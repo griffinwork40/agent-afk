@@ -189,6 +189,13 @@ export type ProviderEvent =
        * truncated …]` sentinel.
        */
       truncated?: boolean;
+      /**
+       * Absolute path to the full bash output capture file when `truncated`
+       * is true and the middle was retained on disk (not a SIGKILL). Absent
+       * for all non-bash tools and for the SIGKILL overflow path where the
+       * middle bytes were never collected. TUI-only — the model never sees it.
+       */
+      capturePath?: string;
       sessionId?: string;
       /**
        * Originating tool name. Used by `buildToolOutputEvent` to look up
@@ -241,6 +248,13 @@ export type ProviderEvent =
        * dispatcher result directly.
        */
       failureClass?: ToolFailureClass;
+      /**
+       * Wall-clock milliseconds from tool invocation to settle, set by the
+       * bash handler and plumbed here so the TUI can surface it in the outcome
+       * line. Not model-facing. Optional — absent for non-bash tools and for
+       * providers that don't supply it.
+       */
+      durationMs?: number;
     }
   | {
       /**

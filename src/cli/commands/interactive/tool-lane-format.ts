@@ -149,19 +149,69 @@ export function formatOutcome(
     return resultColor(`saved → ${linked}`);
   }
   if (chunk.lineCount !== undefined && chunk.lineCount > 1) {
-    return resultColor(`${chunk.lineCount} ${outcomeNoun(toolName, chunk.lineCount)}`);
+    // Multi-line output: always show actual tail lines (up to 7) followed by
+    // a compact header that names the volume, any truncation status, and
+    // the duration. Three sub-cases distinguished by truncation disposition:
+    //
+    //   - `capturePath` set (soft-cap hit, middle retained on disk):
+    //     "N lines · full output saved → ~/…path"
+    //
+    //   - `truncated` true, no `capturePath` (SIGKILL'd at hard cap, middle
+    //     genuinely unrecoverable): "N lines · output capped · command killed"
+    //
+    //   - neither (command completed within model cap): "N lines"
+    //
+    // In all cases, `tailPreview` lines (last ≤7 non-empty lines from the
+    // raw output) are appended so the user sees the actual tail — not merely
+    // a line count — without rerunning the command. Duration `· Xs` is
+    // appended when available.
+    const noun = outcomeNoun(toolName, chunk.lineCount);
+    const durSuffix = chunk.durationMs !== undefined
+      ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
+      : '';
+
+    let headline: string;
+    if (chunk.truncated && chunk.capturePath) {
+      const displayPath = chunk.capturePath.startsWith(effectiveHomeDir)
+        ? '~' + chunk.capturePath.slice(effectiveHomeDir.length)
+        : chunk.capturePath;
+      const linked = hyperlinksEnabled()
+        ? fileHyperlink(displayPath, chunk.capturePath)
+        : displayPath;
+      headline = resultColor(`${chunk.lineCount} ${noun}`) +
+        palette.dim(' · full output saved → ') + resultColor(linked) + durSuffix;
+    } else if (chunk.truncated) {
+      headline = resultColor(`${chunk.lineCount} ${noun}`) +
+        palette.dim(' · output capped · command killed') + durSuffix;
+    } else {
+      headline = resultColor(`${chunk.lineCount} ${noun}`) + durSuffix;
+    }
+
+    // Append actual tail lines when available. Each line is sanitized (same
+    // sanitizer as the single-line preview path) and indented with `    ` to
+    // sit visually under the `⎿` connector rendered by formatToolResultLine.
+    if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
+      const tailLines = chunk.tailPreview
+        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
+        .join('\n');
+      return headline + '\n' + tailLines;
+    }
+    return headline;
   }
   const preview = chunk.content.length > maxPreview
     ? chunk.content.slice(0, maxPreview - 3) + '…'
     : chunk.content;
   // sanitizeLabel is the right sanitizer for outcome previews: chunk.content
   // is LLM-controlled and can embed BEL (rings the terminal bell), backspace,
-  // DEL, CSI/OSC sequences, or bare CR (repositions the cursor). The earlier
+  // DEL, CSI/osC sequences, or bare CR (repositions the cursor). The earlier
   // shape — sanitizePrefixString(stripAnsi(...)) — only scrubbed ESC-prefixed
   // sequences plus \r\n, letting every other C0 byte through to the terminal.
   // Outcome lines are single-line contexts so trim + multi-space collapse
   // (sanitizeLabel's full shape) are the correct semantics.
-  return resultColor(sanitizeLabel(preview));
+  const durSuffix = chunk.durationMs !== undefined
+    ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
+    : '';
+  return resultColor(sanitizeLabel(preview)) + durSuffix;
 }
 
 /**

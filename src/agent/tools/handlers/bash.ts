@@ -24,6 +24,7 @@ import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-e
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
 import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
 import { killProcessGroup } from '../../../utils/kill-process-group.js';
+import { writeBashCapture } from './_bash-capture.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -201,10 +202,11 @@ export function createBashHandler(
       }
     }
 
+  const startedAt = Date.now();
   return new Promise((resolve) => {
     let resolved = false;
 
-    function settle(result: { content: string; isError?: boolean; truncated?: boolean; testResult?: import('./test-runner-detector.js').TestResult }) {
+    function settle(result: { content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; testResult?: import('./test-runner-detector.js').TestResult }) {
       if (resolved) return;
       resolved = true;
       clearTimeout(timeoutHandle);
@@ -324,7 +326,8 @@ export function createBashHandler(
       // structured `truncated: true` flag is the parallel signal for non-model
       // consumers (subagent traces, hooks) — they should not substring-scan.
       const content = headAndTail(combined, MODEL_CAP_BYTES) + HARD_CAP_KILL_NOTE;
-      settle({ content, truncated: true, ...(testResult !== undefined ? { testResult } : {}) });
+      // SIGKILL path: middle bytes are unrecoverable — no capture file.
+      settle({ content, truncated: true, durationMs: Date.now() - startedAt, ...(testResult !== undefined ? { testResult } : {}) });
     }
 
     proc.stdout!.on('data', (chunk: Buffer) => {
@@ -381,11 +384,19 @@ export function createBashHandler(
         // Non-zero exit: name the failure mode and include collected output.
         // The detail may be up to HARD_CAP_BYTES (8MB) now that the
         // accumulator bound was raised, so cap it to the model budget.
-        const capped = capForModel(stderr.trimEnd() || stdout.trimEnd());
+        const rawErr = stderr.trimEnd() || stdout.trimEnd();
+        const capped = capForModel(rawErr);
+        const elapsed = Date.now() - startedAt;
+        // Capture the full error output when it was truncated.
+        const capturePath = capped.truncated
+          ? writeBashCapture(context?.sessionId, context?.toolUseId ?? '', rawErr)
+          : undefined;
         settle({
           content: `Command exited with code ${code}${capped.content ? '\n' + capped.content : ''}`,
           isError: true,
           ...(capped.truncated ? { truncated: true } : {}),
+          ...(capturePath !== undefined ? { capturePath } : {}),
+          durationMs: elapsed,
         });
         return;
       }
@@ -404,9 +415,17 @@ export function createBashHandler(
       const testResult = detectTestResult(combined) ?? undefined;
 
       const capped = capForModel(combined);
+      const elapsed = Date.now() - startedAt;
+      // When the model-facing content is a head+tail view, save the full output
+      // so the TUI can offer a discoverable path. The model never sees this.
+      const capturePath = capped.truncated
+        ? writeBashCapture(context?.sessionId, context?.toolUseId ?? '', combined)
+        : undefined;
       settle({
         content: capped.content,
         ...(capped.truncated ? { truncated: true } : {}),
+        ...(capturePath !== undefined ? { capturePath } : {}),
+        durationMs: elapsed,
         ...(testResult !== undefined ? { testResult } : {}),
       });
     });

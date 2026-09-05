@@ -236,3 +236,79 @@ describe('stream-consumer: stream.retry → stream_retry', () => {
     expect(out).toEqual({ type: 'stream_retry' });
   });
 });
+
+describe('stream-consumer: tailPreview extraction', () => {
+  it('sets tailPreview to last ≤7 non-empty lines for multi-line tool output', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const content = lines.join('\n');
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-tail',
+      content,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    // Should have last 7 non-empty lines
+    expect(out.chunk.tailPreview).toBeDefined();
+    expect(out.chunk.tailPreview).toHaveLength(7);
+    expect(out.chunk.tailPreview![6]).toBe('line 20');
+    expect(out.chunk.tailPreview![0]).toBe('line 14');
+  });
+
+  it('omits tailPreview for single-line content', () => {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-single',
+      content: 'just one line',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.tailPreview).toBeUndefined();
+  });
+
+  it('ignores trailing empty lines when extracting tailPreview', () => {
+    // Content must be >80 chars to trigger truncateContent's tail extraction path.
+    const longPrefix = 'a'.repeat(90);
+    const content = longPrefix + '\nline2\nline3\n\n\n';
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-blanks',
+      content,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    // tailPreview must exist and contain no blank entries
+    expect(out.chunk.tailPreview).toBeDefined();
+    expect(out.chunk.tailPreview!.every(l => l.trim() !== '')).toBe(true);
+  });
+});
+
+describe('stream-consumer: durationMs passthrough', () => {
+  it('plumbs durationMs from provider event to ToolResultChunk', () => {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-dur',
+      content: 'done',
+      durationMs: 3200,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.durationMs).toBe(3200);
+  });
+
+  it('omits durationMs when not supplied by provider', () => {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-nodur',
+      content: 'done',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.durationMs).toBeUndefined();
+  });
+});

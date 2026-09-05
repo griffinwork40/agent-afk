@@ -126,9 +126,18 @@ function formatByteSize(bytes: number): string {
   return gb % 1 === 0 ? `${Math.floor(gb)}GB` : `${gb.toFixed(1)}GB`;
 }
 
+/** Maximum number of tail lines to capture for the TUI outcome preview. */
+const TAIL_PREVIEW_LINES = 7;
+
+/**
+ * Clip the raw tool output to an 80-char single-line preview for the live
+ * tool-lane overlay. Also extracts a `tailPreview` (last ≤7 non-empty lines)
+ * that `formatOutcome` uses to render an actual tail in the scrollback outcome
+ * row instead of only a line count.
+ */
 function truncateContent(
   content: string,
-): { content: string; truncated: boolean; lineCount?: number; sizeBytes: number; sizeLabel: string } {
+): { content: string; truncated: boolean; lineCount?: number; sizeBytes: number; sizeLabel: string; tailPreview?: string[] } {
   const sizeBytes = Buffer.byteLength(content, 'utf8');
   const sizeLabel = formatByteSize(sizeBytes);
 
@@ -149,13 +158,18 @@ function truncateContent(
     return { content, truncated: false, sizeBytes, sizeLabel };
   }
 
+  // Extract the last TAIL_PREVIEW_LINES non-empty lines for the outcome row.
+  // Trim trailing blank lines first (commands often end with a bare newline).
+  const nonEmptyLines = lines.filter(l => l.trim() !== '');
+  const tailPreview = nonEmptyLines.slice(-TAIL_PREVIEW_LINES);
+
   const firstLine = lines[0] ?? '';
   let preview = firstLine;
   if (firstLine.length > 80) {
     preview = firstLine.substring(0, 80) + '…';
   }
   const truncatedContent = preview + `…+${lines.length} lines`;
-  return { content: truncatedContent, truncated: true, lineCount: lines.length, sizeBytes, sizeLabel };
+  return { content: truncatedContent, truncated: true, lineCount: lines.length, sizeBytes, sizeLabel, tailPreview };
 }
 
 export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefined): ResponseMetadata {
@@ -253,7 +267,7 @@ function buildToolOutputEvent(
   // without substring-scanning content for the `[output truncated …]`
   // sentinel. Prior versions conflated this field with display clipping;
   // see PR introducing `ToolResult.truncated` for the rationale.
-  const { content: previewContent, lineCount, sizeBytes, sizeLabel } = truncateContent(event.content);
+  const { content: previewContent, lineCount, sizeBytes, sizeLabel, tailPreview } = truncateContent(event.content);
   return {
     type: 'chunk',
     chunk: {
@@ -264,7 +278,10 @@ function buildToolOutputEvent(
       sizeBytes,
       sizeLabel,
       ...(event.truncated === true && { truncated: true }),
+      ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
+      ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
+      ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,
