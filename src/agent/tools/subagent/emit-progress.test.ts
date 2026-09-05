@@ -245,4 +245,131 @@ describe('createEmitProgressHandler', () => {
     await handler({ message: 'second' }, new AbortController().signal);
     expect(queueCalls).toHaveLength(1);
   });
+
+  // Item 4(a) — throwing queueFn returns delivered:false, ring buffer IS populated.
+  it('returns { delivered: false, reason: queue_error } when queueFn throws', async () => {
+    const throwingQueue = (_text: string): void => {
+      throw new Error('queue failure');
+    };
+    const handler = createEmitProgressHandler(handle, throwingQueue, undefined);
+    const result = await handler({ message: 'test message' }, new AbortController().signal);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content as string)).toEqual({ delivered: false, reason: 'queue_error' });
+    // Ring buffer should still be populated despite the queue failure.
+    const buf = (handle as unknown as { _progressEvents: ProgressEventPayload[] })._progressEvents;
+    expect(buf).toHaveLength(1);
+    expect(buf[0].message).toBe('test message');
+  });
+
+  // Item 4(c) — pushUserMessage fallback when queueFrameworkContext is absent.
+  it('uses pushUserMessage fallback when queueFrameworkContext is not present', async () => {
+    const pushCalls: string[] = [];
+    const parentInputStreamRef = {
+      pushUserMessage: (text: string) => { pushCalls.push(text); },
+    };
+    const queueFnFallback = (text: string): void => {
+      if ((parentInputStreamRef as Record<string, unknown>)['queueFrameworkContext']) {
+        (parentInputStreamRef as unknown as { queueFrameworkContext: (t: string) => void }).queueFrameworkContext(text);
+      } else if (parentInputStreamRef) {
+        parentInputStreamRef.pushUserMessage(text);
+      }
+    };
+    const handler = createEmitProgressHandler(handle, queueFnFallback, undefined);
+    const result = await handler({ message: 'fallback test' }, new AbortController().signal);
+    expect(JSON.parse(result.content as string)).toEqual({ delivered: true });
+    expect(pushCalls).toHaveLength(1);
+    expect(pushCalls[0]).toContain('<child-progress');
+  });
+
+  // Item 8 — Multi-byte UTF-8 truncation: CJK characters near byte boundary.
+  it('truncates at byte boundary without splitting multi-byte CJK codepoints', async () => {
+    // Each CJK character (e.g. U+4E2D) is 3 UTF-8 bytes.
+    // Fill to just over the cap: floor(PROGRESS_MAX_MESSAGE_BYTES / 3) * 3 bytes of CJK
+    // plus a few extra chars to push over the limit.
+    const cjkChar = '\u4e2d'; // 3 bytes each
+    const charsAtCap = Math.floor(PROGRESS_MAX_MESSAGE_BYTES / 3);
+    const longCjk = cjkChar.repeat(charsAtCap + 10); // Exceeds byte cap
+    const handler = createEmitProgressHandler(handle, queueFn, undefined);
+    await handler({ message: longCjk }, new AbortController().signal);
+    const buf = (handle as unknown as { _progressEvents: ProgressEventPayload[] })._progressEvents;
+    expect(buf).toHaveLength(1);
+    const storedBytes = Buffer.byteLength(buf[0].message, 'utf8');
+    // Must be within cap.
+    expect(storedBytes).toBeLessThanOrEqual(PROGRESS_MAX_MESSAGE_BYTES);
+    // Must be valid UTF-8: re-encoding should produce the same byte count.
+    const reEncoded = Buffer.from(buf[0].message, 'utf8');
+    expect(reEncoded.toString('utf8')).toBe(buf[0].message);
+    // Must be a whole number of CJK chars (no split codepoints).
+    expect(buf[0].message.length % 1).toBe(0);
+    for (const ch of buf[0].message) {
+      expect(ch).toBe(cjkChar);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 4(b) — handle-not-initialized path in the tool closure
+// (tested via the fork-progress-events wiring logic, replicated inline)
+// ---------------------------------------------------------------------------
+
+describe('emit_progress tool closure — handle not yet initialized', () => {
+  it('returns isError when capturedRef.current is undefined', async () => {
+    // Replicate the closure logic from fork-progress-events.ts directly.
+    const capturedRef: { current: unknown | undefined } = { current: undefined };
+    let cachedHandler: ((input: unknown, signal: AbortSignal) => Promise<{ content: unknown; isError?: boolean }>) | undefined;
+    const closureFn = async (input: unknown, signal: AbortSignal) => {
+      if (capturedRef.current === undefined) {
+        return { content: 'emit_progress: handle not yet initialized.', isError: true as const };
+      }
+      if (cachedHandler === undefined) {
+        cachedHandler = createEmitProgressHandler(
+          capturedRef.current as Parameters<typeof createEmitProgressHandler>[0],
+          (_text: string) => {},
+          undefined,
+        );
+      }
+      return cachedHandler(input, signal);
+    };
+
+    // Call before binding — should get the "not initialized" error.
+    const result = await closureFn({ message: 'hello' }, new AbortController().signal);
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toContain('handle not yet initialized');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 9 — XML body escaping in formatProgressEvent
+// ---------------------------------------------------------------------------
+
+describe('formatProgressEvent XML body escaping', () => {
+  it('escapes < in message body', () => {
+    const result = formatProgressEvent({ message: 'a<b' }, 'id');
+    expect(result).toContain('a&lt;b');
+    expect(result).not.toContain('a<b');
+  });
+
+  it('escapes > in message body', () => {
+    const result = formatProgressEvent({ message: 'a>b' }, 'id');
+    expect(result).toContain('a&gt;b');
+    expect(result).not.toContain('a>b');
+  });
+
+  it('escapes & in message body', () => {
+    const result = formatProgressEvent({ message: 'a&b' }, 'id');
+    // The body should contain &amp; for the & in the message
+    // (not to be confused with attribute escaping)
+    expect(result).toContain('a&amp;b');
+    // Literal & must not appear except as part of an escape sequence
+    const bodyMatch = result.match(/<child-progress[^>]*>(.*)<\/child-progress>/);
+    expect(bodyMatch).not.toBeNull();
+    expect(bodyMatch![1]).toBe('a&amp;b');
+  });
+
+  it('escapes all three special characters in combination', () => {
+    const result = formatProgressEvent({ message: '<a>&amp;</a>' }, 'id');
+    const bodyMatch = result.match(/<child-progress[^>]*>(.*)<\/child-progress>/);
+    expect(bodyMatch).not.toBeNull();
+    expect(bodyMatch![1]).toBe('&lt;a&gt;&amp;amp;&lt;/a&gt;');
+  });
 });

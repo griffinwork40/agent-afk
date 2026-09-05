@@ -540,6 +540,6 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(writeRoots !== undefined ? { writeRoots } : {}),
     ...(readRoots !== undefined ? { readRoots } : {}),
     ...(isolation !== undefined ? { isolation } : {}),
-    ...(progress_events !== undefined && progress_events ? { progress_events } : {}),
+    ...(progress_events !== undefined ? { progress_events } : {}),
   };
 }

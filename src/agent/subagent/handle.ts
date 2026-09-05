@@ -19,6 +19,7 @@ import { dispatchSubagentStop as _dispatchSubagentStop } from '../subagent-hooks
 import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
+import { PROGRESS_RING_CAPACITY } from './progress-constants.js';
 import {
   createEmptyTrace,
   type SubagentResult,
@@ -621,10 +622,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     ) {
       return;
     }
-    // Inline the capacity constant to avoid a circular/async import.
-    // Kept in sync with PROGRESS_RING_CAPACITY in emit-progress.ts.
-    const CAPACITY = 20;
-    if (this._progressEvents.length >= CAPACITY) {
+    if (this._progressEvents.length >= PROGRESS_RING_CAPACITY) {
       this._progressEvents.shift();
     }
     this._progressEvents.push(payload);

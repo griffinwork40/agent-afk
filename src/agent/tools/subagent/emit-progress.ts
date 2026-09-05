@@ -15,6 +15,7 @@
 
 import type { SubagentHandleImpl } from '../../subagent/handle.js';
 import type { ToolResult } from '../types.js';
+import { PROGRESS_RING_CAPACITY as _PROGRESS_RING_CAPACITY } from '../../subagent/progress-constants.js';
 
 /** Shape of a single progress event payload from the child. */
 export interface ProgressEventPayload {
@@ -23,8 +24,8 @@ export interface ProgressEventPayload {
   metadata?: Record<string, unknown>;
 }
 
-/** Ring buffer capacity per handle. */
-export const PROGRESS_RING_CAPACITY = 20;
+/** Ring buffer capacity per handle. Re-exported from the shared constants module. */
+export const PROGRESS_RING_CAPACITY = _PROGRESS_RING_CAPACITY;
 
 /** Maximum UTF-8 byte length of the `message` field. */
 export const PROGRESS_MAX_MESSAGE_BYTES = 2048;
@@ -41,7 +42,7 @@ export function formatProgressEvent(
   const phaseAttr = payload.phase !== undefined ? ` phase="${escapeAttr(payload.phase)}"` : '';
   return (
     `<child-progress subagentId="${escapeAttr(subagentId)}"${phaseAttr} timestamp="${timestamp}">` +
-    payload.message +
+    escapeXmlBody(payload.message) +
     `</child-progress>`
   );
 }
@@ -49,6 +50,11 @@ export function formatProgressEvent(
 /** Escape XML attribute values (double-quotes and ampersands). */
 function escapeAttr(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+/** Escape XML body text (`&`, `<`, `>`). */
+function escapeXmlBody(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
@@ -117,7 +123,8 @@ export function createEmitProgressHandler(
       const envelope = formatProgressEvent(payload, handle.id);
       parentQueueFn(envelope);
     } catch {
-      // Delivery failure is non-fatal to the child.
+      // Delivery failure is non-fatal to the child, but report it accurately.
+      return { content: JSON.stringify({ delivered: false, reason: 'queue_error' }) };
     }
 
     return { content: JSON.stringify({ delivered: true }) };
@@ -127,11 +134,20 @@ export function createEmitProgressHandler(
 /**
  * Truncate a UTF-8 string to at most `maxBytes` bytes without splitting
  * multi-byte codepoints or surrogate pairs.
+ *
+ * Node's Buffer.toString('utf8') replaces incomplete trailing sequences with
+ * U+FFFD (3 bytes), which can push the result over `maxBytes`. We therefore
+ * walk back from the slice boundary to the start of a complete codepoint before
+ * decoding.
  */
 function truncateToBytes(str: string, maxBytes: number): string {
   const buf = Buffer.from(str, 'utf8');
   if (buf.byteLength <= maxBytes) return str;
-  // Slice to maxBytes then decode, which drops any incomplete multi-byte
-  // sequence at the boundary.
-  return buf.subarray(0, maxBytes).toString('utf8');
+  // Walk back from maxBytes to find the start of a complete codepoint.
+  // UTF-8 continuation bytes have the form 10xxxxxx (0x80–0xBF).
+  let end = Math.min(maxBytes, buf.byteLength);
+  while (end > 0 && (buf[end] !== undefined) && (buf[end]! & 0xc0) === 0x80) {
+    end--;
+  }
+  return buf.subarray(0, end).toString('utf8');
 }

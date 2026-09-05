@@ -59,6 +59,7 @@ function applyProgressEventsToConfig(
 ): BindProgressHandle {
   const handleRef: { current: SubagentHandleImpl<unknown> | undefined } = { current: undefined };
   const capturedRef = handleRef;
+  let cachedHandler: ReturnType<typeof createEmitProgressHandler> | undefined;
 
   const emitProgressTool = tool(
     'emit_progress',
@@ -69,7 +70,7 @@ function applyProgressEventsToConfig(
       'so the parent stays informed without waiting for the full result. ' +
       `The "message" field is required (max ${PROGRESS_MAX_MESSAGE_BYTES} bytes). ` +
       '"phase" and "metadata" are optional. ' +
-      'This tool does NOT count against maxToolUseIterations — it is meta, not work.',
+      'Note: this tool call counts as a tool-use round.',
     z.object({
       message: z.string().describe('Progress message to deliver to the parent (required).'),
       phase: z
@@ -85,18 +86,20 @@ function applyProgressEventsToConfig(
       if (capturedRef.current === undefined) {
         return { content: 'emit_progress: handle not yet initialized.', isError: true };
       }
-      const handlerFn = createEmitProgressHandler(
-        capturedRef.current,
-        (text) => {
-          if (parentInputStreamRef?.queueFrameworkContext) {
-            parentInputStreamRef.queueFrameworkContext(text);
-          } else if (parentInputStreamRef) {
-            parentInputStreamRef.pushUserMessage(text);
-          }
-        },
-        parentAbortSignal,
-      );
-      return handlerFn(input, signal);
+      if (cachedHandler === undefined) {
+        cachedHandler = createEmitProgressHandler(
+          capturedRef.current,
+          (text) => {
+            if (parentInputStreamRef?.queueFrameworkContext) {
+              parentInputStreamRef.queueFrameworkContext(text);
+            } else if (parentInputStreamRef) {
+              parentInputStreamRef.pushUserMessage(text);
+            }
+          },
+          parentAbortSignal,
+        );
+      }
+      return cachedHandler(input, signal);
     },
   );
 
