@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.188.0] - 2026-09-05
+
+### Added
+- child-to-parent progress events via emit_progress tool (#1418) (#1504) (e6ea06d6)
+
 ## [5.187.0] - 2026-09-05
 
 ### Added
