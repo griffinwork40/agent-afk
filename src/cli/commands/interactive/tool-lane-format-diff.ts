@@ -216,7 +216,16 @@ export function formatDiffBlock(
     | { kind: 'body'; text: string };
   const items: Item[] = [];
 
+  // Track the last-seen filePath so multi-file diffs (e.g. patch_apply)
+  // get a dim file-path header at each file boundary. Single-file diffs
+  // (edit_file) never set filePath on hunks so this is a no-op for them.
+  let lastFilePath: string | undefined;
+
   for (const hunk of diff.hunks) {
+    if (hunk.filePath && hunk.filePath !== lastFilePath) {
+      items.push({ kind: 'header', text: palette.dim(hunk.filePath) });
+      lastFilePath = hunk.filePath;
+    }
     const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
     items.push({ kind: 'header', text: palette.diffHunk(header) });
     for (const line of hunk.lines) {

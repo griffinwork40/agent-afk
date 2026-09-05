@@ -194,6 +194,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
         2,
       ),
       isError,
+      ...(applyResult.structuredDiff ? { render: { diff: applyResult.structuredDiff } } : {}),
     };
   };
 }

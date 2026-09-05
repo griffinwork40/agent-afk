@@ -12,6 +12,7 @@ import { createHash, randomBytes } from 'crypto';
 import { writeFile, rename, mkdir, unlink, chmod, stat } from 'fs/promises';
 import { dirname, join, isAbsolute, resolve } from 'path';
 import { computeLineDiff } from '../../../utils/diff.js';
+import type { DiffPayload, DiffHunk } from '../../../utils/diff.js';
 import type { PatchFileChange, ValidationError } from './patch-validate.js';
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,12 @@ export interface PatchApplyResult {
   status: 'applied' | 'dry_run' | 'validation_failed' | 'partial_failure';
   /** Unified diff of all changes (empty string if no changes). */
   diff: string;
+  /**
+   * Structured diff payload merging all per-file diffs. Consumed by the
+   * handler to populate `ToolResult.render.diff` for TUI rendering.
+   * Undefined when no files changed.
+   */
+  structuredDiff?: DiffPayload;
   files_changed: Array<{
     path: string;
     before_hash: string;
@@ -41,17 +48,17 @@ function sha256Hex(content: string): string {
 }
 
 /**
- * Format a structured {@link DiffPayload} as a unified-diff string for a
- * given file pair. Returns an empty string when the payload is null (identical
- * content).
+ * Compute a unified-diff string AND the structured {@link DiffPayload} for a
+ * single file pair. Returns `{ text: '', payload: null }` when the content is
+ * identical.
  */
-function formatUnifiedDiff(
+function computeFileDiff(
   filePath: string,
   before: string,
   after: string,
-): string {
+): { text: string; payload: DiffPayload | null } {
   const payload = computeLineDiff(before, after);
-  if (!payload) return '';
+  if (!payload) return { text: '', payload: null };
 
   const lines: string[] = [
     `--- a/${filePath}`,
@@ -67,7 +74,7 @@ function formatUnifiedDiff(
     }
   }
 
-  return lines.join('\n') + '\n';
+  return { text: lines.join('\n') + '\n', payload };
 }
 
 /**
@@ -125,6 +132,8 @@ export async function applyPatch(
     originalContent: string;
     newContent: string;
     diffBlock: string;
+    diffPayload: DiffPayload | null;
+    filePath: string;
     /** True when the file did not exist before the patch (null sentinel in fileContents). */
     isNewFile: boolean;
   }> = [];
@@ -153,13 +162,31 @@ export async function applyPatch(
       throw new Error(`patch_apply engine: change for ${change.path} has neither content nor edits.`);
     }
 
-    const diffBlock = formatUnifiedDiff(change.path, originalContent, newContent);
+    const fileDiff = computeFileDiff(change.path, originalContent, newContent);
 
-    planned.push({ resolvedPath, originalContent, newContent, diffBlock, isNewFile });
+    planned.push({ resolvedPath, originalContent, newContent, diffBlock: fileDiff.text, diffPayload: fileDiff.payload, filePath: change.path, isNewFile });
   }
 
   // Build combined diff string.
   const combinedDiff = planned.map((p) => p.diffBlock).filter(Boolean).join('\n');
+
+  // Merge per-file structured diffs into a single DiffPayload.
+  // Stamp each hunk with its source filePath so the TUI can render
+  // file-boundary headers when hunks from different files are adjacent.
+  const mergedHunks: DiffHunk[] = [];
+  let totalAdded = 0;
+  let totalRemoved = 0;
+  for (const p of planned) {
+    if (!p.diffPayload) continue;
+    for (const hunk of p.diffPayload.hunks) {
+      mergedHunks.push({ ...hunk, filePath: p.filePath });
+    }
+    totalAdded += p.diffPayload.addedLines;
+    totalRemoved += p.diffPayload.removedLines;
+  }
+  const structuredDiff: DiffPayload | undefined = mergedHunks.length > 0
+    ? { hunks: mergedHunks, addedLines: totalAdded, removedLines: totalRemoved }
+    : undefined;
 
   // Compute result metadata (before/after hashes).
   const filesChanged = planned.map((p) => ({
@@ -173,6 +200,7 @@ export async function applyPatch(
     return {
       status: 'dry_run',
       diff: combinedDiff,
+      structuredDiff,
       files_changed: filesChanged,
       errors: [],
     };
@@ -295,6 +323,7 @@ export async function applyPatch(
   return {
     status: 'applied',
     diff: combinedDiff,
+    structuredDiff,
     files_changed: filesChanged,
     errors: [],
   };
