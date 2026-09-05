@@ -201,3 +201,90 @@ describe('patch_apply handler — dry_run', () => {
     expect(Array.isArray(parsed.errors)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// render.diff sidecar
+// ---------------------------------------------------------------------------
+
+describe('patch_apply — render.diff sidecar', () => {
+  it('attaches structured DiffPayload on successful apply', async () => {
+    const filePath = await writeTemp('render-diff.txt', 'hello world\n');
+    const handler = createPatchApplyHandler(tempDir);
+
+    const result = await handler(
+      {
+        changes: [
+          { path: filePath, edits: [{ old: 'hello', new: 'goodbye' }] },
+        ],
+      },
+      signal,
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.render).toBeDefined();
+    expect(result.render!.diff).toBeDefined();
+    const diff = result.render!.diff!;
+    expect(diff.hunks.length).toBeGreaterThan(0);
+    expect(diff.addedLines).toBeGreaterThan(0);
+    expect(diff.removedLines).toBeGreaterThan(0);
+  });
+
+  it('stamps filePath on hunks for multi-file patches', async () => {
+    await writeTemp('a.txt', 'aaa\n');
+    await writeTemp('b.txt', 'bbb\n');
+    const handler = createPatchApplyHandler(tempDir);
+
+    const result = await handler(
+      {
+        changes: [
+          { path: path.join(tempDir, 'a.txt'), edits: [{ old: 'aaa', new: 'AAA' }] },
+          { path: path.join(tempDir, 'b.txt'), edits: [{ old: 'bbb', new: 'BBB' }] },
+        ],
+      },
+      signal,
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const diff = result.render!.diff!;
+    // Two files, each contributing at least one hunk.
+    expect(diff.hunks.length).toBeGreaterThanOrEqual(2);
+    // Each hunk should have a filePath set.
+    const filePaths = new Set(diff.hunks.map((h) => h.filePath));
+    expect(filePaths.size).toBe(2);
+  });
+
+  it('attaches structured DiffPayload on dry_run', async () => {
+    await writeTemp('dry-render.txt', 'original\n');
+    const handler = createPatchApplyHandler(tempDir);
+
+    const result = await handler(
+      {
+        changes: [
+          { path: path.join(tempDir, 'dry-render.txt'), edits: [{ old: 'original', new: 'modified' }] },
+        ],
+        dry_run: true,
+      },
+      signal,
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.render).toBeDefined();
+    expect(result.render!.diff!.hunks.length).toBeGreaterThan(0);
+  });
+
+  it('omits render.diff when no changes produce a diff', async () => {
+    const handler = createPatchApplyHandler(tempDir);
+
+    const result = await handler(
+      { changes: [] },
+      signal,
+      makeCtx(),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.render).toBeUndefined();
+  });
+});

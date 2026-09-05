@@ -857,6 +857,10 @@ export class AgentSession implements IAgentSession {
     await this.providerQuery.interrupt();
   }
 
+  setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
+    this.providerQuery.setBeforeNextRound?.(cb);
+  }
+
   /**
    * Tear down the SDK lifecycle and rebuild it from the same `AgentConfig`,
    * yielding a session whose conversation context is empty. Forwarding the

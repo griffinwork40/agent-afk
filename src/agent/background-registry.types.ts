@@ -13,4 +13,6 @@ export interface BackgroundJob {
   readonly status: BackgroundJobStatus;
   readonly result?: SubagentResult;
   readonly endedAt?: number;
+  /** Session that created this job. Used for cross-session ownership checks. */
+  readonly parentSessionId?: string;
 }

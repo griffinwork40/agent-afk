@@ -451,3 +451,131 @@ describe('#724 — empty-buffer stream cut with prior tool results', () => {
     expect((result.error as InstanceType<typeof SIE>).toolResultsGathered).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// steer() — ring buffer, guards, and teardown clearing
+// ---------------------------------------------------------------------------
+
+describe('SubagentHandleImpl.steer()', () => {
+  function makeSteerHandle(status?: 'succeeded' | 'failed' | 'cancelled'): SubagentHandleImpl<unknown> {
+    const controller = new AbortController();
+    const graph = new AbortGraph(controller, 'steer-test');
+    const session: IAgentSession = {
+      sessionId: 'steer-session',
+      state: 'idle',
+      abortSignal: controller.signal,
+      async sendMessage() { return { role: 'assistant', content: '', timestamp: new Date() }; },
+      async *sendMessageStream() {},
+      async interrupt() {},
+      async close() {},
+      async reset() {},
+      async setModel() {},
+      async setPermissionMode() {},
+      waitForInitialization: async () => ({ sessionId: 'steer-session', model: 'm', persistSession: false }),
+      getSessionIdentity: () => ({ persistSession: false }),
+      getSessionMetadata: () => ({ sessionId: 'steer-session', model: 'm', persistSession: false }),
+      getQuery: () => { throw new Error('na'); },
+      getLastResponseMetadata: () => null,
+      getOutputStream: async function* () {},
+      getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+      supportedCommands: async () => [],
+      supportedModels: async () => [],
+      supportedAgents: async () => [],
+      getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+      mcpServerStatus: async () => [],
+      accountInfo: async () => ({ name: 't', email: 't@t.com' }),
+      cwd: '/tmp',
+      setCwd: vi.fn(),
+      getHistory: () => [],
+      getTurnCount: () => 0,
+    } as unknown as IAgentSession;
+
+    const handle = new SubagentHandleImpl('steer-handle', session, controller, graph, undefined, 5000, undefined, vi.fn());
+    if (status) {
+      // Force the status by accessing internal field directly (test-only).
+      (handle as unknown as { _currentStatus: string })._currentStatus = status;
+    }
+    return handle;
+  }
+
+  it('queues a message into _steeringMessages during active run', () => {
+    const handle = makeSteerHandle();
+    handle.steer('focus on auth');
+    expect(handle._steeringMessages).toHaveLength(1);
+    expect(handle._steeringMessages[0]).toBe('focus on auth');
+  });
+
+  it('silently drops whitespace-only messages', () => {
+    const handle = makeSteerHandle();
+    handle.steer('   ');
+    handle.steer('\t\n');
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
+
+  it('silently drops messages when status is succeeded', () => {
+    const handle = makeSteerHandle('succeeded');
+    handle.steer('too late');
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
+
+  it('silently drops messages when status is failed', () => {
+    const handle = makeSteerHandle('failed');
+    handle.steer('too late');
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
+
+  it('silently drops messages when status is cancelled', () => {
+    const handle = makeSteerHandle('cancelled');
+    handle.steer('too late');
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
+
+  it('silently drops messages when the controller is aborted', () => {
+    const controller = new AbortController();
+    const graph = new AbortGraph(controller, 'steer-aborted');
+    const session = {
+      sessionId: 's', state: 'idle', abortSignal: controller.signal,
+      async sendMessage() { return { role: 'assistant' as const, content: '', timestamp: new Date() }; },
+      async *sendMessageStream() {},
+      async interrupt() {}, async close() {}, async reset() {}, async setModel() {}, async setPermissionMode() {},
+      waitForInitialization: async () => ({ sessionId: 's', model: 'm', persistSession: false }),
+      getSessionIdentity: () => ({ persistSession: false }),
+      getSessionMetadata: () => ({ sessionId: 's', model: 'm', persistSession: false }),
+      getQuery: () => { throw new Error('na'); },
+      getLastResponseMetadata: () => null,
+      getOutputStream: async function* () {},
+      getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+      supportedCommands: async () => [], supportedModels: async () => [],
+      supportedAgents: async () => [],
+      getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+      mcpServerStatus: async () => [], accountInfo: async () => ({ name: 't', email: 't@t.com' }),
+      cwd: '/tmp', setCwd: vi.fn(), getHistory: () => [], getTurnCount: () => 0,
+    } as unknown as IAgentSession;
+    const handle = new SubagentHandleImpl('steer-ab', session, controller, graph, undefined, 5000, undefined, vi.fn());
+    controller.abort('test abort');
+    handle.steer('after abort');
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
+
+  it('ring buffer evicts oldest when capacity (3) is exceeded', () => {
+    const handle = makeSteerHandle();
+    handle.steer('msg-1');
+    handle.steer('msg-2');
+    handle.steer('msg-3');
+    handle.steer('msg-4'); // evicts msg-1
+    expect(handle._steeringMessages).toHaveLength(3);
+    expect(handle._steeringMessages[0]).toBe('msg-2');
+    expect(handle._steeringMessages[1]).toBe('msg-3');
+    expect(handle._steeringMessages[2]).toBe('msg-4');
+  });
+
+  it('_beforeNextRound getter returns a closure that shifts from _steeringMessages', () => {
+    const handle = makeSteerHandle();
+    handle.steer('first');
+    handle.steer('second');
+    const cb = handle._beforeNextRound;
+    expect(cb()).toBe('first');
+    expect(cb()).toBe('second');
+    expect(cb()).toBeUndefined();
+  });
+});

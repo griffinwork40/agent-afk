@@ -1286,6 +1286,59 @@ describe('formatDiffBlock — render-only diff rendering', () => {
     // The visible text content should still appear.
     expect(stripped).toContain('colored content');
   });
+
+  it('renders file-path headers between hunks from different files', () => {
+    const diff: DiffPayload = {
+      addedLines: 2,
+      removedLines: 0,
+      hunks: [
+        {
+          oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, filePath: 'src/a.ts',
+          lines: [{ kind: '+', text: 'a line' }],
+        },
+        {
+          oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, filePath: 'src/b.ts',
+          lines: [{ kind: '+', text: 'b line' }],
+        },
+      ],
+    };
+    const lines = formatDiffBlock(diff, 'flush', '  ').map(stripAnsi);
+    // Should contain both file-path headers before their respective @@ lines.
+    expect(lines).toContain('  src/a.ts');
+    expect(lines).toContain('  src/b.ts');
+    // File headers come before their hunk headers.
+    const aIdx = lines.indexOf('  src/a.ts');
+    const aHunkIdx = lines.findIndex((l, i) => i > aIdx && l.includes('@@'));
+    expect(aHunkIdx).toBeGreaterThan(aIdx);
+  });
+
+  it('omits file-path header when all hunks share the same file', () => {
+    const diff: DiffPayload = {
+      addedLines: 2,
+      removedLines: 0,
+      hunks: [
+        {
+          oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, filePath: 'src/a.ts',
+          lines: [{ kind: '+', text: 'line 1' }],
+        },
+        {
+          oldStart: 10, oldLines: 1, newStart: 11, newLines: 2, filePath: 'src/a.ts',
+          lines: [{ kind: '+', text: 'line 2' }],
+        },
+      ],
+    };
+    const lines = formatDiffBlock(diff, 'flush', '').map(stripAnsi);
+    // Only one file-path header (first hunk), not before the second.
+    const fileHeaders = lines.filter((l) => l === 'src/a.ts');
+    expect(fileHeaders.length).toBe(1);
+  });
+
+  it('does not emit file-path headers when filePath is absent (single-file edit)', () => {
+    const lines = formatDiffBlock(makeDiff(), 'flush', '').map(stripAnsi);
+    // No line should look like a bare file-path header.
+    // Lines are: stat header, @@ hunk header, context/add/remove body lines.
+    expect(lines.some((l) => /^\s*src\//.test(l))).toBe(false);
+  });
 });
 
 /**

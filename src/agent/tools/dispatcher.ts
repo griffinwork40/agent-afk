@@ -572,7 +572,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
   get toolDefs(): readonly AnthropicToolDef[] {
     const available = this.subagentExecutor?.supportsBackgroundJobs?.()
       ? this.schemas
-      : this.schemas.filter((schema) => schema.name !== 'cancel_background_job');
+      : this.schemas.filter(
+          (schema) =>
+            schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent',
+        );
     const allowed = this.permissions?.allowedTools;
     if (!allowed) return available;
     const set = new Set(allowed);
@@ -620,6 +623,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       this.handlers.has(toolName) ||
       (toolName === 'agent' && this.subagentExecutor !== undefined) ||
       (toolName === 'cancel_background_job' && this.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+      (toolName === 'send_message_to_agent' && this.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
       (toolName === 'skill' && this.skillExecutor !== undefined) ||
       (toolName === 'compose' && this.composeExecutor !== undefined)
     );

@@ -1983,6 +1983,235 @@ describe('SubagentExecutor', () => {
       expect(terminal.content).toMatch(/already completed/);
     });
 
+    it('send_message_to_agent: steers a running model-owned job via handle.steer()', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const steerMock = vi.fn();
+      const handle = {
+        ...bgHandle('steer-job').handle,
+        steer: steerMock,
+      } as unknown as SubagentHandle;
+      const job = registry.register({
+        handle,
+        prompt: 'investigate',
+        model: 'sonnet',
+        provenance: 'model',
+        parentSessionId: 'parent-session-id',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'focus on X' },
+      }));
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain(job.jobId);
+      expect(steerMock).toHaveBeenCalledOnce();
+      expect(steerMock).toHaveBeenCalledWith('focus on X');
+    });
+
+    it('send_message_to_agent: returns isError for unknown jobId and lists known IDs', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle } = bgHandle('known-job');
+      const job = registry.register({
+        handle,
+        prompt: 'known',
+        model: 'sonnet',
+        provenance: 'model',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: 'bg-nonexistent', message: 'redirect' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain(job.jobId);
+    });
+
+    it('send_message_to_agent: refuses to steer user-owned jobs', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const steerMock = vi.fn();
+      const handle = {
+        ...bgHandle('user-owned').handle,
+        steer: steerMock,
+      } as unknown as SubagentHandle;
+      const job = registry.register({
+        handle,
+        prompt: 'user work',
+        model: 'sonnet',
+        provenance: 'user',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'change plan' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/backgrounded by the user/);
+      expect(steerMock).not.toHaveBeenCalled();
+    });
+
+    it('send_message_to_agent: returns non-error for terminal jobs (already done)', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const { handle, fireTerminal } = bgHandle('done-job');
+      const job = registry.register({
+        handle,
+        prompt: 'finished work',
+        model: 'sonnet',
+        provenance: 'model',
+        parentSessionId: 'parent-session-id',
+      });
+      fireTerminal({ id: 'done-job', status: 'succeeded' } as SubagentResult);
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'too late' },
+      }));
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toMatch(/already|succeeded|completed/i);
+    });
+
+    it('send_message_to_agent: refuses cross-session steering', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const steerMock = vi.fn();
+      const handle = {
+        ...bgHandle('cross-session').handle,
+        steer: steerMock,
+      } as unknown as SubagentHandle;
+      const job = registry.register({
+        handle,
+        prompt: 'other session work',
+        model: 'sonnet',
+        provenance: 'model',
+        parentSessionId: 'other-session-id',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'hijack attempt' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/different session/);
+      expect(steerMock).not.toHaveBeenCalled();
+    });
+
+    it('send_message_to_agent: refuses steering when job has no parentSessionId (guard not bypassable)', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const steerMock = vi.fn();
+      const handle = {
+        ...bgHandle('no-parent-id').handle,
+        steer: steerMock,
+      } as unknown as SubagentHandle;
+      // Register WITHOUT parentSessionId — the guard must still refuse
+      // when the caller has a sessionId (undefined !== callerSessionId).
+      const job = registry.register({
+        handle,
+        prompt: 'orphan job',
+        model: 'sonnet',
+        provenance: 'model',
+        // parentSessionId deliberately omitted
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'hijack via missing parentSessionId' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/different session/);
+      expect(steerMock).not.toHaveBeenCalled();
+    });
+
+    it('send_message_to_agent: known-ID enumeration filters out user-owned jobs', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const modelHandle = bgHandle('model-job');
+      const userHandle = bgHandle('user-job');
+      const modelJob = registry.register({
+        handle: modelHandle.handle,
+        prompt: 'model work',
+        model: 'sonnet',
+        provenance: 'model',
+      });
+      registry.register({
+        handle: userHandle.handle,
+        prompt: 'user work',
+        model: 'sonnet',
+        provenance: 'user',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: 'bg-nonexistent', message: 'redirect' },
+      }));
+      expect(result.isError).toBe(true);
+      // Should list model-owned job but not user-owned job
+      expect(result.content).toContain(modelJob.jobId);
+      expect(result.content).not.toContain('user-job');
+    });
+
+    it('send_message_to_agent: returns isError when registry is unavailable', async () => {
+      const noRegistryExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: undefined,
+        depth: 0,
+      });
+
+      const result = await noRegistryExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: 'any-job', message: 'hello' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/not available/i);
+    });
+
     it('mode default is foreground — omitting mode preserves existing behavior', async () => {
       // Reuses the standard mockHandle whose runToResult resolves with
       // "test output" — if the background branch were accidentally

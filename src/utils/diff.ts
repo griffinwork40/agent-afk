@@ -33,6 +33,13 @@ export interface DiffHunk {
   /** Number of NEW-side lines in this hunk (context + insertions). */
   newLines: number;
   lines: DiffLine[];
+  /**
+   * Source file path for this hunk. Set by multi-file tools (e.g.
+   * `patch_apply`) so the TUI can render file-boundary headers when hunks
+   * from different files are merged into a single {@link DiffPayload}.
+   * Absent for single-file diffs (e.g. `edit_file`).
+   */
+  filePath?: string;
 }
 
 /** A structured render-only diff payload. */
