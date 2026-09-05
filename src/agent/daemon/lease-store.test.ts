@@ -10,6 +10,7 @@ import {
   recoverExpiredLeases,
   getTaskRecord,
   listActiveTasks,
+  setLeaseState,
 } from './lease-store.js';
 import { enqueue, dequeueNext } from './queue-store.js';
 import type { QueuedTask } from './queue-store.js';
@@ -669,5 +670,69 @@ describe('reEnqueue — backoff wiring via computeBackoffMs (#1432)', () => {
     const dequeued = dequeueNext(queueDir);
     expect(dequeued).not.toBeNull();
     expect(dequeued?.id).toBe('q-backoff-past-test');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setLeaseState
+// ---------------------------------------------------------------------------
+
+describe('setLeaseState', () => {
+  it('transitions a leased task to waiting_human_input', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, 60_000, queueDir);
+
+    setLeaseState(task.id, 'waiting_human_input', queueDir);
+
+    const record = getTaskRecord(task.id, queueDir);
+    expect(record?.state).toBe('waiting_human_input');
+  });
+
+  it('is a no-op when the lease file does not exist', () => {
+    const queueDir = tmpQueueDir();
+    // Should not throw
+    setLeaseState('nonexistent-task', 'waiting_human_input', queueDir);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recoverExpiredLeases: waiting_human_input suppression
+// ---------------------------------------------------------------------------
+
+describe('recoverExpiredLeases: waiting_human_input suppression', () => {
+  it('skips tasks in waiting_human_input state even if lease is expired', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    // Lease with a very short TTL that will be expired immediately
+    leaseTask(task, srcPath, 1, queueDir);
+
+    // Transition to waiting_human_input
+    setLeaseState(task.id, 'waiting_human_input', queueDir);
+
+    // Wait a tiny bit to ensure lease is expired
+    const now = Date.now();
+    while (Date.now() - now < 5) { /* spin */ }
+
+    const recovered = recoverExpiredLeases(queueDir);
+    // The task should NOT be recovered — it is waiting on a human
+    expect(recovered.find((r) => r.id === task.id)).toBeUndefined();
+
+    // Verify the task is still in leased/ with waiting_human_input state
+    const record = getTaskRecord(task.id, queueDir);
+    expect(record?.state).toBe('waiting_human_input');
+  });
+
+  it('still recovers expired tasks that are NOT in waiting_human_input', () => {
+    const queueDir = tmpQueueDir();
+    const { task, srcPath } = makeTask(queueDir);
+    leaseTask(task, srcPath, 1, queueDir);
+
+    // Wait for lease to expire
+    const now = Date.now();
+    while (Date.now() - now < 5) { /* spin */ }
+
+    const recovered = recoverExpiredLeases(queueDir);
+    expect(recovered.find((r) => r.id === task.id)).toBeDefined();
   });
 });

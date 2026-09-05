@@ -25,7 +25,8 @@ import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
 import { completeTask } from './lease-store.js';
-import { getQueueDir } from '../../paths.js';
+import { recoverPendingHandoffs } from './handoff-wiring.js';
+import { getQueueDir, getStateDatabasePath, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
 import { registerSurfaceSession } from '../session/register-surface-session.js';
@@ -35,13 +36,13 @@ import { createDefaultTraceWriter } from '../trace/factory.js';
 import type { TraceWriter } from '../trace/index.js';
 import { MemoryStore, injectHotMemory } from '../memory/index.js';
 import { StateStore } from '../state/state-store.js';
-import { getStateDatabasePath } from '../../paths.js';
+
 import { injectCompanionPrimer } from '../companion/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { AgentConfig } from '../types.js';
-import { getTelemetryPath } from '../../paths.js';
+
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import {
@@ -360,6 +361,20 @@ export class CronScheduler {
       // eslint-disable-next-line no-console
       console.error(`[daemon] lease-recovery: failed to recover expired leases: ${msg}`);
     }
+
+    // Recover pending handoffs independently — must not be skipped if lease recovery throws.
+    void recoverPendingHandoffs(undefined, this.queueDir)
+      .then((r) => {
+        if (r.renotified > 0 || r.expired > 0) {
+          // eslint-disable-next-line no-console
+          console.error(`[daemon] handoff-recovery: re-notified ${r.renotified}, expired ${r.expired}`);
+        }
+      })
+      .catch((err: unknown) => {
+        const hMsg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
+      });
 
     this.pullPollTimer = setInterval(() => {
       void this.pullTick();
