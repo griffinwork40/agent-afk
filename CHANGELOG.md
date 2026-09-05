@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.186.1] - 2026-09-05
+
+### Changed
+- centralize subagent model resolution into resolveChildModel() (#1499) (db62c706)
+
 ## [5.186.0] - 2026-09-05
 
 ### Added
