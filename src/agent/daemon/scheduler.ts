@@ -15,17 +15,15 @@
 import { env } from '../../config/env.js';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { execFile as execFileCallback } from 'node:child_process';
-import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
 import * as cron from 'node-cron';
 import { runSweep } from '../worktree-sweep.js';
-import type { ExecFileFn, SweepResult } from '../worktree-sweep.js';
+import type { SweepResult } from '../worktree-sweep.js';
 import { sweepRootSet } from '../worktree-root-registry.js';
 import { IdleDetector } from './idle-detector.js';
 import { dequeueNext, recoverExpiredLeases } from './queue-store.js';
 import { completeTask } from './lease-store.js';
-import { recoverPendingHandoffs } from './handoff-wiring.js';
+import { makeDaemonElicitationHandler, recoverPendingHandoffs } from './handoff-wiring.js';
+import { elicitationRouter } from '../elicitation-router.js';
 import { getQueueDir, getStateDatabasePath, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import { AgentSession } from '../session/agent-session.js';
@@ -55,74 +53,11 @@ import { summarizeRootFailures } from './root-failure-summary.js';
 import { countPrunable, formatWorktreePruneSummary } from './worktree-prune-summary.js';
 import { debugLog } from '../../utils/debug.js';
 
-/**
- * Wall-clock ceiling on a single `git` invocation inside the sweep.
- *
- * External constraint: git can block indefinitely on things that are not
- * errors — a credential prompt on a repo with an https remote, a stale NFS or
- * SMB handle, a network-mounted worktree whose server went away. The prune
- * tick's per-root loop is deliberately serial (one machine-global advisory
- * lock), so a single blocked child does not fail that root: it hangs the whole
- * tick forever and strands every root ordered behind it, which is precisely
- * the starvation the per-root try/catch was added to prevent. A timeout turns
- * that silent hang into a rejection the existing catch already handles.
- * Generous by design — a slow `git status` on a large worktree is normal.
- */
-const PRUNE_GIT_TIMEOUT_MS = 120_000;
-
-// Promisified once at module scope — the daemon's builtin worktree-prune task
-// reuses the same node:child_process exec function on every tick; there is no
-// reason to re-resolve it dynamically inside the handler.
-const promisifiedPruneExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
-
-/**
- * `promisifiedPruneExecFile` with a timeout merged into every call. Wrapping
- * here rather than at each `git` call site inside the sweep engine keeps the
- * engine's own signature untouched and applies the ceiling uniformly, including
- * to call sites added later.
- */
-const builtinPruneExecFile: ExecFileFn = (file, args, options) =>
-  promisifiedPruneExecFile(file, args, { timeout: PRUNE_GIT_TIMEOUT_MS, ...options });
-
-/**
- * Resolve the repo root for the builtin worktree-prune sweep. An explicit
- * `override` (AFK_WORKTREE_SWEEP_ROOT) wins; otherwise discover the repo
- * enclosing `cwd` via `git rev-parse --show-toplevel`. Returns `null` when the
- * cwd is not inside a git repository — the daemon's cwd is frequently $HOME
- * (launchd sets WorkingDirectory=homedir), so the caller skips gracefully
- * instead of erroring `fatal: not a git repository` on every nightly run.
- * Exported for unit testing with a stubbed execFile.
- */
-export async function resolveWorktreePruneRoot(
-  execFile: ExecFileFn,
-  cwd: string,
-  override: string | undefined,
-): Promise<string | null> {
-  if (override !== undefined && override.length > 0) return override;
-  try {
-    const top = await execFile('git', ['rev-parse', '--show-toplevel'], { cwd });
-    const root = top.stdout.trim();
-    return root.length > 0 ? root : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Build a charset-safe witness `sessionLabel` for a daemon tick, shaped
- * `<sanitized-taskId>-<uuid>` so traces are greppable by task name yet each
- * tick still gets its own trace dir (a bare taskId would make repeated ticks
- * append to one ever-growing file — the factory treats a repeated label as
- * resume/append).
- *
- * Contract: the result always satisfies SESSION_ID_SAFE (/^[a-zA-Z0-9_-]+$/)
- * because getTraceDir() validates the label and throws otherwise, and a raw
- * taskId may legally contain '.', '/', or spaces.
- */
-export function daemonTraceLabel(taskId: string): string {
-  const safe = taskId.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
-  return `${safe || 'task'}-${randomUUID()}`;
-}
+// Re-export module-scope helpers extracted to scheduler.helpers.ts for the
+// 350-code-line ceiling. Public surface unchanged -- importers of
+// resolveWorktreePruneRoot and daemonTraceLabel resolve through here.
+export { builtinPruneExecFile, resolveWorktreePruneRoot, daemonTraceLabel } from './scheduler.helpers.js';
+import { builtinPruneExecFile, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.helpers.js';
 
 export interface SchedulerOptions {
   /** Per-tick session config; merged with defaults at spawn time. */
@@ -454,12 +389,22 @@ export class CronScheduler {
     let disposeRegistration: (() => void) | null = null;
     this.idleDetector.increment();
     try {
-      const spawned = await this.spawnSession(task.taskId);
+      const spawned = await this.spawnSession(task.taskId, trigger);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
       stateStore = spawned.stateStore;
       mcpManager = spawned.mcpManager ?? null;
       disposeRegistration = spawned.dispose;
+
+      // Invariant: handoff handler installed BEFORE sendMessage so the
+      // ask-question-gate's hasHandler() probe passes for pull tasks;
+      // uninstalled in the finally block so cron ticks never inherit it.
+      if (trigger === 'pull') {
+        elicitationRouter.install(makeDaemonElicitationHandler({
+          taskId: task.taskId, originalCommand: task.command, queueDir: this.queueDir,
+        }));
+      }
+
       const response = await session.sendMessage(task.command);
       const responseText = redactInlineSecrets(response.content);
       // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
@@ -499,6 +444,7 @@ export class CronScheduler {
       this.writeTelemetry(record, task);
       return record;
     } finally {
+      if (trigger === 'pull') elicitationRouter.uninstall();
       this.idleDetector.decrement();
       if (session) {
         try {
@@ -704,7 +650,7 @@ export class CronScheduler {
     }
   }
 
-  private async spawnSession(taskId: string): Promise<{
+  private async spawnSession(taskId: string, trigger: TelemetryTrigger = 'cron'): Promise<{
     session: AgentSession;
     memoryStore: MemoryStore;
     stateStore: StateStore;
@@ -810,13 +756,9 @@ export class CronScheduler {
       // break scheduled tasks that depend on tool execution.
       permissionMode: 'bypassPermissions',
       hookRegistry: registry,
-      // Scheduler/cron sessions are headless (no human at the keyboard): strip
-      // ask_question so a scheduled task never stalls on an unanswerable prompt.
-      // The daemon session factory also forces this after its own config spread;
-      // set it here as the base for the no-factory fallback (standalone
-      // scheduler / tests). Placed before the sessionConfig spread so an
-      // operator escape-hatch could still override it, mirroring permissionMode.
-      isNonInteractive: true,
+      // Pull tasks keep ask_question (handoff handler persists the question
+      // for eventual reply); cron/sessionstart tasks strip it.
+      isNonInteractive: trigger !== 'pull',
       // Surface stamps the session as 'daemon' so routing-decision telemetry
       // rows derive origin:'daemon' correctly. Placed before sessionConfig so
       // an operator escape-hatch via sessionConfig.surface can still override.
