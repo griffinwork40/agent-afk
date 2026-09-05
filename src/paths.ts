@@ -400,6 +400,31 @@ export function getSubagentOutputsDir(sessionId: string): string {
 }
 
 /**
+ * Session-scoped directory for bash output capture files.
+ *
+ * Captures live under the witness trace directory for the session so the
+ * existing witness sweep (30-day / 2 GiB policy) evicts them automatically —
+ * no separate sweeper is needed.
+ *
+ * Layout: `<getTraceDir(sessionId)>/bash-captures/`
+ *
+ * When `sessionId` is undefined or empty (e.g. the session has not yet
+ * received a provider-assigned ID), returns `undefined` so the caller can
+ * skip writing rather than accumulating files under an anonymous path.
+ *
+ * The directory itself should be created with mode 0o700 (owner only).
+ * Individual capture files are written 0o600.
+ */
+export function getBashCapturesDir(sessionId: string | undefined): string | undefined {
+  if (!sessionId || sessionId === '') return undefined;
+  // Use getTraceDir which calls validateSessionId internally — provider-issued
+  // session IDs must pass the same /^[A-Za-z0-9_-]+$/ constraint. If the ID
+  // contains unexpected characters, the function throws; the caller wraps in
+  // try/catch as part of best-effort capture.
+  return join(getTraceDir(sessionId), 'bash-captures');
+}
+
+/**
  * Inverse of {@link getTraceDir}: recover the witness `sessionLabel` from a
  * trace-file path (`.../witness/<label>/trace.jsonl`).
  *

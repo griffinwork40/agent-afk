@@ -116,15 +116,33 @@ describe('bash capture — large output (model-truncated, command completes)', (
     expect(content.startsWith('A')).toBe(true);
   });
 
-  it('capture file is under the state dir bash-captures subdir', async () => {
+  it('capture file is under witness/<sessionId>/bash-captures/ (witness-sweep-covered path)', async () => {
     const result = await run(
       "python3 -c \"print('B' * 110000)\"",
       { sessionId: 'sess-path', toolUseId: 'tu-path' },
     );
     expect(result.capturePath).toBeDefined();
-    // Must be under our temp state dir
+    // Must be under our temp state dir → witness → sessionId → bash-captures
     expect(result.capturePath!.startsWith(tmpStateDir)).toBe(true);
+    expect(result.capturePath!).toContain('witness');
     expect(result.capturePath!).toContain('bash-captures');
+    // Session dir must be present in the path
+    expect(result.capturePath!).toContain('sess-path');
+  });
+
+  it('capture parent directory has mode 0700 (owner only)', async () => {
+    const result = await run(
+      "python3 -c \"print('D2' * 55000)\"",
+      { sessionId: 'sess-dirmode', toolUseId: 'tu-dirmode' },
+    );
+    expect(result.capturePath).toBeDefined();
+    const { statSync, dirname } = await import('node:path').then(() =>
+      import('node:fs').then(fs => ({ statSync: fs.statSync, dirname: (p: string) => p.split('/').slice(0, -1).join('/') }))
+    );
+    const captureDir = result.capturePath!.split('/').slice(0, -1).join('/');
+    const stats = statSync(captureDir);
+    // Mode 0o700: owner rwx, no group or other bits. Platform mask: 0o777.
+    expect(stats.mode & 0o777).toBe(0o700);
   });
 
   it('capture file is mode 0600 (owner read+write only)', async () => {

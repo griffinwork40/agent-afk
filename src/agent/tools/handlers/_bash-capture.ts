@@ -7,28 +7,30 @@
  * a discoverable path rather than silently discarding the middle.
  *
  * Storage layout:
- *   $AFK_STATE_DIR/bash-captures/<sessionId>/<toolUseId>.txt
+ *   $AFK_STATE_DIR/witness/<sessionId>/bash-captures/<toolUseId>.txt
  *
- * Retention: the witness sweep already evicts old session directories on the
- * 30-day / 2 GiB policy (see src/agent/witness-sweep.ts). Captures live in a
- * parallel sibling dir at the state level, not under witness/, so the sweep
- * does NOT currently purge them. This module caps each file at CAPTURE_MAX_BYTES
- * (8 MB) — the same floor as HARD_CAP_BYTES — to bound individual file size.
- * A follow-up sweep for the bash-captures dir is tracked separately.
+ * Retention: capture files live inside the per-session witness trace directory,
+ * so the existing witness sweep (30-day / 2 GiB policy in witness-sweep.ts)
+ * evicts them automatically together with the rest of the session's trace data.
+ * No separate sweeper is required.
  *
- * Access: restricted to the state dir (user-local). Capture files are written
- * 0o600 (owner read/write only). The parent directories are created via
- * mkdirSync without an explicit mode so they inherit the process umask.
+ * Access: restricted to the trace directory (user-local).
+ *   - Parent directories are created with mode 0700 (owner only).
+ *   - Capture files are written with O_CREAT|O_WRONLY|O_EXCL + mode 0600
+ *     (exclusive create, owner read/write only, no symlink following).
+ *   - `toolUseId` is sanitized to `[A-Za-z0-9_-]` before use in paths.
+ *
  * The path is returned from `writeBashCapture` and exposed to the TUI as
  * `ToolResultChunk.capturePath`; the model never sees it (it is not in
- * `content`).
+ * `content`). When the session ID is absent or the write fails, `undefined`
+ * is returned — the TUI renders "output capped" without a path, which is
+ * truthful: the middle is hidden but was not persisted.
  *
  * @module agent/tools/handlers/_bash-capture
  */
 
-import { mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import { getAfkStateDir } from '../../../paths.js';
+import { mkdirSync, openSync, writeSync, closeSync } from 'fs';
+import { getBashCapturesDir } from '../../../paths.js';
 
 /**
  * Hard cap on each individual capture file (bytes). Mirrors HARD_CAP_BYTES —
@@ -38,27 +40,20 @@ import { getAfkStateDir } from '../../../paths.js';
 export const CAPTURE_MAX_BYTES = 8_000_000;
 
 /**
- * Root for session-scoped bash capture files.
- * Distinct from the witness tree so the witness sweep does not evict these.
- */
-export function getBashCapturesDir(sessionId?: string): string {
-  const base = join(getAfkStateDir(), 'bash-captures');
-  if (sessionId === undefined || sessionId === '') return base;
-  // Session IDs come from provider-issued identifiers and must not allow path
-  // traversal. Strip everything that is not alphanumeric, hyphen, or underscore.
-  const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128);
-  return join(base, safe);
-}
-
-/**
  * Write `fullOutput` to a capture file and return its absolute path.
  *
- * Returns `undefined` on any write failure — capture is best-effort;
- * a write failure MUST NOT surface to the user as a tool error.
+ * Returns `undefined` on any write failure or when `sessionId` is absent —
+ * capture is best-effort; a write failure MUST NOT surface as a tool error.
+ *
+ * Security properties:
+ * - `sessionId` is validated by `getBashCapturesDir → getTraceDir → validateSessionId`.
+ * - `toolUseId` is sanitised to `[A-Za-z0-9_-]` before use in the filename.
+ * - The capture directory is created with mode 0700 (owner only).
+ * - The file is opened with O_CREAT|O_WRONLY|O_EXCL so it cannot follow a
+ *   pre-existing symlink and cannot collide with a concurrent write.
+ * - File mode is 0600 (owner read+write only).
  *
  * Preconditions:
- * - `sessionId` and `toolUseId` are opaque strings; both are sanitised
- *   to `[A-Za-z0-9_-]` before use in paths.
  * - `fullOutput` is at most HARD_CAP_BYTES bytes (enforced by the bash
  *   accumulator before this is called).
  */
@@ -69,16 +64,28 @@ export function writeBashCapture(
 ): string | undefined {
   try {
     const dir = getBashCapturesDir(sessionId);
-    mkdirSync(dir, { recursive: true });
+    if (dir === undefined) return undefined;
+    // 0o700: owner rwx, no group or other access. The directory itself
+    // contains session-scoped bash output and should not be world-readable.
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
     const safeId = toolUseId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 128);
-    const filePath = join(dir, `${safeId}.txt`);
+    const filePath = `${dir}/${safeId}.txt`;
     // Guard: never write more than CAPTURE_MAX_BYTES to disk.
     const buf = Buffer.from(fullOutput, 'utf8');
-    const toWrite = buf.length <= CAPTURE_MAX_BYTES ? fullOutput : buf.subarray(0, CAPTURE_MAX_BYTES).toString('utf8');
-    writeFileSync(filePath, toWrite, { encoding: 'utf8', mode: 0o600 });
+    const toWrite = buf.length <= CAPTURE_MAX_BYTES ? buf : buf.subarray(0, CAPTURE_MAX_BYTES);
+    // O_CREAT|O_WRONLY|O_EXCL: creates a new file exclusively — fails if the
+    // path already exists (collision-safe) and does not follow symlinks
+    // (symlink-safe). Mode 0o600: owner read+write only.
+    const fd = openSync(filePath, 'wx', 0o600);
+    try {
+      writeSync(fd, toWrite);
+    } finally {
+      closeSync(fd);
+    }
     return filePath;
   } catch {
-    // Best-effort: swallow any filesystem error (disk full, permissions, etc.)
+    // Best-effort: swallow any filesystem error (disk full, permissions,
+    // collision with a prior identical toolUseId in the same session, etc.)
     return undefined;
   }
 }

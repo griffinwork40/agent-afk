@@ -312,3 +312,96 @@ describe('stream-consumer: durationMs passthrough', () => {
     expect(out.chunk.durationMs).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Integration: bash output pipeline — stream-consumer → formatOutcome
+// Verifies the full pipeline for bash-specific fields (capturePath, truncated,
+// tailPreview, durationMs) without hitting the bash process or filesystem.
+// ---------------------------------------------------------------------------
+
+describe('stream-consumer → formatOutcome: bash output integration', () => {
+  const HOME = '/Users/testuser';
+
+  function buildBashEvent(overrides: Partial<ProviderEvent & { type: 'tool.output' }>): ProviderEvent {
+    return {
+      type: 'tool.output',
+      toolUseId: 'tu-bash',
+      toolName: 'bash',
+      content: 'line1\nline2\nline3',
+      sessionId: 's-bash',
+      ...overrides,
+    };
+  }
+
+  function outcome(evt: ProviderEvent): string {
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    return stripAnsi(formatOutcome(out.chunk, HOME, 60, 'bash'));
+  }
+
+  it('small ordinary output: shows lineCount and tail lines (not just line count)', () => {
+    // 3 lines, 18 bytes — well within model cap and 80-char display limit
+    const rendered = outcome(buildBashEvent({ content: 'line1\nline2\nline3' }));
+    // Must show line count
+    expect(rendered).toContain('3 lines');
+    // Must show actual tail content (not just the header)
+    expect(rendered).toContain('line3');
+  });
+
+  it('large (>100KB) truncated output with capturePath: shows capture path in TUI', () => {
+    const capturePath = `${HOME}/.afk/state/witness/sess-1/bash-captures/tu-1.txt`;
+    // Simulate a model-capped event (truncated=true, capturePath set)
+    const longContent = 'A'.repeat(150) + '\n' + 'B'.repeat(150) + '\n(tail line)';
+    const rendered = outcome(buildBashEvent({
+      content: longContent,
+      truncated: true,
+      capturePath,
+    }));
+    expect(rendered).toContain('full output saved');
+    expect(rendered).toContain('~/.afk/state/witness/sess-1/bash-captures/tu-1.txt');
+  });
+
+  it('SIGKILL path (truncated, no capturePath): shows "output capped · command killed"', () => {
+    const rendered = outcome(buildBashEvent({
+      content: 'partial output\nmore output\n[output truncated — command exceeded the 8000000-byte output cap and was terminated]',
+      truncated: true,
+      // no capturePath
+    }));
+    expect(rendered).toContain('output capped');
+    expect(rendered).toContain('command killed');
+    expect(rendered).not.toContain('full output saved');
+  });
+
+  it('capturePath is plumbed through stream-consumer to chunk', () => {
+    const capturePath = '/tmp/witness/sess/bash-captures/tu.txt';
+    const evt = buildBashEvent({ truncated: true, capturePath });
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.capturePath).toBe(capturePath);
+    expect(out.chunk.truncated).toBe(true);
+  });
+
+  it('durationMs is plumbed and rendered as duration suffix', () => {
+    const rendered = outcome(buildBashEvent({ content: 'done', durationMs: 1500 }));
+    expect(rendered).toContain('1.5s');
+  });
+
+  it('tailPreview is extracted from multi-line content and renders under header', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `output line ${i + 1}`);
+    const rendered = outcome(buildBashEvent({ content: lines.join('\n') }));
+    // Header shows line count
+    expect(rendered).toContain('20 lines');
+    // Actual tail lines from the content must appear (last few lines)
+    expect(rendered).toContain('output line 20');
+    expect(rendered).toContain('output line 19');
+  });
+
+  it('small multi-line output (<=80 chars) shows tail lines — not hidden by display budget', () => {
+    // This is the "ordinary output hidden by <=7-line tail" regression:
+    // output is short (fits 80 chars) but multi-line; must still show tail.
+    const rendered = outcome(buildBashEvent({ content: 'a\nb\nc\nd' }));
+    expect(rendered).toContain('4 lines');
+    expect(rendered).toContain('d');
+    expect(rendered).toContain('c');
+  });
+});

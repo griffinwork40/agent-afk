@@ -142,10 +142,8 @@ function truncateContent(
   const sizeLabel = formatByteSize(sizeBytes);
 
   const lines = content.split('\n');
-  if (lines.length <= 1 && content.length <= 80) {
-    return { content, truncated: false, sizeBytes, sizeLabel };
-  }
 
+  // Single-line path: no lineCount / tailPreview needed.
   if (lines.length <= 1) {
     if (content.length <= 80) {
       return { content, truncated: false, sizeBytes, sizeLabel };
@@ -154,15 +152,21 @@ function truncateContent(
     return { content: truncated, truncated: true, sizeBytes, sizeLabel };
   }
 
-  if (content.length <= 80) {
-    return { content, truncated: false, sizeBytes, sizeLabel };
-  }
-
-  // Extract the last TAIL_PREVIEW_LINES non-empty lines for the outcome row.
-  // Trim trailing blank lines first (commands often end with a bare newline).
+  // Multi-line path: always extract lineCount and tailPreview so the TUI can
+  // render the actual tail lines regardless of total character count.
+  // Short multi-line output (≤80 chars) is shown verbatim as the preview
+  // (no display truncation needed), but we still expose lineCount+tailPreview
+  // so the outcome row renders the tail preview block rather than hiding it.
   const nonEmptyLines = lines.filter(l => l.trim() !== '');
   const tailPreview = nonEmptyLines.slice(-TAIL_PREVIEW_LINES);
 
+  if (content.length <= 80) {
+    // Content fits the preview budget — show it verbatim. lineCount and
+    // tailPreview are still set so formatOutcome renders the tail block.
+    return { content, truncated: false, lineCount: lines.length, sizeBytes, sizeLabel, tailPreview };
+  }
+
+  // Content exceeds the 80-char display budget — collapse to "first line …+N lines".
   const firstLine = lines[0] ?? '';
   let preview = firstLine;
   if (firstLine.length > 80) {
