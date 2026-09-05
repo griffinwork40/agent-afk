@@ -324,17 +324,39 @@ describe('pull tick — elicitation handler lifecycle', () => {
     uninstallSpy.mockRestore();
   });
 
-  it('does not install or uninstall elicitation handler for cron tasks', async () => {
+  it('does not install or uninstall elicitation handler on an empty pull tick', async () => {
     const { elicitationRouter } = await import('../elicitation-router.js');
     const installSpy = vi.spyOn(elicitationRouter, 'install');
     const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
 
-    // Run a cron-triggered task (not a pull task — use the scheduler's runScheduled path).
-    // We verify install/uninstall are NOT called by simply not enqueuing anything in the
-    // pull queue and instead confirming the spies stay at zero after a tick.
+    // An empty pull-tick (nothing in the queue) never reaches the install path.
     const scheduler = makeScheduler(queueDir, telemetryPath);
     scheduler.startPullLoop();
     await vi.advanceTimersByTimeAsync(30_000); // empty tick
+
+    expect(installSpy).not.toHaveBeenCalled();
+    expect(uninstallSpy).not.toHaveBeenCalled();
+
+    await scheduler.stop();
+    installSpy.mockRestore();
+    uninstallSpy.mockRestore();
+  });
+
+  it('does not install or uninstall elicitation handler for a cron runOnce tick', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'install');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+
+    // Register a cron task and drive it via scheduler.tick() — the public
+    // seam used by scheduler.test.ts to invoke runOnce with trigger='cron'.
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.register({
+      taskId: 'cron-elicitation-test',
+      command: '/cron-noop',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+    await scheduler.tick('cron-elicitation-test');
 
     expect(installSpy).not.toHaveBeenCalled();
     expect(uninstallSpy).not.toHaveBeenCalled();

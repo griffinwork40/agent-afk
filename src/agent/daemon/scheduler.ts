@@ -57,7 +57,7 @@ import { debugLog } from '../../utils/debug.js';
 // Re-export module-scope helpers extracted to scheduler.helpers.ts for the
 // 350-code-line ceiling. Public surface unchanged -- importers of
 // resolveWorktreePruneRoot and daemonTraceLabel resolve through here.
-export { builtinPruneExecFile, resolveWorktreePruneRoot, daemonTraceLabel } from './scheduler.helpers.js';
+export { resolveWorktreePruneRoot, daemonTraceLabel } from './scheduler.helpers.js';
 import { builtinPruneExecFile, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.helpers.js';
 
 export interface SchedulerOptions {
@@ -426,6 +426,7 @@ export class CronScheduler {
     let stateStore: StateStore | null = null;
     let mcpManager: McpManager | null = null;
     let disposeRegistration: (() => void) | null = null;
+    let handlerInstalled = false;
     this.idleDetector.increment();
     try {
       const spawned = await this.spawnSession(task.taskId, trigger);
@@ -444,6 +445,7 @@ export class CronScheduler {
           originalCommand: redactInlineSecrets(task.command),
           queueDir: this.queueDir,
         }));
+        handlerInstalled = true;
       }
 
       const response = await session.sendMessage(task.command);
@@ -485,7 +487,7 @@ export class CronScheduler {
       this.writeTelemetry(record, task);
       return record;
     } finally {
-      if (trigger === 'pull') elicitationRouter.uninstall();
+      if (handlerInstalled) elicitationRouter.uninstall();
       this.idleDetector.decrement();
       if (session) {
         try {
