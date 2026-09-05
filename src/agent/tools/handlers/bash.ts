@@ -270,7 +270,7 @@ export function createBashHandler(
       if (proc.pid !== undefined) {
         killProcessGroup(proc.pid);
       }
-      settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true });
+      settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true, durationMs: Date.now() - startedAt });
     }, timeout_ms);
 
     let stdout = '';
@@ -357,7 +357,7 @@ export function createBashHandler(
       if (proc.pid !== undefined) {
         killProcessGroup(proc.pid);
       }
-      settle({ content: 'Command aborted', isError: true });
+      settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
     };
     signal.addEventListener('abort', abortHandler);
     // Close the TOCTOU window between the pre-flight `signal.aborted` check (top
@@ -376,7 +376,7 @@ export function createBashHandler(
       // ran (resolved=true) so this call is a no-op. Check anyway so the
       // branch is explicit: abort beats close.
       if (signal.aborted) {
-        settle({ content: 'Command aborted', isError: true });
+        settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
         return;
       }
 
@@ -451,7 +451,7 @@ export function createBashHandler(
       } else {
         message = describeSpawnCwdError(err, effectiveCwd);
       }
-      settle({ content: `Failed to execute: ${message}`, isError: true });
+      settle({ content: `Failed to execute: ${message}`, isError: true, durationMs: Date.now() - startedAt });
     });
   });
   };

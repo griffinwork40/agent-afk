@@ -60,7 +60,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // daemonTraceLabel) so traces are greppable by task name while each tick
   // still gets its own trace dir. Created before the hook registry so the
   // AFK gate's structured audit trace is wired from the start of the session.
-  const trace = createDefaultTraceWriter({ sessionLabel: daemonTraceLabel(taskId) });
+  const trace = createDefaultTraceWriter({ sessionLabel: sessionId });
   const { registry, memoryStore } = createDefaultHookRegistry(
     undefined,
     'daemon',
