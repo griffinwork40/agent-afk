@@ -144,11 +144,11 @@ async function resolveManagedWorktree(
     ? pathInput
     : join(ctx.afkWorktreesRoot, pathInput);
   if (!isPathWithin(candidate, ctx.afkWorktreesRoot)) {
-    return `Refused: ${candidate} is outside the afk-managed worktree root (${ctx.afkWorktreesRoot}). This tool only manages worktrees under .afk-worktrees/.`;
+    return `Refused: ${pathInput} is outside .afk-worktrees/. Pass a slug (e.g. 'my-worktree') or a path under .afk-worktrees/ from a prior create/list result. Do not pass absolute paths outside .afk-worktrees/.`;
   }
   const entry = await findEntry(execFile, ctx.repoRoot, candidate);
   if (!entry) {
-    return `No registered git worktree at ${candidate}. Use action "list" to see managed worktrees.`;
+    return `No registered git worktree at ${candidate}. Run action "list" to see all managed worktrees and their current paths.`;
   }
   return entry;
 }
@@ -206,7 +206,10 @@ export function createWorktreeHandler(
           const worktreePath = join(ctx.afkWorktreesRoot, slug);
           const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
           if (existing) {
-            return { content: `Worktree already exists at ${worktreePath}`, isError: true };
+            return {
+              content: `Worktree already exists at ${worktreePath}. Use a unique name — e.g. append a short suffix like "${slug}-${Date.now().toString(36).slice(-4)}" — or run action "list" to see all current worktrees.`,
+              isError: true,
+            };
           }
           const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
           const branch = `${prefix}${slug}`;

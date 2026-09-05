@@ -879,8 +879,9 @@ export const worktreeTool: AnthropicToolDef = {
       path: {
         type: 'string',
         description:
-          'keep/release/remove: the worktree to operate on. Absolute path, or a bare slug resolved ' +
-          'against `.afk-worktrees/`.',
+          'keep/release/remove: the worktree to operate on. Pass the slug from a prior `create` or ' +
+          '`list` result (e.g. "my-worktree"), or the full `.afk-worktrees/<slug>` path returned by ' +
+          'those actions. Do not pass absolute paths outside `.afk-worktrees/`.',
       },
       reason: {
         type: 'string',

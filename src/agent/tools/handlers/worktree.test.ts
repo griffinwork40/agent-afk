@@ -337,7 +337,7 @@ describe('worktree handler — keep / release', () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'keep', path: '/tmp/elsewhere' }, SIGNAL);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('outside the afk-managed worktree root');
+    expect(result.content).toContain('outside .afk-worktrees/');
     expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(false);
   });
 
@@ -354,7 +354,7 @@ describe('worktree handler — keep / release', () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'keep', path: '../../etc' }, SIGNAL);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('outside the afk-managed worktree root');
+    expect(result.content).toContain('outside .afk-worktrees/');
     expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(false);
   });
 
@@ -395,7 +395,7 @@ describe('worktree handler — remove guards', () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'remove', path: '../../etc' }, SIGNAL);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('outside the afk-managed worktree root');
+    expect(result.content).toContain('outside .afk-worktrees/');
     expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
   });
 
