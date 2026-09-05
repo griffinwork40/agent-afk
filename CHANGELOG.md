@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.184.0] - 2026-09-05
+
+### Added
+- wire durable handoff store into elicitation path (#1416) (#1493) (2d8a2f1c)
+
+### Changed
+- add endTurnFlush test for fully-pending band (committedBandPaintedRows === 0) (#1492) (51ef6f1d)
+
 ## [5.183.1] - 2026-09-04
 
 ### Fixed
