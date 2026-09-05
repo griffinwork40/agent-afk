@@ -170,11 +170,13 @@ export function buildDaemonSessionFactory(
     const session = new AgentSession(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
-      // Daemon sessions are headless: no human watches to answer ask_question.
-      // Stamped after `...config` so it is forced regardless of caller config;
-      // this is the production chokepoint the scheduler routes every task
-      // through, so it also covers scheduler/cron-spawned sessions.
-      isNonInteractive: true,
+      // Daemon sessions are headless by default: no human watches to answer
+      // ask_question. Pull tasks set isNonInteractive: false in the caller's
+      // config (scheduler.ts spawnSession) so they keep the ask_question tool
+      // available (the handoff handler persists the question for async reply).
+      // Use ?? so an explicit false from the caller's config passes through;
+      // cron/sessionstart callers omit the field and get the safe default (true).
+      isNonInteractive: config.isNonInteractive ?? true,
       // Cascade-abort and drain in-flight children before the writer seals,
       // so a wave still running when this session ends emits real `cancelled`
       // rows instead of vanishing (#733).

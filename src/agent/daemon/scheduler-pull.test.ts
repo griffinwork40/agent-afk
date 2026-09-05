@@ -300,6 +300,73 @@ describe('stop', () => {
   });
 });
 
+describe('pull tick — elicitation handler lifecycle', () => {
+  it('installs the elicitation handler for pull tasks and uninstalls it in finally', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'install');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+
+    enqueue('/pull-elicitation-test', {}, queueDir);
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(installSpy).toHaveBeenCalledTimes(1);
+    expect(uninstallSpy).toHaveBeenCalledTimes(1);
+    // install must have been called before sendMessage fires (the mock session
+    // would have called sendMessage during the tick).
+    expect(installSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      uninstallSpy.mock.invocationCallOrder[0]!,
+    );
+
+    await scheduler.stop();
+    installSpy.mockRestore();
+    uninstallSpy.mockRestore();
+  });
+
+  it('does not install or uninstall elicitation handler on an empty pull tick', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'install');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+
+    // An empty pull-tick (nothing in the queue) never reaches the install path.
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000); // empty tick
+
+    expect(installSpy).not.toHaveBeenCalled();
+    expect(uninstallSpy).not.toHaveBeenCalled();
+
+    await scheduler.stop();
+    installSpy.mockRestore();
+    uninstallSpy.mockRestore();
+  });
+
+  it('does not install or uninstall elicitation handler for a cron runOnce tick', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'install');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+
+    // Register a cron task and drive it via scheduler.tick() — the public
+    // seam used by scheduler.test.ts to invoke runOnce with trigger='cron'.
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.register({
+      taskId: 'cron-elicitation-test',
+      command: '/cron-noop',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+    await scheduler.tick('cron-elicitation-test');
+
+    expect(installSpy).not.toHaveBeenCalled();
+    expect(uninstallSpy).not.toHaveBeenCalled();
+
+    await scheduler.stop();
+    installSpy.mockRestore();
+    uninstallSpy.mockRestore();
+  });
+});
+
 describe('pull tick — lease finalization (completeTask called after runOnce)', () => {
   it('creates no lingering lease files after a successful pull tick', async () => {
     const { existsSync } = await import('node:fs');
@@ -327,6 +394,22 @@ describe('pull tick — lease finalization (completeTask called after runOnce)',
       // At least one completed record.
       expect(completedFiles.length).toBeGreaterThan(0);
     }
+
+    await scheduler.stop();
+  });
+
+  it('pull task gets isNonInteractive: false', async () => {
+    let capturedConfig: AgentConfig | undefined;
+    enqueue('/test-cmd', {}, queueDir);
+
+    const scheduler = makeScheduler(queueDir, telemetryPath, (config) => {
+      capturedConfig = config;
+      return makeMockSession();
+    });
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(capturedConfig?.isNonInteractive).toBe(false);
 
     await scheduler.stop();
   });
