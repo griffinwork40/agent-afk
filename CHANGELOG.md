@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.186.0] - 2026-09-05
+
+### Added
+- show inline colored diffs for patch_apply tool (#1497) (87c4d4d4)
+
 ## [5.185.0] - 2026-09-05
 
 ### Added
