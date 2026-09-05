@@ -12,6 +12,12 @@
  * machinery so no second stdin listener is ever installed (single-consumer
  * stdin invariant, #511).
  *
+ * Steering domains: this is the **human-owned** foreground steering path.
+ * The user sees a running subagent going wrong, hits Ctrl+C, picks Steer,
+ * and types a redirect -- delivered as the next top-level REPL turn.
+ * Background subagents are steered by the **parent model** via the
+ * `send_message_to_agent` tool, which calls `handle.steer()` for mid-run
+ * injection at the next tool-call boundary. See `send-message.ts`.
  */
 
 import { runPicker } from '../../render/picker.js';

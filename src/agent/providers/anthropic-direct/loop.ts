@@ -74,6 +74,7 @@ import { runToolRound } from './loop/tool-round.js';
 import { emitNonToolUseTerminal } from './loop/turn-terminal.js';
 import { TurnAccumulator } from './loop/turn-accumulator.js';
 import { TurnTrace } from '../shared/turn-trace.js';
+import { applyBeforeNextRound } from './loop/inter-round.js';
 
 /**
  * Run one user turn through the model + tool dispatcher loop. Yields
@@ -332,6 +333,7 @@ export async function* runTurn(
     // (assistant push, rollback on throw, tool_result commit) lives inside.
     const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs);
     if (round === 'terminated') return;
+    applyBeforeNextRound(input, input.beforeNextRound?.());
   }
   } finally {
     trace.finish(turn.elapsedMs());

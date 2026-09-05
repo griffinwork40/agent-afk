@@ -479,6 +479,15 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    */
   setSystemPrompt?(basePrompt: string | undefined): boolean;
   /**
+   * Optional. Wire an inter-round steering callback for background subagents.
+   * Called after each tool-round before the next opens. When set, the callback
+   * is invoked by the provider loop; the return value (if non-empty) is
+   * injected as a user-turn steering message before the next round.
+   *
+   * `AgentSession.setBeforeNextRound()` calls this only when present.
+   */
+  setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
+  /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).
    *

@@ -199,6 +199,14 @@ export interface AnthropicDirectQueryOptions {
    */
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
   fastModeController?: import('../../fast-mode.js').FastModeController;
+  /**
+   * Inter-round steering callback. Called after each tool-round returns
+   * `'continue'` and before the next round opens. Returns the next pending
+   * steering message (or `undefined` when none is queued). Wired by the
+   * subagent handle when the child is running in the background so the parent
+   * can inject mid-run guidance without a new user turn.
+   */
+  beforeNextRound?: () => string | undefined;
 }
 
 /** Snapshot of the starter list, freshly cloned per call (callers may mutate). */

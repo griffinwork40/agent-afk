@@ -6,11 +6,11 @@ import {
   clipboardWriteTool,
   clipboardReadTool,
 } from './schemas.js';
-import { cancelBackgroundJobTool } from './schemas.orchestration.js';
+import { cancelBackgroundJobTool, sendMessageToAgentTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 35 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(35);
+  it('contains exactly 36 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(36);
   });
 
   it('exports the expected tool names', () => {
@@ -31,6 +31,7 @@ describe('builtinToolSchemas', () => {
       'get_schedule_history',
       'cancel_schedule',
       'cancel_background_job',
+      'send_message_to_agent',
       'read_witness',
       'search_witness',
       'worktree',
@@ -186,5 +187,24 @@ describe('agentTool', () => {
 
   it('is NOT included in BUILTIN_TOOL_NAMES', () => {
     expect(BUILTIN_TOOL_NAMES).not.toContain('agent');
+  });
+});
+
+describe('sendMessageToAgentTool', () => {
+  it('requires jobId and message', () => {
+    expect(sendMessageToAgentTool.input_schema.required).toEqual(['jobId', 'message']);
+  });
+
+  it('description mentions mode="background" and provenance boundary', () => {
+    expect(sendMessageToAgentTool.description).toMatch(/mode="background"/);
+    expect(sendMessageToAgentTool.description).toMatch(/user-owned|user-backgrounded/i);
+  });
+
+  it('has category "subagent"', () => {
+    expect(sendMessageToAgentTool.category).toBe('subagent');
+  });
+
+  it('is included in BUILTIN_TOOL_NAMES', () => {
+    expect(BUILTIN_TOOL_NAMES).toContain('send_message_to_agent');
   });
 });

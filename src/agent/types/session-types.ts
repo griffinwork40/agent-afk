@@ -240,6 +240,14 @@ export interface IAgentSession {
   interrupt(): Promise<void>;
 
   /**
+   * Set a callback invoked at each tool-call boundary (between tool-result
+   * commit and next model API call) to inject a steering message. Pass
+   * `undefined` to clear. Optional — providers that don't support inter-round
+   * injection silently ignore it.
+   */
+  setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
+
+  /**
    * Tear down the SDK conversation and rebuild it from the same config.
    * Used by `/clear` so the model genuinely loses prior-turn context —
    * forwarding the literal string `/clear` to a provider does not.
