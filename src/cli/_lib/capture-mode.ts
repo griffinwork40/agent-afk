@@ -181,6 +181,21 @@ export function detectNotify(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
+ * Decide whether a dim horizontal-rule separator should be rendered between
+ * conversation turns in the REPL.
+ *
+ * ON by default; `AFK_TURN_SEPARATOR=0` opts OUT (no rule). Only the literal
+ * string "0" disables — any other value (or unset) leaves it on. TTY-only:
+ * even when this returns true, the caller must gate on `stream.isTTY` so
+ * piped/one-shot output (`afk chat`) never receives separator characters.
+ *
+ * Reads `process.env` at call time. Pure function with no side effects.
+ */
+export function detectTurnSeparator(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env['AFK_TURN_SEPARATOR'] !== '0';
+}
+
+/**
  * Compose the OSC 2 terminal-title string for a given working directory and
  * running state. Pure string builder — no I/O, no TTY/env gating.
  *

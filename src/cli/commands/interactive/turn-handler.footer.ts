@@ -20,6 +20,8 @@ import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { formatQuotaUsage } from '../../quota-footer.js';
 import { contextRatio } from './shared.js';
 import { resolveAutoResumeOnUsageLimit } from '../../config.js';
+import { divider } from '../../render/divider.js';
+import { detectTurnSeparator } from '../../_lib/capture-mode.js';
 
 export type ContextTier = 'quiet' | 'normal' | 'caution' | 'near' | 'over';
 
@@ -122,4 +124,33 @@ export function printTurnFooter(
     write(quotaColorFn(quota.text));
   }
   write('');
+}
+
+/**
+ * Emit the turn-boundary separator — a dim horizontal rule that visually
+ * divides adjacent conversation turns in the REPL scrollback.
+ *
+ * Invariant (TUI rhythm contract): this separator is trailing-owned. It is
+ * called AFTER `printTurnFooter` (which ends with its own trailing blank),
+ * so the visual order is:
+ *   …footer content…
+ *   (footer trailing blank emitted by printTurnFooter)
+ *   ────────────── (this rule, the last element of the turn)
+ *   (pre-arm blank at turn start — leading-owned per tui-rhythm.md)
+ *
+ * Guards:
+ * - Feature gate: `AFK_TURN_SEPARATOR !== '0'` (ON by default).
+ * - TTY gate: non-TTY callers (`afk chat`, piped output) receive nothing —
+ *   rule characters in a pipe corrupt downstream tooling.
+ *
+ * @param write  - Compositor-aware line writer (same one passed to printTurnFooter).
+ * @param stdout - Stream used for TTY detection. Pass `process.stdout` for
+ *   production; inject a spy stream in tests.
+ */
+export function printTurnSeparator(
+  write: (line: string) => void,
+  stdout: { isTTY?: boolean } = process.stdout,
+): void {
+  if (!detectTurnSeparator() || !stdout.isTTY) return;
+  write(divider());
 }
