@@ -499,6 +499,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     });
 
     this._steeringMessages.length = 0;
+    this._progressEvents.length = 0;
     try {
       this.abortGraph.abort(this.id, 'cancelled');
     } catch {
@@ -535,6 +536,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
       // ignore interrupt errors
     }
     this._steeringMessages.length = 0;
+    this._progressEvents.length = 0;
     try {
       await this.session.close();
     } finally {
@@ -576,6 +578,9 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   /** Ring buffer of pending steering messages (capacity: 3). Consumed by _beforeNextRound. */
   readonly _steeringMessages: string[] = [];
 
+  /** Ring buffer of progress events emitted by this child (capacity: PROGRESS_RING_CAPACITY). */
+  readonly _progressEvents: import('../tools/subagent/emit-progress.js').ProgressEventPayload[] = [];
+
   /**
    * Queue a mid-run steering message for delivery at the next tool-call boundary.
    *
@@ -598,6 +603,31 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     if (this._controller.signal.aborted) return;
     if (this._steeringMessages.length >= 3) this._steeringMessages.shift();
     this._steeringMessages.push(text);
+  }
+
+  /**
+   * Push a progress event into the ring buffer (capacity: PROGRESS_RING_CAPACITY).
+   * Evicts the oldest entry when the buffer is full (oldest-first eviction,
+   * matching the _steeringMessages pattern). Silently drops the event when the
+   * subagent has already reached a terminal state.
+   * @internal — called by the emit_progress tool handler in
+   *   `tools/subagent/emit-progress.ts`.
+   */
+  emitProgress(payload: import('../tools/subagent/emit-progress.js').ProgressEventPayload): void {
+    if (
+      this._currentStatus === 'succeeded' ||
+      this._currentStatus === 'failed' ||
+      this._currentStatus === 'cancelled'
+    ) {
+      return;
+    }
+    // Inline the capacity constant to avoid a circular/async import.
+    // Kept in sync with PROGRESS_RING_CAPACITY in emit-progress.ts.
+    const CAPACITY = 20;
+    if (this._progressEvents.length >= CAPACITY) {
+      this._progressEvents.shift();
+    }
+    this._progressEvents.push(payload);
   }
 
   /**

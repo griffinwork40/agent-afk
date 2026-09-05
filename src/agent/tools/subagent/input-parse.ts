@@ -138,6 +138,13 @@ export interface AgentInput {
    * to `undefined` (no field) so the executor's `=== 'worktree'` check is total.
    */
   isolation?: 'worktree';
+  /**
+   * When true, the forked child's tool surface gains the `emit_progress` tool,
+   * allowing the child to push structured progress events to the parent at the
+   * parent's next user-turn boundary. Opt-in per dispatch — the tool is EXCLUDED
+   * (not silently no-oped) when this is not set.
+   */
+  progress_events?: boolean;
 }
 
 /**
@@ -509,6 +516,15 @@ export function parseAgentInput(input: unknown): AgentInput {
     isolation = 'worktree';
   }
 
+  // progress_events: optional boolean. Truthy enables the emit_progress tool
+  // on the child. Falsy (or absent) excludes it. readOptional returns
+  // undefined for missing/null/whitespace-only; treat anything truthy as true.
+  const progressEventsValue = readOptional(agentInput, 'progress_events');
+  const progress_events =
+    progressEventsValue !== undefined && progressEventsValue !== null
+      ? Boolean(progressEventsValue)
+      : undefined;
+
   return {
     prompt,
     ...(attachments !== undefined ? { attachments } : {}),
@@ -524,5 +540,6 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(writeRoots !== undefined ? { writeRoots } : {}),
     ...(readRoots !== undefined ? { readRoots } : {}),
     ...(isolation !== undefined ? { isolation } : {}),
+    ...(progress_events !== undefined && progress_events ? { progress_events } : {}),
   };
 }

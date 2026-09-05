@@ -107,6 +107,17 @@ export interface ForkSubagentOptions<T = unknown> {
   denyElicitations?: boolean;
 
   /**
+   * When true, the child's tool surface gains the `emit_progress` tool,
+   * letting it push structured progress events to the parent at the parent's
+   * next user-turn boundary. Events are buffered in a ring buffer (capacity 20)
+   * on the handle and delivered via `queueFrameworkContext`.
+   *
+   * Opt-in per fork — omit (or set false) to keep the child's default surface.
+   * The tool is EXCLUDED (not silently no-oped) when this is not set.
+   */
+  progressEvents?: boolean;
+
+  /**
    * Enforce a per-phase permission boundary on the forked subagent.
    *
    * - `'read-only'`: construct a provider whose `permissions.allowedTools`
