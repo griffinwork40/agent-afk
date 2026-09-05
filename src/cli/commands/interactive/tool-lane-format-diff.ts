@@ -223,7 +223,8 @@ export function formatDiffBlock(
 
   for (const hunk of diff.hunks) {
     if (hunk.filePath && hunk.filePath !== lastFilePath) {
-      items.push({ kind: 'header', text: palette.dim(hunk.filePath) });
+      const safePath = stripAnsi(hunk.filePath).replace(CONTROL_CHAR_RE, '');
+      items.push({ kind: 'header', text: palette.dim(safePath) });
       lastFilePath = hunk.filePath;
     }
     const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
