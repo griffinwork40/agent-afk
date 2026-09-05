@@ -618,6 +618,15 @@
       "category": "model"
     },
     {
+      "name": "AFK_PROSE_MEASURE",
+      "description": "Maximum line length (columns) for prose-only blocks (paragraphs, list items, blockquotes) in the interactive REPL. Code fences use the wider AFK_TEXT_MEASURE (default 100). When AFK_TEXT_MEASURE is explicitly set, it overrides this value for backward compatibility. Accepts a positive integer (minimum 20), or full | off | none | 0 to disable. Unparseable or below-minimum values fall back to the default.",
+      "type": "string",
+      "required": false,
+      "default": "80",
+      "example": "72",
+      "category": "misc"
+    },
+    {
       "name": "AFK_PROVIDER",
       "description": "Force provider selection (anthropic | anthropic-direct | openai | openai-compatible | openai-codex | xai | xai-oauth). Overrides the model-name heuristic. Same surface as the --provider CLI flag; CLI flag wins when both are set.",
       "type": "string",

@@ -1251,6 +1251,20 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_PROSE_MEASURE',
+    description:
+      'Maximum line length (columns) for prose-only blocks (paragraphs, list items, blockquotes) in the ' +
+      'interactive REPL. Code fences use the wider AFK_TEXT_MEASURE (default 100). When AFK_TEXT_MEASURE ' +
+      'is explicitly set, it overrides this value for backward compatibility. ' +
+      'Accepts a positive integer (minimum 20), or full | off | none | 0 to disable. ' +
+      'Unparseable or below-minimum values fall back to the default.',
+    type: 'string',
+    required: false,
+    default: '80',
+    example: '72',
+    category: 'misc',
+  },
+  {
     name: 'COLORFGBG',
     description:
       'Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. ' +
