@@ -576,6 +576,15 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   /** Ring buffer of pending steering messages (capacity: 3). Consumed by _beforeNextRound. */
   readonly _steeringMessages: string[] = [];
 
+  /**
+   * Queue a mid-run steering message for delivery at the next tool-call boundary.
+   *
+   * This is the **model-owned** steering domain: the parent model calls
+   * `send_message_to_agent` which routes here for background subagents.
+   * Foreground subagents are steered by the **human** via the interrupt
+   * picker (Ctrl+C → Steer) which delivers through the REPL turn loop,
+   * not through this method. See `interrupt-picker.ts` for that path.
+   */
   steer(text: string): void {
     if (!text.trim()) return;
     if (

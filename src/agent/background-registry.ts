@@ -749,6 +749,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       status: job.status,
       ...(job.result !== undefined ? { result: job.result } : {}),
       ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
+      ...(job.parentSessionId !== undefined ? { parentSessionId: job.parentSessionId } : {}),
     };
     return snap;
   }

@@ -2094,6 +2094,71 @@ describe('SubagentExecutor', () => {
       expect(result.content).toMatch(/already|succeeded|completed/i);
     });
 
+    it('send_message_to_agent: refuses cross-session steering', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const steerMock = vi.fn();
+      const handle = {
+        ...bgHandle('cross-session').handle,
+        steer: steerMock,
+      } as unknown as SubagentHandle;
+      const job = registry.register({
+        handle,
+        prompt: 'other session work',
+        model: 'sonnet',
+        provenance: 'model',
+        parentSessionId: 'other-session-id',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: job.jobId, message: 'hijack attempt' },
+      }));
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/different session/);
+      expect(steerMock).not.toHaveBeenCalled();
+    });
+
+    it('send_message_to_agent: known-ID enumeration filters out user-owned jobs', async () => {
+      const registry = new BackgroundAgentRegistry({});
+      const modelHandle = bgHandle('model-job');
+      const userHandle = bgHandle('user-job');
+      const modelJob = registry.register({
+        handle: modelHandle.handle,
+        prompt: 'model work',
+        model: 'sonnet',
+        provenance: 'model',
+      });
+      registry.register({
+        handle: userHandle.handle,
+        prompt: 'user work',
+        model: 'sonnet',
+        provenance: 'user',
+      });
+      const bgExecutor = new SubagentExecutor({
+        subagentManager: mockSubagentMgr as any,
+        parentSession: mockParentSession as any,
+        defaultConfig: mockConfig,
+        backgroundRegistry: registry,
+        depth: 0,
+      });
+
+      const result = await bgExecutor.sendMessageToAgent(makeCall({
+        name: 'send_message_to_agent',
+        input: { jobId: 'bg-nonexistent', message: 'redirect' },
+      }));
+      expect(result.isError).toBe(true);
+      // Should list model-owned job but not user-owned job
+      expect(result.content).toContain(modelJob.jobId);
+      expect(result.content).not.toContain('user-job');
+    });
+
     it('send_message_to_agent: returns isError when registry is unavailable', async () => {
       const noRegistryExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,

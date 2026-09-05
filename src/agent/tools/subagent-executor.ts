@@ -461,7 +461,9 @@ export class SubagentExecutor implements SubagentControl {
   supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
   hasPromotableForeground(): boolean { return this.supportsBackgroundJobs() && this.promotionTriggers.size > 0; }
   async cancelBackgroundJob(call: ToolCall): Promise<ToolResult> { return executeBackgroundCancel(this.ctx.backgroundRegistry, call); }
-  async sendMessageToAgent(call: ToolCall): Promise<ToolResult> { return executeSendMessage(this.ctx.backgroundRegistry, call); }
+  async sendMessageToAgent(call: ToolCall): Promise<ToolResult> {
+    return executeSendMessage(this.ctx.backgroundRegistry, call, this.ctx.parentSession.sessionId);
+  }
 
   hasActiveForeground(): boolean {
     return this.activeForegroundHandles.size > 0;
