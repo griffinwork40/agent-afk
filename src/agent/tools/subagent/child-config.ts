@@ -26,6 +26,7 @@ import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import { providerForModel } from '../../providers/index.js';
+import { resolveChildModel } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import {
@@ -73,7 +74,7 @@ export interface BuildChildConfigArgs {
   signal: AbortSignal;
   defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
   resolveApiKeyForModel?: (model: string) => string | undefined;
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
   childSkillExecutorFactory?: (
     depth: number,
@@ -161,8 +162,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // OpenAI key (tier 1 wins) — the OpenAI API then 401s. Clearing them lets
   // the OpenAI auth resolver walk its env / codex precedence cleanly.
   // Invariant: an OMITTED definition model means "policy default", never
-  // "inherit the parent". Both dispatch shapes therefore share one chain:
-  //   call-site > definition model > policy default (`defaultSubagentModel`) > 'sonnet'
+  // "inherit the parent". The canonical precedence chain is defined once in
+  // `resolveChildModel()` (src/agent/subagent/resolve-child-model.ts):
+  //   callSiteModel > namedAgentModel > defaultSubagentModel > defaultModel > 'sonnet'
   // with exactly one escape hatch: an explicit `model: 'inherit'` resolves to
   // the dispatching session's model.
   //
@@ -182,8 +184,11 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     const defModel = namedAgent.definition.model;
     namedDefaultModel = defModel === 'inherit' ? args.parentModel : defModel;
   }
-  const childModel: string =
-    parsed.model ?? namedDefaultModel ?? args.defaultSubagentModel ?? 'sonnet';
+  const childModel: string = resolveChildModel({
+    callSiteModel: parsed.model,
+    namedAgentModel: namedDefaultModel,
+    defaultSubagentModel: args.defaultSubagentModel,
+  });
   const childIsOpenAI = providerForModel(childModel) === 'openai-compatible';
 
   // Named-agent tool access: resolve the definition's declared surface into

@@ -42,6 +42,7 @@ import {
 } from './index.js';
 import { harvestFlagsFromSkillMd, parseSkillMd } from '../cli/slash/_lib/flag-harvest.js';
 import { SubagentManager } from '../agent/subagent.js';
+import { resolveChildModel } from '../agent/subagent/resolve-child-model.js';
 import { substituteSkillArgs } from '../agent/tools/skill-executor/arg-substitution.js';
 import type { IAgentSession } from '../agent/types.js';
 
@@ -155,7 +156,10 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
     parentSession?: IAgentSession,
     ctx?: SkillExecutionContext,
   ) => {
-    const subagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
+    const subagentModel = resolveChildModel({
+      defaultSubagentModel: ctx?.defaultSubagentModel,
+      defaultModel: ctx?.defaultModel,
+    });
 
     // Invariant: the anchor is ALWAYS sent, args or not — mirrors
     // fork-dispatch.ts's runForkedSkillToResult. Naming the skill removes the

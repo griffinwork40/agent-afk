@@ -671,4 +671,26 @@ describe('getDefaultSubagentModel — parent-aware fallback', () => {
     expect(getDefaultSubagentModel('gpt-4o')).toBe('gpt-4o');
     expect(getDefaultSubagentModel('sonnet')).toBe('medium');
   });
+
+  // Regression: xAI/Grok parents must inherit, not fall to Anthropic medium.
+  // A Grok-only user has no Anthropic credentials; dispatching medium children
+  // would 401 at the Anthropic API.
+  it.each([
+    'grok-4.6',
+    'grok-3',
+  ])('inherits xAI-routed parent model %s as the subagent default', (parent) => {
+    expect(getDefaultSubagentModel(parent)).toBe(parent);
+  });
+
+  // Regression: the contract that non-Claude parents inherit is load-bearing
+  // for credential correctness. A non-Claude parent with no Anthropic key must
+  // never produce a child that routes to anthropic-direct.
+  it('non-Claude parent never produces an anthropic-direct child by default', () => {
+    const nonClaudeParents = ['gpt-4o', 'grok-4.6', 'o3-mini', 'codex-1', 'mlx-community/Qwen3.5-35B-A3B-4bit'];
+    for (const parent of nonClaudeParents) {
+      const childModel = getDefaultSubagentModel(parent);
+      const childProvider = providerForModel(childModel);
+      expect(childProvider).not.toBe('anthropic-direct');
+    }
+  });
 });

@@ -43,7 +43,7 @@ export interface SkillExecutorContext {
    * set. Sourced from `AFK_DEFAULT_SUBAGENT_MODEL`; falls back to `'sonnet'`
    * when both are unset. Mirrors `SubagentExecutorContext.defaultSubagentModel`.
    */
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   /** API key / OAuth token forwarded to SubagentManager for child sessions. */
   apiKey?: string;
   /**

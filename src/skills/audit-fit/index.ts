@@ -18,6 +18,7 @@ import { mkdir, appendFile } from 'fs/promises';
 import { join } from 'path';
 import { loadSkillPrompts } from '../_lib/prompt-loader.js';
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
+import { resolveChildModel } from '../../agent/subagent/resolve-child-model.js';
 import { SubagentManager } from '../../agent/subagent.js';
 import type { SubagentResult } from '../../agent/subagent/result.js';
 import { runWave } from '../../agent/subagent/wave.js';
@@ -295,7 +296,8 @@ async function handler(
   // not because dispatch would break. The tier gate is surfacing-only by
   // design; dispatch via getSkill()/the skill tool stays available.
   const apiKey = ctx?.apiKey;
-  const subagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
+  const subagentModel = resolveChildModel(
+    { defaultSubagentModel: ctx?.defaultSubagentModel, defaultModel: ctx?.defaultModel });
   // Tool-use ID of the `skill` ToolCall that invoked this handler. Forwarded
   // as `parentId` to every forkSubagent call so the parallel inspector
   // `Agent(...)` rows nest under THIS skill's tool-lane entry both in the

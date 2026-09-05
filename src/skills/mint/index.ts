@@ -17,6 +17,7 @@
  */
 
 import { registerSkill, type SkillExecutionContext, type SkillMetadata } from '../index.js';
+import { resolveChildModel } from '../../agent/subagent/resolve-child-model.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import type { TraceSink } from '../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../agent/workspace/index.js';
@@ -385,7 +386,10 @@ async function handler(
   // tool-lane entry in both the live overlay and the committed scrollback
   // block. See skills/index.ts SkillExecutionContext.callId.
   const skillCallId = ctx?.callId;
-  const defaultSubagentModel = ctx?.defaultSubagentModel ?? ctx?.defaultModel ?? 'sonnet';
+  const defaultSubagentModel = resolveChildModel({
+    defaultSubagentModel: ctx?.defaultSubagentModel,
+    defaultModel: ctx?.defaultModel,
+  });
 
   // Resume path — caller-supplied resumeFrom wins; otherwise reload the last
   // paused state for this session from disk.

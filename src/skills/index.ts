@@ -27,7 +27,7 @@ export interface SkillExecutionContext {
   /** Default model for the parent session (advisory). */
   defaultModel?: AgentModelInput;
   /** Default model for forked sub-agents (advisory). */
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   /**
    * The tool-use ID of the `skill` ToolCall that invoked this handler. When
    * present, inline-handler implementations SHOULD forward it as

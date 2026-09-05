@@ -19,6 +19,7 @@ import type { ToolCall, ToolResult } from '../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
 import { DEFAULT_READ_ONLY_SKILLS } from '../nesting.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
+import { resolveChildModel } from '../../subagent/resolve-child-model.js';
 import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { getCurrentSink } from '../../_lib/skill-sink-channel.js';
 import { loadSkillPrompts } from '../../../skills/_lib/prompt-loader.js';
@@ -126,7 +127,11 @@ export async function executeForkedRegistrySkill(
   // directly from the agent layer (resolveCredentialForModel), so no
   // injection is required. `ctx.resolveApiKeyForModel` acts as an
   // optional override for callers that need a custom strategy (e.g. tests).
-  const skillChildModel = skill.model ?? ctx.defaultSubagentModel ?? ctx.defaultModel ?? 'sonnet';
+  const skillChildModel = resolveChildModel({
+    callSiteModel: skill.model,
+    defaultSubagentModel: ctx.defaultSubagentModel,
+    defaultModel: ctx.defaultModel,
+  });
   const skillChildApiKey = applyParentCredentialFallback({
     childModel: skillChildModel,
     resolved: ctx.resolveApiKeyForModel
@@ -219,7 +224,11 @@ export async function executePluginSkill(
   // `skill.model ?? ...`). Without the leading `model ??` term a plugin skill
   // pinned to e.g. `model: opus` was silently downgraded to the session
   // default subagent model.
-  const pluginChildModel = model ?? ctx.defaultSubagentModel ?? ctx.defaultModel ?? 'sonnet';
+  const pluginChildModel = resolveChildModel({
+    callSiteModel: model,
+    defaultSubagentModel: ctx.defaultSubagentModel,
+    defaultModel: ctx.defaultModel,
+  });
   const pluginChildApiKey = applyParentCredentialFallback({
     childModel: pluginChildModel,
     resolved: ctx.resolveApiKeyForModel

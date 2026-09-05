@@ -19,6 +19,7 @@ import {
 import { SubagentManager } from '../subagent.js';
 import { resolveChildManagerReadRoots, type ReadScopeInputs } from '../subagent-read-scope.js';
 import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
+import { resolveChildModel } from '../subagent/resolve-child-model.js';
 import { providerForModel } from '../providers/index.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
@@ -44,7 +45,7 @@ export interface ComposeExecutorContext {
   // nudge per node (noisy for an N-node DAG). Left dark intentionally.
   parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'>;
   defaultModel?: AgentModelInput;
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   apiKey?: string;
   // Contract:
   // Per-node credential resolver for the compose path. When provided, the
@@ -752,7 +753,8 @@ export class ComposeExecutor {
         // Resolve the node's effective model and provider FIRST so we can
         // decide whether to forward an API key. Mirrors the resolvedChildApiKey
         // pattern in SubagentExecutor (see subagent-executor.ts:433-444).
-        const nodeModel = n.model ?? this.ctx.defaultSubagentModel ?? this.ctx.defaultModel ?? 'sonnet';
+        const nodeModel = resolveChildModel({ callSiteModel: n.model,
+          defaultSubagentModel: this.ctx.defaultSubagentModel, defaultModel: this.ctx.defaultModel });
         const nodeProvider = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined);
         const parentProvider = providerForModel(
           typeof this.ctx.defaultModel === 'string' ? this.ctx.defaultModel : undefined,
@@ -829,7 +831,8 @@ export class ComposeExecutor {
               id: n.id,
               prompt: n.prompt,
               cwd: effectiveCwd,
-              model: String(n.model ?? this.ctx.defaultSubagentModel ?? this.ctx.defaultModel ?? 'sonnet'),
+              model: resolveChildModel({ callSiteModel: n.model,
+                defaultSubagentModel: this.ctx.defaultSubagentModel, defaultModel: this.ctx.defaultModel }),
             });
           });
           // Build upstream-id map from edges: for each node, list its upstream deps.
