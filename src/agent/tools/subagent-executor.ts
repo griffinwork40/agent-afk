@@ -850,7 +850,7 @@ export class SubagentExecutor implements SubagentControl {
         // subagent.ts this makes every sub-agent uniformly non-interactive.
         // (Previously only background denied; foreground leaked elicitations to
         // the REPL/Telegram human via the process-wide elicitation router.)
-        denyElicitations: true,
+        denyElicitations: true, progressEvents: parsed.progress_events,
       });
       // Backfill: give the depth-1 child executor a real parentId so any
       // depth-2 forks it spawns carry handle.id as their parentId.

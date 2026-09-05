@@ -99,6 +99,13 @@ export interface ChildProviderFactoryArgs {
    * for a read-only skill's forked child. Defaults to false.
    */
   readOnlyBash?: boolean;
+  /**
+   * Custom tools to register on the child's provider. Threaded from
+   * `childConfig.customTools` so tools injected at fork time (e.g.
+   * `emit_progress` via `wireProgressEvents`) reach the provider's
+   * dispatcher — which is the only read point for custom tool schemas.
+   */
+  customTools?: import('../tools/custom-tool.js').CustomToolDef[];
 }
 
 /** Minimal session stub for child executors that only need an abort signal. */
@@ -235,7 +242,7 @@ export interface CreateChildProviderFactoryOptions {
 export function createChildProviderFactory(
   opts: CreateChildProviderFactoryOptions = {},
 ): (args: ChildProviderFactoryArgs) => ModelProvider {
-  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash }) => {
+  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools }) => {
     const providerOpts = {
       // A read-only skill's child passes `allowedTools: RECON_ALLOWED_TOOLS`
       // (no write_file/edit_file); everyone else gets the full CHILD_ALLOWED_TOOLS.
@@ -245,6 +252,10 @@ export function createChildProviderFactory(
       // Bash gate (read-only skill child). Forwarded into BOTH provider
       // constructors so the per-query dispatcher blocks mutating shell commands.
       ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+      // Custom tools injected at fork time (e.g. emit_progress). The provider
+      // constructor is the only read point — config.customTools is not consulted
+      // at query time when a pre-built provider is set.
+      ...(customTools !== undefined && customTools.length > 0 ? { customTools } : {}),
     };
     const route = providerForModel(typeof model === 'string' ? model : undefined);
     if (route === 'openai-compatible') {

@@ -563,9 +563,9 @@ export const agentTool: AnthropicToolDef = {
           'removed, so work in progress is never destroyed (recover it via the ' +
           '`worktree` tool). Mutually exclusive with `cwd` (the runtime owns the ' +
           "child's cwd when isolating) — to isolate, omit `cwd` rather than " +
-          'blanking it. Ignored for read-only agents such as ' +
-          'research-agent — they have nothing to isolate.',
+          'blanking it. Ignored for read-only agents — they have nothing to isolate.',
       },
+      progress_events: { type: 'boolean', description: 'Opt-in: grants the child the `emit_progress` tool so it can push structured progress updates to the parent at each turn boundary. Excluded when not set.' },
     },
     required: ['prompt'],
   },
