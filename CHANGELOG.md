@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.185.0] - 2026-09-05
+
+### Added
+- mid-run agent steering via tool-call boundary injection (#1418) (#1494) (78c13734)
+
 ## [5.184.0] - 2026-09-05
 
 ### Added
