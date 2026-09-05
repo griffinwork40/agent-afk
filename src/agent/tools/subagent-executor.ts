@@ -107,7 +107,7 @@ export interface SubagentExecutorContext {
    * Intentionally decoupled from the parent session — a high-tier parent
    * (e.g. opus) should not silently dispatch high-tier subagents.
    */
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
   childSkillExecutorFactory?: (
     depth: number,

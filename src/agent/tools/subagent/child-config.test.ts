@@ -96,6 +96,7 @@ function baseArgs(overrides?: Partial<BuildChildConfigArgs>): BuildChildConfigAr
     },
     resolveApiKeyForModel: vi.fn((_m: string) => 'child-resolved-key'),
     createChildExecutor: vi.fn((_ctx: SubagentExecutorContext) => stubChildExecutor()),
+    defaultSubagentModel: 'sonnet',
     ...overrides,
   };
 }
@@ -351,8 +352,8 @@ describe('buildChildConfig', () => {
   });
 
   describe('model resolution', () => {
-    it("falls back to 'sonnet' for an unnamed dispatch with no defaults", () => {
-      const { childConfig } = buildChildConfig(baseArgs({ defaultSubagentModel: undefined }));
+    it("resolves to 'sonnet' when defaultSubagentModel is 'sonnet'", () => {
+      const { childConfig } = buildChildConfig(baseArgs({ defaultSubagentModel: 'sonnet' }));
       expect(childConfig.model).toBe('sonnet');
     });
 
@@ -418,12 +419,12 @@ describe('buildChildConfig', () => {
       expect(childConfig.model).toBe('sonnet');
     });
 
-    it('resolves an omitted named model to sonnet when no policy default is wired', () => {
+    it("resolves an omitted named model to 'sonnet' when policy default is 'sonnet'", () => {
       const { childConfig } = buildChildConfig(
         baseArgs({
           namedAgent: namedAgent({}), // no model field
           parentModel: 'opus',
-          defaultSubagentModel: undefined,
+          defaultSubagentModel: 'sonnet',
         }),
       );
       expect(childConfig.model).toBe('sonnet');

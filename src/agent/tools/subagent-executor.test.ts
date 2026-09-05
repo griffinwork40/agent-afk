@@ -523,13 +523,14 @@ describe('SubagentExecutor', () => {
       );
     });
 
-    it("falls back to 'sonnet' when defaultSubagentModel is unset", async () => {
+    it("dispatches 'sonnet' when defaultSubagentModel is explicitly 'sonnet'", async () => {
       const handle = mockHandle();
       const manager = mockManager(handle);
       const exec = new SubagentExecutor({
         subagentManager: manager as any,
         parentSession: mockParentSession as any,
         defaultConfig: { apiKey: 'k', systemPrompt: 'sp' },
+        defaultSubagentModel: 'sonnet',
         depth: 0,
       });
 

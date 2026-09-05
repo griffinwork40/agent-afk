@@ -2988,7 +2988,7 @@ describe('SkillExecutor', () => {
           abortSignal,
         },
         ...(ctx?.defaultModel !== undefined ? { defaultModel: ctx.defaultModel } : {}),
-        ...(ctx?.defaultSubagentModel !== undefined ? { defaultSubagentModel: ctx.defaultSubagentModel } : {}),
+        defaultSubagentModel: ctx?.defaultSubagentModel ?? 'sonnet',
       });
       (executor as unknown as { pluginBodies: Map<string, PluginSkillBody> | null }).pluginBodies =
         new Map([[skillName, body]]);
@@ -3027,17 +3027,21 @@ describe('SkillExecutor', () => {
       );
     });
 
-    it('falls back to defaultModel when neither model: nor defaultSubagentModel is set', async () => {
+    it('uses defaultSubagentModel over defaultModel when the plugin skill declares no model:', async () => {
+      // defaultSubagentModel is now required; it always wins over defaultModel
+      // in the resolveChildModel precedence chain. This guards the cost
+      // contract: a high-tier defaultModel must not silently spawn high-tier
+      // plugin skill children when defaultSubagentModel is wired.
       const { executor, mockForkSubagent } = capturePluginFork(
         'default-model-plugin',
         { body: 'body', pluginPath: '/fake/plugin', context: 'fork' },
-        { defaultModel: 'opus' },
+        { defaultModel: 'opus', defaultSubagentModel: 'sonnet' },
       );
 
       await executor.execute(makeCall({ name: 'default-model-plugin' }));
 
       expect(mockForkSubagent).toHaveBeenCalledWith(
-        expect.objectContaining({ config: expect.objectContaining({ model: 'opus' }) }),
+        expect.objectContaining({ config: expect.objectContaining({ model: 'sonnet' }) }),
       );
     });
   });

@@ -100,7 +100,10 @@ describe('createChildSkillExecutorFactory — defaultSubagentModel threading', (
     expect(constructed[1]!['defaultSubagentModel']).toBe('sonnet');
   });
 
-  it('omits defaultSubagentModel when the caller does not supply it (back-compat)', () => {
+  it("falls back to 'sonnet' when the caller does not supply defaultSubagentModel", () => {
+    // The factory arg is still optional (positional callers may omit it), but
+    // SkillExecutorContext.defaultSubagentModel is now required — so the
+    // factory always materialises a value, defaulting to 'sonnet'.
     const factory = createChildSkillExecutorFactory(
       'sonnet',
       undefined,
@@ -111,10 +114,10 @@ describe('createChildSkillExecutorFactory — defaultSubagentModel threading', (
       undefined,
       undefined,
       'cli',
-      // 10th arg omitted — legacy/test callers keep the pre-fix shape.
+      // 10th arg omitted — factory falls back to 'sonnet'.
     );
     factory(1, 3, new AbortController().signal);
 
-    expect(constructed[0]!).not.toHaveProperty('defaultSubagentModel');
+    expect(constructed[0]!['defaultSubagentModel']).toBe('sonnet');
   });
 });

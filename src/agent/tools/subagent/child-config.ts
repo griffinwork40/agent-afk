@@ -74,7 +74,7 @@ export interface BuildChildConfigArgs {
   signal: AbortSignal;
   defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
   resolveApiKeyForModel?: (model: string) => string | undefined;
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
   childSkillExecutorFactory?: (
     depth: number,
@@ -162,8 +162,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
   // OpenAI key (tier 1 wins) — the OpenAI API then 401s. Clearing them lets
   // the OpenAI auth resolver walk its env / codex precedence cleanly.
   // Invariant: an OMITTED definition model means "policy default", never
-  // "inherit the parent". Both dispatch shapes therefore share one chain:
-  //   call-site > definition model > policy default (`defaultSubagentModel`) > 'sonnet'
+  // "inherit the parent". The canonical precedence chain is defined once in
+  // `resolveChildModel()` (src/agent/subagent/resolve-child-model.ts):
+  //   callSiteModel > namedAgentModel > defaultSubagentModel > defaultModel > 'sonnet'
   // with exactly one escape hatch: an explicit `model: 'inherit'` resolves to
   // the dispatching session's model.
   //

@@ -45,7 +45,7 @@ export interface ComposeExecutorContext {
   // nudge per node (noisy for an N-node DAG). Left dark intentionally.
   parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'>;
   defaultModel?: AgentModelInput;
-  defaultSubagentModel?: AgentModelInput;
+  defaultSubagentModel: AgentModelInput;
   apiKey?: string;
   // Contract:
   // Per-node credential resolver for the compose path. When provided, the

@@ -384,16 +384,14 @@ export function buildComposeNodeProvider(
  * nested SkillExecutors inherit it rather than falling back independently.
  *
  * Invariant: this parameter closes the "subagent model falls back to
- * Anthropic sonnet under an OpenAI-routed parent" leak. A nested SkillExecutor
- * built without it has `defaultSubagentModel: undefined`; that undefined then
- * flows into the child SubagentExecutor it constructs
- * (skill-executor.ts buildForkedChildConfig), whose `agent`-tool resolution is
- * `parsed.model ?? defaultSubagentModel ?? 'sonnet'` — with no `defaultModel`
- * link, so an unset `defaultSubagentModel` routes straight to Anthropic
- * `sonnet` even when the whole session is OpenAI-only (→ "missing Anthropic
- * credentials"). Threading the resolved value here keeps every depth on the
- * parent's provider. Explicit `agent.model` / SKILL.md `model:` still win —
- * this only governs the no-model-specified default.
+ * Anthropic sonnet under an OpenAI-routed parent" leak. The canonical
+ * resolution chain lives in `resolveChildModel()`
+ * (src/agent/subagent/resolve-child-model.ts); `defaultSubagentModel` is
+ * now a REQUIRED field on every executor context interface, so TypeScript
+ * catches a missing wire at compile time. Threading the resolved value
+ * here keeps every depth on the parent's provider. Explicit
+ * `agent.model` / SKILL.md `model:` still win — this only governs the
+ * no-model-specified default.
  */
 export function createChildSkillExecutorFactory(
   defaultModel: AgentModelInput,
@@ -450,10 +448,9 @@ export function createChildSkillExecutorFactory(
       defaultModel,
       // Resolved default-subagent policy threaded through every depth so a
       // nested skill child (and the SubagentExecutor it builds) defaults to the
-      // parent's provider rather than the Anthropic `sonnet` literal. Optional:
-      // when the caller omits it, back-compat fallback chains apply. See the
-      // leak-closure invariant in this factory's jsdoc.
-      ...(defaultSubagentModel !== undefined ? { defaultSubagentModel } : {}),
+      // parent's provider rather than the Anthropic `sonnet` literal. Falls
+      // back to 'sonnet' when the caller omits the arg (legacy/test callers).
+      defaultSubagentModel: defaultSubagentModel ?? 'sonnet',
       apiKey,
       ...(baseUrl !== undefined ? { baseUrl } : {}),
       // Endpoint threads through every depth (factory closes over openaiBaseUrl,
