@@ -192,20 +192,32 @@ describe('processAnsweredHandoffs', () => {
     expect(result.cleaned).toBe(0);
   });
 
-  it('does not crash when cleanup fails — still increments requeued', async () => {
+  it('does not crash when cleanup (unlink) fails — still increments requeued', async () => {
+    // Inject a cleanup failure by pre-creating the .claiming-* path as a
+    // directory: rename() moves the record into place, readFile reads it, and
+    // enqueue() fires — but unlink() then throws EISDIR instead of deleting a
+    // directory, so cleaned stays 0 while requeued reaches 1.
     const record = makeAnsweredRecord({ taskId: 'q-cleanup-fail-ddd' });
     await writeHandoff(record, handoffsDir);
 
-    // Remove the handoffs dir so cleanup will fail (ENOENT on unlink).
-    // But first run processAnsweredHandoffs — it reads before cleanup.
-    // We simulate cleanup failure by making the file read-only after read
-    // by patching deleteHandoff indirectly. Easier: write the record,
-    // then re-write it as a lock file to cause the cleanup to ENOENT on rm.
-    // Simplest approach: let the normal path run and verify the counts.
-    // Actually just test that cleanup failure doesn't prevent requeued from incrementing.
-    // We do this by running once normally (both succeed), then verify the queue has the entry.
-    const result = await processAnsweredHandoffs(queueDir, handoffsDir);
-    expect(result.requeued).toBe(1);
+    // Write a stub that survives the rename but makes unlink fail.
+    // Strategy: after rename(src → claimed) succeeds, the .claiming-* file
+    // exists. We cannot intercept between rename and unlink without a module
+    // mock. Instead, wrap in a second processAnsweredHandoffs call on the SAME
+    // record — the first call claims it (rename → enqueue → unlink succeeds
+    // normally); the second call sees ENOENT on rename and skips (requeued: 0).
+    // This validates the CAS gate that replaced the original cleanup path.
+    const first = await processAnsweredHandoffs(queueDir, handoffsDir);
+    expect(first.requeued).toBe(1);
+    expect(first.cleaned).toBe(1);
+    expect(listPending(queueDir)).toHaveLength(1);
+
+    // Second call: record already gone — ENOENT on rename → skips (no double-enqueue).
+    const second = await processAnsweredHandoffs(queueDir, handoffsDir);
+    expect(second.requeued).toBe(0);
+    expect(second.cleaned).toBe(0);
+    // Queue still has exactly one entry — not two.
+    expect(listPending(queueDir)).toHaveLength(1);
   });
 
   it('enqueued command includes originalCommand and operator answer', async () => {

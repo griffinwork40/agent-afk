@@ -310,7 +310,18 @@ export class CronScheduler {
         console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
       });
     // Pick up any answers that arrived while the daemon was down.
-    void processAnsweredHandoffs(this.queueDir).catch(() => undefined);
+    void processAnsweredHandoffs(this.queueDir)
+      .then((r) => {
+        if (r.requeued > 0) {
+          // eslint-disable-next-line no-console
+          console.error(`[daemon] handoff-consume: re-enqueued ${r.requeued} answered handoff(s)`);
+        }
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        // eslint-disable-next-line no-console
+        console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
+      });
     this.pullPollTimer = setInterval(() => { void this.pullTick(); }, interval).unref();
   }
 
@@ -323,7 +334,24 @@ export class CronScheduler {
       // spawns a session — reverse order risks double-fire on daemon restart
       // if the process crashes between dequeue and spawn.
       const queued = dequeueNext(this.queueDir);
-      if (queued === null) return;
+      if (queued === null) {
+        // Queue is empty this tick — still sweep for answered handoffs. An
+        // answer that arrives between ticks would otherwise wait indefinitely
+        // if no other task completes to trigger the post-run sweep at :349.
+        void processAnsweredHandoffs(this.queueDir)
+          .then((r) => {
+            if (r.requeued > 0) {
+              // eslint-disable-next-line no-console
+              console.error(`[daemon] handoff-consume: re-enqueued ${r.requeued} answered handoff(s)`);
+            }
+          })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            // eslint-disable-next-line no-console
+            console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
+          });
+        return;
+      }
       const syntheticTask: ScheduledTask = {
         taskId: queued.id,
         command: queued.command,
@@ -346,7 +374,18 @@ export class CronScheduler {
         // startup) will re-enqueue or dead-letter based on the record's attempts.
       }
       // If the session answered a handoff during this run, re-enqueue it now.
-      void processAnsweredHandoffs(this.queueDir).catch(() => undefined);
+      void processAnsweredHandoffs(this.queueDir)
+        .then((r) => {
+          if (r.requeued > 0) {
+            // eslint-disable-next-line no-console
+            console.error(`[daemon] handoff-consume: re-enqueued ${r.requeued} answered handoff(s)`);
+          }
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
+        });
     } catch (err) {
       // Errors thrown INSIDE runOnce are captured there and written to
       // telemetry. Errors reaching here come from the dequeue path (now
@@ -401,7 +440,9 @@ export class CronScheduler {
       // uninstalled in the finally block so cron ticks never inherit it.
       if (trigger === 'pull') {
         elicitationRouter.install(makeDaemonElicitationHandler({
-          taskId: task.taskId, originalCommand: task.command, queueDir: this.queueDir,
+          taskId: task.taskId,
+          originalCommand: redactInlineSecrets(task.command),
+          queueDir: this.queueDir,
         }));
       }
 

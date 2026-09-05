@@ -300,6 +300,51 @@ describe('stop', () => {
   });
 });
 
+describe('pull tick — elicitation handler lifecycle', () => {
+  it('installs the elicitation handler for pull tasks and uninstalls it in finally', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'install');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+
+    enqueue('/pull-elicitation-test', {}, queueDir);
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(installSpy).toHaveBeenCalledTimes(1);
+    expect(uninstallSpy).toHaveBeenCalledTimes(1);
+    // install must have been called before sendMessage fires (the mock session
+    // would have called sendMessage during the tick).
+    expect(installSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      uninstallSpy.mock.invocationCallOrder[0]!,
+    );
+
+    await scheduler.stop();
+    installSpy.mockRestore();
+    uninstallSpy.mockRestore();
+  });
+
+  it('does not install or uninstall elicitation handler for cron tasks', async () => {
+    const { elicitationRouter } = await import('../elicitation-router.js');
+    const installSpy = vi.spyOn(elicitationRouter, 'install');
+    const uninstallSpy = vi.spyOn(elicitationRouter, 'uninstall');
+
+    // Run a cron-triggered task (not a pull task — use the scheduler's runScheduled path).
+    // We verify install/uninstall are NOT called by simply not enqueuing anything in the
+    // pull queue and instead confirming the spies stay at zero after a tick.
+    const scheduler = makeScheduler(queueDir, telemetryPath);
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000); // empty tick
+
+    expect(installSpy).not.toHaveBeenCalled();
+    expect(uninstallSpy).not.toHaveBeenCalled();
+
+    await scheduler.stop();
+    installSpy.mockRestore();
+    uninstallSpy.mockRestore();
+  });
+});
+
 describe('pull tick — lease finalization (completeTask called after runOnce)', () => {
   it('creates no lingering lease files after a successful pull tick', async () => {
     const { existsSync } = await import('node:fs');

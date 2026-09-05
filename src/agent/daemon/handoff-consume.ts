@@ -15,12 +15,11 @@
  * @module agent/daemon/handoff-consume
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { getHandoffsDir } from '../../paths.js';
-import { readHandoff, type HandoffRecord } from './handoff-store.js';
-import { cleanupHandoff } from './handoff-wiring.js';
+import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
+import type { HandoffRecord } from './handoff-store.js';
 import { enqueue } from './queue-store.js';
 
 // ---------------------------------------------------------------------------
@@ -99,13 +98,16 @@ async function listAnsweredHandoffs(
 
   const answered: HandoffRecord[] = [];
   for (const filename of filenames) {
-    if (!filename.endsWith('.json') || filename.startsWith('.tmp-') || filename.endsWith('.lock')) continue;
+    if (!filename.endsWith('.json') || filename.startsWith('.tmp-') || filename.startsWith('.claiming-') || filename.endsWith('.lock')) continue;
     try {
       const raw = await readFile(join(handoffsDir, filename), 'utf-8');
       const record = JSON.parse(raw) as HandoffRecord;
+      // Validate taskId before allowing it downstream — skips records with
+      // path-traversal or injection characters in the taskId field.
+      assertSafeJobId(record.taskId);
       if (record.status === 'answered') answered.push(record);
     } catch {
-      // Silently skip unreadable or malformed records.
+      // Silently skip unreadable, malformed, or unsafe records.
     }
   }
   return answered;
@@ -144,22 +146,50 @@ export async function processAnsweredHandoffs(
   let cleaned = 0;
 
   for (const summary of answered) {
+    const src = join(handoffsDir, `${summary.taskId}.json`);
+    const claimed = join(handoffsDir, `.claiming-${summary.taskId}.json`);
     try {
-      // Re-read the full record from disk to get the latest answer.
-      const record = await readHandoff(summary.taskId, handoffsDir);
-      if (record === null || record.status !== 'answered') continue;
+      // CAS gate: rename the handoff file to a per-taskId claiming name.
+      // If two concurrent callers both see the same answered record, only one
+      // rename wins — the other gets ENOENT and skips. This prevents the
+      // double-enqueue race that exists when startup and tick-teardown both
+      // call processAnsweredHandoffs around the same time.
+      try {
+        await rename(src, claimed);
+      } catch (renameErr) {
+        if ((renameErr as NodeJS.ErrnoException).code === 'ENOENT') continue; // another caller got it
+        throw renameErr;
+      }
+
+      // Re-read the full record from the claimed path to get the latest answer.
+      // Read directly from the claimed (renamed) file path.
+      let record: HandoffRecord;
+      try {
+        const raw = await readFile(claimed, 'utf-8');
+        record = JSON.parse(raw) as HandoffRecord;
+      } catch {
+        // Cannot read the claimed file — restore and skip.
+        await rename(claimed, src).catch(() => undefined);
+        continue;
+      }
+      if (record.status !== 'answered') {
+        // Record changed status between list and claim — put it back.
+        await rename(claimed, src).catch(() => undefined);
+        continue;
+      }
 
       const command = buildHandoffResumeCommand(record);
       enqueue(command, {}, queueDir);
       requeued += 1;
 
+      // Delete the claimed file now that the task is safely enqueued.
       try {
-        await cleanupHandoff(record.taskId, handoffsDir);
+        await unlink(claimed);
         cleaned += 1;
       } catch (cleanErr) {
         const msg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
         // eslint-disable-next-line no-console
-        console.error(`[daemon] handoff-consume: cleanup failed for ${record.taskId}: ${msg}`);
+        console.error(`[daemon] handoff-consume: cleanup failed for ${summary.taskId}: ${msg}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
