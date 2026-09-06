@@ -70,7 +70,7 @@ export function emitPlainTtfbWaiting(
   if (!stdout.isTTY) return;
   // TTY + plain: emit a static line that we will erase on first token.
   const fn = completionWriter?.fn ?? console.log;
-  fn(palette.dim('  ◦ waiting for response…'));
+  fn(palette.dim('   ◦ waiting for response…'));
   if (state) {
     state.waitingLineEmitted = true;
     if (completionWriter) state.plainHooks = new PlainTurnHooks(completionWriter, state);

@@ -152,12 +152,12 @@ export function printResumeBanner(stats: SessionStats, writer: CompletionWriter)
   const assistantSnippet = truncate(firstSentence(flatten(last.assistant)), 120);
 
   if (userSnippet.length > 0) {
-    writer.fn(palette.dim(`  Last: ${userSnippet}`));
+    writer.fn(palette.dim(`   Last: ${userSnippet}`));
   }
   if (assistantSnippet.length > 0) {
-    writer.fn(palette.dim(`  ↳ ${assistantSnippet}`));
+    writer.fn(palette.dim(`   ↳ ${assistantSnippet}`));
   }
-  writer.fn(palette.dim('  ↪ /history for full review'));
+  writer.fn(palette.dim('   ↪ /history for full review'));
 }
 
 /**
@@ -463,6 +463,14 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+   * Clears the `pendingStopInjection` binding in `runInputLoop` so a
+   * mid-session /resume swap cannot leak a Stop-hook `injectContext` from
+   * the outgoing session into the resumed session's first turn. Mirrors
+   * the `clearVerdictLedger` / `clearBgResultBuffer` pattern: owned by
+   * `runInputLoop`'s closure, wired onto `ctx` at loop entry, invoked
+   * from the swap's `onSwapped` callback in bootstrap.ts.
+   */
+  clearPendingStopInjection?: () => void;
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `

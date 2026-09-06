@@ -91,7 +91,7 @@ export class StreamingMarkdownRenderer {
   constructor(opts?: StreamingMarkdownRendererOptions) {
     this.out = opts?.out ?? process.stdout;
     this.throttleMs = opts?.throttleMs ?? 33;
-    this.indent = opts?.indent ?? '  ';
+    this.indent = opts?.indent ?? '   ';
     this.isTTY = this.out.isTTY ?? false;
     this.compositor = opts?.compositor ?? null;
     this.overlayComposer = opts?.overlayComposer ?? null;
