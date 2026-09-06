@@ -1774,6 +1774,7 @@ describe('SubagentExecutor', () => {
           // Not used by background branch, but typecheck requires them.
           run: vi.fn(),
           runToResult: vi.fn(),
+          session: { setBeforeNextRound: vi.fn() },
         } as unknown as SubagentHandle,
         fireTerminal: (r: SubagentResult) => captured?.(r),
         cancelMock,

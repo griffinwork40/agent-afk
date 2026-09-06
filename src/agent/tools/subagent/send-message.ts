@@ -71,6 +71,22 @@ export async function sendMessageToAgent(
     };
   }
 
+  // Provider-capability check: steering requires the provider's inter-round
+  // hook (setBeforeNextRound). Anthropic-direct wires it; OpenAI-compatible
+  // providers do not — so the ring buffer would fill but never be consumed.
+  // Return a clear error instead of silently pretending the message landed.
+  if (typeof handle.session.setBeforeNextRound !== 'function') {
+    // Attempt to surface the provider name for a more actionable message.
+    // IAgentSession exposes providerName optionally via metadata.
+    const sessionAny = handle.session as unknown as Record<string, unknown>;
+    const providerName: string =
+      typeof sessionAny['providerName'] === 'string' ? sessionAny['providerName'] : 'this provider';
+    return {
+      content: `Steering is not supported on ${providerName}. The message was not delivered. Use a model backed by the Anthropic provider to enable send_message_to_agent.`,
+      isError: true,
+    };
+  }
+
   handle.steer(message);
   return { content: `Steering message queued for background job ${jobId}.` };
 }
