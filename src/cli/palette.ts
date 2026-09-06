@@ -177,8 +177,8 @@ const lightPaletteDef: ThemePalette = {
   meta: chalk.hex('#6B7280'),
   /** Deeper sky blue — ambient-notice channel on white. */
   info: chalk.hex('#1D6FD6'),
-  /** Dark steel-blue — file refs on white. Hue-matched to the dark theme's `#5B8FA8`. */
-  fileRef: chalk.hex('#276A82'),
+  /** Dark navy-blue — file refs on white. Pushed deeper into blue (h=256°) to separate from the light `user` tone (`#0E7490`, h=197°; ΔE 3.9 → 10.5). */
+  fileRef: chalk.hex('#2D5B7A'),
   /** Bold near-black — H2 headings; white heading is invisible on white. */
   heading: chalk.bold.hex('#1F2937'),
   /** Dim (relative modifier — theme-agnostic). */

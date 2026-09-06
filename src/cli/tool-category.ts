@@ -89,11 +89,10 @@ function categoryColor(cat: ToolCategory): ChalkInstance {
     // tool lane never echoes the brand-orange prompt prefix.
     case 'browser': return chalk.hex('#D9637A');
     case 'planning': return palette.meta;
-    // Schedule — lavender indigo. Moved from amber (h=83°, ΔE 6.4 from
-    // write) to the underused blue-purple zone (h=301°). Cool precision
-    // reads as "clockwork / daemon" and is perceptually distinct from every
-    // other tool-lane category.
-    case 'schedule': return chalk.hex('#8F82C8');
+    // Schedule — medium blue. Moved from amber (h=83°, ΔE 6.4 from
+    // write) to the underused blue zone (h=271°). Distinct from subagent
+    // (palette.plan, ΔE 22.3) and every other tool-lane category.
+    case 'schedule': return chalk.hex('#3482CB');
     // "Other" — unknown/uncategorized tools. Routed to meta-grey rather
     // than info-sky so that an unrecognized tool name doesn't visually
     // assert the same salience as an ℹ ambient notice.
