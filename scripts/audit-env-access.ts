@@ -73,6 +73,11 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
       'Inherits a fixed allowlist of OS-level env vars (PATH, USER, SHELL, TERM, TMPDIR, etc.) into spawned MCP server child processes. The keys are bounded but include vars outside the AFK domain (TMP, SYSTEMROOT, APPDATA) that do not belong in ENV_REGISTRY.',
   },
   {
+    file: 'src/utils/resolve-shell.ts',
+    reason:
+      'Reads OS-level env vars (MSYSTEM, PATH) to probe for Git Bash on Windows. These are system vars that do not belong in ENV_REGISTRY — same rationale as mcp/transport.ts.',
+  },
+  {
     file: 'src/agent/providers/openai-compatible/auth.ts',
     reason:
       'Defines an injectable `readEnv?: (key: string) => string | undefined` dep for tests; the default impl is `(k) => process.env[k]`. The injectable design is the test seam and intentionally dynamic.',
