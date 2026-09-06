@@ -203,6 +203,19 @@ describe('worktree handler — create', () => {
     expect(result.content).toContain('already exists');
   });
 
+  it('reserves room for the suggested suffix when a colliding slug is 80 characters', async () => {
+    const slug = 'a'.repeat(80);
+    const wtPath = join(afkRoot, slug);
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'create', name: slug }, SIGNAL);
+    expect(result.isError).toBe(true);
+    const suggestion = String(result.content).match(/like "([a-z0-9-]+)"/)?.[1];
+    expect(suggestion).toMatch(/^a+-[a-z0-9]{6}$/);
+    expect(suggestion).toHaveLength(80);
+    expect(suggestion).not.toBe(slug);
+  });
+
   it('rejects a name that sanitizes to empty', async () => {
     const handler = createWorktreeHandler(repoRoot, { execFile: makeMock(standardResponder('')) });
     const result = await handler({ action: 'create', name: '///' }, SIGNAL);
@@ -338,6 +351,7 @@ describe('worktree handler — keep / release', () => {
     const result = await handler({ action: 'keep', path: '/tmp/elsewhere' }, SIGNAL);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('outside .afk-worktrees/');
+    expect(result.content).toContain('/tmp/elsewhere');
     expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(false);
   });
 
@@ -349,12 +363,26 @@ describe('worktree handler — keep / release', () => {
     expect(result.content).toContain('No registered git worktree');
   });
 
+  it('accepts a repo-relative .afk-worktrees path', async () => {
+    const wtPath = join(afkRoot, 'important');
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler(
+      { action: 'keep', path: '.afk-worktrees/important', reason: 'unmerged spike' },
+      SIGNAL,
+    );
+    expect(result.isError).toBeUndefined();
+    const lockCall = mock.calls.find((c) => c.args.includes('lock'));
+    expect(lockCall?.args.at(-1)).toBe(wtPath);
+  });
+
   it('refuses a relative .. path-traversal escaping .afk-worktrees/', async () => {
     const mock = makeMock(standardResponder(block(repoRoot)));
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'keep', path: '../../etc' }, SIGNAL);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('outside .afk-worktrees/');
+    expect(result.content).toContain('../../etc');
     expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(false);
   });
 

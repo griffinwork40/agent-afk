@@ -140,11 +140,16 @@ async function resolveManagedWorktree(
   ctx: RepoContext,
   pathInput: string,
 ): Promise<PorcelainEntry | string> {
-  const candidate = isAbsolute(pathInput)
-    ? pathInput
-    : join(ctx.afkWorktreesRoot, pathInput);
+  let candidate: string;
+  if (isAbsolute(pathInput)) {
+    candidate = pathInput;
+  } else if (pathInput.startsWith(`.afk-worktrees${sep}`)) {
+    candidate = resolve(ctx.repoRoot, pathInput);
+  } else {
+    candidate = join(ctx.afkWorktreesRoot, pathInput);
+  }
   if (!isPathWithin(candidate, ctx.afkWorktreesRoot)) {
-    return `Refused: ${pathInput} is outside .afk-worktrees/. Pass a slug (e.g. 'my-worktree') or a path under .afk-worktrees/ from a prior create/list result. Do not pass absolute paths outside .afk-worktrees/.`;
+    return `Refused: ${pathInput} is outside .afk-worktrees/. Pass a slug (e.g. "my-worktree") or a path under .afk-worktrees/ from a prior create/list result. Do not pass absolute paths outside .afk-worktrees/.`;
   }
   const entry = await findEntry(execFile, ctx.repoRoot, candidate);
   if (!entry) {
@@ -206,8 +211,10 @@ export function createWorktreeHandler(
           const worktreePath = join(ctx.afkWorktreesRoot, slug);
           const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
           if (existing) {
+            const suffix = Date.now().toString(36).slice(-6);
+            const suggestedSlug = `${slug.slice(0, 80 - suffix.length - 1)}-${suffix}`;
             return {
-              content: `Worktree already exists at ${worktreePath}. Use a unique name — e.g. append a short suffix like "${slug}-${Date.now().toString(36).slice(-4)}" — or run action "list" to see all current worktrees.`,
+              content: `Worktree already exists at ${worktreePath}. Use a unique name — e.g. append a short suffix like "${suggestedSlug}" — or run action "list" to see all current worktrees.`,
               isError: true,
             };
           }
