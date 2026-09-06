@@ -138,9 +138,9 @@ export async function runTurn(
     void promoteWithQueuedFlush(control, borrowedCompositor, h.onQueuedUserMessage)
       .then(({ jobs, flushedText, flushedPreview }) => {
         const write = (completionWriter ?? { fn: console.log }).fn;
-        for (const job of jobs) {
-          write(palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`));
-        }
+        for (const job of jobs) { write(palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`)); }
+        // Warn when a promoted child shares the parent's worktree — edits may conflict. See #1513.
+        if (jobs.some((j) => j.sharesWorktree)) write(palette.warning('⚠ Background child is writing to your worktree — edits may conflict until it finishes'));
         if (flushedText !== undefined) {
           write(palette.dim(`  → queued message sent to this turn: ${previewOneLine(flushedPreview ?? flushedText)}`));
         }
