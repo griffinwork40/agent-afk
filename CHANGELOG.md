@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.1] - 2026-09-06
+
+### Fixed
+- clear pendingStopInjection on /resume session swap (#1512) (#1521) (24a3c1a2)
+
+### Changed
+- add teardown/cancel clearing assertions for steer() ring buffer (#1496) (#1519) (9259509b)
+
 ## [5.191.0] - 2026-09-06
 
 ### Added
