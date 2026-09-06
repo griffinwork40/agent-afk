@@ -25,6 +25,7 @@ import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KIL
 import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
 import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
+import { resolveShell } from '../../../utils/resolve-shell.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -224,8 +225,13 @@ export function createBashHandler(
       // on collision. This is the path `executePluginSkill` uses to inject
       // `PLUGIN_ROOT=<plugin.path>` for plugin-skill subagents — see
       // `ToolHandlerContext.env` for the per-context (race-safe) rationale.
-      const proc = spawn(command, {
-        shell: true,
+      //
+      // Cross-platform shell: on POSIX `resolveShell()` returns `{ shell: true }`
+      // so Node picks `/bin/sh` as before. On Windows it returns a path to Git
+      // Bash or PowerShell with the appropriate `-c`/`-Command` prefix arg so
+      // POSIX-style commands the model emits actually work (cmd.exe would not).
+      const shellResolution = resolveShell();
+      const spawnBaseOpts = {
         // detached: true places the shell in its own process group (PGID = proc.pid).
         // Combined with process.kill(-proc.pid, 'SIGKILL') below, this lets us kill
         // the entire group atomically — including backgrounded grandchildren — so no
@@ -234,7 +240,7 @@ export function createBashHandler(
         // backgrounded work may outlive the session and cannot be reaped safely
         // without an explicit background-job contract, so cleanup is deferred.
         detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
         // Effective cwd priority:
         // 1. context?.resolveBase — permission-system anchor (from dispatcher)
         // 2. context?.cwd — per-call override (back-compat)
@@ -246,7 +252,17 @@ export function createBashHandler(
         ...(context?.env !== undefined
           ? { env: { ...process.env, ...context.env } }
           : {}),
-      });
+      };
+      const proc =
+        shellResolution.shell === true
+          ? // POSIX: let Node pick /bin/sh via shell:true (existing behaviour)
+            spawn(command, { shell: true, ...spawnBaseOpts })
+          : // Windows: spawn the explicit shell with the command as a positional arg
+            spawn(
+              shellResolution.shell,
+              [...(shellResolution.args ?? []), command],
+              spawnBaseOpts,
+            );
       // unref() so Node's event loop doesn't hold open the process handle after
       // detach — belt-and-suspenders alongside detached: true.
       proc.unref();
