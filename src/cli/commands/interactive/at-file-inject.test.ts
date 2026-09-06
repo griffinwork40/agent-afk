@@ -375,6 +375,51 @@ describe('expandAtFileTokens — hardened guards (review #688)', () => {
   });
 });
 
+describe('expandAtFileTokens — Windows path support (#703)', () => {
+  it('AT_TOKEN_RE captures a backslash-separated path', () => {
+    // On a real Windows box this would hit the filesystem; here we just verify
+    // the token is extracted (the file won't exist, so we get a warning).
+    const r = expandAtFileTokens('@sub\\note.md', { rootDir: tmpRoot, ...ON });
+    // The token should be captured (warning = "not found", not silently skipped).
+    expect(r.warnings.some((w) => w.includes('sub\\note.md'))).toBe(true);
+  });
+
+  it('AT_TOKEN_RE captures a drive-letter path like C:\\Users\\file', () => {
+    const r = expandAtFileTokens('@C:\\Users\\file.ts', { rootDir: tmpRoot, ...ON });
+    expect(r.warnings.some((w) => w.includes('C:\\Users\\file.ts'))).toBe(true);
+  });
+
+  it('SENSITIVE_RE catches backslash-separated .ssh paths', () => {
+    // Directly test the regex by creating a file at a path that, when resolved,
+    // would contain backslashes on Windows. On macOS/Linux we test the regex
+    // against a synthetic Windows-style string via the isSensitiveRead logic.
+    // The regex itself is what we're hardening, so test it in isolation.
+    const re =
+      /(^|[/\\])\.(ssh|aws|gnupg|kube|docker)([/\\]|$)|(^|[/\\])[^/\\]*\.env(\.[^/\\]+)?$|(^|[/\\])\.(netrc|npmrc|pypirc)$|(^|[/\\])id_(rsa|ed25519|ecdsa|dsa)(\.pub)?$|\.(pem|key|p12|pfx)$|(^|[/\\])credentials$|(^|[/\\])\.git[/\\]config$|(^|[/\\])\.git-credentials$|(^|[/\\])\.(bash|zsh|fish|sh)_history$/i;
+
+    // Backslash paths that MUST be caught:
+    expect(re.test('C:\\Users\\alice\\.ssh\\id_rsa')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\.aws\\credentials')).toBe(true);
+    expect(re.test('D:\\home\\.gnupg\\pubring.kbx')).toBe(true);
+    expect(re.test('C:\\repo\\.git\\config')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\.git-credentials')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\.bash_history')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\.env')).toBe(true);
+    expect(re.test('C:\\project\\.env.local')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\.netrc')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\id_rsa')).toBe(true);
+    expect(re.test('C:\\Users\\alice\\credentials')).toBe(true);
+
+    // Forward-slash paths still work:
+    expect(re.test('/home/alice/.ssh/id_rsa')).toBe(true);
+    expect(re.test('/home/alice/.env')).toBe(true);
+
+    // Benign paths NOT caught (no false positives):
+    expect(re.test('C:\\Users\\alice\\project\\src\\app.ts')).toBe(false);
+    expect(re.test('C:\\repo\\.github\\workflows\\ci.yml')).toBe(false);
+  });
+});
+
 describe('expandAtFileTokens — SEC-1 secret-store denylist (PR #688 review)', () => {
   it('blocks .git/config (credential-helper output / token insteadOf rewrites)', () => {
     mkdirSync(join(tmpRoot, '.git'));

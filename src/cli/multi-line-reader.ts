@@ -10,7 +10,7 @@
  */
 
 import { readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join, sep } from 'path';
 import { homedir } from 'os';
 import type { Interface as ReadlineInterface } from 'readline';
 import { list as listSlashCommands } from './slash/registry.js';
@@ -71,6 +71,13 @@ export const MAX_FILE_MATCHES = 50;
  * let it default to `os.homedir()`, mirroring the `rootDir = process.cwd()`
  * convention used throughout the input layer.
  */
+/** Index of the last `/` or `\` in `s`, or -1. */
+function lastSepIndex(s: string): number {
+  const fwd = s.lastIndexOf('/');
+  const bck = s.lastIndexOf('\\');
+  return fwd > bck ? fwd : bck;
+}
+
 export function resolveQuery(
   query: string,
   rootDir: string,
@@ -78,31 +85,33 @@ export function resolveQuery(
 ): { scanDir: string; leafPrefix: string; displayPrefix: string } {
   // Tilde: `~` or `~/<rest>` resolve against the home directory. Only the
   // current user's home (`~/`) is supported — `~user/` is treated as relative.
-  if (query === '~' || query.startsWith('~/')) {
+  // Also recognise `~\<rest>` on Windows so `@~\Documents\f` works.
+  if (query === '~' || query.startsWith('~/') || query.startsWith('~\\')) {
     const rest = query === '~' ? '' : query.slice(2);
-    const slashIdx = rest.lastIndexOf('/');
+    const slashIdx = lastSepIndex(rest);
     const scanRel = slashIdx === -1 ? '' : rest.slice(0, slashIdx);
     const leafPrefix = slashIdx === -1 ? rest : rest.slice(slashIdx + 1);
     const scanDir = scanRel ? join(homeDir, scanRel) : homeDir;
-    const displayPrefix = scanRel ? `~/${scanRel}/` : '~/';
+    const displayPrefix = scanRel ? `~${sep}${scanRel}${sep}` : `~${sep}`;
     return { scanDir, leafPrefix, displayPrefix };
   }
 
   // Absolute: scan the directory portion of the path verbatim, bypassing
-  // rootDir entirely. The display prefix is the absolute directory itself.
-  if (query.startsWith('/')) {
-    const slashIdx = query.lastIndexOf('/');
-    const scanDir = query.slice(0, slashIdx + 1) || '/';
+  // rootDir entirely. Recognises both POSIX `/` and Windows drive-letter
+  // paths like `C:\` / `C:/` via `path.isAbsolute`.
+  if (isAbsolute(query)) {
+    const slashIdx = lastSepIndex(query);
+    const scanDir = query.slice(0, slashIdx + 1) || sep;
     const leafPrefix = query.slice(slashIdx + 1);
     return { scanDir, leafPrefix, displayPrefix: scanDir };
   }
 
   // Relative (legacy behavior): join the dir portion against rootDir.
-  const slashIdx = query.lastIndexOf('/');
+  const slashIdx = lastSepIndex(query);
   const scanRel = slashIdx === -1 ? '' : query.slice(0, slashIdx);
   const leafPrefix = slashIdx === -1 ? query : query.slice(slashIdx + 1);
   const scanDir = scanRel ? join(rootDir, scanRel) : rootDir;
-  const displayPrefix = scanRel ? `${scanRel}/` : '';
+  const displayPrefix = scanRel ? `${scanRel}${sep}` : '';
   return { scanDir, leafPrefix, displayPrefix };
 }
 
