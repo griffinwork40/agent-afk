@@ -31,7 +31,7 @@ import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
-import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
+import { runForegroundWithPromotion, type PromotionTrigger, type PromotedSubagentInfo } from './subagent/foreground-promotion.js';
 import type { QueuedNoteClaim } from './subagent/queued-note.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
@@ -243,11 +243,7 @@ export interface SubagentExecutorContext {
   parentModel?: AgentModelInput;
 }
 
-/** Identity of a subagent that was promoted from foreground to background. */
-export interface PromotedSubagentInfo {
-  jobId: string;
-  label: string;
-}
+export type { PromotedSubagentInfo } from './subagent/foreground-promotion.js';
 
 /**
  * Narrow control seam exposed to the keyboard / REPL layer for user-triggered
