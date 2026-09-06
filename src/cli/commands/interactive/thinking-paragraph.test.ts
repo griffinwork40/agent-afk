@@ -7,7 +7,7 @@
  *   (a) Empty / whitespace buffer → empty string (caller skips the layer).
  *   (b) Short single-paragraph buffer → header + single body line, no footer.
  *   (c) Long buffer → header + N body lines (cap), `⋯ +N chars earlier` footer.
- *   (d) Body width respects 2-col indent (terminal cols minus INDENT.length).
+ *   (d) Body width respects 3-col indent (terminal cols minus INDENT.length).
  *   (e) MIN_BODY_WIDTH floor on narrow terminals (no per-glyph breaks).
  *   (f) Internal whitespace (newlines, runs of spaces) collapsed to single spaces.
  *   (g) Custom `maxLines` honored.

@@ -461,7 +461,7 @@ export class ToolLane {
     // Invariant: when the overlay mixes a NESTING root (skill / Agent / compose
     // — each anchors a col-0 ◉ turn-root marker and a descendant spine drawn at
     // col 0 by renderOverlayChildren) with flat-leaf roots, the flat roots must
-    // ALSO anchor their own col-0 ◉. A flat leaf's bare 2-space lead places its
+    // ALSO anchor their own col-0 ◉. A flat leaf's bare 3-space lead places its
     // `●` glyph at col 2 (the NESTING block's depth-1 connector column) with a
     // BLANK col 0 — so a main-session read_file dispatched after a subagent
     // renders directly below a `│` spine with nothing in col 0, reading as a
@@ -469,12 +469,12 @@ export class ToolLane {
     // col 0 with ◉ turns the `│ → ◉` transition into an honest "spine ended,
     // new root begins" signal, making every root unambiguously parallel to the
     // dispatch head. A pure flat-leaf turn (no NESTING root) keeps the clean
-    // 2-space lead — there is no spine to collide with, so the marker would be
+    // 3-space lead — there is no spine to collide with, so the marker would be
     // gratuitous noise on the common case. Mirrors the "each root anchors its
     // own col-0 ◉ / blank marker" note in tool-lane-render-children.ts. The
     // scrollback commit path groups same-tool flat roots into one labeled
     // `×N` line (renderGroupedRootTools), which is not orphan-prone, so it is
-    // intentionally left at the 2-space lead — only the live overlay renders
+    // intentionally left at the 3-space lead — only the live overlay renders
     // flat roots as separate rows that can collide with a sibling spine.
     const hasNestingRoot = visibleRoots.some((e) => NESTING_TOOLS.has(e.toolName));
     const flatRootLead = hasNestingRoot ? palette.dim(g.turnRoot) : '   ';
@@ -587,6 +587,7 @@ export class ToolLane {
         // spine / floating skill row" bug). This mirrors flush()'s discriminant
         // exactly: NESTING membership alone routes to the frame head, never the
         // `children.length > 0` co-discriminant that was deliberately removed
+        //
         // from flush() for this same failure mode (see the History note on the
         // "subagents escape the skill frame" regression at flush() below). The
         // overlay path was the lone surface that still gated on child count.
