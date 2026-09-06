@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.2] - 2026-09-06
+
+### Fixed
+- resolve credentials fresh per-node at fork time (#1511) (31195fbb)
+- resolve 6 perceptual color collisions via CIEDE2000 audit (#1523) (6f83cd25)
+
+### Changed
+- Delete commit-msg.txt (9d424f84)
+- Delete draft-reddit-post.md (425fc09a)
+
 ## [5.191.1] - 2026-09-06
 
 ### Fixed
