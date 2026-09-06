@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.4] - 2026-09-06
+
+### Fixed
+- warn on Ctrl+B promotion of non-isolated write-capable child (#1513) (#1524) (de04805e)
+
+## [5.191.3] - 2026-09-06
+
+### Fixed
+- regenerate env-registry docs and harden test cleanup (#1522) (#1525) (d00d8f18)
+
 ## [5.191.2] - 2026-09-06
 
 ### Fixed

@@ -26,7 +26,6 @@ import type { TraceOrigin, TraceActor } from '../../session/session-identity.js'
 import type { TraceSink } from '../../trace/index.js';
 import { emitQueuedUserMessage } from '../../trace/emit.js';
 import type { ToolResult } from '../types.js';
-import type { PromotedSubagentInfo } from '../subagent-executor.js';
 import { emitTelemetry, truncate, boundedStopReason, measurePartial, buildFailurePayload } from './failure-payload.js';
 import { appendInjectContext } from './inject-context.js';
 import { claimQueuedNote, type QueuedNoteClaim } from './queued-note.js';
@@ -35,6 +34,14 @@ import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/wo
 import { lockWorktreeForBackground, teardownBackgroundWorktree, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
 import { withProvenanceHeader } from './foreground-promotion.provenance.js';
 export { withProvenanceHeader };
+
+/** Identity of a subagent that was promoted from foreground to background. */
+export interface PromotedSubagentInfo {
+  jobId: string;
+  label: string;
+  /** True when the child shares the parent's worktree (no isolation). See #1513. */
+  sharesWorktree?: boolean;
+}
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -229,7 +236,9 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // Detach the end-of-turn abort bridge — the promoted job must
           // outlive the turn that spawned it, exactly like mode:'background'.
           signal.removeEventListener('abort', abortListener);
-          resolveJob({ jobId: job.jobId, label: job.label });
+          // Absence of isolationTeardown means the child runs in the parent's
+          // worktree — flag this so the TUI can warn the user (#1513).
+          resolveJob({ jobId: job.jobId, label: job.label, sharesWorktree: !isoTd });
           const promotedPayload: Record<string, unknown> = {
             status: 'running' as const,
             jobId: job.jobId,
