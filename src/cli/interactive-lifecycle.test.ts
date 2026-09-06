@@ -432,7 +432,7 @@ describe('interactive command exit teardown', () => {
         options: { model: 'sonnet', maxTurns: '10', debug: false },
         // Stub registry: the teardown path calls cancelAll() during normal
         // session close. Real registry is exercised by bgsub.test.ts.
-        backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        backgroundRegistry: { cancelAll: vi.fn(async () => undefined), list: vi.fn(() => []) },
         // #745: interactive.ts drains this after the startup screen clear.
         // Required on InteractiveCtx — a fixture omitting it throws at the drain.
         bootWarnings: [],
@@ -593,7 +593,7 @@ describe('interactive worktree flag', () => {
       } as never,
       rl,
       options,
-      backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+      backgroundRegistry: { cancelAll: vi.fn(async () => undefined), list: vi.fn(() => []) },
       // #745: interactive.ts drains this after the startup screen clear.
       // Required on InteractiveCtx — a fixture omitting it throws at the drain.
       bootWarnings: [],
@@ -772,7 +772,7 @@ describe('interactive worktree flag', () => {
         } as never,
         rl,
         options: { model: 'claude-opus-4', maxTurns: '10', debug: false, worktree: 'summary-test' },
-        backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        backgroundRegistry: { cancelAll: vi.fn(async () => undefined), list: vi.fn(() => []) },
         // #745: interactive.ts drains this after the startup screen clear.
         // Required on InteractiveCtx — a fixture omitting it throws at the drain.
         bootWarnings: [],
@@ -881,7 +881,7 @@ describe('interactive worktree flag', () => {
         } as never,
         rl,
         options: { model: 'sonnet', maxTurns: '10', debug: false, worktree: 'feat-spec' },
-        backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        backgroundRegistry: { cancelAll: vi.fn(async () => undefined), list: vi.fn(() => []) },
         // #745: interactive.ts drains this after the startup screen clear.
         // Required on InteractiveCtx — a fixture omitting it throws at the drain.
         bootWarnings: [],
@@ -1009,7 +1009,7 @@ describe('interactive signal-handler wiring (PR #486)', () => {
         slashCtx: { ui: { repaintStatusLine } } as never,
         rl,
         options: { model: 'sonnet', maxTurns: '10', debug: false },
-        backgroundRegistry: { cancelAll: vi.fn(async () => undefined) },
+        backgroundRegistry: { cancelAll: vi.fn(async () => undefined), list: vi.fn(() => []) },
         // #745: interactive.ts drains this after the startup screen clear.
         // Required on InteractiveCtx — a fixture omitting it throws at the drain.
         bootWarnings: [],
