@@ -820,3 +820,59 @@ describe('performResumeSwap — C1: background jobs preserved on rollback', () =
     expect(order).toEqual(['build', 'init', 'cancelAll']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests — clearPendingStopInjection invoked on successful swap (#1512)
+// The Stop-hook injection lives in runInputLoop's closure; the clear-setter is
+// wired onto ctx by runInputLoop and called from the onSwapped callback in
+// bootstrap.ts. Here we verify the wiring contract from performResumeSwap's
+// perspective: onSwapped fires on success so the clearPendingStopInjection
+// call (installed there by bootstrap.ts) will execute, and does NOT fire on
+// failure paths — the injection must stay intact when the swap rolls back.
+// ---------------------------------------------------------------------------
+
+describe('performResumeSwap — clearPendingStopInjection wiring (#1512)', () => {
+  it('invokes onSwapped on successful swap (clearPendingStopInjection fires via onSwapped)', async () => {
+    // The clearPendingStopInjection call lives inside the onSwapped callback
+    // wired by bootstrap.ts. performResumeSwap calls onSwapped exactly once
+    // on success — this confirms the call site that drives the clear fires.
+    const { deps, onSwappedSpy } = buildDeps();
+    await performResumeSwap(makeTarget('t-clear', makeStoredSession()), deps);
+    expect(onSwappedSpy).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT invoke onSwapped (and thus not clearPendingStopInjection) on buildSession throw', async () => {
+    const { deps, onSwappedSpy } = buildDeps();
+    deps.buildSession = vi.fn().mockImplementation(() => {
+      throw new Error('constructor boom');
+    });
+    await performResumeSwap(makeTarget('t-clear-fail', makeStoredSession()), deps);
+    expect(onSwappedSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT invoke onSwapped (and thus not clearPendingStopInjection) on init failure', async () => {
+    const { deps, onSwappedSpy } = buildDeps();
+    const newSession = makeFakeSession('failing-session');
+    newSession.waitForInitialization = vi.fn().mockRejectedValue(new Error('init boom'));
+    deps.buildSession = vi.fn().mockReturnValue(
+      newSession as unknown as import('../../../agent/session.js').AgentSession,
+    );
+    await performResumeSwap(makeTarget('t-clear-init-fail', makeStoredSession()), deps);
+    expect(onSwappedSpy).not.toHaveBeenCalled();
+  });
+
+  it('a clearPendingStopInjection callback supplied via onSwapped is invoked and clears the injection', async () => {
+    // Simulate the bootstrap.ts wiring: onSwapped calls ctx.clearPendingStopInjection?.()
+    // We verify the pattern by passing an onSwapped that calls a clear function and
+    // checking the clear function was invoked.
+    let injectionCleared = false;
+    const clearSpy = vi.fn(() => { injectionCleared = true; });
+
+    const { deps } = buildDeps();
+    deps.onSwapped = vi.fn((_target) => { clearSpy(); });
+
+    await performResumeSwap(makeTarget('t-clear-direct', makeStoredSession()), deps);
+    expect(clearSpy).toHaveBeenCalledOnce();
+    expect(injectionCleared).toBe(true);
+  });
+});
