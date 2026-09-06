@@ -1197,6 +1197,14 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_TURN_SEPARATOR',
+    description: 'Render a dim horizontal rule between conversation turns in the REPL. 0 = off, unset/1 = on (default). TTY-only: piped/one-shot output (afk chat) never emits the rule.',
+    type: 'boolean',
+    required: false,
+    example: '0',
+    category: 'misc',
+  },
+  {
     name: 'AFK_SKILL_STREAM_VERBOSE',
     description: 'Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result.',
     type: 'boolean',

@@ -1151,6 +1151,24 @@ describe('parseAgentInput', () => {
       expect('cwd' in result).toBe(false);
     });
 
+    // --- progress_events field ---
+
+    it('omits progress_events from output when absent from input', () => {
+      const result = parseAgentInput({ prompt: 'p' });
+      expect('progress_events' in result).toBe(false);
+    });
+
+    it('includes progress_events: true when set to true', () => {
+      const result = parseAgentInput({ prompt: 'p', progress_events: true });
+      expect(result.progress_events).toBe(true);
+    });
+
+    it('includes progress_events: false when explicitly set to false', () => {
+      const result = parseAgentInput({ prompt: 'p', progress_events: false });
+      expect('progress_events' in result).toBe(true);
+      expect(result.progress_events).toBe(false);
+    });
+
     it('ignores unrecognized extra keys on the input object', () => {
       const result = parseAgentInput({ prompt: 'p', bogusExtra: 'ignored' } as Record<string, unknown>);
       expect(result.prompt).toBe('p');
