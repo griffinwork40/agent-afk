@@ -67,6 +67,10 @@ beforeEach(() => {
   process.env['AFK_ALLOW_PROJECT_MCP'] = '0';
 });
 
+// Invariant: rmSync can race with async writes into AFK_HOME on Linux (the
+// kernel may not have finished unlinking subdirectory inodes before the parent
+// rmdir fires). Wrapping in try/catch is safe -- these are /tmp dirs that the
+// OS reaps anyway.
 afterEach(async () => {
   vi.useRealTimers();
   rmSync(queueDir, { recursive: true, force: true });
@@ -75,7 +79,10 @@ afterEach(async () => {
   else process.env['AFK_HOME'] = savedAfkHome;
   if (savedAllowProjectMcp === undefined) delete process.env['AFK_ALLOW_PROJECT_MCP'];
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
-  if (homeDir !== undefined) rmSync(homeDir, { recursive: true, force: true });
+  if (homeDir !== undefined) {
+    try { rmSync(homeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); }
+    catch { /* ENOTEMPTY race on Linux -- /tmp reaps it */ }
+  }
   homeDir = undefined;
 });
 
