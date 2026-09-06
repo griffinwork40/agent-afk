@@ -22,6 +22,7 @@ import { runSubagentDAG, type SubagentDAGNode } from '../dag-subagent.js';
 import { resolveChildModel } from '../subagent/resolve-child-model.js';
 import { providerForModel } from '../providers/index.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
+import { applyParentCredentialFallback } from './child-credential.js';
 import type { DAGEdge, DAGRunResult } from '../dag.js';
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
@@ -747,10 +748,13 @@ export class ComposeExecutor {
         // the agent tool path (child-config.ts:302-308). ctx.apiKey is a fallback
         // only when fresh resolution returns empty (expired keychain token).
         // OpenAI-routed nodes receive undefined (cross-provider anti-leak).
+        // Uses applyParentCredentialFallback so the isAnthropicCredential gate
+        // prevents a non-Anthropic ctx.apiKey from reaching Anthropic children
+        // (structural parity with child-config.ts, not just behavioral).
         const freshKey = nodeIsOpenAI ? undefined
           : (this.ctx.resolveApiKeyForModel ? this.ctx.resolveApiKeyForModel(nodeModel) : resolveCredentialForModel(nodeModel));
         const resolvedNodeApiKey = nodeIsOpenAI ? undefined
-          : (freshKey && freshKey.length > 0 ? freshKey : this.ctx.apiKey);
+          : applyParentCredentialFallback({ childModel: nodeModel, resolved: freshKey, parentApiKey: this.ctx.apiKey });
         return {
           id: n.id,
           agentType: `${n.id} [${i + 1}/${totalNodes}]`,

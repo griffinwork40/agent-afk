@@ -1529,10 +1529,28 @@ describe('ComposeExecutor', () => {
       expect(dagOpts.nodes[0].apiKey).toBe('anthropic-key-from-env');
     });
 
-    it('falls back to ctx.apiKey when the resolver returns undefined (expired keychain / empty env)', async () => {
+    it('falls back to Anthropic-shaped ctx.apiKey when the resolver returns undefined (expired keychain / empty env)', async () => {
       // When the injected resolver returns undefined (expired keychain, empty
-      // env), the executor falls back to ctx.apiKey as a safety net — matching
-      // the applyParentCredentialFallback pattern in child-credential.ts.
+      // env), applyParentCredentialFallback forwards ctx.apiKey only if it is
+      // Anthropic-shaped — matching child-config.ts structural parity.
+      const resolveApiKeyForModel = vi.fn(() => undefined as string | undefined);
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+      const executor = new ComposeExecutor(makeContext({
+        defaultModel: 'sonnet',
+        apiKey: 'sk-ant-api03-fallback-key',
+        resolveApiKeyForModel,
+      }));
+      await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }] }));
+      expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
+      const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
+      // Falls back to Anthropic-shaped ctx.apiKey when fresh resolution is empty.
+      expect(dagOpts.nodes[0].apiKey).toBe('sk-ant-api03-fallback-key');
+    });
+
+    it('does not forward non-Anthropic ctx.apiKey to Anthropic nodes (cross-provider anti-leak)', async () => {
+      // When the resolver returns undefined and ctx.apiKey is NOT Anthropic-shaped,
+      // applyParentCredentialFallback returns undefined — preventing a non-Anthropic
+      // credential from reaching an Anthropic child.
       const resolveApiKeyForModel = vi.fn(() => undefined as string | undefined);
       mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
       const executor = new ComposeExecutor(makeContext({
@@ -1543,8 +1561,8 @@ describe('ComposeExecutor', () => {
       await executor.execute(makeCall({ nodes: [{ id: 'a', prompt: 'task a', model: 'sonnet' }] }));
       expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
       const dagOpts = mockRunSubagentDAG.mock.calls[0][0];
-      // Falls back to ctx.apiKey when fresh resolution is empty.
-      expect(dagOpts.nodes[0].apiKey).toBe('openai-key');
+      // Non-Anthropic ctx.apiKey must NOT reach Anthropic nodes.
+      expect(dagOpts.nodes[0].apiKey).toBeUndefined();
     });
 
     it('picks up a new credential after mid-session account switch', async () => {
