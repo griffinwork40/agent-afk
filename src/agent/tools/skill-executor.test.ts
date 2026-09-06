@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // Mock the credential resolver so tests are not coupled to the live
@@ -75,8 +76,8 @@ describe('SkillExecutor', () => {
   });
 
   it('refreshes project skills for its cwd before lookup after another session evicts them', async () => {
-    const cwdA = mkdtempSync('/tmp/skill-executor-session-a-');
-    const cwdB = mkdtempSync('/tmp/skill-executor-session-b-');
+    const cwdA = mkdtempSync(join(tmpdir(), 'skill-executor-session-a-'));
+    const cwdB = mkdtempSync(join(tmpdir(), 'skill-executor-session-b-'));
     const skillDir = join(cwdA, '.afk', 'skills', 'session-a-skill');
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(

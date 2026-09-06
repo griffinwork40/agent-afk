@@ -13,6 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmdirSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import {
   extractPluginSkills,
@@ -26,7 +27,7 @@ describe('plugin tool injector', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync('/tmp/plugin-test-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'plugin-test-'));
   });
 
   afterEach(() => {
@@ -614,7 +615,7 @@ describe('extractPluginSkills — memoization', () => {
   }
 
   beforeEach(() => {
-    tmpDir = mkdtempSync('/tmp/plugin-skills-memo-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'plugin-skills-memo-'));
     _resetPluginScanCache();
   });
 

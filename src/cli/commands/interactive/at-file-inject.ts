@@ -40,6 +40,7 @@ import { homedir } from 'os';
 import { resolveQuery } from '../../multi-line-reader.js';
 import { safeRealpath } from '../../../agent/tools/handlers/write-denylist.js';
 import { READ_ALLOWLIST_REL, isReadDenied } from '../../../agent/tools/handlers/read-denylist.js';
+import { pathIsWithin } from '../../../agent/tools/fs-case.js';
 
 /** Per-file injection ceiling. Files larger than this are skipped with a warning. */
 export const AT_FILE_MAX_SIZE_BYTES = 100 * 1024;
@@ -75,7 +76,10 @@ export interface AtFileInjectOpts {
 // Mirror `FILE_TOKEN_RE` (input-highlight.ts): an `@`-token must follow
 // whitespace or buffer start and be followed by whitespace or end, so
 // `email@host.com` is never matched. Requires ≥1 path char after `@`.
-const AT_TOKEN_RE = /(?<=\s|^)@([~\w./-]+)(?=\s|$)/g;
+// Invariant: the character class must include `\` and `:` so Windows paths
+// like `@C:\Users\alice\file.ts` are tokenised. Without them the token stops
+// at the first backslash or drive-letter colon and the file is silently skipped.
+const AT_TOKEN_RE = /(?<=\s|^)@([~\w./\\:-]+)(?=\s|$)/g;
 
 // Injected content is forwarded to the model API verbatim — never auto-read
 // obvious secret stores. Matched (case-insensitively) against the
@@ -87,8 +91,11 @@ const AT_TOKEN_RE = /(?<=\s|^)@([~\w./-]+)(?=\s|$)/g;
 // `.git-credentials` (plaintext credential store) and shell history files
 // (inline-typed secrets) are denied even though they live in ordinary repos /
 // home dirs — see SEC-1, PR #688 review.
+// Invariant: every path-separator anchor must match both `/` and `\` so
+// Windows backslash paths (produced by `safeRealpath` on win32) are caught.
+// Without this, all eight sensitive-directory families are bypassed on Windows.
 const SENSITIVE_RE =
-  /(^|\/)\.(ssh|aws|gnupg|kube|docker)(\/|$)|(^|\/)[^/]*\.env(\.[^/]+)?$|(^|\/)\.(netrc|npmrc|pypirc)$|(^|\/)id_(rsa|ed25519|ecdsa|dsa)(\.pub)?$|\.(pem|key|p12|pfx)$|(^|\/)credentials$|(^|\/)\.git\/config$|(^|\/)\.git-credentials$|(^|\/)\.(bash|zsh|fish|sh)_history$/i;
+  /(^|[/\\])\.(ssh|aws|gnupg|kube|docker)([/\\]|$)|(^|[/\\])[^/\\]*\.env(\.[^/\\]+)?$|(^|[/\\])\.(netrc|npmrc|pypirc)$|(^|[/\\])id_(rsa|ed25519|ecdsa|dsa)(\.pub)?$|\.(pem|key|p12|pfx)$|(^|[/\\])credentials$|(^|[/\\])\.git[/\\]config$|(^|[/\\])\.git-credentials$|(^|[/\\])\.(bash|zsh|fish|sh)_history$/i;
 
 // Secret directories that aren't a single recognizable path segment (so the
 // regex above can't catch them). Resolved per call against the effective home.
@@ -140,7 +147,7 @@ function isSensitiveRead(
   if (allowedFiles.includes(realPath)) return isReadDenied(realPath).denied;
   if (SENSITIVE_RE.test(realPath)) return true;
   for (const dir of sensitiveDirs) {
-    if (realPath === dir || realPath.startsWith(dir + '/')) return true;
+    if (pathIsWithin(realPath, dir)) return true;
   }
   return false;
 }

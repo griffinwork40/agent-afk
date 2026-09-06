@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildSkillManifest,
@@ -54,8 +55,8 @@ let _origCwd: string;
 
 beforeEach(() => {
   fsMocks.readFileSync.mockImplementation(fsMocks.realReadFileSync!);
-  _isolatedAfkHome = mkdtempSync('/tmp/skill-bridge-test-afkhome-');
-  _isolatedCwd = mkdtempSync('/tmp/skill-bridge-test-cwd-');
+  _isolatedAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-test-afkhome-'));
+  _isolatedCwd = mkdtempSync(join(tmpdir(), 'skill-bridge-test-cwd-'));
   _origCwd = process.cwd();
   vi.stubEnv('AFK_HOME', _isolatedAfkHome);
   process.chdir(_isolatedCwd);
@@ -463,7 +464,7 @@ describe('collectSkillEntries — plugin frontmatter audience filter', () => {
     vi.unstubAllEnvs();
     vi.stubEnv('AFK_HOME', _isolatedAfkHome);
     vi.stubEnv('AFK_INTERNAL', '');
-    tmpDir = mkdtempSync('/tmp/skill-bridge-audience-test-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'skill-bridge-audience-test-'));
   });
 
   afterEach(() => {
@@ -548,7 +549,7 @@ describe('collectSkillEntries — registry/plugin dedup', () => {
     vi.unstubAllEnvs();
     vi.stubEnv('AFK_HOME', _isolatedAfkHome);
     vi.stubEnv('AFK_INTERNAL', '');
-    tmpDir = mkdtempSync('/tmp/skill-bridge-dedup-test-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'skill-bridge-dedup-test-'));
   });
 
   afterEach(() => {
@@ -606,7 +607,7 @@ describe('plugin commands/*.md integration', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync('/tmp/skill-bridge-commands-test-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'skill-bridge-commands-test-'));
   });
 
   afterEach(() => {
@@ -736,7 +737,7 @@ describe('discoverPluginSkillBodies', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync('/tmp/skill-bodies-test-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'skill-bodies-test-'));
   });
 
   afterEach(() => {
@@ -848,7 +849,7 @@ describe('discoverPluginAgents', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = mkdtempSync('/tmp/plugin-agents-test-');
+    tmpDir = mkdtempSync(join(tmpdir(), 'plugin-agents-test-'));
   });
 
   afterEach(() => {
@@ -1068,9 +1069,9 @@ describe('collectSkillEntries — disk-scan regression (user + project skills)',
     vi.unstubAllEnvs();
 
     // Isolated AFK_HOME so the test never reads from the real ~/.afk/skills/.
-    tmpAfkHome = mkdtempSync('/tmp/skill-bridge-disk-regression-afkhome-');
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-disk-regression-afkhome-'));
     // Isolated cwd so getProjectSkillsDir() doesn't pick up real project skills.
-    tmpCwd = mkdtempSync('/tmp/skill-bridge-disk-regression-cwd-');
+    tmpCwd = mkdtempSync(join(tmpdir(), 'skill-bridge-disk-regression-cwd-'));
     origCwd = process.cwd();
 
     vi.stubEnv('AFK_HOME', tmpAfkHome);
@@ -1230,9 +1231,9 @@ describe('collectSkillEntries — project skill eviction on cwd change (#179)', 
     _resetRegistry();
     vi.unstubAllEnvs();
 
-    tmpAfkHome = mkdtempSync('/tmp/skill-bridge-evict-afkhome-');
-    cwdA = mkdtempSync('/tmp/skill-bridge-evict-cwdA-');
-    cwdB = mkdtempSync('/tmp/skill-bridge-evict-cwdB-');
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-evict-afkhome-'));
+    cwdA = mkdtempSync(join(tmpdir(), 'skill-bridge-evict-cwdA-'));
+    cwdB = mkdtempSync(join(tmpdir(), 'skill-bridge-evict-cwdB-'));
     origCwd = process.cwd();
 
     vi.stubEnv('AFK_HOME', tmpAfkHome);
@@ -1414,9 +1415,9 @@ describe('scanAllPluginRoots — project plugin session-cwd resolution', () => {
     _resetPluginScanCache();
     vi.unstubAllEnvs();
 
-    tmpAfkHome = mkdtempSync('/tmp/plugin-roots-evict-afkhome-');
-    cwdA = mkdtempSync('/tmp/plugin-roots-evict-cwdA-');
-    cwdB = mkdtempSync('/tmp/plugin-roots-evict-cwdB-');
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'plugin-roots-evict-afkhome-'));
+    cwdA = mkdtempSync(join(tmpdir(), 'plugin-roots-evict-cwdA-'));
+    cwdB = mkdtempSync(join(tmpdir(), 'plugin-roots-evict-cwdB-'));
     origCwd = process.cwd();
 
     vi.stubEnv('AFK_HOME', tmpAfkHome);
@@ -1464,9 +1465,9 @@ describe('discoverPluginSkillBodies — project plugin session-cwd resolution', 
     _resetPluginScanCache();
     vi.unstubAllEnvs();
 
-    tmpAfkHome = mkdtempSync('/tmp/plugin-bodies-evict-afkhome-');
-    cwdA = mkdtempSync('/tmp/plugin-bodies-evict-cwdA-');
-    cwdB = mkdtempSync('/tmp/plugin-bodies-evict-cwdB-');
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'plugin-bodies-evict-afkhome-'));
+    cwdA = mkdtempSync(join(tmpdir(), 'plugin-bodies-evict-cwdA-'));
+    cwdB = mkdtempSync(join(tmpdir(), 'plugin-bodies-evict-cwdB-'));
     origCwd = process.cwd();
 
     vi.stubEnv('AFK_HOME', tmpAfkHome);

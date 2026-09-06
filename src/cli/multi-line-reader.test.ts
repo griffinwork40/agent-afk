@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { tmpdir } from 'os';
 import { buildCompleter, readInput, fileMatchesFor, MAX_FILE_MATCHES, resolveQuery } from './multi-line-reader.js';
 import { registerAll } from './slash/index.js';
@@ -128,6 +128,22 @@ describe('resolveQuery', () => {
     expect(out.leafPrefix).toBe('x');
     // scanDir is the real home; just assert it is absolute and non-empty.
     expect(out.scanDir.length).toBeGreaterThan(0);
+  });
+
+  it('backslash-separated relative: sub\\file → splits on last separator (#703)', () => {
+    expect(resolveQuery('sub\\file', ROOT, HOME)).toEqual({
+      scanDir: join(ROOT, 'sub'),
+      leafPrefix: 'file',
+      displayPrefix: `sub${sep}`,
+    });
+  });
+
+  it('tilde with backslash: ~\\docs\\f → recognised as tilde path (#703)', () => {
+    expect(resolveQuery('~\\docs\\f', ROOT, HOME)).toEqual({
+      scanDir: join(HOME, 'docs'),
+      leafPrefix: 'f',
+      displayPrefix: `~${sep}docs${sep}`,
+    });
   });
 });
 

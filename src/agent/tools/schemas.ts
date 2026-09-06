@@ -17,6 +17,7 @@ import { testRunTool } from './schemas.test-run.js';
 import { getFacetTool } from './schemas.facet.js';
 import { jsonQueryTool } from './schemas.json-query.js';
 export { jsonQueryTool } from './schemas.json-query.js';
+import { shellDescription } from '../../utils/resolve-shell.js';
 
 export const bashTool: AnthropicToolDef = {
   name: 'bash',
@@ -25,7 +26,7 @@ export const bashTool: AnthropicToolDef = {
   description:
     'Execute a shell command and return its stdout and stderr. ' +
     'Use for running programs, installing packages, git operations, and any task that requires a shell. ' +
-    'Commands run through /bin/sh (Node spawn with shell:true) — NOT bash and NOT your $SHELL; /bin/sh is bash-in-POSIX-mode on macOS but dash on Debian/Ubuntu. ' +
+    `Commands run through ${shellDescription()} (Node spawn with shell:true) — NOT bash and NOT your $SHELL; /bin/sh is bash-in-POSIX-mode on macOS but dash on Debian/Ubuntu. ` +
     'Only process substitution <(...) reliably fails closed (exit 2, nothing runs). Other bashisms are nonportable and are NOT dependable refusals: ' +
     '[[ ]] runs on macOS but is a not-found command on dash while the rest of the line still executes; {a,b} expands on macOS but passes through literally on dash (silently wrong argument); arrays run on macOS but are a syntax error on dash. ' +
     'So never assume a bashism-containing command was side-effect-free — prefer a temp file or a POSIX equivalent. Long-running commands should use timeout_ms. ' +
