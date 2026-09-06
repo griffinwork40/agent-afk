@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.0] - 2026-09-06
+
+### Added
+- widen left gutter to 3-space indent (#1509) (7a94d1da)
+
+## [5.190.0] - 2026-09-06
+
+### Added
+- tighter prose measure for non-code blocks (#1510) (e645de8d)
+
 ## [5.189.0] - 2026-09-05
 
 ### Added

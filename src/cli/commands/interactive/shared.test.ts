@@ -68,9 +68,9 @@ describe('printResumeBanner', () => {
     printResumeBanner(makeStats([turn]), writer);
 
     expect(lines).toHaveLength(3);
-    expect(stripAnsi(lines[0]!)).toBe('  Last: fix the auth bug');
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ I patched the token check in middleware.ts.');
-    expect(stripAnsi(lines[2]!)).toBe('  ↪ /history for full review');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: fix the auth bug');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ I patched the token check in middleware.ts.');
+    expect(stripAnsi(lines[2]!)).toBe('   ↪ /history for full review');
   });
 
   it('picks the LAST turn when multiple are present', () => {
@@ -93,9 +93,9 @@ describe('printResumeBanner', () => {
     printResumeBanner(makeStats([turn]), writer);
 
     const userLine = stripAnsi(lines[0]!);
-    expect(userLine).toMatch(/^  Last: a+…$/);
-    // Format: "  Last: " (8 chars) + content up to 80 incl. ellipsis = 88 total max
-    expect(userLine.length).toBeLessThanOrEqual(88);
+    expect(userLine).toMatch(/^   Last: a+…$/);
+    // Format: "   Last: " (9 chars) + content up to 80 incl. ellipsis = 89 total max
+    expect(userLine.length).toBeLessThanOrEqual(89);
   });
 
   it('flattens multi-line content into a single line', () => {
@@ -112,8 +112,8 @@ describe('printResumeBanner', () => {
     for (const line of lines) {
       expect(line).not.toContain('\n');
     }
-    expect(stripAnsi(lines[0]!)).toBe('  Last: multi line user message');
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ multi line reply.');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: multi line user message');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ multi line reply.');
   });
 
   it('strips ANSI cursor-control sequences from stored content', () => {
@@ -131,8 +131,8 @@ describe('printResumeBanner', () => {
     // the helper's own palette.dim styling is applied AFTER stripping, so
     // dim escapes are fine; the danger is unsanitized control bytes inside
     // the content slot. Check the content region only.
-    expect(stripAnsi(lines[0]!)).toBe('  Last: run the thing');
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ cleared screen but kept output.');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: run the thing');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ cleared screen but kept output.');
   });
 
   it('strips OSC 8 hyperlinks (ESC ] ... BEL) from stored content', () => {
@@ -146,7 +146,7 @@ describe('printResumeBanner', () => {
       timestamp: 0,
     };
     printResumeBanner(makeStats([turn]), writer);
-    expect(stripAnsi(lines[0]!)).toBe('  Last: see docs here');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: see docs here');
     // No OSC opener or BEL should survive in the banner.
     expect(lines[0]).not.toContain('\u001b]');
     expect(lines[0]).not.toContain('\u0007');
@@ -163,8 +163,8 @@ describe('printResumeBanner', () => {
       timestamp: 0,
     };
     printResumeBanner(makeStats([turn]), writer);
-    expect(stripAnsi(lines[0]!)).toBe('  Last: savedrestored');
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ used reverse index here.');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: savedrestored');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ used reverse index here.');
     // No raw ESC bytes should leak through.
     for (const line of lines) {
       expect(line.includes('\u001b7')).toBe(false);
@@ -183,7 +183,7 @@ describe('printResumeBanner', () => {
       timestamp: 0,
     };
     printResumeBanner(makeStats([turn]), writer);
-    expect(stripAnsi(lines[0]!)).toBe('  Last: beforeafter');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: beforeafter');
   });
 
   it('strips 8-bit C1 CSI bytes (\\x9B) from stored content', () => {
@@ -196,7 +196,7 @@ describe('printResumeBanner', () => {
       timestamp: 0,
     };
     printResumeBanner(makeStats([turn]), writer);
-    expect(stripAnsi(lines[0]!)).toBe('  Last: red-via-c1');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: red-via-c1');
   });
 
   it('skips the user line when the user field is empty', () => {
@@ -205,8 +205,8 @@ describe('printResumeBanner', () => {
     printResumeBanner(makeStats([turn]), writer);
 
     expect(lines).toHaveLength(2);
-    expect(stripAnsi(lines[0]!)).toBe('  ↳ standalone reply.');
-    expect(stripAnsi(lines[1]!)).toBe('  ↪ /history for full review');
+    expect(stripAnsi(lines[0]!)).toBe('   ↳ standalone reply.');
+    expect(stripAnsi(lines[1]!)).toBe('   ↪ /history for full review');
   });
 
   it('skips the assistant line when the assistant field is empty', () => {
@@ -215,8 +215,8 @@ describe('printResumeBanner', () => {
     printResumeBanner(makeStats([turn]), writer);
 
     expect(lines).toHaveLength(2);
-    expect(stripAnsi(lines[0]!)).toBe('  Last: incomplete turn');
-    expect(stripAnsi(lines[1]!)).toBe('  ↪ /history for full review');
+    expect(stripAnsi(lines[0]!)).toBe('   Last: incomplete turn');
+    expect(stripAnsi(lines[1]!)).toBe('   ↪ /history for full review');
   });
 
   it('still emits the /history pointer when both user and assistant are empty', () => {
@@ -225,7 +225,7 @@ describe('printResumeBanner', () => {
     printResumeBanner(makeStats([turn]), writer);
 
     expect(lines).toHaveLength(1);
-    expect(stripAnsi(lines[0]!)).toBe('  ↪ /history for full review');
+    expect(stripAnsi(lines[0]!)).toBe('   ↪ /history for full review');
   });
 
   it('extracts only the first sentence from a long assistant reply', () => {
@@ -237,7 +237,7 @@ describe('printResumeBanner', () => {
     };
     printResumeBanner(makeStats([turn]), writer);
 
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ First sentence here.');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ First sentence here.');
   });
 
   it('does not false-stop at `e.g.` / `i.e.` abbreviations', () => {
@@ -252,7 +252,7 @@ describe('printResumeBanner', () => {
       timestamp: 0,
     };
     printResumeBanner(makeStats([turn]), writer);
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ Use e.g. middleware.ts to patch the bug.');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ Use e.g. middleware.ts to patch the bug.');
   });
 
   it('still stops at sentence boundaries when the next sentence is lowercase', () => {
@@ -267,7 +267,7 @@ describe('printResumeBanner', () => {
       timestamp: 0,
     };
     printResumeBanner(makeStats([turn]), writer);
-    expect(stripAnsi(lines[1]!)).toBe('  ↳ PASS: 5/5 passed.');
+    expect(stripAnsi(lines[1]!)).toBe('   ↳ PASS: 5/5 passed.');
   });
 
   it('does not split UTF-16 surrogate pairs at the truncation boundary', () => {
@@ -321,7 +321,7 @@ describe('printResumeBanner', () => {
     const line = stripAnsi(lines[0]!);
     // No ellipsis means no truncation happened.
     expect(line).not.toContain('…');
-    expect(line).toBe('  Last: ' + '🎉'.repeat(80));
+    expect(line).toBe('   Last: ' + '🎉'.repeat(80));
   });
 });
 

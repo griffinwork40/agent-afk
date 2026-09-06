@@ -1,7 +1,7 @@
 import { getTerminalWidth } from './terminal-size.js';
 import { renderMarkdownToTerminal } from './formatter.js';
 import { wrapToWidth } from './wrap.js';
-import { capToMeasure } from './render/measure.js';
+import { capToMeasure, capToProseMeasure } from './render/measure.js';
 
 /**
  * Pure markdown formatting and analysis helpers for StreamingMarkdownRenderer.
@@ -17,6 +17,16 @@ import { capToMeasure } from './render/measure.js';
 export function calculateContentWidth(indentLength: number): number {
   const termWidth = Math.max(1, getTerminalWidth() - 2);
   return Math.max(1, capToMeasure(termWidth - indentLength));
+}
+
+/**
+ * Content width for prose-only blocks — tighter than code for readability.
+ * Same terminal-minus-chrome math, but capped at the prose measure (default
+ * 80) instead of the code measure (default 100).
+ */
+export function calculateProseContentWidth(indentLength: number): number {
+  const termWidth = Math.max(1, getTerminalWidth() - 2);
+  return Math.max(1, capToProseMeasure(termWidth - indentLength));
 }
 
 /**
