@@ -259,8 +259,8 @@ describe('handleOrchestratorEvent — thinking overlay (live mode)', () => {
     const plain = strip(lastCall);
     // Header is the unambiguous marker.
     expect(plain).toContain('◆ thinking');
-    // Body line is indented by 2 cols and contains the reasoning text.
-    expect(plain).toContain('  Let me reason about this');
+    // Body line is indented by 3 cols and contains the reasoning text.
+    expect(plain).toContain('   Let me reason about this');
   });
 
   it("does NOT include the thinking paragraph in 'summary' mode (but may still repaint for stage rail / lane updates)", () => {

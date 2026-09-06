@@ -75,7 +75,7 @@ export function formatGroupedToolResults(
 ): string {
   const { color, glyph } = styleForToolName(toolName);
   const prefix =
-    '  ' +
+    '   ' +
     color(glyph + ' ') +
     color.bold(toolName) +
     palette.dim(` ×${entries.length}`) +
@@ -125,17 +125,17 @@ export function renderGroupedRootTools(
         // expendable tail, which is exactly how the overlay clamps the same
         // row ("clamping should elide the outcome tail, not the leading
         // prefix that carries the tool identity" — tool-lane.test.ts).
-        lines.push(clampLineToTerminal('  ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
+        lines.push(clampLineToTerminal('   ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
-          // the outcome line (2 for the row indent, 2 more to clear the
+          // the outcome line (3 for the row indent, 1 more to clear the
           // tool-name column visually).
           for (const line of formatDiffBlock(e.diff, 'flush', '    ')) {
             lines.push(clampLineToTerminal(line, cols));
           }
         }
       } else {
-        lines.push(clampLineToTerminal('  ' + e.prefix, cols));
+        lines.push(clampLineToTerminal('   ' + e.prefix, cols));
       }
     } else {
       lines.push(formatGroupedToolResults(toolName, entries, cols, homeDir));
