@@ -39,13 +39,13 @@ export interface QueuedFlushSnapshot {
 export interface QueuedFlushControl {
   hasPromotableForeground(): boolean;
   promoteActiveForeground(queuedNote?: { readonly text: string; claimed: boolean }): Promise<
-    readonly { jobId: string; label: string }[]
+    readonly { jobId: string; label: string; sharesWorktree?: boolean }[]
   >;
 }
 
 export interface QueuedFlushResult {
   /** Jobs adopted by the background registry (empty when nothing was promoted). */
-  jobs: readonly { jobId: string; label: string }[];
+  jobs: readonly { jobId: string; label: string; sharesWorktree?: boolean }[];
   /** The queued text delivered into the running turn, or undefined if none was. */
   flushedText?: string;
   /** Compact display-safe representation of the flushed text. */
