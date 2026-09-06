@@ -578,4 +578,20 @@ describe('SubagentHandleImpl.steer()', () => {
     expect(cb()).toBe('second');
     expect(cb()).toBeUndefined();
   });
+
+  it('cancel() clears pending steering messages', async () => {
+    const handle = makeSteerHandle();
+    handle.steer('focus on auth');
+    expect(handle._steeringMessages).toHaveLength(1);
+    await handle.cancel();
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
+
+  it('teardown() clears pending steering messages', async () => {
+    const handle = makeSteerHandle();
+    handle.steer('focus on auth');
+    expect(handle._steeringMessages).toHaveLength(1);
+    await handle.teardown();
+    expect(handle._steeringMessages).toHaveLength(0);
+  });
 });
