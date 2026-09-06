@@ -3,8 +3,8 @@
  *
  * The runtime writes a terminal `closure` event on every session teardown
  * (`src/agent/session/agent-session.ts:680` emits it; the writer's `seal()`
- * follows). The payload carries a `reason` discriminated union with seven
- * values; six of them indicate something other than a clean end-of-turn
+ * follows). The payload carries a `reason` discriminated union with eight
+ * values; seven of them indicate something other than a clean end-of-turn
  * stop:
  *
  *   - `budget_exceeded`     — monetary ceiling crossed
@@ -13,6 +13,7 @@
  *   - `abort`               — explicit cancellation / cascade
  *   - `iteration_cap`       — loop iteration ceiling
  *   - `max_turns_exceeded`  — turn ceiling
+ *   - `truncated`           — model output-token ceiling hit mid-response
  *
  * `model_end_turn` is the only normal exit. Everything else is surfaced
  * as a card. One card per anomalous reason; sessions sharing that reason
