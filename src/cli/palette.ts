@@ -87,8 +87,8 @@ const darkPaletteDef = {
   syntaxString: chalk.italic.hex('#8AB07A'),
   /** Tool argument — dim white, for `(args)` after the tool name. */
   toolArg: chalk.dim.white,
-  /** Thinking tone — muted mauve italic, for extended thinking blocks. */
-  thinking: chalk.italic.hex('#9B8FB5'),
+  /** Thinking tone — dusty rose italic, for extended thinking blocks. Shifted from mauve (h=304°) to rose (h=9°) to separate from `plan` (lavender, h=307°, ΔE was 12.8); the warm rose reads as "contemplative inner monologue" without echoing the plan-card purple. */
+  thinking: chalk.italic.hex('#B5888F'),
   /** Success tone — green check marks, confirmation messages. */
   success: chalk.green,
   /** Error tone — muted red, used for errors and warnings. */
@@ -103,8 +103,8 @@ const darkPaletteDef = {
   meta: chalk.blackBright,
   /** Info tone — sky blue, used for ℹ-prefixed ambient notices, status cards, and daemon banners. Owns the ambient-notice channel exclusively. */
   info: chalk.hex('#5BA8FF'),
-  /** File-reference teal — for `@<path>` tokens in the input field. Distinct from `info` so that file refs don't visually echo notification messages. */
-  fileRef: chalk.hex('#56B5A8'),
+  /** File-reference steel-blue — for `@<path>` tokens in the input field. Shifted from teal (h=184°) to slate-blue (h=241°) to separate from `user` (cyan, ΔE was 8.4 → 21.9); reads as "anchor/reference" rather than "user identity." Distinct from `info` (sky-blue) and `caret` (cornflower) by lightness and saturation. */
+  fileRef: chalk.hex('#5B8FA8'),
   /** Heading tone — bold white, used for H2 markdown headings and section titles in help/debug. H1 uses `brand` instead. */
   heading: chalk.bold.white,
   /** Label tone — dim, used for key-value row labels in debug banners. */
@@ -161,8 +161,8 @@ const lightPaletteDef: ThemePalette = {
   syntaxString: chalk.italic.hex('#3F7A3F'),
   /** Mid grey — dim-white washes out on white, so use an explicit legible grey. */
   toolArg: chalk.hex('#6B7280'),
-  /** Darker mauve italic — thinking blocks on white. */
-  thinking: chalk.italic.hex('#6D5B8E'),
+  /** Dark dusty-rose italic — thinking blocks on white. Hue-matched to the dark theme's `#B5888F`. */
+  thinking: chalk.italic.hex('#8A5D64'),
   /** Dark green — success on white. */
   success: chalk.hex('#2E7D32'),
   /** Dark red — errors on white. */
@@ -177,8 +177,8 @@ const lightPaletteDef: ThemePalette = {
   meta: chalk.hex('#6B7280'),
   /** Deeper sky blue — ambient-notice channel on white. */
   info: chalk.hex('#1D6FD6'),
-  /** Dark teal — file refs on white. */
-  fileRef: chalk.hex('#0F766E'),
+  /** Dark steel-blue — file refs on white. Hue-matched to the dark theme's `#5B8FA8`. */
+  fileRef: chalk.hex('#276A82'),
   /** Bold near-black — H2 headings; white heading is invisible on white. */
   heading: chalk.bold.hex('#1F2937'),
   /** Dim (relative modifier — theme-agnostic). */
@@ -245,8 +245,8 @@ const umberPaletteDef: ThemePalette = {
   syntaxString: chalk.italic.hex('#96C182'),
   /** ansi7 white, dimmed — the faithful translation of the dark theme's `chalk.dim.white`. */
   toolArg: chalk.dim.hex('#D3CDC5'),
-  /** Warm mauve italic — no Umber analogue; warm-shifted from the dark theme's `#9B8FB5`. */
-  thinking: chalk.italic.hex('#B49EC4'),
+  /** Warm dusty-rose italic — no Umber analogue; warm-shifted from the dark theme's `#B5888F`. */
+  thinking: chalk.italic.hex('#C4929A'),
   /** ansi2 green — the faithful translation of `chalk.green`. */
   success: chalk.hex('#8AE49E'),
   /** ansi1 red — the faithful translation of `chalk.red`. */
@@ -261,8 +261,8 @@ const umberPaletteDef: ThemePalette = {
   meta: chalk.hex('#AAA19B'),
   /** ansi4 blue — the ambient-notice channel. */
   info: chalk.hex('#739EF0'),
-  /** ansi14 bright cyan — file refs. Brighter than `user` (ansi6), inverting the dark theme's relative ordering; both stay legible and distinguishable. */
-  fileRef: chalk.hex('#80E5E2'),
+  /** Warm steel-blue — no Umber analogue for the new file-ref hue; warm-shifted from the dark theme's `#5B8FA8`. */
+  fileRef: chalk.hex('#78ACB8'),
   /** ansi15 bright white, bold — H2 headings. */
   heading: chalk.bold.hex('#F9F6F2'),
   /** Dim (theme-agnostic). */

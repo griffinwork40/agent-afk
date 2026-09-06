@@ -61,11 +61,12 @@ export {
  */
 function categoryColor(cat: ToolCategory): ChalkInstance {
   switch (cat) {
-    // Read — soft sand. Reads are the highest-frequency tool category (every
+    // Read — warm clay. Reads are the highest-frequency tool category (every
     // turn involves grep/read/glob), so they need a distinct hue that isn't
-    // in the blue family (which is already crowded by info/tool/fileRef).
-    // Sand = "data at rest," warm and earthy.
-    case 'read': return chalk.hex('#C9B584');
+    // in the blue family. Clay = "data at rest," warm and earthy. Shifted
+    // rosier (h=64°) from the original sand (h=90°) to separate from
+    // tool (#DCDCAA, ΔE was 11.1) and schedule (now lavender).
+    case 'read': return chalk.hex('#C2A48E');
     case 'write': return chalk.hex('#E8A33D');
     case 'shell': return chalk.hex('#A8E060');
     case 'subagent': return palette.plan;
@@ -82,15 +83,17 @@ function categoryColor(cat: ToolCategory): ChalkInstance {
     // dag/mcp/web/fileRef (four teal-adjacent hues) remain perceptually
     // separable in dense tool turns.
     case 'web': return chalk.hex('#A0C4C0');
-    // Browser — bright coral/orange. Distinct from web (sage) because browser
-    // tools drive a stateful headed session, not a one-shot HTTP request —
-    // operators reading the tool lane should see "this is a different class of
-    // I/O than web_scrape" at a glance.
-    case 'browser': return chalk.hex('#FF8A65');
+    // Browser — rose crimson. Distinct from web (sage) because browser tools
+    // drive a stateful headed session, not a one-shot HTTP request. Shifted
+    // from coral (h=44°, ΔE 6.7 from brand) to crimson-rose (h=12°) so the
+    // tool lane never echoes the brand-orange prompt prefix.
+    case 'browser': return chalk.hex('#D9637A');
     case 'planning': return palette.meta;
-    // Schedule — daemon-management tools. Amber-adjacent to distinguish from
-    // write (orange) without clashing with planning (meta-grey).
-    case 'schedule': return chalk.hex('#D4A84B');
+    // Schedule — lavender indigo. Moved from amber (h=83°, ΔE 6.4 from
+    // write) to the underused blue-purple zone (h=301°). Cool precision
+    // reads as "clockwork / daemon" and is perceptually distinct from every
+    // other tool-lane category.
+    case 'schedule': return chalk.hex('#8F82C8');
     // "Other" — unknown/uncategorized tools. Routed to meta-grey rather
     // than info-sky so that an unrecognized tool name doesn't visually
     // assert the same salience as an ℹ ambient notice.
