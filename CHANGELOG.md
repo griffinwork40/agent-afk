@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.190.0] - 2026-09-06
+
+### Added
+- tighter prose measure for non-code blocks (#1510) (e645de8d)
+
 ## [5.189.0] - 2026-09-05
 
 ### Added
