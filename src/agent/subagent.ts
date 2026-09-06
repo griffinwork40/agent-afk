@@ -47,6 +47,7 @@ import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 import { CompletedCache } from './subagent/completed-cache.js';
 import { SubagentLogWriter } from './subagent/log.js';
+import { wireProgressEvents } from './subagent/fork-progress-events.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -56,13 +57,8 @@ export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
 // use by SubagentManager below AND re-exported here unchanged, so every
 // existing `from './subagent.js'` importer keeps working untouched.
 import {
-  DENY_ELICITATION,
-  SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
-  SUBAGENT_DEFAULT_TIMEOUT_MS,
   SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
-  SUBAGENT_BACKGROUND_TIMEOUT_MS,
   SUBAGENT_DRAIN_TIMEOUT_MS,
-  resolveSubagentTimeoutMs,
   resolveSubagentIdleTimeoutMs,
 } from './subagent/constants.js';
 
@@ -72,14 +68,18 @@ import type {
   SubagentManagerOptions,
 } from './subagent/fork-types.js';
 
+// Re-export-only symbols forwarded without local use.
 export {
   DENY_ELICITATION,
   SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS,
   SUBAGENT_DEFAULT_TIMEOUT_MS,
-  SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
   SUBAGENT_BACKGROUND_TIMEOUT_MS,
-  SUBAGENT_DRAIN_TIMEOUT_MS,
   resolveSubagentTimeoutMs,
+} from './subagent/constants.js';
+// Locally-used symbols also re-exported for public API.
+export {
+  SUBAGENT_DEFAULT_IDLE_TIMEOUT_MS,
+  SUBAGENT_DRAIN_TIMEOUT_MS,
   resolveSubagentIdleTimeoutMs,
 };
 export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
@@ -414,6 +414,9 @@ export class SubagentManager {
       stopOccupancyHeartbeat = startWorktreeOccupancyHeartbeat(childConfig.cwd);
     }
 
+    // Progress-events opt-in — mutates childConfig.customTools in place when enabled.
+    const bindProgressHandle = wireProgressEvents(childConfig, options.progressEvents, options.parent.getInputStreamRef?.(), options.parent.abortSignal);
+
     // Ordering constraint: the heartbeat armed above is disarmed by the settle
     // callback installed on the handle built below, so the guarded span has to
     // run from construction all the way through `active.set`. A throw anywhere
@@ -518,6 +521,7 @@ export class SubagentManager {
         options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
       );
       if (logWriter) handle._logWriter = logWriter;
+      bindProgressHandle(handle as SubagentHandleImpl<unknown>);
       this.active.set(id, handle as SubagentHandleImpl<unknown>);
     } catch (err) {
       // Construction or manager-wiring failed (invalid model, sync init

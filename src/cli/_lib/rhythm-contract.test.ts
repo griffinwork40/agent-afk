@@ -14,7 +14,7 @@
  * @module cli/_lib/rhythm-contract.test
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { PassThrough } from 'stream';
 import {
   handleOrchestratorEvent,
@@ -27,6 +27,7 @@ import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { Writer } from '../slash/types.js';
 import type { OutputEvent } from '../../agent/types.js';
+import { printTurnFooter, printTurnSeparator } from '../commands/interactive/turn-handler.footer.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -393,6 +394,114 @@ describe('TUI rhythm contract — dispose() safety-net tool flush', () => {
   });
 });
 
+describe('TUI rhythm contract — turn-boundary separator (printTurnSeparator)', () => {
+  afterEach(() => {
+    // Restore env after each test so mutation doesn't bleed across cases.
+    delete process.env['AFK_TURN_SEPARATOR'];
+  });
+
+  it('TTY + feature enabled (default): emits exactly one rule line, no trailing blank', () => {
+    const lines: string[] = [];
+    const write = (l: string): void => { lines.push(l); };
+    const stdout = { isTTY: true as boolean | undefined };
+
+    printTurnSeparator(write, stdout);
+
+    // Emits exactly one line: the dim rule.
+    expect(lines.length).toBe(1);
+    // The rule line must be non-empty (contains '─' chars, possibly wrapped in ANSI).
+    expect(lines[0]).toBeTruthy();
+    expect(lines[0]).toMatch(/─/);
+    // Must NOT be a blank line.
+    expect(lines[0]).not.toBe('');
+  });
+
+  it('non-TTY: emits nothing (piped/one-shot path is silent)', () => {
+    const lines: string[] = [];
+    const write = (l: string): void => { lines.push(l); };
+    const stdout = { isTTY: false as boolean | undefined };
+
+    printTurnSeparator(write, stdout);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it('AFK_TURN_SEPARATOR=0: emits nothing even on TTY', () => {
+    process.env['AFK_TURN_SEPARATOR'] = '0';
+    const lines: string[] = [];
+    const write = (l: string): void => { lines.push(l); };
+    const stdout = { isTTY: true as boolean | undefined };
+
+    printTurnSeparator(write, stdout);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it('AFK_TURN_SEPARATOR=1: explicitly on, same as default', () => {
+    process.env['AFK_TURN_SEPARATOR'] = '1';
+    const lines: string[] = [];
+    const write = (l: string): void => { lines.push(l); };
+    const stdout = { isTTY: true as boolean | undefined };
+
+    printTurnSeparator(write, stdout);
+
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toMatch(/─/);
+  });
+
+  it('isTTY undefined (non-interactive stream): emits nothing', () => {
+    const lines: string[] = [];
+    const write = (l: string): void => { lines.push(l); };
+    const stdout = { isTTY: undefined };
+
+    printTurnSeparator(write, stdout);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it('printTurnFooter + printTurnSeparator combined: footer trailing blank then rule', () => {
+    // Simulates the call site in turn-handler.ts:
+    //   printTurnFooter(meta, stats, writeAbove);
+    //   printTurnSeparator(writeAbove, process.stdout);
+    // Verifies the combined rhythm: footer emits its trailing '' then the
+    // separator emits the rule line (no extra blank after it — the pre-arm
+    // blank at the next turn is a separate, leading-owned emission).
+    const lines: string[] = [];
+    const write = (l: string): void => { lines.push(l); };
+    const stdout = { isTTY: true as boolean | undefined };
+
+    // Minimal meta + stats for the footer. Use a real-shaped SessionStats
+    // (turnTokens is required by contextRatio).
+    const meta = { durationMs: 1000, totalCostUsd: 0.001 };
+    const stats = {
+      model: 'claude-haiku-4-5',
+      turnCount: 1,
+      totalCostUsd: 0,
+      totalInputTokens: 100,
+      totalOutputTokens: 50,
+      totalCacheWriteTokens: 0,
+      totalCacheReadTokens: 0,
+      turnTokens: [{ input: 100, output: 50, cache: 0 }],
+      permissionMode: 'default' as const,
+    };
+
+    printTurnFooter(meta, stats, write);
+    printTurnSeparator(write, stdout);
+
+    // The footer should have emitted at least one dim stats line + one trailing ''.
+    expect(lines.length).toBeGreaterThan(0);
+
+    // The second-to-last entry (from footer) must be the trailing blank.
+    const secondToLast = lines[lines.length - 2];
+    expect(secondToLast, 'footer must emit a trailing blank before the separator').toBe('');
+
+    // The LAST entry must be the separator rule, not another blank.
+    const last = lines[lines.length - 1]!;
+    expect(last, 'separator rule must be the last emission').toMatch(/─/);
+    expect(last, 'separator must not be a blank').not.toBe('');
+  });
+});
+
 describe('TUI rhythm contract — registry summary', () => {
   // Pin the set of sites known to be under the contract. When a new
   // emitter is added, this test forces a conscious decision: either
@@ -410,6 +519,10 @@ describe('TUI rhythm contract — registry summary', () => {
       'interactive.ts:402',  // SIGINT idle: consistency with mid-stream
       'interactive.ts:486',  // welcome banner leading: predecessor is boot stdout
     ];
+    // Trailing-owned additions (not exceptions — no edit needed here):
+    //   turn-handler.footer.ts: printTurnSeparator() — emits rule line only,
+    //   no trailing blank; relies on the pre-arm blank (leading-exception above)
+    //   for visual separation from the next turn.
     // No assertion needed — the list itself is the documentation. If a
     // future PR adds a new leading-blank emitter, the contract requires
     // appending it here AND to docs/tui-rhythm.md.

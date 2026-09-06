@@ -80,6 +80,7 @@ export async function* emitAndCommitToolResults(
       content: result.content,
       ...(result.isError === true ? { isError: true } : {}),
       ...(truncated ? { truncated: true } : {}),
+      ...(result.capturePath !== undefined ? { capturePath: result.capturePath } : {}),
       ...(result.incomplete === true ? { incomplete: true } : {}),
       ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
       ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
@@ -90,6 +91,13 @@ export async function* emitAndCommitToolResults(
       // gate saying no from a tool that broke, and renders both as a red ✗.
       // Parity with dispatch-append.ts's tool.output yield.
       ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+      // Plumb tool-measured duration so the TUI outcome row can show `· Xs`.
+      // The provider-side durationMs above measures round-trip including
+      // provider overhead; result.durationMs is the handler's own stopwatch.
+      // Prefer the handler value when available (bash always sets it), fall
+      // back to the provider measurement for non-bash tools that don't.
+      durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
+      ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       sessionId: input.ctx.sessionId,
     };
 

@@ -18,7 +18,7 @@ export function formatThoughtSummary(durationMs: number, charCount: number): str
     : `${(duration / 1000).toFixed(1)}s`;
   // Rough token estimate: 1 token ~= 4 chars
   const tokenCount = Math.ceil(charCount / 4);
-  return `  ${palette.thinking('◆ thought for ' + durationStr + ' · ' + tokenCount + ' tokens')}`;
+  return `   ${palette.thinking('◆ thought for ' + durationStr + ' · ' + tokenCount + ' tokens')}`;
 }
 
 /**

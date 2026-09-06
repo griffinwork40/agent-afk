@@ -11,6 +11,32 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.0] - 2026-09-06
+
+### Added
+- widen left gutter to 3-space indent (#1509) (7a94d1da)
+
+## [5.190.0] - 2026-09-06
+
+### Added
+- tighter prose measure for non-code blocks (#1510) (e645de8d)
+
+## [5.189.0] - 2026-09-05
+
+### Added
+- improved bash output visibility in TUI (#1500) (88091f9e)
+
+## [5.188.0] - 2026-09-05
+
+### Added
+- child-to-parent progress events via emit_progress tool (#1418) (#1504) (e6ea06d6)
+
+## [5.187.0] - 2026-09-05
+
+### Added
+- add turn-boundary separator between conversation turns (#1508) (2a9e657d)
+- thread trigger into spawnSession and wire handoff handler (#1416) (#1498) (d6619f02)
+
 ## [5.186.1] - 2026-09-05
 
 ### Changed

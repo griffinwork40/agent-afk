@@ -32,7 +32,7 @@ import { palette } from '../../palette.js';
 import { capToMeasure } from '../../render/measure.js';
 
 const HEADER = '◆ thinking';
-const INDENT = '  ';
+const INDENT = '   ';
 const DEFAULT_MAX_BODY_LINES = 5;
 /**
  * Floor on body width so a 20-col terminal still produces wrapped prose
@@ -68,7 +68,7 @@ export interface ThinkingParagraphOptions {
  *   second wrapped body line
  *   ⋯ +N chars earlier   ← only when truncated
  *
- * All lines are indented by 2 columns. Header and body are italic mauve
+ * All lines are indented by 3 columns. Header and body are italic mauve
  * (`palette.thinking`); the truncation footer is dim so it reads as
  * scaffolding rather than reasoning.
  *

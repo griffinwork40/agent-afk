@@ -128,9 +128,35 @@ export interface ToolResultChunk {
    */
   truncated?: boolean;
   persistedPath?: string;
+  /**
+   * Absolute path to a capture file holding the full bash output when the
+   * model-facing content is a head+tail view (`truncated: true`). Present only
+   * on bash results and only when the full output was retained (not a SIGKILL
+   * path where the middle is unrecoverable). TUI-only — never model-facing.
+   * The TUI shows "hidden output saved → ~/…" with a hyperlink to this file.
+   */
+  capturePath?: string;
+  /**
+   * The last up to 7 lines of the tool's raw output, stored verbatim so the
+   * TUI can render an actual tail preview in the outcome row instead of only a
+   * line count. Set by `buildToolOutputEvent` in `stream-consumer.ts` whenever
+   * `lineCount > 1` (multi-line output). Each entry is already sanitized for
+   * single-line display. TUI-only — never model-facing.
+   */
+  tailPreview?: string[];
+  /** Non-empty lines omitted from the displayed tail (within provider content). */
+  hiddenLineCount?: number;
+  /** Bash process exit status, absent when no exit code was observed. TUI-only. */
+  exitCode?: number;
   sizeBytes?: number;
   sizeLabel?: string;
   lineCount?: number;
+  /**
+   * Wall-clock milliseconds from tool invocation to settle, plumbed from the
+   * bash handler via `ToolResult.durationMs` → `tool.output.durationMs`.
+   * Used by the TUI outcome row to show `· Xs`. Not model-facing.
+   */
+  durationMs?: number;
   /**
    * Optional pre-rendered display string set by the tool handler (via
    * `ToolResult.display`) for the interactive tool-lane outcome row.

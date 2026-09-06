@@ -236,3 +236,197 @@ describe('stream-consumer: stream.retry → stream_retry', () => {
     expect(out).toEqual({ type: 'stream_retry' });
   });
 });
+
+describe('stream-consumer: tailPreview extraction', () => {
+  it('sets tailPreview to last ≤7 non-empty lines for multi-line tool output', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const content = lines.join('\n');
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-tail',
+      content,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    // Should have last 7 non-empty lines
+    expect(out.chunk.tailPreview).toBeDefined();
+    expect(out.chunk.tailPreview).toHaveLength(7);
+    expect(out.chunk.tailPreview![6]).toBe('line 20');
+    expect(out.chunk.tailPreview![0]).toBe('line 14');
+  });
+
+  it('omits tailPreview for single-line content', () => {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-single',
+      content: 'just one line',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.tailPreview).toBeUndefined();
+  });
+
+  it('ignores trailing empty lines when extracting tailPreview', () => {
+    // Content must be >80 chars to trigger truncateContent's tail extraction path.
+    const longPrefix = 'a'.repeat(90);
+    const content = longPrefix + '\nline2\nline3\n\n\n';
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-blanks',
+      content,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    // tailPreview must exist and contain no blank entries
+    expect(out.chunk.tailPreview).toBeDefined();
+    expect(out.chunk.tailPreview!.every(l => l.trim() !== '')).toBe(true);
+  });
+});
+
+describe('stream-consumer: durationMs passthrough', () => {
+  it('plumbs durationMs from provider event to ToolResultChunk', () => {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-dur',
+      content: 'done',
+      durationMs: 3200,
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.durationMs).toBe(3200);
+  });
+
+  it('omits durationMs when not supplied by provider', () => {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-nodur',
+      content: 'done',
+      sessionId: 's1',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.durationMs).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration: bash output pipeline — stream-consumer → formatOutcome
+// Verifies the full pipeline for bash-specific fields (capturePath, truncated,
+// tailPreview, durationMs) without hitting the bash process or filesystem.
+// ---------------------------------------------------------------------------
+
+describe('stream-consumer → formatOutcome: bash output integration', () => {
+  const HOME = '/Users/testuser';
+
+  function buildBashEvent(overrides: Partial<ProviderEvent & { type: 'tool.output' }>): ProviderEvent {
+    return {
+      type: 'tool.output',
+      toolUseId: 'tu-bash',
+      toolName: 'bash',
+      content: 'line1\nline2\nline3',
+      sessionId: 's-bash',
+      ...overrides,
+    };
+  }
+
+  function outcome(evt: ProviderEvent): string {
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    return stripAnsi(formatOutcome(out.chunk, HOME, 60, 'bash'));
+  }
+
+  it('small ordinary output: shows lineCount and tail lines (not just line count)', () => {
+    // 3 lines, 18 bytes — well within model cap and 80-char display limit
+    const rendered = outcome(buildBashEvent({ content: 'line1\nline2\nline3' }));
+    // Must show line count
+    expect(rendered).toContain('3 lines');
+    // Must show actual tail content (not just the header)
+    expect(rendered).toContain('line3');
+  });
+
+  it('large (>100KB) truncated output with capturePath: shows capture path in TUI', () => {
+    const capturePath = `${HOME}/.afk/state/witness/sess-1/bash-captures/tu-1.txt`;
+    // Simulate a model-capped event (truncated=true, capturePath set)
+    const longContent = 'A'.repeat(150) + '\n' + 'B'.repeat(150) + '\n(tail line)';
+    const rendered = outcome(buildBashEvent({
+      content: longContent,
+      truncated: true,
+      capturePath,
+    }));
+    expect(rendered).toContain('full output saved');
+    expect(rendered).toContain('~/.afk/state/witness/sess-1/bash-captures/tu-1.txt');
+  });
+
+  it('SIGKILL path (truncated, no capturePath): shows "output capped · command killed"', () => {
+    const rendered = outcome(buildBashEvent({
+      content: 'partial output\nmore output\n[output truncated — command exceeded the 8000000-byte output cap and was terminated]',
+      truncated: true,
+      // no capturePath
+    }));
+    expect(rendered).toContain('output capped');
+    expect(rendered).toContain('command killed');
+    expect(rendered).not.toContain('full output saved');
+  });
+
+  it('capturePath is plumbed through stream-consumer to chunk', () => {
+    const capturePath = '/tmp/witness/sess/bash-captures/tu.txt';
+    const evt = buildBashEvent({ truncated: true, capturePath });
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.capturePath).toBe(capturePath);
+    expect(out.chunk.truncated).toBe(true);
+  });
+
+  it.each([undefined, 0, 1, 127])('plumbs exitCode %s without inventing missing status', (exitCode) => {
+    const evt = buildBashEvent({ content: 'failed', exitCode, durationMs: 3200 });
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.exitCode).toBe(exitCode);
+    const rendered = outcome(evt);
+    if (exitCode) expect(rendered).toContain(` · exit ${exitCode} · 3.2s`);
+    else expect(rendered).not.toContain('exit');
+  });
+
+  it.each([0, 3, 7, 8, 20])('counts all lines hidden (same denominator as lineCount) for %s content items', (count) => {
+    const content = Array.from({ length: count }, (_, i) => `L${i}`).join('\n\n \n') + '\n';
+    const lines = content.split('\n');
+    const nonEmpty = lines.filter(l => l.trim() !== '');
+    const tailLen = Math.min(nonEmpty.length, 7);
+    const expectedHidden = lines.length - tailLen;
+    const evt = buildBashEvent({ content });
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    expect(out.chunk.hiddenLineCount).toBe(expectedHidden);
+    const rendered = outcome(evt);
+    if (expectedHidden > 0) expect(rendered).toContain(`${expectedHidden} earlier lines hidden`);
+    else expect(rendered).not.toContain('earlier lines hidden');
+  });
+
+  it('durationMs is plumbed and rendered as duration suffix', () => {
+    const rendered = outcome(buildBashEvent({ content: 'done', durationMs: 1500 }));
+    expect(rendered).toContain('1.5s');
+  });
+
+  it('tailPreview is extracted from multi-line content and renders under header', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `output line ${i + 1}`);
+    const rendered = outcome(buildBashEvent({ content: lines.join('\n') }));
+    // Header shows line count
+    expect(rendered).toContain('20 lines');
+    // Actual tail lines from the content must appear (last few lines)
+    expect(rendered).toContain('output line 20');
+    expect(rendered).toContain('output line 19');
+  });
+
+  it('small multi-line output (<=80 chars) shows tail lines — not hidden by display budget', () => {
+    // This is the "ordinary output hidden by <=7-line tail" regression:
+    // output is short (fits 80 chars) but multi-line; must still show tail.
+    const rendered = outcome(buildBashEvent({ content: 'a\nb\nc\nd' }));
+    expect(rendered).toContain('4 lines');
+    expect(rendered).toContain('d');
+    expect(rendered).toContain('c');
+  });
+});
