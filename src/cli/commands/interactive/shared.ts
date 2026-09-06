@@ -463,6 +463,14 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+   * Clears the `pendingStopInjection` binding in `runInputLoop` so a
+   * mid-session /resume swap cannot leak a Stop-hook `injectContext` from
+   * the outgoing session into the resumed session's first turn. Mirrors
+   * the `clearVerdictLedger` / `clearBgResultBuffer` pattern: owned by
+   * `runInputLoop`'s closure, wired onto `ctx` at loop entry, invoked
+   * from the swap's `onSwapped` callback in bootstrap.ts.
+   */
+  clearPendingStopInjection?: () => void;
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `
