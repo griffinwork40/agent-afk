@@ -1,11 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   capToMeasure,
+  capToProseMeasure,
   resolveTextMeasure,
+  resolveProseMeasure,
   DEFAULT_TEXT_MEASURE,
+  DEFAULT_PROSE_MEASURE,
   MIN_TEXT_MEASURE,
 } from './measure.js';
-import { calculateContentWidth } from '../markdown-stream-format.js';
+import { calculateContentWidth, calculateProseContentWidth } from '../markdown-stream-format.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import {
   renderTextChildLines,
@@ -103,7 +106,7 @@ describe('capToMeasure', () => {
 });
 
 describe('calculateContentWidth', () => {
-  it('caps prose on a wide terminal', () => {
+  it('caps text on a wide terminal', () => {
     withMeasureEnv(undefined, () =>
       withCols(200, () => {
         expect(calculateContentWidth(2)).toBe(DEFAULT_TEXT_MEASURE);
@@ -129,14 +132,14 @@ describe('calculateContentWidth', () => {
   });
 });
 
-// Invariant: every UNBORDERED text surface shares one measure. Capping a
-// subset produces a right-edge discontinuity on wide terminals — bordered
-// elements may differ because the border explains the change, but adjacent
-// unbordered blocks stopping at different columns read as broken wrapping.
-// These cases pin that all three unbordered surfaces stay bounded by the
-// measure (plus their own small chrome) rather than scaling with the
-// terminal. A new unbordered surface that skips capToMeasure fails here.
-describe('adjacency — unbordered surfaces share a right edge', () => {
+// Invariant (two-tier measure): unbordered surfaces use one of two measures.
+// Code fences and structured content (thinking, tool-lane) cap at
+// DEFAULT_TEXT_MEASURE (100); prose blocks (paragraphs, list items,
+// blockquotes) cap at DEFAULT_PROSE_MEASURE (80). The right-edge
+// discontinuity is a deliberate trade for prose readability. These cases
+// pin that each surface stays bounded by its tier's measure (plus chrome)
+// rather than scaling with the terminal.
+describe('adjacency — unbordered surfaces respect their tier measure', () => {
   const LONG = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do '.repeat(12);
   const CHROME_SLACK = 12; // indent + prefix + spine glyph budget
 
@@ -151,10 +154,10 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
   });
 
   for (const cols of [120, 200]) {
-    it(`bounds prose, thinking, and tool-lane text at ${cols} cols`, () => {
+    it(`bounds code, thinking, and tool-lane text at the code measure (${cols} cols)`, () => {
       withMeasureEnv(undefined, () =>
         withCols(cols, () => {
-          const proseWidth = calculateContentWidth(2);
+          const codeWidth = calculateContentWidth(2);
 
           const thinking = formatThinkingParagraph(LONG, { cols, maxLines: 4 });
           const thinkingMax = Math.max(
@@ -178,19 +181,38 @@ describe('adjacency — unbordered surfaces share a right edge', () => {
           );
           const rowMax = Math.max(...rowLines.map((l) => stripAnsi(l).length));
 
-          const ceiling = DEFAULT_TEXT_MEASURE + CHROME_SLACK;
-          expect(proseWidth).toBeLessThanOrEqual(ceiling);
-          expect(thinkingMax).toBeLessThanOrEqual(ceiling);
-          expect(laneMax).toBeLessThanOrEqual(ceiling);
-          expect(rowMax).toBeLessThanOrEqual(ceiling);
+          const codeCeiling = DEFAULT_TEXT_MEASURE + CHROME_SLACK;
+          expect(codeWidth).toBeLessThanOrEqual(codeCeiling);
+          expect(thinkingMax).toBeLessThanOrEqual(codeCeiling);
+          expect(laneMax).toBeLessThanOrEqual(codeCeiling);
+          expect(rowMax).toBeLessThanOrEqual(codeCeiling);
 
           // And crucially: they do not scale with the terminal.
-          if (cols > ceiling) {
-            expect(proseWidth).toBeLessThan(cols);
+          if (cols > codeCeiling) {
+            expect(codeWidth).toBeLessThan(cols);
             expect(thinkingMax).toBeLessThan(cols);
             expect(laneMax).toBeLessThan(cols);
             expect(rowMax).toBeLessThan(cols);
           }
+        }),
+      );
+    });
+
+    it(`bounds prose at the tighter prose measure (${cols} cols)`, () => {
+      withMeasureEnv(undefined, () =>
+        withCols(cols, () => {
+          const proseWidth = calculateProseContentWidth(2);
+          const proseCeiling = DEFAULT_PROSE_MEASURE + CHROME_SLACK;
+          expect(proseWidth).toBeLessThanOrEqual(proseCeiling);
+
+          // Prose does not scale with the terminal.
+          if (cols > proseCeiling) {
+            expect(proseWidth).toBeLessThan(cols);
+          }
+
+          // Prose is strictly tighter than code on a wide terminal.
+          const codeWidth = calculateContentWidth(2);
+          expect(proseWidth).toBeLessThan(codeWidth);
         }),
       );
     });
