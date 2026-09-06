@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.5] - 2026-09-06
+
+### Fixed
+- improve error messages and schema guidance to reduce 46% failure rate (#1515) (c2046fef)
+- Windows compatibility — security, shell resolution, and test fixes (#703) (#1518) (4eb94bf0)
+
+### Changed
+- bump next from 16.3.3 to 16.3.4 in /website (#1528) (a171be6c)
+- bump @types/node from 26.4.0 to 26.4.1 in /website (#1527) (1e749aa0)
+- bump the fumadocs group in /website with 3 updates (#1526) (d86e4661)
+
 ## [5.191.4] - 2026-09-06
 
 ### Fixed
