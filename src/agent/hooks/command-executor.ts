@@ -1,7 +1,7 @@
 /**
  * Shell-command executor for config-driven hooks.
  *
- * Spawns the hook command via `sh -c`, writes a JSON context payload to its
+ * Spawns the hook command via the OS shell (`shell: true`), writes a JSON context payload to its
  * stdin, reads stdout/stderr (capped at 64 KB each), and maps the exit code
  * to a {@link HookDecision}.
  *
@@ -187,7 +187,8 @@ export async function executeCommand(
       resolve(result);
     }
 
-    const proc = spawn('sh', ['-c', command], {
+    const proc = spawn(command, {
+      shell: true,
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: agentCwd,
       env: childEnv,
