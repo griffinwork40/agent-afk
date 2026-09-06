@@ -241,6 +241,8 @@ function buildResult(
  *   - `budget_exceeded` / `timeout` → high regardless of count (one is bad).
  *   - `hook_blocked` / `iteration_cap` / `max_turns_exceeded` → medium;
  *     escalates to high at ≥3 occurrences.
+ *   - `truncated` → medium (model hit output-token ceiling mid-response);
+ *     escalates to high at ≥3 occurrences.
  *   - `abort` → low by default (often user-initiated), medium at ≥3.
  *
  * The ladder is intentionally conservative; reviewers can escalate via
@@ -254,6 +256,7 @@ function severityFor(reason: string, count: number): Severity {
     case 'hook_blocked':
     case 'iteration_cap':
     case 'max_turns_exceeded':
+    case 'truncated':
       return count >= 3 ? 'high' : 'medium';
     case 'abort':
       return count >= 3 ? 'medium' : 'low';
