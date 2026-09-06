@@ -1,20 +1,21 @@
 import { env } from '../../config/env.js';
 
 /**
- * Maximum comfortable reading measure for UNBORDERED streamed text.
+ * Maximum measure for CODE blocks and structured surfaces (tool-lane, thinking).
  *
  * Bordered elements already cap their inner width at 100 columns
  * (`card.ts`, `error-box.ts`, `usage-limit-box.ts`) — this applies the same
  * ceiling to the unbordered surfaces that previously scaled to the full
- * terminal: assistant prose, thinking blocks, tool-lane text, subagent text.
+ * terminal: code fences, thinking blocks, tool-lane text, subagent text.
  *
- * Invariant: every unbordered text surface must share ONE measure. Capping a
- * subset produces a visible right-edge discontinuity on wide terminals —
- * bordered elements can differ in width because the border explains the
- * change, but adjacent unbordered blocks that stop at different columns read
- * as broken wrapping rather than as an intentional measure. If a new
- * unbordered text surface is added, route its wrap width through
- * {@link capToMeasure} too.
+ * Invariant (two-tier measure): unbordered surfaces use one of two measures.
+ * Code fences and structured content (thinking, tool-lane) use this value
+ * via {@link capToMeasure}. Prose blocks (paragraphs, list items, blockquotes)
+ * use the tighter {@link DEFAULT_PROSE_MEASURE} via {@link capToProseMeasure}.
+ * The right-edge discontinuity between 80 and 100 columns is a deliberate
+ * trade for prose readability — research converges on 60-80 characters for
+ * comfortable reading. If a new unbordered surface is added, route it through
+ * the appropriate cap function for its content type.
  */
 export const DEFAULT_TEXT_MEASURE = 100;
 
