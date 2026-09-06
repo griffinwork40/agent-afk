@@ -434,6 +434,163 @@ describe('BackgroundAgentRegistry', () => {
     });
   });
 
+  // I-1514: touchedFiles tracking and cancelAll drain-timeout warning
+  describe('touchedFiles tracking (I-1514)', () => {
+    it('getTouchedFiles() returns empty array before any file-mutating tool calls', () => {
+      const handle = createStubHandle('tf-0');
+      const job = registry.register({ handle, prompt: 'go', model: 'sonnet' });
+      expect(registry.getTouchedFiles(job.jobId)).toEqual([]);
+    });
+
+    it('records file_path from edit_file tool_use_detail chunk', () => {
+      const handle = createStubHandle('tf-1');
+      const job = registry.register({ handle, prompt: 'go', model: 'sonnet' });
+      handle.__fireProgress({
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-1',
+          toolName: 'edit_file',
+          toolInput: '',
+          toolInputRaw: JSON.stringify({ file_path: '/src/foo.ts', old_string: 'a', new_string: 'b' }),
+        },
+      });
+      expect(registry.getTouchedFiles(job.jobId)).toEqual(['/src/foo.ts']);
+    });
+
+    it('records file_path from write_file tool_use_detail chunk', () => {
+      const handle = createStubHandle('tf-2');
+      const job = registry.register({ handle, prompt: 'go', model: 'sonnet' });
+      handle.__fireProgress({
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-2',
+          toolName: 'write_file',
+          toolInput: '',
+          toolInputRaw: JSON.stringify({ file_path: '/src/bar.ts', content: 'hello' }),
+        },
+      });
+      expect(registry.getTouchedFiles(job.jobId)).toEqual(['/src/bar.ts']);
+    });
+
+    it('deduplicates repeated edits to the same file', () => {
+      const handle = createStubHandle('tf-3');
+      const job = registry.register({ handle, prompt: 'go', model: 'sonnet' });
+      const chunk = (file: string) => ({
+        type: 'chunk' as const,
+        chunk: {
+          type: 'tool_use_detail' as const,
+          toolUseId: 'tu-3',
+          toolName: 'edit_file' as const,
+          toolInput: '',
+          toolInputRaw: JSON.stringify({ file_path: file }),
+        },
+      });
+      handle.__fireProgress(chunk('/src/foo.ts'));
+      handle.__fireProgress(chunk('/src/foo.ts'));
+      handle.__fireProgress(chunk('/src/bar.ts'));
+      expect(registry.getTouchedFiles(job.jobId)).toEqual(['/src/foo.ts', '/src/bar.ts']);
+    });
+
+    it('ignores pending tool_use_detail chunks (arguments still streaming)', () => {
+      const handle = createStubHandle('tf-4');
+      const job = registry.register({ handle, prompt: 'go', model: 'sonnet' });
+      handle.__fireProgress({
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-4',
+          toolName: 'edit_file',
+          toolInput: '(streaming…)',
+          pending: true,
+        },
+      });
+      expect(registry.getTouchedFiles(job.jobId)).toEqual([]);
+    });
+
+    it('does not record files for non-mutating tools (e.g. read_file)', () => {
+      const handle = createStubHandle('tf-5');
+      const job = registry.register({ handle, prompt: 'go', model: 'sonnet' });
+      handle.__fireProgress({
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-5',
+          toolName: 'read_file',
+          toolInput: '',
+          toolInputRaw: JSON.stringify({ file_path: '/src/secret.ts' }),
+        },
+      });
+      expect(registry.getTouchedFiles(job.jobId)).toEqual([]);
+    });
+
+    it('getTouchedFiles() returns undefined for an unknown jobId', () => {
+      expect(registry.getTouchedFiles('nonexistent')).toBeUndefined();
+    });
+
+    it('cancelAll drain-timeout warning includes touched files', async () => {
+      vi.useFakeTimers();
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      // Hanging handle — cancel() never fires the terminal callback.
+      let captured: ((r: SubagentResult) => void) | undefined;
+      let capturedProgress: ((event: import('./types/session-types.js').OutputEvent) => void) | undefined;
+      const hangingHandle: Partial<StubHandle> & Record<string, unknown> = {
+        id: 'hang-tf',
+        status: 'idle' as SubagentStatus,
+        __cancelCalled: 0,
+        __teardownCalled: 0,
+        runInBackground(
+          _prompt: string,
+          onResult?: (r: SubagentResult) => void,
+          onProgress?: (event: import('./types/session-types.js').OutputEvent) => void,
+        ) {
+          captured = onResult;
+          capturedProgress = onProgress;
+          void captured;
+        },
+        async cancel() {
+          (hangingHandle.__cancelCalled as number)++;
+        },
+        async run() { throw new Error('not implemented'); },
+        async runToResult() { throw new Error('not implemented'); },
+        async teardown() { (hangingHandle.__teardownCalled as number)++; },
+        __fireTerminal(_result: SubagentResult) { /* unused */ },
+      };
+
+      const job = registry.register({ handle: hangingHandle as StubHandle, prompt: 'edit things', model: 'sonnet' });
+
+      // Simulate the child touching a file before cancel fires.
+      capturedProgress?.({
+        type: 'chunk',
+        chunk: {
+          type: 'tool_use_detail',
+          toolUseId: 'tu-hang',
+          toolName: 'edit_file',
+          toolInput: '',
+          toolInputRaw: JSON.stringify({ file_path: '/src/half-done.ts' }),
+        },
+      });
+
+      const cancelPromise = registry.cancelAll();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(5100);
+      await cancelPromise;
+
+      // The warning must name the touched file.
+      const calls = warnSpy.mock.calls.map((c) => String(c[0]));
+      const drainWarning = calls.find((m) => m.includes(job.jobId));
+      expect(drainWarning).toBeDefined();
+      expect(drainWarning).toContain('/src/half-done.ts');
+
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    });
+  });
+
   it('list() returns jobs in registration order', () => {
     const h1 = createStubHandle('s1');
     const h2 = createStubHandle('s2');

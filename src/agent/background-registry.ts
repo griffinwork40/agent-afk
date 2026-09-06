@@ -90,6 +90,14 @@ interface InternalJob extends BackgroundJob {
    */
   transcriptTail: string;
   /**
+   * Ordered, deduplicated list of file paths the child has touched via
+   * `edit_file` or `write_file` tool calls. Populated from `tool_use_detail`
+   * progress chunks in `register()`'s `onProgress` handler. Used by
+   * `cancelAll()` to surface a checklist when a drain timeout fires so the
+   * operator knows which files to inspect for half-applied edits.
+   */
+  touchedFiles: string[];
+  /**
    * Optional parent session id forwarded from RegisterArgs.
    * Surfaced to both routing-telemetry events and bg-job meta records.
    */
@@ -229,6 +237,17 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         if (event.type === 'chunk' && event.chunk.type === 'content') {
           this.appendTranscript(jobId, event.chunk.content);
         }
+        // Track files touched by edit_file / write_file so cancelAll() can
+        // surface them if a drain timeout fires mid-edit. Only non-pending
+        // tool_use_detail chunks carry confirmed (fully-parsed) tool arguments.
+        if (
+          event.type === 'chunk' &&
+          event.chunk.type === 'tool_use_detail' &&
+          !event.chunk.pending &&
+          (event.chunk.toolName === 'edit_file' || event.chunk.toolName === 'write_file')
+        ) {
+          this.recordTouchedFile(jobId, event.chunk.toolInputRaw ?? event.chunk.toolInput);
+        }
       },
     );
 
@@ -329,6 +348,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       terminalSettled,
       settle,
       transcriptTail: '',
+      touchedFiles: [],
       parentSessionId: args.parentSessionId,
       onCleanup: args.onCleanup,
     };
@@ -479,8 +499,11 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       running.map((j) => {
         const timeout = new Promise<void>((resolve) =>
           setTimeout(() => {
+            const fileList = j.touchedFiles.length > 0
+              ? ` — files touched: ${j.touchedFiles.join(', ')}`
+              : '';
             console.warn(
-              `[BackgroundAgentRegistry] cancelAll: job ${j.jobId} did not settle within ${CANCEL_DRAIN_TIMEOUT_MS}ms — continuing teardown`,
+              `[BackgroundAgentRegistry] cancelAll: job ${j.jobId} did not settle within ${CANCEL_DRAIN_TIMEOUT_MS}ms — continuing teardown${fileList}`,
             );
             resolve();
           }, CANCEL_DRAIN_TIMEOUT_MS).unref(),
@@ -521,9 +544,49 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     return this.jobs.get(jobId)?.handle;
   }
 
+  /**
+   * Return the ordered, deduplicated list of files the job has touched via
+   * `edit_file` or `write_file`, or undefined if the job is unknown.
+   * Used by callers that want to surface the file list without going through
+   * the `cancelAll()` drain-timeout warning path.
+   */
+  getTouchedFiles(jobId: string): readonly string[] | undefined {
+    return this.jobs.get(jobId)?.touchedFiles;
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /**
+   * Parse a tool input JSON string and, if it contains a non-empty
+   * `file_path` field, append it to the job's `touchedFiles` list
+   * (deduplicating via simple last-seen filter). Silent no-op on parse errors
+   * or unknown jobIds.
+   *
+   * Called from the `onProgress` handler in `register()` for every non-pending
+   * `tool_use_detail` chunk whose `toolName` is `edit_file` or `write_file`.
+   */
+  private recordTouchedFile(jobId: string, toolInputJson: string): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    try {
+      const parsed: unknown = JSON.parse(toolInputJson);
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        'file_path' in parsed &&
+        typeof (parsed as Record<string, unknown>)['file_path'] === 'string'
+      ) {
+        const fp = (parsed as Record<string, unknown>)['file_path'] as string;
+        if (fp && !job.touchedFiles.includes(fp)) {
+          job.touchedFiles.push(fp);
+        }
+      }
+    } catch {
+      // Malformed JSON — skip silently; this is a best-effort diagnostics feature.
+    }
+  }
 
   private nextJobId(): string {
     this.counter += 1;
