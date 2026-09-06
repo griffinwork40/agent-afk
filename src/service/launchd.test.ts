@@ -58,14 +58,14 @@ import {
   uninstallService,
 } from './launchd.js';
 
-describe('labelFor', () => {
+describe.skipIf(process.platform !== 'darwin')('labelFor', () => {
   it('emits reverse-DNS label per service', () => {
     expect(labelFor('telegram')).toBe('com.afk.telegram');
     expect(labelFor('daemon')).toBe('com.afk.daemon');
   });
 });
 
-describe('plistPath', () => {
+describe.skipIf(process.platform !== 'darwin')('plistPath', () => {
   it('roots in ~/Library/LaunchAgents', () => {
     expect(plistPath('telegram', '/Users/me')).toBe(
       '/Users/me/Library/LaunchAgents/com.afk.telegram.plist',
@@ -73,13 +73,13 @@ describe('plistPath', () => {
   });
 });
 
-describe('SERVICE_NAMES', () => {
+describe.skipIf(process.platform !== 'darwin')('SERVICE_NAMES', () => {
   it('lists exactly the recognised services', () => {
     expect([...SERVICE_NAMES].sort()).toEqual(['daemon', 'telegram']);
   });
 });
 
-describe('renderPlist', () => {
+describe.skipIf(process.platform !== 'darwin')('renderPlist', () => {
   it('emits valid XML with required keys in stable order', () => {
     const xml = renderPlist({
       label: 'com.afk.telegram',
@@ -173,7 +173,7 @@ describe('renderPlist', () => {
   });
 });
 
-describe('parseLaunchctlListRow', () => {
+describe.skipIf(process.platform !== 'darwin')('parseLaunchctlListRow', () => {
   it('extracts PID and exit status when job is running', () => {
     const table = [
       'PID\tStatus\tLabel',
@@ -253,7 +253,7 @@ describe('parseLaunchctlListRow', () => {
   });
 });
 
-describe('resolveAfkBinary', () => {
+describe.skipIf(process.platform !== 'darwin')('resolveAfkBinary', () => {
   it('prefers the `which` result when it exists', () => {
     const result = resolveAfkBinary(
       ['/opt/homebrew/bin/afk'],
@@ -288,7 +288,7 @@ describe('resolveAfkBinary', () => {
   });
 });
 
-describe('resolveProgramArguments', () => {
+describe.skipIf(process.platform !== 'darwin')('resolveProgramArguments', () => {
   it('daemon argv is bare `afk daemon` (loads persisted schedules without --trigger)', () => {
     // Mock execFileSync to simulate a clean `which afk` resolving to a
     // trusted location. The /usr/local/bin/afk allowlisted prefix is
@@ -340,7 +340,7 @@ describe('resolveProgramArguments', () => {
   });
 });
 
-describe('resolveServicePath', () => {
+describe.skipIf(process.platform !== 'darwin')('resolveServicePath', () => {
   it('prepends the installer node dir, then standard system bins', () => {
     const parts = resolveServicePath('/Users/me/.nvm/versions/node/v24.11.0/bin/node').split(':');
     // node dir first — so `#!/usr/bin/env node` resolves under launchd's
@@ -370,7 +370,7 @@ describe('resolveServicePath', () => {
 // mocked so launchctl is never invoked. Cleanup runs in afterEach.
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('install/uninstall/status I/O', () => {
+describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', () => {
   let tmpHome: string;
   let originalHome: string | undefined;
   let originalAfkHome: string | undefined;

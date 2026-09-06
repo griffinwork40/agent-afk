@@ -47,7 +47,7 @@ import { renderPathUnit, renderRestartUnit, renderServiceUnit } from './systemd/
 // Pure: unit-file generation
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('renderServiceUnit', () => {
+describe.skipIf(process.platform !== 'linux')('renderServiceUnit', () => {
   it('emits the three sections with KeepAlive-equivalent + start-on-login invariants', () => {
     const unit = renderServiceUnit({
       description: 'AFK telegram service',
@@ -113,7 +113,7 @@ describe('renderServiceUnit', () => {
   });
 });
 
-describe('renderPathUnit', () => {
+describe.skipIf(process.platform !== 'linux')('renderPathUnit', () => {
   it('emits [Path] with PathModified + paired Unit + install target', () => {
     const unit = renderPathUnit({
       description: 'AFK telegram rebuild watch',
@@ -127,7 +127,7 @@ describe('renderPathUnit', () => {
   });
 });
 
-describe('renderRestartUnit', () => {
+describe.skipIf(process.platform !== 'linux')('renderRestartUnit', () => {
   it('emits a oneshot with no [Install] section that restarts the target unit', () => {
     const unit = renderRestartUnit({
       description: 'AFK telegram rebuild restart',
@@ -147,7 +147,7 @@ describe('renderRestartUnit', () => {
 // Pure: systemctl show parsing
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('parseSystemctlShow', () => {
+describe.skipIf(process.platform !== 'linux')('parseSystemctlShow', () => {
   it('extracts pid when MainPID > 0', () => {
     const r = parseSystemctlShow('MainPID=4242\nExecMainStatus=0\nActiveState=active\nLoadState=loaded\n');
     expect(r.pid).toBe(4242);
@@ -173,7 +173,7 @@ describe('parseSystemctlShow', () => {
 // I/O: install / uninstall against a real tmpdir
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('install / uninstall I/O', () => {
+describe.skipIf(process.platform !== 'linux')('install / uninstall I/O', () => {
   let tmpHome: string;
   let prevHome: string | undefined;
   let prevAfkHome: string | undefined;
@@ -307,7 +307,7 @@ describe('install / uninstall I/O', () => {
 // I/O: systemdManager.restart()
 // ─────────────────────────────────────────────────────────────────────────
 
-describe('systemdManager.restart()', () => {
+describe.skipIf(process.platform !== 'linux')('systemdManager.restart()', () => {
   let tmpHome: string;
   let prevHome: string | undefined;
   let prevAfkHome: string | undefined;
