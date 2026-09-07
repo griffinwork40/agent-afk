@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.7] - 2026-09-07
+
+### Fixed
+- spine severed on multi-line tool outcomes in nested tree (#1530) (5ee8454a)
+
 ## [5.191.6] - 2026-09-07
 
 ### Fixed
