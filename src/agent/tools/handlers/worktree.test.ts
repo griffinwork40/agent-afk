@@ -194,13 +194,56 @@ describe('worktree handler — create', () => {
     expect(addCall?.args.at(-1)).toBe('origin/main');
   });
 
-  it('refuses when a worktree already exists at the target path', async () => {
-    const wtPath = join(afkRoot, 'taken');
-    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
+  // #1516: a collision no longer returns isError — it auto-appends a 4-hex suffix.
+  it('auto-disambiguates when a worktree already exists at the target slug', async () => {
+    const takenPath = join(afkRoot, 'my-feature');
+    // Porcelain lists the taken worktree so the handler sees the collision.
+    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(takenPath)}\n`, (call) => {
+      if (call.args.includes('add')) {
+        // Extract the worktree path from the argv and create it.
+        const addIdx = call.args.indexOf('add');
+        const wtArg = call.args[addIdx + 3]; // add -b <branch> <path> <base>
+        if (wtArg) {
+          return fs.mkdir(wtArg, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+        }
+      }
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir')) {
+        return { stdout: 'base-sha-abc\n', stderr: '' };
+      }
+      return undefined;
+    }));
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
-    const result = await handler({ action: 'create', name: 'taken' }, SIGNAL);
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('already exists');
+    const result = await handler({ action: 'create', name: 'my-feature' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string; note: string };
+    // Path must differ from the taken slug and end with a 4-hex suffix.
+    expect(parsed.path).not.toBe(takenPath);
+    expect(parsed.path).toMatch(/my-feature-[0-9a-f]{4}$/);
+    expect(parsed.branch).toMatch(/^afk\/my-feature-[0-9a-f]{4}$/);
+    // Note must mention that the original name was taken.
+    expect(parsed.note).toContain('"my-feature" was taken');
+  });
+
+  it('creates normally (no suffix) when slug does not collide', async () => {
+    const wtPath = join(afkRoot, 'fresh-slug');
+    // Porcelain lists only the repo root — no collision.
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('add')) {
+        return fs.mkdir(wtPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir')) {
+        return { stdout: 'base-sha-xyz\n', stderr: '' };
+      }
+      return undefined;
+    }));
+    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    const result = await handler({ action: 'create', name: 'fresh-slug' }, SIGNAL);
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string; note: string };
+    expect(parsed.path).toBe(wtPath);
+    expect(parsed.branch).toBe('afk/fresh-slug');
+    // Note must NOT mention disambiguation.
+    expect(parsed.note).not.toContain('was taken');
   });
 
   it('rejects a name that sanitizes to empty', async () => {

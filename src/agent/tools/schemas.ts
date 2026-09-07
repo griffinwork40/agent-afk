@@ -870,7 +870,9 @@ export const worktreeTool: AnthropicToolDef = {
         type: 'string',
         description:
           'create only: worktree slug (kebab-case; sanitized). Becomes `.afk-worktrees/<name>` and ' +
-          'branch `afk/<name>` (prefix configurable via AFK_WORKTREE_BRANCH_PREFIX).',
+          'branch `afk/<name>` (prefix configurable via AFK_WORKTREE_BRANCH_PREFIX). ' +
+          'If a worktree with this slug already exists, a 4-hex-char suffix is appended automatically ' +
+          '(e.g. `issue-1399-a3f2`) — the response note will indicate the original name was taken.',
       },
       base: {
         type: 'string',

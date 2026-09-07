@@ -27,6 +27,7 @@
 
 import { join, resolve, isAbsolute, sep } from 'node:path';
 import { promises as fs } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import type { ToolHandler } from '../types.js';
 import { runSweep } from '../../worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree-sweep.js';
@@ -199,15 +200,22 @@ export function createWorktreeHandler(
           if (typeof obj['name'] !== 'string' || !obj['name']) {
             return { content: 'Invalid input: name required for create', isError: true };
           }
-          const slug = sanitizeSlug(obj['name']);
-          if (!slug) {
+          const rawSlug = sanitizeSlug(obj['name']);
+          if (!rawSlug) {
             return { content: `Invalid input: name "${obj['name']}" sanitizes to empty`, isError: true };
           }
-          const worktreePath = join(ctx.afkWorktreesRoot, slug);
-          const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
-          if (existing) {
-            return { content: `Worktree already exists at ${worktreePath}`, isError: true };
+          // Auto-disambiguate: if a worktree already exists at the target path,
+          // append a 4-hex-char suffix instead of returning an error. This breaks
+          // the daemon re-selection loop where a stale leftover worktree would
+          // cause every subsequent run for the same issue to fail immediately.
+          let slug = rawSlug;
+          const existingAtBase = await findEntry(execFile, ctx.repoRoot, join(ctx.afkWorktreesRoot, rawSlug));
+          if (existingAtBase) {
+            const suffix = randomBytes(2).toString('hex');
+            const baseWords = rawSlug.split('-').slice(0, 3).join('-');
+            slug = `${baseWords.slice(0, 25)}-${suffix}`;
           }
+          const worktreePath = join(ctx.afkWorktreesRoot, slug);
           const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
           const branch = `${prefix}${slug}`;
           const baseInput = resolveCreateBaseRef(obj['base']);
@@ -230,12 +238,15 @@ export function createWorktreeHandler(
           // baseRef) — NOT ctx.repoRoot — so the recommended manager matches
           // the lockfile at `base`, not main.
           const installCommand = await detectInstallCommand(info.path);
+          const disambiguated = slug !== rawSlug
+            ? ` (original name "${rawSlug}" was taken; using "${slug}" instead)`
+            : '';
           return {
             content: JSON.stringify({
               path: info.path,
               branch: info.branch,
               base: info.baseRef,
-              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.`,
+              note: `Dependencies are NOT installed in this fresh worktree (no shared node_modules). Run \`${installCommand}\` in ${info.path} before building or testing, or the build/tests will fail opaquely.${disambiguated}`,
             }),
           };
         }
