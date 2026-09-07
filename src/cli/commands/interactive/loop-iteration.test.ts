@@ -778,6 +778,69 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Tests — ctx.clearPendingStopInjection wiring (#1512)
+// The /resume onSwapped callback calls ctx.clearPendingStopInjection() to
+// prevent a Stop-correction from the outgoing session leaking into the
+// resumed session's first turn. These tests verify (a) the method is wired
+// onto ctx by runInputLoop and (b) calling it clears the pending injection so
+// the next turn receives a clean prompt.
+// ---------------------------------------------------------------------------
+
+describe('runReplLoop — ctx.clearPendingStopInjection wiring (#1512)', () => {
+  it('wires ctx.clearPendingStopInjection onto ctx before the first iteration', async () => {
+    // Run a single turn and then exit. Capture ctx after runReplLoop returns.
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // The method must be set and callable (wired by runInputLoop).
+    expect(typeof ctx.clearPendingStopInjection).toBe('function');
+  });
+
+  it('calling clearPendingStopInjection prevents the injection from reaching the next turn', async () => {
+    // Turn 1 → Stop handler returns injectContext (simulates a pending correction).
+    // Between turn 1 and turn 2 we call clearPendingStopInjection (as /resume would).
+    // Turn 2's prompt must be clean — no correction prepended.
+    const registry = createHookRegistry();
+    let stopCount = 0;
+    registry.register('Stop', async () => {
+      stopCount += 1;
+      return stopCount === 1 ? { injectContext: 'LEAKED-CORRECTION' } : {};
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    surfaceState.readLineQueue = [
+      { text: 'first turn', attachments: [] },
+      {
+        text: 'second turn',
+        attachments: [],
+        beforeReturn() {
+          // Simulate what /resume's onSwapped callback does: clear the pending
+          // injection before the resumed session's first turn starts. ctx is
+          // declared before the queue is assigned so this closure is safe.
+          ctx.clearPendingStopInjection?.();
+        },
+      },
+      { text: '/exit', attachments: [] },
+    ];
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    // The pending correction was cleared before turn 2 — prompt must be clean.
+    expect(secondText).toBe('second turn');
+    expect(secondText).not.toContain('LEAKED-CORRECTION');
+  });
+});
+
 describe('runReplLoop — UserPromptSubmit hook integration', () => {
   it('UserPromptSubmit block hook causes loop to continue without calling runTurn', async () => {
     const registry = createHookRegistry();

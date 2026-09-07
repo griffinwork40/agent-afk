@@ -740,7 +740,8 @@ describe('reseedStatsFromStored — startedAt fallback', () => {
 // onSwapped. Here we just confirm onSwapped fires exactly once on success
 // and does not fire on failure paths — the actual ledger clear is covered
 // at the repl-loop integration level (verdict-card.test.ts touches the
-// ledger, repl-loop owns the wiring).
+// ledger, repl-loop owns the wiring). Same pattern applies to
+// ctx.clearBgResultBuffer and ctx.clearPendingStopInjection (#1512).
 // ---------------------------------------------------------------------------
 
 describe('performResumeSwap — onSwapped invocation', () => {
@@ -768,6 +769,22 @@ describe('performResumeSwap — onSwapped invocation', () => {
     );
     await performResumeSwap(makeTarget('t', makeStoredSession()), deps);
     expect(onSwappedSpy).not.toHaveBeenCalled();
+  });
+
+  it('onSwapped can invoke clearPendingStopInjection (#1512 — leak-prevention pattern)', async () => {
+    // Verify that performResumeSwap passes control to onSwapped in a position
+    // where calling ctx.clearPendingStopInjection() is safe and effective. We
+    // simulate the bootstrap.ts wiring by constructing a custom onSwapped that
+    // calls a spy-backed clearPendingStopInjection, confirming it is reachable
+    // from the swap callback on a successful swap.
+    const clearSpy = vi.fn();
+    const mockCtxLike = { clearPendingStopInjection: clearSpy };
+
+    const { deps } = buildDeps();
+    deps.onSwapped = () => { mockCtxLike.clearPendingStopInjection?.(); };
+
+    await performResumeSwap(makeTarget('t-clear', makeStoredSession()), deps);
+    expect(clearSpy).toHaveBeenCalledOnce();
   });
 });
 

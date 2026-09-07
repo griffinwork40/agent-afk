@@ -186,6 +186,10 @@ export async function runInputLoop(
   // Cross-turn state is exactly what the v1 Stop wiring deferred (see the Stop
   // dispatch site at the bottom of the loop).
   let pendingStopInjection: string | undefined;
+  // Expose a clear hook so the /resume onSwapped callback can drop a pending
+  // injection from the outgoing session before the resumed session's first turn
+  // runs — mirrors the clearVerdictLedger / clearBgResultBuffer pattern.
+  ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
   // Parsed terminal-state kind + corroborating-evidence flag of the current
   // turn, captured from onTerminalState (which fires during runTurn) so the
   // post-turn Stop dispatch can carry them on StopContext for policy handlers.

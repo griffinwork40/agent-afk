@@ -463,6 +463,15 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+   * Clears any pending post-turn Stop-hook injection so a mid-session /resume
+   * swap can't leak the outgoing session's Stop correction into the resumed
+   * session's first turn. Same wiring pattern as `clearVerdictLedger` and
+   * `clearBgResultBuffer`: owned by `runInputLoop`'s closure, wired there
+   * after `pendingStopInjection` is declared, invoked from the swap's
+   * `onSwapped` callback.
+   */
+  clearPendingStopInjection?: () => void;
+  /**
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `
