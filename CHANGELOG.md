@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.196.0] - 2026-09-07
+
+### Added
+- honor allowCustom in durable handoff questions (#1551) (#1553) (cacfe68b)
+
 ## [5.195.1] - 2026-09-07
 
 ### Fixed
