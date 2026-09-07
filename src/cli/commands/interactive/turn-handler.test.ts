@@ -1321,6 +1321,85 @@ describe('runTurn — borrowed-compositor regression (PR 424 / Stage 3e)', () =>
     expect(writerCalls.some((l) => l.includes('backgrounded'))).toBe(false);
   });
 
+  // Worktree-conflict warning (#1513): non-isolated children share the parent's
+  // worktree and can cause concurrent write conflicts when promoted to background.
+  it('Ctrl+B emits a worktree-conflict warning when the promoted child shares the parent worktree', async () => {
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+
+    // sharesWorktree: true — no isolation: "worktree" was set on the dispatch.
+    const promoteActiveForeground = vi.fn().mockResolvedValue([
+      { jobId: 'bg-warn', label: 'non-isolated job', sharesWorktree: true },
+    ]);
+    const subagentControl = {
+      hasPromotableForeground: () => true,
+      promoteActiveForeground,
+      hasActiveForeground: () => false,
+      cancelActiveForeground: vi.fn().mockResolvedValue(0),
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = {
+      ...h,
+      subagentControl,
+      setBackgroundHandler: (handler) => { handler?.(); },
+    };
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      streamFrom([{ type: 'done', metadata: { durationMs: 1 } }]),
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(promoteActiveForeground).toHaveBeenCalledTimes(1);
+    // The worktree-conflict warning must appear.
+    expect(writerCalls.some((l) => l.includes('Background child'))).toBe(true);
+    expect(writerCalls.some((l) => l.includes('worktree'))).toBe(true);
+  });
+
+  it('Ctrl+B does NOT emit a worktree-conflict warning when the promoted child is isolated', async () => {
+    const writerCalls: string[] = [];
+    const completionWriter = { fn: (line: string) => { writerCalls.push(line); } };
+
+    // sharesWorktree: false — isolation: "worktree" was set; child has its own tree.
+    const promoteActiveForeground = vi.fn().mockResolvedValue([
+      { jobId: 'bg-iso', label: 'isolated job', sharesWorktree: false },
+    ]);
+    const subagentControl = {
+      hasPromotableForeground: () => true,
+      promoteActiveForeground,
+      hasActiveForeground: () => false,
+      cancelActiveForeground: vi.fn().mockResolvedValue(0),
+    };
+
+    const { h } = makeHandles();
+    const handles: TurnHandles = {
+      ...h,
+      subagentControl,
+      setBackgroundHandler: (handler) => { handler?.(); },
+    };
+
+    await runTurn(
+      { text: 'q', attachments: [] },
+      streamFrom([{ type: 'done', metadata: { durationMs: 1 } }]),
+      makeStats(),
+      handles,
+      'summary',
+      completionWriter,
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(promoteActiveForeground).toHaveBeenCalledTimes(1);
+    // The isolated job backgrounded normally — confirmation line present.
+    expect(writerCalls.some((l) => l.includes('backgrounded as bg-iso'))).toBe(true);
+    // No worktree-conflict warning for an isolated child.
+    expect(writerCalls.some((l) => l.includes('Background child'))).toBe(false);
+  });
+
   it('routes paused usage-limit box through completionWriter.fn (not console.log) when compositor armed', async () => {
     const { stub } = makeStubCompositor();
     const writerCalls: string[] = [];
