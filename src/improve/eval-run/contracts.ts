@@ -19,8 +19,8 @@
  *   - `repeated-tool-use`    → the repeat-loop circuit breaker (PR #80).
  *   - `subagent-block`       → the skill max-depth recovery hint (PR #80).
  *   - `tool-failure-density` → that detector being enabled by default (PR #80).
- *   - `closure-anomaly`      → the abort-closure recovery hint
- *                              (`session/closure-guidance.ts`; abort subtype).
+ *   - `closure-anomaly`      → the closure recovery hint (`session/closure-guidance.ts`;
+ *                              abort + truncated subtypes).
  *
  * Patterns with no registered contract resolve to `undefined`; the runner
  * records an `unsupported` result rather than failing.
@@ -46,6 +46,7 @@ import {
 } from '../../agent/tools/skill-depth-message.js';
 import {
   CLOSURE_ABORT_RECOVERY_HINT,
+  CLOSURE_TRUNCATED_RECOVERY_HINT,
   buildClosureGuidance,
 } from '../../agent/session/closure-guidance.js';
 import {
@@ -622,12 +623,14 @@ async function runToolFailureDensityContract(): Promise<ContractProbeResult> {
  * `emitClosure` wires onto the `closure` trace event — a regression that
  * drops the hint (or starts emitting one on clean closes) is caught here.
  *
- * Scoped to the `abort` subtype: the only closure reason the guardrail covers
- * today (see `closure-guidance.ts`). The contract validates the GUARDRAIL the
+ * Covers `abort` (canonical check + recovery-action presence + canonical-constant
+ * identity) and `truncated` (canonical-constant identity) — the two subtypes
+ * most likely to silently regress. The contract validates the GUARDRAIL the
  * pattern maps to, not a fixture replay — matching the other contracts.
  */
 async function runClosureAnomalyRecoveryHint(): Promise<ContractProbeResult> {
   const abortGuidance = buildClosureGuidance('abort');
+  const truncatedGuidance = buildClosureGuidance('truncated');
   const benignGuidance = buildClosureGuidance('model_end_turn');
 
   const checks: EvalCheck[] = [
@@ -651,6 +654,13 @@ async function runClosureAnomalyRecoveryHint(): Promise<ContractProbeResult> {
       pass: abortGuidance === CLOSURE_ABORT_RECOVERY_HINT,
       expected: 'buildClosureGuidance("abort") === CLOSURE_ABORT_RECOVERY_HINT',
       actual: abortGuidance === null ? 'null' : snapshot(abortGuidance),
+    }),
+    makeCheck({
+      name: 'truncated-closure-has-canonical-guidance',
+      description: 'A truncated closure maps to the exported CLOSURE_TRUNCATED_RECOVERY_HINT (no drift)',
+      pass: truncatedGuidance === CLOSURE_TRUNCATED_RECOVERY_HINT,
+      expected: 'buildClosureGuidance("truncated") === CLOSURE_TRUNCATED_RECOVERY_HINT',
+      actual: truncatedGuidance === null ? 'null' : snapshot(truncatedGuidance),
     }),
     makeCheck({
       name: 'benign-closure-has-no-guidance',
@@ -703,7 +713,7 @@ const CONTRACTS: readonly EvalContract[] = Object.freeze([
   {
     id: 'closure-abort-recovery-hint',
     patternId: 'closure-anomaly',
-    title: 'Anomalous abort closure carries an actionable recovery hint',
+    title: 'Anomalous closure (abort, truncated) carries an actionable recovery hint',
     run: runClosureAnomalyRecoveryHint,
   },
 ] satisfies EvalContract[]);

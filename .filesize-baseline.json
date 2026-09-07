@@ -35,7 +35,7 @@
     "src/cli/terminal-compositor.ts": { "loc": 353, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/env.ts": { "loc": 1719, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/improve/eval-run/contracts.ts": { "loc": 491, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/improve/eval-run/contracts.ts": { "loc": 500, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/runner.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/propose/template-engine.ts": { "loc": 459, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/skills/audit-fit/index.ts": { "loc": 424, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
