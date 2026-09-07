@@ -183,4 +183,17 @@ describe('applySlotCredentials', () => {
     );
     expect(config.forceChatgptOAuth).toBe(false);
   });
+
+  it('chatgpt-oauth slot with explicit apiKey: forceChatgptOAuth is false (explicit key wins)', () => {
+    // When a chatgpt-oauth slot also carries an explicit apiKey, the key should
+    // win — forceChatgptOAuth must NOT be set so resolveOpenAIAuth uses the key
+    // rather than silently ignoring it and forcing the ChatGPT OAuth token.
+    const config: SlotCredentialTarget = { model: 'medium' };
+    applySlotCredentials(
+      config,
+      slots({ medium: { id: 'gpt-5.6', provider: 'chatgpt-oauth', apiKey: 'sk-explicit' } }),
+    );
+    expect(config.forceChatgptOAuth).toBe(false);
+    expect(config.apiKey).toBe('sk-explicit');
+  });
 });

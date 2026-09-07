@@ -292,7 +292,19 @@ describe('oneShotChatCompletion', () => {
       user: 'msg',
       clientFactory: () => makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] })),
     });
-    expect(mockResolveAuth).toHaveBeenCalledWith('sk-explicit');
+    expect(mockResolveAuth).toHaveBeenCalledWith('sk-explicit', undefined, false);
+  });
+
+  it('passes forceChatgptOAuth:true through to resolveOpenAIAuth', async () => {
+    await oneShotChatCompletion({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      forceChatgptOAuth: true,
+      clientFactory: () => makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] })),
+    });
+    expect(mockResolveAuth).toHaveBeenCalledWith('sk-test', undefined, true);
   });
 
   // ── factory precedence ──────────────────────────────────────────────────────

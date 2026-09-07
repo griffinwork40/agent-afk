@@ -325,3 +325,64 @@ describe('resolveOpenAIAuth — forced ChatGPT OAuth (per-slot, flag-independent
     expect(msg).not.toContain('Found ChatGPT/OAuth credentials');
   });
 });
+
+describe('resolveOpenAIAuth — ChatGPT OAuth expiry gate', () => {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+  /** Build an auth.json with a JWT whose `exp` is the given epoch-seconds value. */
+  function authJsonWithExp(exp: number): string {
+    const access = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ exp })}.sig`;
+    return JSON.stringify({
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: { access_token: access },
+    });
+  }
+
+  const EXPIRED_EXP = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
+  const FUTURE_EXP = Math.floor(Date.now() / 1000) + 3600;  // 1 hour from now
+
+  // ── Tier 0 (forceChatgptOAuth path) ─────────────────────────────────────────
+
+  it('Tier 0: expired token → returns no-usable-auth-chatgpt-expired', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => authJsonWithExp(EXPIRED_EXP) }),
+      true,
+    );
+    expect(r.source).toBe('no-usable-auth-chatgpt-expired');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('Tier 0: valid (future) token → returns chatgpt-oauth with the access token', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({ readFile: () => authJsonWithExp(FUTURE_EXP) }),
+      true,
+    );
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.apiKey).not.toBeNull();
+  });
+
+  // ── Tier 4 (flag-gated AFK_OPENAI_CHATGPT_OAUTH path) ─────────────────────
+
+  it('Tier 4 (flag-gated): expired token → returns no-usable-auth-chatgpt-expired', () => {
+    const r = resolveOpenAIAuth(
+      undefined,
+      deps({
+        readEnv: (k) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined),
+        readFile: () => authJsonWithExp(EXPIRED_EXP),
+      }),
+    );
+    expect(r.source).toBe('no-usable-auth-chatgpt-expired');
+    expect(r.apiKey).toBeNull();
+  });
+
+  // ── formatAuthDiagnostic for the new source ──────────────────────────────────
+
+  it("formatAuthDiagnostic for 'no-usable-auth-chatgpt-expired' contains 're-run' and 'expired'", () => {
+    const msg = formatAuthDiagnostic({ apiKey: null, source: 'no-usable-auth-chatgpt-expired' });
+    expect(msg.toLowerCase()).toContain('expired');
+    expect(msg.toLowerCase()).toContain('re-run');
+  });
+});

@@ -97,7 +97,7 @@ export function applySlotCredentials(config: SlotCredentialTarget, bindings?: Mo
   // from the startup slot must be cleared when switching to a non-chatgpt slot,
   // else resolveOpenAIAuth keeps forcing the ChatGPT token and ignores the
   // tier/env key. The apiKey is still cleared below (route === 'openai-compatible').
-  config.forceChatgptOAuth = binding.provider === 'chatgpt-oauth';
+  config.forceChatgptOAuth = binding.provider === 'chatgpt-oauth' && binding.apiKey === undefined;
   // SuperGrok OAuth vs metered API-key force — mutual exclusive per slot.
   config.forceXaiOAuth = binding.provider === 'xai-oauth';
   config.forceXaiApiKey = binding.provider === 'xai';

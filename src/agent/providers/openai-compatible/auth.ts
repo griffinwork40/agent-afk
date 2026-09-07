@@ -58,7 +58,8 @@ export type OpenAIAuthSource =
   | 'chatgpt-oauth'
   | 'no-usable-auth'
   | 'no-usable-auth-codex-oauth'
-  | 'no-usable-auth-forced-chatgpt-oauth';
+  | 'no-usable-auth-forced-chatgpt-oauth'
+  | 'no-usable-auth-chatgpt-expired';
 
 /**
  * Result of auth resolution. When `apiKey` is set the request can proceed;
@@ -131,6 +132,9 @@ export function resolveOpenAIAuth(
     if (codexRaw !== null) {
       const parsed = parseCodexAuthJson(codexRaw);
       if (parsed.kind === 'chatgpt' && parsed.accessToken) {
+        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
+          return { apiKey: null, source: 'no-usable-auth-chatgpt-expired' };
+        }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
           source: 'chatgpt-oauth',
@@ -188,6 +192,9 @@ export function resolveOpenAIAuth(
       // these tokens (read-only — refresh stays with `codex`). When disabled,
       // surface distinctly so the diagnostic can give a precise next step.
       if (chatGptOAuthEnabled(readEnv) && parsed.accessToken) {
+        if (parsed.expiresAt !== undefined && parsed.expiresAt <= Math.floor(Date.now() / 1000)) {
+          return { apiKey: null, source: 'no-usable-auth-chatgpt-expired' };
+        }
         const res: OpenAIAuthResolution = {
           apiKey: parsed.accessToken,
           source: 'chatgpt-oauth',
@@ -357,6 +364,12 @@ export function formatAuthDiagnostic(resolution: OpenAIAuthResolution): string {
         "This model's slot is configured provider: 'chatgpt-oauth' but no ChatGPT-subscription token was found in " +
         '~/.codex/auth.json. Sign in with `codex` using ChatGPT (not API-key mode), or change the slot to ' +
         "provider: 'openai' with a key. (read-only; AFK will not refresh the token — re-run `codex` when it expires)."
+      );
+    case 'no-usable-auth-chatgpt-expired':
+      return (
+        'ChatGPT subscription OAuth token in ~/.codex/auth.json has expired. ' +
+        're-run `codex` to refresh it, then restart AFK. ' +
+        '(read-only; AFK will not refresh the token automatically.)'
       );
     case 'no-usable-auth':
     default:
