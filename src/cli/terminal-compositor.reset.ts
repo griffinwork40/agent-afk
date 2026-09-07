@@ -56,6 +56,7 @@ export interface ResetStateHost {
   readonly autocompleteState?: AutocompleteState;
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
+  disarmRows: number;
 }
 
 export function resetState(self: ResetStateHost): void {
@@ -110,6 +111,9 @@ export function resetState(self: ResetStateHost): void {
   // resize", not "stale forever until any resize happens to occur".
   self.bandGeometryStale = false;
   self.lastKnownRows = 0;
+  // Drop the between-turn resize snapshot — a fresh arm cycle has no
+  // geometry yet (same as the bandGeometryStale reset above).
+  self.disarmRows = 0;
   // Drop any active picker — a disarm during a picker would leave
   // the controller's resolve callback orphaned. The runPicker abort
   // path normally exits the picker first; this is defence-in-depth

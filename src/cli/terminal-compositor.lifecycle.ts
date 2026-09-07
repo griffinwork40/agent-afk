@@ -53,6 +53,7 @@ export interface LifecycleHost {
   handleKeypress: ((char: string | undefined, key: KeyInfo) => void) | null;
   resizeUnsub: (() => void) | null;
   resizeImmediateUnsub: (() => void) | null;
+  disarmRows: number;
 
   logUpdate: LogUpdateFn | null;
   readonly scrollRegion?: CompositorScrollRegionGuard;
@@ -353,6 +354,38 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // not history"). The first real keystroke during the agent turn will
   // refresh the state via `applyEdit()` → `updateAutocomplete()`.
 
+  // External constraint (terminal resize semantics): a SIGWINCH while
+  // disarmed updated stdout.rows without our handlers running. disarm()
+  // snapshots stdout.rows into disarmRows; if the live value differs here,
+  // a resize occurred while disarmed (e.g. closing a tmux pane between
+  // agent turns). Reset renderer geometry so the first repaint uses the
+  // new dimensions, matching the invariant the live immediate subscriber
+  // satisfies during a turn.
+  //
+  // No ResizeBus subscription is needed between turns — comparing two
+  // integers at arm-time is O(1) and avoids the listener-leak that a
+  // surviving subscriber would cause on final disarm (disposal).
+  const liveRows = self.stdout.rows ?? 24;
+  if (self.disarmRows > 0 && liveRows !== self.disarmRows) {
+    self.logUpdate?.resetGeometry?.();
+    // Mirror the EXPAND ghost-erase snapshot from the live immediate handler:
+    // if the terminal expanded while disarmed, the old frame rows are frozen
+    // on screen at their pre-resize positions. Snapshot the footprint so the
+    // first repaint can erase them.
+    if (liveRows > self.disarmRows) {
+      const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
+      const bottom = Math.max(1, self.disarmRows - 1 - extraRows);
+      // Frame top is unknown post-disarm (logUpdate was cleared); use row 1
+      // as the conservative top so the erase covers the full old footprint.
+      const top = 1;
+      if (top <= bottom) {
+        self.pendingResizeErase = { top, bottom };
+      }
+    }
+    self.bandGeometryStale = true;
+    self.disarmRows = 0;
+  }
+
   self.repaint();
 
   // Start the caret-blink ticker AFTER the first frame is painted so the
@@ -445,6 +478,14 @@ export function disarm(self: LifecycleHost): void {
 
   self.armed = false;
   self.resetState();
+  // Snapshot the terminal height AFTER resetState (which clears disarmRows
+  // to 0) so arm() can detect a SIGWINCH that arrives while disarmed by
+  // comparing against live stdout.rows. This replaces the one-shot
+  // ResizeBus subscriber approach, which leaked on final disarm (the
+  // subscriber prevented GC of the compositor because arm() was never
+  // called again to tear it down). Placed after resetState() deliberately:
+  // resetState() zeros disarmRows, so the snapshot must come after.
+  self.disarmRows = self.stdout.rows ?? 24;
   // Dispose the suggest engine AFTER resetState so no pending promise
   // resolves try to call repaint() on a disarmed compositor. The engine's
   // dispose() signals all in-flight promises to resolve null — the

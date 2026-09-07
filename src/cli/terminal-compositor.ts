@@ -338,6 +338,17 @@ export class TerminalCompositor {
   resizeUnsub: (() => void) | null = null;
   /** @internal Relaxed from `private` for the lifecycle module (LifecycleHost). */
   resizeImmediateUnsub: (() => void) | null = null;
+  /**
+   * Snapshot of `stdout.rows` at the moment disarm() runs. arm() compares
+   * this against live `stdout.rows` to detect a SIGWINCH that arrived while
+   * disarmed (e.g. closing a tmux pane between agent turns). When they
+   * differ, arm() calls resetGeometry() and optionally sets pendingResizeErase
+   * for EXPAND ghost-erase before the first repaint.
+   *
+   * Zero means "no snapshot" (fresh compositor, or after resetState()).
+   * @internal Relaxed from `private` for the lifecycle module (LifecycleHost).
+   */
+  disarmRows = 0;
 
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;
