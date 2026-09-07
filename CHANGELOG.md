@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.192.0] - 2026-09-07
+
+### Added
+- configurable preview size with head/tail line count (#1542) (c9cdcc4f)
+
 ## [5.191.9] - 2026-09-07
 
 ### Fixed
