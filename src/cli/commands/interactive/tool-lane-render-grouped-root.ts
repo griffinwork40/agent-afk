@@ -11,7 +11,7 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry } from './tool-lane-render.js';
-import { clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
+import { clampLineToTerminal, pushOutcomeLines, toolLaneWidth } from './tool-lane-render.js';
 
 function groupedResultSuffix(
   entries: ToolEntry[],
@@ -51,7 +51,7 @@ function groupedResultSuffix(
 
   if (completed.length > 0) {
     const outcomes = completed.map((entry) =>
-      formatOutcome(entry.result!, homeDir, 60, entry.toolName),
+      formatOutcome(entry.result!, homeDir, 60, entry.toolName).replace(/\n[\s\S]*/u, '…'),
     );
     return palette.dim(' — ') + outcomes.join(palette.dim(', '));
   }
@@ -120,12 +120,19 @@ export function renderGroupedRootTools(
     if (entries.length === 1) {
       const e = entries[0]!;
       if (e.result) {
-        // Plain clamp, not suffix-reservation as in the grouped path: for a
-        // single entry the args ARE the identity and the outcome is the
-        // expendable tail, which is exactly how the overlay clamps the same
-        // row ("clamping should elide the outcome tail, not the leading
-        // prefix that carries the tool identity" — tool-lane.test.ts).
-        lines.push(clampLineToTerminal('   ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ' + formatOutcome(e.result, homeDir, 60, e.toolName) + batchBadge(e.result), cols));
+        // pushOutcomeLines splits multi-line formatOutcome so continuation
+        // lines carry '   ' (the same 3-space root indent) instead of a
+        // bare inline join that would embed a raw \n into the row. This
+        // mirrors the child-render and overlay paths — see
+        // tool-lane-render-children.ts and tool-lane.ts.
+        pushOutcomeLines(
+          lines,
+          '   ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ',
+          formatOutcome(e.result, homeDir, 60, e.toolName),
+          '   ',
+          cols,
+          batchBadge(e.result),
+        );
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (3 for the row indent, 1 more to clear the
