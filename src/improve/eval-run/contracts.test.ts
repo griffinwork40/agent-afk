@@ -253,7 +253,7 @@ describe('tool-failure-density classification (synthetic SessionRead corpus)', (
 });
 
 // ---------------------------------------------------------------------------
-// Contract: closure-anomaly abort recovery hint
+// Contract: closure-anomaly recovery hint (abort + truncated subtypes)
 // ---------------------------------------------------------------------------
 
 describe('closure-abort-recovery-hint contract', () => {
@@ -263,6 +263,7 @@ describe('closure-abort-recovery-hint contract', () => {
       'abort-closure-has-guidance',
       'guidance-names-a-recovery-action',
       'guidance-is-the-canonical-constant',
+      'truncated-closure-has-canonical-guidance',
       'benign-closure-has-no-guidance',
     ]);
     for (const c of result.checks) {
