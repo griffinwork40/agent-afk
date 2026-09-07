@@ -1,3 +1,5 @@
+import { env } from '../../config/env.js';
+
 /** Display-only output sizing and tail extraction. */
 function formatByteSize(bytes: number): string {
   if (bytes < 1024) {
@@ -15,14 +17,47 @@ function formatByteSize(bytes: number): string {
   return gb % 1 === 0 ? `${Math.floor(gb)}GB` : `${gb.toFixed(1)}GB`;
 }
 
-/** Maximum number of tail lines to capture for the TUI outcome preview. */
-const TAIL_PREVIEW_LINES = 7;
+/**
+ * Read AFK_BASH_PREVIEW_TAIL_LINES and AFK_BASH_PREVIEW_HEAD_LINES from the
+ * env registry and return validated, bounded values.
+ *
+ * Precedence (highest → lowest):
+ *   1. AFK_BASH_PREVIEW_TAIL_LINES / AFK_BASH_PREVIEW_HEAD_LINES (env vars)
+ *   2. Hardcoded defaults (tailLines=7, headLines=0)
+ *
+ * Invalid (non-integer, NaN) or out-of-range values silently fall back to the
+ * defaults. Tail range: 1–50. Head range: 0–50.
+ */
+function getPreviewConfig(): { tailLines: number; headLines: number } {
+  const DEFAULT_TAIL = 7;
+  const DEFAULT_HEAD = 0;
+
+  let tailLines = DEFAULT_TAIL;
+  const rawTail = env.AFK_BASH_PREVIEW_TAIL_LINES;
+  if (rawTail !== undefined) {
+    const parsed = parseInt(rawTail, 10);
+    if (!Number.isNaN(parsed) && parsed >= 1 && parsed <= 50) tailLines = parsed;
+  }
+
+  let headLines = DEFAULT_HEAD;
+  const rawHead = env.AFK_BASH_PREVIEW_HEAD_LINES;
+  if (rawHead !== undefined) {
+    const parsed = parseInt(rawHead, 10);
+    if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 50) headLines = parsed;
+  }
+
+  return { tailLines, headLines };
+}
 
 /**
  * Clip the raw tool output to an 80-char single-line preview for the live
- * tool-lane overlay. Also extracts a `tailPreview` (last ≤7 non-empty lines)
- * that `formatOutcome` uses to render an actual tail in the scrollback outcome
- * row instead of only a line count.
+ * tool-lane overlay. Also extracts a `tailPreview` (last ≤N non-empty lines,
+ * optionally prefixed with head lines) that `formatOutcome` uses to render an
+ * actual tail in the scrollback outcome row instead of only a line count.
+ *
+ * Preview size is configurable via AFK_BASH_PREVIEW_TAIL_LINES (default 7)
+ * and AFK_BASH_PREVIEW_HEAD_LINES (default 0). When head + tail ≥ total
+ * non-empty lines, all lines are shown without duplication.
  */
 export function truncateContent(
   content: string,
@@ -47,10 +82,25 @@ export function truncateContent(
   // (no display truncation needed), but we still expose lineCount+tailPreview
   // so the outcome row renders the tail preview block rather than hiding it.
   const nonEmptyLines = lines.filter(l => l.trim() !== '');
-  const tailPreview = nonEmptyLines.slice(-TAIL_PREVIEW_LINES);
+  const { tailLines, headLines } = getPreviewConfig();
+
+  let tailPreview: string[];
+  if (headLines > 0 && headLines + tailLines >= nonEmptyLines.length) {
+    // Head + tail would cover everything — show all lines without duplication.
+    tailPreview = nonEmptyLines.slice();
+  } else if (headLines > 0) {
+    // Both head and tail sections; they do not overlap.
+    const head = nonEmptyLines.slice(0, headLines);
+    const tail = nonEmptyLines.slice(-tailLines);
+    tailPreview = [...head, ...tail];
+  } else {
+    // Default: tail only.
+    tailPreview = nonEmptyLines.slice(-tailLines);
+  }
+
   // Contract: hiddenLineCount uses lines.length (same denominator as lineCount)
   // so the UI reads coherently: "N lines, M earlier lines hidden" implies
-  // N - M lines are visible in the tail preview.
+  // N - M lines are visible in the preview.
   const hiddenLineCount = lines.length - tailPreview.length;
 
   if (content.length <= 80) {

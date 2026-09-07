@@ -286,6 +286,141 @@ describe('stream-consumer: tailPreview extraction', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Configurable preview size (AFK_BASH_PREVIEW_TAIL_LINES / _HEAD_LINES)
+// ---------------------------------------------------------------------------
+describe('stream-consumer: configurable preview size', () => {
+  /** Helper: send a tool.output event and return tailPreview + hiddenLineCount. */
+  function previewFor(content: string): { tailPreview: string[] | undefined; hiddenLineCount: number | undefined } {
+    const evt: ProviderEvent = {
+      type: 'tool.output',
+      toolUseId: 'tu-cfg',
+      content,
+      sessionId: 's-cfg',
+    };
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    return { tailPreview: out.chunk.tailPreview, hiddenLineCount: out.chunk.hiddenLineCount };
+  }
+
+  /** Build a content string with N numbered lines, each >80 chars to ensure truncation path. */
+  function makeLines(n: number): string {
+    return Array.from({ length: n }, (_, i) => `line${i + 1} ${'x'.repeat(85)}`).join('\n');
+  }
+
+  afterEach(() => {
+    delete process.env['AFK_BASH_PREVIEW_TAIL_LINES'];
+    delete process.env['AFK_BASH_PREVIEW_HEAD_LINES'];
+  });
+
+  it('default behavior — no env vars: 7 tail lines, no head', () => {
+    const content = makeLines(20);
+    const { tailPreview, hiddenLineCount } = previewFor(content);
+    expect(tailPreview).toHaveLength(7);
+    expect(tailPreview![6]).toContain('line20');
+    expect(tailPreview![0]).toContain('line14');
+    // hiddenLineCount = totalLines(20) - displayedPreviewLines(7)
+    expect(hiddenLineCount).toBe(13);
+  });
+
+  it('AFK_BASH_PREVIEW_TAIL_LINES=3 — only 3 tail lines shown', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = '3';
+    const content = makeLines(20);
+    const { tailPreview, hiddenLineCount } = previewFor(content);
+    expect(tailPreview).toHaveLength(3);
+    expect(tailPreview![2]).toContain('line20');
+    expect(tailPreview![0]).toContain('line18');
+    expect(hiddenLineCount).toBe(17);
+  });
+
+  it('AFK_BASH_PREVIEW_HEAD_LINES=3 with default tail=7 — 3 head + 7 tail', () => {
+    process.env['AFK_BASH_PREVIEW_HEAD_LINES'] = '3';
+    const content = makeLines(20);
+    const { tailPreview, hiddenLineCount } = previewFor(content);
+    // 3 head + 7 tail = 10 displayed lines
+    expect(tailPreview).toHaveLength(10);
+    expect(tailPreview![0]).toContain('line1');
+    expect(tailPreview![2]).toContain('line3');
+    expect(tailPreview![3]).toContain('line14');
+    expect(tailPreview![9]).toContain('line20');
+    // hiddenLineCount = totalLines(20) - displayedLines(10)
+    expect(hiddenLineCount).toBe(10);
+  });
+
+  it('invalid tail value "abc" — falls back to default 7', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = 'abc';
+    const content = makeLines(20);
+    const { tailPreview } = previewFor(content);
+    expect(tailPreview).toHaveLength(7);
+  });
+
+  it('invalid tail value "-1" — falls back to default 7', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = '-1';
+    const content = makeLines(20);
+    const { tailPreview } = previewFor(content);
+    expect(tailPreview).toHaveLength(7);
+  });
+
+  it('tail value "0" — out-of-range, falls back to default 7', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = '0';
+    const content = makeLines(20);
+    const { tailPreview } = previewFor(content);
+    expect(tailPreview).toHaveLength(7);
+  });
+
+  it('tail value "51" — out-of-range, falls back to default 7', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = '51';
+    const content = makeLines(20);
+    const { tailPreview } = previewFor(content);
+    expect(tailPreview).toHaveLength(7);
+  });
+
+  it('invalid head value "abc" — falls back to 0 (no head)', () => {
+    process.env['AFK_BASH_PREVIEW_HEAD_LINES'] = 'abc';
+    const content = makeLines(20);
+    const { tailPreview } = previewFor(content);
+    expect(tailPreview).toHaveLength(7); // just tail
+  });
+
+  it('head value "0" — explicitly no head, shows only tail', () => {
+    process.env['AFK_BASH_PREVIEW_HEAD_LINES'] = '0';
+    const content = makeLines(20);
+    const { tailPreview } = previewFor(content);
+    expect(tailPreview).toHaveLength(7);
+    expect(tailPreview![0]).toContain('line14');
+  });
+
+  it('head + tail overlap: head=5, tail=5 on 8-line output — all 8 shown, hiddenCount=0', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = '5';
+    process.env['AFK_BASH_PREVIEW_HEAD_LINES'] = '5';
+    // 8 lines; head=5 + tail=5 = 10 >= 8 → show all without duplication
+    const content = makeLines(8);
+    const { tailPreview, hiddenLineCount } = previewFor(content);
+    expect(tailPreview).toHaveLength(8);
+    expect(tailPreview![0]).toContain('line1');
+    expect(tailPreview![7]).toContain('line8');
+    expect(hiddenLineCount).toBe(0);
+  });
+
+  it('short output (≤7 lines): all lines shown regardless of config', () => {
+    // Default config: tail=7; 5-line output should show all 5.
+    const content = makeLines(5);
+    const { tailPreview, hiddenLineCount } = previewFor(content);
+    expect(tailPreview).toHaveLength(5);
+    expect(hiddenLineCount).toBe(0);
+  });
+
+  it('boundary: tail=50 on 100-line output — 50 tail lines shown', () => {
+    process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = '50';
+    const content = makeLines(100);
+    const { tailPreview, hiddenLineCount } = previewFor(content);
+    expect(tailPreview).toHaveLength(50);
+    expect(tailPreview![49]).toContain('line100');
+    expect(tailPreview![0]).toContain('line51');
+    expect(hiddenLineCount).toBe(50);
+  });
+});
+
 describe('stream-consumer: durationMs passthrough', () => {
   it('plumbs durationMs from provider event to ToolResultChunk', () => {
     const evt: ProviderEvent = {

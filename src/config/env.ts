@@ -1806,6 +1806,31 @@ export const ENV_REGISTRY = [
     example: '600000',
     category: 'misc',
   },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of tail lines shown in the bash output preview block rendered by formatOutcome. ' +
+      'Must be an integer in the range 1–50. Invalid, out-of-range, or absent values fall back ' +
+      'to the default of 7. Does not affect model-context output caps or capture retention limits.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '14',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of head lines prepended to the bash output preview block. When set, the preview ' +
+      'shows up to this many lines from the start of the output followed by the tail preview. ' +
+      'Must be an integer in the range 0–50. Invalid or out-of-range values fall back to 0 ' +
+      '(no head lines). When head + tail ≥ total non-empty lines, all lines are shown without ' +
+      'duplication. Absent or 0 means no head lines are shown (default).',
+    type: 'number',
+    required: false,
+    example: '3',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];
 
 /**
