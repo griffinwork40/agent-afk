@@ -1,23 +1,16 @@
 /**
- * Interrupt-and-steer picker — shown on the FIRST Ctrl+C during an active
- * turn, giving the user a deliberate choice instead of an immediate stop.
+ * Interrupt picker — shown on the FIRST Ctrl+C during an active turn,
+ * giving the user a deliberate choice between Stop (soft) and Cancel (hard).
  *
  * UX contract:
- *   - 1st Ctrl+C → show this picker (Stop / Steer / Cancel)
+ *   - 1st Ctrl+C → show this picker (Stop / Cancel)
  *   - 2nd Ctrl+C while picker is open → hard-cancel immediately (safety hatch)
  *   - Picker dismisses cleanly if the turn completes while it is open
- *   - Esc inside the picker = "Cancel" (dismiss without action)
+ *   - Esc inside the picker = dismiss (no action, turn keeps running)
  *
  * The picker runs entirely through the compositor's existing picker-mode
  * machinery so no second stdin listener is ever installed (single-consumer
  * stdin invariant, #511).
- *
- * Steering domains: this is the **human-owned** foreground steering path.
- * The user sees a running subagent going wrong, hits Ctrl+C, picks Steer,
- * and types a redirect -- delivered as the next top-level REPL turn.
- * Background subagents are steered by the **parent model** via the
- * `send_message_to_agent` tool, which calls `handle.steer()` for mid-run
- * injection at the next tool-call boundary. See `send-message.ts`.
  */
 
 import { runPicker } from '../../render/picker.js';
@@ -26,7 +19,7 @@ import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { TurnState } from './repl-loop-shared.js';
 
 /** Possible outcomes of the interrupt picker. */
-export type InterruptChoice = 'stop' | 'cancel' | 'steer' | 'dismissed';
+export type InterruptChoice = 'stop' | 'cancel' | 'dismissed';
 
 /**
  * Options for {@link showInterruptPicker}. All callbacks are called
@@ -52,53 +45,34 @@ export interface InterruptPickerOptions {
    * Mirrors the existing double-Ctrl+C path.
    */
   onCancel: () => void;
-  /**
-   * Called when the user selects "Steer" (redirect the agent mid-turn).
-   * `onStop()` fires first (soft-stop), then `onSteer()` — so even if the
-   * steer readline is abandoned, the turn is already gracefully stopped.
-   * Fire-and-forget: this callback may initiate async readline work.
-   */
-  onSteer?: () => void;
 }
 
 // Option labels (visible in the picker UI).
-const LABEL_STOP = 'Stop  — keep work so far, return to prompt';
+const LABEL_STOP = 'Stop   — keep work so far, return to prompt';
 const LABEL_CANCEL = 'Cancel — hard-cancel (same as Ctrl+C again)';
-const LABEL_STEER = 'Steer  — redirect the agent mid-turn';
 
 const HEADER = [
   palette.warning('⚠ ') + palette.bold('Turn interrupted — what would you like to do?'),
   palette.dim('  (Ctrl+C again = immediate cancel)'),
 ];
 
-const OPTIONS = [LABEL_STOP, LABEL_STEER, LABEL_CANCEL];
+const OPTIONS = [LABEL_STOP, LABEL_CANCEL];
 
 /**
- * Display the interrupt-and-steer picker and handle the chosen action.
+ * Display the interrupt picker and handle the chosen action.
  *
  * Returns the chosen action:
  * - `'stop'`      — user selected Stop (soft-stop fired via `onStop`)
- * - `'steer'`     — user selected Steer (`onStop()` fired first for soft-stop,
- *                    then `onSteer?.()` fires to initiate the redirect readline)
  * - `'cancel'`    — user selected Cancel (hard-cancel fired via `onCancel`)
  * - `'dismissed'` — picker aborted externally (turn ended while open)
  *
  * Contract: never rejects. On any exception the picker aborts silently and
  * 'dismissed' is returned so the SIGINT handler degrades to its prior behavior.
- *
- * Steer path:
- *   1. `onStop()` fires synchronously first (soft-stop: keeps completed work,
- *      returns to prompt on completion).
- *   2. `onSteer?.()` fires next (fire-and-forget): the callback reads a redirect
- *      message from the user and sets `turnState.pendingSteerText`, which the
- *      `runInputLoop` while-body drains on the next iteration.
- *   3. Escape cancels the dedicated redirect read and degrades to pure Stop
- *      behavior — the turn was already soft-stopped in step 1.
  */
 export async function showInterruptPicker(
   opts: InterruptPickerOptions,
 ): Promise<InterruptChoice> {
-  const { compositor, signal, onStop, onCancel, onSteer } = opts;
+  const { compositor, signal, onStop, onCancel } = opts;
 
   if (signal.aborted) return 'dismissed';
 
@@ -140,16 +114,6 @@ export async function showInterruptPicker(
     onStop();
     return 'stop';
   }
-  if (chosen === LABEL_STEER) {
-    // Soft-stop first so the turn starts winding down regardless of what the
-    // user types in the steer readline — even an abandoned or empty steer
-    // degrades to pure Stop behavior.
-    onStop();
-    // Fire-and-forget: the steer readline runs asynchronously; the caller
-    // (launchInterruptPicker / interactive.ts onSteer) owns the async chain.
-    onSteer?.();
-    return 'steer';
-  }
   if (chosen === LABEL_CANCEL) {
     onCancel();
     return 'cancel';
@@ -182,22 +146,10 @@ export interface LaunchInterruptPickerOptions {
    * Called when the user selects "Cancel" in the picker.
    */
   onCancel: () => void;
-  /**
-   * Fire the steer action (redirect the agent mid-turn). `onStop()` fires
-   * first (soft-stop) before this callback is invoked. Fire-and-forget:
-   * this callback may initiate async readline work.
-   *
-   * IMPORTANT: The `onSteer` callback is responsible for clearing
-   * `turnState.interruptPickerAbort` AFTER the steer readline settles —
-   * the `.then()` cleanup in `launchInterruptPicker` defers the clear for
-   * the `'steer'` path so the abort controller remains live throughout the
-   * readline (second-Ctrl+C safety hatch).
-   */
-  onSteer?: () => void;
 }
 
 /**
- * Launch the interrupt-and-steer picker asynchronously.
+ * Launch the interrupt picker asynchronously.
  *
  * Creates an AbortController, stores it on `turnState.interruptPickerAbort`
  * (so a second Ctrl+C can abort the picker), shows the picker, fires the
@@ -208,7 +160,7 @@ export interface LaunchInterruptPickerOptions {
  * action fires on the microtask where `runPicker` resolves.
  */
 export function launchInterruptPicker(opts: LaunchInterruptPickerOptions): void {
-  const { compositor, turnState, onStop, onCancel, onSteer } = opts;
+  const { compositor, turnState, onStop, onCancel } = opts;
   const pickerAbort = new AbortController();
   turnState.interruptPickerAbort = pickerAbort;
 
@@ -217,18 +169,9 @@ export function launchInterruptPicker(opts: LaunchInterruptPickerOptions): void 
     signal: pickerAbort.signal,
     onStop,
     onCancel,
-    onSteer,
-  }).then((choice) => {
-    // For the 'steer' path, defer clearing interruptPickerAbort to the
-    // onSteer callback itself (after the readline settles). This keeps the
-    // abort controller live throughout the steer readline so a second Ctrl+C
-    // can hard-cancel during the readline (safety hatch).
-    //
-    // For all other paths (stop, cancel, dismissed), clear immediately.
-    if (choice !== 'steer') {
-      if (turnState.interruptPickerAbort === pickerAbort) {
-        turnState.interruptPickerAbort = null;
-      }
+  }).then(() => {
+    if (turnState.interruptPickerAbort === pickerAbort) {
+      turnState.interruptPickerAbort = null;
     }
   });
 }

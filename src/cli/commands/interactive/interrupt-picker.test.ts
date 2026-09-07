@@ -1,5 +1,5 @@
 /**
- * Unit tests for the interrupt-and-steer picker (interrupt-picker.ts).
+ * Unit tests for the interrupt picker (interrupt-picker.ts).
  *
  * Uses a `FakeCompositor` that satisfies both the `PickerHost` interface
  * (used by `runPicker`) and the `TerminalCompositor` surface that
@@ -8,7 +8,7 @@
  * Pattern mirrors src/cli/render/picker.test.ts: FakePickerHost + pressKey.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { PickerController } from '../../terminal-compositor.js';
 import type { TurnState } from './repl-loop-shared.js';
 import {
@@ -91,14 +91,12 @@ describe('showInterruptPicker', () => {
     const ctrl = new AbortController();
     const onStop = vi.fn();
     const onCancel = vi.fn();
-    const onSteer = vi.fn();
 
     const p = showInterruptPicker({
       compositor: compositor as any,
       signal: ctrl.signal,
       onStop,
       onCancel,
-      onSteer,
     });
 
     // Stop is index 0 — press Enter immediately
@@ -107,75 +105,23 @@ describe('showInterruptPicker', () => {
 
     expect(result).toBe('stop');
     expect(onStop).toHaveBeenCalledOnce();
-    expect(onSteer).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it('returns "steer" when Steer is selected (↓ once, then Enter)', async () => {
+  it('returns "cancel" when Cancel is selected (down once, then Enter); only onCancel fires', async () => {
     const compositor = new FakeCompositor();
     const ctrl = new AbortController();
     const onStop = vi.fn();
     const onCancel = vi.fn();
-    const onSteer = vi.fn();
 
     const p = showInterruptPicker({
       compositor: compositor as any,
       signal: ctrl.signal,
       onStop,
       onCancel,
-      onSteer,
     });
 
-    // Move down once to Steer (index 1), then confirm
-    compositor.pressKey('down');
-    compositor.pressKey('return');
-    const result = await p;
-
-    expect(result).toBe('steer');
-  });
-
-  it('calls onStop before onSteer when Steer is selected', async () => {
-    const compositor = new FakeCompositor();
-    const ctrl = new AbortController();
-    const callOrder: string[] = [];
-    const onStop = vi.fn(() => { callOrder.push('stop'); });
-    const onSteer = vi.fn(() => { callOrder.push('steer'); });
-
-    const p = showInterruptPicker({
-      compositor: compositor as any,
-      signal: ctrl.signal,
-      onStop,
-      onCancel: vi.fn(),
-      onSteer,
-    });
-
-    compositor.pressKey('down');
-    compositor.pressKey('return');
-    await p;
-
-    expect(callOrder[0]).toBe('stop');
-    expect(callOrder[1]).toBe('steer');
-    expect(onStop).toHaveBeenCalledOnce();
-    expect(onSteer).toHaveBeenCalledOnce();
-  });
-
-  it('returns "cancel" when Cancel is selected (↓ twice, then Enter); only onCancel fires', async () => {
-    const compositor = new FakeCompositor();
-    const ctrl = new AbortController();
-    const onStop = vi.fn();
-    const onCancel = vi.fn();
-    const onSteer = vi.fn();
-
-    const p = showInterruptPicker({
-      compositor: compositor as any,
-      signal: ctrl.signal,
-      onStop,
-      onCancel,
-      onSteer,
-    });
-
-    // Cancel is index 2 — press ↓ twice
-    compositor.pressKey('down');
+    // Cancel is index 1 — press down once
     compositor.pressKey('down');
     compositor.pressKey('return');
     const result = await p;
@@ -183,7 +129,6 @@ describe('showInterruptPicker', () => {
     expect(result).toBe('cancel');
     expect(onCancel).toHaveBeenCalledOnce();
     expect(onStop).not.toHaveBeenCalled();
-    expect(onSteer).not.toHaveBeenCalled();
   });
 
   it('returns "dismissed" when the signal is pre-aborted', async () => {
@@ -196,7 +141,6 @@ describe('showInterruptPicker', () => {
       signal: ctrl.signal,
       onStop: vi.fn(),
       onCancel: vi.fn(),
-      onSteer: vi.fn(),
     });
 
     expect(result).toBe('dismissed');
@@ -211,7 +155,6 @@ describe('showInterruptPicker', () => {
       signal: ctrl.signal,
       onStop: vi.fn(),
       onCancel: vi.fn(),
-      onSteer: vi.fn(),
     });
 
     // Abort the signal externally (simulates turn completing while picker open)
@@ -221,7 +164,7 @@ describe('showInterruptPicker', () => {
     expect(result).toBe('dismissed');
   });
 
-  it('OPTIONS order: Stop=0, Steer=1, Cancel=2 — visible in rendered rows', async () => {
+  it('OPTIONS order: Stop=0, Cancel=1 — visible in rendered rows', async () => {
     const compositor = new FakeCompositor();
     const ctrl = new AbortController();
 
@@ -230,43 +173,21 @@ describe('showInterruptPicker', () => {
       signal: ctrl.signal,
       onStop: vi.fn(),
       onCancel: vi.fn(),
-      onSteer: vi.fn(),
     });
 
     // The picker is open — inspect rendered rows
     const rows = compositor.renderSnapshot();
-    // rows include header lines + option lines; find the option lines
-    // (they contain the label text). We strip ANSI and check order.
     const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
     const optionRows = rows.map(stripAnsi).filter(
-      r => r.includes('Stop') || r.includes('Steer') || r.includes('Cancel'),
+      r => r.includes('Stop') || r.includes('Cancel'),
     );
-    expect(optionRows.length).toBe(3);
+    expect(optionRows.length).toBe(2);
     expect(optionRows[0]).toContain('Stop');
-    expect(optionRows[1]).toContain('Steer');
-    expect(optionRows[2]).toContain('Cancel');
+    expect(optionRows[1]).toContain('Cancel');
 
     // Clean up
     ctrl.abort();
     await p;
-  });
-
-  it('onSteer is optional — omitting it does not throw when Steer is selected', async () => {
-    const compositor = new FakeCompositor();
-    const ctrl = new AbortController();
-
-    const p = showInterruptPicker({
-      compositor: compositor as any,
-      signal: ctrl.signal,
-      onStop: vi.fn(),
-      onCancel: vi.fn(),
-      // onSteer deliberately omitted
-    });
-
-    compositor.pressKey('down');
-    compositor.pressKey('return');
-
-    await expect(p).resolves.toBe('steer');
   });
 });
 
@@ -275,38 +196,6 @@ describe('showInterruptPicker', () => {
 // ---------------------------------------------------------------------------
 
 describe('launchInterruptPicker', () => {
-  it('does NOT clear turnState.interruptPickerAbort when "steer" is chosen', async () => {
-    const compositor = new FakeCompositor();
-    const turnState = makeTurnState();
-
-    // Track when onSteer fires
-    let onSteerCalled = false;
-    const steerPromise = new Promise<void>(resolve => {
-      launchInterruptPicker({
-        compositor: compositor as any,
-        turnState,
-        onStop: vi.fn(),
-        onCancel: vi.fn(),
-        onSteer: () => {
-          onSteerCalled = true;
-          // Simulate: onSteer doesn't clear immediately (it owns the clear after readline)
-          resolve();
-        },
-      });
-    });
-
-    // Press ↓ once (Steer) then Enter
-    compositor.pressKey('down');
-    compositor.pressKey('return');
-
-    await steerPromise;
-
-    // interruptPickerAbort should still be set (not cleared by launchInterruptPicker's .then())
-    // because the 'steer' branch defers the clear to onSteer
-    expect(onSteerCalled).toBe(true);
-    expect(turnState.interruptPickerAbort).not.toBeNull();
-  });
-
   it('clears turnState.interruptPickerAbort after "stop" is chosen', async () => {
     const compositor = new FakeCompositor();
     const turnState = makeTurnState();
@@ -338,8 +227,7 @@ describe('launchInterruptPicker', () => {
       onCancel: vi.fn(),
     });
 
-    // Press ↓ twice (Cancel = index 2) then Enter
-    compositor.pressKey('down');
+    // Press down once (Cancel = index 1) then Enter
     compositor.pressKey('down');
     compositor.pressKey('return');
 
@@ -364,46 +252,5 @@ describe('launchInterruptPicker', () => {
 
     // Clean up
     turnState.interruptPickerAbort?.abort();
-  });
-
-  it('onSteer publishes pendingSteerRead synchronously — before the callback returns (Item 5)', async () => {
-    // The PR's invariant: "Publish synchronously, before the stopped turn can
-    // reach its next loop iteration." Assert that turnState.pendingSteerRead is
-    // already a Promise at the moment onSteer() is still on the call stack —
-    // i.e. before any microtask/await has resolved.
-    const compositor = new FakeCompositor();
-    const turnState: TurnState & { pendingSteerRead?: Promise<string | null> | null } = makeTurnState();
-
-    let syncCheckPassed = false;
-
-    const steerPromise = new Promise<void>(resolve => {
-      launchInterruptPicker({
-        compositor: compositor as any,
-        turnState,
-        onStop: vi.fn(),
-        onCancel: vi.fn(),
-        onSteer: () => {
-          // This is still on the synchronous call stack — no awaits have
-          // occurred. The PR's publish must have happened by now.
-          // Simulate interactive.ts's onSteer: publish a Promise, then assert.
-          // Here we just assert the invariant that the caller (interactive.ts)
-          // can safely synchronously assign and see it.
-          const p = Promise.resolve('steer text');
-          turnState.pendingSteerRead = p;
-          syncCheckPassed = (turnState.pendingSteerRead instanceof Promise);
-          resolve();
-        },
-      });
-    });
-
-    compositor.pressKey('down');
-    compositor.pressKey('return');
-
-    await steerPromise;
-
-    // Synchronous-publish invariant confirmed: pendingSteerRead was a Promise
-    // on the same synchronous stack frame as the onSteer callback.
-    expect(syncCheckPassed).toBe(true);
-    expect(turnState.pendingSteerRead).toBeInstanceOf(Promise);
   });
 });
