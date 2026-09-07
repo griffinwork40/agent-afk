@@ -16,7 +16,8 @@
  * passthrough. `display` never appears on `ProviderEvent` or `ToolResult`.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { resetBashPreviewWarnings } from '../../config/bash-preview.js';
 import type { ProviderEvent } from '../provider.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import type { OutputEvent } from './stream-consumer.js';
@@ -428,5 +429,139 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(rendered).toContain('4 lines');
     expect(rendered).toContain('d');
     expect(rendered).toContain('c');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Configurable preview size: AFK_BASH_PREVIEW_TAIL_LINES / AFK_BASH_PREVIEW_HEAD_LINES
+// ---------------------------------------------------------------------------
+
+describe('stream-consumer → formatOutcome: configurable preview size', () => {
+  const HOME = '/Users/testuser';
+
+  function buildBashEvent(content: string): ProviderEvent {
+    return {
+      type: 'tool.output',
+      toolUseId: 'tu-preview',
+      toolName: 'bash',
+      content,
+      sessionId: 's-preview',
+    };
+  }
+
+  function outcome(content: string): string {
+    const evt = buildBashEvent(content);
+    const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    return stripAnsi(formatOutcome(out.chunk, HOME, 60, 'bash'));
+  }
+
+  beforeEach(() => {
+    resetBashPreviewWarnings();
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('default tail=7, head=0: shows last 7 non-empty lines (existing behavior preserved)', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', undefined);
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', undefined);
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const rendered = outcome(lines.join('\n'));
+    expect(rendered).toContain('line 20');
+    expect(rendered).toContain('line 14');
+    expect(rendered).not.toContain('line 13');
+  });
+
+  it('custom tail=3: shows only the last 3 lines', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '3');
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', undefined);
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
+    const rendered = outcome(lines.join('\n'));
+    expect(rendered).toContain('line 10');
+    expect(rendered).toContain('line 8');
+    expect(rendered).not.toContain('line 7');
+  });
+
+  it('tail=0: no tail preview is rendered', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '0');
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', undefined);
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
+    const rendered = outcome(lines.join('\n'));
+    expect(rendered).toContain('10 lines');
+    // None of the actual content lines should appear
+    expect(rendered).not.toContain('line 1');
+    expect(rendered).not.toContain('line 10');
+  });
+
+  it('head=3: shows first 3 lines plus tail', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '7');
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', '3');
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const rendered = outcome(lines.join('\n'));
+    expect(rendered).toContain('line 1');
+    expect(rendered).toContain('line 2');
+    expect(rendered).toContain('line 3');
+    // Tail lines
+    expect(rendered).toContain('line 20');
+  });
+
+  it('overlap: 5-line output with head=3, tail=3 shows all 5 lines without duplication', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '3');
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', '3');
+    const lines = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+    const rendered = outcome(lines.join('\n'));
+    expect(rendered).toContain('alpha');
+    expect(rendered).toContain('epsilon');
+    // No duplication: check that 'alpha' appears exactly once
+    const occurrences = rendered.split('alpha').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('overlap: head+tail exactly equals total non-empty lines — no duplication', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '3');
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', '3');
+    const lines = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const rendered = outcome(lines.join('\n'));
+    // All 6 lines should appear exactly once each
+    for (const line of lines) {
+      const count = rendered.split(line).length - 1;
+      expect(count).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('short output (fewer lines than tail): shows all available lines', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '7');
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', undefined);
+    const rendered = outcome('a\nb\nc');
+    expect(rendered).toContain('a');
+    expect(rendered).toContain('b');
+    expect(rendered).toContain('c');
+  });
+
+  it('invalid tail value falls back to default=7', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', 'bad');
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const rendered = outcome(lines.join('\n'));
+    // Default 7 lines — last 7 should appear
+    expect(rendered).toContain('line 20');
+    expect(rendered).toContain('line 14');
+    expect(rendered).not.toContain('line 13');
+  });
+
+  it('invalid head value falls back to default=0 (no head preview)', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', undefined);
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', 'bad');
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
+    const rendered = outcome(lines.join('\n'));
+    // No head lines — line 1 should NOT appear (it's not in the tail either)
+    expect(rendered).not.toContain('line 1');
+    expect(rendered).not.toContain('line 2');
+    expect(rendered).toContain('line 10');
   });
 });

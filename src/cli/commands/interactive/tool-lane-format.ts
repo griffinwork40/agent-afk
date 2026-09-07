@@ -194,14 +194,29 @@ export function formatOutcome(
       headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
     }
 
-    // Append actual tail lines when available. Each line is sanitized (same
-    // sanitizer as the single-line preview path) and indented with `    ` to
-    // sit visually under the `⎿` connector rendered by formatToolResultLine.
-    if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
-      const tailLines = chunk.tailPreview
-        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
-        .join('\n');
-      return headline + '\n' + tailLines;
+    // Append actual head/tail lines when available. Each line is sanitized
+    // (same sanitizer as the single-line preview path) and indented with
+    // `    ` to sit visually under the `⎿` connector rendered by
+    // formatToolResultLine. Head lines render before the tail, separated by
+    // an ellipsis indicator when both are present.
+    const hasHead = chunk.headPreview !== undefined && chunk.headPreview.length > 0;
+    const hasTail = chunk.tailPreview !== undefined && chunk.tailPreview.length > 0;
+
+    const renderLine = (l: string) =>
+      palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l));
+
+    if (hasHead || hasTail) {
+      const parts: string[] = [];
+      if (hasHead) {
+        parts.push(chunk.headPreview!.map(renderLine).join('\n'));
+      }
+      if (hasHead && hasTail) {
+        parts.push(palette.dim('    …'));
+      }
+      if (hasTail) {
+        parts.push(chunk.tailPreview!.map(renderLine).join('\n'));
+      }
+      return headline + '\n' + parts.join('\n');
     }
     return headline;
   }

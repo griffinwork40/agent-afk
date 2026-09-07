@@ -237,6 +237,31 @@ export const ENV_REGISTRY = [
     category: 'model',
   },
   {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of tail lines shown in bash output previews in the TUI outcome row. Default 7; ' +
+      'accepted range 0-50 (0 disables tail preview entirely); out-of-range or unparseable input ' +
+      'falls back to the default. Independent of model-context output caps and capture retention limits.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '15',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of head lines shown in bash output previews in the TUI outcome row. Default 0 ' +
+      '(head preview disabled); accepted range 0-50; out-of-range or unparseable input falls back ' +
+      'to the default. When head + tail >= total output lines, all lines are shown without duplication. ' +
+      'Independent of model-context output caps and capture retention limits.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '3',
+    category: 'misc',
+  },
+  {
     name: 'AFK_MAX_NESTING_DEPTH',
     description:
       'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +
