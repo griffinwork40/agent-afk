@@ -776,6 +776,65 @@ describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
     expect(received.terminalState).toBeUndefined();
     expect(received.doneHasCorroboratingEvidence).toBeUndefined();
   });
+
+  it('wires ctx.clearPendingStopInjection on the ctx object after runReplLoop starts', async () => {
+    // The runReplLoop closure must register clearPendingStopInjection on ctx so
+    // that onSwapped (the /resume swap callback) can invoke it to prevent the
+    // outgoing session's stale Stop injection from leaking into the resumed
+    // session's first turn (#1512).
+    surfaceState.readLineQueue = [
+      { text: 'only turn', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    // clearPendingStopInjection must have been wired by runReplLoop.
+    expect(ctx.clearPendingStopInjection).toBeTypeOf('function');
+  });
+
+  it('clearPendingStopInjection prevents stale injection from reaching the next turn', async () => {
+    // Behavioural proof of fix for #1512. Sequence:
+    //   turn 1 runs → Stop fires → injectContext is stashed in pendingStopInjection
+    //   onSwapped fires (simulated via beforeReturn on the next readline call)
+    //     → clearPendingStopInjection() is called, clearing the stash
+    //   turn 2 runs → prompt must NOT contain the injection text.
+    //
+    // beforeReturn fires just before readLine returns the entry, which is
+    // exactly the window in which onSwapped runs between sessions on /resume.
+    const registry = createHookRegistry();
+    let stopCount = 0;
+    registry.register('Stop', async () => {
+      stopCount += 1;
+      return stopCount === 1 ? { injectContext: 'STALE-INJECTION' } : {};
+    });
+
+    const ctx = makeCtx();
+    ctx.hookRegistry = registry;
+
+    surfaceState.readLineQueue = [
+      { text: 'turn-one', attachments: [] },
+      {
+        text: 'turn-two',
+        attachments: [],
+        // beforeReturn fires in the readline await between turn 1 and turn 2 —
+        // the same window that onSwapped occupies during a /resume swap.
+        beforeReturn: () => {
+          ctx.clearPendingStopInjection?.();
+        },
+      },
+      { text: '/exit', attachments: [] },
+    ];
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
+    const turn2Text = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
+    // The injection was cleared before the loop drained it — turn 2 is clean.
+    expect(turn2Text).not.toContain('STALE-INJECTION');
+    expect(turn2Text).toBe('turn-two');
+  });
 });
 
 describe('runReplLoop — UserPromptSubmit hook integration', () => {

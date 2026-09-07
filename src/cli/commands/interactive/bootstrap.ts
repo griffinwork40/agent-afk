@@ -257,6 +257,10 @@ export async function bootstrapSession(
         // settled just before it may already sit in the notifier's buffer
         // and would otherwise inject into the resumed session's first turn.
         ctx.clearBgResultBuffer?.();
+        // Clear any Stop-hook injectContext that was stashed by the outgoing
+        // session's last turn so it cannot leak into the resumed session's
+        // first turn (#1512).
+        ctx.clearPendingStopInjection?.();
         // Re-point every long-lived holder of the outgoing (now sealed) writer
         // at the incoming session's live one. These are built once in
         // createBootstrapInfra and survive the swap, so without this the

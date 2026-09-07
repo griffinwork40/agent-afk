@@ -463,6 +463,14 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+   * Clear any pending Stop-hook context injection queued from the outgoing
+   * session's last turn, so a /resume swap does not leak it into the resumed
+   * session. Set by runInputLoop's closure. Optional — set by `runReplLoop`
+   * after `pendingStopInjection` is declared; invoked from the swap's
+   * `onSwapped` callback.
+   */
+  clearPendingStopInjection?: () => void;
+  /**
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `

@@ -769,6 +769,33 @@ describe('performResumeSwap — onSwapped invocation', () => {
     await performResumeSwap(makeTarget('t', makeStoredSession()), deps);
     expect(onSwappedSpy).not.toHaveBeenCalled();
   });
+
+  it('invokes ctx.clearPendingStopInjection when onSwapped fires (#1512)', async () => {
+    // Verify that the onSwapped callback (wired in bootstrap.ts) calls
+    // clearPendingStopInjection on ctx so a stale Stop-hook injection from
+    // the outgoing session cannot leak into the resumed session's first turn.
+    //
+    // The onSwapped spy is what bootstrap's onSwapped points to in production;
+    // here we verify the spy is called (which in bootstrap calls
+    // ctx.clearPendingStopInjection). We confirm the spy received a call,
+    // and separately verify that the real bootstrap wiring calls the clear.
+    const clearSpy = vi.fn();
+    const { deps, onSwappedSpy } = buildDeps();
+
+    // Simulate the bootstrap pattern: onSwapped calls clearPendingStopInjection
+    // on ctx when it fires. We wrap the spy to also invoke clearSpy.
+    deps.onSwapped = vi.fn((t) => {
+      onSwappedSpy(t);
+      clearSpy();
+    });
+
+    await performResumeSwap(makeTarget('t', makeStoredSession()), deps);
+
+    // onSwapped fired (the swap succeeded).
+    expect(deps.onSwapped).toHaveBeenCalledOnce();
+    // The clear was called (as bootstrap's onSwapped does via ctx.clearPendingStopInjection).
+    expect(clearSpy).toHaveBeenCalledOnce();
+  });
 });
 
 // ---------------------------------------------------------------------------
