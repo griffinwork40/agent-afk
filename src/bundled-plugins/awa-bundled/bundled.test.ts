@@ -131,6 +131,11 @@ const PINNED_HASHES = {
   // simplify is bundled-only (no upstream counterpart).
   simplify:
     'a984a507872949e17c87ab72979cb089524ba1da899f38af80fd0e725ebff667',
+  // orient: end-of-session orientation prompt generator. Bundled from the
+  // awa-private plugin (awa-dev/skills/orient). context: load — loads into the
+  // current session and dispatches a single read-only research sub-agent.
+  // No upstream counterpart in the public plugin — bundled-only.
+  orient: 'decf46404d299d84c590773b8e4a672c02b6c93fd5ce7c5334ae5fe8b33be318',
   spec: '167e7cbb84de5b716efa11bb9f20a6e4b940f6f9a6d1812a7fbd735dae4f67dd',
 } as const;
 
