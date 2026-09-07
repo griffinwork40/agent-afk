@@ -190,8 +190,18 @@ export function formatOutcome(
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
 
+    // Render head lines (when present) before the hidden-lines separator.
+    let headSection = '';
+    if (chunk.headPreview !== undefined && chunk.headPreview.length > 0) {
+      headSection = '\n' + chunk.headPreview
+        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
+        .join('\n');
+    }
+
     if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
-      headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
+      headline += headSection + '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
+    } else {
+      headline += headSection;
     }
 
     // Append actual tail lines when available. Each line is sanitized (same

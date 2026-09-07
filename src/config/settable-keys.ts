@@ -266,6 +266,8 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
   { path: 'maxSummaryCallsPerSession', tier: 'agent', type: 'number', clamp: { min: 1, max: 500, integer: true }, description: 'Cap on summary calls per session.' },
+  { path: 'bash.previewTailLines', tier: 'agent', type: 'number', clamp: { min: 0, max: 50, integer: true }, description: 'Number of tail lines shown in the bash output preview. 0 disables the tail preview. Default: 7.' },
+  { path: 'bash.previewHeadLines', tier: 'agent', type: 'number', clamp: { min: 0, max: 50, integer: true }, description: 'Number of head lines shown in the bash output preview above the hidden-lines separator. 0 disables head preview (default).' },
 
   // Human-only (CLI with --allow gate; agent tool refuses).
   { path: 'systemPrompt', tier: 'human', type: 'string', description: 'Operator system-prompt overlay.' },
