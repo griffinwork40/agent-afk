@@ -34,6 +34,7 @@ import { setLeaseState } from './lease-store.js';
 import { pushIfConfigured } from '../../telegram/push.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
+import { buildHandoffCallback } from '../../telegram/handoff-callback-data.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -170,17 +171,24 @@ export function makeDaemonElicitationHandler(
         handoffsDir: opts.handoffsDir,
       }).catch(() => undefined);
     } else {
+      // Daemon process (no Telegraf instance). Build the notification via the
+      // raw push path. For confirm/choice, attach inline keyboard markup so the
+      // separate Telegram bot process can handle the callback via afk:h:*.
       const questionText = truncateForNotify(request.message);
+      const qType = request.type ?? 'text';
       const parts = [
         `🔔 Daemon task waiting for your answer`,
         `📋 Task: ${opts.taskId}`,
         questionText,
       ];
-      if (request.choices && request.choices.length > 0) {
+      const replyMarkup = buildHandoffReplyMarkup(qType, opts.taskId, request.choices);
+      if (!replyMarkup && request.choices && request.choices.length > 0) {
         parts.push(`Options: ${truncateForNotify(request.choices.join(', '))}`);
       }
-      parts.push(`\nReply to this task's next run to provide your answer.`);
-      void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+      if (!replyMarkup) {
+        parts.push(`\nReply to this task's next run to provide your answer.`);
+      }
+      void pushIfConfigured(parts.join('\n'), { replyMarkup }).catch(() => undefined);
     }
 
     // Step 4: decline — daemon sessions cannot block on a synchronous answer.
@@ -355,6 +363,50 @@ export async function cleanupHandoff(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/** Truncate a button label to Telegram's ~64-byte UTF-8 limit. */
+function truncateLabel(label: string, maxBytes = 64): string {
+  if (Buffer.byteLength(label, 'utf8') <= maxBytes) return label;
+  const buf = Buffer.from(label, 'utf8').subarray(0, maxBytes);
+  return new TextDecoder('utf-8', { fatal: false }).decode(buf).replace(/\uFFFD$/, '');
+}
+
+/**
+ * Build Telegram InlineKeyboardMarkup for confirm/choice question types.
+ * Returns undefined for text/number/multi_choice (no buttons for those).
+ *
+ * The returned shape matches Telegram's InlineKeyboardMarkup interface and
+ * is forwarded verbatim as `replyMarkup` in pushIfConfigured.
+ */
+function buildHandoffReplyMarkup(
+  qType: string,
+  taskId: string,
+  choices?: readonly string[],
+): import('telegraf/types').InlineKeyboardMarkup | undefined {
+  try {
+    if (qType === 'confirm') {
+      return {
+        inline_keyboard: [[
+          { text: 'Yes', callback_data: buildHandoffCallback(taskId, 1) },
+          { text: 'No', callback_data: buildHandoffCallback(taskId, 0) },
+        ]],
+      };
+    }
+    if (qType === 'choice' && choices && choices.length > 0) {
+      const MAX_CHOICES = 20;
+      return {
+        inline_keyboard: choices.slice(0, MAX_CHOICES).map((c, i) => [{
+          text: truncateLabel(String(c)),
+          callback_data: buildHandoffCallback(taskId, i),
+        }]),
+      };
+    }
+  } catch {
+    // buildHandoffCallback can throw if taskId is too long for the 64-byte
+    // Telegram limit. Fall through to no-markup so the push still sends.
+  }
+  return undefined;
+}
 
 /**
  * Serialize an ElicitationRequest into a plain Record for durable storage.
