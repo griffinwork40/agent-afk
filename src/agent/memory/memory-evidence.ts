@@ -26,7 +26,7 @@
  * @module agent/memory/memory-evidence
  */
 
-import { env } from '../../config/env.js';
+import { env, isExplicitlyDisabled } from '../../config/env.js';
 import type { FactCategory, FactVerification } from './types.js';
 
 /**
@@ -47,11 +47,13 @@ export function isCodebaseFactCategory(category: FactCategory): boolean {
 }
 
 /**
- * Whether the evidence gate is enabled. On by default; set AFK_MEMORY_EVIDENCE_GATE=0
- * to disable. The single env read-point for this subsystem.
+ * Whether the evidence gate is enabled. On by default; set AFK_MEMORY_EVIDENCE_GATE
+ * to 0/false/no/off to disable. The single env read-point for this subsystem.
  */
 export function evidenceGateEnabled(): boolean {
-  return env.AFK_MEMORY_EVIDENCE_GATE !== '0';
+  const v = env.AFK_MEMORY_EVIDENCE_GATE;
+  if (!v) return true; // on by default
+  return !isExplicitlyDisabled(v);
 }
 
 /**

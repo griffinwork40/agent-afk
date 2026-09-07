@@ -75,12 +75,22 @@ describe('shouldCaptureSubagentOutput', () => {
     delete process.env[FLAG];
   });
 
-  it('is on by default when flag is unset', () => {
-    expect(shouldCaptureSubagentOutput(baseInput())).toBe(true);
+  it('is off by default when flag is unset (opt-in)', () => {
+    expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
   });
 
   it('is off when the flag is explicitly "0"', () => {
     process.env[FLAG] = '0';
+    expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
+  });
+
+  it('is off when the flag is a garbage string (not in allowlist)', () => {
+    process.env[FLAG] = 'garbage';
+    expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
+  });
+
+  it('is off when the flag is "enabled" (not in allowlist)', () => {
+    process.env[FLAG] = 'enabled';
     expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
   });
 
@@ -143,8 +153,13 @@ describe('createSubagentOutputRecorder', () => {
     expect(createSubagentOutputRecorder(baseInput())).toBeNull();
   });
 
-  it('captures by default when flag is unset (on by default)', () => {
+  it('returns null when flag is unset (off by default — opt-in)', () => {
     delete process.env[FLAG];
+    expect(createSubagentOutputRecorder(baseInput())).toBeNull();
+  });
+
+  it('captures when flag is explicitly enabled', () => {
+    process.env[FLAG] = '1';
     expect(createSubagentOutputRecorder(baseInput())).not.toBeNull();
   });
 

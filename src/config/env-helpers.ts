@@ -64,3 +64,34 @@ export function getEnvVarValue(name: string): string | undefined {
   const raw = process.env[name];
   return raw === undefined || raw === '' ? undefined : raw;
 }
+
+/**
+ * Whether a user-supplied env value explicitly requests disabling a feature.
+ * Matches the four documented disable values: 0, false, no, off (case-insensitive).
+ *
+ * Contract:
+ *   - For features that are ON by default:
+ *       `if (!v) return true; return !isExplicitlyDisabled(v);`
+ *   - For features that are OFF by default (opt-in):
+ *       `if (!v) return false; return isExplicitlyEnabled(v);`
+ *
+ * Using an allowlist (isExplicitlyEnabled) for opt-in features and a denylist
+ * (isExplicitlyDisabled) for opt-out features keeps the safe default intact:
+ * unrecognized / garbage values fall through to the default rather than
+ * toggling anything.
+ */
+export function isExplicitlyDisabled(value: string): boolean {
+  return /^(0|false|no|off)$/i.test(value.trim());
+}
+
+/**
+ * Whether a user-supplied env value explicitly requests enabling a feature.
+ * Matches the four documented enable values: 1, true, yes, on (case-insensitive).
+ *
+ * Symmetric counterpart to {@link isExplicitlyDisabled}. Use this as the gate
+ * for opt-in features so that unrecognized / garbage values leave the feature
+ * OFF (safe default) rather than accidentally enabling it.
+ */
+export function isExplicitlyEnabled(value: string): boolean {
+  return /^(1|true|yes|on)$/i.test(value.trim());
+}
