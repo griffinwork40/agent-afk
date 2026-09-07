@@ -88,7 +88,7 @@ function truncateQuestion(text: string): string {
     : `${text.slice(0, MAX_QUESTION_CHARS)}...(truncated)`;
 }
 
-/** Truncate a button label to Telegram's ~64-byte limit. */
+/** Truncate a button label for display (Telegram allows ~200 bytes for labels; 64-byte cap here is conservative). */
 function truncateLabel(label: string, maxBytes = 64): string {
   if (Buffer.byteLength(label, 'utf8') <= maxBytes) return label;
   const buf = Buffer.from(label, 'utf8').subarray(0, maxBytes);
@@ -306,6 +306,24 @@ export async function matchReplyToHandoff(
       ).catch(() => {});
       return true; // consumed, but ask again
     }
+    const min = record.question['min'] as number | undefined;
+    const max = record.question['max'] as number | undefined;
+    if (min !== undefined && n < min) {
+      await bot.telegram.sendMessage(
+        chatId,
+        `Please reply with a number >= ${min}.`,
+        { reply_parameters: { message_id: replyToMessageId } },
+      ).catch(() => {});
+      return true;
+    }
+    if (max !== undefined && n > max) {
+      await bot.telegram.sendMessage(
+        chatId,
+        `Please reply with a number <= ${max}.`,
+        { reply_parameters: { message_id: replyToMessageId } },
+      ).catch(() => {});
+      return true;
+    }
     answer = { value: n };
   } else if (qType === 'multi_choice') {
     const choices = Array.isArray(record.question['choices'])
@@ -315,7 +333,7 @@ export async function matchReplyToHandoff(
     const selected: string[] = [];
     for (const part of parts) {
       const idx = parseInt(part, 10);
-      if (!Number.isInteger(idx) || idx < 1 || idx > choices.length) {
+      if (!Number.isInteger(idx) || String(idx) !== part || idx < 1 || idx > choices.length) {
         await bot.telegram.sendMessage(
           chatId,
           `Please reply with comma-separated numbers between 1 and ${choices.length}.`,
@@ -343,6 +361,11 @@ export async function matchReplyToHandoff(
       replyToMessageId,
       undefined,
       `Answered: ${answerLabel}`,
+    ).catch(() => {});
+  } else {
+    await bot.telegram.editMessageText(
+      chatId, replyToMessageId, undefined,
+      'This question was already answered from another surface.',
     ).catch(() => {});
   }
   return true;
@@ -393,7 +416,6 @@ export function clearPendingTextHandoff(taskId: string): void {
   for (const [msgId, tid] of pendingTextHandoffs) {
     if (tid === taskId) {
       pendingTextHandoffs.delete(msgId);
-      return;
     }
   }
 }
