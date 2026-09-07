@@ -371,6 +371,34 @@ export function renderTextChildLines(text: string, indent: string, g: Readonly<G
 }
 
 
+/**
+ * Push a possibly multi-line outcome string into `lines`, splitting on `\n` so
+ * every continuation line (hiddenLineCount notice, tailPreview rows) carries the
+ * spine-aware `continuationIndent` instead of the hardcoded 4-space indent that
+ * `formatOutcome` embeds. The first line is concatenated with `headPrefix`;
+ * subsequent lines get `continuationIndent` prepended. Every emitted line is
+ * clamped to `cols`.
+ *
+ * Centralizes the split-and-re-indent pattern used by both the overlay and flush
+ * child-render paths (tool-lane-render-children.ts) and the root NESTING-entry
+ * path (tool-lane.ts), so the spine is never severed on multi-line outcomes.
+ */
+export function pushOutcomeLines(
+  lines: string[],
+  headPrefix: string,
+  outcomeText: string,
+  continuationIndent: string,
+  cols: number,
+  headSuffix = '',
+): void {
+  const parts = outcomeText.split('\n');
+  lines.push(clampLineToTerminal(headPrefix + parts[0]! + headSuffix, cols));
+  for (let i = 1; i < parts.length; i++) {
+    lines.push(clampLineToTerminal(continuationIndent + parts[i]!, cols));
+  }
+}
+
+
 // Re-export from grouping module
 export {
   assignConnectors,
