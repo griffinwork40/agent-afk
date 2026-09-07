@@ -1113,6 +1113,31 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of leading (head) lines to include in the bash output preview block. ' +
+      'Default 0 (head section disabled). Env var takes precedence over bash.previewHeadLines ' +
+      'in afk.config.json. Values are clamped to [0, 200] and must be integers; invalid values ' +
+      'fall back to the default. Keep separate from model-context output caps (AFK_BASH_MAX_OUTPUT_BYTES).',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '5',
+    category: 'process',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of trailing (tail) lines to include in the bash output preview block. ' +
+      'Default 7. Env var takes precedence over bash.previewTailLines in afk.config.json. ' +
+      'Values are clamped to [0, 200] and must be integers; invalid values fall back to the default.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '15',
+    category: 'process',
+  },
+  {
     name: 'AFK_BG_AUTO_DELIVER',
     description:
       'Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.',

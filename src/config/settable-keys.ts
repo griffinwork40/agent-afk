@@ -266,6 +266,25 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },
   { path: 'bgSummaries', tier: 'agent', type: 'boolean', description: 'Background summarisation.' },
   { path: 'maxSummaryCallsPerSession', tier: 'agent', type: 'number', clamp: { min: 1, max: 500, integer: true }, description: 'Cap on summary calls per session.' },
+  {
+    path: 'bash.previewHeadLines',
+    tier: 'agent',
+    type: 'number',
+    clamp: { min: 0, max: 200, integer: true },
+    description:
+      'Number of leading lines to include in the bash output preview (head section). ' +
+      'Default 0 (head disabled). Overridden by AFK_BASH_PREVIEW_HEAD_LINES env var. ' +
+      'Separate from model-context output caps.',
+  },
+  {
+    path: 'bash.previewTailLines',
+    tier: 'agent',
+    type: 'number',
+    clamp: { min: 0, max: 200, integer: true },
+    description:
+      'Number of trailing lines to include in the bash output preview (tail section). ' +
+      'Default 7. Overridden by AFK_BASH_PREVIEW_TAIL_LINES env var.',
+  },
 
   // Human-only (CLI with --allow gate; agent tool refuses).
   { path: 'systemPrompt', tier: 'human', type: 'string', description: 'Operator system-prompt overlay.' },
