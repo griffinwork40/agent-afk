@@ -1806,6 +1806,31 @@ export const ENV_REGISTRY = [
     example: '600000',
     category: 'misc',
   },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL',
+    description:
+      'Number of tail lines shown in bash output previews (the scrollback outcome row). ' +
+      'Valid range 1–200; default 7. Values outside the range are silently clamped. ' +
+      'Set to 0 to suppress the tail preview entirely. ' +
+      'Takes precedence over bash.preview.tailLines in afk.config.json when set.',
+    type: 'number',
+    required: false,
+    example: '15',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_HEAD',
+    description:
+      'Number of head lines shown above the tail in bash output previews. ' +
+      'Default 0 (head preview disabled). Valid range 0–200; values outside the range ' +
+      'are silently clamped. When head + tail ≥ total line count, all lines are shown ' +
+      'without duplication. ' +
+      'Takes precedence over bash.preview.headLines in afk.config.json when set.',
+    type: 'number',
+    required: false,
+    example: '3',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];
 
 /**
