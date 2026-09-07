@@ -261,6 +261,8 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'interactive.worktreeAutoname', tier: 'agent', type: 'boolean', description: 'Auto-name worktrees.' },
   { path: 'interactive.suggestGhost', tier: 'agent', type: 'boolean', description: 'Ghost-text suggestions in the REPL.' },
   { path: 'interactive.thinkingUi', tier: 'agent', type: 'enum', enumValues: ['summary', 'live', 'digest', 'off'], description: 'Default REPL thinking-display mode.' },
+  { path: 'interactive.bashPreviewTailLines', tier: 'agent', type: 'number', clamp: { min: 1, max: 50, integer: true }, description: 'Tail lines shown in the TUI bash-output preview block (1–50). Env-var twin: AFK_BASH_PREVIEW_TAIL_LINES.' },
+  { path: 'interactive.bashPreviewHeadLines', tier: 'agent', type: 'number', clamp: { min: 0, max: 50, integer: true }, description: 'Head lines shown above the tail block in the bash-output preview (0 = disabled, 0–50). Env-var twin: AFK_BASH_PREVIEW_HEAD_LINES.' },
   { path: 'theme', tier: 'agent', type: 'enum', enumValues: ['dark', 'light', 'umber', 'auto'], description: 'TUI color palette (dark | light | umber | auto). Display-only; auto detects a light/dark background from the terminal and falls back to dark. umber matches the Umber terminal and is dark-only, so auto never selects it.' },
   { path: 'updatePolicy', tier: 'human', type: 'enum', enumValues: ['notify', 'auto', 'off'], description: 'Self-update policy (human-tier: auto self-update is scope-widening).' },
   { path: 'autoResumeOnUsageLimit', tier: 'agent', type: 'boolean', description: 'Auto-resume after a usage-limit pause.' },

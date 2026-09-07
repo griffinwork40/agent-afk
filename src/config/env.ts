@@ -1806,6 +1806,33 @@ export const ENV_REGISTRY = [
     example: '600000',
     category: 'misc',
   },
+  // ── Bash output preview sizing ────────────────────────────────────────────
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of tail lines shown in the TUI bash-output preview (the "last N lines" block in ' +
+      'the outcome row). Accepts integers 1–50; values outside this range are clamped. ' +
+      'Invalid non-numeric values fall back to the default of 7. ' +
+      'Config-key twin: interactive.bashPreviewTailLines.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '10',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of head lines shown above the tail block in the TUI bash-output preview. ' +
+      'Default 0 (head block disabled). Accepts integers 0–50; values outside this range are ' +
+      'clamped. When head + tail ≥ total non-empty line count the output is shown in full ' +
+      'with no duplication. Config-key twin: interactive.bashPreviewHeadLines.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '3',
+    category: 'misc',
+  },
 ] as const satisfies readonly EnvVarMeta[];
 
 /**
