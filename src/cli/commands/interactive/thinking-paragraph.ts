@@ -36,9 +36,10 @@ const INDENT = '  ';
 const DEFAULT_MAX_BODY_LINES = 5;
 /**
  * Floor on body width so a 20-col terminal still produces wrapped prose
- * rather than per-glyph breaks. wrap-ansi with `wordWrap: true, hard: false`
- * will still allow longer tokens to overrun this width — preferred over
- * mangling them into single-letter slivers.
+ * rather than per-glyph breaks. wrap-ansi with `wordWrap: true, hard: true`
+ * character-splits tokens that exceed this width — acceptable because the
+ * compositor overlays use CUP positioning and lines that overflow past
+ * `opts.cols` cause terminal auto-wrap and frame flicker.
  */
 const MIN_BODY_WIDTH = 16;
 /**
@@ -123,8 +124,14 @@ export function formatThinkingParagraph(
   // visible "extra column" of indent on continuation lines here that
   // looks like a layout bug. `trim: true` removes that artifact without
   // touching the per-line `INDENT` we prepend after wrapping.
+  //
+  // `hard: true` is required because this output is rendered via the
+  // compositor's CUP-positioned overlay (setOverlay). Any line that
+  // exceeds `bodyWidth` causes the terminal to auto-wrap, which produces
+  // visible frame flicker and misaligned overlay rows. Long unbreakable
+  // tokens (URLs, file paths) are character-split at the width boundary.
   const wrapped = wrapAnsi(normalized, bodyWidth, {
-    hard: false,
+    hard: true,
     trim: true,
     wordWrap: true,
   });

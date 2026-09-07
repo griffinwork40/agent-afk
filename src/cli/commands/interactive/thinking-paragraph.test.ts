@@ -19,6 +19,9 @@
  *   (i) Perf bound — cost: the visible body is independent of everything before
  *       the tail budget — the observable proof that the O(N) normalize+wrap only
  *       ever touches a bounded tail, not the full buffer.
+ *   (j) Hard-wrap regression (#1454): long unbreakable tokens (URLs, file paths)
+ *       must not cause any output line to exceed `cols` — verified against the
+ *       CUP-positioned compositor overlay that cannot tolerate auto-wrap.
  *
  * Assertions look at the ANSI-stripped string so the structure (line count,
  * presence of header/footer text) is testable without coupling to chalk's
@@ -99,8 +102,8 @@ describe('formatThinkingParagraph', () => {
     // Every line begins with the 2-col indent.
     for (const line of lines) expect(line.startsWith('  ')).toBe(true);
     // Body lines (skip the header) honor the body width (cols - 2 = 28).
-    // wrap-ansi with wordWrap: true, hard: false may slightly exceed for
-    // unbreakable tokens, but our `wordN` tokens are short so the cap holds.
+    // With hard: true, lines are guaranteed to fit within cols — no line
+    // can exceed the total width including indent.
     for (const line of lines.slice(1)) {
       expect(line.length).toBeLessThanOrEqual(30);
     }
@@ -180,6 +183,18 @@ describe('formatThinkingParagraph', () => {
       expect(droppedChars, `cols=${cols} footer totals all dropped chars`).toBe(
         buffer.length - visibleProse.length - 1,
       );
+    }
+  });
+
+  it('(j) hard-wraps unbreakable tokens — no output line exceeds cols (regression #1454)', () => {
+    const longUrl = 'https://example.com/very/deep/path/that/is/definitely/longer/than/bodyWidth';
+    const longPath = '/Users/runner/work/repo/src/cli/commands/interactive/thinking-paragraph.ts';
+    const buffer = `Consider ${longUrl} and also ${longPath} for the details.`;
+    const cols = 40;
+    const out = formatThinkingParagraph(buffer, { cols, maxLines: 10 });
+    const lines = stripAnsi(out).split('\n');
+    for (const line of lines) {
+      expect(line.length, `line too wide: ${JSON.stringify(line)}`).toBeLessThanOrEqual(cols);
     }
   });
 
