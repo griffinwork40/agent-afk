@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.193.0] - 2026-09-07
+
+### Added
+- add orient skill to awa-bundled (#1546) (b4681c2a)
+
 ## [5.192.1] - 2026-09-07
 
 ### Fixed
