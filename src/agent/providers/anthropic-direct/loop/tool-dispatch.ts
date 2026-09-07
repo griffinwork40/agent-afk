@@ -80,6 +80,11 @@ export async function* dispatchToolCalls(
       toolName: block.name,
       toolInput: summarizeToolInput(block.name, block.input),
       toolInputRaw: extractRawToolInput(block.input),
+      // Intentionally broader than shouldCaptureSubagentOutput: isSubagentFork
+      // is not in scope here, so we populate toolInputCapture whenever the env
+      // var is set. The recorder null-gates at construction via
+      // shouldCaptureSubagentOutput, so this field is silently dropped for
+      // non-fork sessions. Wasted extractCaptureToolInput call only.
       toolInputCapture: (env.AFK_CAPTURE_SUBAGENT_OUTPUT && !isExplicitlyDisabled(env.AFK_CAPTURE_SUBAGENT_OUTPUT)) ? extractCaptureToolInput(block.input) : undefined,
       sessionId: input.ctx.sessionId,
     };

@@ -47,8 +47,8 @@ export function isCodebaseFactCategory(category: FactCategory): boolean {
 }
 
 /**
- * Whether the evidence gate is enabled. On by default; set AFK_MEMORY_EVIDENCE_GATE=0
- * to disable. The single env read-point for this subsystem.
+ * Whether the evidence gate is enabled. On by default; set AFK_MEMORY_EVIDENCE_GATE
+ * to 0/false/no/off to disable. The single env read-point for this subsystem.
  */
 export function evidenceGateEnabled(): boolean {
   const v = env.AFK_MEMORY_EVIDENCE_GATE;
