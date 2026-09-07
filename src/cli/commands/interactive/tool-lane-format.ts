@@ -190,18 +190,34 @@ export function formatOutcome(
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
 
-    if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
-      headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
+    // Build the body: optional head lines, hidden-line indicator, then tail lines.
+    const bodyParts: string[] = [];
+
+    // Head preview lines (when AFK_BASH_PREVIEW_HEAD_LINES > 0).
+    if (chunk.headPreview !== undefined && chunk.headPreview.length > 0) {
+      const headLines = chunk.headPreview
+        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
+        .join('\n');
+      bodyParts.push(headLines);
     }
 
-    // Append actual tail lines when available. Each line is sanitized (same
-    // sanitizer as the single-line preview path) and indented with `    ` to
-    // sit visually under the `⎿` connector rendered by formatToolResultLine.
+    // Hidden-line indicator between head and tail (only when lines were omitted).
+    if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
+      bodyParts.push(palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`));
+    }
+
+    // Tail preview lines. Each line is sanitized (same sanitizer as the
+    // single-line preview path) and indented with `    ` to sit visually
+    // under the `⎿` connector rendered by formatToolResultLine.
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
       const tailLines = chunk.tailPreview
         .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
         .join('\n');
-      return headline + '\n' + tailLines;
+      bodyParts.push(tailLines);
+    }
+
+    if (bodyParts.length > 0) {
+      return headline + '\n' + bodyParts.join('\n');
     }
     return headline;
   }

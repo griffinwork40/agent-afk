@@ -98,6 +98,34 @@ export interface EnvVarMeta {
  * Backfill them as you touch the relevant code path.
  */
 export const ENV_REGISTRY = [
+  // ── Bash output preview ───────────────────────────────────────────────────
+  {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of leading non-empty lines shown at the top of a bash output preview block. ' +
+      'Default 0 (no head lines shown). Accepted range 0–50; out-of-range or unparseable ' +
+      'input falls back to the default. When head + tail >= total non-empty lines, all lines ' +
+      'are shown without duplication. Configurable via afk.config.json interactive.bashPreviewHeadLines.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '3',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of trailing non-empty lines shown at the bottom of a bash output preview block. ' +
+      'Default 7. Accepted range 0–50; out-of-range or unparseable input falls back to the default. ' +
+      'Set to 0 to suppress the tail preview entirely. Configurable via afk.config.json ' +
+      'interactive.bashPreviewTailLines.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '10',
+    category: 'misc',
+  },
+
   // ── Model / agent runtime ─────────────────────────────────────────────────
   {
     name: 'AFK_COMPACT_KEEP_LAST_TURNS',
