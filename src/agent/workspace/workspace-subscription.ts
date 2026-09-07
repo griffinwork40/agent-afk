@@ -12,6 +12,7 @@
  */
 
 import type { WorkspaceEntry, WorkspaceEntryType } from './workspace-store.js';
+import { WORKSPACE_DELIVERY_MAX_BYTES } from './workspace-subscription-constants.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,8 +78,10 @@ export function notifySubscribers(
  *
  * Returns undefined when entries is empty (callers should short-circuit).
  *
- * The envelope is truncated at WORKSPACE_DELIVERY_MAX_BYTES via the ring
- * buffer cap upstream; no additional byte truncation is applied here.
+ * The envelope is byte-limited to WORKSPACE_DELIVERY_MAX_BYTES. If the full
+ * envelope exceeds this limit, entries are dropped from the end (newest-first)
+ * until it fits, and a `<truncated-delivery>` marker is appended so the
+ * subscriber knows entries were omitted.
  *
  * @param droppedCount - Cumulative entries dropped due to ring-buffer overflow
  *   since the last drain. When non-zero, a `dropped="N"` attribute is added to
@@ -90,30 +93,58 @@ export function formatWorkspaceDeliveryEnvelope(
 ): string | undefined {
   if (entries.length === 0) return undefined;
 
-  const timestamp = new Date().toISOString();
-  const count = entries.length;
-  const droppedAttr = droppedCount > 0 ? ` dropped="${droppedCount}"` : '';
+  const buildEnvelope = (subset: WorkspaceEntry[], truncated: boolean): string => {
+    const timestamp = new Date().toISOString();
+    const count = subset.length;
+    const droppedAttr = droppedCount > 0 ? ` dropped="${droppedCount}"` : '';
 
-  const entriesXml = entries
-    .map((e) => {
-      const subjectAttr =
-        e.subject !== null && e.subject !== undefined
-          ? ` subject="${escapeAttr(e.subject)}"`
-          : '';
-      const confidenceAttr = ` confidence="${e.confidence.toFixed(2)}"`;
-      return (
-        `<entry id="${e.id}" type="${escapeAttr(e.type)}"${subjectAttr}${confidenceAttr}>` +
-        escapeXmlBody(e.content) +
-        `</entry>`
-      );
-    })
-    .join('\n  ');
+    const entriesXml = subset
+      .map((e) => {
+        const subjectAttr =
+          e.subject !== null && e.subject !== undefined
+            ? ` subject="${escapeAttr(e.subject)}"`
+            : '';
+        const confidenceAttr = ` confidence="${e.confidence.toFixed(2)}"`;
+        return (
+          `<entry id="${e.id}" type="${escapeAttr(e.type)}"${subjectAttr}${confidenceAttr}>` +
+          escapeXmlBody(e.content) +
+          `</entry>`
+        );
+      })
+      .join('\n  ');
 
-  return (
-    `<workspace-delivery count="${count}"${droppedAttr} timestamp="${timestamp}">\n  ` +
-    entriesXml +
-    `\n</workspace-delivery>`
-  );
+    const truncatedMarker = truncated
+      ? `\n  <truncated-delivery omitted="${entries.length - subset.length}" />`
+      : '';
+    return (
+      `<workspace-delivery count="${count}"${droppedAttr} timestamp="${timestamp}">\n  ` +
+      entriesXml +
+      truncatedMarker +
+      `\n</workspace-delivery>`
+    );
+  };
+
+  // Build with all entries first (common case: within limit).
+  let result = buildEnvelope(entries, false);
+  if (Buffer.byteLength(result) <= WORKSPACE_DELIVERY_MAX_BYTES) return result;
+
+  // Binary-search for the largest prefix that fits within the byte limit.
+  let lo = 1;
+  let hi = entries.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = buildEnvelope(entries.slice(0, mid), true);
+    if (Buffer.byteLength(candidate) <= WORKSPACE_DELIVERY_MAX_BYTES) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  result = buildEnvelope(entries.slice(0, lo), true);
+  // Edge: even a single entry exceeds the limit — return it truncated anyway
+  // rather than returning undefined (callers expect at least one entry when
+  // the input is non-empty).
+  return result;
 }
 
 // ── XML helpers ───────────────────────────────────────────────────────────────

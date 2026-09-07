@@ -194,17 +194,21 @@ export class WorkspaceStore {
         nextSeq,
       );
       const id = Number(result.lastInsertRowid);
-      // Read back the full row so notifySubscribers receives a complete WorkspaceEntry.
-      insertedEntry = this.db
-        .prepare('SELECT * FROM workspace_entries WHERE id = ?')
-        .get(id) as WorkspaceEntry;
+      // Read back the full row so notifySubscribers receives a complete
+      // WorkspaceEntry. Skip the SELECT entirely when no subscribers are
+      // registered — avoids the round-trip in the common no-subscription case.
+      if (this._subscriptions.size > 0) {
+        insertedEntry = this.db
+          .prepare('SELECT * FROM workspace_entries WHERE id = ?')
+          .get(id) as WorkspaceEntry;
+      }
       return id;
     });
     const id = txn();
     // Notify subscribers outside the transaction — deliveryFn may push to
     // external ring buffers; keeping it outside prevents any re-entrant SQLite
     // call from deadlocking on the write transaction.
-    if (insertedEntry !== undefined && this._subscriptions.size > 0) {
+    if (insertedEntry !== undefined) {
       notifySubscribers(this._subscriptions, insertedEntry);
     }
     return id;

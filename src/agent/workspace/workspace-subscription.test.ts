@@ -12,16 +12,16 @@ import type { WorkspaceEntry } from './workspace-store.js';
 function makeEntry(overrides: Partial<WorkspaceEntry> = {}): WorkspaceEntry {
   return {
     id: 1,
-    sessionId: 'sess-1',
+    session_id: 'sess-1',
     type: 'finding',
     subject: 'auth invariant',
     content: 'The auth module uses JWT.',
     evidence: null,
     confidence: 1.0,
-    agentId: 'agent-a',
-    relatesTo: null,
-    relationType: null,
-    createdAt: '2026-09-07T00:00:00Z',
+    agent_id: 'agent-a',
+    relates_to: null,
+    relation_type: null,
+    created_at: '2026-09-07T00:00:00Z',
     seq: 1,
     ...overrides,
   };
