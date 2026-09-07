@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.194.0] - 2026-09-07
+
+### Added
+- wire durable handoff answers into Telegram (#1416) (#1533) (f4e07c4c)
+
 ## [5.193.0] - 2026-09-07
 
 ### Added
