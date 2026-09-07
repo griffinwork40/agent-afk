@@ -1,32 +1,17 @@
 /**
  * Handler for the `worktree` lifecycle tool.
  *
- * Gives the model a sanctioned lifecycle for afk-managed git worktrees under
- * `<repoRoot>/.afk-worktrees/`, replacing the raw `bash: git worktree add`
- * pattern that produced meta-less ghost worktrees the sweep engine
- * (`src/agent/worktree-sweep.ts`) reaps or leaks:
- *
- *   - `create`  — worktree + branch under `.afk-worktrees/` WITH a
- *                 `.afk-worktree-meta.json` (owner 'agent', pid, createdAt),
- *                 so all sweep guards (age, PID-liveness) apply.
- *   - `keep`    — `git worktree lock` with a reason. The sweep short-circuits
- *                 on locked trees before every other verdict — this is the
- *                 self-save primitive.
- *   - `release` — `git worktree unlock`.
- *   - `list`    — dry-run sweep: paths + verdicts + age, so the model can see
- *                 which trees are endangered or stale.
- *   - `remove`  — guarded removal: refuses dirty, locked, commits-ahead, main
- *                 worktree, and anything outside `.afk-worktrees/`. `force`
- *                 overrides the dirty/commits-ahead refusal only.
- *
- * Pattern: follows schedules.ts — manual input validation, isError: true on
- * failure, no thrown exceptions.
+ * Sanctioned lifecycle for afk-managed git worktrees under `.afk-worktrees/`:
+ * create (with meta + auto-suffix on collision #1516), keep, release, list,
+ * remove. Pattern: manual input validation, isError: true on failure, no
+ * thrown exceptions.
  *
  * @module agent/tools/handlers/worktree
  */
 
 import { join, resolve, isAbsolute, sep } from 'node:path';
 import { promises as fs } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import type { ToolHandler } from '../types.js';
 import { runSweep } from '../../worktree-sweep.js';
 import type { ExecFileFn } from '../../worktree-sweep.js';
@@ -44,17 +29,14 @@ import {
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
   execFile?: ExecFileFn;
+  /** Override suffix generator for deterministic tests (#1516). */
+  generateSuffix?: () => string;
 }
 
 /**
- * Detect the package manager from the lockfile present in the freshly created
- * worktree at `worktreePath` and return its install command. A fresh worktree
- * shares no `node_modules` with the main checkout, so the caller must install
- * deps before building/testing — this gives the precise command. Inspecting
- * the worktree (not the main checkout) matters because `base` may point at a
- * branch/commit whose lockfile differs from the current checkout. Falls back
- * to `pnpm install` when no lockfile is found (repo convention). Best-effort:
- * never throws.
+ * Detect install command from the freshly created worktree's lockfile (#439).
+ * Inspects the worktree (not main checkout) so `base` lockfile differences are
+ * respected. Falls back to `pnpm install`. Best-effort: never throws.
  */
 async function detectInstallCommand(worktreePath: string): Promise<string> {
   const lockfiles: Array<[string, string]> = [
@@ -130,11 +112,7 @@ async function findEntry(
   return entries.find((e) => resolve(e.path) === resolve(path));
 }
 
-/**
- * Validate a caller-supplied worktree path: absolute or relative to the afk
- * root by slug, must resolve inside `.afk-worktrees/`, must be registered.
- * Returns the entry, or an error string.
- */
+/** Resolve a caller-supplied path/slug to a registered entry, or return an error string. */
 async function resolveManagedWorktree(
   execFile: ExecFileFn,
   ctx: RepoContext,
@@ -158,18 +136,13 @@ async function resolveManagedWorktree(
   return entry;
 }
 
-/**
- * Build the `worktree` tool handler bound to a session cwd.
- *
- * @param cwd - Session working directory (worktree path under `afk -w`).
- *   Repo-root resolution anchors here; falls back to `process.cwd()`.
- * @param deps - Test injection point for the git exec function.
- */
+/** Build the `worktree` tool handler bound to a session cwd. */
 export function createWorktreeHandler(
   cwd?: string,
   deps?: WorktreeHandlerDeps,
 ): ToolHandler {
   const execFile = deps?.execFile ?? defaultExecFile;
+  const generateSuffix = deps?.generateSuffix ?? (() => randomBytes(2).toString('hex'));
 
   return async (input, _signal, context) => {
     if (!input || typeof input !== 'object') {
@@ -209,17 +182,26 @@ export function createWorktreeHandler(
             return { content: `Invalid input: name "${obj['name']}" sanitizes to empty`, isError: true };
           }
           const worktreePath = join(ctx.afkWorktreesRoot, slug);
+          let resolvedSlug = slug;
+          let worktreePathResolved = worktreePath;
           const existing = await findEntry(execFile, ctx.repoRoot, worktreePath);
           if (existing) {
-            const suffix = Date.now().toString(36).slice(-6);
-            const suggestedSlug = `${slug.slice(0, 80 - suffix.length - 1)}-${suffix}`;
-            return {
-              content: `Worktree already exists at ${worktreePath}. Use a unique name — e.g. append a short suffix like "${suggestedSlug}" — or run action "list" to see all current worktrees.`,
-              isError: true,
-            };
+            // Auto-retry with a unique 4-char hex suffix rather than surfacing
+            // a collision error — the common case is a stale worktree from a
+            // prior failed run on the same issue (#1516).
+            const suffix = generateSuffix();
+            resolvedSlug = `${slug.slice(0, 80 - suffix.length - 1)}-${suffix}`;
+            worktreePathResolved = join(ctx.afkWorktreesRoot, resolvedSlug);
+            const stillExists = await findEntry(execFile, ctx.repoRoot, worktreePathResolved);
+            if (stillExists) {
+              return {
+                content: `Worktree already exists at ${worktreePath} and the auto-suffixed path ${worktreePathResolved} is also taken. Run action "list" to see all current worktrees.`,
+                isError: true,
+              };
+            }
           }
           const prefix = env.AFK_WORKTREE_BRANCH_PREFIX ?? 'afk/';
-          const branch = `${prefix}${slug}`;
+          const branch = `${prefix}${resolvedSlug}`;
           const baseInput = resolveCreateBaseRef(obj['base']);
           if (typeof baseInput === 'object') {
             return { content: baseInput.error, isError: true };
@@ -229,7 +211,7 @@ export function createWorktreeHandler(
           const info = await createManagedWorktree({
             execFile,
             repoRoot: ctx.repoRoot,
-            worktreePath,
+            worktreePath: worktreePathResolved,
             branch,
             baseRef,
           });
