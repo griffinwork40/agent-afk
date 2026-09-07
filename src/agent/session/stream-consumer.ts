@@ -23,7 +23,8 @@ import { BudgetExceededError } from '../../utils/errors.js';
 import { emitBudget } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
-import { truncateContent } from './stream-consumer.preview.js';
+import { truncateContent, resolvePreviewConfig } from './stream-consumer.preview.js';
+import { env } from '../../config/env.js';
 
 /** Callbacks the transform needs to produce side effects. */
 export type TransformDeps = {
@@ -206,7 +207,8 @@ function buildToolOutputEvent(
   // without substring-scanning content for the `[output truncated …]`
   // sentinel. Prior versions conflated this field with display clipping;
   // see PR introducing `ToolResult.truncated` for the rationale.
-  const { content: previewContent, lineCount, sizeBytes, sizeLabel, tailPreview, hiddenLineCount } = truncateContent(event.content);
+  const previewConfig = resolvePreviewConfig(env.AFK_BASH_PREVIEW_TAIL_LINES, env.AFK_BASH_PREVIEW_HEAD_LINES);
+  const { content: previewContent, lineCount, sizeBytes, sizeLabel, tailPreview, headPreview, hiddenLineCount } = truncateContent(event.content, previewConfig);
   return {
     type: 'chunk',
     chunk: {
@@ -220,6 +222,7 @@ function buildToolOutputEvent(
       ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
       ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
+      ...(headPreview !== undefined && headPreview.length > 0 && { headPreview }),
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),

@@ -1123,6 +1123,34 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
 
+  // ── Bash output preview ───────────────────────────────────────────────────
+  {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of leading (head) lines from bash output to include in the TUI outcome preview. ' +
+      'Default 0 (head disabled). When both head and tail are enabled and their combined count ' +
+      'covers the full output, all lines are shown without a hidden-lines indicator. ' +
+      'Valid range: 0–50. Values outside this range are clamped to the nearest bound.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '5',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of trailing (tail) lines from bash output to include in the TUI outcome preview. ' +
+      'Default 7. Valid range: 1–50. Values outside this range are clamped to the nearest bound. ' +
+      'Set to 0 to disable the tail (useful when only head lines are desired via ' +
+      'AFK_BASH_PREVIEW_HEAD_LINES). Does not affect model-context capture limits.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '10',
+    category: 'misc',
+  },
+
   // ── UI / output ───────────────────────────────────────────────────────────
   {
     name: 'AFK_BANNER_PLAIN',
