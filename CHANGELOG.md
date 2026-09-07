@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.8] - 2026-09-07
+
+### Changed
+- remove Steer option from interrupt picker (#1531) (1b8c00cd)
+
 ## [5.191.7] - 2026-09-07
 
 ### Fixed
