@@ -34,6 +34,8 @@ export const ToolCallStartedPayloadSchema = z.object({
   /** Optional for backward compat: traces recorded before this field was
    *  added lack it. New traces always produce it (SHA-256 hex = 64 chars). */
   argsFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  /** SHA-256 of the normalized resource id (path without offset/limit). Resource-bearing tools only. */
+  resourceFingerprint: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   subagentId: z.string().optional(),
 });
 

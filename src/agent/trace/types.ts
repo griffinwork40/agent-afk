@@ -62,6 +62,21 @@ export interface ToolCallStartedPayload {
    * with identical byte counts.
    */
   argsFingerprint?: string;
+  /**
+   * SHA-256 hex digest of the **normalized resource identifier** alone,
+   * stripping arguments that don't change which resource is accessed (e.g.
+   * offset/limit on `read_file`). Enables cross-agent file-overlap measurement
+   * without inflating the count when two agents read the same file at different
+   * offsets.
+   *
+   * Present only for tools that access a nameable resource (`read_file` uses
+   * the normalized `file_path`). Absent for tools with no single identifiable
+   * resource or for traces recorded before this field was added.
+   *
+   * Privacy: contains a hash, never a raw path -- same boundary as
+   * `argsFingerprint`.
+   */
+  resourceFingerprint?: string;
   /** Present when the call originates inside a fork. */
   subagentId?: string;
 }
