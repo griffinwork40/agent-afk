@@ -33,7 +33,7 @@ export class SpawnedPidRegistry {
    * Record a PID as session-owned.
    * Called by the bash handler immediately after `spawn()` assigns a PID.
    *
-   * @param pid - The child process PID. Must be a positive integer.
+   * @param pid - The child process PID. Must be an integer > 1.
    */
   register(pid: number): void {
     if (Number.isInteger(pid) && pid > 1) {
