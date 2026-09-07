@@ -143,7 +143,7 @@ export function createStubParentSession(
 // sub-agent writes. If specific skills need memory write access, do it per-skill via a
 // buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
 // extending this global default.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'workspace_publish', 'workspace_query', 'agent', 'skill', 'state_get', 'state_query'];
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'workspace_publish', 'workspace_query', 'workspace_subscribe', 'agent', 'skill', 'state_get', 'state_query'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's

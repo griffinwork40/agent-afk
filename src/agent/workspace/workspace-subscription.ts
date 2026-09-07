@@ -79,14 +79,20 @@ export function notifySubscribers(
  *
  * The envelope is truncated at WORKSPACE_DELIVERY_MAX_BYTES via the ring
  * buffer cap upstream; no additional byte truncation is applied here.
+ *
+ * @param droppedCount - Cumulative entries dropped due to ring-buffer overflow
+ *   since the last drain. When non-zero, a `dropped="N"` attribute is added to
+ *   the envelope so the subscribing model knows entries were lost.
  */
 export function formatWorkspaceDeliveryEnvelope(
   entries: WorkspaceEntry[],
+  droppedCount = 0,
 ): string | undefined {
   if (entries.length === 0) return undefined;
 
   const timestamp = new Date().toISOString();
   const count = entries.length;
+  const droppedAttr = droppedCount > 0 ? ` dropped="${droppedCount}"` : '';
 
   const entriesXml = entries
     .map((e) => {
@@ -104,7 +110,7 @@ export function formatWorkspaceDeliveryEnvelope(
     .join('\n  ');
 
   return (
-    `<workspace-delivery count="${count}" timestamp="${timestamp}">\n  ` +
+    `<workspace-delivery count="${count}"${droppedAttr} timestamp="${timestamp}">\n  ` +
     entriesXml +
     `\n</workspace-delivery>`
   );
@@ -112,9 +118,14 @@ export function formatWorkspaceDeliveryEnvelope(
 
 // ── XML helpers ───────────────────────────────────────────────────────────────
 
-/** Escape XML attribute values (double-quotes and ampersands). */
+/** Escape XML attribute values (double-quotes, ampersands, single-quotes, and angle brackets). */
 function escapeAttr(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /** Escape XML body text (`&`, `<`, `>`). */

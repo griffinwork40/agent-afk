@@ -44,7 +44,7 @@ import {
   composeTool,
 } from '../../tools/schemas.js';
 import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
-import { WorkspaceStore, createWorkspaceHandlers, workspaceToolSchemas } from '../../workspace/index.js';
+import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
@@ -213,7 +213,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Workspace (per-session publish) + awareness (runtime-state) — parity
     // with anthropic-direct/provider-schemas.ts. Keep the workspace schema in
     // lockstep with its handler when AFK_WORKSPACE_DISABLED omits the store.
-    schemas.push(...(this.workspaceStore !== undefined ? workspaceToolSchemas : []), getRuntimeStateTool);
+    // workspace_subscribe schema is intentionally excluded: the handler requires
+    // SubagentHandleImpl wiring (setSubscribeHandler) not yet supported by this provider.
+    // Only publish + query are advertised; subscribe goes through anthropic-direct only.
+    schemas.push(...(this.workspaceStore !== undefined ? [workspacePublishTool, workspaceQueryTool] : []), getRuntimeStateTool);
     // Custom (consumer-registered) tool schemas are appended last so their
     // names never silently shadow a builtin. A custom schema whose name
     // collides with an already-present builtin (or an earlier custom tool) is

@@ -596,6 +596,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   readonly _pendingWorkspaceEntries: WorkspaceEntry[] = [];
 
   /**
+   * Cumulative count of workspace entries dropped due to ring-buffer overflow
+   * since the last drain. Incremented in the deliveryFn (wiring.ts) when an
+   * eviction occurs; reset to 0 in _drainWorkspaceDeliveries after reading.
+   * Surfaced as dropped="N" in the <workspace-delivery> XML envelope so the
+   * subscribing model knows entries were lost.
+   * @internal
+   */
+  _workspaceDroppedSinceDrain: number = 0;
+
+  /**
    * The WorkspaceStore this child is subscribed to, if any. Set by
    * workspace-subscription-wiring.ts after handle construction, used by
    * dispatchStopAndRelease to call unsubscribeAll(agentId) on teardown.
@@ -652,12 +662,16 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   /**
    * Drain all pending workspace entries into a single `<workspace-delivery>`
    * XML envelope. Returns undefined when the buffer is empty.
+   * Reads and resets _workspaceDroppedSinceDrain so the envelope carries the
+   * cumulative drop count since the last delivery (dropped="N" attribute).
    * @internal
    */
   private _drainWorkspaceDeliveries(): string | undefined {
     if (this._pendingWorkspaceEntries.length === 0) return undefined;
     const entries = this._pendingWorkspaceEntries.splice(0); // drain all
-    return formatWorkspaceDeliveryEnvelope(entries);
+    const dropped = this._workspaceDroppedSinceDrain;
+    this._workspaceDroppedSinceDrain = 0;
+    return formatWorkspaceDeliveryEnvelope(entries, dropped);
   }
 
   /**

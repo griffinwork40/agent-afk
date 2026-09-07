@@ -90,6 +90,7 @@ export function wireWorkspaceSubscriptions(
         if (h._pendingWorkspaceEntries.length >= WORKSPACE_DELIVERY_RING_CAPACITY) {
           h._pendingWorkspaceEntries.shift();
           droppedCount = 1;
+          h._workspaceDroppedSinceDrain++;
         }
         h._pendingWorkspaceEntries.push(entry);
         // Witness trace: workspace_delivery (fire-and-forget)

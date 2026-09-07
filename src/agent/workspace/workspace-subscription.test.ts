@@ -147,6 +147,25 @@ describe('formatWorkspaceDeliveryEnvelope', () => {
     const result = formatWorkspaceDeliveryEnvelope([entry])!;
     expect(result).not.toContain('subject=');
   });
+
+  it('omits dropped attribute when droppedCount is 0 (default)', () => {
+    const result = formatWorkspaceDeliveryEnvelope([makeEntry()])!;
+    expect(result).not.toContain('dropped=');
+  });
+
+  it('includes dropped="N" attribute when droppedCount > 0', () => {
+    const result = formatWorkspaceDeliveryEnvelope([makeEntry()], 3)!;
+    expect(result).toContain('dropped="3"');
+    // Attribute must appear in the opening envelope tag
+    const envelopeOpenTag = result.split('>')[0] + '>';
+    expect(envelopeOpenTag).toContain('dropped="3"');
+  });
+
+  it('escapes single-quotes and angle brackets in subject attribute', () => {
+    const entry = makeEntry({ subject: "it's a <test> & 'value'" });
+    const result = formatWorkspaceDeliveryEnvelope([entry])!;
+    expect(result).toContain('subject="it&apos;s a &lt;test&gt; &amp; &apos;value&apos;"');
+  });
 });
 
 // ── generateSubscriptionId ──────────────────────────────────────────────────
