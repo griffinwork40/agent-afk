@@ -295,14 +295,15 @@ export const ENV_REGISTRY = [
   {
     name: 'AFK_MEMORY_EVIDENCE_GATE',
     description:
-      'Opt-in (set to 1) evidence gate for durable memory writes. When enabled, a codebase ' +
-      'fact (memory_update category "convention") stored without an `evidence` citation is ' +
+      'Evidence gate for durable memory writes. When enabled, a codebase ' +
+      'fact (memory_update category "convention") stored without an evidence citation is ' +
       'recalled as [unverified], and memory_search results carry a verification verdict. ' +
-      'User preferences and agent reflections are never gated. Default off — memory behaves ' +
-      'identically to legacy when unset.',
+      'User preferences and agent reflections are never gated. On by default. ' +
+      'Set to 0 to disable.',
     type: 'boolean',
     required: false,
-    example: '1',
+    default: '1',
+    example: '0',
     category: 'misc',
   },
   {
@@ -540,16 +541,20 @@ export const ENV_REGISTRY = [
   },
   {
     name: 'AFK_SUGGEST_ENABLED',
-    description: 'Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. Set to 1/true/yes/on to activate. Off by default.',
+    description: 'Enable the LLM-backed ghost-text suggestion tier in the interactive REPL. On by default. Set to 0/false/no/off to disable.',
     type: 'boolean',
     required: false,
+    default: '1',
+    example: '0',
     category: 'model',
   },
   {
     name: 'AFK_SUGGEST_PROMPT',
-    description: 'Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. Set to 1/true/yes/on to activate. Off by default. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).',
+    description: 'Enable LLM-generated empty-prompt suggestions — a proposed next action shown as ghost text when the prompt is blank, accepted with Tab or Right-arrow. Fires only after a turn has completed in the session: the startup prompt (and the prompt right after /clear) is left clean because there is no session context to ground a proposal in. On by default. Set to 0/false/no/off to disable. Requires AFK_SUGGEST_ENABLED (it reuses the same suggestion model and provider).',
     type: 'boolean',
     required: false,
+    default: '1',
+    example: '0',
     category: 'model',
   },
   {
@@ -757,10 +762,11 @@ export const ENV_REGISTRY = [
   },
   {
     name: 'AFK_OPENAI_CHATGPT_OAUTH',
-    description: 'Opt into using ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. READ-ONLY: AFK never refreshes these tokens — re-run `codex` when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).',
+    description: 'Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. On by default. Set to 0/false/no/off to disable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).',
     type: 'boolean',
     required: false,
-    example: '1',
+    default: '1',
+    example: '0',
     category: 'model',
   },
   {
@@ -1481,15 +1487,16 @@ export const ENV_REGISTRY = [
   {
     name: 'AFK_CAPTURE_SUBAGENT_OUTPUT',
     description:
-      'Opt-in: when set to 1, a subagent\'s conversational OUTPUT (assistant text plus each ' +
-      'tool call with its arguments) is appended incrementally to a redacted markdown ' +
+      'Capture subagent conversational OUTPUT (assistant text plus each ' +
+      'tool call with its arguments) as a redacted markdown ' +
       'transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, ' +
       'so a child killed by a timeout still leaves a usable partial record — the case where ' +
-      'final-message capture yields nothing. Off by default for the same reasons as ' +
-      'AFK_CAPTURE_SUBAGENT_PROMPTS (unpruned witness tree, best-effort regex redaction).',
+      'final-message capture yields nothing. On by default. Set to 0 to disable. ' +
+      'Note: best-effort regex redaction only — connection strings, PEM blocks, and PII are not caught.',
     type: 'boolean',
     required: false,
-    example: '1',
+    default: '1',
+    example: '0',
     category: 'debug',
   },
   {

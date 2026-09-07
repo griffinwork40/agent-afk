@@ -71,7 +71,7 @@ export interface SubagentOutputCaptureInput {
  * whole safety story, so it should be assertable without touching the disk.
  */
 export function shouldCaptureSubagentOutput(input: SubagentOutputCaptureInput): boolean {
-  if (env.AFK_CAPTURE_SUBAGENT_OUTPUT !== '1') return false;
+  if (env.AFK_CAPTURE_SUBAGENT_OUTPUT === '0') return false;
   if (!input.isSubagentFork) return false;
   if (!input.sessionId || !input.subagentId) return false;
   return true;

@@ -270,12 +270,12 @@ function last4Of(s: string): string {
   return s.length <= 4 ? s : s.slice(-4);
 }
 
-/** Truthy check for the ChatGPT-subscription OAuth opt-in flag (off by default). */
+/** Truthy check for the ChatGPT-subscription OAuth flag (on by default). */
 function chatGptOAuthEnabled(readEnv: (key: string) => string | undefined): boolean {
   const v = readEnv('AFK_OPENAI_CHATGPT_OAUTH');
-  if (!v) return false;
+  if (!v) return true;
   const n = v.trim().toLowerCase();
-  return n === '1' || n === 'true' || n === 'yes' || n === 'on';
+  return !(n === '0' || n === 'false' || n === 'no' || n === 'off');
 }
 
 /**

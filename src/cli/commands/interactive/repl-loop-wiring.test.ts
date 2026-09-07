@@ -459,16 +459,18 @@ describe('runReplLoop — P2 regression: AFK_SUGGEST_ENABLED parsed as boolean',
     expect(await captureLlmEnabled('On')).toBe(true);
   });
 
-  it('keeps the LLM tier OFF for falsy values (0/false) and unset', async () => {
-    // The bug: these returned `true` under `!!env.AFK_SUGGEST_ENABLED`.
+  it('keeps the LLM tier OFF for explicit falsy values (0/false/no/off)', async () => {
     expect(await captureLlmEnabled('0')).toBe(false);
     expect(await captureLlmEnabled('false')).toBe(false);
     expect(await captureLlmEnabled('no')).toBe(false);
     expect(await captureLlmEnabled('off')).toBe(false);
-    expect(await captureLlmEnabled('')).toBe(false);
-    expect(await captureLlmEnabled(undefined)).toBe(false);
-    // A non-empty non-keyword string is not an activation.
-    expect(await captureLlmEnabled('maybe')).toBe(false);
+  });
+
+  it('enables the LLM tier by default when unset or empty (on by default)', async () => {
+    expect(await captureLlmEnabled('')).toBe(true);
+    expect(await captureLlmEnabled(undefined)).toBe(true);
+    // A non-empty non-keyword string is not an explicit deactivation.
+    expect(await captureLlmEnabled('maybe')).toBe(true);
   });
 });
 

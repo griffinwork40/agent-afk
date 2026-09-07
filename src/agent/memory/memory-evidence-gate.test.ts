@@ -91,7 +91,7 @@ async function supersede(
   return JSON.parse(res.content) as Record<string, unknown>;
 }
 
-describe('memory evidence gate (AFK_MEMORY_EVIDENCE_GATE=1)', () => {
+describe('memory evidence gate (on by default)', () => {
   it('1. a citable codebase fact (convention) with evidence is stored and recalled as verified', async () => {
     const out = await setFact(
       'convention',
@@ -217,7 +217,7 @@ describe('memory evidence gate — supersede + evidence', () => {
     // A cited convention fact superseded with no fresh evidence WOULD warn
     // (carried-forward) under the gate; with the gate off it must be silent.
     const set = await setFact('convention', 'zibbloff owns the theta layer', 'src/t.ts:1');
-    delete process.env['AFK_MEMORY_EVIDENCE_GATE'];
+    process.env['AFK_MEMORY_EVIDENCE_GATE'] = '0';
     const out = await supersede(set['id'] as number, 'zibbloff owns the theta layer changed');
     expect(out['warning']).toBeUndefined();
     expect(out['id']).toBeTypeOf('number');
@@ -229,7 +229,7 @@ describe('memory evidence gate — OFF is a byte-identical no-op', () => {
     // Stored while ON (so evidence is persisted)...
     await setFact('convention', 'plonkoff the baz layer', 'src/x.ts:1');
     // ...recalled while OFF.
-    delete process.env['AFK_MEMORY_EVIDENCE_GATE'];
+    process.env['AFK_MEMORY_EVIDENCE_GATE'] = '0';
 
     const res = await search({ query: 'plonkoff' }, signal);
     const fact = (JSON.parse(res.content) as MemorySearchResult[]).find((r) => r.type === 'fact')!;
@@ -240,7 +240,7 @@ describe('memory evidence gate — OFF is a byte-identical no-op', () => {
   });
 
   it('an uncited codebase fact write returns no warning when the gate is off', async () => {
-    delete process.env['AFK_MEMORY_EVIDENCE_GATE'];
+    process.env['AFK_MEMORY_EVIDENCE_GATE'] = '0';
     const out = await setFact('convention', 'snorgleoff a thing with no citation');
     expect(out['warning']).toBeUndefined();
     expect(out['id']).toBeTypeOf('number');

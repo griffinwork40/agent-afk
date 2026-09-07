@@ -80,7 +80,7 @@ export async function* dispatchToolCalls(
       toolName: block.name,
       toolInput: summarizeToolInput(block.name, block.input),
       toolInputRaw: extractRawToolInput(block.input),
-      toolInputCapture: env.AFK_CAPTURE_SUBAGENT_OUTPUT === '1' ? extractCaptureToolInput(block.input) : undefined,
+      toolInputCapture: env.AFK_CAPTURE_SUBAGENT_OUTPUT !== '0' ? extractCaptureToolInput(block.input) : undefined,
       sessionId: input.ctx.sessionId,
     };
   }

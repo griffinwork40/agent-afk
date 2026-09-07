@@ -117,7 +117,7 @@ export async function* dispatchAndAppendToolCalls({
       toolName: call.name,
       toolInput: summarizeToolInput(call.name, call.input),
       toolInputRaw: extractRawToolInput(call.input),
-      toolInputCapture: env.AFK_CAPTURE_SUBAGENT_OUTPUT === '1' ? extractCaptureToolInput(call.input) : undefined,
+      toolInputCapture: env.AFK_CAPTURE_SUBAGENT_OUTPUT !== '0' ? extractCaptureToolInput(call.input) : undefined,
       sessionId,
     };
   }

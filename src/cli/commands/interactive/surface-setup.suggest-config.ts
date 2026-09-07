@@ -98,15 +98,14 @@ export function buildSuggestConfig(opts: {
           return ring.getEntries ? [...ring.getEntries()] : [];
         },
         // Parse as a boolean, not raw truthiness: only the documented
-        // activations (1/true/yes/on — see docs/env-registry.md) enable the
-        // Tier-2 LLM. A non-empty falsy value like `0` or `false` must keep
-        // suggestions off, otherwise typing would start firing provider calls
-        // despite the user explicitly disabling them.
-        llmEnabled: () => /^(1|true|yes|on)$/i.test(env.AFK_SUGGEST_ENABLED ?? ''),
+        // deactivations (0/false/no/off — see docs/env-registry.md) disable
+        // the Tier-2 LLM. On by default; an unset or unrecognized value
+        // keeps suggestions enabled.
+        llmEnabled: () => !/^(0|false|no|off)$/i.test(env.AFK_SUGGEST_ENABLED ?? ''),
         // Same documented-activation parse as llmEnabled. Gates ONLY the
         // empty-prompt suggestion; the completion tiers are unaffected.
         promptSuggestEnabled: () =>
-          /^(1|true|yes|on)$/i.test(env.AFK_SUGGEST_PROMPT ?? ''),
+          !/^(0|false|no|off)$/i.test(env.AFK_SUGGEST_PROMPT ?? ''),
       }),
     },
   };

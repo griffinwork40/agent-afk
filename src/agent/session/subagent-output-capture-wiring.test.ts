@@ -151,8 +151,8 @@ describe('subagent output capture wiring', () => {
     }
   });
 
-  it('captures nothing when the flag is off, even for a fork', async () => {
-    delete process.env[FLAG];
+  it('captures nothing when the flag is explicitly off, even for a fork', async () => {
+    process.env[FLAG] = '0';
     const sessionId = `owiring-off-${Date.now()}`;
     const session = new AgentSession({
       model: 'sonnet',

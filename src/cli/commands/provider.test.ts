@@ -159,14 +159,12 @@ describe('buildProviderAuthDiagnose — slot-aware (forceChatgptOAuth)', () => {
     expect(r.message).toMatch(/codex/i);
   });
 
-  it('ignores forceChatgptOAuth=false even when a ChatGPT token exists — falls back to no-usable-auth', () => {
-    // When forceChatgptOAuth is false, the ChatGPT token in auth.json is
-    // ignored because AFK_OPENAI_CHATGPT_OAUTH is not set (hermeticDeps has
-    // readEnv returning undefined for it).
+  it('uses ChatGPT OAuth by default when token exists and flag is unset (on by default)', () => {
+    // With the flag defaulting to on, the ChatGPT token should be picked up
+    // even without an explicit opt-in (hermeticDeps readEnv returns undefined).
     const r = buildProviderAuthDiagnose(undefined, hermeticDepsWithChatGptToken, false);
-    // Source should be no-usable-auth-codex-oauth (found OAuth but not using it)
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.exitCode).toBe(1);
+    expect(r.source).toBe('chatgpt-oauth');
+    expect(r.exitCode).toBe(0);
   });
 
   it('is backward-compatible: third param absent behaves like forceChatgptOAuth=false', () => {
