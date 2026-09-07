@@ -430,3 +430,156 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(rendered).toContain('c');
   });
 });
+
+describe('stream-consumer: configurable preview (AFK_BASH_PREVIEW_TAIL_LINES / AFK_BASH_PREVIEW_HEAD_LINES)', () => {
+  // Helpers to set / clear preview env vars around each test.
+  function withPreviewEnv(tail: string | undefined, head: string | undefined, fn: () => void): void {
+    const prevTail = process.env['AFK_BASH_PREVIEW_TAIL_LINES'];
+    const prevHead = process.env['AFK_BASH_PREVIEW_HEAD_LINES'];
+    if (tail !== undefined) process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = tail;
+    else delete process.env['AFK_BASH_PREVIEW_TAIL_LINES'];
+    if (head !== undefined) process.env['AFK_BASH_PREVIEW_HEAD_LINES'] = head;
+    else delete process.env['AFK_BASH_PREVIEW_HEAD_LINES'];
+    try {
+      fn();
+    } finally {
+      if (prevTail !== undefined) process.env['AFK_BASH_PREVIEW_TAIL_LINES'] = prevTail;
+      else delete process.env['AFK_BASH_PREVIEW_TAIL_LINES'];
+      if (prevHead !== undefined) process.env['AFK_BASH_PREVIEW_HEAD_LINES'] = prevHead;
+      else delete process.env['AFK_BASH_PREVIEW_HEAD_LINES'];
+    }
+  }
+
+  it('defaults to 7 tail lines when env vars are not set', () => {
+    withPreviewEnv(undefined, undefined, () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const evt = buildBashEvent({ content: lines.join('\n') });
+      const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.tailPreview).toHaveLength(7);
+      expect(out.chunk.headPreview).toBeUndefined();
+    });
+  });
+
+  it('respects AFK_BASH_PREVIEW_TAIL_LINES when set to a valid value', () => {
+    withPreviewEnv('3', undefined, () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const evt = buildBashEvent({ content: lines.join('\n') });
+      const out = transformProviderEvent(evt, noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.tailPreview).toHaveLength(3);
+      expect(out.chunk.tailPreview![2]).toBe('line 20');
+      expect(out.chunk.tailPreview![0]).toBe('line 18');
+    });
+  });
+
+  it('falls back to default 7 when AFK_BASH_PREVIEW_TAIL_LINES is non-integer', () => {
+    withPreviewEnv('abc', undefined, () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const out = transformProviderEvent(buildBashEvent({ content: lines.join('\n') }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.tailPreview).toHaveLength(7);
+    });
+  });
+
+  it('falls back to default 7 when AFK_BASH_PREVIEW_TAIL_LINES is zero', () => {
+    withPreviewEnv('0', undefined, () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const out = transformProviderEvent(buildBashEvent({ content: lines.join('\n') }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      // 0 is non-positive → falls back to default 7
+      expect(out.chunk.tailPreview).toHaveLength(7);
+    });
+  });
+
+  it('falls back to default 7 when AFK_BASH_PREVIEW_TAIL_LINES is negative', () => {
+    withPreviewEnv('-3', undefined, () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const out = transformProviderEvent(buildBashEvent({ content: lines.join('\n') }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.tailPreview).toHaveLength(7);
+    });
+  });
+
+  it('emits headPreview when AFK_BASH_PREVIEW_HEAD_LINES is set and output is long enough', () => {
+    withPreviewEnv('3', '2', () => {
+      // 20 lines > 3 + 2 = 5, so no overlap — headPreview should appear
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const out = transformProviderEvent(buildBashEvent({ content: lines.join('\n') }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.headPreview).toHaveLength(2);
+      expect(out.chunk.headPreview![0]).toBe('line 1');
+      expect(out.chunk.headPreview![1]).toBe('line 2');
+      expect(out.chunk.tailPreview).toHaveLength(3);
+      expect(out.chunk.tailPreview![2]).toBe('line 20');
+    });
+  });
+
+  it('omits headPreview when head + tail covers all non-empty lines (overlap dedup)', () => {
+    withPreviewEnv('4', '3', () => {
+      // 6 non-empty lines, head=3 + tail=4 = 7 ≥ 6 → headPreview must be omitted
+      const content = Array.from({ length: 6 }, (_, i) => `line ${i + 1}`).join('\n');
+      const out = transformProviderEvent(buildBashEvent({ content }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.headPreview).toBeUndefined();
+      // tail still covers everything (slice(-4) of 6 = lines 3-6)
+      expect(out.chunk.tailPreview).toBeDefined();
+    });
+  });
+
+  it('headPreview renders above the hidden-lines indicator and tailPreview', () => {
+    withPreviewEnv('3', '2', () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `output ${i + 1}`);
+      const rendered = outcome(buildBashEvent({ content: lines.join('\n') }));
+      const headPos = rendered.indexOf('output 1');
+      const hiddenPos = rendered.indexOf('earlier lines hidden');
+      const tailPos = rendered.indexOf('output 20');
+      expect(headPos).toBeGreaterThanOrEqual(0);
+      expect(hiddenPos).toBeGreaterThanOrEqual(0);
+      expect(tailPos).toBeGreaterThanOrEqual(0);
+      // order: head → hidden → tail
+      expect(headPos).toBeLessThan(hiddenPos);
+      expect(hiddenPos).toBeLessThan(tailPos);
+    });
+  });
+
+  it('does not emit headPreview when AFK_BASH_PREVIEW_HEAD_LINES is zero (default)', () => {
+    withPreviewEnv(undefined, '0', () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const out = transformProviderEvent(buildBashEvent({ content: lines.join('\n') }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.headPreview).toBeUndefined();
+    });
+  });
+
+  it('hiddenLineCount accounts for both head and tail displayed lines', () => {
+    withPreviewEnv('3', '2', () => {
+      // 20 lines, head=2 visible + tail=3 visible = 5 displayed
+      // hiddenLineCount = 20 - 5 = 15
+      const content = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n');
+      const out = transformProviderEvent(buildBashEvent({ content }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.hiddenLineCount).toBe(20 - 5);
+    });
+  });
+
+  it('handles output shorter than the tail window without erroring', () => {
+    withPreviewEnv('10', undefined, () => {
+      // Only 4 lines, tailLines=10 — should return all 4, no crash
+      const content = 'a\nb\nc\nd';
+      const out = transformProviderEvent(buildBashEvent({ content }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.tailPreview).toHaveLength(4);
+      expect(out.chunk.hiddenLineCount).toBe(0);
+    });
+  });
+
+  it('falls back to default 0 head lines when AFK_BASH_PREVIEW_HEAD_LINES is non-integer', () => {
+    withPreviewEnv(undefined, 'not-a-number', () => {
+      const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+      const out = transformProviderEvent(buildBashEvent({ content: lines.join('\n') }), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+      if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+      expect(out.chunk.headPreview).toBeUndefined();
+    });
+  });
+});

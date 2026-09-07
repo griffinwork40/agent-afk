@@ -1113,6 +1113,26 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of head lines shown in the bash output preview (from the start of output). Default 0 (disabled). Non-integer or negative values are ignored and the default applies.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '3',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of tail lines shown in the bash output preview (from the end of output). Default 7. Non-integer or non-positive values are ignored and the default applies.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '15',
+    category: 'misc',
+  },
+  {
     name: 'AFK_BG_AUTO_DELIVER',
     description:
       'Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.',
