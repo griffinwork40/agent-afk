@@ -87,7 +87,7 @@ describe('resolveOpenAIAuth — precedence', () => {
     expect(r.last4).toBe('5555');
   });
 
-  it('reports no-usable-auth-codex-oauth when only ChatGPT OAuth is present', () => {
+  it('uses ChatGPT OAuth when present (on by default)', () => {
     const r = resolveOpenAIAuth(undefined, deps({
       readFile: () =>
         JSON.stringify({
@@ -96,9 +96,7 @@ describe('resolveOpenAIAuth — precedence', () => {
           tokens: { access_token: 'eyJxxx', refresh_token: 'rt_xxx', account_id: 'acc' },
         }),
     }));
-    expect(r.source).toBe('no-usable-auth-codex-oauth');
-    expect(r.apiKey).toBeNull();
-    expect(r.last4).toBeUndefined();
+    expect(r.source).toBe('chatgpt-oauth');
   });
 
   it('returns no-usable-auth when nothing is configured', () => {
@@ -227,14 +225,15 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
     });
   const flagOn = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined);
 
-  it('stays read-only-rejected when the opt-in flag is OFF (default)', () => {
-    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
+  it('stays rejected when the flag is explicitly OFF', () => {
+    const flagOff = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '0' : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOff, readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('no-usable-auth-codex-oauth');
     expect(r.apiKey).toBeNull();
   });
 
-  it('returns the access token tagged chatgpt-oauth when the flag is ON', () => {
-    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson() }));
+  it('returns the access token tagged chatgpt-oauth when flag is unset (on by default)', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('chatgpt-oauth');
     expect(r.apiKey).toBe(ACCESS);
     expect(r.accountId).toBe('acct_from_jwt');

@@ -47,12 +47,11 @@ export function isCodebaseFactCategory(category: FactCategory): boolean {
 }
 
 /**
- * Whether the evidence gate is enabled. Opt-in; any value other than the
- * literal '1' (including unset) leaves memory behavior identical to legacy.
- * The single env read-point for this subsystem.
+ * Whether the evidence gate is enabled. On by default; set AFK_MEMORY_EVIDENCE_GATE=0
+ * to disable. The single env read-point for this subsystem.
  */
 export function evidenceGateEnabled(): boolean {
-  return env.AFK_MEMORY_EVIDENCE_GATE === '1';
+  return env.AFK_MEMORY_EVIDENCE_GATE !== '0';
 }
 
 /**

@@ -75,22 +75,25 @@ describe('shouldCaptureSubagentOutput', () => {
     delete process.env[FLAG];
   });
 
-  it('is off by default — the flag must be explicitly opted into', () => {
+  it('is on by default when flag is unset', () => {
+    expect(shouldCaptureSubagentOutput(baseInput())).toBe(true);
+  });
+
+  it('is off when the flag is explicitly "0"', () => {
+    process.env[FLAG] = '0';
     expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
   });
 
-  it('is on when the flag is exactly "1"', () => {
+  it('is on when the flag is explicitly "1"', () => {
     process.env[FLAG] = '1';
     expect(shouldCaptureSubagentOutput(baseInput())).toBe(true);
   });
 
   it('does not capture a non-fork (top-level) session', () => {
-    process.env[FLAG] = '1';
     expect(shouldCaptureSubagentOutput(baseInput({ isSubagentFork: false }))).toBe(false);
   });
 
   it('does not capture without both a sessionId and a subagentId', () => {
-    process.env[FLAG] = '1';
     expect(shouldCaptureSubagentOutput(baseInput({ sessionId: undefined }))).toBe(false);
     expect(shouldCaptureSubagentOutput(baseInput({ subagentId: undefined }))).toBe(false);
   });
@@ -135,9 +138,14 @@ describe('createSubagentOutputRecorder', () => {
     delete process.env[FLAG];
   });
 
-  it('returns null when capture is disabled, so callers pay nothing', () => {
-    delete process.env[FLAG];
+  it('returns null when capture is explicitly disabled, so callers pay nothing', () => {
+    process.env[FLAG] = '0';
     expect(createSubagentOutputRecorder(baseInput())).toBeNull();
+  });
+
+  it('captures by default when flag is unset (on by default)', () => {
+    delete process.env[FLAG];
+    expect(createSubagentOutputRecorder(baseInput())).not.toBeNull();
   });
 
   it('writes assistant prose and the tool call that followed it, in causal order', async () => {

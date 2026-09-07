@@ -55,6 +55,7 @@ agent-afk@*
 .afk-worktrees/
 .afk-work/
 .afk/plans
+drafts/
 
 # AFK worktree bookkeeping (local-only)
 .afk-worktree-meta.json
