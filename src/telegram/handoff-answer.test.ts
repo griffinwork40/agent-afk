@@ -224,6 +224,161 @@ describe('matchReplyToHandoff', () => {
 });
 
 // ---------------------------------------------------------------------------
+// allowCustom behavior
+// ---------------------------------------------------------------------------
+
+describe('allowCustom', () => {
+  let handoffsDir: string;
+
+  beforeEach(async () => {
+    handoffsDir = await makeTmpDir();
+    clearPendingTextHandoff('q-1716000000000-abc123');
+  });
+
+  afterEach(async () => {
+    if (handoffsDir) await rm(handoffsDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('choice+allowCustom: pendingTextHandoffs is populated after sendHandoffQuestion', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: {
+        message: 'Pick a deployment target',
+        type: 'choice',
+        choices: ['prod', 'staging'],
+        allowCustom: true,
+      },
+    });
+    await writeHandoff(record, handoffsDir);
+
+    const result = await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+    expect(result.ok).toBe(true);
+
+    // Should have included the custom hint in the message
+    const call = (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[1]).toContain('custom answer');
+
+    // Should still have inline keyboard buttons
+    expect(call[2]).toHaveProperty('reply_markup');
+
+    // The message_id should be registered for reply-to matching
+    // Verify by replying -- if not registered, matchReplyToHandoff returns false
+    const consumed = await matchReplyToHandoff(bot, 12345, 42, 'my-custom-env', handoffsDir);
+    expect(consumed).toBe(true);
+  });
+
+  it('choice+allowCustom: matchReplyToHandoff accepts free text as custom_value', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: {
+        message: 'Pick a deployment target',
+        type: 'choice',
+        choices: ['prod', 'staging'],
+        allowCustom: true,
+      },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    const consumed = await matchReplyToHandoff(bot, 12345, 42, 'canary', handoffsDir);
+    expect(consumed).toBe(true);
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.status).toBe('answered');
+    expect(updated.answer).toEqual({ value: null, custom_value: 'canary' });
+  });
+
+  it('choice without allowCustom: no reply-to path registered', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: {
+        message: 'Pick a color',
+        type: 'choice',
+        choices: ['Red', 'Green'],
+      },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    // Without allowCustom, reply-to should not be registered
+    const consumed = await matchReplyToHandoff(bot, 12345, 42, 'Blue');
+    expect(consumed).toBe(false);
+  });
+
+  it('multi_choice+allowCustom: accepts non-numeric text as custom_value', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: {
+        message: 'Pick features',
+        type: 'multi_choice',
+        choices: ['auth', 'logging', 'metrics'],
+        allowCustom: true,
+      },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    const consumed = await matchReplyToHandoff(bot, 12345, 42, 'tracing', handoffsDir);
+    expect(consumed).toBe(true);
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.status).toBe('answered');
+    expect(updated.answer).toEqual({ value: null, custom_value: 'tracing' });
+  });
+
+  it('multi_choice without allowCustom: rejects non-numeric text', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: {
+        message: 'Pick features',
+        type: 'multi_choice',
+        choices: ['auth', 'logging', 'metrics'],
+      },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    // Non-numeric text should be rejected (consumed=true, but still pending)
+    const consumed = await matchReplyToHandoff(bot, 12345, 42, 'tracing', handoffsDir);
+    expect(consumed).toBe(true);
+
+    // Should have sent an error message
+    const sendCalls = (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    // First call is sendHandoffQuestion, second is the error reply
+    expect(sendCalls.length).toBeGreaterThan(1);
+    const errorCall = sendCalls[sendCalls.length - 1]!;
+    expect(errorCall[1]).toContain('comma-separated numbers');
+  });
+
+  it('multi_choice+allowCustom: still accepts valid numeric lists', async () => {
+    const bot = mockBot();
+    const record = makeRecord({
+      question: {
+        message: 'Pick features',
+        type: 'multi_choice',
+        choices: ['auth', 'logging', 'metrics'],
+        allowCustom: true,
+      },
+    });
+    await writeHandoff(record, handoffsDir);
+    await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
+
+    const consumed = await matchReplyToHandoff(bot, 12345, 42, '1,3', handoffsDir);
+    expect(consumed).toBe(true);
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.status).toBe('answered');
+    expect(updated.answer).toEqual({ value: ['auth', 'metrics'] });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // registerHandoffAnswerHandlers
 // ---------------------------------------------------------------------------
 

@@ -141,6 +141,7 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
     }
 
     if (qType === 'choice') {
+      const allowCustom = Boolean(question['allowCustom']);
       const MAX_CHOICES = 20;
       const visibleChoices = choices.slice(0, MAX_CHOICES);
       const buttons = visibleChoices.map((choice, i) => [
@@ -149,19 +150,30 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
           buildHandoffCallback(record.taskId, i),
         ),
       ]);
-      const sent = await bot.telegram.sendMessage(chatId, displayText, {
+      let choiceText = displayText;
+      if (allowCustom) {
+        choiceText += '\n\n<i>Or reply to this message with a custom answer</i>';
+      }
+      const sent = await bot.telegram.sendMessage(chatId, choiceText, {
         parse_mode: 'HTML',
         ...threadOpts,
         reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
       });
+      if (allowCustom) {
+        pendingTextHandoffs.set(sent.message_id, record.taskId);
+      }
       await persistRouteAndMessageId(record, chatId, threadId, sent.message_id, handoffsDir);
       return { ok: true, messageId: sent.message_id };
     }
 
     // text / number / multi_choice: plain message with reply hint
+    const allowCustomMulti = qType === 'multi_choice' && Boolean(question['allowCustom']);
     if (qType === 'multi_choice' && choices.length > 0) {
       const choiceList = choices.map((c, i) => `${i + 1}. ${escapeHtml(String(c))}`).join('\n');
-      displayText += `\n\n${choiceList}\n\n<i>Reply with comma-separated numbers (e.g. 1,3)</i>`;
+      const hint = allowCustomMulti
+        ? '<i>Reply with comma-separated numbers (e.g. 1,3) or a custom answer</i>'
+        : '<i>Reply with comma-separated numbers (e.g. 1,3)</i>';
+      displayText += `\n\n${choiceList}\n\n${hint}`;
     } else if (qType === 'number') {
       const min = question['min'] as number | undefined;
       const max = question['max'] as number | undefined;
@@ -325,15 +337,22 @@ export async function matchReplyToHandoff(
       return true;
     }
     answer = { value: n };
+  } else if (qType === 'choice' && record.question['allowCustom']) {
+    // Free-form custom answer for a choice question with allowCustom enabled.
+    answer = { value: null, custom_value: trimmed };
   } else if (qType === 'multi_choice') {
     const choices = Array.isArray(record.question['choices'])
       ? record.question['choices'] as string[]
       : [];
     const parts = trimmed.split(',').map(s => s.trim());
-    const selected: string[] = [];
-    for (const part of parts) {
-      const idx = parseInt(part, 10);
-      if (!Number.isInteger(idx) || String(idx) !== part || idx < 1 || idx > choices.length) {
+    const isNumericList = parts.every(p => {
+      const idx = parseInt(p, 10);
+      return Number.isInteger(idx) && String(idx) === p && idx >= 1 && idx <= choices.length;
+    });
+    if (!isNumericList) {
+      if (record.question['allowCustom']) {
+        answer = { value: null, custom_value: trimmed };
+      } else {
         await bot.telegram.sendMessage(
           chatId,
           `Please reply with comma-separated numbers between 1 and ${choices.length}.`,
@@ -341,9 +360,9 @@ export async function matchReplyToHandoff(
         ).catch(() => {});
         return true;
       }
-      selected.push(choices[idx - 1]!);
+    } else {
+      answer = { value: parts.map(p => choices[parseInt(p, 10) - 1]!) };
     }
-    answer = { value: selected };
   } else {
     // text (default)
     answer = { value: trimmed };
