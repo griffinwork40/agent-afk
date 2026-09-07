@@ -28,3 +28,4 @@ export * from './preview-diff.js';
 export * from './context-bar.js';
 export * from './context-sparkline.js';
 export * from './session-summary.js';
+export * from './file-op-summary.js';
