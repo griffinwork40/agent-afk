@@ -99,6 +99,25 @@ export function createPlanModeGate(
       }
     }
 
+    // `test_run` is coverage-gated: running tests without coverage is a
+    // read-like observation (stdout only); coverage=true writes artifacts to
+    // disk (coverage/, coverage.out, .coverage) and must be refused.
+    if (toolName === 'test_run') {
+      const coverage =
+        typeof context.input === 'object' && context.input !== null
+          ? (context.input as Record<string, unknown>)['coverage'] === true
+          : false;
+      if (coverage) {
+        return {
+          decision: 'block',
+          reason:
+            `plan mode: test_run with coverage=true refused — coverage flags ` +
+            `write artifacts to disk (coverage/, coverage.out, .coverage). ` +
+            `Run without coverage, or use /plan off to act.`,
+        };
+      }
+    }
+
     return {};
   };
 }

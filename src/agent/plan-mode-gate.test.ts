@@ -159,4 +159,51 @@ describe('createPlanModeGate', () => {
     const result = gate({ event: 'PreToolUse', toolName: 'write_file', input: {} });
     expect(result.decision).toBe('block');
   });
+
+  // test_run coverage guard: coverage=true writes artifacts to disk and must
+  // be refused in plan mode; running without coverage is read-like and passes.
+  it('blocks test_run with coverage=true in plan mode', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { coverage: true },
+    });
+    expect(result.decision).toBe('block');
+    expect(result.reason).toContain('coverage=true');
+    expect(result.reason).toContain('disk');
+  });
+
+  it('allows test_run without coverage in plan mode (read-like observation)', () => {
+    const { gate } = makeGate('plan');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { pattern: 'src/**/*.test.ts' },
+    });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('allows test_run with coverage=true in default (non-plan) mode', () => {
+    const { gate } = makeGate('default');
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { coverage: true },
+    });
+    expect(result.decision).toBeUndefined();
+  });
+
+  it('allows test_run with coverage=true for subagents in plan mode (parentSessionId set)', () => {
+    const { gate } = makeGate('plan');
+    // Subagents are isolated workers; plan mode is a main-session affordance
+    // and must not block the subagent's task-output tool calls.
+    const result = gate({
+      event: 'PreToolUse',
+      toolName: 'test_run',
+      input: { coverage: true },
+      parentSessionId: 'parent-session-123',
+    });
+    expect(result.decision).toBeUndefined();
+  });
 });
