@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.198.0] - 2026-09-07
+
+### Added
+- reactive workspace subscriptions via workspace_subscribe (#1418) (#1560) (3ba59f00)
+
 ## [5.197.1] - 2026-09-07
 
 ### Fixed
