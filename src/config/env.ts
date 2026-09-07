@@ -1133,6 +1133,30 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_BASH_PREVIEW_HEAD_LINES',
+    description:
+      'Number of head (top) lines shown in the TUI bash-output preview block. ' +
+      'Default 0 (disabled). Clamped to [0, 50]. Config-file key: bashPreview.headLines. ' +
+      'Precedence: AFK_BASH_PREVIEW_HEAD_LINES > bashPreview.headLines in afk.config.json > default (0).',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '3',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_BASH_PREVIEW_TAIL_LINES',
+    description:
+      'Number of tail (bottom) lines shown in the TUI bash-output preview block. ' +
+      'Default 7. Clamped to [0, 50]. Config-file key: bashPreview.tailLines. ' +
+      'Precedence: AFK_BASH_PREVIEW_TAIL_LINES > bashPreview.tailLines in afk.config.json > default (7).',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '10',
+    category: 'misc',
+  },
+  {
     name: 'AFK_PLAIN_OUTPUT',
     description:
       'Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, ' +

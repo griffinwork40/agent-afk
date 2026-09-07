@@ -205,6 +205,17 @@ export function loadConfig(overrides?: Partial<CliConfig>, cwd: string = process
     ...(merged.enforceDoneEvidence !== undefined ? { enforceDoneEvidence: merged.enforceDoneEvidence } : {}),
     ...(merged.importFrom !== undefined ? { importFrom: merged.importFrom } : {}),
     ...(merged.theme !== undefined ? { theme: merged.theme } : {}),
+    // bashPreview: env-tier wins over json-tier on a per-key basis so that
+    // `AFK_BASH_PREVIEW_TAIL_LINES=10` only overrides tailLines, leaving
+    // headLines from afk.config.json intact. Merge order: json first, then
+    // env vars override individual keys. An absent field = use built-in default.
+    ...(() => {
+      const jsonBp = jsonConfig.bashPreview;
+      const envBp = envConfig.bashPreview;
+      if (!jsonBp && !envBp) return {};
+      const bp = { ...jsonBp, ...envBp };
+      return Object.keys(bp).length > 0 ? { bashPreview: bp } : {};
+    })(),
   };
 
   // Resolve + install the process-global model-slot bindings (Stage 1).

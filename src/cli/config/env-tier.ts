@@ -295,6 +295,24 @@ export function loadEnvConfig(): Partial<CliConfig> {
     config.openaiBaseUrl = normalizeOpenAIBaseUrl(env.AFK_OPENAI_BASE_URL);
   }
 
+  // TUI bash-output preview preferences. Env vars take precedence over
+  // afk.config.json `bashPreview` (merged by the config facade). Values are
+  // clamped to [0, 50] so an accidental large number can't flood the TUI.
+  {
+    const bp: NonNullable<typeof config.bashPreview> = {};
+    if (env.AFK_BASH_PREVIEW_TAIL_LINES) {
+      const n = Number(env.AFK_BASH_PREVIEW_TAIL_LINES);
+      if (Number.isInteger(n) && n >= 0) bp.tailLines = Math.min(50, n);
+    }
+    if (env.AFK_BASH_PREVIEW_HEAD_LINES) {
+      const n = Number(env.AFK_BASH_PREVIEW_HEAD_LINES);
+      if (Number.isInteger(n) && n >= 0) bp.headLines = Math.min(50, n);
+    }
+    if (Object.keys(bp).length > 0) {
+      config.bashPreview = bp;
+    }
+  }
+
   envConfigCache = config;
   return config;
 }

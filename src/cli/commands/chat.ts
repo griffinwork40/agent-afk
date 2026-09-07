@@ -630,6 +630,8 @@ export function registerChatCommand(program: Command): void {
           // Pipes worktree cwd to tool handlers (bash, glob, grep) so the
           // shell commands the model spawns honor the isolated worktree.
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
+          // TUI bash-output preview preferences from afk.config.json / env.
+          ...(cliConfig.bashPreview !== undefined ? { previewOpts: cliConfig.bashPreview } : {}),
           // Wire resume/session-id config when a session flag is set.
           ...resumeConfig,
           provider,

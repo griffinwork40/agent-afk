@@ -524,6 +524,9 @@ export class AgentSession implements IAgentSession {
       // fires. Thread the writer through so the emission site doesn't
       // need to reach back into the session.
       ...(this.config.traceWriter ? { traceWriter: this.config.traceWriter } : {}),
+      // TUI bash-output preview preferences — propagated from loadConfig()
+      // bashPreview by the REPL/Telegram bootstrap.
+      ...(this.config.previewOpts ? { previewOpts: this.config.previewOpts } : {}),
     };
   }
 

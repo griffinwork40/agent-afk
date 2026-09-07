@@ -54,6 +54,11 @@ export interface BuildAgentSessionDeps {
    * default model.
    */
   explicitProvider?: string;
+  /**
+   * TUI bash-output preview preferences from `loadConfig().bashPreview`.
+   * Propagated to `AgentConfig.previewOpts` and then into `TransformDeps`.
+   */
+  previewOpts?: { tailLines?: number; headLines?: number };
 }
 
 /**
@@ -90,6 +95,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
+    ...(deps.previewOpts !== undefined ? { previewOpts: deps.previewOpts } : {}),
     providerFactory: deps.providerFactory,
   })), deps.traceWriter);
 }
@@ -139,5 +145,6 @@ export function buildSharedDeps(a: {
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
     ...(a.initialPermissionMode !== undefined ? { permissionMode: a.initialPermissionMode } : {}),
     ...(a.explicitProvider !== undefined ? { explicitProvider: a.explicitProvider } : {}),
+    ...(a.cliConfig.bashPreview !== undefined ? { previewOpts: a.cliConfig.bashPreview } : {}),
   };
 }

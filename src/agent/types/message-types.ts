@@ -137,14 +137,24 @@ export interface ToolResultChunk {
    */
   capturePath?: string;
   /**
-   * The last up to 7 lines of the tool's raw output, stored verbatim so the
-   * TUI can render an actual tail preview in the outcome row instead of only a
-   * line count. Set by `buildToolOutputEvent` in `stream-consumer.ts` whenever
-   * `lineCount > 1` (multi-line output). Each entry is already sanitized for
-   * single-line display. TUI-only — never model-facing.
+   * The last up to N lines of the tool's raw output (N controlled by
+   * `bashPreview.tailLines` / `AFK_BASH_PREVIEW_TAIL_LINES`, default 7),
+   * stored verbatim so the TUI can render an actual tail preview in the
+   * outcome row instead of only a line count. Set by `buildToolOutputEvent`
+   * in `stream-consumer.ts` whenever `lineCount > 1` (multi-line output).
+   * Each entry is already sanitized for single-line display. TUI-only —
+   * never model-facing.
    */
   tailPreview?: string[];
-  /** Non-empty lines omitted from the displayed tail (within provider content). */
+  /**
+   * The first up to N lines of the tool's raw output (N controlled by
+   * `bashPreview.headLines` / `AFK_BASH_PREVIEW_HEAD_LINES`, default 0 =
+   * disabled). When present and non-empty, the TUI renders these lines ABOVE
+   * the "M earlier lines hidden" notice and BEFORE tailPreview. TUI-only —
+   * never model-facing.
+   */
+  headPreview?: string[];
+  /** Non-empty lines omitted from the displayed head+tail (within provider content). */
   hiddenLineCount?: number;
   /** Bash process exit status, absent when no exit code was observed. TUI-only. */
   exitCode?: number;

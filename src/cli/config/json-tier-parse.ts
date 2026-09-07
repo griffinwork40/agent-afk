@@ -234,6 +234,19 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     }
   }
 
+  if (json.bashPreview && typeof json.bashPreview === 'object') {
+    const bp: NonNullable<CliConfig['bashPreview']> = {};
+    if (typeof json.bashPreview.tailLines === 'number' && Number.isInteger(json.bashPreview.tailLines)) {
+      bp.tailLines = Math.min(50, Math.max(0, json.bashPreview.tailLines));
+    }
+    if (typeof json.bashPreview.headLines === 'number' && Number.isInteger(json.bashPreview.headLines)) {
+      bp.headLines = Math.min(50, Math.max(0, json.bashPreview.headLines));
+    }
+    if (Object.keys(bp).length > 0) {
+      config.bashPreview = bp;
+    }
+  }
+
   if (json.interactive && typeof json.interactive === 'object') {
     const interactive: NonNullable<CliConfig['interactive']> = {};
     if (typeof json.interactive.worktreeAutoname === 'boolean') {

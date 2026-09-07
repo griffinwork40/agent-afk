@@ -190,6 +190,23 @@ export function formatOutcome(
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
 
+    // Build the preview block:
+    //   [head lines]
+    //   [N earlier lines hidden]
+    //   [tail lines]
+    //
+    // Head lines are shown first when present. Then the hidden-line notice.
+    // Then tail lines (which also cover the all-lines case when overlap is
+    // detected — headPreview is cleared and tailPreview holds all lines).
+    const formatLine = (l: string): string =>
+      palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l));
+
+    let previewBlock = '';
+
+    if (chunk.headPreview !== undefined && chunk.headPreview.length > 0) {
+      previewBlock += '\n' + chunk.headPreview.map(formatLine).join('\n');
+    }
+
     if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
       headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
     }
@@ -198,10 +215,11 @@ export function formatOutcome(
     // sanitizer as the single-line preview path) and indented with `    ` to
     // sit visually under the `⎿` connector rendered by formatToolResultLine.
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
-      const tailLines = chunk.tailPreview
-        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
-        .join('\n');
-      return headline + '\n' + tailLines;
+      previewBlock += '\n' + chunk.tailPreview.map(formatLine).join('\n');
+    }
+
+    if (previewBlock.length > 0) {
+      return headline + previewBlock;
     }
     return headline;
   }

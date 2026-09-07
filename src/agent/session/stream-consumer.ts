@@ -24,6 +24,7 @@ import { emitBudget } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { renderToolResult } from '../tools/render-registry.js';
 import { truncateContent } from './stream-consumer.preview.js';
+import type { TruncateContentOpts } from './stream-consumer.preview.js';
 
 /** Callbacks the transform needs to produce side effects. */
 export type TransformDeps = {
@@ -67,6 +68,15 @@ export type TransformDeps = {
    * the only `kind` emitted is `'monetary'`.
    */
   traceWriter?: TraceSink;
+  /**
+   * TUI bash-output preview preferences. When provided, overrides the
+   * built-in defaults (7 tail lines, 0 head lines) used by `truncateContent`.
+   * Populated from `bashPreview` in afk.config.json and/or the
+   * `AFK_BASH_PREVIEW_TAIL_LINES` / `AFK_BASH_PREVIEW_HEAD_LINES` env vars.
+   * Absent → defaults apply. Keep this separate from model-context caps and
+   * capture retention limits (those are different concerns).
+   */
+  previewOpts?: TruncateContentOpts;
 };
 
 /**
@@ -140,6 +150,7 @@ export function usageToMetadata(usage: ProviderUsage, sessionId: string | undefi
 
 function buildToolOutputEvent(
   event: Extract<ProviderEvent, { type: 'tool.output' }>,
+  previewOpts?: TruncateContentOpts,
 ): OutputEvent {
   // Per-tool display formatter (e.g. memory tools' JSON → "3 results
   // (2 facts, 1 procedure)") runs here, BEFORE `truncateContent` mangles
@@ -206,7 +217,15 @@ function buildToolOutputEvent(
   // without substring-scanning content for the `[output truncated …]`
   // sentinel. Prior versions conflated this field with display clipping;
   // see PR introducing `ToolResult.truncated` for the rationale.
-  const { content: previewContent, lineCount, sizeBytes, sizeLabel, tailPreview, hiddenLineCount } = truncateContent(event.content);
+  const {
+    content: previewContent,
+    lineCount,
+    sizeBytes,
+    sizeLabel,
+    tailPreview,
+    headPreview,
+    hiddenLineCount,
+  } = truncateContent(event.content, previewOpts);
   return {
     type: 'chunk',
     chunk: {
@@ -220,6 +239,7 @@ function buildToolOutputEvent(
       ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
       ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
+      ...(headPreview !== undefined && headPreview.length > 0 && { headPreview }),
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
@@ -348,7 +368,7 @@ export function transformProviderEvent(
       if (event.isError !== true && event.toolName) {
         (deps._successfulToolNames ??= []).push(event.toolName);
       }
-      return buildToolOutputEvent(event);
+      return buildToolOutputEvent(event, deps.previewOpts);
     }
 
     case 'tool.diff':

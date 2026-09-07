@@ -308,6 +308,20 @@ export interface CliConfig {
    * `undefined` / absent = nothing imported (strict opt-in).
    */
   importFrom?: ImportFromConfig;
+  /**
+   * TUI bash-output preview preferences. Separate from model-context output
+   * caps and capture retention limits — controls only what the TUI shows.
+   *
+   * Precedence (highest wins):
+   *   `AFK_BASH_PREVIEW_TAIL_LINES` / `AFK_BASH_PREVIEW_HEAD_LINES` env vars
+   *   > `bashPreview` in afk.config.json > built-in defaults (7 tail, 0 head).
+   */
+  bashPreview?: {
+    /** Tail lines in the TUI preview block. Default 7. Clamped to [0, 50]. */
+    tailLines?: number;
+    /** Head lines in the TUI preview block. Default 0 (disabled). Clamped to [0, 50]. */
+    headLines?: number;
+  };
 }
 
 /** One per-tier model binding in afk.config.json's `models` block. */
@@ -403,6 +417,13 @@ export interface ConfigFileSchema {
   importFrom?: Partial<
     Record<ImportSourceBinary, boolean | { plugins?: boolean; skills?: boolean; mcp?: boolean }>
   >;
+  /**
+   * TUI bash-output preview line counts. See `CliConfig.bashPreview` for docs.
+   */
+  bashPreview?: {
+    tailLines?: number;
+    headLines?: number;
+  };
 }
 
 export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {

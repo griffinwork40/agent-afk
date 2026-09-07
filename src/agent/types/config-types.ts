@@ -841,4 +841,17 @@ export interface AgentConfig {
    * is the grant — it is not denied by the gate.
    */
   customTools?: import('../tools/custom-tool.js').CustomToolDef[];
+
+  /**
+   * TUI bash-output preview preferences. Separate from model-context output
+   * caps and capture retention limits — controls only what lines the TUI
+   * displays in the outcome row. Populated by the REPL/Telegram bootstrap
+   * from `loadConfig().bashPreview` (merged from afk.config.json and env vars).
+   *
+   * Absent → `truncateContent` uses its built-in defaults (7 tail, 0 head).
+   */
+  previewOpts?: {
+    tailLines?: number;
+    headLines?: number;
+  };
 }
