@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.9] - 2026-09-07
+
+### Fixed
+- auto-append unique suffix on name collision (#1516) (#1543) (afca1cdd)
+- apply pushOutcomeLines to grouped-root single-entry path (#1532) (#1534) (3e4bdebc)
+- warn on Ctrl+B promotion of non-isolated write-capable child (#1513) (#1535) (002509ad)
+
+### Changed
+- extend closure contract to cover truncated guidance (#1529) (#1536) (38844778)
+
 ## [5.191.8] - 2026-09-07
 
 ### Changed
