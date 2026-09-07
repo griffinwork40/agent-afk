@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HandoffRecord } from '../agent/daemon/handoff-store.js';
-import { writeHandoff } from '../agent/daemon/handoff-store.js';
+import { writeHandoff, readHandoff, updateHandoffAnswer } from '../agent/daemon/handoff-store.js';
 import {
   sendHandoffQuestion,
   matchReplyToHandoff,
@@ -155,6 +155,53 @@ describe('sendHandoffQuestion', () => {
     const result = await sendHandoffQuestion({ bot, record, chatId: 12345, handoffsDir });
     expect(result.ok).toBe(false);
     expect(result.messageId).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // persistRouteAndMessageId race-condition tests (#1549)
+  // -------------------------------------------------------------------------
+
+  it('persistRouteAndMessageId: updates route/messageId on a still-pending record', async () => {
+    const bot = mockBot();
+    const record = makeRecord();
+    await writeHandoff(record, handoffsDir);
+
+    await sendHandoffQuestion({ bot, record, chatId: 55555, threadId: 7, handoffsDir });
+
+    const updated = JSON.parse(
+      await readFile(join(handoffsDir, `${record.taskId}.json`), 'utf-8'),
+    ) as HandoffRecord;
+    expect(updated.status).toBe('pending');
+    expect(updated.route).toEqual({ chatId: 55555, threadId: 7 });
+    expect(updated.telegramMessageId).toBe(42);
+  });
+
+  it('persistRouteAndMessageId: skips write when record transitions to answered before persist', async () => {
+    const bot = mockBot();
+    const record = makeRecord();
+    await writeHandoff(record, handoffsDir);
+
+    // Intercept sendMessage to simulate the operator answering in the narrow
+    // window between sendMessage resolving and persistRouteAndMessageId writing.
+    (bot.telegram.sendMessage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      // Concurrent answer lands while the Telegram send is "in-flight".
+      await updateHandoffAnswer(record.taskId, { value: true }, 'telegram', handoffsDir);
+      return { message_id: 42 };
+    });
+
+    await sendHandoffQuestion({ bot, record, chatId: 99999, handoffsDir });
+
+    // The record on disk must reflect the answer, not the stale pending+route overwrite.
+    const onDisk = await readHandoff(record.taskId, handoffsDir);
+    expect(onDisk).not.toBeNull();
+    expect(onDisk!.status).toBe('answered');
+    // route and telegramMessageId must NOT have been written (would require status=pending)
+    expect(onDisk!.route).toBeUndefined();
+    expect(onDisk!.telegramMessageId).toBeUndefined();
+  });
+
+  afterEach(async () => {
+    if (handoffsDir) await rm(handoffsDir, { recursive: true, force: true }).catch(() => {});
   });
 });
 
