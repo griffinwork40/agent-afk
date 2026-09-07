@@ -1,32 +1,38 @@
-fix(subagent): populate CompletedCache in onTerminal; refactor tasks stdin TODO
+fix(daemon): proactive OAuth token refresh timer (#1296)
 
-## BLOCKER: CompletedCache never populated
-`SubagentManager.forkSubagent` built a `CompletedCache` and exposed it via
-`manager.completed`, but the `onTerminal` callback only called
-`this.active.delete(id)`, `this.abortGraph.dispose(id)`, and
-`void logWriter?.close()` -- `completed.add()` was never called. After
-`onTerminal` fired, `manager.get(id)` returned `undefined` for every
-completed subagent, making `/tasks:view` unable to locate any finished handle
-from the in-memory path.
+Problem: a long-lived daemon holds an OAuth access token that may expire
+hours into its run. Scheduled tasks that fire after expiry receive a 401,
+but the per-request 401-retry path in auth-retry-tier.ts only fires
+during an active API call — there is no request in flight between tasks
+to trigger the refresh, so the daemon is stuck.
 
-Fix: add `CompletedCache.recordHandle()` -- a convenience method that builds
-a lightweight `SubagentResult` from terminal handle-state fields (all
-fully populated by `run()` before `_onTerminal()` fires) and calls `add()`
-internally. `onTerminal` now calls `this.completed.recordHandle(...)`.
-The `message` field is intentionally omitted from the cached result because
-`/tasks:view` uses `SubagentLogReader` for full conversation replay.
+Fix (Option 2 from the issue): add a background setInterval inside
+startDaemon that calls an injected oauthRefresher every
+oauthRefreshIntervalMs (default 4 hours). Claude Code OAuth tokens
+typically expire after 8 hours, so a 4-hour interval refreshes well
+before the halfway point.
 
-## Medium: subagent.ts file-size ceiling
-Adding the completion-cache wiring pushed `subagent.ts` briefly above the
-350 code-line ceiling. Extracting the result-building logic into
-`CompletedCache.recordHandle()` brings it back to 344 code lines.
+Implementation:
+- DaemonOptions.oauthRefresher: injected from the CLI layer following
+  the existing doneUnverifiedProbe injection pattern.
+- DaemonOptions.oauthRefreshIntervalMs: override for tests.
+- The timer is unref()d so it does not block process.exit() in --once
+  runs or tests that skip stop().
+- Errors inside the refresher are caught and written to stderr; the
+  per-request 401 retry remains the last-resort safety net.
+- stop() clears the timer immediately to prevent post-stop calls.
 
-## Medium: direct process.stdin access in tasks.ts
-Added a TODO comment on the `process.stdin.on('data', onKeypress)` line,
-noting that direct stdin listeners bypass the compositor's routing and
-should route through `compositor.enterPickerMode()` instead.
+CLI wiring (src/cli/commands/daemon.ts):
+- Injects refreshClaudeCodeOauthToken (keychain.ts) as oauthRefresher
+  when the daemon is OAuth-routed (no explicit --api-key or env credential).
+- Uses a dynamic import() inside the refresher closure to stay within
+  the file's existing filesize-ratchet baseline (392 code lines).
+- Extracts the inline doneUnverifiedProbe lambda into a named const
+  isDoneUnverified helper, keeping the startDaemon call site concise
+  and net code-line count within baseline.
 
-## Tests
-Added 4 tests for `CompletedCache.recordHandle()` covering succeeded,
-succeeded-with-stopReason, failed, and cancelled cases (17 tests total,
-up from 13).
+Tests (src/agent/daemon.test.ts):
+- Timer fires on the configured interval.
+- stop() clears the timer; no further calls after stop.
+- A throwing refresher logs to stderr but does not propagate.
+- No timer installed when oauthRefresher is omitted.

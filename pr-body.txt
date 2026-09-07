@@ -1,0 +1,39 @@
+## Summary
+
+Fixes #1296: daemon's scheduled tasks fail with 401 when the OAuth token expires between tasks because the per-request retry path has nothing to trigger it.
+
+## Root cause
+
+The existing `auth-retry-tier.ts` 401 retry only fires when an API call is actively in flight. A long-lived daemon (running as a service via launchd/systemd) can sit idle for hours between tasks. When the OAuth token expires during that idle window, the next task fires with a stale token and gets a 401 — but there is no prior request to trigger the reactive refresh, so the daemon is stuck.
+
+## Fix (Option 2 from issue)
+
+Add a background `setInterval` in `startDaemon` that proactively calls an injected `oauthRefresher` every 4 hours (configurable via `oauthRefreshIntervalMs`). The refresher is a no-op when the token is still valid (`keychain.ts` guards on `expiresAt + REFRESH_MARGIN_MS`), so the overhead is negligible.
+
+### Architecture
+
+Follows the `doneUnverifiedProbe` injection pattern: the refresher function is injected from the CLI layer (`src/cli/commands/daemon.ts`) because `src/agent/` must not import credential code directly.
+
+### Key properties
+
+- **Timer unref'd**: does not prevent `process.exit()` in `--once` runs or test teardown
+- **Errors suppressed**: a failed proactive refresh logs to stderr but does not crash the daemon — the per-request 401 retry remains the last-resort safety net
+- **stop() clears timer**: prevents any post-stop calls on graceful shutdown
+- **OAuth-only wiring**: only injected when the daemon is OAuth-routed (no explicit `--api-key`, `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN`)
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| `src/agent/daemon.ts` | Add `oauthRefresher` / `oauthRefreshIntervalMs` to `DaemonOptions`; install/clear timer in `startDaemon`/`stop` |
+| `src/cli/commands/daemon.ts` | Wire `refreshClaudeCodeOauthToken` as the refresher for OAuth-routed daemons; extract `isDoneUnverified` helper (filesize ratchet compliance) |
+| `src/agent/daemon.test.ts` | 4 new tests covering timer fire, stop cleanup, error suppression, and no-op when omitted |
+
+## CI
+
+- `pnpm lint` ✅
+- `pnpm test` ✅ (pre-existing `anthropic-direct.test.ts compact()` and `writer.test.ts process-exit backstop` failures are on main, not introduced here)
+- `pnpm audit:filesize:check` ✅ (`cli/commands/daemon.ts` stays at its 392-line baseline)
+- `pnpm audit:sdk:check` ✅
+- `pnpm scan:env:check` ✅
+- `pnpm audit:chalk:check` ✅
