@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isExplicitlyDisabled } from './env-helpers.js';
+import { isExplicitlyDisabled, isExplicitlyEnabled } from './env-helpers.js';
 
 describe('isExplicitlyDisabled', () => {
   describe('disable values — return true', () => {
@@ -28,6 +28,38 @@ describe('isExplicitlyDisabled', () => {
       'returns false for %j',
       (v) => {
         expect(isExplicitlyDisabled(v)).toBe(false);
+      },
+    );
+  });
+});
+
+describe('isExplicitlyEnabled', () => {
+  describe('enable values — return true', () => {
+    it.each(['1', 'true', 'yes', 'on'])('returns true for %s', (v) => {
+      expect(isExplicitlyEnabled(v)).toBe(true);
+    });
+  });
+
+  describe('case insensitivity', () => {
+    it.each(['TRUE', 'True', 'YES', 'Yes', 'ON', 'On'])('returns true for %s', (v) => {
+      expect(isExplicitlyEnabled(v)).toBe(true);
+    });
+  });
+
+  describe('whitespace trimming', () => {
+    it.each([' 1 ', ' true ', ' yes ', ' on ', '\t1\t', '\ntrue\n'])(
+      'returns true for %j (whitespace-padded)',
+      (v) => {
+        expect(isExplicitlyEnabled(v)).toBe(true);
+      },
+    );
+  });
+
+  describe('non-enable values — return false', () => {
+    it.each(['0', 'false', 'no', 'off', 'garbage', 'enabled', 'nope'])(
+      'returns false for %j',
+      (v) => {
+        expect(isExplicitlyEnabled(v)).toBe(false);
       },
     );
   });

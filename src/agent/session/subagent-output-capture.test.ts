@@ -84,6 +84,16 @@ describe('shouldCaptureSubagentOutput', () => {
     expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
   });
 
+  it('is off when the flag is a garbage string (not in allowlist)', () => {
+    process.env[FLAG] = 'garbage';
+    expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
+  });
+
+  it('is off when the flag is "enabled" (not in allowlist)', () => {
+    process.env[FLAG] = 'enabled';
+    expect(shouldCaptureSubagentOutput(baseInput())).toBe(false);
+  });
+
   it('is on when the flag is explicitly "1"', () => {
     process.env[FLAG] = '1';
     expect(shouldCaptureSubagentOutput(baseInput())).toBe(true);

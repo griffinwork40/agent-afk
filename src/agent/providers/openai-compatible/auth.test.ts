@@ -254,6 +254,13 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
     expect(r.apiKey).toBeNull();
   });
 
+  it.each(['false', 'no', 'off', 'FALSE', 'NO', 'OFF'])('stays rejected when flag is %j (not in allowlist)', (flagVal) => {
+    const flagEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? flagVal : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagEnv, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
   it('prefers an explicit account_id field over the JWT claim', () => {
     const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson({ account_id: 'acct_explicit' }) }));
     expect(r.accountId).toBe('acct_explicit');

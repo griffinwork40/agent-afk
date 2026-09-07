@@ -29,7 +29,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { env, isExplicitlyDisabled } from '../../config/env.js';
+import { env, isExplicitlyEnabled } from '../../config/env.js';
 import { getSubagentOutputsDir } from '../../paths.js';
 import type { OutputEvent } from '../types/session-types.js';
 import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
@@ -72,7 +72,7 @@ export interface SubagentOutputCaptureInput {
  */
 export function shouldCaptureSubagentOutput(input: SubagentOutputCaptureInput): boolean {
   const v = env.AFK_CAPTURE_SUBAGENT_OUTPUT;
-  if (!v || isExplicitlyDisabled(v)) return false;
+  if (!v || !isExplicitlyEnabled(v)) return false;
   if (!input.isSubagentFork) return false;
   if (!input.sessionId || !input.subagentId) return false;
   return true;

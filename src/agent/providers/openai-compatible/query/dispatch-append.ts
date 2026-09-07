@@ -4,7 +4,7 @@ import { emitToolCall } from '../../../trace/emit.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
 import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/raw-input.js';
-import { env, isExplicitlyDisabled } from '../../../../config/env.js';
+import { env, isExplicitlyEnabled } from '../../../../config/env.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
@@ -122,7 +122,7 @@ export async function* dispatchAndAppendToolCalls({
       // var is set. The recorder null-gates at construction via
       // shouldCaptureSubagentOutput, so this field is silently dropped for
       // non-fork sessions. Wasted extractCaptureToolInput call only.
-      toolInputCapture: (env.AFK_CAPTURE_SUBAGENT_OUTPUT && !isExplicitlyDisabled(env.AFK_CAPTURE_SUBAGENT_OUTPUT)) ? extractCaptureToolInput(call.input) : undefined,
+      toolInputCapture: (env.AFK_CAPTURE_SUBAGENT_OUTPUT && isExplicitlyEnabled(env.AFK_CAPTURE_SUBAGENT_OUTPUT)) ? extractCaptureToolInput(call.input) : undefined,
       sessionId,
     };
   }

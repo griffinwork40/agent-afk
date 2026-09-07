@@ -1929,4 +1929,5 @@ export {
   isEnvVarSet,
   getEnvVarValue,
   isExplicitlyDisabled,
+  isExplicitlyEnabled,
 } from './env-helpers.js';
