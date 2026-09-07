@@ -375,7 +375,14 @@ export async function matchReplyToHandoff(
 // Internals
 // ---------------------------------------------------------------------------
 
-/** Update the HandoffRecord with Telegram route and message ID for restart recovery. */
+/**
+ * Update the HandoffRecord with Telegram route and message ID for restart recovery.
+ *
+ * Invariant: re-reads the record from disk before writing so a concurrent answer
+ * that transitioned the record to 'answered' between sendMessage and this call is
+ * never clobbered. If the fresh copy is no longer 'pending', we skip the write --
+ * the answer already landed and erasing it would be a data loss bug (#1549).
+ */
 async function persistRouteAndMessageId(
   record: HandoffRecord,
   chatId: number,
@@ -384,12 +391,15 @@ async function persistRouteAndMessageId(
   handoffsDir?: string,
 ): Promise<void> {
   const route: HandoffRoute = { chatId, ...(threadId ? { threadId } : {}) };
-  const updated: HandoffRecord = {
-    ...record,
-    route,
-    telegramMessageId: messageId,
-  };
   try {
+    const fresh = await readHandoff(record.taskId, handoffsDir);
+    // Answer won the race -- skip the write to preserve it.
+    if (fresh === null || fresh.status !== 'pending') return;
+    const updated: HandoffRecord = {
+      ...fresh,
+      route,
+      telegramMessageId: messageId,
+    };
     await writeHandoff(updated, handoffsDir);
   } catch {
     // Best-effort: the handoff still works without route/messageId; restart
