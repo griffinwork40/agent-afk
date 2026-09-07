@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.195.0] - 2026-09-07
+
+### Added
+- auto-reclaim locked worktrees when preservation reason expires (#1545) (#1548) (480d45bb)
+
 ## [5.194.0] - 2026-09-07
 
 ### Added
