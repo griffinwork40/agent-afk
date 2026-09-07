@@ -20,7 +20,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupWorktree } from './worktree.js';
-import { readRegisteredWorktreeRoots } from '../../../agent/worktree-root-registry.js';
+import { readRegisteredWorktreeRoots } from '../../../agent/worktree/worktree-root-registry.js';
 
 type ExecResult = { stdout: string; stderr: string };
 type ExecCall = { file: string; args: string[]; opts?: { cwd?: string } };

@@ -6,7 +6,7 @@
  * isolation, the aggregation, and the skip branch all live here.
  *
  * Kept out of `scheduler.test.ts` deliberately: this file mocks
- * `../worktree-sweep.js` and `../worktree-root-registry.js` module-wide, and
+ * `../worktree/worktree-sweep.js` and `../worktree/worktree-root-registry.js` module-wide, and
  * `vi.mock` is file-scoped — folding these in would silently re-point those
  * modules for the 30 unrelated telemetry tests next door.
  */
@@ -36,13 +36,13 @@ vi.mock('node-cron', () => ({
   })),
 }));
 
-vi.mock('../worktree-sweep.js', () => ({ runSweep: vi.fn() }));
-vi.mock('../worktree-root-registry.js', () => ({ sweepRootSet: vi.fn() }));
+vi.mock('../worktree/worktree-sweep.js', () => ({ runSweep: vi.fn() }));
+vi.mock('../worktree/worktree-root-registry.js', () => ({ sweepRootSet: vi.fn() }));
 
 import { CronScheduler } from './scheduler.js';
-import { runSweep } from '../worktree-sweep.js';
-import { sweepRootSet } from '../worktree-root-registry.js';
-import type { SweepResult } from '../worktree-sweep.js';
+import { runSweep } from '../worktree/worktree-sweep.js';
+import { sweepRootSet } from '../worktree/worktree-root-registry.js';
+import type { SweepResult } from '../worktree/worktree-sweep.js';
 
 const mockRunSweep = vi.mocked(runSweep);
 const mockSweepRootSet = vi.mocked(sweepRootSet);

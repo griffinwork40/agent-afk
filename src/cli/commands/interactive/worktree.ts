@@ -19,8 +19,8 @@ import { randomBytes } from 'node:crypto';
 
 import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js';
 import { detectShellFromEnv } from '../shell-init.js';
-import { probeNonRebuildableIgnoredFiles } from '../../../agent/worktree-ignored-probe.js';
-import { registerWorktreeRoot } from '../../../agent/worktree-root-registry.js';
+import { probeNonRebuildableIgnoredFiles } from '../../../agent/worktree/worktree-ignored-probe.js';
+import { registerWorktreeRoot } from '../../../agent/worktree/worktree-root-registry.js';
 import type { WorktreeDisposition } from './worktree-disposition.js';
 
 const execFileDefault = promisify(execFileCallback);

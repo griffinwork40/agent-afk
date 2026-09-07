@@ -86,7 +86,7 @@ import { classifyRisk } from './risk-classifier.js';
 import { elicitationRouter } from './elicitation-router.js';
 import { emitHookDecision } from './trace/emit.js';
 import { redactInlineSecrets } from './session/prompt-dump.js';
-import { worktreeRootFor } from './worktree-occupancy.js';
+import { worktreeRootFor } from './worktree/worktree-occupancy.js';
 import { isSafeInWorkspaceRm } from './afk-mode-rm-allowlist.js';
 
 /** Default deny-on-timeout window for a high-risk approval (ms). */

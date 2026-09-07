@@ -2,7 +2,7 @@
  * Tests for the /worktree slash command.
  *
  * Strategy: mock `runSweep` from the sweep engine module (the real engine
- * is exercised by `src/agent/worktree-sweep.test.ts`). Each test verifies
+ * is exercised by `src/agent/worktree/worktree-sweep.test.ts`). Each test verifies
  * the slash's routing, argument parsing, formatting, and the "this session"
  * marker logic.
  */
@@ -13,9 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SlashContext, SessionStats } from '../types.js';
 
-vi.mock('../../../agent/worktree-sweep.js', async () => {
-  const actual = await vi.importActual<typeof import('../../../agent/worktree-sweep.js')>(
-    '../../../agent/worktree-sweep.js',
+vi.mock('../../../agent/worktree/worktree-sweep.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../agent/worktree/worktree-sweep.js')>(
+    '../../../agent/worktree/worktree-sweep.js',
   );
   return {
     ...actual,
@@ -23,7 +23,7 @@ vi.mock('../../../agent/worktree-sweep.js', async () => {
   };
 });
 
-import { runSweep } from '../../../agent/worktree-sweep.js';
+import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
 import { worktreeCmd } from './worktree.ts';
 
 const mockRunSweep = runSweep as unknown as ReturnType<typeof vi.fn>;

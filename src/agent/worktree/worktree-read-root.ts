@@ -59,7 +59,7 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { debugLog } from '../utils/debug.js';
+import { debugLog } from '../../utils/debug.js';
 
 const execFilePromise = promisify(execFileCb);
 

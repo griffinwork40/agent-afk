@@ -57,7 +57,7 @@ import { AgentSession } from '../session/agent-session.js';
 import { McpManager } from '../mcp/index.js';
 import type { AgentConfig } from '../types.js';
 import type { ModelProvider, ProviderEvent, ProviderQuery, ProviderQueryArgs, ProviderUserTurn } from '../provider.js';
-import type { ExecFileFn } from '../worktree-sweep.js';
+import type { ExecFileFn } from '../worktree/worktree-sweep.js';
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'agent-afk-scheduler-'));

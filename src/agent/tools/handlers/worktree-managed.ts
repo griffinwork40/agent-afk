@@ -20,9 +20,9 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
 import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
-import type { ExecFileFn } from '../../worktree-sweep.js';
-import { registerWorktreeRoot } from '../../worktree-root-registry.js';
-import { hasNonRebuildableIgnoredFiles } from '../../worktree-ignored-probe.js';
+import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
+import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
+import { hasNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */

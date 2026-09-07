@@ -13,8 +13,8 @@ import { join, resolve, isAbsolute, sep } from 'node:path';
 import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type { ToolHandler } from '../types.js';
-import { runSweep } from '../../worktree-sweep.js';
-import type { ExecFileFn } from '../../worktree-sweep.js';
+import { runSweep } from '../../worktree/worktree-sweep.js';
+import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { env } from '../../../config/env.js';
 import {
   defaultExecFile,

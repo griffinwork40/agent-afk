@@ -10,8 +10,8 @@
 import { promises as fs, existsSync, createReadStream, realpathSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
-import { getWorktreeSweepLockPath, getTelemetryPath } from '../paths.js';
-import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js';
+import { getWorktreeSweepLockPath, getTelemetryPath } from '../../paths.js';
+import { readPresenceFiles, type PresenceRecord } from '../awareness/presence.js';
 // Runtime value import. Safe despite the mutual reference: the only import
 // going the other way (worktree-ignored-probe.ts importing ExecFileFn from
 // THIS file) is `import type`, which TypeScript erases at compile time — so
