@@ -30,6 +30,7 @@ import type { MemoryStore } from '../memory/index.js';
 import type { McpManager } from '../mcp/index.js';
 import type { StateStore } from '../state/state-store.js';
 import type { AgentConfig } from '../types.js';
+import type { Telegraf } from 'telegraf';
 
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
@@ -96,6 +97,18 @@ export interface SchedulerOptions {
    * guards it defensively so a bug can never crash a tick.
    */
   doneUnverifiedProbe?: (args: { responseText: string; successfulToolNames: readonly string[] }) => boolean;
+  /**
+   * Telegraf bot instance for rich elicitation in pull-mode tasks. When
+   * provided together with `primaryChatId`, daemon ask_question calls use
+   * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
+   * falling back to the plain `pushIfConfigured` text notification path.
+   * Has no effect when absent — fallback is always preserved.
+   */
+  bot?: Telegraf;
+  /** Primary Telegram chat ID for handoff question delivery. */
+  primaryChatId?: number;
+  /** Optional topic thread ID for supergroup delivery. */
+  primaryThreadId?: number;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -398,6 +411,9 @@ export class CronScheduler {
           taskId: task.taskId,
           originalCommand: redactInlineSecrets(task.command),
           queueDir: this.queueDir,
+          ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
+          ...(this.options.primaryChatId !== undefined ? { chatId: this.options.primaryChatId } : {}),
+          ...(this.options.primaryThreadId !== undefined ? { threadId: this.options.primaryThreadId } : {}),
         }));
         handlerInstalled = true;
       }

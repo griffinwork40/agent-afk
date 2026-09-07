@@ -15,6 +15,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AgentConfig } from './types.js';
+import type { Telegraf } from 'telegraf';
 import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './daemon/scheduler.js';
 import type { ScheduledTask, TriggerMode } from './daemon/triggers.js';
 import { getDaemonStateDir } from '../paths.js';
@@ -76,6 +77,19 @@ export interface DaemonOptions {
    */
   writePortFile?: boolean;
   /**
+   * Telegraf bot instance for rich daemon elicitation. When provided together
+   * with `primaryChatId`, pull-mode tasks use `sendHandoffQuestion` (inline
+   * keyboards, reply-to matching) instead of the plain push fallback. Follows
+   * the `doneUnverifiedProbe` injection pattern — injected from the co-running
+   * caller (e.g. a shared Telegram+daemon process) rather than imported.
+   * Has no effect when absent — fallback is always preserved.
+   */
+  bot?: Telegraf;
+  /** Primary Telegram chat ID for elicitation delivery when `bot` is present. */
+  primaryChatId?: number;
+  /** Optional topic thread ID for supergroup delivery. */
+  primaryThreadId?: number;
+  /**
    * Proactive OAuth token refresher (optional).
    *
    * When provided, `startDaemon` installs a background timer that calls this
@@ -136,6 +150,9 @@ export async function startDaemon(options: DaemonOptions = {}): Promise<DaemonHa
     ...(options.doneUnverifiedProbe !== undefined ? { doneUnverifiedProbe: options.doneUnverifiedProbe } : {}),
     ...(options.pullPollIntervalMs !== undefined ? { pullPollIntervalMs: options.pullPollIntervalMs } : {}),
     ...(options.queueDir !== undefined ? { queueDir: options.queueDir } : {}),
+    ...(options.bot !== undefined ? { bot: options.bot } : {}),
+    ...(options.primaryChatId !== undefined ? { primaryChatId: options.primaryChatId } : {}),
+    ...(options.primaryThreadId !== undefined ? { primaryThreadId: options.primaryThreadId } : {}),
   });
 
   if (options.pullPollIntervalMs !== undefined && options.pullPollIntervalMs > 0) {

@@ -10,7 +10,7 @@
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
     "src/agent/daemon/scheduler.ts": {
-      "loc": 380,
+      "loc": 387,
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
     "src/agent/memory/memory-store.ts": {
@@ -62,14 +62,14 @@
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
     "src/agent/trace/events.ts": {
-      "loc": 427,
+      "loc": 426,
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
     "src/agent/trace/receipt.ts": {
       "loc": 412,
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
-    "src/agent/worktree/worktree-sweep.ts": {
+    "src/agent/worktree-sweep.ts": {
       "loc": 500,
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
@@ -130,7 +130,7 @@
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
     "src/config/env.ts": {
-      "loc": 1754,
+      "loc": 1747,
       "reason": "legacy: predates the ceiling gate; pending concern extraction"
     },
     "src/config/import-sources.ts": {
