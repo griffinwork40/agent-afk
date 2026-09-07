@@ -32,6 +32,8 @@ import {
 } from './handoff-store.js';
 import { setLeaseState } from './lease-store.js';
 import { pushIfConfigured } from '../../telegram/push.js';
+import type { Telegraf } from 'telegraf';
+import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -78,6 +80,17 @@ export interface DaemonElicitationOpts {
    * Handoffs directory override (for testing). Defaults to getHandoffsDir().
    */
   handoffsDir?: string;
+  /**
+   * Telegraf bot instance for sending rich handoff questions with inline
+   * keyboards. When provided, questions are sent via `sendHandoffQuestion`
+   * (interactive buttons for confirm/choice, reply-to for text/number).
+   * When absent, falls back to plain `pushIfConfigured` text notification.
+   */
+  bot?: Telegraf;
+  /** Target Telegram chat ID for the handoff question. */
+  chatId?: number;
+  /** Optional topic thread ID for supergroups. */
+  threadId?: number;
 }
 
 /**
@@ -145,18 +158,30 @@ export function makeDaemonElicitationHandler(
       );
     }
 
-    // Step 3: send a Telegram notification. Fire-and-forget.
-    const questionText = truncateForNotify(request.message);
-    const parts = [
-      `🔔 Daemon task waiting for your answer`,
-      `📋 Task: ${opts.taskId}`,
-      questionText,
-    ];
-    if (request.choices && request.choices.length > 0) {
-      parts.push(`Options: ${truncateForNotify(request.choices.join(', '))}`);
+    // Step 3: send the question to Telegram. When a bot instance is available,
+    // use sendHandoffQuestion for rich inline keyboards (confirm/choice) and
+    // reply-to-message matching (text/number). Otherwise fall back to plain push.
+    if (opts.bot && opts.chatId) {
+      void sendHandoffQuestion({
+        bot: opts.bot,
+        record,
+        chatId: opts.chatId,
+        threadId: opts.threadId,
+        handoffsDir: opts.handoffsDir,
+      }).catch(() => undefined);
+    } else {
+      const questionText = truncateForNotify(request.message);
+      const parts = [
+        `🔔 Daemon task waiting for your answer`,
+        `📋 Task: ${opts.taskId}`,
+        questionText,
+      ];
+      if (request.choices && request.choices.length > 0) {
+        parts.push(`Options: ${truncateForNotify(request.choices.join(', '))}`);
+      }
+      parts.push(`\nReply to this task's next run to provide your answer.`);
+      void pushIfConfigured(parts.join('\n')).catch(() => undefined);
     }
-    parts.push(`\nReply to this task's next run to provide your answer.`);
-    void pushIfConfigured(parts.join('\n')).catch(() => undefined);
 
     // Step 4: decline — daemon sessions cannot block on a synchronous answer.
     // The durable handoff record is the mechanism for eventual delivery.
@@ -199,6 +224,7 @@ export interface RecoveryResult {
 export async function recoverPendingHandoffs(
   handoffsDir?: string,
   queueDir?: string,
+  bot?: Telegraf,
 ): Promise<RecoveryResult> {
   const result: RecoveryResult = { renotified: 0, expired: 0 };
 
@@ -238,18 +264,32 @@ export async function recoverPendingHandoffs(
       continue;
     }
 
-    // Re-notify the operator.
+    // Re-notify the operator. When a bot instance is available and the record
+    // has a stored route, re-send a rich interactive question. Otherwise fall
+    // back to the plain push notification path.
     try {
-      const questionText = typeof record.question['message'] === 'string'
-        ? truncateForNotify(record.question['message'] as string)
-        : '(question details unavailable)';
-      const parts = [
-        `🔔 Reminder: daemon task still waiting for your answer`,
-        `📋 Task: ${record.taskId}`,
-        questionText,
-        `⏱️ Waiting for ${Math.round(age / 60_000)} minutes`,
-      ];
-      void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+      if (bot && record.route) {
+        // Clear any stale in-memory entry from a prior run before re-sending.
+        clearPendingTextHandoff(record.taskId);
+        await sendHandoffQuestion({
+          bot,
+          record,
+          chatId: record.route.chatId,
+          threadId: record.route.threadId,
+          handoffsDir,
+        });
+      } else {
+        const questionText = typeof record.question['message'] === 'string'
+          ? truncateForNotify(record.question['message'] as string)
+          : '(question details unavailable)';
+        const parts = [
+          `🔔 Reminder: daemon task still waiting for your answer`,
+          `📋 Task: ${record.taskId}`,
+          questionText,
+          `⏱️ Waiting for ${Math.round(age / 60_000)} minutes`,
+        ];
+        void pushIfConfigured(parts.join('\n')).catch(() => undefined);
+      }
       result.renotified += 1;
     } catch {
       // Non-fatal — continue with other handoffs.

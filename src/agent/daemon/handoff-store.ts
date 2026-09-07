@@ -100,6 +100,14 @@ export interface HandoffRecord {
   answerSource?: string;
   /** The daemon task command, preserved for re-enqueue with injected answer. */
   originalCommand: string;
+  /**
+   * Telegram message_id of the question message sent to the operator.
+   * Used by the reply-to-message matching path: when the operator replies
+   * to this message, the bot matches the reply's `reply_to_message.message_id`
+   * against this field to route the answer to the correct handoff.
+   * Populated after the Telegram message is successfully sent.
+   */
+  telegramMessageId?: number;
 }
 
 // ---------------------------------------------------------------------------
