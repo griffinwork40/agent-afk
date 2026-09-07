@@ -296,3 +296,109 @@ describe('teardownIsolatedWorktree', () => {
     expect(lock?.args.join(' ')).toMatch(/non-rebuildable ignored files/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Layer 2 + 3: structured metadata and self-healing teardown (#1545)
+// ---------------------------------------------------------------------------
+
+describe('teardownIsolatedWorktree — structured metadata on preserve', () => {
+  it('writes preservedReason + preservedAt to meta after locking a dirty tree', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'iso-meta-dirty');
+    await fs.mkdir(wtPath, { recursive: true });
+    // Existing meta (simulates what createManagedWorktree wrote)
+    await fs.writeFile(join(wtPath, '.afk-worktree-meta.json'), JSON.stringify({ owner: 'agent', createdAt: new Date().toISOString() }));
+
+    const mock = makeMock((call) => {
+      if (call.args.includes('status')) return { stdout: ' M wip.ts\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'dirty' });
+
+    const meta = JSON.parse(await fs.readFile(join(wtPath, '.afk-worktree-meta.json'), 'utf-8')) as Record<string, unknown>;
+    expect(meta['preservedReason']).toBe('dirty');
+    expect(typeof meta['preservedAt']).toBe('string');
+    expect(meta['commitsAheadAtPreserve']).toBeUndefined();
+  });
+
+  it('writes preservedReason + commitsAheadAtPreserve to meta for a commits-ahead tree', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'iso-meta-ahead');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(join(wtPath, '.afk-worktree-meta.json'), JSON.stringify({
+      owner: 'agent',
+      createdAt: new Date().toISOString(),
+      baseSha: 'base999',
+    }));
+
+    const mock = makeMock((call) => {
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      if (call.args.includes('--ignored')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse')) return { stdout: 'head111\n', stderr: '' };
+      if (call.args.includes('rev-list')) return { stdout: '3\n', stderr: '' };
+      // re-probe upstream (Layer 3): return non-empty to force preserve path
+      if (call.args.includes('log') && call.args.includes('@{upstream}..HEAD')) return { stdout: 'abc commit\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'commits-ahead' });
+
+    const meta = JSON.parse(await fs.readFile(join(wtPath, '.afk-worktree-meta.json'), 'utf-8')) as Record<string, unknown>;
+    expect(meta['preservedReason']).toBe('commits-ahead');
+    expect(meta['commitsAheadAtPreserve']).toBe(3);
+  });
+});
+
+describe('teardownIsolatedWorktree — self-healing re-probe (Layer 3)', () => {
+  it('removes a commits-ahead tree when the re-probe shows all commits are pushed', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'iso-pushed-healed');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(join(wtPath, '.afk-worktree-meta.json'), JSON.stringify({
+      owner: 'agent',
+      createdAt: new Date().toISOString(),
+      baseSha: 'base777',
+    }));
+
+    const mock = makeMock((call) => {
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      if (call.args.includes('--ignored')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse')) return { stdout: 'head222\n', stderr: '' };
+      if (call.args.includes('rev-list')) return { stdout: '2\n', stderr: '' };
+      // Layer 3 re-probe: empty → all pushed → safe to remove
+      if (call.args.includes('log') && call.args.includes('@{upstream}..HEAD')) return { stdout: '', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
+    // After re-probe reveals all pushed, teardown removes the tree
+    expect(result.removed).toBe(true);
+    expect(result.preserved).toBe(false);
+    expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(true);
+    expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(false);
+  });
+
+  it('still preserves + locks when re-probe confirms commits are NOT pushed', async () => {
+    const wtPath = join(repoRoot, '.afk-worktrees', 'iso-still-unpushed');
+    await fs.mkdir(wtPath, { recursive: true });
+    await fs.writeFile(join(wtPath, '.afk-worktree-meta.json'), JSON.stringify({
+      owner: 'agent',
+      createdAt: new Date().toISOString(),
+      baseSha: 'base888',
+    }));
+
+    const mock = makeMock((call) => {
+      if (call.args.includes('status')) return { stdout: '', stderr: '' };
+      if (call.args.includes('--ignored')) return { stdout: '', stderr: '' };
+      if (call.args.includes('rev-parse')) return { stdout: 'head333\n', stderr: '' };
+      if (call.args.includes('rev-list')) return { stdout: '1\n', stderr: '' };
+      // re-probe: non-empty → still unpushed → preserve
+      if (call.args.includes('log') && call.args.includes('@{upstream}..HEAD')) return { stdout: 'def456 unpushed commit\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'commits-ahead' });
+    expect(mock.calls.some((c) => c.args.includes('lock'))).toBe(true);
+  });
+});

@@ -334,11 +334,30 @@ export function describePreserveReason(reason: NonNullable<IsolatedTeardownResul
 }
 
 /**
+ * Contract: re-probe whether commits on HEAD have been pushed since the
+ * `commitsAhead` check ran. Outputs empty when all commits are upstream-
+ * reachable (safe to remove); non-empty when unpushed work remains.
+ * Fails SAFE — any git error returns a non-empty string so the caller
+ * treats the tree as having unpushed commits and preserves it.
+ */
+async function probeUnpushedCommits(execFile: ExecFileFn, worktreePath: string): Promise<string> {
+  try {
+    const r = await execFile('git', ['-C', worktreePath, 'log', '--oneline', '@{upstream}..HEAD']);
+    return r.stdout.trim();
+  } catch { return 'probe-failed'; }
+}
+
+/**
  * Tear down an isolated worktree after its subagent finishes. Removes a
  * clean tree; PRESERVES a dirty / commits-ahead / ignored-local-state tree
  * (WIP and untracked local state are never destroyed) and `git worktree
  * lock`s it so the sweep engine never reaps it out from under work in
  * progress. Best-effort — never throws (teardown runs in a `finally`).
+ *
+ * History: Layer 3 re-probe added — when the initial guard says `commits-ahead`,
+ * we re-query the upstream to catch the race where a subagent pushed its branch
+ * but the teardown still sees stale commitsAhead data. If the re-probe finds the
+ * remote holds all commits, the tree is removed rather than preserved.
  */
 export async function teardownIsolatedWorktree(args: {
   execFile?: ExecFileFn;
@@ -354,6 +373,18 @@ export async function teardownIsolatedWorktree(args: {
       force: false,
     });
     if (outcome.removed) return { removed: true, preserved: false };
+    // Layer 3: when guard refused due to commits-ahead, re-probe push status.
+    // The subagent may have pushed after the commitsAhead check ran.
+    if (outcome.reason === 'commits-ahead') {
+      const unpushed = await probeUnpushedCommits(execFile, args.worktreePath);
+      if (!unpushed) {
+        // All commits are on the remote — safe to remove now.
+        try {
+          await execFile('git', ['-C', args.repoRoot, 'worktree', 'remove', args.worktreePath]);
+          return { removed: true, preserved: false };
+        } catch { /* fall through to preserve */ }
+      }
+    }
     // Dirty, commits-ahead, or ignored-local-state → preserve WIP/local state;
     // lock so the sweep never reaps it.
     try {
@@ -363,6 +394,18 @@ export async function teardownIsolatedWorktree(args: {
         args.worktreePath,
       ]);
     } catch { /* best-effort */ }
+    // Layer 2: write structured metadata AFTER locking so the sweep reconsider
+    // module can query preservedReason without re-running git.
+    try {
+      const metaPath = join(args.worktreePath, '.afk-worktree-meta.json');
+      const existing = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as Record<string, unknown>;
+      const patch: Record<string, unknown> = {
+        preservedReason: outcome.reason,
+        preservedAt: new Date().toISOString(),
+      };
+      if (outcome.reason === 'commits-ahead') patch['commitsAheadAtPreserve'] = outcome.commitsAhead;
+      await fs.writeFile(metaPath, JSON.stringify({ ...existing, ...patch }, null, 2), 'utf-8');
+    } catch { /* best-effort — never fail teardown over a meta write */ }
     return { removed: false, preserved: true, reason: outcome.reason };
   } catch {
     return { removed: false, preserved: false };

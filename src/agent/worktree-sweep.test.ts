@@ -2771,3 +2771,208 @@ describe('pushed-commits reaping', () => {
     expect(result.removed).not.toContain(worktreePath);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Parser fix: locked with reason string (#1545 Layer 1)
+// ---------------------------------------------------------------------------
+
+describe('parseWorktreeList — locked with reason string', () => {
+  it('parses a locked worktree with a bare "locked" line (no reason)', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-locked-bare');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'interactive', createdAt: new Date().toISOString() }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    // Bare "locked" with no trailing reason
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/bare\nlocked`;
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn, repoRoot, lockPath: lockFile, dryRun: false, telemetryPath: telemetryFile,
+    });
+
+    expect(result.candidates.find((c) => c.path === worktreePath)?.verdict).toBe('locked');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+
+  it('parses a locked worktree with "locked <reason>" (the bug fixed by startsWith)', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-locked-reason');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({ owner: 'interactive', createdAt: new Date().toISOString() }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    // git outputs "locked afk: isolated-worktree preserved (commits-ahead)" as a single line
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/reason\nlocked afk: isolated-worktree preserved (commits-ahead)`;
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn, repoRoot, lockPath: lockFile, dryRun: false, telemetryPath: telemetryFile,
+    });
+
+    // Must still classify as locked (was previously missed — the === 'locked' test failed)
+    expect(result.candidates.find((c) => c.path === worktreePath)?.verdict).toBe('locked');
+    expect(result.removed).not.toContain(worktreePath);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sweep reconsideration integration (#1545 Layer 4)
+// ---------------------------------------------------------------------------
+
+describe('sweep reconsideration — auto-unlock integration', () => {
+  it('auto-unlocks a locked commits-ahead tree when all commits are now pushed', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-reconsider-pushed');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date().toISOString(),
+        preservedReason: 'commits-ahead',
+        preservedAt: new Date().toISOString(),
+        commitsAheadAtPreserve: 2,
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/reconsidered\nlocked afk: isolated-worktree preserved (commits-ahead)`;
+    const unlockCalls: string[][] = [];
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      // re-probe: empty output means all pushed
+      if (args.includes('log') && args.includes('@{upstream}..HEAD')) return { stdout: '', stderr: '' };
+      if (args.includes('unlock')) { unlockCalls.push(args); return { stdout: '', stderr: '' }; }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn, repoRoot, lockPath: lockFile, dryRun: false, telemetryPath: telemetryFile,
+    });
+
+    expect(unlockCalls.length).toBeGreaterThan(0);
+    expect(unlockCalls[0]).toContain('unlock');
+    expect(result.warnings.some((w) => w.includes('auto-unlocked') && w.includes(worktreePath))).toBe(true);
+  });
+
+  it('does NOT auto-unlock when commits are still unpushed', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-reconsider-unpushed');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date().toISOString(),
+        preservedReason: 'commits-ahead',
+        preservedAt: new Date().toISOString(),
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/still-unpushed\nlocked afk: isolated-worktree preserved (commits-ahead)`;
+    const unlockCalls: string[][] = [];
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      // re-probe: non-empty means still unpushed
+      if (args.includes('log') && args.includes('@{upstream}..HEAD')) return { stdout: 'abc123 some commit\n', stderr: '' };
+      if (args.includes('unlock')) { unlockCalls.push(args); return { stdout: '', stderr: '' }; }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn, repoRoot, lockPath: lockFile, dryRun: false, telemetryPath: telemetryFile,
+    });
+
+    expect(unlockCalls).toHaveLength(0);
+    expect(result.warnings.some((w) => w.includes('auto-unlocked'))).toBe(false);
+  });
+
+  it('does NOT auto-unlock a tree with ignored-local-state reason', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-reconsider-ignored');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date().toISOString(),
+        preservedReason: 'ignored-local-state',
+        preservedAt: new Date().toISOString(),
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/ignored\nlocked afk: isolated-worktree preserved (ignored-local-state: non-rebuildable ignored files present (e.g. .env) — git status looked clean)`;
+    const unlockCalls: string[][] = [];
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      if (args.includes('unlock')) { unlockCalls.push(args); return { stdout: '', stderr: '' }; }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn, repoRoot, lockPath: lockFile, dryRun: false, telemetryPath: telemetryFile,
+    });
+
+    expect(unlockCalls).toHaveLength(0);
+    expect(result.warnings.some((w) => w.includes('auto-unlocked'))).toBe(false);
+  });
+
+  it('does NOT auto-unlock in dry-run mode', async () => {
+    const worktreePath = join(afkWorktreesDir, 'afk-reconsider-dryrun');
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.writeFile(
+      join(worktreePath, '.afk-worktree-meta.json'),
+      JSON.stringify({
+        owner: 'interactive',
+        createdAt: new Date().toISOString(),
+        preservedReason: 'commits-ahead',
+        preservedAt: new Date().toISOString(),
+      }),
+    );
+
+    const mainBlock = worktreeBlock({ path: repoRoot });
+    const wtBlock = `worktree ${worktreePath}\nHEAD abc1234\nbranch refs/heads/afk/dryrun\nlocked afk: isolated-worktree preserved (commits-ahead)`;
+    const unlockCalls: string[][] = [];
+
+    const mock = makeMock(async ({ args }) => {
+      if (args.includes('list') && args.includes('--porcelain')) {
+        return { stdout: `${mainBlock}\n\n${wtBlock}\n`, stderr: '' };
+      }
+      if (args.includes('log') && args.includes('@{upstream}..HEAD')) return { stdout: '', stderr: '' };
+      if (args.includes('unlock')) { unlockCalls.push(args); return { stdout: '', stderr: '' }; }
+      return { stdout: '', stderr: '' };
+    });
+
+    const result = await runSweep({
+      execFile: mock as ExecFileFn, repoRoot, lockPath: lockFile, dryRun: true, telemetryPath: telemetryFile,
+      bypassSoftLaunch: true,
+    });
+
+    expect(unlockCalls).toHaveLength(0);
+    expect(result.dryRun).toBe(true);
+  });
+});

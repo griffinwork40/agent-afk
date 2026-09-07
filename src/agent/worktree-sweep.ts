@@ -19,6 +19,7 @@ import { readPresenceFiles, type PresenceRecord } from './awareness/presence.js'
 import { probeNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
 import { readRootSweepCount, recordRootSweep, SOFT_LAUNCH_RUNS } from './worktree-sweep-valve.js';
 import { classifyOrphanDir } from './worktree-orphan-guard.js';
+import { reconsiderLockedWorktree } from './worktree-sweep.reconsider.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,6 +80,12 @@ interface WorktreeMeta {
   createdAt: string;
   baseSha?: string;
   baseBranch?: string;
+  /** Why the tree was preserved at teardown. Only set by teardown paths. */
+  preservedReason?: 'dirty' | 'commits-ahead' | 'ignored-local-state';
+  /** ISO timestamp when the tree was preserved. */
+  preservedAt?: string;
+  /** Number of commits ahead of base at preservation time. */
+  commitsAheadAtPreserve?: number;
 }
 
 interface WorktreeCandidate {
@@ -245,9 +252,8 @@ function isProcessAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'EPERM') return true;
-    return false;
+    // EPERM = process exists but isn't ours to signal — still alive.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
@@ -258,11 +264,7 @@ function isProcessAlive(pid: number): boolean {
  * comparison silently fails.
  */
 function realpathSafe(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
+  try { return realpathSync(p); } catch { return p; }
 }
 
 /**
@@ -295,6 +297,8 @@ interface ParsedWorktree {
   head: string;
   branch: string;
   locked: boolean;
+  /** Reason string from `git worktree list --porcelain` (the part after `locked `). */
+  lockReason?: string;
   prunable: boolean;
   isBare: boolean;
 }
@@ -308,17 +312,18 @@ function parseWorktreeList(stdout: string): ParsedWorktree[] {
     let head = '';
     let branch = '';
     let locked = false;
+    let lockReason: string | undefined;
     let prunable = false;
     let isBare = false;
     for (const line of lines) {
       if (line.startsWith('worktree ')) path = line.slice('worktree '.length).trim();
       else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length).trim();
       else if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim();
-      else if (line.trim() === 'locked') locked = true;
+      else if (line.trim().startsWith('locked')) { locked = true; lockReason = line.trim().slice('locked'.length).trim() || undefined; }
       else if (line.trim() === 'prunable') prunable = true;
       else if (line.trim() === 'bare') isBare = true;
     }
-    if (path) result.push({ path, head, branch, locked, prunable, isBare });
+    if (path) result.push({ path, head, branch, locked, lockReason, prunable, isBare });
   }
   return result;
 }
@@ -839,42 +844,23 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       // in. Gating on commitsAhead keeps a reaped-but-pushed tree recoverable
       // from the local branch even if its remote branch was later deleted and
       // the tracking ref pruned, which is otherwise unrecoverable-by-gc.
+      // Invariant: branch ref may be deleted ONLY when commitsAhead === 0 (all
+      // work is on the remote). `git branch -d` deletes a branch merged to its
+      // upstream, which is exactly the pushed-worktree state.
       const branchSafeToDelete = candidate.commitsAhead === 0;
-      const deleteBranchIfSafe = async (): Promise<void> => {
-        if (!entry.branch || !branchSafeToDelete) return;
-        await execFile('git', [
-          '-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch),
-        ]).catch(() => {});
+      const reapClean = async (): Promise<void> => {
+        await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
+        if (entry.branch && branchSafeToDelete) {
+          await execFile('git', ['-C', repoRoot, 'branch', '-d', shortBranchName(entry.branch)]).catch(() => {});
+        } else if (entry.branch) {
+          result.warnings.push(`[INFO] reaped worktree with pushed commits; branch preserved (${shortBranchName(entry.branch)}): ${entry.path}`);
+        }
+        result.removed.push(entry.path);
       };
 
       try {
-        if (verdict === 'empty') {
-          await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
-          await deleteBranchIfSafe();
-          if (!branchSafeToDelete && entry.branch) {
-            result.warnings.push(
-              `[INFO] reaped worktree with pushed commits; branch preserved ` +
-                `(${shortBranchName(entry.branch)}): ${entry.path}`,
-            );
-          }
-          result.removed.push(entry.path);
-        } else if (verdict === 'dead-owner') {
-          // Mirrors the 'empty' removal path: clean tree, no commits ahead,
-          // safe to drop wholesale. Also attempt branch deletion since the
-          // owning REPL never got to merge or land it. Branch delete is
-          // best-effort (it may already be deleted, or be checked out
-          // elsewhere — git refuses, we move on) AND gated on commitsAhead ===
-          // 0 by deleteBranchIfSafe: a pushed tree loses its checkout but keeps
-          // its branch.
-          await execFile('git', ['-C', repoRoot, 'worktree', 'remove', '--force', entry.path]);
-          await deleteBranchIfSafe();
-          if (!branchSafeToDelete && entry.branch) {
-            result.warnings.push(
-              `[INFO] reaped worktree with pushed commits; branch preserved ` +
-                `(${shortBranchName(entry.branch)}): ${entry.path}`,
-            );
-          }
-          result.removed.push(entry.path);
+        if (verdict === 'empty' || verdict === 'dead-owner') {
+          await reapClean();
         } else if (verdict === 'stale-clean') {
           // Invariant: `stale-clean` fires only on trees with commits ahead
           // of base — a clean tree with zero commits ahead is always caught
@@ -891,8 +877,13 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
           result.warnings.push(
             `[WARN] stale-dirty worktree preserved (${candidate.dirtyReason}): ${entry.path}`,
           );
+        } else if (verdict === 'locked') {
+          // Two-phase: auto-unlock when the preservation reason has expired;
+          // normal classification removes the tree on the NEXT sweep tick.
+          const r = await reconsiderLockedWorktree({ execFile, repoRoot, worktreePath: entry.path, meta, lockReason: entry.lockReason });
+          if (r.unlocked) result.warnings.push(`[INFO] auto-unlocked preserved worktree (${r.reason}): ${entry.path}`);
         }
-        // 'locked', 'active' → no-op
+        // 'active' → no-op
       } catch (err) {
         result.warnings.push(
           `[ERROR] Failed to process ${entry.path} (${verdict}): ${err instanceof Error ? err.message : String(err)}`,
