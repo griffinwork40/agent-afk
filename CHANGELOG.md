@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.192.1] - 2026-09-07
+
+### Fixed
+- detect resize while disarmed via snapshot, not listener (#1544) (ac415758)
+
 ## [5.192.0] - 2026-09-07
 
 ### Added
