@@ -1,32 +1,43 @@
-fix(subagent): populate CompletedCache in onTerminal; refactor tasks stdin TODO
+feat(tui): live parallel-batch indicator during pending window (#516)
 
-## BLOCKER: CompletedCache never populated
-`SubagentManager.forkSubagent` built a `CompletedCache` and exposed it via
-`manager.completed`, but the `onTerminal` callback only called
-`this.active.delete(id)`, `this.abortGraph.dispose(id)`, and
-`void logWriter?.close()` -- `completed.add()` was never called. After
-`onTerminal` fired, `manager.get(id)` returned `undefined` for every
-completed subagent, making `/tasks:view` unable to locate any finished handle
-from the in-memory path.
+Phase 2 of the concurrent-batch visibility feature. Phase 1 (already
+shipped) adds ∥i/N badges on completed tool rows. Phase 2 adds a live
+[×N] badge on every in-flight row while a parallel wave is still running.
 
-Fix: add `CompletedCache.recordHandle()` -- a convenience method that builds
-a lightweight `SubagentResult` from terminal handle-state fields (all
-fully populated by `run()` before `_onTerminal()` fires) and calls `add()`
-internally. `onTerminal` now calls `this.completed.recordHandle(...)`.
-The `message` field is intentionally omitted from the cached result because
-`/tasks:view` uses `SubagentLogReader` for full conversation replay.
+## What changed
 
-## Medium: subagent.ts file-size ceiling
-Adding the completion-cache wiring pushed `subagent.ts` briefly above the
-350 code-line ceiling. Extracting the result-building logic into
-`CompletedCache.recordHandle()` brings it back to 344 code lines.
+### New `tool.batch.start` ProviderEvent / `batch-start` OutputEvent
+- `src/agent/provider.ts` — new `type: 'tool.batch.start'` member on the
+  `ProviderEvent` union. Carries `batchSize` (≥ 2) and `toolUseIds[]`.
+- `src/agent/types/session-types.ts` — mirrors as `type: 'batch-start'`
+  on `OutputEvent` with the same fields.
 
-## Medium: direct process.stdin access in tasks.ts
-Added a TODO comment on the `process.stdin.on('data', onKeypress)` line,
-noting that direct stdin listeners bypass the compositor's routing and
-should route through `compositor.enterPickerMode()` instead.
+### Dispatcher emits batch-start events
+- `src/agent/tools/dispatcher.batch-process.ts` — new `batchEventSink?`
+  callback on `BatchExecDeps`. `runConcurrentBatch` calls the sink at the
+  top of each wave before any handler fires.
+- `src/agent/tools/dispatcher.ts` — new private `pendingBatchEvents[]`
+  accumulates sink calls. New public `drainBatchEvents()` clears the buffer.
+- `src/agent/providers/anthropic-direct/types.ts` — added
+  `drainBatchEvents?()` to `ToolDispatcherLike`.
 
-## Tests
-Added 4 tests for `CompletedCache.recordHandle()` covering succeeded,
-succeeded-with-stopReason, failed, and cancelled cases (17 tests total,
-up from 13).
+### Provider loops yield batch-start events
+- `src/agent/providers/anthropic-direct/loop/tool-dispatch.ts` — drains
+  and yields `tool.batch.start` events after executeBatch returns.
+- `src/agent/providers/openai-compatible/query/dispatch-append.ts` — same.
+- `src/agent/session/stream-consumer.ts` — maps to `batch-start` OutputEvent.
+
+### TUI live overlay
+- `src/cli/commands/interactive/tool-lane-format.ts` — new
+  `pendingBatchBadge(toolUseId, pendingBatch)` → `[×N]` (dim, × glyph).
+- `src/cli/commands/interactive/tool-lane.ts` — `notifyBatchStart`,
+  lazy clear in `addResult`, badge in `getOverlay` for in-flight rows.
+- `src/cli/_lib/stream-renderer-orchestrator.ts` — handles `batch-start`.
+- `src/cli/_lib/stream-renderer-subagent.ts` — no-op for subagent path.
+
+## Tests (18 new tests)
+- `dispatcher.test.ts` — 7 tests for `drainBatchEvents`
+- `tool-lane-format.test.ts` — 5 tests for `pendingBatchBadge`
+- `tool-lane-batch-start.test.ts` — 6 tests for `ToolLane.notifyBatchStart`
+
+Closes #516 Phase 2

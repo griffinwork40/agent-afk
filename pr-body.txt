@@ -1,0 +1,50 @@
+## Summary
+
+Phase 2 of the concurrent-batch TUI visibility feature (see #516).
+
+**Phase 1** (already shipped): after a parallel wave completes, each tool row in scrollback gets a `∥i/N` badge showing which wave it ran in.
+
+**Phase 2** (this PR): during the window when tools are *still in-flight*, the overlay shows a `[×N]` pending badge next to each spinner, so the operator can see parallel execution *as it happens* — before any result arrives.
+
+## How it works
+
+1. **Emit a `tool.batch.start` event**: `executeBatch`'s inner `runConcurrentBatch` calls a new `batchEventSink` callback at the top of each concurrent wave (width ≥ 2), before any handler fires. The dispatcher accumulates these into `pendingBatchEvents[]`. The provider generator drains and yields them as `tool.batch.start` ProviderEvents right after `executeBatch` returns, which get translated to `batch-start` OutputEvents by the stream consumer.
+
+2. **Live overlay consumes `batch-start`**: `handleOrchestratorEvent` handles the new `batch-start` OutputEvent by calling `toolLane.notifyBatchStart(batchSize, toolUseIds)`, then triggers a repaint.
+
+3. **Badge appears on in-flight rows**: `getOverlay`'s in-flight row renderer appends `pendingBatchBadge(entry.toolUseId, this.pendingBatch)`, which returns `[×N]` (dim) for member ids.
+
+4. **Badge clears automatically**: `addResult` checks after each result whether all batch member ids have resolved, and nulls `pendingBatch` when the wave is fully done.
+
+## Constraints preserved
+
+- **Append-only scrollback**: badge only touches the live overlay (getOverlay), never the flush/scrollback path.
+- **No behavior changes**: batching/concurrency behavior and `concurrencySafe` flags are untouched.
+- **Phase 1 backward compat**: `∥i/N` completed badges continue to work via the existing `batchBadge()` path.
+- **Sequential batches** (bash, edit_file, …): never emit `batch-start` — only `isConcurrencySafe` waves with ≥ 2 calls.
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| `src/agent/provider.ts` | New `tool.batch.start` ProviderEvent |
+| `src/agent/types/session-types.ts` | New `batch-start` OutputEvent |
+| `src/agent/providers/anthropic-direct/types.ts` | `drainBatchEvents?()` on `ToolDispatcherLike` |
+| `src/agent/tools/dispatcher.batch-process.ts` | `batchEventSink?` on `BatchExecDeps`; call in `runConcurrentBatch` |
+| `src/agent/tools/dispatcher.ts` | `pendingBatchEvents[]`, `drainBatchEvents()`, wire sink in `executeBatch` |
+| `src/agent/providers/anthropic-direct/loop/tool-dispatch.ts` | Drain+yield after `executeBatch` |
+| `src/agent/providers/openai-compatible/query/dispatch-append.ts` | Same for openai-compat path |
+| `src/agent/session/stream-consumer.ts` | `transformProviderEvent` maps `tool.batch.start` → `batch-start` |
+| `src/cli/commands/interactive/tool-lane-format.ts` | New `pendingBatchBadge()` helper |
+| `src/cli/commands/interactive/tool-lane.ts` | `notifyBatchStart`, lazy clear, badge in `getOverlay` |
+| `src/cli/_lib/stream-renderer-orchestrator.ts` | Handle `batch-start` OutputEvent |
+| `src/cli/_lib/stream-renderer-subagent.ts` | No-op case for subagent path |
+| `src/agent/tools/dispatcher.test.ts` | 7 new tests for `drainBatchEvents` |
+| `src/cli/commands/interactive/tool-lane-format.test.ts` | 5 new tests for `pendingBatchBadge` |
+| `src/cli/commands/interactive/tool-lane-batch-start.test.ts` | New file: 6 tests for overlay badge |
+
+## Tests
+
+All 5,094 existing tests pass. 18 new tests added.
+
+Closes #516 Phase 2
