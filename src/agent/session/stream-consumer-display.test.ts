@@ -16,12 +16,19 @@
  * passthrough. `display` never appears on `ProviderEvent` or `ToolResult`.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ProviderEvent } from '../provider.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import type { OutputEvent } from './stream-consumer.js';
 import { formatOutcome } from '../../cli/commands/interactive/tool-lane-format.js';
 import { stripAnsi } from '../../cli/display.js';
+import { truncateContent } from './stream-consumer.preview.js';
+import {
+  resolvePreviewLineCounts,
+  DEFAULT_PREVIEW_TAIL_LINES,
+  DEFAULT_PREVIEW_HEAD_LINES,
+  PREVIEW_LINES_CEILING,
+} from './preview-config.js';
 
 const noopDeps = {
   onAssistantMessage: () => {},
@@ -428,5 +435,163 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(rendered).toContain('4 lines');
     expect(rendered).toContain('d');
     expect(rendered).toContain('c');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests for configurable preview line counts
+// ---------------------------------------------------------------------------
+
+describe('truncateContent: configurable tail lines (inline config)', () => {
+  // Build multi-line content longer than 80 chars so the multi-line path runs.
+  function makeLines(n: number): string {
+    return Array.from({ length: n }, (_, i) => `line ${i + 1}`).join('\n') + '\n' + 'x'.repeat(100);
+  }
+
+  it('default config: tailPreview has ≤7 non-empty lines', () => {
+    const content = makeLines(20);
+    const result = truncateContent(content);
+    expect(result.tailPreview).toBeDefined();
+    expect(result.tailPreview!.length).toBeLessThanOrEqual(7);
+    expect(result.headPreview).toBeUndefined();
+  });
+
+  it('custom tailLines=3 via config: tailPreview has ≤3 lines', () => {
+    const content = makeLines(10);
+    const result = truncateContent(content, { tailLines: 3 });
+    expect(result.tailPreview).toBeDefined();
+    expect(result.tailPreview!.length).toBeLessThanOrEqual(3);
+  });
+
+  it('headLines=2 + tailLines=3, 10 non-empty lines: headPreview has 2, tailPreview has 3', () => {
+    const content = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join('\n') + '\n' + 'x'.repeat(100);
+    const result = truncateContent(content, { tailLines: 3, headLines: 2 });
+    expect(result.headPreview).toBeDefined();
+    expect(result.headPreview!).toHaveLength(2);
+    expect(result.headPreview![0]).toBe('line 1');
+    expect(result.tailPreview).toBeDefined();
+    expect(result.tailPreview!).toHaveLength(3);
+    expect(result.tailPreview![2]).toBe('line 10');
+  });
+
+  it('overlap: head=3 + tail=3 with 5 non-empty lines shows all 5 via tailPreview, no headPreview', () => {
+    const content = ['a', 'b', 'c', 'd', 'e'].join('\n') + '\n' + 'x'.repeat(100);
+    const result = truncateContent(content, { tailLines: 3, headLines: 3 });
+    // head + tail (6) >= total non-empty (5) => show all via tailPreview
+    expect(result.tailPreview).toBeDefined();
+    expect(result.tailPreview!).toHaveLength(5);
+    expect(result.headPreview).toBeUndefined();
+    // No lines hidden
+    expect(result.hiddenLineCount).toBe(0);
+  });
+
+  it('head + tail exactly equals non-empty count: no duplication, no hidden lines', () => {
+    // Exactly 6 non-empty lines, head=3 tail=3 => total 6 >= 6
+    const content = Array.from({ length: 6 }, (_, i) => `L${i}`).join('\n') + '\n' + 'x'.repeat(100);
+    const result = truncateContent(content, { tailLines: 3, headLines: 3 });
+    expect(result.tailPreview!).toHaveLength(6);
+    expect(result.headPreview).toBeUndefined();
+    expect(result.hiddenLineCount).toBe(0);
+  });
+
+  it('short output (all fits): hiddenLineCount accounts for empty lines only', () => {
+    // 4 non-empty lines total — tailPreview should be all 4, hiddenLineCount 0
+    const content = 'a\nb\nc\nd';
+    const result = truncateContent(content, { tailLines: 7 });
+    expect(result.tailPreview!).toHaveLength(4);
+    expect(result.hiddenLineCount).toBe(0);
+  });
+
+  it('hiddenLineCount is calculated from displayed selection vs total lines', () => {
+    // 20 non-empty lines + some blank lines, tail=3, head=0
+    const content = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n\n'); // blank lines between
+    const result = truncateContent(content, { tailLines: 3, headLines: 0 });
+    const lines = content.split('\n');
+    // hiddenLineCount = total lines - tailPreview.length
+    expect(result.hiddenLineCount).toBe(lines.length - 3);
+    expect(result.tailPreview!).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests for resolvePreviewLineCounts (env var parsing)
+// ---------------------------------------------------------------------------
+
+describe('resolvePreviewLineCounts: env var parsing', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns defaults when env vars are unset', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', undefined);
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', undefined);
+    const { tailLines, headLines } = resolvePreviewLineCounts();
+    expect(tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
+    expect(headLines).toBe(DEFAULT_PREVIEW_HEAD_LINES);
+  });
+
+  it('parses valid AFK_BASH_PREVIEW_TAIL_LINES', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '10');
+    expect(resolvePreviewLineCounts().tailLines).toBe(10);
+  });
+
+  it('parses valid AFK_BASH_PREVIEW_HEAD_LINES', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', '3');
+    expect(resolvePreviewLineCounts().headLines).toBe(3);
+  });
+
+  it('allows zero for headLines (disabled)', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', '0');
+    expect(resolvePreviewLineCounts().headLines).toBe(0);
+  });
+
+  it('falls back to default tailLines for zero (must be ≥1)', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '0');
+    expect(resolvePreviewLineCounts().tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
+  });
+
+  it('falls back to default for non-numeric tailLines', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', 'abc');
+    expect(resolvePreviewLineCounts().tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
+  });
+
+  it('falls back to default for non-numeric headLines', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', 'notanumber');
+    expect(resolvePreviewLineCounts().headLines).toBe(DEFAULT_PREVIEW_HEAD_LINES);
+  });
+
+  it('falls back to default for negative tailLines', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '-5');
+    expect(resolvePreviewLineCounts().tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
+  });
+
+  it('falls back to default for tailLines above ceiling', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', String(PREVIEW_LINES_CEILING + 1));
+    expect(resolvePreviewLineCounts().tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
+  });
+
+  it('falls back to default for headLines above ceiling', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_HEAD_LINES', String(PREVIEW_LINES_CEILING + 1));
+    expect(resolvePreviewLineCounts().headLines).toBe(DEFAULT_PREVIEW_HEAD_LINES);
+  });
+
+  it('accepts the ceiling value itself', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', String(PREVIEW_LINES_CEILING));
+    expect(resolvePreviewLineCounts().tailLines).toBe(PREVIEW_LINES_CEILING);
+  });
+
+  it('falls back to default for whitespace-only values', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '   ');
+    expect(resolvePreviewLineCounts().tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
+  });
+
+  it('trims whitespace from valid values', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '  5  ');
+    expect(resolvePreviewLineCounts().tailLines).toBe(5);
+  });
+
+  it('falls back to default for float values', () => {
+    vi.stubEnv('AFK_BASH_PREVIEW_TAIL_LINES', '3.5');
+    expect(resolvePreviewLineCounts().tailLines).toBe(DEFAULT_PREVIEW_TAIL_LINES);
   });
 });

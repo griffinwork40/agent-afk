@@ -190,8 +190,19 @@ export function formatOutcome(
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
 
+    // Render head lines (when AFK_BASH_PREVIEW_HEAD_LINES > 0) before the
+    // hidden-count separator and tail block.
+    let headBlock = '';
+    if (chunk.headPreview !== undefined && chunk.headPreview.length > 0) {
+      headBlock = '\n' + chunk.headPreview
+        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
+        .join('\n');
+    }
+
+    // "N earlier lines hidden" separator (shown between head and tail blocks).
+    let hiddenSep = '';
     if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
-      headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
+      hiddenSep = '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
     }
 
     // Append actual tail lines when available. Each line is sanitized (same
@@ -201,7 +212,10 @@ export function formatOutcome(
       const tailLines = chunk.tailPreview
         .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
         .join('\n');
-      return headline + '\n' + tailLines;
+      return headline + headBlock + hiddenSep + '\n' + tailLines;
+    }
+    if (headBlock || hiddenSep) {
+      return headline + headBlock + hiddenSep;
     }
     return headline;
   }
