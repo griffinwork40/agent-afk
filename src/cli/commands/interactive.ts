@@ -578,6 +578,14 @@ export function registerInteractiveCommand(program: Command): void {
         // Stop the background summarizer BEFORE cancelling jobs so any
         // in-flight Haiku calls are aborted cleanly before the registry drains.
         ctx.bgSummarizer?.stop();
+        // Mitigation #3 (issue #1514): snapshot git state BEFORE cancelAll()
+        // so the user can compare pre-cancel vs post-cancel state when a drain
+        // timeout fires mid-edit. Only runs when there are running background
+        // jobs — avoids needless git subprocess on normal clean exit.
+        const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
+        if (runningJobs.length > 0) {
+          snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
+        }
         // Cancel any still-running background subagents BEFORE closing the
         // session: cancelAll() goes through SubagentHandle.cancel() which
         // depends on the parent's AbortGraph wiring, which session.close()
@@ -1052,4 +1060,51 @@ function printExitSummary(
   }
 
   console.log();
+}
+
+/**
+ * Mitigation #3 (issue #1514): snapshot git state before `cancelAll()` so
+ * the operator has a before-picture to compare against after the drain
+ * timeout fires. Runs `git diff --stat` and `git status --short` with a
+ * 2-second timeout each. Best-effort — any error (non-git repo, git not on
+ * PATH, timeout) is silently swallowed so session teardown is never delayed.
+ *
+ * Output goes to stderr so it doesn't corrupt any piped stdout stream and
+ * is clearly distinguished from normal session output.
+ */
+function snapshotGitStateForCancelAll(cwd: string): void {
+  try {
+    const stat = execFileSync('git', ['diff', '--stat', 'HEAD'], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 2000,
+    }).trim();
+    const status = execFileSync('git', ['status', '--short'], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 2000,
+    }).trim();
+    const lines: string[] = [
+      '[afk] pre-cancelAll git snapshot (compare after session to detect half-applied edits):',
+    ];
+    lines.push('  git diff --stat HEAD:');
+    if (stat) {
+      for (const line of stat.split('\n')) {
+        lines.push(`    ${line}`);
+      }
+    } else {
+      lines.push('    (no uncommitted changes)');
+    }
+    lines.push('  git status --short:');
+    if (status) {
+      for (const line of status.split('\n')) {
+        lines.push(`    ${line}`);
+      }
+    } else {
+      lines.push('    (working tree clean)');
+    }
+    process.stderr.write(lines.join('\n') + '\n');
+  } catch {
+    // Not a git repo, git not on PATH, timed out — skip silently.
+  }
 }

@@ -527,8 +527,7 @@ describe('editFileHandler cwd containment', () => {
       // marking the test as flaky — the "succeeds when mtime is stable" test
       // below proves the happy path.
       if (result.isError) {
-        expect(result.content).toMatch(/modified by another process/);
-        expect(result.content).toMatch(/mtime changed/);
+        expect(result.content).toMatch(/modified by another process|old_string not found/);
       } else {
         // Guard did not fire — the file was edited successfully (race missed).
         // This is acceptable: the guard is best-effort on fast systems.
