@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**179 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**181 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -218,6 +218,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
 | `AFK_BANNER_PLAIN` | boolean |  |  | `1` | Suppress the ANSI-colored banner at REPL startup. Useful for non-TTY captures and CI logs. |
+| `AFK_BASH_PREVIEW_HEAD_LINES` | number |  | `0` | `3` | Number of leading non-empty lines shown in the bash output head block of the TUI outcome preview. 0 (default) disables the head block entirely. Accepted range 0–200; non-integer, negative, or out-of-range input falls back to the default. When head + tail >= total non-empty lines, all lines are shown without a hidden-line notice. Keep preview preferences separate from model-context caps (AFK_BASH_PREVIEW_TAIL_LINES). |
+| `AFK_BASH_PREVIEW_TAIL_LINES` | number |  | `7` | `10` | Number of trailing non-empty lines shown in the bash output tail block of the TUI outcome preview. Default 7 (compact tail-first preview). Accepted range 0–200; non-integer, negative, or out-of-range input falls back to the default. When head + tail >= total non-empty lines, all lines are shown without a hidden-line notice. Keep preview preferences separate from model-context caps (AFK_BASH_PREVIEW_HEAD_LINES). |
 | `AFK_BG_AUTO_DELIVER` | boolean |  | `1` | `0` | Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow. |
 | `AFK_DEMO_CLEAN` | boolean |  |  | `1` | Explicit opt-in to capture-mode. When set to 1, suppresses high-frequency repaint drivers (spinner ticker, live thinking-preview) so recorded artifacts contain each state once instead of once per timer tick. |
 | `AFK_DIFF_LINES` | number |  |  | `50` | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. |

@@ -26,6 +26,24 @@
       "category": "misc"
     },
     {
+      "name": "AFK_BASH_PREVIEW_HEAD_LINES",
+      "description": "Number of leading non-empty lines shown in the bash output head block of the TUI outcome preview. 0 (default) disables the head block entirely. Accepted range 0–200; non-integer, negative, or out-of-range input falls back to the default. When head + tail >= total non-empty lines, all lines are shown without a hidden-line notice. Keep preview preferences separate from model-context caps (AFK_BASH_PREVIEW_TAIL_LINES).",
+      "type": "number",
+      "required": false,
+      "default": "0",
+      "example": "3",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_BASH_PREVIEW_TAIL_LINES",
+      "description": "Number of trailing non-empty lines shown in the bash output tail block of the TUI outcome preview. Default 7 (compact tail-first preview). Accepted range 0–200; non-integer, negative, or out-of-range input falls back to the default. When head + tail >= total non-empty lines, all lines are shown without a hidden-line notice. Keep preview preferences separate from model-context caps (AFK_BASH_PREVIEW_HEAD_LINES).",
+      "type": "number",
+      "required": false,
+      "default": "7",
+      "example": "10",
+      "category": "misc"
+    },
+    {
       "name": "AFK_BG_AUTO_DELIVER",
       "description": "Auto-deliver background subagent results into the model context on the next user turn (interactive REPL). On by default. Set to 0, false, off, or no (case-insensitive) to disable, restoring the manual /bgsub:join retrieval flow.",
       "type": "boolean",

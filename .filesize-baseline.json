@@ -1,6 +1,4 @@
-{
-  "limit": 350,
-  "entries": {
+{"limit": 350, "entries": {
     "scripts/audit-sdk-dependency.ts": { "loc": 450, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/background-registry.ts": { "loc": 378, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/daemon/scheduler.ts": { "loc": 380, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
@@ -33,7 +31,7 @@
     "src/cli/slash/commands/info.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts": { "loc": 512, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.ts": { "loc": 353, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/config/env.ts": { "loc": 1719, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/config/env.ts": { "loc": 1747, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/contracts.ts": { "loc": 500, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/runner.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
@@ -43,5 +41,4 @@
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 392, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/message.ts": { "loc": 581, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/session-manager.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" }
-  }
-}
+}}
