@@ -32,16 +32,16 @@
     "src/cli/elicitation/agent-question.ts": { "loc": 399, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/slash/commands/info.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts": { "loc": 512, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/terminal-compositor.ts": { "loc": 355, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/terminal-compositor.ts": { "loc": 354, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/env.ts": { "loc": 1747, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/contracts.ts": { "loc": 500, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/runner.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/propose/template-engine.ts": { "loc": 461, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/skills/audit-fit/index.ts": { "loc": 424, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/bot.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/bot.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 392, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/telegram/handlers/message.ts": { "loc": 581, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/telegram/handlers/message.ts": { "loc": 533, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/session-manager.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" }
   }
 }

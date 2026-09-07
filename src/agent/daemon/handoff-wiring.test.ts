@@ -124,6 +124,74 @@ describe('makeDaemonElicitationHandler', () => {
     expect(record).toBeNull();
   });
 
+  it('sends confirm question with inline keyboard via pushIfConfigured', async () => {
+    const { pushIfConfigured } = await import('../../telegram/push.js');
+    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    mockPush.mockClear();
+
+    const handler = makeDaemonElicitationHandler({
+      taskId: 'q-confirm-kb',
+      originalCommand: '/deploy',
+      handoffsDir,
+    });
+
+    await handler(makeRequest({ type: 'confirm', message: 'Deploy?' }), { signal: notAborted() });
+
+    expect(mockPush).toHaveBeenCalled();
+    const [, opts] = mockPush.mock.calls[0]!;
+    // Inline keyboard should have Yes/No buttons with afk:h: prefix
+    expect(opts?.replyMarkup).toBeDefined();
+    const kb = opts.replyMarkup.inline_keyboard;
+    expect(kb).toHaveLength(1);
+    expect(kb[0]).toHaveLength(2);
+    expect(kb[0][0].text).toBe('Yes');
+    expect(kb[0][0].callback_data).toMatch(/^afk:h:1:q-confirm-kb$/);
+    expect(kb[0][1].text).toBe('No');
+    expect(kb[0][1].callback_data).toMatch(/^afk:h:0:q-confirm-kb$/);
+  });
+
+  it('sends choice question with per-option buttons via pushIfConfigured', async () => {
+    const { pushIfConfigured } = await import('../../telegram/push.js');
+    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    mockPush.mockClear();
+
+    const handler = makeDaemonElicitationHandler({
+      taskId: 'q-choice-kb',
+      originalCommand: '/pick',
+      handoffsDir,
+    });
+
+    await handler(
+      makeRequest({ type: 'choice', choices: ['Red', 'Blue'] }),
+      { signal: notAborted() },
+    );
+
+    const [, opts] = mockPush.mock.calls[0]!;
+    expect(opts?.replyMarkup).toBeDefined();
+    const kb = opts.replyMarkup.inline_keyboard;
+    expect(kb).toHaveLength(2);
+    expect(kb[0][0].text).toBe('Red');
+    expect(kb[1][0].text).toBe('Blue');
+  });
+
+  it('sends text question without inline keyboard', async () => {
+    const { pushIfConfigured } = await import('../../telegram/push.js');
+    const mockPush = pushIfConfigured as ReturnType<typeof vi.fn>;
+    mockPush.mockClear();
+
+    const handler = makeDaemonElicitationHandler({
+      taskId: 'q-text-kb',
+      originalCommand: '/ask',
+      handoffsDir,
+    });
+
+    await handler(makeRequest({ type: 'text' }), { signal: notAborted() });
+
+    const [, opts] = mockPush.mock.calls[0]!;
+    // text type should not have inline keyboard
+    expect(opts?.replyMarkup).toBeUndefined();
+  });
+
   it('uses empty string for sessionId when not provided', async () => {
     const handler = makeDaemonElicitationHandler({
       taskId: 'q-no-session',

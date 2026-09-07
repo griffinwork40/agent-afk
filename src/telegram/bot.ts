@@ -376,6 +376,7 @@ export class TelegramBot {
         (...args) => this.log('[elicitation]', ...args),
       );
       elicitationRouter.install(composeTelegramElicitation(askHandler, formHandler));
+      (await import('./handoff-answer.js')).registerHandoffAnswerHandlers(this.bot); // afk:h:* handoff buttons
     }
 
     // Import any plugin JS entrypoints (manifest `main`) before launching: each
@@ -431,11 +432,8 @@ export class TelegramBot {
     this.log('Stopping bot...');
     this.running = false;
 
-    this.log('Stopping auto-subscribe loop...');
-    this.stopAutoSubscribe();
-
-    this.log('Uninstalling elicitation handler...');
-    elicitationRouter.uninstall();
+    this.log('Stopping auto-subscribe loop...'); this.stopAutoSubscribe();
+    this.log('Uninstalling elicitation handler...'); elicitationRouter.uninstall();
 
     this.log('Stopping session watches...');
     await this.watchManager.stopAll();
