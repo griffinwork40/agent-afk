@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.195.1] - 2026-09-07
+
+### Fixed
+- re-read record in persistRouteAndMessageId to prevent race (#1549) (#1552) (b1fd4ccf)
+
 ## [5.195.0] - 2026-09-07
 
 ### Added
