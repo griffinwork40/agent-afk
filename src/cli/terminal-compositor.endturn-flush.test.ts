@@ -135,6 +135,98 @@ describe('Stage 3 (#540) endTurn: single end-of-turn flush to scrollback', () =>
     term.dispose();
   }, 15_000);
 
+  it('skips Step 1 erase when bandGeometryStale is true — no CUP+EL targeting stale rows, but Step 2 archive and Step 3 clear still run', async () => {
+    // Use a separate stdout per phase so we can inspect only endTurn()'s writes.
+    const stdout = makeStdout(COLS, ROWS);
+    const stdin = makeStdin();
+    const fullCollector = collect(stdout); // collects ALL writes for the xterm/headless check
+    const statusLine = new StatusLine({ stream: stdout, force: true, throttleMs: 0 });
+    statusLine.start();
+    statusLine.repaint({ model: 'M', cost: 0, tokens: 0, contextPct: 0 });
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), scrollRegion: statusLine, anchorRow: 1 });
+    await c.arm();
+    statusLine.setExtraRows(1);
+    c.setSpinner({ enabled: true });
+
+    // Commit a block so the band has content.
+    c.setOverlay('spinner line');
+    c.commitAbove('STALE-GEOM-BLOCK\n');
+
+    // Collapse the overlay so repositionCommittedBand fires and paints the band
+    // (sets committedBandPaintedRows > 0 and committedBandBottomRow > 0).
+    c.setSpinner({ enabled: false });
+    c.setOverlay('');
+    const internals = c as unknown as {
+      repaint(): void;
+      committedBand: string[];
+      committedBandPaintedRows: number;
+      committedBandBottomRow: number;
+      bandGeometryStale: boolean;
+    };
+    internals.repaint();
+
+    // Precondition: the band is painted (Step 1 would normally fire).
+    expect(internals.committedBandPaintedRows, 'precondition: band must be painted').toBeGreaterThan(0);
+    expect(internals.committedBandBottomRow, 'precondition: bottomRow must be > 0').toBeGreaterThan(0);
+    const staleBottomRow = internals.committedBandBottomRow;
+
+    // Simulate SIGWINCH between Phase 1 and endTurn: geometry is now stale.
+    internals.bandGeometryStale = true;
+
+    // Capture only the writes produced by endTurn().
+    const endTurnChunks: string[] = [];
+    const endTurnListener = (x: unknown): void => { endTurnChunks.push(String(x)); };
+    stdout.on('data', endTurnListener);
+
+    // Stage 3 flush — with stale geometry.
+    c.endTurn();
+    stdout.removeListener('data', endTurnListener);
+    const endTurnOut = endTurnChunks.join('');
+
+    // (A) Step 1 erase must have been SKIPPED — no CUP sequence targeting the
+    //     stale row number (eraseAndPaintRow emits \x1b[ROW;1H\x1b[2K for each
+    //     erased row; skipping Step 1 means none of those row-targeted CUPs land).
+    const cupPattern = new RegExp(`\x1b\\[${staleBottomRow};1H`);
+    expect(
+      cupPattern.test(endTurnOut),
+      `Step 1 erase must NOT emit CUP targeting stale row ${staleBottomRow} when bandGeometryStale=true`,
+    ).toBe(false);
+
+    // (B) Step 2 archive must have run — the band content must appear in
+    //     endTurn()'s output (the scrollback archive escape carries it).
+    expect(
+      endTurnOut.includes('STALE-GEOM-BLOCK'),
+      'Step 2 archive must still write band content even when geometry is stale',
+    ).toBe(true);
+
+    // (C) Step 3 clear must have run — band is zeroed.
+    expect(internals.committedBand.length, 'Step 3 must zero the band after endTurn()').toBe(0);
+    expect(internals.committedBandPaintedRows, 'Step 3 must zero paintedRows after endTurn()').toBe(0);
+
+    c.disarm();
+    statusLine.stop();
+
+    // (D) Verify via @xterm/headless that the archived content reaches the
+    //     terminal — feed ALL session output through the PTY emulator and
+    //     confirm the block appears in scrollback or viewport.
+    const term = new HeadlessTerminal({
+      cols: COLS, rows: ROWS, scrollback: 800, allowProposedApi: true, convertEol: true,
+    });
+    await termWrite(term, fullCollector());
+    const scrollback = scrollbackLines(term);
+    const viewport = viewportLines(term);
+    const allOutput = [...scrollback, ...viewport];
+    const dump = [
+      'SCROLLBACK:', ...scrollback.map((l, i) => `[sb${i}] ${JSON.stringify(l.trimEnd())}`),
+      'VIEWPORT:', ...viewport.map((l, i) => `[vp${i}] ${JSON.stringify(l.trimEnd())}`),
+    ].join('\n');
+    expect(
+      allOutput.some((l) => l.includes('STALE-GEOM-BLOCK')),
+      `STALE-GEOM-BLOCK must appear in scrollback or viewport:\n${dump}`,
+    ).toBe(true);
+    term.dispose();
+  }, 15_000);
+
   it('is a no-op when the compositor is not armed', async () => {
     const stdout = makeStdout(COLS, ROWS);
     const stdin = makeStdin();

@@ -495,7 +495,7 @@ export function endTurnFlush(self: LifecycleHost): void {
   // copy would scroll into scrollback AGAIN when the next commit's
   // preserveRowsBeforeFrameRender runs.
   const paintedCount = self.committedBandPaintedRows;
-  if (paintedCount > 0 && self.committedBandBottomRow > 0) {
+  if (paintedCount > 0 && self.committedBandBottomRow > 0 && !self.bandGeometryStale) {
     const paintedTop = self.committedBandBottomRow - paintedCount + 1;
     let eraseOut = '\x1b[?25l';
     for (let r = Math.max(1, paintedTop); r <= self.committedBandBottomRow; r++) {
