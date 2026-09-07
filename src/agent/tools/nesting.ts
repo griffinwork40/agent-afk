@@ -106,6 +106,12 @@ export interface ChildProviderFactoryArgs {
    * dispatcher — which is the only read point for custom tool schemas.
    */
   customTools?: import('../tools/custom-tool.js').CustomToolDef[];
+  /**
+   * Optional workspace_subscribe handler wired by workspace-subscription-wiring.ts.
+   * Passed to the child's provider so its per-query dispatcher registers the
+   * handler alongside workspace_publish / workspace_query.
+   */
+  subscribeHandler?: import('../tools/types.js').ToolHandler;
 }
 
 /** Minimal session stub for child executors that only need an abort signal. */
@@ -137,7 +143,7 @@ export function createStubParentSession(
 // sub-agent writes. If specific skills need memory write access, do it per-skill via a
 // buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
 // extending this global default.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'workspace_publish', 'workspace_query', 'agent', 'skill', 'state_get', 'state_query'];
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'workspace_publish', 'workspace_query', 'workspace_subscribe', 'agent', 'skill', 'state_get', 'state_query'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's
@@ -242,7 +248,7 @@ export interface CreateChildProviderFactoryOptions {
 export function createChildProviderFactory(
   opts: CreateChildProviderFactoryOptions = {},
 ): (args: ChildProviderFactoryArgs) => ModelProvider {
-  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools }) => {
+  return ({ childExecutor, childSkillExecutor, model, allowedTools, readOnlyBash, customTools, subscribeHandler }) => {
     const providerOpts = {
       // A read-only skill's child passes `allowedTools: RECON_ALLOWED_TOOLS`
       // (no write_file/edit_file); everyone else gets the full CHILD_ALLOWED_TOOLS.
@@ -273,6 +279,7 @@ export function createChildProviderFactory(
     return new AnthropicDirectProvider({
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+      ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
       readOnlyMemory: true,
     });
   };

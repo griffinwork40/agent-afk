@@ -89,6 +89,13 @@ export class AnthropicDirectProvider implements ModelProvider {
   private readonly externalTools: ToolDispatcher | undefined;
   private readonly memoryStore: MemoryStore;
   private readonly workspaceStore: WorkspaceStore | undefined;
+  /**
+   * Optional workspace_subscribe handler wired at fork time by workspace-subscription-wiring.ts.
+   * Mutable so it can be injected post-construction via setSubscribeHandler()
+   * (before the first query fires) when the child provider is pre-built inside
+   * createChildProviderFactory before the handle exists.
+   */
+  private subscribeHandler: import('../../tools/types.js').ToolHandler | undefined;
   private readonly stateStore: StateStore;
   private readonly providerFactory?: AnthropicClientFactory;
   private readonly skillExecutor?: SkillExecutor;
@@ -167,6 +174,7 @@ export class AnthropicDirectProvider implements ModelProvider {
   constructor(opts: AnthropicDirectProviderOptions = {}) {
     this.memoryStore = opts.memoryStore ?? new MemoryStore();
     this.workspaceStore = opts.workspaceStore;
+    this.subscribeHandler = opts.subscribeHandler;
     this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
     this.externalTools = opts.tools;
     this.skillExecutor = opts.skillExecutor;
@@ -241,12 +249,23 @@ export class AnthropicDirectProvider implements ModelProvider {
         setMcpToolsCache: (v) => { this._mcpToolsCache = v; },
         getMcpHandlersCache: () => this._mcpHandlersCache,
         setMcpHandlersCache: (v) => { this._mcpHandlersCache = v; },
+        ...(this.subscribeHandler !== undefined ? { subscribeHandler: this.subscribeHandler } : {}),
       },
       permissionMode,
       // Inject the session-scoped PID registry into every per-query dispatcher
       // so bash can register spawned PIDs and wait_for can gate on them (#1430).
       { ...opts, spawnedPidRegistry: this._spawnedPidRegistry },
     );
+  }
+
+  /**
+   * Inject a workspace_subscribe handler post-construction.
+   * Called by forkSubagent after wireWorkspaceSubscriptions() produces the
+   * handler and the pre-built child provider is already in childConfig.
+   * Must be called before the first query fires (before AgentSession starts).
+   */
+  setSubscribeHandler(handler: import('../../tools/types.js').ToolHandler): void {
+    this.subscribeHandler = handler;
   }
 
   close(): void {
