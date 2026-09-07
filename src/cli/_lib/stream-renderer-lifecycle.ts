@@ -15,7 +15,6 @@ import { createStageTracker } from '../commands/interactive/loop-stage.js';
 import { formatDuration } from '../format-utils.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
-import { palette } from '../palette.js';
 import { interruptPeek } from '../render/interrupt-peek.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { isDebugEnabled } from '../../utils/debug.js';
@@ -105,6 +104,8 @@ export function registerOverlaySlots(
      */
     getTtfbStartedAt?: () => number | undefined;
     isTtfbDone?: () => boolean;
+    /** Live accessor for the braille spinner frame counter — drives the TTFB waiting-line animation. */
+    getTtfbSpinnerFrame?: () => number;
     /**
      * Live accessor for the active subagent status bar specs, keyed by subagentId.
      * Optional so existing non-TTY callers and tests register slots unchanged;
@@ -240,7 +241,7 @@ export function registerOverlaySlots(
       // Delegates to renderTtfbWaitingLine (stream-renderer-ttfb.ts) which
       // returns '' when the timer is inactive, done, or inside the grace period.
       if (bannerLines.length === 0 && !stopping) {
-        const waiting = renderTtfbWaitingLine(ctx.getTtfbStartedAt, ctx.isTtfbDone, palette);
+        const waiting = renderTtfbWaitingLine(ctx.getTtfbStartedAt, ctx.isTtfbDone, ctx.getTtfbSpinnerFrame);
         if (waiting) bannerLines.push(waiting);
       }
       return bannerLines.length > 0 ? bannerLines.join('\n') : '';

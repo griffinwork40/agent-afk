@@ -15,6 +15,7 @@
  */
 
 import type { OverlayComposer } from './overlay-composer.js';
+import { streamProgress } from '../render/stream-progress.js';
 
 /**
  * Minimum elapsed time before showing the TTFB waiting line, in milliseconds.
@@ -49,6 +50,8 @@ export interface TtfbTickCtx {
    * only re-flushed when the displayed second value changes.
    */
   lastTtfbAnnotation: string;
+  /** Braille spinner frame counter — incremented by checkTtfbAnnotation on each tick. */
+  ttfbSpinnerFrame: number;
   isTTY: boolean;
   disposed: boolean;
   overlayComposer: OverlayComposer | null;
@@ -87,6 +90,7 @@ export function checkTtfbAnnotation(ctx: TtfbTickCtx, now: number): boolean {
   if (ctx.lastTtfbAnnotation === annotation) return false;
 
   ctx.lastTtfbAnnotation = annotation;
+  ctx.ttfbSpinnerFrame++;
   ctx.overlayComposer.markDirty('progress-banner');
   // No flush() here — checkPauseAnnotations batches all dirty marks and
   // issues one flush per tick to prevent double-setOverlay compositor desyncs.
@@ -135,13 +139,16 @@ export function applyFirstContent(
 export function renderTtfbWaitingLine(
   getTtfbStartedAt: (() => number | undefined) | undefined,
   isTtfbDone: (() => boolean) | undefined,
-  palette: { dim: (s: string) => string },
+  getSpinnerFrame: (() => number) | undefined,
 ): string {
-  if (!getTtfbStartedAt || !isTtfbDone || isTtfbDone()) return '';
+  if (!getTtfbStartedAt || !isTtfbDone || !getSpinnerFrame || isTtfbDone()) return '';
   const startedAt = getTtfbStartedAt();
   if (startedAt === undefined) return '';
   const elapsedMs = Date.now() - startedAt;
   if (elapsedMs < TTFB_GRACE_MS) return '';
-  const secs = Math.floor(elapsedMs / 1000);
-  return palette.dim(`  ◦ waiting for response… ${secs}s`);
+  return '  ' + streamProgress({
+    label: 'waiting for response…',
+    spinnerFrame: getSpinnerFrame(),
+    elapsedMs,
+  });
 }

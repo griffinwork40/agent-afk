@@ -177,6 +177,8 @@ export class StreamRenderer {
   private ttfbDone: boolean;
   /** Last annotation string rendered for the TTFB line — drives 1 Hz change detection. */
   private lastTtfbAnnotation = '';
+  /** Braille spinner frame counter for the TTFB waiting line — incremented per 80ms tick. */
+  private ttfbSpinnerFrame = 0;
 
   /** Ref wired in arm() so the edit-preview hook can push diffs to the tool lane. */
   private readonly addPreviewDiffRef: PreviewDiffRef | undefined;
@@ -365,6 +367,7 @@ export class StreamRenderer {
       getSoftStopping: () => this.softStopping,
       getTtfbStartedAt: () => this.ttfbStartedAt,
       isTtfbDone: () => this.ttfbDone,
+      getTtfbSpinnerFrame: () => this.ttfbSpinnerFrame,
       getActiveSubagents: () => this.activeSubagents,
     });
 
@@ -646,10 +649,12 @@ export class StreamRenderer {
       ttfbStartedAt: this.ttfbStartedAt,
       ttfbDone: this.ttfbDone,
       lastTtfbAnnotation: this.lastTtfbAnnotation,
+      ttfbSpinnerFrame: this.ttfbSpinnerFrame,
     };
     checkProgressBannerStaleness(lifecycleCtx);
     checkPauseAnnotations(lifecycleCtx);
     this.lastTtfbAnnotation = lifecycleCtx.lastTtfbAnnotation;
+    this.ttfbSpinnerFrame = lifecycleCtx.ttfbSpinnerFrame;
   }
 
 }

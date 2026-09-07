@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StreamRenderer } from './stream-renderer.js';
-import { applyFirstContent } from './stream-renderer-ttfb.js';
+import { applyFirstContent, renderTtfbWaitingLine, TTFB_GRACE_MS } from './stream-renderer-ttfb.js';
 import type { OverlayComposer } from './overlay-composer.js';
 import type { Writer } from '../slash/types.js';
 
@@ -16,6 +16,88 @@ const writer: Writer = {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+// Braille spinner frames used by streamProgress
+const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+describe('renderTtfbWaitingLine', () => {
+  it('returns empty string when isTtfbDone returns true', () => {
+    const startedAt = Date.now() - TTFB_GRACE_MS - 1000;
+    const result = renderTtfbWaitingLine(
+      () => startedAt,
+      () => true,
+      () => 0,
+    );
+    expect(result).toBe('');
+  });
+
+  it('returns empty string when elapsed < TTFB_GRACE_MS', () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now() - (TTFB_GRACE_MS - 500);
+    const result = renderTtfbWaitingLine(
+      () => startedAt,
+      () => false,
+      () => 0,
+    );
+    expect(result).toBe('');
+    vi.useRealTimers();
+  });
+
+  it('returns empty string when any getter is undefined', () => {
+    const startedAt = Date.now() - TTFB_GRACE_MS - 1000;
+    expect(renderTtfbWaitingLine(undefined, () => false, () => 0)).toBe('');
+    expect(renderTtfbWaitingLine(() => startedAt, undefined, () => 0)).toBe('');
+    expect(renderTtfbWaitingLine(() => startedAt, () => false, undefined)).toBe('');
+  });
+
+  it('returns empty string when getTtfbStartedAt returns undefined', () => {
+    const result = renderTtfbWaitingLine(
+      () => undefined,
+      () => false,
+      () => 0,
+    );
+    expect(result).toBe('');
+  });
+
+  it('returns a string with a braille spinner glyph and "waiting for response…" when active', () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now() - TTFB_GRACE_MS - 2000;
+    const result = renderTtfbWaitingLine(
+      () => startedAt,
+      () => false,
+      () => 0,
+    );
+    expect(result).not.toBe('');
+    expect(result).toContain('waiting for response…');
+    // Strip ANSI to verify braille glyph presence
+    const stripped = result.replace(/\x1b\[[0-9;]*m/g, '');
+    const hasBraille = BRAILLE_FRAMES.some((g) => stripped.includes(g));
+    expect(hasBraille).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('produces different spinner glyphs for different spinnerFrame values', () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now() - TTFB_GRACE_MS - 2000;
+    const makeResult = (frame: number) =>
+      renderTtfbWaitingLine(() => startedAt, () => false, () => frame);
+
+    // Collect stripped results for multiple consecutive frames
+    const results = Array.from({ length: BRAILLE_FRAMES.length }, (_, i) =>
+      makeResult(i).replace(/\x1b\[[0-9;]*m/g, ''),
+    );
+
+    // All frames should be non-empty
+    for (const r of results) {
+      expect(r).not.toBe('');
+    }
+
+    // At least two distinct results exist (the spinner actually advances)
+    const unique = new Set(results);
+    expect(unique.size).toBeGreaterThan(1);
+    vi.useRealTimers();
+  });
 });
 
 describe('applyFirstContent', () => {
