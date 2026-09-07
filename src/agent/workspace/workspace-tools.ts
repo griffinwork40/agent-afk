@@ -18,7 +18,7 @@ import type { WorkspaceEntry, WorkspacePublishInput, WorkspaceRelationType } fro
 import { WorkspaceStore } from './workspace-store.js';
 
 /** Tool names that must be permitted whenever a provider wires a workspace store. */
-export const WORKSPACE_TOOL_NAMES = ['workspace_publish', 'workspace_query'] as const;
+export const WORKSPACE_TOOL_NAMES = ['workspace_publish', 'workspace_query', 'workspace_subscribe'] as const;
 
 /**
  * workspace_publish: Publish a structured finding to the shared session workspace.
@@ -113,8 +113,53 @@ export const workspaceQueryTool: AnthropicToolDef = {
   },
 };
 
+/**
+ * workspace_subscribe: Subscribe to push delivery of matching workspace entries.
+ *
+ * Returns a subscriptionId. Matching entries published by any sibling are
+ * delivered at the subscriber's next tool-call boundary via the beforeNextRound
+ * hook — no polling required. The subscription is automatically cancelled when
+ * the agent's handle is torn down.
+ *
+ * DAG users: call workspace_subscribe in the opening tool round so live
+ * cross-node updates are received without busy-polling workspace_query.
+ */
+export const workspaceSubscribeTool: AnthropicToolDef = {
+  name: 'workspace_subscribe',
+  category: 'read',
+  concurrencySafe: true,
+  description:
+    'Subscribe to push delivery of matching workspace entries published by sibling agents. ' +
+    'Matching entries are delivered at your next tool-call boundary via a <workspace-delivery> ' +
+    'envelope — no polling needed. The subscription is automatically cancelled when your ' +
+    'session ends. Use in DAG pipelines to receive live cross-node updates without ' +
+    'busy-polling workspace_query.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      subject: {
+        type: 'string',
+        description:
+          'Case-insensitive substring filter on entry subject. ' +
+          'Only entries whose subject contains this string are delivered. ' +
+          'Omit to match any subject.',
+      },
+      type: {
+        type: 'string',
+        enum: ['finding', 'evidence', 'hypothesis', 'decision', 'artifact', 'status'],
+        description: 'Optional: restrict delivery to one entry type.',
+      },
+    },
+    required: [],
+  },
+};
+
 /** All workspace tool schemas. */
-export const workspaceToolSchemas: AnthropicToolDef[] = [workspacePublishTool, workspaceQueryTool];
+export const workspaceToolSchemas: AnthropicToolDef[] = [
+  workspacePublishTool,
+  workspaceQueryTool,
+  workspaceSubscribeTool,
+];
 
 /**
  * Create workspace tool handlers bound to a store + session.

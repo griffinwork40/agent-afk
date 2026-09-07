@@ -20,6 +20,8 @@ import { emitSessionPhase, emitSubagentLifecycle } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import { PauseAwareCeiling, SUBAGENT_MAX_PAUSE_EXTENSION_MS } from './pause-ceiling.js';
 import { PROGRESS_RING_CAPACITY } from './progress-constants.js';
+import type { WorkspaceEntry, WorkspaceStore } from '../workspace/workspace-store.js';
+import { formatWorkspaceDeliveryEnvelope } from '../workspace/workspace-subscription.js';
 import {
   createEmptyTrace,
   type SubagentResult,
@@ -501,6 +503,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
     this._steeringMessages.length = 0;
     this._progressEvents.length = 0;
+    this._pendingWorkspaceEntries.length = 0;
     try {
       this.abortGraph.abort(this.id, 'cancelled');
     } catch {
@@ -538,6 +541,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
     }
     this._steeringMessages.length = 0;
     this._progressEvents.length = 0;
+    this._pendingWorkspaceEntries.length = 0;
     try {
       await this.session.close();
     } finally {
@@ -581,6 +585,23 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
 
   /** Ring buffer of progress events emitted by this child (capacity: PROGRESS_RING_CAPACITY). */
   readonly _progressEvents: import('../tools/subagent/emit-progress.js').ProgressEventPayload[] = [];
+
+  /**
+   * Ring buffer of pending workspace entries to deliver at the next
+   * tool-call boundary. Accumulated by workspace_subscribe deliveryFn calls;
+   * drained into one `<workspace-delivery>` XML envelope by _drainWorkspaceDeliveries().
+   * Cap: WORKSPACE_DELIVERY_RING_CAPACITY (10). Oldest-first eviction.
+   * @internal
+   */
+  readonly _pendingWorkspaceEntries: WorkspaceEntry[] = [];
+
+  /**
+   * The WorkspaceStore this child is subscribed to, if any. Set by
+   * workspace-subscription-wiring.ts after handle construction, used by
+   * dispatchStopAndRelease to call unsubscribeAll(agentId) on teardown.
+   * @internal
+   */
+  _workspaceStore: WorkspaceStore | undefined = undefined;
 
   /**
    * Queue a mid-run steering message for delivery at the next tool-call boundary.
@@ -629,11 +650,28 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
   }
 
   /**
-   * Stable closure shifted by the provider loop's inter-round hook.
-   * Returns the oldest pending steering message and removes it, or undefined.
+   * Drain all pending workspace entries into a single `<workspace-delivery>`
+   * XML envelope. Returns undefined when the buffer is empty.
+   * @internal
+   */
+  private _drainWorkspaceDeliveries(): string | undefined {
+    if (this._pendingWorkspaceEntries.length === 0) return undefined;
+    const entries = this._pendingWorkspaceEntries.splice(0); // drain all
+    return formatWorkspaceDeliveryEnvelope(entries);
+  }
+
+  /**
+   * Stable closure consumed by the provider loop's inter-round hook.
+   * Returns a combined string of any pending steering message and all pending
+   * workspace deliveries, or undefined when both are empty.
    * @internal
    */
   get _beforeNextRound(): () => string | undefined {
-    return () => this._steeringMessages.shift();
+    return () => {
+      const steering = this._steeringMessages.shift();
+      const workspace = this._drainWorkspaceDeliveries();
+      if (steering !== undefined && workspace !== undefined) return steering + '\n\n' + workspace;
+      return steering ?? workspace;
+    };
   }
 }

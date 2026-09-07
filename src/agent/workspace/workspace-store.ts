@@ -14,6 +14,8 @@
 
 import Database from 'better-sqlite3';
 import type BetterSqlite3 from 'better-sqlite3';
+import type { WorkspaceSubscription } from './workspace-subscription.js';
+import { notifySubscribers } from './workspace-subscription.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +129,13 @@ END;
 export class WorkspaceStore {
   private readonly db: BetterSqlite3.Database;
 
+  /**
+   * In-memory subscription registry. Keyed by subscriptionId.
+   * Subscriptions are ephemeral — not persisted to SQLite — and are cleaned up
+   * when the subscribing child's handle is torn down via unsubscribeAll().
+   */
+  private readonly _subscriptions = new Map<string, WorkspaceSubscription>();
+
   constructor(dbPath?: string) {
     this.db = new Database(dbPath ?? ':memory:');
     // busy_timeout: concurrent writers wait up to 5s rather than failing fast.
@@ -158,8 +167,13 @@ export class WorkspaceStore {
   /**
    * Publish a new workspace entry. Returns the assigned row id.
    * `seq` is auto-incremented per session (max existing seq + 1, starting at 1).
+   *
+   * After inserting, notifies all active subscribers whose filter matches the
+   * new entry. Notification is synchronous and in-process — no I/O in the hot
+   * path (subscriptions use pure in-memory JS filter checks).
    */
   publish(entry: WorkspacePublishInput): number {
+    let insertedEntry: WorkspaceEntry | undefined;
     const txn = this.db.transaction(() => {
       const nextSeq = this.nextSeq(entry.session_id);
       const stmt = this.db.prepare(`
@@ -179,9 +193,43 @@ export class WorkspaceStore {
         entry.relation_type ?? null,
         nextSeq,
       );
-      return Number(result.lastInsertRowid);
+      const id = Number(result.lastInsertRowid);
+      // Read back the full row so notifySubscribers receives a complete WorkspaceEntry.
+      insertedEntry = this.db
+        .prepare('SELECT * FROM workspace_entries WHERE id = ?')
+        .get(id) as WorkspaceEntry;
+      return id;
     });
-    return txn();
+    const id = txn();
+    // Notify subscribers outside the transaction — deliveryFn may push to
+    // external ring buffers; keeping it outside prevents any re-entrant SQLite
+    // call from deadlocking on the write transaction.
+    if (insertedEntry !== undefined && this._subscriptions.size > 0) {
+      notifySubscribers(this._subscriptions, insertedEntry);
+    }
+    return id;
+  }
+
+  /**
+   * Register a subscription for push delivery of matching workspace entries.
+   * The subscription is active until `unsubscribeAll(agentId)` is called.
+   *
+   * @returns The registered WorkspaceSubscription (caller may read .id for the response).
+   */
+  subscribe(subscription: WorkspaceSubscription): void {
+    this._subscriptions.set(subscription.id, subscription);
+  }
+
+  /**
+   * Remove all subscriptions for the given agent. Called when the agent's
+   * handle is torn down (dispatchStopAndRelease in handle.streaming.ts).
+   */
+  unsubscribeAll(agentId: string): void {
+    for (const [id, sub] of this._subscriptions) {
+      if (sub.agentId === agentId) {
+        this._subscriptions.delete(id);
+      }
+    }
   }
 
   /**

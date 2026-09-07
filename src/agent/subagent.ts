@@ -39,15 +39,13 @@ import { providerForModel, type BundledProviderName } from './providers/index.js
 import { validatePhaseRole } from './subagent/fork-validation.js';
 import { assembleChildConfig } from './subagent/fork-child-config.js';
 import { emitForkStarted, appendForkTelemetry } from './subagent/fork-lifecycle.js';
-import {
-  SubagentHandleImpl,
-  type SubagentHandle,
-} from './subagent/handle.js';
+import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
 import { CompletedCache } from './subagent/completed-cache.js';
 import { SubagentLogWriter } from './subagent/log.js';
 import { wireProgressEvents } from './subagent/fork-progress-events.js';
+import { wireWorkspaceSubscriptions } from './subagent/workspace-subscription-wiring.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -417,6 +415,9 @@ export class SubagentManager {
     // Progress-events opt-in — mutates childConfig.customTools in place when enabled.
     const bindProgressHandle = wireProgressEvents(childConfig, options.progressEvents, options.parent.getInputStreamRef?.(), options.parent.abortSignal);
 
+    // Workspace subscriptions (Pillar 3): two-phase init mirrors progress events.
+    const wsSubs = wireWorkspaceSubscriptions(this.workspaceStore, id, effectiveTraceWriter, childConfig.provider as never);
+
     // Ordering constraint: the heartbeat armed above is disarmed by the settle
     // callback installed on the handle built below, so the guarded span has to
     // run from construction all the way through `active.set`. A throw anywhere
@@ -522,6 +523,7 @@ export class SubagentManager {
       );
       if (logWriter) handle._logWriter = logWriter;
       bindProgressHandle(handle as SubagentHandleImpl<unknown>);
+      wsSubs.bindHandle(handle as SubagentHandleImpl<unknown>);
       this.active.set(id, handle as SubagentHandleImpl<unknown>);
     } catch (err) {
       // Construction or manager-wiring failed (invalid model, sync init

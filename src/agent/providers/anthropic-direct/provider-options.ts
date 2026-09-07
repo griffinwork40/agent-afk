@@ -98,6 +98,13 @@ export interface AnthropicDirectProviderOptions {
   memoryStore?: MemoryStore;
   /** Shared WorkspaceStore instance. When set, children share the parent's ephemeral workspace. */
   workspaceStore?: WorkspaceStore;
+  /**
+   * Optional workspace_subscribe tool handler. When provided, the provider
+   * registers it alongside workspace_publish / workspace_query in the
+   * per-query dispatcher. Supplied by workspace-subscription-wiring.ts when a
+   * child is forked; absent for top-level sessions (no handle to deliver to).
+   */
+  subscribeHandler?: import('../../tools/types.js').ToolHandler;
   /** Shared StateStore instance. When set, avoids creating a second KV store. */
   stateStore?: StateStore;
   /** Surface identifier for fact metadata (e.g. 'cli', 'daemon', 'telegram'). */

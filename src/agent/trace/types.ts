@@ -812,7 +812,14 @@ export type SessionPhaseName =
   // agent file can silently convert a read-only verifier into a
   // write-capable agent machine-wide), so — like `rate_limit` — this renders
   // in the DEFAULT `afk trace show` view instead of behind `--all`.
-  | 'boot_warning';
+  | 'boot_warning'
+  // Workspace subscription lifecycle (Pillar 3, #1418).
+  // `workspace_subscribed` is emitted when a child calls workspace_subscribe;
+  // `workspace_delivery` is emitted each time entries are pushed to a
+  // subscriber's ring buffer. Both carry agent + subscription context in
+  // `metadata`. Fire-and-forget (consistent with other Pillar 1/2 events).
+  | 'workspace_subscribed'
+  | 'workspace_delivery';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

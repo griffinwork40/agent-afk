@@ -137,6 +137,12 @@ export interface BuildDispatcherDeps {
   setMcpToolsCache: (value: AnthropicToolDef[] | null) => void;
   getMcpHandlersCache: () => Map<string, ToolHandler> | null;
   setMcpHandlersCache: (value: Map<string, ToolHandler> | null) => void;
+  /**
+   * Optional workspace_subscribe handler wired by workspace-subscription-wiring.ts.
+   * When present, registered alongside the existing workspace publish/query handlers.
+   * Absent for top-level sessions (no handle to deliver to) and when workspace is disabled.
+   */
+  subscribeHandler?: ToolHandler;
 }
 
 /**
@@ -177,6 +183,14 @@ export function buildDispatcher(
     const wsHandlers = createWorkspaceHandlers(deps.workspaceStore, opts?.sessionId ?? '', opts?.subagentId);
     for (const [name, handler] of wsHandlers) {
       handlers.set(name, handler);
+    }
+    // workspace_subscribe handler comes from workspace-subscription-wiring
+    // (not from createWorkspaceHandlers) because it requires a SubagentHandleImpl
+    // reference not available at dispatcher-build time. Only present for forked
+    // children (wireWorkspaceSubscriptions wires it); top-level sessions receive
+    // undefined here and workspace_subscribe is not registered for them.
+    if (deps.subscribeHandler !== undefined) {
+      handlers.set('workspace_subscribe', deps.subscribeHandler);
     }
   }
   // State store tools: state_get, state_put, state_cas, state_delete, state_query.

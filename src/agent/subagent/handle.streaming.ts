@@ -464,5 +464,18 @@ export async function dispatchStopAndRelease<T>(
     }
   }
 
+  // Cleanup: remove this child's subscriptions from the workspace store so
+  // the store does not hold references to the departed handle's ring buffer.
+  // Idempotent — unsubscribeAll is a map iteration and is safe to call even
+  // when no subscriptions were registered. Fire synchronously before onTerminal()
+  // so the store is clean before the active-map entry is evicted.
+  if (handle._workspaceStore !== undefined) {
+    try {
+      handle._workspaceStore.unsubscribeAll(handle.id);
+    } catch {
+      // Subscription cleanup is best-effort — never block teardown.
+    }
+  }
+
   handle._onTerminal();
 }
