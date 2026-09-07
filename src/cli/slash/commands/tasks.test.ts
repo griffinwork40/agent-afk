@@ -35,7 +35,9 @@ import {
   tasksCancelCmd,
   setTasksRegistry,
   resetTasksRegistry,
+  setTasksIctx,
 } from './tasks.js';
+import type { InteractiveCtx } from '../../commands/interactive/shared.js';
 import { enterTaskViewMode } from '../../commands/interactive/task-view-mode.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SubagentHandle } from '../../../agent/subagent/handle.js';
@@ -226,6 +228,23 @@ describe('/tasks slash commands', () => {
       await tasksViewCmd.handler(ctx, 'sub-history-1');
       expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'sub-history-1' }),
+      );
+    });
+
+    it('setTasksIctx threads ictx into the TaskViewEntry passed to enterTaskViewMode (#1332)', async () => {
+      const h = makeHandle('sub-ictx-1', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+
+      const fakeIctx = { viewingTaskId: undefined } as unknown as InteractiveCtx;
+      setTasksIctx(fakeIctx);
+
+      const { ctx } = makeCtx();
+      mockedEnterTaskViewMode.mockResolvedValueOnce(undefined);
+      await tasksViewCmd.handler(ctx, 'sub-ictx-1');
+
+      expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sub-ictx-1', ictx: fakeIctx }),
       );
     });
   });
