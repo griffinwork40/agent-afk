@@ -11,6 +11,13 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.191.6] - 2026-09-07
+
+### Fixed
+- detect `truncated` closure reason as anomalous (#1503) (6684050e)
+- surface touched files on cancelAll drain timeout (#1514) (#1522) (6f92f6c9)
+- send_message_to_agent returns error on non-steering providers (#1495) (#1520) (aaa13fd7)
+
 ## [5.191.5] - 2026-09-06
 
 ### Fixed
