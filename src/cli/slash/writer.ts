@@ -63,6 +63,12 @@ export function createConsoleWriter(sink?: WriterSink): Writer {
   // (`CompletionWriter` / `compositor.commitAbove`) already wraps at the live
   // width and re-wraps the retained band on resize, and pre-wrapping here
   // would freeze rows at today's width so a later widen could not rejoin them.
+  //
+  // `writeRaw` below is NOT bounded on either path, also deliberately: `raw()`
+  // emits verbatim content (a file body, captured shell output, a transcript),
+  // never a composed row, so it keeps the line structure its producer chose —
+  // the same byte-identity reasoning that leaves non-TTY output alone. See the
+  // `Writer.raw()` exclusion in render/bounded-line.ts.
   const writeLine = sink !== undefined
     ? (text: string) => { sink.fn(text); }
     : (text: string) => { console.log(boundLineToTerminal(text)); };

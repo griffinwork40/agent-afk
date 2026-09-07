@@ -11,14 +11,19 @@
  * output reads as broken rather than wrapped. Truncating instead would
  * bound the row but destroy content.
  *
- * Invariant: no row handed to a TTY may exceed the terminal width. This
- * module is the enforcement point, applied at the RAW write seams rather
+ * Invariant: no COMPOSED row handed to a TTY may exceed the terminal width.
+ * This module is the enforcement point, applied at the RAW write seams rather
  * than at the ~40 call sites, so a new caller cannot reintroduce the bug by
  * forgetting to budget. Rows that already fit pass through byte-identical.
  *
+ * "Composed" is load-bearing: it is what separates a row this module owns
+ * from verbatim content it must not touch. See the `Writer.raw()` exclusion
+ * below.
+ *
  * The four raw seams, all of which write straight to the terminal with no
  * compositor to wrap them:
- *   - `slash/writer.ts` — sinkless `console.log` (all slash-command output)
+ *   - `slash/writer.ts` — sinkless `console.log` behind `Writer.line()` (and
+ *     the `info`/`warn`/`error`/`success` helpers composed on top of it)
  *   - `commands/interactive/repl-renderer.ts` — the disarmed TTY branch
  *   - `commands/interactive/bootstrap-surface.ts` — `CompletionWriter`'s
  *     pre-arm `console.log` default for `fn` / `idleFn`
@@ -31,6 +36,22 @@
  * today's width and a later WIDEN could no longer rejoin them (guarded by
  * `tests/pty/compositor-scrollback.pty.test.ts`'s width-resize-fragment
  * cases).
+ *
+ * Deliberately NOT applied to `Writer.raw()` either — `slash/writer.ts`'s
+ * sinkless `process.stdout.write` is a fifth raw seam, left unbounded on
+ * purpose. It emits VERBATIM content rather than a composed row: a file body
+ * (`/afk-md show`), captured shell output (`/sh show`), a formatted
+ * transcript. That content arrives with the line structure its producer
+ * chose, and re-wrapping it would break copy-paste fidelity for the same
+ * reason the non-TTY path stays byte-identical below. A long line there
+ * SHOULD auto-wrap, the way `cat` lets it.
+ *
+ * The trade every bounded seam accepts: a terminal's own soft wrap REJOINS on
+ * widen, but a newline inserted here never does, so a bounded row is frozen at
+ * the width it was written at. That is the same mechanism that excludes the
+ * armed path above — the difference is that the armed path HAS a retained band
+ * to reflow, while these seams have nothing that could rejoin them. Preserving
+ * the indent now beats a reflow that cannot happen.
  *
  * ## Wrap, don't truncate; hang the indent
  *

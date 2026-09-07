@@ -86,9 +86,21 @@ describe('hangingWrap', () => {
   });
 
   it('drops the hanging indent when honoring it would leave < 8 content columns', () => {
-    const out = hangingWrap(' '.repeat(30) + 'x'.repeat(80), 34);
+    const deepIndent = ' '.repeat(30);
+    const out = hangingWrap(deepIndent + 'x'.repeat(80), 34);
+    const rows = out.split('\n');
+
     expectAllRowsFit(out, 34);
-    expect(out.split('\n').length).toBeGreaterThan(1);
+    expect(rows.length).toBeGreaterThan(1);
+    // These two pin the guard itself. Width-fit and row-count alone do NOT:
+    // with the hang honored the rows would be 30 spaces + 4 content columns,
+    // which still fits 34 and still exceeds one row — so a test asserting only
+    // those passes whether or not MIN_CONTENT_COLUMNS exists. What actually
+    // separates the branches is that no continuation carries the indent, and
+    // that the payload lands in ~4 rows rather than the ~20 a 4-column
+    // content width would force.
+    expect(rows.slice(1).some((r) => r.startsWith(deepIndent))).toBe(false);
+    expect(rows.length).toBeLessThan(10);
   });
 
   it('is a no-op for a non-positive or non-finite width', () => {
