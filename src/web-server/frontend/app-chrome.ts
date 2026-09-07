@@ -7,9 +7,7 @@
  * wired once at startup by the main module.
  */
 
-function $(id: string): HTMLElement | null {
-  return document.getElementById(id);
-}
+import { $optional as $ } from './dom-utils.js';
 
 /**
  * Show a transient toast notification in the #toast element.
