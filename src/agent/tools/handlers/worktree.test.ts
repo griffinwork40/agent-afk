@@ -194,26 +194,57 @@ describe('worktree handler — create', () => {
     expect(addCall?.args.at(-1)).toBe('origin/main');
   });
 
-  it('refuses when a worktree already exists at the target path', async () => {
+  // #1516: on a name collision the handler auto-retries with a 4-char hex
+  // suffix instead of surfacing an error.
+  it('auto-retries with a suffixed slug when the original name is already taken', async () => {
     const wtPath = join(afkRoot, 'taken');
-    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
+    // The porcelain listing contains the original slug but NOT the suffixed one,
+    // so the auto-retry succeeds and creates the worktree.
+    const mock = makeMock(standardResponder(block(repoRoot), (call) => {
+      if (call.args.includes('list') && call.args.includes('--porcelain')) {
+        return { stdout: `${block(repoRoot)}\n\n${block(wtPath)}\n`, stderr: '' };
+      }
+      if (call.args.includes('add')) {
+        // The actual add path will be the suffixed path — mkdir to let meta write succeed.
+        const addPath = call.args[call.args.indexOf('-b') + 2];
+        return fs.mkdir(addPath, { recursive: true }).then(() => ({ stdout: '', stderr: '' }));
+      }
+      if (call.args.includes('rev-parse') && !call.args.includes('--git-common-dir')) {
+        return { stdout: 'base-sha\n', stderr: '' };
+      }
+      return undefined;
+    }));
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
     const result = await handler({ action: 'create', name: 'taken' }, SIGNAL);
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('already exists');
+    // Should succeed, not error.
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(String(result.content)) as { path: string; branch: string };
+    // Path and branch must include a 4-char hex suffix.
+    expect(parsed.path).toMatch(/taken-[0-9a-f]{4}$/);
+    expect(parsed.branch).toMatch(/taken-[0-9a-f]{4}$/);
+    // The suffixed path must be inside .afk-worktrees/.
+    expect(parsed.path.startsWith(afkRoot + sep)).toBe(true);
   });
 
-  it('reserves room for the suggested suffix when a colliding slug is 80 characters', async () => {
-    const slug = 'a'.repeat(80);
-    const wtPath = join(afkRoot, slug);
-    const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
-    const handler = createWorktreeHandler(repoRoot, { execFile: mock });
-    const result = await handler({ action: 'create', name: slug }, SIGNAL);
+  // #1516: when BOTH the original and auto-suffixed paths are taken, surface an error.
+  // Use a injectable suffix via WorktreeHandlerDeps so the test is deterministic.
+  it('errors when the original slug and the auto-suffixed slug are both taken', async () => {
+    const base = 'double-occ';
+    const fixedSuffix = 'ab12';
+    const wtPath = join(afkRoot, base);
+    const suffixedPath = join(afkRoot, `${base}-${fixedSuffix}`);
+    const mock = makeMock(standardResponder(
+      `${block(repoRoot)}\n\n${block(wtPath)}\n\n${block(suffixedPath)}\n`,
+    ));
+    // Pass the fixed suffix via deps so the handler derives `double-occ-ab12`.
+    const handler = createWorktreeHandler(repoRoot, {
+      execFile: mock,
+      generateSuffix: () => fixedSuffix,
+    });
+    const result = await handler({ action: 'create', name: base }, SIGNAL);
     expect(result.isError).toBe(true);
-    const suggestion = String(result.content).match(/like "([a-z0-9-]+)"/)?.[1];
-    expect(suggestion).toMatch(/^a+-[a-z0-9]{6}$/);
-    expect(suggestion).toHaveLength(80);
-    expect(suggestion).not.toBe(slug);
+    expect(result.content).toContain('already exists');
+    expect(result.content).toContain('auto-suffixed path');
   });
 
   it('rejects a name that sanitizes to empty', async () => {
