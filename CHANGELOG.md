@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.197.0] - 2026-09-07
+
+### Added
+- flip 5 env var defaults from opt-in to opt-out (#1558) (6b81547b)
+
+### Changed
+- Delete drafts directory (69e6d60a)
+- Delete assets/demo-placeholder.png (23a90acd)
+- Delete .afk/prompts/parallel-primitives-wave1.md (1ff519cd)
+
 ## [5.196.0] - 2026-09-07
 
 ### Added
