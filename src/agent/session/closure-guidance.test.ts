@@ -2,8 +2,8 @@
  * Tests for the `closure-anomaly` guardrail — {@link buildClosureGuidance}.
  *
  * Pure function: maps a {@link ClosureReason} to an actionable recovery hint
- * (abort, iteration_cap, timeout subtypes) or `null` (benign closes +
- * anomalous reasons not yet covered). The wiring onto the closure trace event
+ * (abort, iteration_cap, timeout, truncated subtypes) or `null` (benign
+ * closes + anomalous reasons not yet covered). The wiring onto the closure trace event
  * is covered in `trace/closure.test.ts`; the eval-run contract is covered in
  * `improve/eval-run/contracts.test.ts`.
  */
@@ -15,6 +15,7 @@ import {
   CLOSURE_ABORT_RECOVERY_HINT,
   CLOSURE_ITERATION_CAP_RECOVERY_HINT,
   CLOSURE_TIMEOUT_RECOVERY_HINT,
+  CLOSURE_TRUNCATED_RECOVERY_HINT,
 } from './closure-guidance.js';
 
 describe('buildClosureGuidance', () => {
@@ -60,10 +61,19 @@ describe('buildClosureGuidance', () => {
     expect(CLOSURE_TIMEOUT_RECOVERY_HINT).toMatch(/trace|slow tool/i);
   });
 
+  // -- truncated --
+  it('returns the canonical recovery hint for a truncated closure', () => {
+    expect(buildClosureGuidance('truncated')).toBe(CLOSURE_TRUNCATED_RECOVERY_HINT);
+    expect(CLOSURE_TRUNCATED_RECOVERY_HINT.trim().length).toBeGreaterThan(0);
+  });
+
+  it('the truncated hint names a concrete recovery action', () => {
+    expect(buildClosureGuidance('truncated')).toMatch(/\b(resume|re-run|rerun|retry)\b/i);
+  });
+
   // -- benign --
   it('returns null for benign closes — no false-positive guidance', () => {
     expect(buildClosureGuidance('model_end_turn')).toBeNull();
-    expect(buildClosureGuidance('truncated')).toBeNull();
   });
 
   // -- deferred anomalous subtypes --

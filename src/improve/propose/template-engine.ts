@@ -452,6 +452,8 @@ function closureAdviceFor(reason: string): string {
       return 'Loop iteration ceiling tripped. The model could not make progress in N turns. Either the task is genuinely impossible at that budget, or a tool is in an unproductive loop (cross-reference repeated-tool-use cards).';
     case 'max_turns_exceeded':
       return 'Turn ceiling tripped. Same diagnostic as iteration_cap.';
+    case 'truncated':
+      return 'The model hit the output-token ceiling mid-response. Check `max_tokens` and the model\'s output limit. Consider retrying with a larger output budget or splitting the task into smaller steps.';
     default:
       return 'Reason not in the known anomalous set. Inspect the trace and update the detector if this is a new closure variant.';
   }

@@ -179,6 +179,20 @@ describe('detectClosureAnomaly — threshold + severity', () => {
     ];
     expect(detectClosureAnomaly(s3)[0]?.severity).toBe('medium');
   });
+
+  it('truncated starts medium, escalates to high at >=3', () => {
+    resetSeq();
+    const s1 = [makeSession('s1', [closureLine('truncated')])];
+    expect(detectClosureAnomaly(s1)[0]?.severity).toBe('medium');
+
+    resetSeq();
+    const s3 = [
+      makeSession('a', [closureLine('truncated')]),
+      makeSession('b', [closureLine('truncated')]),
+      makeSession('c', [closureLine('truncated')]),
+    ];
+    expect(detectClosureAnomaly(s3)[0]?.severity).toBe('high');
+  });
 });
 
 describe('detectClosureAnomaly — slug + schema conformance', () => {

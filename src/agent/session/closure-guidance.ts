@@ -13,11 +13,11 @@
  * deterministic builder, wired at one production site and exercised directly
  * by an `afk improve eval-run` contract (no LLM, no network).
  *
- * Coverage: `abort`, `iteration_cap`, and `timeout` carry guidance today.
- * The detector flags six anomalous reasons; the remaining three
- * (budget_exceeded, hook_blocked, max_turns_exceeded) each get their own
- * hint in a follow-up. Benign reasons (model_end_turn, truncated) never
- * carry guidance — a clean close needs no recovery action.
+ * Coverage: `abort`, `iteration_cap`, `timeout`, and `truncated` carry
+ * guidance today. The detector flags seven anomalous reasons; the remaining
+ * three (budget_exceeded, hook_blocked, max_turns_exceeded) each get their
+ * own hint in a follow-up. Only `model_end_turn` is benign — a clean close
+ * needs no recovery action.
  *
  * @module agent/session/closure-guidance
  */
@@ -58,6 +58,18 @@ export const CLOSURE_TIMEOUT_RECOVERY_HINT =
   'waiting on a slow tool call.';
 
 /**
+ * Recovery hint for a `truncated` closure. The model's final turn was cut off
+ * by the output-token ceiling (Anthropic `max_tokens`, OpenAI `length` /
+ * `max_output_tokens`) — the session may have been mid-tool-call or
+ * mid-response when the provider stopped generating.
+ */
+export const CLOSURE_TRUNCATED_RECOVERY_HINT =
+  'Session output was truncated by the model provider\'s output-token ceiling ' +
+  'before the response completed. The transcript and witness trace are ' +
+  'preserved — resume with `afk --resume <sessionId>` to continue from where ' +
+  'the output was cut off.';
+
+/**
  * Map a closure reason to an actionable recovery hint, or `null` when no
  * guidance applies (benign closes, and anomalous reasons not yet covered).
  *
@@ -73,6 +85,8 @@ export function buildClosureGuidance(reason: ClosureReason): string | null {
       return CLOSURE_ITERATION_CAP_RECOVERY_HINT;
     case 'timeout':
       return CLOSURE_TIMEOUT_RECOVERY_HINT;
+    case 'truncated':
+      return CLOSURE_TRUNCATED_RECOVERY_HINT;
     default:
       return null;
   }

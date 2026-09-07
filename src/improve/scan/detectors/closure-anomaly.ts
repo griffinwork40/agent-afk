@@ -3,8 +3,8 @@
  *
  * The runtime writes a terminal `closure` event on every session teardown
  * (`src/agent/session/agent-session.ts:680` emits it; the writer's `seal()`
- * follows). The payload carries a `reason` discriminated union with seven
- * values; six of them indicate something other than a clean end-of-turn
+ * follows). The payload carries a `reason` discriminated union with eight
+ * values; seven of them indicate something other than a clean end-of-turn
  * stop:
  *
  *   - `budget_exceeded`     — monetary ceiling crossed
@@ -13,6 +13,7 @@
  *   - `abort`               — explicit cancellation / cascade
  *   - `iteration_cap`       — loop iteration ceiling
  *   - `max_turns_exceeded`  — turn ceiling
+ *   - `truncated`           — model output-token ceiling hit mid-response
  *
  * `model_end_turn` is the only normal exit. Everything else is surfaced
  * as a card. One card per anomalous reason; sessions sharing that reason
@@ -58,7 +59,7 @@ import type { SessionRead } from '../reader.js';
 /** Default minimum sessions sharing a reason before a card fires. */
 export const DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES = 1;
 
-/** Closure reasons we treat as anomalous. `model_end_turn` is excluded. */
+/** Closure reasons we treat as anomalous. Only `model_end_turn` is excluded. */
 const ANOMALOUS_REASONS = new Set<string>([
   'budget_exceeded',
   'timeout',
@@ -66,6 +67,7 @@ const ANOMALOUS_REASONS = new Set<string>([
   'abort',
   'iteration_cap',
   'max_turns_exceeded',
+  'truncated',
 ]);
 
 export interface ClosureAnomalyOptions {
@@ -240,6 +242,8 @@ function buildResult(
  *   - `budget_exceeded` / `timeout` → high regardless of count (one is bad).
  *   - `hook_blocked` / `iteration_cap` / `max_turns_exceeded` → medium;
  *     escalates to high at ≥3 occurrences.
+ *   - `truncated` → medium (model hit output-token ceiling mid-response);
+ *     escalates to high at ≥3 occurrences.
  *   - `abort` → low by default (often user-initiated), medium at ≥3.
  *
  * The ladder is intentionally conservative; reviewers can escalate via
@@ -253,6 +257,7 @@ function severityFor(reason: string, count: number): Severity {
     case 'hook_blocked':
     case 'iteration_cap':
     case 'max_turns_exceeded':
+    case 'truncated':
       return count >= 3 ? 'high' : 'medium';
     case 'abort':
       return count >= 3 ? 'medium' : 'low';
