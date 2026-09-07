@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.197.1] - 2026-09-07
+
+### Fixed
+- address #1558 review feedback -- revert OAuth and capture defaults (#1559) (8ae06419)
+
 ## [5.197.0] - 2026-09-07
 
 ### Added
