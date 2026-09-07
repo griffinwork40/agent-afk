@@ -247,6 +247,27 @@ describe('memory evidence gate — OFF is a byte-identical no-op', () => {
   });
 });
 
+describe('evidenceGateEnabled — disable-value aliases', () => {
+  // Confirms that isExplicitlyDisabled's full vocabulary (0, false, no, off,
+  // case-insensitive) is honoured end-to-end, not just the '0' exercised above.
+
+  for (const disableValue of ['false', 'False', 'no', 'No', 'off', 'Off']) {
+    it(`an uncited codebase fact write returns no warning when AFK_MEMORY_EVIDENCE_GATE=${disableValue}`, async () => {
+      process.env['AFK_MEMORY_EVIDENCE_GATE'] = disableValue;
+      const out = await setFact('convention', `aliasoff-${disableValue} a thing with no citation`);
+      expect(out['warning']).toBeUndefined();
+      expect(out['id']).toBeTypeOf('number');
+    });
+  }
+
+  it('a garbage string keeps the gate enabled (uncited fact still warns)', async () => {
+    process.env['AFK_MEMORY_EVIDENCE_GATE'] = 'garbage';
+    const out = await setFact('convention', 'garbagegate a thing with no citation');
+    expect(out['warning'], 'garbage value must not disable the gate').toBeDefined();
+    expect(out['warning'] as string).toContain('[unverified]');
+  });
+});
+
 describe('memory evidence gate — schema migration v3 → v4', () => {
   it('a fresh store is at schema v4 with a facts.evidence column', () => {
     const dir = freshTmpDir('evidence-fresh');

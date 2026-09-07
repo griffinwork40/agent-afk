@@ -87,8 +87,9 @@ describe('resolveOpenAIAuth — precedence', () => {
     expect(r.last4).toBe('5555');
   });
 
-  it('uses ChatGPT OAuth when present (on by default)', () => {
+  it('uses ChatGPT OAuth when present and flag is explicitly ON (off by default — opt-in)', () => {
     const r = resolveOpenAIAuth(undefined, deps({
+      readEnv: (k) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? '1' : undefined),
       readFile: () =>
         JSON.stringify({
           auth_mode: 'chatgpt',
@@ -232,12 +233,32 @@ describe('resolveOpenAIAuth — ChatGPT-subscription OAuth (flag-gated, read-onl
     expect(r.apiKey).toBeNull();
   });
 
-  it('returns the access token tagged chatgpt-oauth when flag is unset (on by default)', () => {
+  it('stays rejected when the flag is unset (off by default — opt-in)', () => {
     const r = resolveOpenAIAuth(undefined, deps({ readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it('returns the access token tagged chatgpt-oauth when flag is explicitly ON', () => {
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagOn, readFile: () => chatgptAuthJson() }));
     expect(r.source).toBe('chatgpt-oauth');
     expect(r.apiKey).toBe(ACCESS);
     expect(r.accountId).toBe('acct_from_jwt');
     expect(r.expiresAt).toBe(9999999999);
+  });
+
+  it('treats unrecognized env value as disabled (safe default)', () => {
+    const garbageEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? 'garbage' : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: garbageEnv, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.apiKey).toBeNull();
+  });
+
+  it.each(['false', 'no', 'off', 'FALSE', 'NO', 'OFF'])('stays rejected when flag is %j (not in allowlist)', (flagVal) => {
+    const flagEnv = (k: string) => (k === 'AFK_OPENAI_CHATGPT_OAUTH' ? flagVal : undefined);
+    const r = resolveOpenAIAuth(undefined, deps({ readEnv: flagEnv, readFile: () => chatgptAuthJson() }));
+    expect(r.source).toBe('no-usable-auth-codex-oauth');
+    expect(r.apiKey).toBeNull();
   });
 
   it('prefers an explicit account_id field over the JWT claim', () => {

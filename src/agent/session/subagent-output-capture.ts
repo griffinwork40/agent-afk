@@ -29,7 +29,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { env } from '../../config/env.js';
+import { env, isExplicitlyEnabled } from '../../config/env.js';
 import { getSubagentOutputsDir } from '../../paths.js';
 import type { OutputEvent } from '../types/session-types.js';
 import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
@@ -71,7 +71,8 @@ export interface SubagentOutputCaptureInput {
  * whole safety story, so it should be assertable without touching the disk.
  */
 export function shouldCaptureSubagentOutput(input: SubagentOutputCaptureInput): boolean {
-  if (env.AFK_CAPTURE_SUBAGENT_OUTPUT === '0') return false;
+  const v = env.AFK_CAPTURE_SUBAGENT_OUTPUT;
+  if (!v || !isExplicitlyEnabled(v)) return false;
   if (!input.isSubagentFork) return false;
   if (!input.sessionId || !input.subagentId) return false;
   return true;

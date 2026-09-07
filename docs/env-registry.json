@@ -111,11 +111,10 @@
     },
     {
       "name": "AFK_CAPTURE_SUBAGENT_OUTPUT",
-      "description": "Capture subagent conversational OUTPUT (assistant text plus each tool call with its arguments) as a redacted markdown transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, so a child killed by a timeout still leaves a usable partial record — the case where final-message capture yields nothing. On by default. Set to 0 to disable. Note: best-effort regex redaction only — connection strings, PEM blocks, and PII are not caught.",
+      "description": "Capture subagent conversational OUTPUT (assistant text plus each tool call with its arguments) as a redacted markdown transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, so a child killed by a timeout still leaves a usable partial record — the case where final-message capture yields nothing. Off by default. Set to 1 to enable. Note: best-effort regex redaction only — connection strings, PEM blocks, and PII are not caught.",
       "type": "boolean",
       "required": false,
-      "default": "1",
-      "example": "0",
+      "example": "1",
       "category": "debug"
     },
     {
@@ -598,11 +597,10 @@
     },
     {
       "name": "AFK_OPENAI_CHATGPT_OAUTH",
-      "description": "Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. On by default. Set to 0/false/no/off to disable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).",
+      "description": "Use ChatGPT-subscription OAuth credentials from ~/.codex/auth.json (auth_mode: chatgpt) as OpenAI provider auth. Off by default. Set to 1/true/yes/on to enable. READ-ONLY: AFK never refreshes these tokens — re-run codex when the access token expires. Routes requests over the Responses API to the private ChatGPT backend (chatgpt.com/backend-api).",
       "type": "boolean",
       "required": false,
-      "default": "1",
-      "example": "0",
+      "example": "1",
       "category": "model"
     },
     {
