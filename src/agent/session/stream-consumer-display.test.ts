@@ -16,7 +16,7 @@
  * passthrough. `display` never appears on `ProviderEvent` or `ToolResult`.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { ProviderEvent } from '../provider.js';
 import { transformProviderEvent } from './stream-consumer.js';
 import type { OutputEvent } from './stream-consumer.js';
@@ -428,5 +428,217 @@ describe('stream-consumer → formatOutcome: bash output integration', () => {
     expect(rendered).toContain('4 lines');
     expect(rendered).toContain('d');
     expect(rendered).toContain('c');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AFK_BASH_TAIL_LINES and AFK_BASH_HEAD_LINES env var configuration tests
+// ---------------------------------------------------------------------------
+
+describe('stream-consumer: configurable preview size (AFK_BASH_TAIL_LINES / AFK_BASH_HEAD_LINES)', () => {
+  const HOME = '/Users/testuser';
+
+  function buildBashEvent(content: string): ProviderEvent {
+    return {
+      type: 'tool.output',
+      toolUseId: 'tu-cfg',
+      toolName: 'bash',
+      content,
+      sessionId: 's-cfg',
+    };
+  }
+
+  function getChunk(content: string) {
+    const out = transformProviderEvent(buildBashEvent(content), noopDeps) as Extract<OutputEvent, { type: 'chunk' }>;
+    if (out.chunk.type !== 'tool_result') throw new Error('unreachable');
+    return out.chunk;
+  }
+
+  function rendered(content: string): string {
+    return stripAnsi(formatOutcome(getChunk(content), HOME, 60, 'bash'));
+  }
+
+  afterEach(() => {
+    delete process.env['AFK_BASH_TAIL_LINES'];
+    delete process.env['AFK_BASH_HEAD_LINES'];
+  });
+
+  // ── Default behaviour ────────────────────────────────────────────────────
+
+  it('default: tailPreview has 7 lines for 20-line output (no env override)', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(7);
+    expect(chunk.tailPreview![6]).toBe('line 20');
+    expect(chunk.tailPreview![0]).toBe('line 14');
+  });
+
+  it('default: headPreview is absent when AFK_BASH_HEAD_LINES is unset', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toBeUndefined();
+  });
+
+  // ── Custom tail count ────────────────────────────────────────────────────
+
+  it('AFK_BASH_TAIL_LINES=3: tailPreview has 3 lines', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = '3';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(3);
+    expect(chunk.tailPreview![2]).toBe('line 20');
+    expect(chunk.tailPreview![0]).toBe('line 18');
+  });
+
+  it('AFK_BASH_TAIL_LINES=10: tailPreview has 10 lines', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = '10';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(10);
+    expect(chunk.tailPreview![9]).toBe('line 20');
+    expect(chunk.tailPreview![0]).toBe('line 11');
+  });
+
+  // ── Zero tail count ──────────────────────────────────────────────────────
+
+  it('AFK_BASH_TAIL_LINES=0: tailPreview is absent (no lines shown)', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = '0';
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    // tailPreview is empty so the spread omits the key
+    expect(chunk.tailPreview).toBeUndefined();
+  });
+
+  // ── Invalid inputs fall back to default ─────────────────────────────────
+
+  it('AFK_BASH_TAIL_LINES=abc: invalid string falls back to 7', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = 'abc';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(7);
+  });
+
+  it('AFK_BASH_TAIL_LINES=1.5: decimal falls back to 7', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = '1.5';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(7);
+  });
+
+  it('AFK_BASH_TAIL_LINES=51: above max (50) falls back to 7', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = '51';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(7);
+  });
+
+  it('AFK_BASH_TAIL_LINES=50: boundary value 50 is accepted', () => {
+    process.env['AFK_BASH_TAIL_LINES'] = '50';
+    const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(50);
+  });
+
+  // ── Head lines ────────────────────────────────────────────────────────────
+
+  it('AFK_BASH_HEAD_LINES=3: headPreview has first 3 lines', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '3';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toHaveLength(3);
+    expect(chunk.headPreview![0]).toBe('line 1');
+    expect(chunk.headPreview![2]).toBe('line 3');
+    // tail still present at default 7
+    expect(chunk.tailPreview).toHaveLength(7);
+  });
+
+  it('AFK_BASH_HEAD_LINES=0: headPreview absent (disabled)', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '0';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toBeUndefined();
+  });
+
+  it('AFK_BASH_HEAD_LINES=abc: invalid string falls back to 0 (disabled)', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = 'abc';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toBeUndefined();
+  });
+
+  it('AFK_BASH_HEAD_LINES=51: above max falls back to 0 (disabled)', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '51';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toBeUndefined();
+  });
+
+  // ── Overlap: head + tail >= total non-empty lines ─────────────────────────
+
+  it('overlap: head+tail >= total lines → all lines in tailPreview, headPreview absent', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '5';
+    process.env['AFK_BASH_TAIL_LINES'] = '5';
+    // 8 non-empty lines, head(5)+tail(5)=10 >= 8 → show all
+    const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toBeUndefined();
+    expect(chunk.tailPreview).toHaveLength(8);
+    // No hidden lines
+    expect(chunk.hiddenLineCount).toBe(0);
+  });
+
+  it('overlap: head+tail exactly equals total → no duplication', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '3';
+    process.env['AFK_BASH_TAIL_LINES'] = '4';
+    // exactly 7 non-empty lines
+    const lines = Array.from({ length: 7 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toBeUndefined();
+    expect(chunk.tailPreview).toHaveLength(7);
+    expect(chunk.hiddenLineCount).toBe(0);
+  });
+
+  it('no overlap: head+tail < total → hiddenLineCount reflects gap', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '3';
+    process.env['AFK_BASH_TAIL_LINES'] = '3';
+    // 20 non-empty lines → hidden = 20+trailing_newline(1?) - 6 displayed
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.headPreview).toHaveLength(3);
+    expect(chunk.tailPreview).toHaveLength(3);
+    // lines.length = 20 (no trailing newline), displayed = 6
+    expect(chunk.hiddenLineCount).toBe(20 - 6);
+  });
+
+  // ── Short output (fewer lines than requested) ─────────────────────────────
+
+  it('short output: 3 non-empty lines, default tail=7 → tailPreview has all 3', () => {
+    const lines = ['a', 'b', 'c'];
+    const chunk = getChunk(lines.join('\n'));
+    expect(chunk.tailPreview).toHaveLength(3);
+  });
+
+  it('short output: 2 lines, head=3 tail=3 → overlap, all in tailPreview', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '3';
+    process.env['AFK_BASH_TAIL_LINES'] = '3';
+    const chunk = getChunk('line1\nline2');
+    expect(chunk.headPreview).toBeUndefined();
+    expect(chunk.tailPreview).toHaveLength(2);
+  });
+
+  // ── Rendered output includes head lines ───────────────────────────────────
+
+  it('head lines appear before the hidden-lines indicator in rendered output', () => {
+    process.env['AFK_BASH_HEAD_LINES'] = '2';
+    process.env['AFK_BASH_TAIL_LINES'] = '2';
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+    const r = rendered(lines.join('\n'));
+    const headIdx = r.indexOf('line 1');
+    const hiddenIdx = r.indexOf('earlier lines hidden');
+    const tailIdx = r.indexOf('line 19');
+    // head comes before hidden indicator, hidden before tail
+    expect(headIdx).toBeGreaterThanOrEqual(0);
+    expect(hiddenIdx).toBeGreaterThan(headIdx);
+    expect(tailIdx).toBeGreaterThan(hiddenIdx);
   });
 });

@@ -206,7 +206,7 @@ function buildToolOutputEvent(
   // without substring-scanning content for the `[output truncated …]`
   // sentinel. Prior versions conflated this field with display clipping;
   // see PR introducing `ToolResult.truncated` for the rationale.
-  const { content: previewContent, lineCount, sizeBytes, sizeLabel, tailPreview, hiddenLineCount } = truncateContent(event.content);
+  const { content: previewContent, lineCount, sizeBytes, sizeLabel, headPreview, tailPreview, hiddenLineCount } = truncateContent(event.content);
   return {
     type: 'chunk',
     chunk: {
@@ -219,6 +219,7 @@ function buildToolOutputEvent(
       ...(event.truncated === true && { truncated: true }),
       ...(event.capturePath !== undefined && { capturePath: event.capturePath }),
       ...(lineCount !== undefined && { lineCount }),
+      ...(headPreview !== undefined && headPreview.length > 0 && { headPreview }),
       ...(tailPreview !== undefined && tailPreview.length > 0 && { tailPreview }),
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),

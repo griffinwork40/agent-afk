@@ -190,6 +190,17 @@ export function formatOutcome(
       headline = resultColor(`${chunk.lineCount} ${noun}`) + exitSuffix + durSuffix;
     }
 
+    // Render head lines BEFORE the hidden-lines indicator (if any), so the
+    // layout reads: [header] [head lines] [… N earlier lines hidden] [tail lines].
+    // Each line is sanitized (same sanitizer as the single-line preview path)
+    // and indented with `    ` to sit visually under the `⎿` connector.
+    if (chunk.headPreview !== undefined && chunk.headPreview.length > 0) {
+      const headLines = chunk.headPreview
+        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
+        .join('\n');
+      headline += '\n' + headLines;
+    }
+
     if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
       headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
     }
