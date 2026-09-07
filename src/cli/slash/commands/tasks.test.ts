@@ -35,6 +35,7 @@ import {
   tasksCancelCmd,
   setTasksRegistry,
   resetTasksRegistry,
+  setTasksIctx,
 } from './tasks.js';
 import { enterTaskViewMode } from '../../commands/interactive/task-view-mode.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
@@ -42,6 +43,7 @@ import type { SubagentHandle } from '../../../agent/subagent/handle.js';
 import type { SubagentStatus } from '../../../agent/subagent/result.js';
 import { CompletedCache } from '../../../agent/subagent/completed-cache.js';
 import type { SlashContext, SessionStats } from '../types.js';
+import type { InteractiveCtx } from '../../commands/interactive/shared.js';
 
 const mockedEnterTaskViewMode = vi.mocked(enterTaskViewMode);
 
@@ -274,6 +276,90 @@ describe('/tasks slash commands', () => {
       await tasksCancelCmd.handler(ctx, 'sub-running-1');
       expect(h.cancel).toHaveBeenCalledOnce();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // ictxRef → TaskViewEntry wiring (#1332)
+  // -------------------------------------------------------------------------
+
+  describe('ictxRef → TaskViewEntry wiring (#1332)', () => {
+    /** Minimal fake InteractiveCtx — only viewingTaskId is used by the wiring path. */
+    function makeFakeIctx(): InteractiveCtx {
+      return { viewingTaskId: undefined } as unknown as InteractiveCtx;
+    }
+
+    it('/tasks:view — setTasksIctx threads ictx into enterTaskViewMode entry', async () => {
+      const fakeIctx = makeFakeIctx();
+      const h = makeHandle('sub-wiring-view', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+      setTasksIctx(fakeIctx);
+
+      const { ctx } = makeCtx();
+      mockedEnterTaskViewMode.mockResolvedValueOnce(undefined);
+      await tasksViewCmd.handler(ctx, 'sub-wiring-view');
+
+      expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sub-wiring-view', ictx: fakeIctx }),
+      );
+    });
+
+    it('/tasks:view — without setTasksIctx, ictx is undefined in the entry', async () => {
+      // resetTasksRegistry() in beforeEach already cleared ictxRef.
+      const h = makeHandle('sub-wiring-no-ictx', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+      // Intentionally do NOT call setTasksIctx.
+
+      const { ctx } = makeCtx();
+      mockedEnterTaskViewMode.mockResolvedValueOnce(undefined);
+      await tasksViewCmd.handler(ctx, 'sub-wiring-no-ictx');
+
+      expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
+        expect.objectContaining({ ictx: undefined }),
+      );
+    });
+
+    it('/tasks interactive Enter — setTasksIctx threads ictx into enterTaskViewMode entry', async () => {
+      const fakeIctx = makeFakeIctx();
+      const h = makeHandle('sub-wiring-interactive', 'running');
+      const manager = makeManager([h]);
+      setTasksRegistry(manager, SESSION_LABEL);
+      setTasksIctx(fakeIctx);
+
+      const ctx: SlashContext = {
+        session: { current: {} } as unknown as SlashContext['session'],
+        stats: {
+          totalTurns: 0, totalCostUsd: 0, totalTokens: 0, totalDurationMs: 0,
+          sessionStartTime: Date.now(), turnCosts: [], turnTokens: [], turns: [],
+          model: 'sonnet', permissionMode: 'default',
+        },
+        out: {
+          line: vi.fn(),
+          raw: vi.fn(),
+          success: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        ui: { clearScreen: vi.fn(), repaintStatusLine: vi.fn() },
+        // Provide setSoftStopHandler to enter interactive mode.
+        setSoftStopHandler: vi.fn(),
+      };
+
+      mockedEnterTaskViewMode.mockResolvedValueOnce(undefined);
+      const handlerPromise = tasksCmd.handler(ctx, '');
+
+      // Wait for collectAllTasks + renderList + stdin.on() to settle.
+      await new Promise<void>((r) => setTimeout(r, 50));
+      process.stdin.emit('data', '\r');
+
+      await handlerPromise;
+
+      expect(mockedEnterTaskViewMode).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sub-wiring-interactive', ictx: fakeIctx }),
+      );
+    }, 10_000);
   });
 
   // -------------------------------------------------------------------------
