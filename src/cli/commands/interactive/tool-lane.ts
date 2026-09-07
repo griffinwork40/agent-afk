@@ -11,9 +11,9 @@ import {
   formatAgentHeader,
   formatAgentChildren,
   renderGroupedRootTools,
-  getGlyphs,
-  toolLaneWidth,
+  getGlyphs, toolLaneWidth,
   freshToolEntry,
+  pushOutcomeLines,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -597,7 +597,9 @@ export class ToolLane {
         // never carries a `diff` payload (diffs originate from edit/write
         // tool_diff chunks), so no diff block is rendered here.
         if (entry.result) {
-          lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ' + formatOutcome(entry.result, undefined, 60, entry.toolName) + batchBadge(entry.result)));
+          // pushOutcomeLines splits multi-line formatOutcome so continuation
+          // lines carry the spine glyph, not a bare 4-space indent.
+          pushOutcomeLines(lines, palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ', formatOutcome(entry.result, undefined, 60, entry.toolName), palette.dim(g.spine) + '  ', cols, batchBadge(entry.result));
         } else {
           // Live elapsed counter: computed at repaint time so the counter ticks
           // on every overlay refresh without a dedicated timer. Grace period

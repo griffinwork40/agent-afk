@@ -18,6 +18,7 @@ import {
   renderTextChildLines,
   getGlyphs,
   toolLaneWidth,
+  pushOutcomeLines,
 } from './tool-lane-render.js';
 import {
   groupSiblings,
@@ -259,15 +260,15 @@ function renderOverlayChildren(
         // child will draw its own connector row from the current parent's
         // indented spine column — exactly what the caller renders next.
       } else if (child.result) {
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ' + formatOutcome(child.result, undefined, 60, child.toolName), cols));
+        // formatOutcome may return multi-line content (hiddenLineCount +
+        // tailPreview). pushOutcomeLines splits on \n so continuation lines
+        // carry the spine-aware indent instead of the bare 4-space indent
+        // that formatOutcome embeds.
+        const outcomeText = formatOutcome(child.result, undefined, 60, child.toolName);
+        const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
+        const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+        pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
         if (child.diff && !child.result.isError) {
-          // Diff sits under the child entry. Indent = current row's indent
-          // + 1 spine slot (continuing this child's column iff it's not the
-          // last sibling) + a 1-cell pad to clear past the connector. We
-          // approximate the post-connector position with `'    '` extension
-          // since the connector itself is 3 cells (`├─ ` / `╰─ `) — the diff
-          // hangs visually past it without claiming a sibling slot.
-          const diffIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
           // Clamp each diff body line to terminal width. Diff lines are
           // model-controlled (file content) and routinely exceed `cols`;
           // without clamping the terminal soft-wraps the overflow to column 0
@@ -278,7 +279,7 @@ function renderOverlayChildren(
           // log-update's wrap-aware count, making the block flicker on each
           // repaint. Mirrors the clamp on the root-overlay diff path in
           // tool-lane.ts.
-          for (const line of formatDiffBlock(child.diff, 'overlay', diffIndent)) {
+          for (const line of formatDiffBlock(child.diff, 'overlay', continuationIndent)) {
             lines.push(clampLineToTerminal(line, cols));
           }
         }
@@ -446,18 +447,18 @@ function renderFlushChildren(
         const parentSlot = parentIsLast ?? isLast;
         lines.push(...renderFlushChildren(grandchildren, childMap, homeDir, undefined, cols, [...ancestorIsLast, parentSlot], g, isLast));
       } else if (child.result) {
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ' + formatOutcome(child.result, homeDir, 60, child.toolName), cols));
+        // Mirror overlay path: pushOutcomeLines splits on \n so continuation
+        // lines carry the spine-aware indent in scrollback.
+        const outcomeText = formatOutcome(child.result, homeDir, 60, child.toolName);
+        const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
+        const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+        pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
         if (child.diff && !child.result.isError) {
-          // Scrollback renders the full diff (no overlay cap). Indent matches
-          // the overlay path: continue (or close) this child's spine column,
-          // then 2 cells past the connector.
-          const diffIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
-          // Clamp each diff body line to terminal width — see the matching
-          // note on the overlay diff path above. Scrollback is append-only:
-          // an unclamped line that soft-wraps to column 0 orphans its
-          // continuation past the spine gutter permanently, with no repaint
-          // able to repair it.
-          for (const line of formatDiffBlock(child.diff, 'flush', diffIndent)) {
+          // Clamp each diff body line to terminal width -- scrollback is
+          // append-only: an unclamped line that soft-wraps to column 0
+          // orphans its continuation past the spine gutter permanently,
+          // with no repaint able to repair it.
+          for (const line of formatDiffBlock(child.diff, 'flush', continuationIndent)) {
             lines.push(clampLineToTerminal(line, cols));
           }
         }
