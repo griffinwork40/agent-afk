@@ -17,8 +17,30 @@ import type { AnthropicToolDef, ToolHandler } from '../tools/types.js';
 import type { WorkspaceEntry, WorkspacePublishInput, WorkspaceRelationType } from './workspace-store.js';
 import { WorkspaceStore } from './workspace-store.js';
 
-/** Tool names that must be permitted whenever a provider wires a workspace store. */
-export const WORKSPACE_TOOL_NAMES = ['workspace_publish', 'workspace_query', 'workspace_subscribe'] as const;
+/**
+ * Tool names wired on every surface that registers a workspace store.
+ *
+ * Invariant: `workspace_subscribe` is intentionally excluded from this base
+ * array. The subscribe handler is gated on `opts.subscribeHandler` at provider
+ * construction (see anthropic-direct/index.ts), so it is only registered on
+ * child / nesting surfaces where a subscribe handler is actually wired. Top-
+ * level surfaces (REPL, one-shot chat, Telegram, daemon) never pass that option
+ * and therefore have no handler — including the name here was dead weight that
+ * misleadingly implied the tool was available at those surfaces (#1562).
+ *
+ * Use `WORKSPACE_CHILD_TOOL_NAMES` where `workspace_subscribe` IS wired (child
+ * provider allowlists — see `CHILD_ALLOWED_TOOLS` in nesting.ts).
+ */
+export const WORKSPACE_TOOL_NAMES = ['workspace_publish', 'workspace_query'] as const;
+
+/**
+ * Workspace tool names for child / nesting provider allowlists where
+ * `workspace_subscribe` is actually wired via `subscribeHandler`.
+ *
+ * Callers: `CHILD_ALLOWED_TOOLS` (nesting.ts). Do NOT spread into top-level
+ * surface allowlists — those surfaces never wire a subscribeHandler.
+ */
+export const WORKSPACE_CHILD_TOOL_NAMES = ['workspace_publish', 'workspace_query', 'workspace_subscribe'] as const;
 
 /**
  * workspace_publish: Publish a structured finding to the shared session workspace.
