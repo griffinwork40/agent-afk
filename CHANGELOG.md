@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.201.0] - 2026-09-08
+
+### Added
+- live rolling tail during long-running commands (#1506) (#1568) (d46be13a)
+
 ## [5.200.1] - 2026-09-08
 
 ### Fixed
