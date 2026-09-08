@@ -103,6 +103,7 @@ export interface SchedulerOptions {
    * `sendHandoffQuestion` (inline keyboards, reply-to matching) instead of
    * falling back to the plain `pushIfConfigured` text notification path.
    * Has no effect when absent — fallback is always preserved.
+   * Has no effect on cron-triggered tasks, which use the plain push path.
    */
   bot?: Telegraf;
   /** Primary Telegram chat ID for handoff question delivery. */
