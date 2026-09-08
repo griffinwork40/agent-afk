@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.202.1] - 2026-09-08
+
+### Fixed
+- include grep include arg in resource fingerprint (#1565) (#1573) (d5fbd466)
+
+### Changed
+- cover combined steering + workspace beforeNextRound (#1564) (#1575) (b9ca73bb)
+- cover setSubscribeHandler injection path (#1563) (#1574) (6ce52c5e)
+- scope workspace_subscribe to child allowlists only (#1562) (#1577) (dc497243)
+
 ## [5.202.0] - 2026-09-08
 
 ### Added
