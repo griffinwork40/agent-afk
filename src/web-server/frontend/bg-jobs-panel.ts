@@ -128,6 +128,8 @@ export function renderBgJobsPanel(
 
   const panel = el('div', 'bgjobs-panel');
 
+  panel.appendChild(el('h2', 'bgjobs-title', 'Background Jobs'));
+
   if (jobs.length === 0) {
     panel.appendChild(el('div', 'bgjobs-empty', 'No background jobs'));
     container.appendChild(panel);

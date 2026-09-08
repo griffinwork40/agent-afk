@@ -5,7 +5,10 @@
 
 /* ── bg-jobs panel ────────────────────────────────────────────────────────── */
 
+.bgjobs-title { margin: 0 0 16px; font-size: 18px; font-weight: 600; color: var(--text); }
+
 .bgjobs-panel {
+  max-width: 900px; width: 100%;
   display: flex;
   flex-direction: column;
   gap: 4px;

@@ -2,6 +2,7 @@
 
 .mem-view { display: none; flex: 1; flex-direction: column; overflow-y: auto; padding: 24px; }
 .mem-view.is-active { display: flex; }
+.mem-panel { display: flex; flex-direction: column; flex: 1; }
 
 .mem-inner { max-width: 900px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
 

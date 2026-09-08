@@ -21,6 +21,10 @@
 }
 
 * { box-sizing: border-box; }
+/* Invariant: the hidden attribute must always win over CSS display rules.
+   Elements like .transcript and .composer have explicit display values that
+   override the UA [hidden] { display: none } in some browsers. */
+[hidden] { display: none !important; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #prompt:focus-visible, .approval-input:focus-visible { outline: none; }
 

@@ -263,7 +263,7 @@ function renderResults(area: HTMLElement, results: MemorySearchResult[]): void {
 export function createMemoryPanel(opts: MemoryPanelOpts): HTMLElement {
   const { api } = opts;
 
-  const panel = el('div', 'mem-view');
+  const panel = el('div', 'mem-panel');
 
   const inner = el('div', 'mem-inner');
   inner.appendChild(el('h2', 'mem-title', 'Memory'));
