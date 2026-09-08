@@ -72,3 +72,7 @@ tmp/
 todo.md
 src/web-ui-assets/
 pr1387-diff.txt
+
+# Local-only research artifacts (not for public repo)
+docs/research/
+tests/false-completion-benchmark.test.ts
