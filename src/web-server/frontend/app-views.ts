@@ -1,12 +1,17 @@
 /**
  * Top-level view switching for `afk web` — sessions, schedules, bg-jobs, memory.
  *
- * Contract: switching toggles DOM visibility rather than destroying nodes so
- * the SSE stream stays alive while viewing other panels; notifications are not
- * missed. The SchedulesView and memory panel are constructed lazily on first use.
+ * Contract: switching toggles the `hidden` attribute on every view container
+ * rather than destroying nodes, so the SSE stream stays alive while viewing
+ * other panels — notifications are not missed.
  *
- * Invariant: lazy singletons are module-scoped here and never exposed to app.ts,
- * keeping lifecycle self-contained in this file.
+ * Invariant: visibility uses the `hidden` attribute exclusively. A global
+ * `[hidden] { display: none !important }` rule in styles.css guarantees the
+ * attribute wins over any element-level CSS `display` declaration, avoiding
+ * the specificity fights that class-based toggling caused.
+ *
+ * Invariant: lazy singletons are module-scoped here and never exposed to
+ * app.ts, keeping lifecycle self-contained in this file.
  */
 
 import { SchedulesView } from './schedules-view.js';
@@ -25,29 +30,41 @@ let schedulesView: SchedulesView | undefined;
 /** Lazy singleton — constructed on first switch to the memory view. */
 let memoryPanel: HTMLElement | undefined;
 
-/** IDs of all non-session-view containers (toggled hidden when showing sessions). */
-const ALT_VIEW_IDS = ['schedules-view', 'bg-jobs-view', 'memory-view'] as const;
-
 /** IDs of all nav buttons (toggled is-active). */
 const NAV_IDS = ['nav-sessions', 'nav-schedules', 'nav-bg-jobs', 'nav-memory'] as const;
 
-/** Map from ViewName to the corresponding view container id. */
-const VIEW_CONTAINER_ID: Readonly<Record<ViewName, string>> = {
-  sessions: '',
+/** Session-view element IDs — shown when sessions tab is active. */
+const SESSION_EL_IDS = ['transcript', 'approvals', 'composer'] as const;
+
+/** Alternate view container IDs — one shown at a time, rest hidden. */
+const ALT_VIEW_IDS = ['schedules-view', 'bg-jobs-view', 'memory-view'] as const;
+
+/** Map from ViewName to the corresponding alt-view container id. */
+const VIEW_CONTAINER_ID: Readonly<Record<Exclude<ViewName, 'sessions'>, string>> = {
   schedules: 'schedules-view',
   'bg-jobs': 'bg-jobs-view',
   memory: 'memory-view',
 };
 
+function setHidden(id: string, hide: boolean): void {
+  const el = document.getElementById(id);
+  if (el) el.hidden = hide;
+}
+
+function setHiddenBySelector(sel: string, hide: boolean): void {
+  const el = document.querySelector(sel) as HTMLElement | null;
+  if (el) el.hidden = hide;
+}
+
 /**
  * Switch between the top-level views.
  *
  * The sessions view includes transcript, approvals, and composer. Alternate
- * views are standalone panels. Switching toggles visibility rather than
- * destroying DOM -- the SSE stream stays alive while viewing other panels so
- * notifications are not missed.
+ * views are standalone panels that each get their own container.
  */
 export function switchView(view: ViewName, api: ApiFunction): void {
+  const isSessionsView = view === 'sessions';
+
   // Nav button active states
   for (const navId of NAV_IDS) {
     const btn = document.getElementById(navId);
@@ -55,31 +72,15 @@ export function switchView(view: ViewName, api: ApiFunction): void {
     btn?.classList.toggle('is-active', btnView === view);
   }
 
-  // Session-view elements
-  const transcript = document.getElementById('transcript');
-  const approvals = document.getElementById('approvals');
-  const composer = document.getElementById('composer');
-  const sidebarHead = document.querySelector('.sidebar-head') as HTMLElement | null;
-  const sessionsEl = document.getElementById('sessions');
-
-  const isSessionsView = view === 'sessions';
-
   // Toggle session-view elements
-  if (transcript) transcript.hidden = !isSessionsView;
-  if (approvals) approvals.hidden = !isSessionsView;
-  if (composer) composer.hidden = !isSessionsView;
-  if (sidebarHead) sidebarHead.hidden = !isSessionsView;
-  if (sessionsEl) sessionsEl.hidden = !isSessionsView;
+  for (const id of SESSION_EL_IDS) setHidden(id, !isSessionsView);
+  setHiddenBySelector('.sidebar-head', !isSessionsView);
+  setHidden('sessions', !isSessionsView);
 
-  // Toggle all alternate view containers — deactivate every alt view, then
-  // activate the requested one (if it's not sessions).
-  for (const altId of ALT_VIEW_IDS) {
-    document.getElementById(altId)?.classList.remove('is-active');
-  }
-
+  // Toggle all alternate view containers — hide all, then show the target.
+  for (const altId of ALT_VIEW_IDS) setHidden(altId, true);
   if (!isSessionsView) {
-    const targetId = VIEW_CONTAINER_ID[view];
-    document.getElementById(targetId)?.classList.add('is-active');
+    setHidden(VIEW_CONTAINER_ID[view], false);
   }
 
   // Per-view lazy initialisation and data loading
@@ -108,7 +109,6 @@ export function switchView(view: ViewName, api: ApiFunction): void {
           const data = (await api<{ jobs: BgJobMeta[] }>('/api/bg-jobs'));
           renderBgJobsPanel(bgView, data.jobs);
         } catch {
-          // Non-fatal: render empty panel on error.
           renderBgJobsPanel(bgView, []);
         }
       })();

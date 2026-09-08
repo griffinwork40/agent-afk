@@ -1,7 +1,6 @@
 /* ── schedules view ─────────────────────────────────────────────────────── */
 
-.sched-view { display: none; flex: 1; flex-direction: column; overflow-y: auto; padding: 24px; }
-.sched-view.is-active { display: flex; }
+.sched-view { flex: 1; display: flex; flex-direction: column; overflow-y: auto; padding: 24px; }
 
 .sched-header { max-width: 900px; width: 100%; margin: 0 auto 20px; }
 .sched-title-row {
