@@ -30,7 +30,8 @@
 import { Markup, type Telegraf } from 'telegraf';
 import { answerHandoff } from '../agent/daemon/handoff-wiring.js';
 import type { HandoffRecord, HandoffRoute } from '../agent/daemon/handoff-store.js';
-import { writeHandoff, readHandoff } from '../agent/daemon/handoff-store.js';
+import { writeHandoff, readHandoff, withHandoffLock } from '../agent/daemon/handoff-store.js';
+import { getHandoffsDir } from '../paths.js';
 import {
   buildHandoffCallback,
   parseHandoffCallback,
@@ -397,10 +398,16 @@ export async function matchReplyToHandoff(
 /**
  * Update the HandoffRecord with Telegram route and message ID for restart recovery.
  *
- * Invariant: re-reads the record from disk before writing so a concurrent answer
- * that transitioned the record to 'answered' between sendMessage and this call is
- * never clobbered. If the fresh copy is no longer 'pending', we skip the write --
- * the answer already landed and erasing it would be a data loss bug (#1549).
+ * Invariant: acquires the same O_EXCL lock that updateHandoffAnswer uses, then
+ * re-reads the record inside the lock. This closes the TOCTOU window (#1557):
+ * without the lock, a concurrent updateHandoffAnswer completing between the read
+ * and write would have its 'answered' status clobbered by our pending+route write.
+ * If the fresh copy is no longer 'pending' (answer won the race), we skip the
+ * write — erasing an answer would be a data loss bug (#1549).
+ *
+ * Best-effort contract: all errors (including lock-not-acquired) are swallowed.
+ * The handoff still functions without route/messageId; restart recovery re-sends
+ * to the default target instead of the original chat.
  */
 async function persistRouteAndMessageId(
   record: HandoffRecord,
@@ -409,17 +416,20 @@ async function persistRouteAndMessageId(
   messageId: number,
   handoffsDir?: string,
 ): Promise<void> {
+  const dir = handoffsDir ?? getHandoffsDir();
   const route: HandoffRoute = { chatId, ...(threadId ? { threadId } : {}) };
   try {
-    const fresh = await readHandoff(record.taskId, handoffsDir);
-    // Answer won the race -- skip the write to preserve it.
-    if (fresh === null || fresh.status !== 'pending') return;
-    const updated: HandoffRecord = {
-      ...fresh,
-      route,
-      telegramMessageId: messageId,
-    };
-    await writeHandoff(updated, handoffsDir);
+    await withHandoffLock(record.taskId, dir, async () => {
+      const fresh = await readHandoff(record.taskId, dir);
+      // Answer won the race -- skip the write to preserve it.
+      if (fresh === null || fresh.status !== 'pending') return;
+      const updated: HandoffRecord = {
+        ...fresh,
+        route,
+        telegramMessageId: messageId,
+      };
+      await writeHandoff(updated, dir);
+    });
   } catch {
     // Best-effort: the handoff still works without route/messageId; restart
     // recovery will just re-send to the default target instead of the original chat.

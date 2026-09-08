@@ -8,6 +8,7 @@ import {
   deleteHandoff,
   listPendingHandoffs,
   updateHandoffAnswer,
+  withHandoffLock,
   type HandoffRecord,
 } from './handoff-store.js';
 
@@ -381,6 +382,65 @@ describe('concurrent writes', () => {
     for (let i = 0; i < count; i++) {
       expect(reads[i]?.sessionId).toBe(`sess-batch-${i}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// withHandoffLock
+// ---------------------------------------------------------------------------
+
+describe('withHandoffLock', () => {
+  it('runs the callback and returns its value when the lock is free', async () => {
+    const result = await withHandoffLock('q-lock-free', testDir, async () => 'hello');
+    expect(result).toBe('hello');
+  });
+
+  it('returns null immediately when an existing fresh lock file blocks acquisition', async () => {
+    const lockFile = join(testDir, 'q-lock-blocked.lock');
+    // Simulate a live holder by creating the lock file with a fresh mtime.
+    await writeFile(lockFile, '', { mode: 0o600 });
+
+    const result = await withHandoffLock('q-lock-blocked', testDir, async () => 'should-not-run');
+    expect(result).toBeNull();
+  });
+
+  it('clears a stale lock file (>30 s) and runs the callback', async () => {
+    const lockFile = join(testDir, 'q-lock-stale.lock');
+    await writeFile(lockFile, '', { mode: 0o600 });
+    const staleTime = new Date(Date.now() - 60_000);
+    await utimes(lockFile, staleTime, staleTime);
+
+    const result = await withHandoffLock('q-lock-stale', testDir, async () => 'ran-after-stale');
+    expect(result).toBe('ran-after-stale');
+  });
+
+  it('releases the lock after the callback succeeds', async () => {
+    await withHandoffLock('q-lock-release', testDir, async () => 'ok');
+    // Lock file must be gone so a second call can acquire it.
+    const result2 = await withHandoffLock('q-lock-release', testDir, async () => 'second');
+    expect(result2).toBe('second');
+  });
+
+  it('releases the lock even when the callback throws', async () => {
+    await expect(
+      withHandoffLock('q-lock-throws', testDir, async () => { throw new Error('boom'); }),
+    ).rejects.toThrow('boom');
+    // Lock must be released so subsequent callers are not blocked.
+    const result = await withHandoffLock('q-lock-throws', testDir, async () => 'after-throw');
+    expect(result).toBe('after-throw');
+  });
+
+  it('only one concurrent caller succeeds when two race for the same taskId', async () => {
+    const order: string[] = [];
+    const [r1, r2] = await Promise.all([
+      withHandoffLock('q-lock-race', testDir, async () => { order.push('winner'); return 'w'; }),
+      withHandoffLock('q-lock-race', testDir, async () => { order.push('should-not-run'); return 's'; }),
+    ]);
+    // Exactly one call ran.
+    const results = [r1, r2];
+    expect(results.filter(r => r !== null)).toHaveLength(1);
+    expect(results.filter(r => r === null)).toHaveLength(1);
+    expect(order).toEqual(['winner']);
   });
 });
 
