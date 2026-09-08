@@ -91,6 +91,7 @@ describe('RollingTailBuffer', () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
+
   it('clear() fires undefined and suppresses future pushes', () => {
     const cb = vi.fn();
     const buf = new RollingTailBuffer(cb, 5, 0);

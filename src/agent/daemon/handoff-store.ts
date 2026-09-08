@@ -252,38 +252,33 @@ export async function listPendingHandoffs(
 }
 
 /**
- * Record a human answer for the given taskId using an exclusive-create lock
- * file as a compare-and-swap gate to prevent TOCTOU races.
+ * Acquire the O_EXCL lock for a taskId, run `cb` inside the lock, then release.
  *
  * Protocol:
- *   1. Try to create `<taskId>.lock` with O_EXCL — fails with EEXIST if
- *      another caller already holds it.
- *   2. EEXIST → return { won: false } (not an error; first-writer-wins).
- *   3. On lock acquisition, re-read the record and verify status is still
- *      'pending'; if not, return { won: false }.
- *   4. Write the updated record atomically, then release the lock.
- *   5. Return { won: true } on success.
+ *   1. Try to create `<taskId>.lock` with O_EXCL — fails immediately with EEXIST
+ *      if another caller already holds it (returns null without running cb).
+ *   2. On EEXIST, check whether the lock file is older than STALE_LOCK_TTL_MS.
+ *      If stale (crash leftover), unlink and retry once. A second EEXIST means a
+ *      genuine concurrent holder — return null.
+ *   3. Run `cb()` with the lock held.
+ *   4. Release the lock in a finally block regardless of cb outcome.
  *
- * @param taskId      - The daemon task ID to update.
- * @param answer      - The human's response value.
- * @param source      - Which surface provided the answer ('telegram' | 'web' | 'repl').
- * @param handoffsDir - Override the handoffs directory (defaults to `getHandoffsDir()`).
- * @throws If no record exists for the taskId.
- * @returns UpdateHandoffResult — won: true if this caller claimed the record.
+ * Returns the value returned by `cb`, or `null` when the lock could not be acquired.
+ *
+ * @param taskId      - The daemon task ID whose lock to acquire.
+ * @param handoffsDir - Directory containing the lock file.
+ * @param cb          - Callback to run while the lock is held.
  */
 // Invariant: a lock file older than this threshold is assumed to be a crash
 // leftover (SIGKILL/OOM between lock creation and the finally-unlink). We retry
 // once after unlinking; a second EEXIST means a genuine concurrent holder.
 const STALE_LOCK_TTL_MS = 30_000;
 
-export async function updateHandoffAnswer(
+export async function withHandoffLock<T>(
   taskId: string,
-  answer: unknown,
-  source: string,
-  handoffsDir: string = getHandoffsDir(),
-): Promise<UpdateHandoffResult> {
-  assertSafeJobId(taskId);
-  await ensureHandoffsDir(handoffsDir);
+  handoffsDir: string,
+  cb: () => Promise<T>,
+): Promise<T | null> {
   const lock = lockPath(handoffsDir, taskId);
 
   // Step 1: acquire exclusive lock via O_EXCL create.
@@ -299,12 +294,12 @@ export async function updateHandoffAnswer(
         lockMtime = lockStat.mtimeMs;
       } catch {
         // Lock disappeared between our failed write and the stat — another
-        // process cleaned it up. Return { won: false }; caller can retry.
-        return { won: false };
+        // process cleaned it up. Caller can retry.
+        return null;
       }
       if (Date.now() - lockMtime <= STALE_LOCK_TTL_MS) {
         // Lock is fresh — genuine concurrent holder; do not steal it.
-        return { won: false };
+        return null;
       }
       // Lock is older than TTL — stale crash leftover. Unlink and retry once.
       try { await unlink(lock); } catch { /* ignore — may have been cleaned concurrently */ }
@@ -313,7 +308,7 @@ export async function updateHandoffAnswer(
       } catch (retryErr) {
         if ((retryErr as NodeJS.ErrnoException).code === 'EEXIST') {
           // Genuine race on the retry — another process won.
-          return { won: false };
+          return null;
         }
         throw retryErr;
       }
@@ -324,19 +319,54 @@ export async function updateHandoffAnswer(
 
   // Lock acquired — release in finally regardless of outcome.
   try {
-    // Step 2: re-read record inside lock.
+    return await cb();
+  } finally {
+    try { await unlink(lock); } catch { /* ignore — lock cleanup is best-effort */ }
+  }
+}
+
+/**
+ * Record a human answer for the given taskId using an exclusive-create lock
+ * file as a compare-and-swap gate to prevent TOCTOU races.
+ *
+ * Protocol:
+ *   1. Acquire the O_EXCL lock via withHandoffLock — returns { won: false } if
+ *      another caller already holds it (first-writer-wins CAS).
+ *   2. Re-read the record and verify status is still 'pending'; if not, return
+ *      { won: false }.
+ *   3. Write the updated record atomically, then release the lock.
+ *   4. Return { won: true } on success.
+ *
+ * @param taskId      - The daemon task ID to update.
+ * @param answer      - The human's response value.
+ * @param source      - Which surface provided the answer ('telegram' | 'web' | 'repl').
+ * @param handoffsDir - Override the handoffs directory (defaults to `getHandoffsDir()`).
+ * @throws If no record exists for the taskId.
+ * @returns UpdateHandoffResult — won: true if this caller claimed the record.
+ */
+export async function updateHandoffAnswer(
+  taskId: string,
+  answer: unknown,
+  source: string,
+  handoffsDir: string = getHandoffsDir(),
+): Promise<UpdateHandoffResult> {
+  assertSafeJobId(taskId);
+  await ensureHandoffsDir(handoffsDir);
+
+  const result = await withHandoffLock(taskId, handoffsDir, async () => {
+    // Re-read record inside lock.
     const existing = await readHandoff(taskId, handoffsDir);
     if (existing === null) {
       throw new Error(`handoff-store: no record found for taskId ${taskId}`);
     }
 
-    // Step 3: guard — another winner may have landed between our EEXIST check
+    // Guard — another winner may have landed between our EEXIST check
     // and this read (shouldn't happen with O_EXCL, but be defensive).
     if (existing.status !== 'pending') {
       return { won: false };
     }
 
-    // Step 4: write updated record atomically.
+    // Write updated record atomically.
     const updated: HandoffRecord = {
       ...existing,
       status: 'answered',
@@ -346,7 +376,8 @@ export async function updateHandoffAnswer(
     };
     await atomicWriteJson(handoffPath(handoffsDir, taskId), updated);
     return { won: true };
-  } finally {
-    try { await unlink(lock); } catch { /* ignore — lock cleanup is best-effort */ }
-  }
+  });
+
+  // null means the lock was not acquired — another caller holds it.
+  return result ?? { won: false };
 }
