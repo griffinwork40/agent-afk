@@ -13,7 +13,7 @@ import type { CanUseTool } from '../types/sdk-types.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import type { HookRegistry } from '../hooks.js';
 import type { AgentConfig, IAgentSession } from '../types.js';
-import type { SubagentProgressSink } from '../types/session-types.js';
+import type { SubagentProgressSink, OutputEvent } from '../types/session-types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { Surface } from '../awareness/types.js';
 import type { PhaseRole } from '../tools/nesting.js';
@@ -263,4 +263,17 @@ export interface SubagentManagerOptions {
    * when absent (old behaviour, kept for backwards compatibility).
    */
   sessionLabel?: string;
+  /**
+   * Optional sink for subagent lifecycle `OutputEvent`s (type
+   * `'subagent_lifecycle'`). When set, `forkSubagent` emits a `started` event
+   * immediately after the handle enters the active map, and a terminal
+   * event (`succeeded` / `failed` / `cancelled`) when the handle reaches its
+   * final state. Wired at bootstrap time to push into the parent session's
+   * `outputBroadcast` so live surfaces (web-UI SSE, CLI TUI) see subagent
+   * lifecycle without scraping the witness trace.
+   *
+   * Late-bindable via {@link SubagentManager.setOutputEventSink} — use that
+   * setter when the session is not available at manager construction time.
+   */
+  outputEventSink?: (event: OutputEvent) => void;
 }

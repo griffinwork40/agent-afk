@@ -201,6 +201,23 @@ export async function bootstrapSession(
   // dropped from session_sealed telemetry.
   composeExecutor.setOnSubagentSucceeded(onSubagentSucceeded);
 
+  // Step 1A: wire subagent_lifecycle and background_job OutputEvent emission.
+  // Read through sessionRef so post-resume swaps route into the live session.
+  const sidebandSink = (event: import('../../../agent/types/session-types.js').OutputEvent): void => {
+    sessionRef.current?.pushSidebandEvent(event);
+  };
+  rootManager.setOutputEventSink(sidebandSink);
+  // Wire background_job events via the registry's existing EventEmitter API.
+  backgroundRegistry.on('started', (job) => {
+    sidebandSink({ type: 'background_job', jobId: job.jobId, status: 'started', label: job.label });
+  });
+  backgroundRegistry.on('settled', (job) => {
+    const status = job.status === 'completed' ? 'completed' as const
+      : job.status === 'failed' ? 'failed' as const
+      : 'cancelled' as const;
+    sidebandSink({ type: 'background_job', jobId: job.jobId, status, label: job.label });
+  });
+
   // ContextSampler constructor assigns `session` as the source.  attach() is
   // called by performResumeSwap (resume-swap.ts step 8) on every mid-session
   // swap to rebind the source and reset the cache; no call needed here.

@@ -26,7 +26,7 @@ import type { HookRegistry } from './hooks.js';
 import { AgentSession } from './session.js';
 
 import type { AgentConfig } from './types.js';
-import type { SubagentProgressSink } from './types/session-types.js';
+import type { SubagentProgressSink, OutputEvent } from './types/session-types.js';
 import { dispatchSubagentStart } from './subagent-hooks.js';
 import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
@@ -132,6 +132,9 @@ export class SubagentManager {
   private onSubagentSucceededCb:
     | ((usage: import('./subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void)
     | undefined;
+  // Mutable sink for subagent lifecycle OutputEvents. Set post-construction via
+  // setOutputEventSink() (same late-binding pattern as setOnSubagentSucceeded).
+  private outputEventSink: ((event: OutputEvent) => void) | undefined;
 
   constructor(options: SubagentManagerOptions = {}) {
     this.parentCanUseTool = options.canUseTool;
@@ -148,6 +151,7 @@ export class SubagentManager {
     this.parentSurface = options.surface;
     this.parentAbortSignal = options.parentAbortSignal;
     this.onSubagentSucceededCb = options.onSubagentSucceeded;
+    this.outputEventSink = options.outputEventSink;
     this.workspaceStore = options.workspaceStore;
     this.sessionLabel = options.sessionLabel;
     // Witness layer: AbortGraph receives the writer at construction so
@@ -203,6 +207,17 @@ export class SubagentManager {
     cb: (usage: import('./subagent/result.js').SubagentTrace['usage'], costUsd: number | undefined) => void,
   ): void {
     this.onSubagentSucceededCb = cb;
+  }
+
+  /**
+   * Wire a sink for subagent lifecycle `OutputEvent`s. When set, `forkSubagent`
+   * pushes `started` immediately and `succeeded`/`failed`/`cancelled` when the
+   * fork reaches its terminal state. Replaces any prior sink silently. Typically
+   * called once after the parent session is constructed (same late-binding
+   * pattern as {@link setOnSubagentSucceeded}).
+   */
+  setOutputEventSink(sink: (event: OutputEvent) => void): void {
+    this.outputEventSink = sink;
   }
 
   /**
@@ -467,13 +482,25 @@ export class SubagentManager {
           // timeout, and abort — so it is the settle hook the heartbeat's
           // teardown belongs on.
           stopOccupancyHeartbeat();
+          // Emit subagent_lifecycle terminal event into the parent output stream.
+          // handle._currentStatus is already set before _onTerminal fires.
+          const rawStatus = handle._currentStatus;
+          const terminalStatus: 'succeeded' | 'failed' | 'cancelled' =
+            rawStatus === 'succeeded' || rawStatus === 'failed' || rawStatus === 'cancelled'
+              ? rawStatus : 'succeeded';
+          this.outputEventSink?.({
+            type: 'subagent_lifecycle',
+            subagentId: id,
+            status: terminalStatus,
+            ...(handle._lastDurationMs !== undefined ? { durationMs: handle._lastDurationMs } : {}),
+          });
           // Populate the completed cache BEFORE removing from active so that
           // the memory-first /tasks:view path can access the handle after
           // teardown. The result is a minimal stub — consumers only use
           // `handle` from the entry (see completed.get(id)?.handle).
           this.completed.add(id, handle as SubagentHandle, {
             id,
-            status: handle._currentStatus === 'running' ? 'succeeded' : handle._currentStatus,
+            status: terminalStatus,
           });
           this.active.delete(id);
           this.abortGraph.dispose(id);
@@ -555,6 +582,17 @@ export class SubagentManager {
       idPrefix: options.idPrefix,
       parentSessionId: options.parent.sessionId,
       effectiveResolvedAgentType,
+    });
+
+    // Emit subagent_lifecycle 'started' into the parent output stream so live
+    // surfaces (web-UI SSE, CLI) see the fork without scraping the witness trace.
+    this.outputEventSink?.({
+      type: 'subagent_lifecycle',
+      subagentId: id,
+      status: 'started',
+      ...(effectiveChildModel !== undefined ? { model: String(effectiveChildModel) } : {}),
+      ...(effectiveAgentType !== undefined ? { agentType: effectiveAgentType } : {}),
+      ...(options.promptHead !== undefined ? { promptHead: options.promptHead } : {}),
     });
 
     return handle;
