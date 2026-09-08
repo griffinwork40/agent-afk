@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.202.0] - 2026-09-08
+
+### Added
+- add schedule CRUD UI to afk web (#1570) (35bd80f0)
+- default-on Done verification for unattended execution (#1571) (8d98e8ff)
+
 ## [5.201.1] - 2026-09-08
 
 ### Fixed
