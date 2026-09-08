@@ -455,7 +455,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private callHandlerContext(call: ToolCall): ToolHandlerContext {
     const tailCallback =
-      this.bashOutputTailReporter !== undefined && call.id
+      call.name === 'bash' && this.bashOutputTailReporter !== undefined && call.id
         ? this.bashOutputTailReporter(call.id)
         : undefined;
     return {

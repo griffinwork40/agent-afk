@@ -52,6 +52,8 @@ export class RollingTailBuffer {
   private lastNotifiedAt = 0;
   private pendingFlush: ReturnType<typeof setTimeout> | undefined;
   private cleared = false;
+  /** Whether the previous chunk ended with LF, so the next text starts a new line. */
+  private atLineBoundary = true;
 
   constructor(
     private readonly onChange: TailCallback,
@@ -91,8 +93,8 @@ export class RollingTailBuffer {
 
       if (i === 0) {
         // First \n-segment continues (appends to) the last line in the buffer.
-        if (this.lines.length === 0) {
-          this.lines.push(effective);
+        if (this.atLineBoundary || this.lines.length === 0) {
+          if (effective.length > 0) this.lines.push(effective);
         } else {
           // Append to the current last line (no \n between them).
           const last = this.lines[this.lines.length - 1]!;
@@ -101,6 +103,7 @@ export class RollingTailBuffer {
           this.lines[this.lines.length - 1] =
             crParts.length > 1 ? effective : last + effective;
         }
+        if (effective.length > 0) this.atLineBoundary = false;
       } else {
         // Subsequent \n-segments are new lines.
         // Trim the previous last line before pushing the new one.
@@ -116,6 +119,11 @@ export class RollingTailBuffer {
         // Only push non-empty effective values.
         if (effective.length > 0) {
           this.lines.push(effective);
+          this.atLineBoundary = false;
+        } else {
+          // Preserve the LF boundary across chunks. Without this state, a
+          // following chunk would be concatenated onto the completed line.
+          this.atLineBoundary = true;
         }
       }
     }
@@ -191,6 +199,9 @@ export class RollingTailBuffer {
 
   private fireNotify(): void {
     const tail = this.peek();
+    // `undefined` is reserved for clear(), where it tells the TUI that the
+    // command settled. Whitespace/control-only output must not mimic settle.
+    if (!this.cleared && tail === undefined) return;
     this.onChange(tail);
   }
 }

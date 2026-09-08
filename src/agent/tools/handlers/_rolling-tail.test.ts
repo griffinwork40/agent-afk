@@ -63,6 +63,34 @@ describe('RollingTailBuffer', () => {
     expect(tail).not.toContain('second');
   });
 
+  it('preserves line boundaries across chunks ending in LF', () => {
+    const cb = vi.fn();
+    const buf = new RollingTailBuffer(cb, 5, 0);
+    buf.push('one\n');
+    buf.push('two\n');
+    buf.push('three\n');
+    expect(buf.peek()).toBe('one\ntwo\nthree');
+  });
+
+  it('does not report undefined for whitespace-only in-flight output', () => {
+    const cb = vi.fn();
+    const buf = new RollingTailBuffer(cb, 5, 0);
+    buf.push('\r');
+    buf.push('   ');
+    expect(cb).not.toHaveBeenCalled();
+
+    buf.clear();
+    expect(cb).toHaveBeenCalledOnce();
+    expect(cb).toHaveBeenCalledWith(undefined);
+  });
+
+  it('ignores empty pushes', () => {
+    const cb = vi.fn();
+    const buf = new RollingTailBuffer(cb);
+    buf.push('');
+    expect(cb).not.toHaveBeenCalled();
+  });
+
   it('clear() fires undefined and suppresses future pushes', () => {
     const cb = vi.fn();
     const buf = new RollingTailBuffer(cb, 5, 0);

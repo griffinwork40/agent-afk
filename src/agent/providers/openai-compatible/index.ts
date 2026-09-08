@@ -521,6 +521,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
        */
       subagentToolOutputCapBytes?: number;
       traceWriter?: import('../../trace/index.js').TraceSink;
+      /** Factory for the REPL-only live bash output tail callback. */
+      bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
       /**
        * Live source for the `get_runtime_state` tool — see the matching
        * comment in `anthropic-direct/index.ts:buildDispatcher`.
@@ -653,10 +655,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
         : this.providerOpts.permissions,
       (this.providerOpts.customTools ?? []).map((t) => t.schema.name),
     );
-    if (effectivePermissions !== undefined)
-      dispatcherOpts.permissions = effectivePermissions;
-    if (this.providerOpts.subagentExecutor !== undefined)
-      dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
+    if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
+    if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
     if (this.providerOpts.skillExecutor !== undefined)
       dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
     if (this.providerOpts.composeExecutor !== undefined)
@@ -682,6 +682,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     if (opts.subagentToolOutputCapBytes !== undefined)
       dispatcherOpts.maxOutputBytes = opts.subagentToolOutputCapBytes;
     if (opts.traceWriter !== undefined) dispatcherOpts.traceWriter = opts.traceWriter;
+    if (opts.bashOutputTailReporter !== undefined) dispatcherOpts.bashOutputTailReporter = opts.bashOutputTailReporter;
     // Read-only-skill bash gate — parity with anthropic-direct. Forwarded from
     // the provider's construction-time flag so a read-only skill's forked
     // OpenAI-routed child also blocks mutating shell commands.

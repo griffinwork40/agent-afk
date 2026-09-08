@@ -493,6 +493,14 @@ export class StreamRenderer {
   setBashOutputTail(toolUseId: string, tail: string | undefined): void {
     if (this.disposed) return;
     this.toolLane.setBashOutputTail(toolUseId, tail);
+    if (this.overlayComposer) {
+      this.overlayComposer.markDirty('tool-lane');
+      // Tail callbacks arrive asynchronously from the command stream. Defer
+      // repaint to coalesce with any model event in the current turn.
+      setTimeout(() => {
+        if (!this.disposed) this.overlayComposer?.flush();
+      }, 0);
+    }
   }
 
   /** Signal first streaming content — clears the TTFB waiting indicator. Idempotent. */
