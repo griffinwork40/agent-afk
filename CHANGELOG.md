@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.199.0] - 2026-09-08
+
+### Added
+- resource-level fingerprinting and tested analyzer (#1537) (#1554) (846e865f)
+
 ## [5.198.1] - 2026-09-08
 
 ### Changed
