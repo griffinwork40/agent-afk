@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.200.1] - 2026-09-08
+
+### Fixed
+- close TOCTOU window in persistRouteAndMessageId (#1557) (#1567) (5b1663bc)
+
 ## [5.200.0] - 2026-09-08
 
 ### Added
