@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.198.1] - 2026-09-08
+
+### Changed
+- move worktree-* cluster into src/agent/worktree/ (#1561) (2382f84c)
+
 ## [5.198.0] - 2026-09-07
 
 ### Added
