@@ -432,15 +432,20 @@ describe('withHandoffLock', () => {
 
   it('only one concurrent caller succeeds when two race for the same taskId', async () => {
     const order: string[] = [];
+    // Hold the lock long enough for the loser to attempt acquisition while
+    // it is still held. Without the delay, both can succeed sequentially
+    // on fast CI (macOS) where the first callback completes and releases
+    // before the second even tries.
+    const delay = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
     const [r1, r2] = await Promise.all([
-      withHandoffLock('q-lock-race', testDir, async () => { order.push('winner'); return 'w'; }),
-      withHandoffLock('q-lock-race', testDir, async () => { order.push('should-not-run'); return 's'; }),
+      withHandoffLock('q-lock-race', testDir, async () => { order.push('a'); await delay(50); return 'w'; }),
+      withHandoffLock('q-lock-race', testDir, async () => { order.push('b'); await delay(50); return 's'; }),
     ]);
-    // Exactly one call ran.
+    // Exactly one call ran (the other got null from the O_EXCL contention).
     const results = [r1, r2];
     expect(results.filter(r => r !== null)).toHaveLength(1);
     expect(results.filter(r => r === null)).toHaveLength(1);
-    expect(order).toEqual(['winner']);
+    expect(order).toHaveLength(1);
   });
 });
 
