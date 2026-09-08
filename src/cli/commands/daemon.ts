@@ -252,12 +252,13 @@ export function resolveNotifyChatTarget(
  * Format a daemon telemetry record for an out-of-band notification
  * (e.g. Telegram push). Short, scannable, status-first.
  *
- * `verifyDone` gates the opt-in "Done"-verification downgrade (mirrors
- * `daemon.verifyDone` in config). When it is `true` AND
- * `details.doneUnverified` is `true`, the ✅ success header is downgraded to a
- * "⚠️ Done (unverified)" header and the {@link DAEMON_DONE_UNVERIFIED_CAVEAT}
- * line is appended. When `verifyDone` is falsy (the default), the output is
- * byte-identical to before this feature existed — fail-open, opt-in.
+ * `verifyDone` gates the "Done"-verification downgrade (mirrors
+ * `daemon.verifyDone` in config — default: true since the daemon surface is
+ * unattended). When it is `true` AND `details.doneUnverified` is `true`, the
+ * ✅ success header is downgraded to a "⚠️ Done (unverified)" header and the
+ * {@link DAEMON_DONE_UNVERIFIED_CAVEAT} line is appended. When `verifyDone`
+ * is explicitly `false`, the output is byte-identical to before this feature
+ * existed.
  */
 export function formatTaskCompletion(
   record: TelemetryRecord,
@@ -513,8 +514,9 @@ export function registerDaemonCommand(program: Command): void {
             // markdown:true — task output is agent-authored markdown; render it
             // to Telegram HTML so **bold**/`code`/headers format instead of
             // showing their literal markers (plain-text fallback on parse error).
-            // config.daemon?.verifyDone gates the opt-in Done-verification
-            // downgrade; when unset/false the formatted message is unchanged.
+            // Invariant: in unattended execution, a self-certified Done with
+            // no corroborating evidence is flagged by default. Opt-OUT via
+            // daemon.verifyDone: false.
             //
             // notifyChat routing: when the triggering task set an explicit
             // notifyChat, resolve it (alias/number) and FAIL-CLOSED against the
@@ -524,7 +526,7 @@ export function registerDaemonCommand(program: Command): void {
             // (never silently drops the completion notification).
             const target = resolveNotifyChatTarget(details?.notifyChat, record.taskId);
             void pushIfConfigured(
-              formatTaskCompletion(record, details, config.daemon?.verifyDone === true),
+              formatTaskCompletion(record, details, config.daemon?.verifyDone !== false),
               { markdown: true, ...(target !== undefined ? { target } : {}) },
             ).catch(() => undefined);
           },
