@@ -22,6 +22,7 @@
     />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/approvals.css" />
+    <link rel="stylesheet" href="/schedules.css" />
   </head>
   <body>
     <header class="topbar">
@@ -37,6 +38,10 @@
 
     <main class="layout">
       <aside id="sidebar" class="sidebar">
+        <nav class="sidebar-nav">
+          <button id="nav-sessions" class="sidebar-nav-btn is-active" data-view="sessions">Sessions</button>
+          <button id="nav-schedules" class="sidebar-nav-btn" data-view="schedules">Schedules</button>
+        </nav>
         <div class="sidebar-head">
           <span>Sessions</span>
           <button id="new-session" class="new-session" title="Start a new session">+ New</button>
@@ -47,6 +52,7 @@
 
       <section class="main">
         <div id="transcript" class="transcript"></div>
+        <div id="schedules-view" class="sched-view"></div>
         <div id="approvals" class="approvals"></div>
         <div id="composer" class="composer">
           <div id="slash-menu" class="slash-menu" hidden></div>

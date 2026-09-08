@@ -28,6 +28,15 @@ import {
   type RouteContext,
 } from './routes.js';
 import { handleStream } from './stream-route.js';
+import {
+  handleCreateSchedule,
+  handleDaemonStatus,
+  handleDeleteSchedule,
+  handleListSchedules,
+  handleScheduleHistory,
+  handleToggleSchedule,
+  handleUpdateSchedule,
+} from './routes.schedules.js';
 
 export const DEFAULT_WEB_PORT = 4141;
 export const DEFAULT_WEB_HOST = '127.0.0.1';
@@ -318,6 +327,39 @@ async function dispatch(
 
   if (path === '/api/commands' && method === 'GET') {
     await handleCommands(res);
+    return;
+  }
+
+  // ---- schedule management routes ------------------------------------------
+  if (path === '/api/schedules' && method === 'GET') {
+    await handleListSchedules(res);
+    return;
+  }
+  if (path === '/api/schedules' && method === 'POST') {
+    await handleCreateSchedule(res, await readBody(req));
+    return;
+  }
+  const scheduleIdMatch = /^\/api\/schedules\/([^/]+)$/.exec(path);
+  if (scheduleIdMatch?.[1] && method === 'PATCH') {
+    await handleUpdateSchedule(res, decodeURIComponent(scheduleIdMatch[1]), await readBody(req));
+    return;
+  }
+  if (scheduleIdMatch?.[1] && method === 'DELETE') {
+    await handleDeleteSchedule(res, decodeURIComponent(scheduleIdMatch[1]));
+    return;
+  }
+  const toggleMatch = /^\/api\/schedules\/([^/]+)\/toggle$/.exec(path);
+  if (toggleMatch?.[1] && method === 'POST') {
+    await handleToggleSchedule(res, decodeURIComponent(toggleMatch[1]));
+    return;
+  }
+  const historyMatch = /^\/api\/schedules\/([^/]+)\/history$/.exec(path);
+  if (historyMatch?.[1] && method === 'GET') {
+    await handleScheduleHistory(res, decodeURIComponent(historyMatch[1]));
+    return;
+  }
+  if (path === '/api/daemon/status' && method === 'GET') {
+    await handleDaemonStatus(res);
     return;
   }
 
