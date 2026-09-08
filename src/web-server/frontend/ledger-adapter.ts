@@ -1,12 +1,13 @@
 /**
  * Adapts persisted ledger records into transcript items for rendering.
  *
- * Invariant: the ledger is a PROJECTION, not a transcript. Successful tool
- * results are never written to it (only failures are), assistant text is
- * capped, and tool inputs are truncated. So a `tool` record replayed from disk
- * can prove that a tool RAN but can never supply its output. Those items are
- * marked `outputUnavailable` so the UI can say "result not available after
- * refresh" instead of rendering blank space that reads as "returned nothing".
+ * Invariant: the ledger is a PROJECTION, not a transcript. As of Wave 1
+ * (Step 1B), successful tool results ARE persisted (clipped to 400 chars),
+ * thinking blocks are persisted, and richer event kinds (tool_activity,
+ * rate_limit, progress, subagent_lifecycle, background_job, plan_mode) are
+ * now present. Tool items replayed from older ledgers (pre-Wave 1) still
+ * carry `outputUnavailable: true` — the `tool_result` record (new) provides
+ * real output and sets `outputUnavailable: false`.
  *
  * This is deliberately separate from view-model.ts, which folds LIVE
  * OutputEvents. The two sources have genuinely different fidelity and
@@ -40,13 +41,21 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined;
+}
+
 /**
  * Convert one ledger record into a transcript item.
  *
  * Returns undefined for records with no visual representation (session meta,
  * the HMAC-signed remote-control records, the terminal `closed` marker).
  */
-export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | undefined {
+export function ledgerRecordToItem(
+  record: LedgerRecordLike,
+  /** Optional mutable index for matching `tool_result` back to an earlier `tool` item. */
+  toolIndex?: Map<string, ToolCallItem>,
+): TranscriptItem | undefined {
   const payload = record;
   if (typeof payload.kind !== 'string') return undefined;
 
@@ -56,6 +65,9 @@ export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | u
 
     case 'assistant':
       return { kind: 'assistant', id: nextId('a'), text: str(payload['text']) ?? '' };
+
+    case 'thinking':
+      return { kind: 'thinking', id: nextId('th'), text: str(payload['text']) ?? '' };
 
     case 'tool': {
       const input = str(payload['input']) ?? '';
@@ -76,19 +88,50 @@ export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | u
       // only record this is, and treating it as a placeholder would erase it.
       if (input.trim() === '…') return undefined;
 
-      // Contract: status 'ok' is inferred, not observed. The ledger records
-      // that a tool started; a corresponding failure would arrive as a separate
-      // `tool_error`. Absence of output here is a gap in the record, never
-      // evidence that the tool produced nothing — hence outputUnavailable.
+      // Contract: status 'ok' is INFERRED here. If the ledger also has a
+      // corresponding `tool_result` record (Wave 1+), `ledgerToItems` will
+      // patch the item's output in a second pass via `toolIndex`.
       const item: ToolCallItem = {
         kind: 'tool',
         id: nextId('t'),
         name: str(payload['toolName']) ?? 'tool',
         inputPreview: input,
         status: 'ok',
-        outputUnavailable: true,
+        outputUnavailable: true,  // may be cleared by a matching tool_result
       };
+      // Register in the index by a synthetic key (toolName+input) isn't
+      // reliable since multiple calls share the same tool name. The ledger
+      // `tool_result` carries `toolUseId`; we use that for exact matching.
+      // Pre-Wave 1 ledgers have no `toolUseId` on `tool` records, so the
+      // index is best-effort.
+      if (toolIndex && str(payload['toolUseId'])) {
+        toolIndex.set(str(payload['toolUseId'])!, item);
+      }
       return item;
+    }
+
+    case 'tool_result': {
+      // Wave 1+: a successful tool result was persisted. Find the matching
+      // tool item in the index and update it with the real output.
+      const toolUseId = str(payload['toolUseId']);
+      const content = str(payload['content']) ?? '';
+      const durationMs = num(payload['durationMs']);
+      if (toolIndex && toolUseId) {
+        const existing = toolIndex.get(toolUseId);
+        if (existing) {
+          existing.output = content;
+          existing.outputUnavailable = false;
+          if (durationMs !== undefined) existing.durationMs = durationMs;
+          return undefined; // no new item — we patched in place
+        }
+      }
+      // No matching tool item found (pre-Wave 1 ledger without toolUseId on the
+      // tool record, or out-of-order replay). Render as a standalone notice.
+      return {
+        kind: 'notice',
+        id: nextId('n'),
+        text: `tool result: ${content.slice(0, 80)}`,
+      };
     }
 
     case 'tool_error': {
@@ -119,6 +162,17 @@ export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | u
       const bits: string[] = [];
       if (typeof cost === 'number') bits.push(`$${cost.toFixed(4)}`);
       if (typeof ms === 'number') bits.push(`${(ms / 1000).toFixed(1)}s`);
+      // Token breakdown (Wave 1)
+      const inputTok = num(payload['inputTokens']);
+      const outputTok = num(payload['outputTokens']);
+      const cacheRead = num(payload['cacheReadTokens']);
+      if (inputTok !== undefined || outputTok !== undefined) {
+        const parts: string[] = [];
+        if (inputTok !== undefined) parts.push(`${inputTok}in`);
+        if (outputTok !== undefined) parts.push(`${outputTok}out`);
+        if (cacheRead !== undefined) parts.push(`${cacheRead}cache`);
+        bits.push(parts.join('/'));
+      }
       return {
         kind: 'notice',
         id: nextId('n'),
@@ -132,9 +186,65 @@ export function ledgerRecordToItem(record: LedgerRecordLike): TranscriptItem | u
     case 'resumed':
       return { kind: 'notice', id: nextId('n'), text: 'resumed' };
 
+    case 'tool_activity': {
+      const count = num(payload['activeCount']) ?? 0;
+      if (count === 0) return { kind: 'notice', id: nextId('n'), text: 'tool wave complete' };
+      const plural = count === 1 ? 'tool' : 'tools';
+      return { kind: 'notice', id: nextId('n'), text: `Running ${count} ${plural} in parallel` };
+    }
+
+    case 'rate_limit': {
+      const retryMs = num(payload['retryAfterMs']);
+      const suffix = retryMs !== undefined ? ` (retrying in ${Math.ceil(retryMs / 1000)}s)` : '';
+      return { kind: 'notice', id: nextId('n'), text: `Rate limited${suffix}` };
+    }
+
+    case 'progress':
+      return { kind: 'notice', id: nextId('n'), text: str(payload['message']) ?? 'progress' };
+
+    case 'subagent_lifecycle': {
+      const subId = str(payload['subagentId']) ?? 'subagent';
+      const status = str(payload['status']) ?? 'unknown';
+      const agentType = str(payload['agentType']);
+      const label = agentType ? `${agentType} (${subId.slice(0, 8)})` : subId.slice(0, 12);
+      const durationMs = num(payload['durationMs']);
+      const durationSuffix = durationMs !== undefined ? ` · ${(durationMs / 1000).toFixed(1)}s` : '';
+      return {
+        kind: 'notice',
+        id: nextId('n'),
+        text: `Subagent ${status}: ${label}${durationSuffix}`,
+      };
+    }
+
+    case 'background_job': {
+      const jobId = str(payload['jobId']) ?? 'job';
+      const status = str(payload['status']) ?? 'unknown';
+      const label = str(payload['label']) ?? jobId.slice(0, 12);
+      return { kind: 'notice', id: nextId('n'), text: `Background job ${status}: ${label}` };
+    }
+
+    case 'plan_mode': {
+      const mode = str(payload['mode']) ?? 'default';
+      return { kind: 'notice', id: nextId('n'), text: `Switched to ${mode} mode` };
+    }
+
     default:
       return undefined;
   }
+}
+
+/**
+ * Convert a list of ledger records into transcript items, correlating
+ * `tool_result` records with their preceding `tool` records via toolUseId.
+ */
+export function ledgerToItems(records: LedgerRecordLike[]): TranscriptItem[] {
+  const toolIndex = new Map<string, ToolCallItem>();
+  const items: TranscriptItem[] = [];
+  for (const rec of records) {
+    const item = ledgerRecordToItem(rec, toolIndex);
+    if (item) items.push(item);
+  }
+  return items;
 }
 
 /** Running cost/duration totals derived from `done` records. */
@@ -142,6 +252,10 @@ export interface SessionTotals {
   costUsd: number;
   durationMs: number;
   turns: number;
+  /** Token counts from `done` records (Wave 1+). */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
 }
 
 export function accumulateTotals(totals: SessionTotals, record: LedgerRecordLike): SessionTotals {
@@ -149,9 +263,15 @@ export function accumulateTotals(totals: SessionTotals, record: LedgerRecordLike
   if (payload.kind !== 'done') return totals;
   const cost = payload['costUsd'];
   const ms = payload['durationMs'];
+  const inputTok = payload['inputTokens'];
+  const outputTok = payload['outputTokens'];
+  const cacheRead = payload['cacheReadTokens'];
   return {
     costUsd: totals.costUsd + (typeof cost === 'number' ? cost : 0),
     durationMs: totals.durationMs + (typeof ms === 'number' ? ms : 0),
     turns: totals.turns + 1,
+    inputTokens: (totals.inputTokens ?? 0) + (typeof inputTok === 'number' ? inputTok : 0),
+    outputTokens: (totals.outputTokens ?? 0) + (typeof outputTok === 'number' ? outputTok : 0),
+    cacheReadTokens: (totals.cacheReadTokens ?? 0) + (typeof cacheRead === 'number' ? cacheRead : 0),
   };
 }

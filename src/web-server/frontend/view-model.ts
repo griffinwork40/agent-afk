@@ -63,6 +63,8 @@ export interface ToolCallItem {
    */
   outputUnavailable?: boolean;
   diff?: ToolDiffChunk['diff'];
+  /** Wall-clock milliseconds the tool call took, sourced from the ledger `tool_result` record. */
+  durationMs?: number;
 }
 
 /** A terminal or turn-level error. */
