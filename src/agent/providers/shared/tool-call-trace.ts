@@ -107,7 +107,7 @@ function redactSensitiveFields(toolName: string, input: unknown): unknown {
  * resource. Returns `undefined` for tools where no single resource identity
  * exists.
  *
- * For `read_file` / `glob` / `list_directory`: the resource is the normalized
+ * For `read_file` / `list_directory` / `grep`: the resource is the normalized
  * file path, ignoring offset/limit/pattern so that two reads of the same file
  * at different offsets share a fingerprint.
  *
@@ -127,7 +127,7 @@ function computeResourceFingerprint(
       const raw = (obj['file_path'] ?? obj['path']) as string | undefined;
       if (typeof raw !== 'string' || raw.length === 0) return undefined;
       // Normalize: trim whitespace, collapse consecutive slashes, strip trailing /
-      const normalized = raw.trim().replace(/\/+/g, '/').replace(/\/$/, '');
+      const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
       return createHash('sha256').update(normalized).digest('hex');
     }
 
@@ -137,7 +137,7 @@ function computeResourceFingerprint(
       // hash when `path` is present.
       const raw = obj['path'] as string | undefined;
       if (typeof raw !== 'string' || raw.length === 0) return undefined;
-      const normalized = raw.trim().replace(/\/+/g, '/').replace(/\/$/, '');
+      const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
       return createHash('sha256').update(normalized).digest('hex');
     }
 

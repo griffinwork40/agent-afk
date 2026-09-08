@@ -188,9 +188,7 @@ export function validate(
 
   if (report.distinctAgents < 1) {
     failures.push({ rule: 'no-subagents', message: 'No subagents ran (only root session).' });
-  }
-
-  if (report.distinctAgents < 2) {
+  } else if (report.distinctAgents < 2) {
     failures.push({
       rule: 'too-few-reading-agents',
       message: `Fewer than 2 agents performed reads (found ${report.distinctAgents}).`,
