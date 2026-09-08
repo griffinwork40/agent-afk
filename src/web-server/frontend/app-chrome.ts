@@ -8,6 +8,7 @@
  */
 
 import { $ } from './dom-utils.js';
+import { createModelSelector } from './model-selector.js';
 
 /**
  * Show a transient toast notification in the #toast element.
@@ -75,14 +76,8 @@ export function toggleNewSessionForm(
   form.id = 'new-session-form';
   form.className = 'new-session-form';
 
-  const select = document.createElement('select');
-  select.className = 'nsf-select';
-  for (const m of ['haiku', 'sonnet', 'opus']) {
-    const opt = document.createElement('option');
-    opt.value = m; opt.textContent = m;
-    if (m === 'sonnet') opt.selected = true;
-    select.appendChild(opt);
-  }
+  let selectedModel = 'sonnet';
+  const modelWidget = createModelSelector({ onSelect: (id) => { selectedModel = id; } });
 
   const cwdInput = document.createElement('input');
   cwdInput.type = 'text';
@@ -94,7 +89,7 @@ export function toggleNewSessionForm(
   createBtn.textContent = 'Create';
   const commit = (): void => {
     form.remove();
-    onCreate(select.value, cwdInput.value.trim());
+    onCreate(selectedModel, cwdInput.value.trim());
   };
   createBtn.addEventListener('click', commit);
   cwdInput.addEventListener('keydown', (e) => {
@@ -102,7 +97,7 @@ export function toggleNewSessionForm(
     if (e.key === 'Escape') form.remove();
   });
 
-  form.append(select, cwdInput, createBtn);
+  form.append(modelWidget, cwdInput, createBtn);
   sidebar.insertAdjacentElement('afterbegin', form);
   cwdInput.focus();
 }

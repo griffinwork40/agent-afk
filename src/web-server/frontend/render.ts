@@ -19,6 +19,7 @@ import { applyIncrementalUpdate } from './render-incremental.js';
 import { createThinkingBlockNode } from './thinking-panel.js';
 import { classifySession, renderStatusBadge } from './session-status.js';
 import { renderDiffBlock } from './diff-viewer.js';
+import { renderModelBadge } from './model-selector.js';
 export type { PendingApproval, ApprovalAnswer } from './render-approvals.js';
 export { renderApprovals } from './render-approvals.js';
 
@@ -35,6 +36,8 @@ export interface SessionSummary {
   updatedAt?: string;
   title?: string;
   alive?: boolean;
+  /** Model tier used for this session, e.g. 'sonnet', 'haiku', 'opus'. */
+  model?: string;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -115,6 +118,7 @@ export function renderSidebar(
       meta.appendChild(renderStatusBadge(classifySession(s)));
     }
     if (s.alive) meta.appendChild(el('span', 'badge badge-alive', 'running'));
+    if (s.model) meta.appendChild(renderModelBadge(s.model));
     if (s.updatedAt) meta.appendChild(el('span', 'session-time', relativeTime(s.updatedAt)));
     row.appendChild(meta);
 

@@ -1,3 +1,8 @@
+/* ── bg-jobs view container ─────────────────────────────────────────────── */
+
+.bgjob-view { display: none; flex: 1; flex-direction: column; overflow-y: auto; padding: 24px; }
+.bgjob-view.is-active { display: flex; }
+
 /* ── bg-jobs panel ────────────────────────────────────────────────────────── */
 
 .bgjobs-panel {

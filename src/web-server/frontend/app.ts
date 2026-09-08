@@ -19,6 +19,7 @@ import {
   renderTranscript,
   type SessionSummary,
 } from './render.js';
+import { wireAtFileAffordance } from './at-file-panel.js';
 import {
   accumulateTotals,
   ledgerRecordToItem,
@@ -316,6 +317,10 @@ async function main(): Promise<void> {
     loadCommands: async () => (await api<{ commands: CommandEntry[] }>('/api/commands')).commands,
   });
   panel().wire();
+  const composerRow = document.querySelector('.composer-row');
+  if (composerRow instanceof HTMLElement) {
+    wireAtFileAffordance({ input: $('prompt') as HTMLTextAreaElement, container: composerRow });
+  }
   $('new-session').addEventListener('click', () => toggleNewSessionForm(
     (model, cwd) => void createSession(model, cwd),
   ));
@@ -323,6 +328,8 @@ async function main(): Promise<void> {
   // Wire nav tab switching
   document.getElementById('nav-sessions')?.addEventListener('click', () => switchView('sessions', api));
   document.getElementById('nav-schedules')?.addEventListener('click', () => switchView('schedules', api));
+  document.getElementById('nav-bg-jobs')?.addEventListener('click', () => switchView('bg-jobs', api));
+  document.getElementById('nav-memory')?.addEventListener('click', () => switchView('memory', api));
   wireSidebarClose();
   $('stop').addEventListener('click', () => {
     void stopTurn().catch((err: unknown) => {
