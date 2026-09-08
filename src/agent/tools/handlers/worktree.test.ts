@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import { rmSync } from 'node:fs';
 import { createWorktreeHandler } from './worktree.js';
-import type { ExecFileFn } from '../../worktree-sweep.js';
+import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 
 const SIGNAL = new AbortController().signal;
 

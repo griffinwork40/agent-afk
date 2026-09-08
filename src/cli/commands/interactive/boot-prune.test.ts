@@ -9,9 +9,9 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../../../agent/worktree-sweep.js', async () => {
-  const actual = await vi.importActual<typeof import('../../../agent/worktree-sweep.js')>(
-    '../../../agent/worktree-sweep.js',
+vi.mock('../../../agent/worktree/worktree-sweep.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../agent/worktree/worktree-sweep.js')>(
+    '../../../agent/worktree/worktree-sweep.js',
   );
   return { ...actual, runSweep: vi.fn() };
 });
@@ -24,7 +24,7 @@ vi.mock('node:child_process', () => ({
   }),
 }));
 
-import { runSweep } from '../../../agent/worktree-sweep.js';
+import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
 import { bootPruneWorktrees } from './boot-prune.ts';
 
 const mockRunSweep = runSweep as unknown as ReturnType<typeof vi.fn>;

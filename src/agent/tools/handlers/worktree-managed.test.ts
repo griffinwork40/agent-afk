@@ -16,7 +16,7 @@ import {
   createIsolatedWorktree,
   teardownIsolatedWorktree,
 } from './worktree-managed.js';
-import type { ExecFileFn } from '../../worktree-sweep.js';
+import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 
 interface Call { file: string; args: string[] }
 

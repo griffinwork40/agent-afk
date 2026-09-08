@@ -57,12 +57,12 @@ vi.mock('./session.js', () => {
 });
 
 // Control the worktree → main-root resolver without touching real git.
-vi.mock('./worktree-read-root.js', () => ({
+vi.mock('./worktree/worktree-read-root.js', () => ({
   resolveWorktreeMainRoot: vi.fn(async () => undefined),
 }));
 
 import { SubagentManager } from './subagent.js';
-import { resolveWorktreeMainRoot } from './worktree-read-root.js';
+import { resolveWorktreeMainRoot } from './worktree/worktree-read-root.js';
 import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
 
 const WORKTREE = '/repo/.afk-worktrees/wt';

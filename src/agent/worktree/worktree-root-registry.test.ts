@@ -14,7 +14,7 @@ import {
   readRegisteredWorktreeRoots,
   sweepRootSet,
 } from './worktree-root-registry.js';
-import { getWorktreeRootsRegistryPath } from '../paths.js';
+import { getWorktreeRootsRegistryPath } from '../../paths.js';
 
 let stateDir: string;
 let prevStateDir: string | undefined;

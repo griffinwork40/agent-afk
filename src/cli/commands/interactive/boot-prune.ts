@@ -19,8 +19,8 @@ import { execFile as execFileCallback } from 'node:child_process';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { runSweep } from '../../../agent/worktree-sweep.js';
-import type { ExecFileFn } from '../../../agent/worktree-sweep.js';
+import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
+import type { ExecFileFn } from '../../../agent/worktree/worktree-sweep.js';
 
 const execFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 

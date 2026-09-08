@@ -5,7 +5,7 @@
  *   /worktree list                  — show afk-managed worktrees + verdicts
  *   /worktree prune [flags]         — actually remove prunable worktrees
  *
- * Both reuse `runSweep` from `src/agent/worktree-sweep.ts` (the same engine
+ * Both reuse `runSweep` from `src/agent/worktree/worktree-sweep.ts` (the same engine
  * the daemon's nightly cron and `afk worktree` CLI subcommand use). This
  * file is intentionally a thin formatter — no policy decisions live here.
  *
@@ -24,8 +24,8 @@ import { promises as fs } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
-import { runSweep } from '../../../agent/worktree-sweep.js';
-import type { ExecFileFn, SweepOptions } from '../../../agent/worktree-sweep.js';
+import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
+import type { ExecFileFn, SweepOptions } from '../../../agent/worktree/worktree-sweep.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult, Writer } from '../types.js';
 

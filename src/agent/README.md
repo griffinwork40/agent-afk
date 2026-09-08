@@ -34,6 +34,7 @@ is scoped to `src/agent/`.
 | `memory/` | `MemoryStore`, memory-backed tools, and memory hooks. |
 | `marketplaces/` | Plugin marketplace resolve / install / remove / update. |
 | `plugins/` | Local plugin discovery and install. |
+| `worktree/` | Managed worktree lifecycle: sweep engine, root registry, occupancy tracking, ignored-file probe, orphan guard, read-root resolution. |
 
 ## Providers
 
@@ -183,8 +184,16 @@ for await (const event of session.sendMessageStream('Refactor src/x.ts')) {
 | AbortGraph | `abort-graph.ts` | Tree of `AbortController`s. Parent abort cascades to descendants; child abort notifies the parent but never auto-aborts it. Abort always wins over hook decisions. |
 | Elicitation router | `elicitation-router.ts` | Module-scope handler for SDK elicitation requests. Auto-declines on timeout. |
 | Plugins scanner | `plugins-scanner.ts` | Scans `~/.afk/plugins/` for `.claude-plugin/plugin.json` up to depth 5. |
-| DAG | `dag.ts` | Kahn layer-by-layer workflow executor. Types are exported; `runDAG()` throws — not yet implemented. |
+| DAG | `dag.ts`, `dag-*.ts` | Kahn layer-by-layer workflow executor with per-node timeouts and fail-fast semantics. |
 | Daemon | `daemon.ts`, `daemon/` | Cron-scheduled task runner with an HTTP control surface on port 7777. |
+| Background registry | `background-registry.ts`, `background-registry.*.ts` | Background subagent job tracking, cap, sweep, and log. |
+| Worktree (farm) | `worktree.ts` | Speculative branch farm: creates/manages N isolated git worktrees for parallel agent branches. |
+| Permissions | `permissions*.ts` | Three-layer permission stack: store, policy, and resolution. |
+| AFK mode | `afk-mode*.ts` | AFK mode gate, diagnostics, and control plane. |
+| Risk / safety | `risk-classifier*.ts`, `safe-destruct*.ts`, `release-boundary*.ts`, `signal-block*.ts` | Risk classification, safe destruction, release gating, and signal blocking. |
+| Routing | `routing-*.ts` | Model routing directives and auto-routing logic. |
+| Abort | `abort-graph.ts`, `abort-*.ts` | Abort controller tree with cascading abort and notification. |
+| Sweep / retention | `witness-sweep.ts` | Witness trace retention and eviction. |
 
 ## Subagent return contract
 

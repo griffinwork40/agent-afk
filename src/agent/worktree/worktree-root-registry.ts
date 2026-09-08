@@ -23,8 +23,8 @@
 import { promises as fs } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { getWorktreeRootsRegistryPath } from '../paths.js';
-import { debugLog } from '../utils/debug.js';
+import { getWorktreeRootsRegistryPath } from '../../paths.js';
+import { debugLog } from '../../utils/debug.js';
 import { classifyRootLiveness } from './worktree-root-registry-liveness.js';
 import { normalizeRootPath } from './worktree-root-path.js';
 

@@ -14,10 +14,10 @@ import { palette } from '../palette.js';
 import { execFile as execFileCallback } from 'node:child_process';
 import { handleCommandError } from '../errors/index.js';
 import { promisify } from 'node:util';
-import { runSweep } from '../../agent/worktree-sweep.js';
-import type { SweepOptions } from '../../agent/worktree-sweep.js';
+import { runSweep } from '../../agent/worktree/worktree-sweep.js';
+import type { SweepOptions } from '../../agent/worktree/worktree-sweep.js';
 import { loadConfig } from '../config.js';
-import type { ExecFileFn } from '../../agent/worktree-sweep.js';
+import type { ExecFileFn } from '../../agent/worktree/worktree-sweep.js';
 
 const execFile = promisify(execFileCallback) as ExecFileFn;
 

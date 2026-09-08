@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSweep } from './worktree-sweep.js';
 import type { ExecFileFn } from './worktree-sweep.js';
-import type { PresenceRecord } from './awareness/presence.js';
+import type { PresenceRecord } from '../awareness/presence.js';
 
 type ExecResult = { stdout: string; stderr: string };
 type ExecCall = { file: string; args: string[]; opts?: { cwd?: string } };
@@ -2043,7 +2043,7 @@ describe('dead-owner — live-session protection', () => {
     // disk across both phases so the verdict flip is attributable solely to the
     // cwd write. AFK_HOME is set to repoRoot in beforeEach, so the real presence
     // dir is isolated to this test's tmpdir.
-    const { writePresenceFile, updatePresenceCwd, readPresenceFiles } = await import('./awareness/presence.js');
+    const { writePresenceFile, updatePresenceCwd, readPresenceFiles } = await import('../awareness/presence.js');
 
     const deadOwnerPid = findDeadPid();
     const worktreePath = join(afkWorktreesDir, 'afk-e2e-presence-wt');
@@ -2124,7 +2124,7 @@ describe('dead-owner — live-session protection', () => {
     // across set → clear. The creator pid is DEAD, so presence.cwd is the ONLY
     // thing sparing this worktree: if a blocked write corrupted or dropped the
     // record, the verdict would flip straight back to 'dead-owner'.
-    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await import('./awareness/presence.js');
+    const { writePresenceFile, setPresenceBlocked, readPresenceFiles } = await import('../awareness/presence.js');
 
     const deadOwnerPid = findDeadPid();
     const worktreePath = join(afkWorktreesDir, 'afk-e2e-blocked-wt');

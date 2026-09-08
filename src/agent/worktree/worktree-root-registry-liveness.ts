@@ -23,7 +23,7 @@
 
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
-import { debugLog } from '../utils/debug.js';
+import { debugLog } from '../../utils/debug.js';
 
 export interface RootLivenessResult<T> {
   /** Confirmed-live entries, `path` normalized to absolute and de-duplicated. */
