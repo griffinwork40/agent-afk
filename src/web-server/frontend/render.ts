@@ -14,7 +14,7 @@
 
 import { stripAnsi } from './ansi-strip.js';
 import { renderMarkdown } from './markdown-dom.js';
-import type { TranscriptItem, ToolCallItem } from './view-model.js';
+import type { TranscriptItem, ToolCallItem, SubagentItem, BgJobItem } from './view-model.js';
 import { applyIncrementalUpdate } from './render-incremental.js';
 import { createThinkingBlockNode } from './thinking-panel.js';
 import { classifySession, renderStatusBadge } from './session-status.js';
@@ -169,6 +169,10 @@ function renderItem(item: TranscriptItem): HTMLElement {
       return el('div', 'notice', item.text);
     case 'tool':
       return renderTool(item);
+    case 'subagent':
+      return renderSubagentCard(item);
+    case 'bg_job':
+      return renderBgJobCard(item);
   }
 }
 
@@ -242,6 +246,46 @@ function renderTool(item: ToolCallItem): HTMLElement {
   }
 
   node.appendChild(body);
+  return node;
+}
+
+function fmtDuration(ms: number): string {
+  const secs = ms / 1000;
+  if (secs < 60) return `${secs.toFixed(1)}s`;
+  return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`;
+}
+
+const STATUS_ICONS: Record<string, string> = {
+  started: '▶',
+  succeeded: '✓',
+  failed: '✗',
+  cancelled: '◼',
+  completed: '✓',
+};
+
+function renderSubagentCard(item: SubagentItem): HTMLElement {
+  const status = item.status;
+  const node = el('div', `sa-card sa-card--${status}`);
+  const icon = el('span', 'sa-icon', STATUS_ICONS[status] ?? '●');
+  const header = el('div', 'sa-header');
+  header.appendChild(icon);
+  header.appendChild(el('span', 'sa-label', item.label));
+  if (item.model) header.appendChild(el('span', 'sa-model', item.model));
+  if (item.durationMs !== undefined) header.appendChild(el('span', 'sa-dur', fmtDuration(item.durationMs)));
+  node.appendChild(header);
+  if (item.promptHead) {
+    node.appendChild(el('div', 'sa-prompt', item.promptHead));
+  }
+  return node;
+}
+
+function renderBgJobCard(item: BgJobItem): HTMLElement {
+  const node = el('div', `sa-card sa-card--${item.status}`);
+  const icon = el('span', 'sa-icon', STATUS_ICONS[item.status] ?? '●');
+  const header = el('div', 'sa-header');
+  header.appendChild(icon);
+  header.appendChild(el('span', 'sa-label', `bg: ${item.label}`));
+  node.appendChild(header);
   return node;
 }
 

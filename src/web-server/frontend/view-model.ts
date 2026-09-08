@@ -81,13 +81,36 @@ export interface NoticeItem {
   text: string;
 }
 
+/** A subagent lifecycle event (started, succeeded, failed, cancelled). */
+export interface SubagentItem {
+  kind: 'subagent';
+  id: string;
+  subagentId: string;
+  status: string;
+  label: string;
+  model?: string;
+  durationMs?: number;
+  promptHead?: string;
+}
+
+/** A background job lifecycle event. */
+export interface BgJobItem {
+  kind: 'bg_job';
+  id: string;
+  jobId: string;
+  status: string;
+  label: string;
+}
+
 export type TranscriptItem =
   | UserMessageItem
   | AssistantTextItem
   | ThinkingItem
   | ToolCallItem
   | ErrorItem
-  | NoticeItem;
+  | NoticeItem
+  | SubagentItem
+  | BgJobItem;
 
 export interface ApplyOptions {
   /**

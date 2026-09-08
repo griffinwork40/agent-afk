@@ -207,20 +207,23 @@ export function ledgerRecordToItem(
       const status = str(payload['status']) ?? 'unknown';
       const agentType = str(payload['agentType']);
       const label = agentType ? `${agentType} (${subId.slice(0, 8)})` : subId.slice(0, 12);
-      const durationMs = num(payload['durationMs']);
-      const durationSuffix = durationMs !== undefined ? ` · ${(durationMs / 1000).toFixed(1)}s` : '';
       return {
-        kind: 'notice',
-        id: nextId('n'),
-        text: `Subagent ${status}: ${label}${durationSuffix}`,
+        kind: 'subagent' as const,
+        id: nextId('sa'),
+        subagentId: subId,
+        status,
+        label,
+        model: str(payload['model']),
+        durationMs: num(payload['durationMs']),
+        promptHead: str(payload['promptHead']),
       };
     }
 
     case 'background_job': {
-      const jobId = str(payload['jobId']) ?? 'job';
+      const jid = str(payload['jobId']) ?? 'job';
       const status = str(payload['status']) ?? 'unknown';
-      const label = str(payload['label']) ?? jobId.slice(0, 12);
-      return { kind: 'notice', id: nextId('n'), text: `Background job ${status}: ${label}` };
+      const label = str(payload['label']) ?? jid.slice(0, 12);
+      return { kind: 'bg_job' as const, id: nextId('bj'), jobId: jid, status, label };
     }
 
     case 'plan_mode': {

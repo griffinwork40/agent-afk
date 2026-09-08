@@ -214,7 +214,7 @@ describe('ledgerRecordToItem — Wave 1 new kinds', () => {
     expect(item && 'text' in item ? item.text : '').toBe('Analyzing code...');
   });
 
-  it('renders subagent_lifecycle as a notice', () => {
+  it('renders subagent_lifecycle as a structured card', () => {
     const item = ledgerRecordToItem({
       kind: 'subagent_lifecycle',
       subagentId: 'sa-abc123',
@@ -222,19 +222,21 @@ describe('ledgerRecordToItem — Wave 1 new kinds', () => {
       agentType: 'research-agent',
       durationMs: 2500,
     });
-    expect(item?.kind).toBe('notice');
-    const text = item && 'text' in item ? item.text : '';
-    expect(text).toContain('succeeded');
-    expect(text).toContain('research-agent');
-    expect(text).toContain('2.5s');
+    expect(item?.kind).toBe('subagent');
+    if (item?.kind === 'subagent') {
+      expect(item.status).toBe('succeeded');
+      expect(item.label).toContain('research-agent');
+      expect(item.durationMs).toBe(2500);
+    }
   });
 
-  it('renders background_job as a notice', () => {
+  it('renders background_job as a structured card', () => {
     const item = ledgerRecordToItem({ kind: 'background_job', jobId: 'bg-1', status: 'completed', label: 'my task' });
-    expect(item?.kind).toBe('notice');
-    const text = item && 'text' in item ? item.text : '';
-    expect(text).toContain('completed');
-    expect(text).toContain('my task');
+    expect(item?.kind).toBe('bg_job');
+    if (item?.kind === 'bg_job') {
+      expect(item.status).toBe('completed');
+      expect(item.label).toBe('my task');
+    }
   });
 
   it('renders plan_mode as a notice', () => {

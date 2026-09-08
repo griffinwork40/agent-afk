@@ -637,3 +637,35 @@ details[open] > .tc-header::before { transform: rotate(90deg); }
   margin-top: 10px; font-size: 12px; font-style: italic;
   color: var(--text-faint);
 }
+
+/* ---- subagent / bg-job lifecycle cards ---- */
+.sa-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 12px; margin: 8px 0; border-radius: var(--radius);
+  border-left: 3px solid var(--border); background: var(--bg-sunken);
+  font-family: var(--mono); font-size: 12px;
+}
+.sa-card--started  { border-left-color: var(--accent); }
+.sa-card--succeeded, .sa-card--completed { border-left-color: var(--success); }
+.sa-card--failed   { border-left-color: var(--error); }
+.sa-card--cancelled { border-left-color: var(--text-dim); }
+.sa-header {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.sa-icon {
+  font-size: 13px; width: 18px; text-align: center; flex-shrink: 0;
+}
+.sa-card--started .sa-icon  { color: var(--accent); }
+.sa-card--succeeded .sa-icon, .sa-card--completed .sa-icon { color: var(--success); }
+.sa-card--failed .sa-icon   { color: var(--error); }
+.sa-card--cancelled .sa-icon { color: var(--text-dim); }
+.sa-label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text);
+}
+.sa-model { color: var(--text-dim); font-size: 11px; }
+.sa-dur   { color: var(--text-faint); font-size: 11px; }
+.sa-prompt {
+  color: var(--text-faint); font-size: 11px; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
