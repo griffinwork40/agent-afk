@@ -20,9 +20,14 @@ import {
   toScheduledTask,
   type ScheduledTaskConfig,
 } from '../agent/daemon/schedule-store.js';
-import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../agent/daemon/http-client.js';
-import { getTelemetryPath } from '../paths.js';
+import { trySyncToDaemon, SYNC_FAILED_NOTE, parsePortFile } from '../agent/daemon/http-client.js';
+import { getTelemetryPath, getDaemonStateDir } from '../paths.js';
 import { sendJson } from './routes.js';
+import { join } from 'node:path';
+
+const VALID_TRIGGERS = new Set(['cron', 'sessionstart', 'both']);
+const VALID_NOTIFY_ON = new Set(['failure', 'always', 'never']);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -79,11 +84,32 @@ export async function handleCreateSchedule(
     return;
   }
 
-  const trigger = str(body, 'trigger') as ScheduledTaskConfig['trigger'] | undefined;
-  const notifyOn = str(body, 'notifyOn') as ScheduledTaskConfig['notifyOn'] | undefined;
+  const trigger = str(body, 'trigger');
+  const notifyOn = str(body, 'notifyOn');
+  if (trigger !== undefined && !VALID_TRIGGERS.has(trigger)) {
+    sendJson(res, 400, {
+      error: 'bad_request',
+      message: `trigger must be one of: ${[...VALID_TRIGGERS].join(', ')}`,
+    });
+    return;
+  }
+  if (notifyOn !== undefined && !VALID_NOTIFY_ON.has(notifyOn)) {
+    sendJson(res, 400, {
+      error: 'bad_request',
+      message: `notifyOn must be one of: ${[...VALID_NOTIFY_ON].join(', ')}`,
+    });
+    return;
+  }
   const enabled = bool(body, 'enabled') ?? true;
 
-  const config = addSchedule({ name, command, cron, trigger, notifyOn, enabled });
+  const config = addSchedule({
+    name,
+    command,
+    cron,
+    trigger: trigger as ScheduledTaskConfig['trigger'],
+    notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'],
+    enabled,
+  });
 
   let daemonSynced = false;
   let syncDetail = '';
@@ -118,9 +144,24 @@ export async function handleUpdateSchedule(
   const name = str(body, 'name');
   const command = str(body, 'command');
   const cron = str(body, 'cron');
-  const trigger = str(body, 'trigger') as ScheduledTaskConfig['trigger'] | undefined;
-  const notifyOn = str(body, 'notifyOn') as ScheduledTaskConfig['notifyOn'] | undefined;
+  const trigger = str(body, 'trigger');
+  const notifyOn = str(body, 'notifyOn');
   const enabled = bool(body, 'enabled');
+
+  if (trigger !== undefined && !VALID_TRIGGERS.has(trigger)) {
+    sendJson(res, 400, {
+      error: 'bad_request',
+      message: `trigger must be one of: ${[...VALID_TRIGGERS].join(', ')}`,
+    });
+    return;
+  }
+  if (notifyOn !== undefined && !VALID_NOTIFY_ON.has(notifyOn)) {
+    sendJson(res, 400, {
+      error: 'bad_request',
+      message: `notifyOn must be one of: ${[...VALID_NOTIFY_ON].join(', ')}`,
+    });
+    return;
+  }
 
   if (cron !== undefined && !isValidCron(cron)) {
     sendJson(res, 400, {
@@ -135,8 +176,8 @@ export async function handleUpdateSchedule(
     ...(name !== undefined ? { name } : {}),
     ...(command !== undefined ? { command } : {}),
     ...(cron !== undefined ? { cron } : {}),
-    ...(trigger !== undefined ? { trigger } : {}),
-    ...(notifyOn !== undefined ? { notifyOn } : {}),
+    ...(trigger !== undefined ? { trigger: trigger as ScheduledTaskConfig['trigger'] } : {}),
+    ...(notifyOn !== undefined ? { notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'] } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
     updatedAt: new Date().toISOString(),
   };
@@ -269,23 +310,22 @@ export async function handleDaemonStatus(res: ServerResponse): Promise<void> {
   // Reuse the same port-file + HTTP discovery the sync client uses, but
   // target /health instead of /tasks.
   try {
-    // Inline the port-file logic from http-client — it does not export a
-    // "probe health" helper, so we call /health ourselves.
-    const { existsSync: exists, readFileSync: readFs } = await import('node:fs');
-    const { join } = await import('node:path');
-    const { getDaemonStateDir } = await import('../paths.js');
-    const { parsePortFile } = await import('../agent/daemon/http-client.js');
-
     const portFile = join(getDaemonStateDir('default'), 'port');
-    if (!exists(portFile)) {
+    if (!existsSync(portFile)) {
       sendJson(res, 200, { running: false, detail: 'no port file' });
       return;
     }
 
-    const raw = readFs(portFile, 'utf-8').trim();
+    const raw = (await readFile(portFile, 'utf-8')).trim();
     const parsed = parsePortFile(raw);
     if (!parsed) {
       sendJson(res, 200, { running: false, detail: 'invalid port file' });
+      return;
+    }
+
+    // SSRF guard: only connect to loopback addresses.
+    if (!LOOPBACK_HOSTS.has(parsed.host.toLowerCase())) {
+      sendJson(res, 200, { running: false, detail: 'non-loopback host in port file rejected' });
       return;
     }
 

@@ -51,6 +51,9 @@ function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/);
   if (parts.length < 5) return expr;
   const [min, hour, dom, mon, dow] = parts as [string, string, string, string, string];
+  if (dom === '*' && mon === '*' && dow === '*' && hour.startsWith('*/')) {
+    return `Every ${hour.slice(2)} hours`;
+  }
   if (dom === '*' && mon === '*' && dow === '*' && hour !== '*' && min !== '*') {
     return `Daily at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
   }

@@ -38,6 +38,9 @@ function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/);
   if (parts.length < 5) return '';
   const [min, hour, dom, mon, dow] = parts as [string, string, string, string, string];
+  if (dom === '*' && mon === '*' && dow === '*' && hour.startsWith('*/')) {
+    return `Runs every ${hour.slice(2)} hours`;
+  }
   if (dom === '*' && mon === '*' && dow === '*' && hour !== '*' && min !== '*') {
     return `Runs daily at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
   }
@@ -49,9 +52,7 @@ function describeCron(expr: string): string {
   if (dom === '*' && mon === '*' && dow === '*' && hour === '*') {
     return min === '*' ? 'Runs every minute' : `Runs every hour at :${min.padStart(2, '0')}`;
   }
-  if (hour === '*/6' || hour === '*/4' || hour === '*/2' || hour === '*/8' || hour === '*/12') {
-    return `Runs every ${hour.slice(2)} hours`;
-  }
+  // Step-interval patterns now handled above the daily branch.
   return `Cron: ${expr}`;
 }
 
