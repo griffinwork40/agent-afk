@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.201.1] - 2026-09-08
+
+### Fixed
+- address rolling tail review feedback (#1569) (0ba10c86)
+
 ## [5.201.0] - 2026-09-08
 
 ### Added
