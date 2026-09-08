@@ -778,6 +778,7 @@ export async function runInputLoop(
         // Thread the edit-preview ref so the StreamRenderer can wire the hook
         // callback into the tool lane during arm(). Absent on non-REPL callers.
         ...(ctx.addPreviewDiffRef ? { addPreviewDiffRef: ctx.addPreviewDiffRef } : {}),
+        bashTailSetter: ctx.bashTailSetter,
       }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()

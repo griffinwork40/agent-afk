@@ -120,6 +120,25 @@ export interface ToolHandlerContext {
    * the pre-registry behaviour is preserved: any PID > 1 is probed.
    */
   spawnedPidRegistry?: SpawnedPidRegistry;
+  /**
+   * Live output tail callback for the bash tool (issue #1506).
+   *
+   * When present, the bash handler creates a RollingTailBuffer and feeds it
+   * every stdout/stderr chunk during execution. The buffer calls this callback
+   * (throttled to ~300 ms) with a snapshot of the last N sanitized output lines
+   * so the TUI can render in-flight progress without waiting for the command to
+   * finish. Called with `undefined` when the command completes or is aborted so
+   * the TUI knows to erase the tail from the overlay.
+   *
+   * Contract:
+   *   - Ephemeral display ONLY. The tail snapshot is NEVER forwarded to the
+   *     model or stored in conversation history. Only the completed output from
+   *     the bash handler's accumulator reaches the model.
+   *   - Optional. When absent, the bash handler behaves exactly as before.
+   *   - The callback must not throw — the bash handler swallows any exception
+   *     from this callback to preserve the "never blocks execution" guarantee.
+   */
+  onBashOutputTail?: (tail: string | undefined) => void;
 }
 
 /**

@@ -108,6 +108,15 @@ export interface BuildDispatcherOptions {
    * restrictions via their own dispatcher and do not share the registry.
    */
   spawnedPidRegistry?: SpawnedPidRegistry;
+  /**
+   * Live bash output tail reporter factory (issue #1506). Forwarded from the
+   * REPL orchestrator when the session is running on a TTY REPL surface. The
+   * dispatcher calls the factory once per bash invocation (with the `toolUseId`)
+   * and attaches the returned callback as `context.onBashOutputTail` so the bash
+   * handler can drive the TUI rolling tail via RollingTailBuffer. Absent for
+   * non-TTY surfaces and forked children (no overlay to repaint).
+   */
+  bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
 }
 
 /**
@@ -331,5 +340,9 @@ export function buildDispatcher(
     readOnlyBash: deps.readOnlyBash,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
+    // #1506: Live bash output tail for REPL TUI progress display.
+    ...(opts?.bashOutputTailReporter !== undefined
+      ? { bashOutputTailReporter: opts.bashOutputTailReporter }
+      : {}),
   });
 }

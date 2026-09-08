@@ -213,9 +213,16 @@ export async function runTurn(
   // sink, the post-stream queued-buffer capture — go through this binding.
   let renderer = buildRenderer();
 
+  // Bridge the session-scoped bashOutputTailReporter factory to this turn's
+  // ToolLane (issue #1506). Cleared on dispose so stale callbacks are no-ops.
+  if (h.bashTailSetter) {
+    h.bashTailSetter.current = (id, tail) => renderer.setBashOutputTail(id, tail);
+  }
+
   const disposeRendererOnce = async (): Promise<void> => {
     if (rendererDisposed) return;
     rendererDisposed = true;
+    if (h.bashTailSetter) h.bashTailSetter.current = undefined;
     try { await renderer.dispose(); } catch { /* best-effort */ }
   };
 

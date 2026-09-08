@@ -497,6 +497,14 @@ export interface AgentConfig {
   traceWriter?: TraceSink;
 
   /**
+   * Live bash output tail reporter factory (issue #1506). When present, the
+   * per-query dispatcher calls this once per bash invocation and attaches the
+   * returned callback as `context.onBashOutputTail` so the TUI can render a
+   * rolling tail of in-flight bash progress. REPL-only; absent for forks.
+   */
+  bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+
+  /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
    * sealed.
    *

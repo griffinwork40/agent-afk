@@ -324,6 +324,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
             ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
             : {}),
           ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
+          ...(config.bashOutputTailReporter !== undefined
+            ? { bashOutputTailReporter: config.bashOutputTailReporter }
+            : {}),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),

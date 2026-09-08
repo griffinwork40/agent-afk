@@ -129,6 +129,21 @@ interface ToolEntryFields {
    * so it doesn't drift upward on every repaint. Undefined while in-flight.
    */
   finishedAt?: number;
+  /**
+   * Live bash output tail (issue #1506). Set by {@link ToolLane.setBashOutputTail}
+   * when the bash tool's RollingTailBuffer fires a throttled notification.
+   * Contains the last N sanitized lines of stdout/stderr, newline-joined.
+   *
+   * Rendered as dim italic lines under the in-flight tool row in the live
+   * overlay only — never in {@link ToolLane.flush}, because scrollback is
+   * post-mortem and the full result will appear there via the normal
+   * tool_result path. Cleared (set to `undefined`) immediately when the
+   * command completes or is aborted.
+   *
+   * Invariant: ephemeral display ONLY. This field is NEVER sent to the model
+   * or included in any part of the conversation history.
+   */
+  outputTail?: string;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };

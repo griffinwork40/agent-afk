@@ -486,6 +486,15 @@ export class StreamRenderer {
     return this.streamingMarkdownRef.current?.getPendingBuffer() ?? '';
   }
 
+  /**
+   * Delegate to this turn's ToolLane for live bash output tail. Issue #1506.
+   * Safe to call after dispose (no-op).
+   */
+  setBashOutputTail(toolUseId: string, tail: string | undefined): void {
+    if (this.disposed) return;
+    this.toolLane.setBashOutputTail(toolUseId, tail);
+  }
+
   /** Signal first streaming content — clears the TTFB waiting indicator. Idempotent. */
   notifyFirstContent(): void {
     if (this.disposed) return;

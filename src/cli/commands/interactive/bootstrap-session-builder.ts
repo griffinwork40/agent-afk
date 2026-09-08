@@ -40,6 +40,8 @@ export interface BuildAgentSessionDeps {
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  /** Live bash output tail reporter factory (REPL-only, issue #1506). */
+  bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   cwd: string | undefined;
   maxTurns: number;
   autoResumeOnUsageLimit: boolean | undefined;
@@ -85,6 +87,9 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
+    ...(deps.bashOutputTailReporter !== undefined
+      ? { bashOutputTailReporter: deps.bashOutputTailReporter }
+      : {}),
     ...(deps.drainSubagents !== undefined ? { drainSubagents: deps.drainSubagents } : {}),
     ...(deps.autoResumeOnUsageLimit !== undefined
       ? { autoResumeOnUsageLimit: deps.autoResumeOnUsageLimit }
@@ -114,6 +119,7 @@ export function buildSharedDeps(a: {
   hookRegistry: HookRegistry;
   traceWriter: TraceWriter | undefined;
   drainSubagents?: ((reason: string) => Promise<unknown>) | undefined;
+  bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
   effectiveCwd: string | undefined;
   maxTurns: string;
   initialPermissionMode: PermissionMode | undefined;
@@ -134,6 +140,9 @@ export function buildSharedDeps(a: {
     hookRegistry: a.hookRegistry,
     traceWriter: a.traceWriter,
     drainSubagents: a.drainSubagents,
+    ...(a.bashOutputTailReporter !== undefined
+      ? { bashOutputTailReporter: a.bashOutputTailReporter }
+      : {}),
     cwd: a.effectiveCwd,
     maxTurns: parseInt(a.maxTurns, 10),
     autoResumeOnUsageLimit: a.cliConfig.autoResumeOnUsageLimit,
