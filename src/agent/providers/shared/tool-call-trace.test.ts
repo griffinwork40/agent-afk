@@ -181,6 +181,99 @@ describe('buildToolCallStartedPayload', () => {
     const expected = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     expect(payload.argsFingerprint).toBe(expected);
   });
+
+  // ── resourceFingerprint ─────────────────────────────────────────────────
+
+  it('computes resourceFingerprint for read_file from file_path alone (ignoring offset/limit)', () => {
+    const a = buildToolCallStartedPayload({
+      toolUseId: 'rf_a', name: 'read_file',
+      input: { file_path: '/src/agent/session.ts', offset: 1, limit: 50 },
+    });
+    const b = buildToolCallStartedPayload({
+      toolUseId: 'rf_b', name: 'read_file',
+      input: { file_path: '/src/agent/session.ts', offset: 100, limit: 200 },
+    });
+    expect(a.resourceFingerprint).toBeDefined();
+    expect(a.resourceFingerprint).toHaveLength(64);
+    // Same file, different offsets → same resourceFingerprint
+    expect(a.resourceFingerprint).toBe(b.resourceFingerprint);
+    // But different argsFingerprint (offset/limit differ)
+    expect(a.argsFingerprint).not.toBe(b.argsFingerprint);
+  });
+
+  it('produces different resourceFingerprint for different read_file paths', () => {
+    const a = buildToolCallStartedPayload({
+      toolUseId: 'rf_c', name: 'read_file',
+      input: { file_path: '/src/a.ts' },
+    });
+    const b = buildToolCallStartedPayload({
+      toolUseId: 'rf_d', name: 'read_file',
+      input: { file_path: '/src/b.ts' },
+    });
+    expect(a.resourceFingerprint).not.toBe(b.resourceFingerprint);
+  });
+
+  it('does not include resourceFingerprint for non-resource tools (bash, agent, etc.)', () => {
+    const bash = buildToolCallStartedPayload({
+      toolUseId: 'nr_1', name: 'bash',
+      input: { command: 'ls' },
+    });
+    expect('resourceFingerprint' in bash).toBe(false);
+
+    const agent = buildToolCallStartedPayload({
+      toolUseId: 'nr_2', name: 'agent',
+      input: { prompt: 'investigate' },
+    });
+    expect('resourceFingerprint' in agent).toBe(false);
+  });
+
+  it('normalizes trailing slashes and consecutive slashes in read_file paths', () => {
+    const clean = buildToolCallStartedPayload({
+      toolUseId: 'norm_a', name: 'read_file',
+      input: { file_path: '/src/agent/session.ts' },
+    });
+    const messy = buildToolCallStartedPayload({
+      toolUseId: 'norm_b', name: 'read_file',
+      input: { file_path: '/src//agent///session.ts' },
+    });
+    expect(clean.resourceFingerprint).toBe(messy.resourceFingerprint);
+  });
+
+  it('computes resourceFingerprint for list_directory from path', () => {
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'ld_1', name: 'list_directory',
+      input: { path: '/src/agent/' },
+    });
+    expect(payload.resourceFingerprint).toBeDefined();
+    expect(payload.resourceFingerprint).toHaveLength(64);
+    // Trailing slash stripped in normalization
+    const payload2 = buildToolCallStartedPayload({
+      toolUseId: 'ld_2', name: 'list_directory',
+      input: { path: '/src/agent' },
+    });
+    expect(payload.resourceFingerprint).toBe(payload2.resourceFingerprint);
+  });
+
+  it('computes resourceFingerprint for grep from path', () => {
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'gr_1', name: 'grep',
+      input: { pattern: 'foo', path: '/src/agent' },
+    });
+    expect(payload.resourceFingerprint).toBeDefined();
+    expect(payload.resourceFingerprint).toHaveLength(64);
+  });
+
+  it('omits resourceFingerprint for read_file with missing/empty file_path', () => {
+    const noPath = buildToolCallStartedPayload({
+      toolUseId: 'rf_e', name: 'read_file', input: {},
+    });
+    expect('resourceFingerprint' in noPath).toBe(false);
+
+    const empty = buildToolCallStartedPayload({
+      toolUseId: 'rf_f', name: 'read_file', input: { file_path: '' },
+    });
+    expect('resourceFingerprint' in empty).toBe(false);
+  });
 });
 
 describe('buildToolCallCompletedPayload', () => {

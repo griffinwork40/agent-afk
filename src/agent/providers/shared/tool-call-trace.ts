@@ -55,12 +55,14 @@ export function buildToolCallStartedPayload(args: {
   // Redact known-sensitive fields before hashing. inputBytes stays on the
   // raw input for accurate sizing (it's a byte count, not content).
   const hashInput = JSON.stringify(redactSensitiveFields(name, raw));
+  const resourceFp = computeResourceFingerprint(name, raw);
   return {
     phase: 'started',
     toolUseId,
     name,
     inputBytes: Buffer.byteLength(serialized, 'utf8'),
     argsFingerprint: createHash('sha256').update(hashInput).digest('hex'),
+    ...(resourceFp !== undefined ? { resourceFingerprint: resourceFp } : {}),
     ...(subagentId !== undefined ? { subagentId } : {}),
   };
 }
@@ -97,6 +99,50 @@ function redactSensitiveFields(toolName: string, input: unknown): unknown {
 
     default:
       return input;
+  }
+}
+
+/**
+ * Compute a resource-level fingerprint for tools that access a single nameable
+ * resource. Returns `undefined` for tools where no single resource identity
+ * exists.
+ *
+ * For `read_file` / `list_directory` / `grep`: the resource is the normalized
+ * file path, ignoring offset/limit/pattern so that two reads of the same file
+ * at different offsets share a fingerprint.
+ *
+ * Privacy: the returned value is a SHA-256 hex hash, never a raw path.
+ */
+function computeResourceFingerprint(
+  toolName: string,
+  input: unknown,
+): string | undefined {
+  if (typeof input !== 'object' || input === null) return undefined;
+  const obj = input as Record<string, unknown>;
+
+  switch (toolName) {
+    case 'read_file':
+    case 'list_directory': {
+      // Both use a path-like key: read_file → file_path, list_directory → path
+      const raw = (obj['file_path'] ?? obj['path']) as string | undefined;
+      if (typeof raw !== 'string' || raw.length === 0) return undefined;
+      // Normalize: trim whitespace, collapse consecutive slashes, strip trailing /
+      const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+      return createHash('sha256').update(normalized).digest('hex');
+    }
+
+    case 'grep': {
+      // grep's resource is `path` (directory/file being searched) + `pattern`,
+      // but `include` / other args change what is read. Keep it narrow: only
+      // hash when `path` is present.
+      const raw = obj['path'] as string | undefined;
+      if (typeof raw !== 'string' || raw.length === 0) return undefined;
+      const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+      return createHash('sha256').update(normalized).digest('hex');
+    }
+
+    default:
+      return undefined;
   }
 }
 
