@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.200.0] - 2026-09-08
+
+### Added
+- wire rich handoff sender into daemon elicitation path (#1550) (#1555) (11f20e74)
+
 ## [5.199.0] - 2026-09-08
 
 ### Added
