@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IAgentSession, Message, OutputEvent } from '../types.js';
 import { SubagentHandleImpl } from './handle.js';
 import { AbortGraph } from '../abort-graph.js';
+import type { WorkspaceEntry } from '../workspace/workspace-store.js';
 
 // ---------------------------------------------------------------------------
 // Minimal mock session that satisfies IAgentSession
@@ -593,5 +594,143 @@ describe('SubagentHandleImpl.steer()', () => {
     expect(handle._steeringMessages).toHaveLength(1);
     await handle.teardown();
     expect(handle._steeringMessages).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #1564 — _beforeNextRound combined steering + workspace path
+//
+// PR #1560 modified _beforeNextRound to concatenate a pending steering message
+// and any pending workspace deliveries with a '\n\n' separator. No test covered
+// the combined path where BOTH are present simultaneously. This suite covers:
+//   - combined: result is steering + '\n\n' + workspace envelope
+//   - steering-only: result is the steering string
+//   - workspace-only: result is the workspace delivery XML
+//   - neither: result is undefined
+// ---------------------------------------------------------------------------
+
+describe('_beforeNextRound — combined steering + workspace path (#1564)', () => {
+  /** Minimal WorkspaceEntry that satisfies the type without a real DB. */
+  function makeWorkspaceEntry(id: number, content: string): WorkspaceEntry {
+    return {
+      id,
+      session_id: 'test-session',
+      type: 'finding',
+      subject: 'test subject',
+      content,
+      evidence: null,
+      confidence: 1.0,
+      agent_id: null,
+      relates_to: null,
+      relation_type: null,
+      created_at: new Date().toISOString(),
+      seq: id,
+    };
+  }
+
+  function makeHandle(): SubagentHandleImpl<unknown> {
+    const controller = new AbortController();
+    const graph = new AbortGraph(controller, 'bnr-test');
+    const session: IAgentSession = {
+      sessionId: 'bnr-session',
+      state: 'idle',
+      abortSignal: controller.signal,
+      async sendMessage() { return { role: 'assistant', content: '', timestamp: new Date() }; },
+      async *sendMessageStream() {},
+      async interrupt() {},
+      async close() {},
+      async reset() {},
+      async setModel() {},
+      async setPermissionMode() {},
+      waitForInitialization: async () => ({ sessionId: 'bnr-session', model: 'm', persistSession: false }),
+      getSessionIdentity: () => ({ persistSession: false }),
+      getSessionMetadata: () => ({ sessionId: 'bnr-session', model: 'm', persistSession: false }),
+      getQuery: () => { throw new Error('na'); },
+      getLastResponseMetadata: () => null,
+      getOutputStream: async function* () {},
+      getInputStreamRef: () => ({ pushUserMessage: vi.fn() }),
+      supportedCommands: async () => [],
+      supportedModels: async () => [],
+      supportedAgents: async () => [],
+      getContextUsage: async () => ({ contextLimitTokens: 0, contextUsedTokens: 0 }),
+      mcpServerStatus: async () => [],
+      accountInfo: async () => ({ name: 't', email: 't@t.com' }),
+      cwd: '/tmp',
+      setCwd: vi.fn(),
+      getHistory: () => [],
+      getTurnCount: () => 0,
+    } as unknown as IAgentSession;
+
+    return new SubagentHandleImpl(
+      'bnr-handle',
+      session,
+      controller,
+      graph,
+      undefined, // outputSchema
+      5000,      // timeoutMs
+      undefined, // hookRegistry
+      vi.fn(),   // onTerminal
+    );
+  }
+
+  it('combined: returns steering + "\\n\\n" + workspace envelope when both are present', () => {
+    const handle = makeHandle();
+    handle.steer('focus on the auth module');
+    handle._pendingWorkspaceEntries.push(makeWorkspaceEntry(1, 'found a critical bug'));
+
+    const cb = handle._beforeNextRound;
+    const result = cb();
+
+    expect(result).toBeTypeOf('string');
+    // Steering text must appear before the separator
+    expect(result).toContain('focus on the auth module');
+    // Workspace envelope must appear after the separator
+    expect(result).toContain('<workspace-delivery');
+    expect(result).toContain('found a critical bug');
+    // The two parts must be joined by exactly '\n\n'
+    expect(result).toContain('focus on the auth module\n\n<workspace-delivery');
+  });
+
+  it('combined: subsequent call returns undefined (both buffers drained)', () => {
+    const handle = makeHandle();
+    handle.steer('first message');
+    handle._pendingWorkspaceEntries.push(makeWorkspaceEntry(2, 'workspace content'));
+
+    const cb = handle._beforeNextRound;
+    cb(); // first call drains both
+    const second = cb();
+    expect(second).toBeUndefined();
+  });
+
+  it('steering-only: returns the steering string when no workspace entries are pending', () => {
+    const handle = makeHandle();
+    handle.steer('only steering here');
+
+    const cb = handle._beforeNextRound;
+    const result = cb();
+
+    expect(result).toBe('only steering here');
+    // Next call must be empty — ring buffer consumed
+    expect(cb()).toBeUndefined();
+  });
+
+  it('workspace-only: returns the workspace envelope string when no steering message is pending', () => {
+    const handle = makeHandle();
+    handle._pendingWorkspaceEntries.push(makeWorkspaceEntry(3, 'workspace only content'));
+
+    const cb = handle._beforeNextRound;
+    const result = cb();
+
+    expect(result).toBeTypeOf('string');
+    expect(result).toContain('<workspace-delivery');
+    expect(result).toContain('workspace only content');
+    // Next call must be empty — workspace buffer drained
+    expect(cb()).toBeUndefined();
+  });
+
+  it('neither: returns undefined when both buffers are empty', () => {
+    const handle = makeHandle();
+    const cb = handle._beforeNextRound;
+    expect(cb()).toBeUndefined();
   });
 });
