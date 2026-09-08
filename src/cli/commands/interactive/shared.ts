@@ -381,6 +381,13 @@ export interface InteractiveCtx {
    *
    * Absent when no MCP config file exists or every server is `disabled`.
    */
+  /**
+   * Mutable ref to the current turn's bash-output-tail setter. Populated by
+   * the per-turn StreamRenderer (which owns the ToolLane) and cleared when
+   * the turn ends. The factory closure in bootstrap delegates here so the
+   * session-scoped AgentConfig reaches the per-turn ToolLane. Issue #1506.
+   */
+  bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
   mcpManager?: import('../../../agent/mcp/index.js').McpManager;
   /**
    * Registry of background subagent jobs spawned by the `agent` tool with
@@ -801,6 +808,13 @@ export interface TurnHandles {
    * tool lane without importing CLI-layer modules. Absent on non-REPL callers.
    */
   addPreviewDiffRef?: PreviewDiffRef;
+  /**
+   * Mutable ref for the per-turn bash output tail bridge (issue #1506).
+   * Set by the REPL bootstrap; the turn handler wires and clears it around
+   * each StreamRenderer's lifetime so the session-scoped factory reaches the
+   * per-turn ToolLane.
+   */
+  bashTailSetter?: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
 }
 
 // `discardStdin: false` is load-bearing — ora's default wraps process.stdin

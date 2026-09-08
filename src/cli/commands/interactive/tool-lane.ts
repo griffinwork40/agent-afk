@@ -196,6 +196,28 @@ export class ToolLane {
     }
   }
 
+  /**
+   * Set (or clear with `undefined`) the live bash output tail on an entry.
+   * Called by the stream-renderer orchestrator when the bash tool's
+   * RollingTailBuffer fires a throttled notification (issue #1506).
+   *
+   * Rendered as dim italic continuation lines under the in-flight bash row in
+   * the live overlay only — never in {@link ToolLane.flush}, because scrollback
+   * is post-mortem. Cleared immediately (set to `undefined`) when the command
+   * completes or is aborted so the tail row disappears on the next repaint.
+   *
+   * No-op if the entry doesn't exist or is a text entry.
+   */
+  setBashOutputTail(toolUseId: string, tail: string | undefined): void {
+    const entry = this.entries.get(toolUseId);
+    if (entry?.kind !== 'tool') return;
+    if (tail === undefined) {
+      delete entry.outputTail;
+    } else {
+      entry.outputTail = tail;
+    }
+  }
+
   addResult(toolUseId: string, chunk: ToolResultChunk): void {
     const entry = this.entries.get(toolUseId);
     // Clear previewDiff on the same tick as result — preview is now obsolete.
@@ -655,6 +677,20 @@ export class ToolLane {
             // the Invariant note at the NESTING_TOOLS branch above for the
             // column-alignment rationale.
             lines.push(clamp(palette.dim(g.spine) + palette.thinking('⌇  ' + sanitizeLabel(entry.thinkingTail))));
+          }
+          if (entry.outputTail) {
+            // Live bash output tail (issue #1506): last N lines of stdout/stderr,
+            // rendered as dim italic continuation lines under the in-flight row.
+            // Ephemeral overlay only — never reaches scrollback or the model.
+            // Each tail line is indented 5 spaces to align with the tool content
+            // column (matching the previewDiff/thinkingTail indent), clamped to
+            // the terminal width to prevent soft-wrap from orphaning a flush-left
+            // continuation between siblings.
+            for (const tailLine of entry.outputTail.split('\n')) {
+              if (tailLine.length > 0) {
+                lines.push(clamp('     ' + palette.dim(sanitizeLabel(tailLine))));
+              }
+            }
           }
         }
       }

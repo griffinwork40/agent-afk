@@ -130,11 +130,20 @@ export async function bootstrapSession(
     completionWriter, memoryStore: sharedMemoryStore, stateStore: sharedStateStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
+  // Mutable ref for the per-turn bash output tail bridge (issue #1506).
+  // The factory below closes over this; the per-turn StreamRenderer sets
+  // .current when it starts and clears it when the turn ends.
+  const bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined } = { current: undefined };
+  const bashOutputTailReporter = (toolUseId: string) => {
+    return (tail: string | undefined) => { bashTailSetter.current?.(toolUseId, tail); };
+  };
+
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps = buildSharedDeps({
     sessionModel, resumeConfig, systemPrompt, systemPromptSource, thinking, effort,
     maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
+    bashOutputTailReporter,
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
@@ -314,6 +323,7 @@ export async function bootstrapSession(
     gitStatusSampler,
     completionWriter,
     replRenderer,
+    bashTailSetter,
     slashCtx,
     rl: null!,  // overwritten below
     options,

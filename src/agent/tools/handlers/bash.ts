@@ -26,6 +26,7 @@ import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
 import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
+import { RollingTailBuffer } from './_rolling-tail.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -206,12 +207,30 @@ export function createBashHandler(
     const startedAt = Date.now();
     return new Promise((resolve) => {
       let resolved = false;
+
+      // Live rolling tail buffer — ephemeral TUI chrome only, never model-facing.
+      // Created only when the context supplies an onBashOutputTail callback.
+      // Cleared (and a final `undefined` sent) in every settle path so the TUI
+      // always erases the tail row regardless of how the command ends.
+      const tailBuffer =
+        context?.onBashOutputTail !== undefined
+          ? new RollingTailBuffer((tail) => {
+              try {
+                context.onBashOutputTail!(tail);
+              } catch {
+                // Contract: callback must not throw, but we swallow defensively.
+              }
+            })
+          : undefined;
   
       function settle(result: { content: string; isError?: boolean; truncated?: boolean; capturePath?: string; durationMs?: number; exitCode?: number; testResult?: import('./test-runner-detector.js').TestResult }) {
         if (resolved) return;
         resolved = true;
         clearTimeout(timeoutHandle);
         signal.removeEventListener('abort', abortHandler);
+        // Clear the tail buffer in every settle path so the TUI erases the
+        // live tail row immediately on command completion or abort.
+        tailBuffer?.clear();
         resolve(result);
       }
   
@@ -354,7 +373,10 @@ export function createBashHandler(
         const remaining = HARD_CAP_BYTES - totalBytes;
         const safe = chunk.length <= remaining ? chunk : chunk.subarray(0, Math.max(0, remaining));
         totalBytes += safe.length;
-        stdout += safe.toString('utf8');
+        const text = safe.toString('utf8');
+        stdout += text;
+        // Feed the live tail buffer (ephemeral TUI display — not model-facing).
+        tailBuffer?.push(text);
         maybeOverflow('stdout');
       });
   
@@ -363,7 +385,10 @@ export function createBashHandler(
         const remaining = HARD_CAP_BYTES - totalBytes;
         const safe = chunk.length <= remaining ? chunk : chunk.subarray(0, Math.max(0, remaining));
         totalBytes += safe.length;
-        stderr += safe.toString('utf8');
+        const text = safe.toString('utf8');
+        stderr += text;
+        // Feed the live tail buffer (ephemeral TUI display — not model-facing).
+        tailBuffer?.push(text);
         maybeOverflow('stderr');
       });
   

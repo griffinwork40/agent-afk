@@ -234,6 +234,22 @@ export interface SessionToolDispatcherOptions {
    * new session construction paths should always supply one.
    */
   spawnedPidRegistry?: SpawnedPidRegistry;
+  /**
+   * Live bash output tail reporter factory (issue #1506).
+   *
+   * When present, `callHandlerContext` calls this factory with the
+   * `toolUseId` of each dispatched bash call and attaches the returned
+   * callback as `context.onBashOutputTail`. The bash handler feeds
+   * streaming stdout/stderr to a RollingTailBuffer that fires the callback
+   * (throttled ~300 ms) so the TUI can render in-flight progress.
+   *
+   * The factory is called once per tool invocation — the returned callback
+   * is bound to that call's `toolUseId` and drives the TUI's
+   * {@link ToolLane.setBashOutputTail} for that specific lane entry.
+   *
+   * Optional: when absent, bash behaves as before (no live tail).
+   */
+  bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -294,6 +310,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly maxOutputBytes: number | undefined;
   /** Session-scoped PID registry for wait_for process condition gating (#1430). */
   private readonly spawnedPidRegistry: SpawnedPidRegistry | undefined;
+  /** Live bash output tail reporter factory (issue #1506). */
+  private readonly bashOutputTailReporter:
+    | ((toolUseId: string) => (tail: string | undefined) => void)
+    | undefined;
   /**
    * Repeat-loop circuit breaker state. The dispatcher is built per `query()`,
    * so this naturally tracks CONSECUTIVE byte-identical calls within a single
@@ -381,6 +401,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         : undefined;
     this._allowAll = opts.allowAll === true;
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
+    this.bashOutputTailReporter = opts.bashOutputTailReporter;
 
     // When caller passes arrays by reference (provider sharing pattern), use
     // them directly so mutations are visible without rebuilding. Otherwise
@@ -429,14 +450,19 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
   /**
    * Returns a per-call handler context that augments the base `handlerContext`
-   * with the tool-call-specific fields (`toolUseId`, `traceWriter`). Used by
-   * `execute()` and `executeCore()` when dispatching to a named handler.
+   * with the tool-call-specific fields (`toolUseId`, `traceWriter`, and
+   * the per-call bash output tail callback when the reporter factory is set).
    */
   private callHandlerContext(call: ToolCall): ToolHandlerContext {
+    const tailCallback =
+      this.bashOutputTailReporter !== undefined && call.id
+        ? this.bashOutputTailReporter(call.id)
+        : undefined;
     return {
       ...this.handlerContext,
       toolUseId: call.id,
       ...(this.traceWriter !== undefined ? { traceWriter: this.traceWriter } : {}),
+      ...(tailCallback !== undefined ? { onBashOutputTail: tailCallback } : {}),
     };
   }
 

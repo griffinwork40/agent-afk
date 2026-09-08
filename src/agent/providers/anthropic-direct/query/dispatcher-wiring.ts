@@ -185,6 +185,9 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           ? { subagentToolOutputCapBytes: config.subagentToolOutputCapBytes }
           : {}),
         traceWriter: config.traceWriter,
+        ...(config.bashOutputTailReporter !== undefined
+          ? { bashOutputTailReporter: config.bashOutputTailReporter }
+          : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
