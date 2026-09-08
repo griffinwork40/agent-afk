@@ -374,6 +374,87 @@ describe('pull tick — elicitation handler lifecycle', () => {
   });
 });
 
+describe('pull tick — bot/chatId forwarding to makeDaemonElicitationHandler', () => {
+  it('forwards bot and primaryChatId to the handler when both are provided', async () => {
+    const handoffWiring = await import('./handoff-wiring.js');
+    const handlerSpy = vi.spyOn(handoffWiring, 'makeDaemonElicitationHandler');
+
+    const mockBot = { telegram: {} } as unknown as import('telegraf').Telegraf;
+    enqueue('/fwd-test', {}, queueDir);
+    const scheduler = new CronScheduler({
+      queueDir,
+      telemetryPath,
+      pullPollIntervalMs: 30_000,
+      sessionFactory: () => makeMockSession(),
+      bot: mockBot,
+      primaryChatId: 12345,
+      primaryThreadId: 99,
+    });
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(handlerSpy).toHaveBeenCalledOnce();
+    const callOpts = handlerSpy.mock.calls[0]?.[0];
+    expect(callOpts?.bot).toBe(mockBot);
+    expect(callOpts?.chatId).toBe(12345);
+    expect(callOpts?.threadId).toBe(99);
+
+    await scheduler.stop();
+    handlerSpy.mockRestore();
+  });
+
+  it('omits bot/chatId/threadId from handler opts when scheduler has no bot', async () => {
+    const handoffWiring = await import('./handoff-wiring.js');
+    const handlerSpy = vi.spyOn(handoffWiring, 'makeDaemonElicitationHandler');
+
+    enqueue('/no-bot-test', {}, queueDir);
+    const scheduler = new CronScheduler({
+      queueDir,
+      telemetryPath,
+      pullPollIntervalMs: 30_000,
+      sessionFactory: () => makeMockSession(),
+    });
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(handlerSpy).toHaveBeenCalledOnce();
+    const callOpts = handlerSpy.mock.calls[0]?.[0];
+    expect(callOpts?.bot).toBeUndefined();
+    expect(callOpts?.chatId).toBeUndefined();
+    expect(callOpts?.threadId).toBeUndefined();
+
+    await scheduler.stop();
+    handlerSpy.mockRestore();
+  });
+
+  it('omits threadId when primaryThreadId is not set but bot+chatId are', async () => {
+    const handoffWiring = await import('./handoff-wiring.js');
+    const handlerSpy = vi.spyOn(handoffWiring, 'makeDaemonElicitationHandler');
+
+    const mockBot = { telegram: {} } as unknown as import('telegraf').Telegraf;
+    enqueue('/no-thread-test', {}, queueDir);
+    const scheduler = new CronScheduler({
+      queueDir,
+      telemetryPath,
+      pullPollIntervalMs: 30_000,
+      sessionFactory: () => makeMockSession(),
+      bot: mockBot,
+      primaryChatId: 42,
+    });
+    scheduler.startPullLoop();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(handlerSpy).toHaveBeenCalledOnce();
+    const callOpts = handlerSpy.mock.calls[0]?.[0];
+    expect(callOpts?.bot).toBe(mockBot);
+    expect(callOpts?.chatId).toBe(42);
+    expect(callOpts?.threadId).toBeUndefined();
+
+    await scheduler.stop();
+    handlerSpy.mockRestore();
+  });
+});
+
 describe('pull tick — lease finalization (completeTask called after runOnce)', () => {
   it('creates no lingering lease files after a successful pull tick', async () => {
     const { existsSync } = await import('node:fs');
