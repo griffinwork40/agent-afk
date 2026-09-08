@@ -72,8 +72,13 @@ export function openScheduleHistory(
   body.appendChild(el('div', 'sched-history-loading', 'Loading...'));
   modal.appendChild(body);
 
+  const close = (): void => {
+    overlay.remove();
+    document.removeEventListener('keydown', escHandler);
+  };
+
   const closeBtn = el('button', 'sched-cancel-btn', 'Close');
-  closeBtn.addEventListener('click', () => overlay.remove());
+  closeBtn.addEventListener('click', close);
   modal.appendChild(closeBtn);
 
   overlay.appendChild(modal);
@@ -81,13 +86,10 @@ export function openScheduleHistory(
 
   // Close on Escape or overlay click
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) close();
   });
   const escHandler = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      overlay.remove();
-      document.removeEventListener('keydown', escHandler);
-    }
+    if (e.key === 'Escape') close();
   };
   document.addEventListener('keydown', escHandler);
 

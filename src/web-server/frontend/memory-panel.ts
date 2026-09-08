@@ -257,13 +257,14 @@ function renderResults(area: HTMLElement, results: MemorySearchResult[]): void {
 // ── Public factory ────────────────────────────────────────────────────────────
 
 /**
- * Build and return the memory panel element.
+ * Build and return the memory panel element with a `refresh()` handle.
  * Fetches hot memory on mount; search is triggered by user action.
+ * Call `refresh()` on subsequent visits to re-fetch hot memory.
  */
-export function createMemoryPanel(opts: MemoryPanelOpts): HTMLElement {
+export function createMemoryPanel(opts: MemoryPanelOpts): HTMLElement & { refresh(): void } {
   const { api } = opts;
 
-  const panel = el('div', 'mem-panel');
+  const panel = el('div', 'mem-panel') as unknown as HTMLElement & { refresh(): void };
 
   const inner = el('div', 'mem-inner');
   inner.appendChild(el('h2', 'mem-title', 'Memory'));
@@ -278,17 +279,22 @@ export function createMemoryPanel(opts: MemoryPanelOpts): HTMLElement {
 
   panel.appendChild(inner);
 
-  // Fetch hot memory immediately on construction — this fires once.
-  // The panel is constructed lazily (first nav to the memory view), so
-  // timing is equivalent to a mount callback in a component framework.
-  void (async () => {
-    try {
-      const data = (await api('/api/memory/hot')) as HotResponse;
-      updateHot(data);
-    } catch {
-      // Non-fatal: hot section remains in loading state but search still works.
-    }
-  })();
+  const fetchHot = (): void => {
+    void (async () => {
+      try {
+        const data = (await api('/api/memory/hot')) as HotResponse;
+        updateHot(data);
+      } catch {
+        // Non-fatal: hot section remains in loading state but search still works.
+      }
+    })();
+  };
+
+  // Fetch hot memory immediately on construction.
+  fetchHot();
+
+  // Expose refresh for subsequent visits.
+  panel.refresh = fetchHot;
 
   return panel;
 }

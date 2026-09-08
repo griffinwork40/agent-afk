@@ -28,7 +28,7 @@ export type ViewName = 'sessions' | 'schedules' | 'bg-jobs' | 'memory';
 let schedulesView: SchedulesView | undefined;
 
 /** Lazy singleton — constructed on first switch to the memory view. */
-let memoryPanel: HTMLElement | undefined;
+let memoryPanel: (HTMLElement & { refresh(): void }) | undefined;
 
 /** IDs of all nav buttons (toggled is-active). */
 const NAV_IDS = ['nav-sessions', 'nav-schedules', 'nav-bg-jobs', 'nav-memory'] as const;
@@ -120,6 +120,8 @@ export function switchView(view: ViewName, api: ApiFunction): void {
     if (memView && !memoryPanel) {
       memoryPanel = createMemoryPanel({ api });
       memView.appendChild(memoryPanel);
+    } else {
+      memoryPanel?.refresh();
     }
   }
 }

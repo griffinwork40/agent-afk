@@ -163,6 +163,6 @@ details.dv-hunk[open] > .dv-hunk-header > .dv-chevron {
 .dv-content {
   flex: 1;
   padding: 0 8px;
-  overflow: hidden;
-  /* Do not wrap — horizontal scroll is on .dv-hunk-body. */
+  /* No overflow here — horizontal scroll lives on .dv-hunk-body so long
+     lines push it wide enough to trigger the scrollbar. */
 }

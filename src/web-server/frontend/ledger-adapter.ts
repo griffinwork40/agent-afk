@@ -37,6 +37,11 @@ function nextId(prefix: string): string {
   return `${prefix}_${counter}`;
 }
 
+/** Reset the ID counter on session switch to prevent cross-session collisions. */
+export function resetIdCounter(): void {
+  counter = 0;
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }

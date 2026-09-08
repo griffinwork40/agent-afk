@@ -206,19 +206,21 @@ export function openScheduleForm(
   btnRow.appendChild(saveBtn);
   modal.appendChild(btnRow);
 
+  const close = (): void => {
+    overlay.remove();
+    document.removeEventListener('keydown', escHandler);
+  };
+
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
   nameInput.focus();
 
   // Close on Escape or overlay click
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) overlay.remove();
+    if (e.target === overlay) close();
   });
   const escHandler = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape') {
-      overlay.remove();
-      document.removeEventListener('keydown', escHandler);
-    }
+    if (e.key === 'Escape') close();
   };
   document.addEventListener('keydown', escHandler);
 
@@ -257,8 +259,7 @@ export function openScheduleForm(
         });
       }
 
-      overlay.remove();
-      document.removeEventListener('keydown', escHandler);
+      close();
       opts.onSaved();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'save failed');

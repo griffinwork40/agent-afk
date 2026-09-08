@@ -23,12 +23,14 @@ import { wireAtFileAffordance } from './at-file-panel.js';
 import {
   accumulateTotals,
   ledgerRecordToItem,
+  resetIdCounter,
   type LedgerRecordLike,
   type SessionTotals,
 } from './ledger-adapter.js';
+import type { ToolCallItem, TranscriptItem } from './view-model.js';
+import { resetNodeCache } from './render-incremental.js';
 import { QueuePanel } from './queue-panel.js';
 import { isPinnedToBottom } from './scroll-pin.js';
-import type { TranscriptItem } from './view-model.js';
 import { createApprovalsManager } from './app-approvals.js';
 import { switchView } from './app-views.js';
 
@@ -148,6 +150,9 @@ function selectSession(id: string): void {
   activeId = id;
   const snapshotId = id;
   items = [];
+  resetIdCounter();
+  resetNodeCache();
+  const toolIndex = new Map<string, ToolCallItem>();
   panel().clear();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
   stream?.stop();
@@ -162,7 +167,11 @@ function selectSession(id: string): void {
   stream = new SessionStream(id, token, {
     onEvent: (data) => {
       if (activeId !== snapshotId) return;
-      const frame = data as { record?: LedgerRecordLike };
+      const frame = data as { record?: LedgerRecordLike; error?: string };
+      if (frame.error) {
+        showToast(`Stream error: ${frame.error}`);
+        return;
+      }
       const record = frame.record;
       if (!record) return;
       if (record.kind === 'done' || record.kind === 'error') {
@@ -173,7 +182,7 @@ function selectSession(id: string): void {
         // keeps the queue a queue rather than a write-through.
         void panel().flush();
       }
-      const item = ledgerRecordToItem(record);
+      const item = ledgerRecordToItem(record, toolIndex);
       totals = accumulateTotals(totals, record);
       if (item) {
         items.push(item);
@@ -183,9 +192,10 @@ function selectSession(id: string): void {
         // from "user had scrolled up to read". Unconditional scrolling made
         // history unreadable on a live session: every arriving event yanked the
         // viewport back to the newest row mid-sentence.
-        const wasPinned = isPinnedToBottom($('transcript'));
-        renderTranscript($('transcript'), items);
-        if (wasPinned) scrollToBottom($('transcript'));
+        const transcriptEl = $('transcript');
+        const wasPinned = !transcriptEl.hidden && isPinnedToBottom(transcriptEl);
+        renderTranscript(transcriptEl, items);
+        if (wasPinned) scrollToBottom(transcriptEl);
       }
       renderMeter();
     },
