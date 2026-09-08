@@ -31,6 +31,9 @@ import {
 import { QueuePanel } from './queue-panel.js';
 import { isPinnedToBottom } from './scroll-pin.js';
 import type { TranscriptItem } from './view-model.js';
+import { SchedulesView } from './schedules-view.js';
+import { openScheduleForm } from './schedule-form.js';
+import { openScheduleHistory } from './schedule-history.js';
 
 const token = readAndScrubToken();
 
@@ -53,6 +56,9 @@ let turnActive = false;
 
 /** True while the SSE transport is in a reconnecting state. */
 let sseReconnecting = false;
+
+/** Lazy singleton for the schedules view. */
+let schedulesView: SchedulesView | undefined;
 
 /**
  * Contract: constructed lazily on first use so this module can be imported
@@ -254,6 +260,62 @@ function syncStop(): void {
 }
 
 /**
+ * Switch between the sessions and schedules top-level views.
+ *
+ * The sessions view includes transcript, approvals, and composer. The schedules
+ * view is a standalone panel for CRUD of daemon-scheduled tasks. Switching
+ * toggles visibility rather than destroying DOM -- the SSE stream stays alive
+ * while viewing schedules so notifications are not missed.
+ */
+function switchView(view: 'sessions' | 'schedules'): void {
+  // Nav buttons
+  const navSessions = document.getElementById('nav-sessions');
+  const navSchedules = document.getElementById('nav-schedules');
+  navSessions?.classList.toggle('is-active', view === 'sessions');
+  navSchedules?.classList.toggle('is-active', view === 'schedules');
+
+  // Session-view elements
+  const transcript = document.getElementById('transcript');
+  const approvals = document.getElementById('approvals');
+  const composer = document.getElementById('composer');
+  const sidebarHead = document.querySelector('.sidebar-head') as HTMLElement | null;
+  const sessionsEl = document.getElementById('sessions');
+
+  // Schedule-view element
+  const schedView = document.getElementById('schedules-view');
+
+  if (view === 'sessions') {
+    if (transcript) transcript.style.display = '';
+    if (approvals) approvals.style.display = '';
+    if (composer) composer.style.display = '';
+    if (sidebarHead) sidebarHead.style.display = '';
+    if (sessionsEl) sessionsEl.style.display = '';
+    schedView?.classList.remove('is-active');
+  } else {
+    if (transcript) transcript.style.display = 'none';
+    if (approvals) approvals.style.display = 'none';
+    if (composer) composer.style.display = 'none';
+    if (sidebarHead) sidebarHead.style.display = 'none';
+    if (sessionsEl) sessionsEl.style.display = 'none';
+    schedView?.classList.add('is-active');
+
+    if (!schedulesView && schedView) {
+      schedulesView = new SchedulesView({
+        container: schedView,
+        api,
+        onEdit: (schedule) =>
+          openScheduleForm(schedule.id ? schedule : null, {
+            api,
+            onSaved: () => void schedulesView?.load(),
+          }),
+        onShowHistory: (id) => openScheduleHistory(id, api),
+      });
+    }
+    void schedulesView?.load();
+  }
+}
+
+/**
  * Start a session this process owns, then select it.
  *
  * Contract: the sidebar is refreshed BEFORE selecting, because `selectSession`
@@ -362,6 +424,10 @@ async function main(): Promise<void> {
   $('new-session').addEventListener('click', () => toggleNewSessionForm(
     (model, cwd) => void createSession(model, cwd),
   ));
+
+  // Wire nav tab switching
+  document.getElementById('nav-sessions')?.addEventListener('click', () => switchView('sessions'));
+  document.getElementById('nav-schedules')?.addEventListener('click', () => switchView('schedules'));
   wireSidebarClose();
   $('stop').addEventListener('click', () => {
     void stopTurn().catch((err: unknown) => {
