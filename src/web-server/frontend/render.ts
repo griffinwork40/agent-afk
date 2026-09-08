@@ -18,6 +18,7 @@ import type { TranscriptItem, ToolCallItem } from './view-model.js';
 import { applyIncrementalUpdate } from './render-incremental.js';
 import { createThinkingBlockNode } from './thinking-panel.js';
 import { classifySession, renderStatusBadge } from './session-status.js';
+import { renderDiffBlock } from './diff-viewer.js';
 export type { PendingApproval, ApprovalAnswer } from './render-approvals.js';
 export { renderApprovals } from './render-approvals.js';
 
@@ -233,7 +234,7 @@ function renderTool(item: ToolCallItem): HTMLElement {
 
   if (item.diff !== undefined) {
     body.appendChild(el('div', 'tool-label', 'diff'));
-    body.appendChild(renderDiff(stripAnsi(String(item.diff))));
+    body.appendChild(renderDiffBlock(stripAnsi(String(item.diff))));
   }
 
   node.appendChild(body);
@@ -245,25 +246,6 @@ function truncate(s: string, n: number): string {
   return flat.length <= n ? flat : `${flat.slice(0, n - 1)}…`;
 }
 
-/** Render a unified diff with per-line colour spans (no innerHTML). */
-function renderDiff(text: string): HTMLPreElement {
-  const pre = el('pre', 'tool-pre tool-diff');
-  for (const line of text.split('\n')) {
-    const span = document.createElement('span');
-    span.textContent = line;
-    span.className = line.startsWith('+++') || line.startsWith('---')
-      ? 'diff-ctx'
-      : line.startsWith('+')
-        ? 'diff-add'
-        : line.startsWith('-')
-          ? 'diff-del'
-          : line.startsWith('@@')
-            ? 'diff-hunk'
-            : 'diff-ctx';
-    pre.appendChild(span);
-  }
-  return pre;
-}
 
 /** Semantic one-liner for the tool summary row. */
 function summarizeToolInput(name: string, preview: string): string {
