@@ -40,7 +40,8 @@ afterEach(() => {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  rmSync(tmpRoot, { recursive: true, force: true });
+  // Best-effort: on Windows a lingering SQLite handle (kv.db) may cause EBUSY.
+  try { rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore on Windows */ }
   vi.restoreAllMocks();
 });
 

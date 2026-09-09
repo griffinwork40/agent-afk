@@ -30,7 +30,7 @@ import {
   lstatSync,
   unlinkSync,
 } from 'fs';
-import { basename, dirname, join, resolve, relative } from 'path';
+import { basename, dirname, isAbsolute, join, resolve, relative } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../../paths.js';
 import { parseSource, assertHttpsUrl, type ParsedSource } from './source.js';
 import * as git from './git.js';
@@ -406,10 +406,12 @@ export function assertWithinPluginsDir(dest: string, parentDir: string): void {
     throw new Error(`Path traversal detected: resolved path "${dest}" escapes plugin dir "${parentDir}"`);
   }
   // Belt-and-suspenders: on POSIX, path.relative never returns an absolute path,
-  // so this arm is unreachable today. It is kept as a defensive guard for
-  // hypothetical Windows support or future platform changes where relative()
-  // semantics may differ (e.g. cross-drive paths that cannot be made relative).
-  if (rel.startsWith('/')) {
+  // so this arm is unreachable today. On Windows, path.relative returns the
+  // absolute dest unchanged when dest is on a different drive than parentDir
+  // (cross-drive paths cannot be expressed as relative). isAbsolute() catches
+  // both the POSIX case (starts with '/') and the Windows cross-drive case
+  // (starts with a drive letter like 'C:\').
+  if (isAbsolute(rel)) {
     throw new Error(`Path traversal detected: resolved path "${dest}" escapes plugin dir "${parentDir}"`);
   }
 }

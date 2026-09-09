@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import path from 'node:path';
 import {
   DEFAULT_GROK_CLI_COMPAT_VERSION,
   isCliChatProxyBaseUrl,
@@ -7,12 +8,13 @@ import {
   type GrokCliHeaderDeps,
 } from './headers.js';
 
-const VERSION_FILE = '/test-home/.grok/version.json';
+const TEST_HOME = path.resolve('/test-home');
+const VERSION_FILE = path.join(TEST_HOME, '.grok', 'version.json');
 
 function deps(overrides: Partial<GrokCliHeaderDeps> = {}): GrokCliHeaderDeps {
   return {
     readEnv: () => undefined,
-    homeDir: () => '/test-home',
+    homeDir: () => TEST_HOME,
     readFile: () => { throw new Error('version file unavailable'); },
     ...overrides,
   };

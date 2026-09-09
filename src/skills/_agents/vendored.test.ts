@@ -18,7 +18,7 @@ const PINNED_HASHES = {
 type AgentName = keyof typeof PINNED_HASHES;
 
 function computeHash(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+  return createHash('sha256').update(content.replace(/\r\n/g, '\n')).digest('hex');
 }
 
 function readPrompt(name: AgentName): string {

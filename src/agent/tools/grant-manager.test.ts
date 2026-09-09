@@ -65,15 +65,18 @@ function makeHooks(opts?: {
 let tmpHome: string = '';
 let prevAfkHome: string | undefined;
 let prevHome: string | undefined;
+let prevUserProfile: string | undefined;
 let prevStateDir: string | undefined;
 
 function setupAuditEnv(): void {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'pgm-test-'));
   prevAfkHome = process.env['AFK_HOME'];
   prevHome = process.env['HOME'];
+  prevUserProfile = process.env['USERPROFILE'];
   prevStateDir = process.env['AFK_STATE_DIR'];
   process.env['AFK_HOME'] = tmpHome;
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
   delete process.env['AFK_STATE_DIR'];
 }
 
@@ -82,6 +85,8 @@ function teardownAuditEnv(): void {
   else process.env['AFK_HOME'] = prevAfkHome;
   if (prevHome === undefined) delete process.env['HOME'];
   else process.env['HOME'] = prevHome;
+  if (prevUserProfile === undefined) delete process.env['USERPROFILE'];
+  else process.env['USERPROFILE'] = prevUserProfile;
   if (prevStateDir === undefined) delete process.env['AFK_STATE_DIR'];
   else process.env['AFK_STATE_DIR'] = prevStateDir;
   rmSync(tmpHome, { recursive: true, force: true });
@@ -113,7 +118,8 @@ describe('PathGrantManager — addReadRoot', () => {
     const hooks = makeHooks();
     const gm = new PathGrantManager(hooks);
     gm.addReadRoot('/some/path', 'slash');
-    expect(hooks._readRoots).toContain('/some/path');
+    // path.resolve normalizes to the platform absolute form (e.g. C:\some\path on Windows).
+    expect(hooks._readRoots).toContain(path.resolve('/some/path'));
   });
 
   it('is idempotent — repeated adds do not duplicate the entry', () => {
@@ -122,7 +128,8 @@ describe('PathGrantManager — addReadRoot', () => {
     gm.addReadRoot('/some/path', 'slash');
     gm.addReadRoot('/some/path', 'slash');
     gm.addReadRoot('/some/path', 'slash');
-    expect(hooks._readRoots.filter((p) => p === '/some/path').length).toBe(1);
+    const resolved = path.resolve('/some/path');
+    expect(hooks._readRoots.filter((p) => p === resolved).length).toBe(1);
   });
 
   it('resolves the path to absolute before storing', () => {
@@ -184,7 +191,7 @@ describe('PathGrantManager — addWriteRoot', () => {
       const hooks = makeHooks();
       const gm = new PathGrantManager(hooks);
       gm.addWriteRoot('/fresh/write', 'slash', 'test-sess');
-      const entries = readAuditEntries().filter((e) => e['path'] === '/fresh/write');
+      const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/fresh/write'));
       expect(entries.length).toBe(1);
       expect(entries[0]!['action']).toBe('grant-write');
     } finally {
@@ -196,8 +203,8 @@ describe('PathGrantManager — addWriteRoot', () => {
     const hooks = makeHooks();
     const gm = new PathGrantManager(hooks);
     gm.addWriteRoot('/rw/path', 'slash');
-    expect(hooks._readRoots).toContain('/rw/path');
-    expect(hooks._writeRoots).toContain('/rw/path');
+    expect(hooks._readRoots).toContain(path.resolve('/rw/path'));
+    expect(hooks._writeRoots).toContain(path.resolve('/rw/path'));
   });
 
   it('is idempotent on writeRoots', () => {
@@ -205,16 +212,18 @@ describe('PathGrantManager — addWriteRoot', () => {
     const gm = new PathGrantManager(hooks);
     gm.addWriteRoot('/rw/path', 'slash');
     gm.addWriteRoot('/rw/path', 'slash');
-    expect(hooks._writeRoots.filter((p) => p === '/rw/path').length).toBe(1);
+    const resolved = path.resolve('/rw/path');
+    expect(hooks._writeRoots.filter((p) => p === resolved).length).toBe(1);
   });
 
   it('records a read→write upgrade (adds path that was already read-only to writeRoots)', () => {
-    const hooks = makeHooks({ initialRead: ['/shared'] });
+    const hooks = makeHooks({ initialRead: [path.resolve('/shared')] });
     const gm = new PathGrantManager(hooks);
     // Path is already a read root; addWriteRoot must add it to write roots.
     gm.addWriteRoot('/shared', 'slash');
-    expect(hooks._writeRoots).toContain('/shared');
-    expect(hooks._readRoots.filter((p) => p === '/shared').length).toBe(1);
+    expect(hooks._writeRoots).toContain(path.resolve('/shared'));
+    const resolved = path.resolve('/shared');
+    expect(hooks._readRoots.filter((p) => p === resolved).length).toBe(1);
   });
 });
 
@@ -249,29 +258,29 @@ describe('PathGrantManager — revokeRoot', () => {
   // --- Finding 2: migrating anchor policy (Option A) ---
 
   it('(Finding 2) refuses to revoke the current protected root', () => {
-    const hooks = makeHooks({ protectedRoot: '/anchor' });
+    const hooks = makeHooks({ protectedRoot: path.resolve('/anchor') });
     const gm = new PathGrantManager(hooks);
-    hooks._readRoots.push('/anchor'); // manually put it in the list
+    hooks._readRoots.push(path.resolve('/anchor')); // manually put it in the list (resolved form)
     gm.revokeRoot('/anchor', 'slash');
     // Guard fired — path remains in readRoots.
-    expect(hooks._readRoots).toContain('/anchor');
+    expect(hooks._readRoots).toContain(path.resolve('/anchor'));
   });
 
   it('(Finding 2) allows revoking the old anchor after the protected root migrates', () => {
-    const hooks = makeHooks({ protectedRoot: '/old-anchor' });
+    const hooks = makeHooks({ protectedRoot: path.resolve('/old-anchor') });
     const gm = new PathGrantManager(hooks);
-    hooks._readRoots.push('/old-anchor');
-    hooks._readRoots.push('/new-anchor');
+    hooks._readRoots.push(path.resolve('/old-anchor'));
+    hooks._readRoots.push(path.resolve('/new-anchor'));
 
     // Migrate the protected root (simulates setResolveBase / setCwd).
-    hooks._protectedRoot = '/new-anchor';
+    hooks._protectedRoot = path.resolve('/new-anchor');
 
     // /old-anchor is no longer the protected root — revoke must succeed.
     gm.revokeRoot('/old-anchor', 'slash');
-    expect(hooks._readRoots).not.toContain('/old-anchor');
+    expect(hooks._readRoots).not.toContain(path.resolve('/old-anchor'));
     // /new-anchor (the new anchor) is still protected.
     gm.revokeRoot('/new-anchor', 'slash');
-    expect(hooks._readRoots).toContain('/new-anchor');
+    expect(hooks._readRoots).toContain(path.resolve('/new-anchor'));
   });
 
   it('(Finding 2) is a no-op when getReadRoots is undefined (uninit provider)', () => {
@@ -420,7 +429,8 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     expect(entries.length).toBe(before + 1);
     const last = entries[entries.length - 1]!;
     expect(last['action']).toBe('revoke');
-    expect(last['path']).toBe('/p');
+    // path.resolve normalizes to the platform absolute form (e.g. D:\p on Windows).
+    expect(last['path']).toBe(path.resolve('/p'));
   });
 
   it('(Finding 3) emits NO extra entry on a double-revoke (second is no-op)', () => {
@@ -466,7 +476,7 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     gm.addReadRoot('/dup', 'slash');
     gm.addReadRoot('/dup', 'slash');
     gm.addReadRoot('/dup', 'slash');
-    const entries = readAuditEntries().filter((e) => e['path'] === '/dup');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/dup'));
     expect(entries.length).toBe(1);
   });
 
@@ -476,7 +486,7 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     gm.addReadRoot('/up', 'slash');
     gm.addWriteRoot('/up', 'slash'); // read-root already present — only write-audit fires
     gm.addWriteRoot('/up', 'slash'); // idempotent — no additional row
-    const entries = readAuditEntries().filter((e) => e['path'] === '/up');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/up'));
     expect(entries.map((e) => e['action'])).toEqual(['grant-read', 'grant-write']);
   });
 

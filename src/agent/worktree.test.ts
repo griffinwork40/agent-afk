@@ -8,9 +8,9 @@
 
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -48,7 +48,9 @@ async function makeRepo(): Promise<string> {
 }
 
 function makeAfkHome(): string {
-  return mkdtempSync(join(tmpdir(), 'afk-farm-home-'));
+  // realpathSync so git-reported paths (long form) match the temp dir path
+  // on Windows where tmpdir() may return an 8.3 short form like RUNNER~1.
+  return realpathSync(mkdtempSync(join(tmpdir(), 'afk-farm-home-')));
 }
 
 let savedAfkHome: string | undefined;
@@ -88,13 +90,24 @@ describe('createFarm', () => {
     // Each worktree exists on disk and is registered with git.
     const registered = await run(repoRoot, 'git', ['worktree', 'list', '--porcelain']);
     for (const b of manifest.branches) {
-      expect(b.path).toContain(afkHome);
+      // Normalize paths before comparison: on Windows git may report forward-
+      // slash long-form paths while afkHome is stored with backslashes or 8.3
+      // short-path form. Normalize both to backslashes for the contains check.
+      const normPath = b.path.replace(/\//g, path.sep);
+      const normHome = afkHome.replace(/\//g, path.sep);
+      expect(normPath.toLowerCase()).toContain(normHome.toLowerCase());
       expect(b.branch).toMatch(
         /^afk\/farm\/20260514T153000-rewrite-auth-to-jose-a3f2\/\d+-branch-\d+$/,
       );
       const stat = await fs.stat(b.path);
       expect(stat.isDirectory()).toBe(true);
-      expect(registered).toContain(b.path);
+      // On Windows, git reports paths with forward slashes and the full-form
+      // user name (e.g. runneradmin) while b.path may use backslashes and
+      // the 8.3 short name (RUNNER~1). Expand b.path through fs.realpath and
+      // normalise separators before the contains check so both sides agree.
+      const resolvedBPath = (await fs.realpath(b.path)).replace(/\\/g, '/').toLowerCase();
+      const normRegistered = registered.replace(/\\/g, '/').toLowerCase();
+      expect(normRegistered).toContain(resolvedBPath);
     }
 
     // Manifest written to disk and round-trips.

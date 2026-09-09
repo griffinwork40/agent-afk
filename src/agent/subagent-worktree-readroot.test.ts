@@ -65,8 +65,8 @@ import { SubagentManager } from './subagent.js';
 import { resolveWorktreeMainRoot } from './worktree/worktree-read-root.js';
 import { getAfkStateDir, getAgentFrameworkDir } from '../paths.js';
 
-const WORKTREE = '/repo/.afk-worktrees/wt';
-const MAIN = '/repo';
+const WORKTREE = path.resolve('/repo/.afk-worktrees/wt');
+const MAIN = path.resolve('/repo');
 const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
 // A CONFINED fork is additionally granted the AFK state dir (Gap A) so it can
 // read ~/.afk/state (skill-preflight inputs, todos, transcripts). Not mocked —
@@ -129,23 +129,23 @@ describe('forkSubagent — worktree main-repo read-root grant', () => {
 
   it('grants [cwd, state] when cwd is not a worktree (no main root, but state still reachable — Gap A)', async () => {
     mockedResolve.mockResolvedValue(undefined);
-    const mgr = new SubagentManager({ cwd: '/plain/repo' });
+    const mgr = new SubagentManager({ cwd: path.resolve('/plain/repo') });
     await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k' }));
 
     const cfg = shared.lastConfig as { cwd?: string; readRoots?: string[] } | null;
-    expect(cfg?.cwd).toBe('/plain/repo');
+    expect(cfg?.cwd).toBe(path.resolve('/plain/repo'));
     // No distinct worktree main root, but a confined fork still needs ~/.afk/state.
-    expect(cfg?.readRoots).toEqual(['/plain/repo', STATE, FRAMEWORK]);
+    expect(cfg?.readRoots).toEqual([path.resolve('/plain/repo'), STATE, FRAMEWORK]);
   });
 
   it('grants the configured AFK_FRAMEWORK_DIR override to confined forks', async () => {
-    const configuredFramework = '/configured/agent-framework';
+    const configuredFramework = path.resolve('/configured/agent-framework');
     vi.stubEnv('AFK_FRAMEWORK_DIR', configuredFramework);
-    const mgr = new SubagentManager({ cwd: '/plain/repo' });
+    const mgr = new SubagentManager({ cwd: path.resolve('/plain/repo') });
     await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k' }));
 
     const cfg = shared.lastConfig as { readRoots?: string[] } | null;
-    expect(cfg?.readRoots).toEqual(['/plain/repo', STATE, configuredFramework]);
+    expect(cfg?.readRoots).toEqual([path.resolve('/plain/repo'), STATE, configuredFramework]);
   });
 
   it('does NOT override caller-pinned readRoots (e.g. afk farm) and skips resolution', async () => {
@@ -202,7 +202,7 @@ describe('forkSubagent — worktree main-repo read-root grant', () => {
   });
 
   it('falls back to the parent worktree for the main root when the child cwd does not resolve (Gap B)', async () => {
-    const CHILD = '/some/unrelated/dir';
+    const CHILD = path.resolve('/some/unrelated/dir');
     // Child cwd is not a linked worktree (resolves to nothing); the PARENT is.
     mockedResolve.mockImplementation(async (cwd?: string) =>
       cwd === WORKTREE ? MAIN : undefined,
@@ -229,23 +229,23 @@ describe('forkSubagent — explicit write-root pre-grant (#435)', () => {
   it('composes config.writeRoots with the child cwd (deduped)', async () => {
     const mgr = new SubagentManager({ cwd: WORKTREE });
     await mgr.forkSubagent(
-      forkOpts({ model: 'sonnet', apiKey: 'k', writeRoots: ['/sibling/repo'] }),
+      forkOpts({ model: 'sonnet', apiKey: 'k', writeRoots: [path.resolve('/sibling/repo')] }),
     );
 
     const cfg = shared.lastConfig as { writeRoots?: string[] } | null;
     // cwd is always included so the child keeps write access to its own tree.
-    expect(cfg?.writeRoots).toEqual([WORKTREE, '/sibling/repo']);
+    expect(cfg?.writeRoots).toEqual([WORKTREE, path.resolve('/sibling/repo')]);
   });
 
   it('dedupes when config.writeRoots already contains the cwd', async () => {
     const mgr = new SubagentManager({ cwd: WORKTREE });
     await mgr.forkSubagent(
-      forkOpts({ model: 'sonnet', apiKey: 'k', writeRoots: [WORKTREE, '/sibling'] }),
+      forkOpts({ model: 'sonnet', apiKey: 'k', writeRoots: [WORKTREE, path.resolve('/sibling')] }),
     );
 
     const cfg = shared.lastConfig as { writeRoots?: string[] } | null;
     // Set dedup: WORKTREE appears once even though both base and writeRoots include it.
-    expect(cfg?.writeRoots).toEqual([WORKTREE, '/sibling']);
+    expect(cfg?.writeRoots).toEqual([WORKTREE, path.resolve('/sibling')]);
   });
 
   it('does not override writeRoots when config.writeRoots is absent', async () => {
@@ -259,7 +259,7 @@ describe('forkSubagent — explicit write-root pre-grant (#435)', () => {
 });
 
 describe('forkSubagent — additive read-root pre-grant (extraReadRoots, #662)', () => {
-  const EXTRA = '/scratch/data';
+  const EXTRA = path.resolve('/scratch/data');
 
   beforeEach(() => {
     shared.lastConfig = null;
@@ -283,11 +283,11 @@ describe('forkSubagent — additive read-root pre-grant (extraReadRoots, #662)',
     // A plain (non-worktree) confined parent → inherited = [cwd, STATE, FRAMEWORK]; the
     // extra dir joins the union without dropping cwd or state.
     mockedResolve.mockResolvedValue(undefined);
-    const mgr = new SubagentManager({ cwd: '/plain/repo' });
+    const mgr = new SubagentManager({ cwd: path.resolve('/plain/repo') });
     await mgr.forkSubagent(forkOpts({ model: 'sonnet', apiKey: 'k', extraReadRoots: [EXTRA] }));
 
     const cfg = shared.lastConfig as { readRoots?: string[] } | null;
-    expect(new Set(cfg?.readRoots)).toEqual(new Set(['/plain/repo', STATE, FRAMEWORK, EXTRA]));
+    expect(new Set(cfg?.readRoots)).toEqual(new Set([path.resolve('/plain/repo'), STATE, FRAMEWORK, EXTRA]));
   });
 
   it('does NOT confine an already-unconfined child (invariant #2 — stays read-open)', async () => {

@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, existsSync, utimesSync, symlinkSync } from 'fs';
-import { join, resolve as resolvePath } from 'path';
+import { basename as pathBasename, join, resolve as resolvePath } from 'path';
 import { tmpdir } from 'os';
 import { rmSync } from 'fs';
 
@@ -76,7 +76,7 @@ describe('getSkillPreflightDir — session ID validation (F04: UUID/hex-only reg
   // F07: fallback uses crypto.randomBytes (random hex), not process.pid.
   it('F07 — falls back to unbound-<random-hex> (not pid) when sessionId is undefined', () => {
     const dir = getSkillPreflightDir(undefined);
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     // Must NOT contain the process pid as a plain number suffix.
     expect(basename).not.toBe(`unbound-${process.pid}`);
@@ -85,14 +85,14 @@ describe('getSkillPreflightDir — session ID validation (F04: UUID/hex-only reg
 
   it('F07 — falls back to unbound-<random-hex> when sessionId is an empty string', () => {
     const dir = getSkillPreflightDir('');
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     expect(existsSync(dir)).toBe(true);
   });
 
   it('F07 — falls back to unbound-<random-hex> for path-traversal sessionId', () => {
     const dir = getSkillPreflightDir('../../../etc/passwd');
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     expect(existsSync(dir)).toBe(true);
   });
@@ -100,28 +100,28 @@ describe('getSkillPreflightDir — session ID validation (F04: UUID/hex-only reg
   it('falls back to unbound-<random-hex> when sessionId exceeds 128 characters', () => {
     const long = 'a'.repeat(129);
     const dir = getSkillPreflightDir(long);
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     expect(existsSync(dir)).toBe(true);
   });
 
   it('falls back to unbound-<random-hex> for IDs shorter than 8 characters', () => {
     const dir = getSkillPreflightDir('abc123');
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     expect(existsSync(dir)).toBe(true);
   });
 
   it('falls back to unbound-<random-hex> when sessionId contains underscores', () => {
     const dir = getSkillPreflightDir('ses-abc123_XYZ');
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     expect(existsSync(dir)).toBe(true);
   });
 
   it('falls back to unbound-<random-hex> when sessionId contains uppercase non-hex letters (G-Z)', () => {
     const dir = getSkillPreflightDir('GGGGGGGG');
-    const basename = dir.split('/').at(-1) ?? '';
+    const basename = pathBasename(dir);
     expect(basename).toMatch(/^unbound-[0-9a-f]{16}$/);
     expect(existsSync(dir)).toBe(true);
   });

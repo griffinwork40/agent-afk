@@ -28,8 +28,10 @@ describe('envFile primitives', () => {
       upsertEnvVar(nested, 'AFK_MODEL', 'sonnet');
       expect(existsSync(nested)).toBe(true);
       expect(readEnvVarFromFile(nested, 'AFK_MODEL')).toBe('sonnet');
-      // 0o600 — owner read/write only.
-      expect(statSync(nested).mode & 0o777).toBe(0o600);
+      // 0o600 — owner read/write only. NTFS does not support POSIX mode bits.
+      if (process.platform !== 'win32') {
+        expect(statSync(nested).mode & 0o777).toBe(0o600);
+      }
     });
 
     it('replaces an existing key in place, preserving comments / blanks / order', () => {

@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import type { HookContext, HookDecision } from '../hooks.js';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
+import { resolveShell } from '../../utils/resolve-shell.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -135,7 +136,7 @@ export async function executeCommand(
       ? context.toolName
       : '';
 
-  const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME'] as const;
+  const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'] as const;
   const childEnv: NodeJS.ProcessEnv = {};
   for (const key of ENV_PASSTHROUGH) {
     const val = process.env[key];
@@ -187,14 +188,29 @@ export async function executeCommand(
       resolve(result);
     }
 
-    const proc = spawn(command, {
-      shell: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
+    const isWin32 = process.platform === 'win32';
+    const shellResolution = resolveShell();
+    const spawnOpts = {
+      stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
       cwd: agentCwd,
       env: childEnv,
-      detached: true,
-    });
-    // Don't pin the event loop.
+      // detached: true creates a process group on POSIX (allows group kill).
+      // On Windows, detached does not create a process group — set false there
+      // to avoid misleading behaviour and unref() artefacts.
+      detached: !isWin32,
+    };
+    const proc =
+      shellResolution.shell === true
+        ? // POSIX: let Node pick /bin/sh via shell:true (existing behaviour).
+          spawn(command, { shell: true, ...spawnOpts })
+        : // Windows: spawn the resolved shell with args + command string.
+          spawn(
+            shellResolution.shell,
+            [...(shellResolution.args ?? []), command],
+            spawnOpts,
+          );
+    // Don't pin the event loop on POSIX (detached=true). On Windows
+    // (detached=false), unref() is a harmless no-op.
     proc.unref();
 
     // --- Output capture with 64 KB per-stream cap ---

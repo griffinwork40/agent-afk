@@ -7,7 +7,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 // Helper: mask off sticky/setuid/setgid bits to get rwxrwxrwx.
 function permBits(filePath: string): number {
@@ -27,7 +27,10 @@ describe('transcript — S2 file mode 0o600 regression', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'afk-transcript-test-'));
     const { startTranscript } = await import('./transcript.js');
     const filePath = await startTranscript(tmpDir, 'claude-3-5-haiku-20241022');
-    expect(permBits(filePath)).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      expect(permBits(filePath)).toBe(0o600);
+    }
   });
 
   it('initTranscript appendTurn writes to a file with mode 0o600', async () => {
@@ -39,7 +42,10 @@ describe('transcript — S2 file mode 0o600 regression', () => {
       const { initTranscript } = await import('./transcript.js');
       const handle = await initTranscript(() => 'claude-3-5-haiku-20241022');
       await handle.appendTurn('hello', 'world');
-      expect(permBits(handle.path())).toBe(0o600);
+      // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+      if (process.platform !== 'win32') {
+        expect(permBits(handle.path())).toBe(0o600);
+      }
     } finally {
       if (savedEnv === undefined) {
         delete process.env['AFK_STATE_DIR'];
@@ -153,12 +159,15 @@ describe('transcript — immediate user-message write (appendUser)', () => {
 describe('transcript — default directory resolution (state-tier placement)', () => {
   let tmpHome: string;
   let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
   let savedStateDir: string | undefined;
   let savedAfkHome: string | undefined;
 
   afterEach(() => {
     if (savedHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = savedHome;
+    if (savedUserProfile === undefined) delete process.env['USERPROFILE'];
+    else process.env['USERPROFILE'] = savedUserProfile;
     if (savedStateDir === undefined) delete process.env['AFK_STATE_DIR'];
     else process.env['AFK_STATE_DIR'] = savedStateDir;
     if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
@@ -169,9 +178,11 @@ describe('transcript — default directory resolution (state-tier placement)', (
   it('with AFK_STATE_DIR unset, transcripts land in ~/.afk/state/transcripts (not the legacy ~/.afk/transcripts)', async () => {
     tmpHome = mkdtempSync(join(tmpdir(), 'afk-transcript-home-'));
     savedHome = process.env['HOME'];
+    savedUserProfile = process.env['USERPROFILE'];
     savedStateDir = process.env['AFK_STATE_DIR'];
     savedAfkHome = process.env['AFK_HOME'];
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
     delete process.env['AFK_STATE_DIR'];
     delete process.env['AFK_HOME'];
 
@@ -180,8 +191,8 @@ describe('transcript — default directory resolution (state-tier placement)', (
     const p = handle.path();
 
     // Lands inside the state tier, NOT the legacy flat dir.
-    expect(p.startsWith(join(tmpHome, '.afk', 'state', 'transcripts') + '/')).toBe(true);
-    expect(p.startsWith(join(tmpHome, '.afk', 'transcripts') + '/')).toBe(false);
+    expect(p.startsWith(join(tmpHome, '.afk', 'state', 'transcripts') + sep)).toBe(true);
+    expect(p.startsWith(join(tmpHome, '.afk', 'transcripts') + sep)).toBe(false);
   });
 });
 

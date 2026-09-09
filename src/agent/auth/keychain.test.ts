@@ -87,10 +87,10 @@ describe('writeLinuxCredentials — S3 file mode 0o600 regression', () => {
     }
   });
 
-  it('writes the credential file with mode 0o600', () => {
+  it.skipIf(process.platform === 'win32')('writes the credential file with mode 0o600', () => {
     // Constraint: POSIX file-mode — mode must be set at write time (no TOCTOU).
-    // We exercise the Linux credential writer directly via the exported helper
-    // so this test is platform-independent (no process.platform stub needed).
+    // We exercise the Linux credential writer directly via the exported helper.
+    // NTFS does not support POSIX mode bits, so this test is skipped on Windows.
     tmpDir = mkdtempSync(join(tmpdir(), 'afk-keychain-test-'));
     const credPath = join(tmpDir, '.credentials.json');
     const blob = JSON.stringify({ claudeAiOauth: { accessToken: 'tok' } });

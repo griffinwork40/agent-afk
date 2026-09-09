@@ -32,6 +32,7 @@ useUnsetAfkHome();
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 let originalCwd: string;
 let savedOauthToken: string | undefined;
 
@@ -46,10 +47,12 @@ beforeEach(() => {
   // invalidate the disk-tier cache so loadConfig() actually rereads.
   _resetConfigCache();
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   originalCwd = process.cwd();
   tmpHome = join(tmpdir(), `afk-daemon-cfg-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(tmpHome, { recursive: true });
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
   // chdir into tmpHome so the cwd lookup (process.cwd()/afk.config.json)
   // misses cleanly even if the repo cwd happens to have one. The legacy
   // path getLegacyJsonConfigPath() also resolves via homedir(), so it
@@ -73,6 +76,8 @@ afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
 
   delete process.env['ANTHROPIC_API_KEY'];
   delete process.env['CLAUDE_CODE_OAUTH_TOKEN'];

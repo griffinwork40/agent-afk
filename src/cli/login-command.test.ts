@@ -78,6 +78,8 @@ describe('upsertEnvVar', () => {
   });
 
   it('sets restrictive file permissions (0o600)', () => {
+    // NTFS does not expose POSIX permission bits — skip on Windows.
+    if (process.platform === 'win32') return;
     upsertEnvVar(envFilePath, 'SENSITIVE_KEY', 'sensitive_value');
     const stats = require('fs').statSync(envFilePath);
     // 0o600 = rw------- (owner read/write only)

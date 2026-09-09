@@ -17,6 +17,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import {
   builtinBashSensitiveRoots,
   createBashRestrictionHook,
@@ -28,7 +30,7 @@ import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir, tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'fs';
 
 function mockGrants(): GrantManager {
@@ -37,7 +39,7 @@ function mockGrants(): GrantManager {
     addWriteRoot: () => {},
     revokeRoot: () => {},
     getGrants() {
-      return { resolveBase: '/tmp/repo', readRoots: ['/tmp/repo'], writeRoots: ['/tmp/repo'] };
+      return { resolveBase: resolve('/tmp/repo'), readRoots: [resolve('/tmp/repo')], writeRoots: [resolve('/tmp/repo')] };
     },
   };
 }
@@ -304,9 +306,9 @@ describe('createBashRestrictionHook — grant containment direction (F4 regressi
       revokeRoot: () => {},
       getGrants() {
         return {
-          resolveBase: '/tmp/repo',
-          readRoots: ['/tmp/repo', extraReadRoot],
-          writeRoots: ['/tmp/repo'],
+          resolveBase: resolve('/tmp/repo'),
+          readRoots: [resolve('/tmp/repo'), extraReadRoot],
+          writeRoots: [resolve('/tmp/repo')],
         };
       },
     };
@@ -353,9 +355,9 @@ describe('createBashRestrictionHook — context.grantManager precedence (#514)',
       revokeRoot: () => {},
       getGrants() {
         return {
-          resolveBase: '/tmp/repo',
-          readRoots: ['/tmp/repo', extraRoot],
-          writeRoots: ['/tmp/repo'],
+          resolveBase: resolve('/tmp/repo'),
+          readRoots: [resolve('/tmp/repo'), extraRoot],
+          writeRoots: [resolve('/tmp/repo')],
         };
       },
     };
@@ -406,7 +408,8 @@ describe('createBashRestrictionHook — wiring failsafes', () => {
   });
 });
 
-describe('SENSITIVE_PATH_SIGNAL stays in sync with the built-in sensitive roots', () => {
+// Windows: POSIX-only sensitive paths (~/Library, /etc/shadow, ~/.ssh)
+describe.skipIf(isWin32)('SENSITIVE_PATH_SIGNAL stays in sync with the built-in sensitive roots', () => {
   // Invariant: every restricted root check 2 protects must ALSO be matchable by
   // check 1's lexical signal — otherwise an interpreter one-liner that assembles
   // that root at runtime (a quote-prefixed `~`, which normalizeHomeRefs leaves
@@ -526,7 +529,7 @@ describe('deriveRestrictedSubstrings — Option A (#740): resolveBase can drop a
       writeRoots: [],
     });
     const withBase = deriveRestrictedSubstrings({
-      resolveBase: '/tmp/repo',
+      resolveBase: resolve('/tmp/repo'),
       readRoots: [],
       writeRoots: [],
     });
@@ -638,7 +641,8 @@ describe('createBashRestrictionHook — credential parity with the typed read de
   });
 });
 
-describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () => {
+// Windows: mcp.json carve-out uses POSIX home paths ($HOME, ~/.afk)
+describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parity (#728)', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
   const home = homedir();
   const mcp = `${home}/.afk/config/mcp.json`;
@@ -736,7 +740,8 @@ describe('createBashRestrictionHook — mcp.json carve-out parity (#728)', () =>
 // these pin that propagation so a future refactor of `allowlistedFileForms`
 // cannot silently invert the carve-out on the bash surface without a failing
 // test. Mirrors the mcp.json parity block above.
-describe('createBashRestrictionHook — ssh config / known_hosts carve-out parity (#579 O2)', () => {
+// Windows: ssh carve-out uses POSIX home paths (~/.ssh/config, $HOME)
+describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts carve-out parity (#579 O2)', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
   const home = homedir();
   const sshConfig = `${home}/.ssh/config`;
@@ -804,7 +809,8 @@ describe('createBashRestrictionHook — ssh config / known_hosts carve-out parit
   });
 });
 
-describe('createBashRestrictionHook — relocated AFK_HOME parity', () => {
+// Windows: relocated AFK_HOME uses POSIX paths ($AFK_HOME, symlinks, ~/.afk)
+describe.skipIf(isWin32)('createBashRestrictionHook — relocated AFK_HOME parity', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
   const relocated = join(tmpdir(), 'agent-afk-relocated-home');
 

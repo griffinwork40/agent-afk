@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { tmpdir } from 'os';
 import {
   getAfkHome,
@@ -43,6 +43,7 @@ import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 // This suite asserts the unset-AFK_HOME fallback ($HOME/.afk) — drop the
 // global sentinel AFK_HOME per test; HOME is redirected to a tmp dir below.
@@ -51,14 +52,18 @@ useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   tmpHome = join(tmpdir(), `afk-paths-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
 });
 
 afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
   delete process.env['AFK_HOME'];
   // getAfkStateDir() now reads AFK_STATE_DIR — clear it so a case that sets
   // it cannot leak into sibling cases that assume the $AFK_HOME/state default.
@@ -265,14 +270,14 @@ describe('assertSafeJobId and bg job path accessors', () => {
       const root = getBgJobsRoot();
       const escaped = join(root, '../../etc/passwd');
       // The resolved path should NOT contain '/state/bg/' as a suffix near the leaf
-      expect(escaped.includes('/etc/passwd')).toBe(true);
+      expect(escaped.replace(/\\/g, '/')).toContain('/etc/passwd');
     });
 
     it('valid jobIds resolve to paths under the bg jobs root', () => {
       const root = getBgJobsRoot();
-      expect(getBgJobDir('bg-abc-1').startsWith(root + '/')).toBe(true);
-      expect(getBgJobLog('bg-abc-1').startsWith(root + '/')).toBe(true);
-      expect(getBgJobMeta('bg-abc-1').startsWith(root + '/')).toBe(true);
+      expect(getBgJobDir('bg-abc-1').startsWith(root + sep) || getBgJobDir('bg-abc-1').startsWith(root + '/')).toBe(true);
+      expect(getBgJobLog('bg-abc-1').startsWith(root + sep) || getBgJobLog('bg-abc-1').startsWith(root + '/')).toBe(true);
+      expect(getBgJobMeta('bg-abc-1').startsWith(root + sep) || getBgJobMeta('bg-abc-1').startsWith(root + '/')).toBe(true);
     });
   });
 });
@@ -325,10 +330,11 @@ describe('assertSafeBrowserProfile and browser vault path accessors', () => {
 
     it('valid profiles resolve under the browser state root, with the storageState leaf', () => {
       const root = getBrowserStateRoot();
-      expect(getBrowserProfileStateDir('work').startsWith(root + '/')).toBe(true);
+      const profileDir = getBrowserProfileStateDir('work');
+      expect(profileDir.startsWith(root + sep) || profileDir.startsWith(root + '/')).toBe(true);
       const statePath = getBrowserStorageStatePath('work');
-      expect(statePath.startsWith(root + '/')).toBe(true);
-      expect(statePath.endsWith('/work/storageState.json')).toBe(true);
+      expect(statePath.startsWith(root + sep) || statePath.startsWith(root + '/')).toBe(true);
+      expect(statePath.replace(/\\/g, '/').endsWith('/work/storageState.json')).toBe(true);
     });
   });
 });
@@ -353,8 +359,9 @@ describe('getAfkHome — AFK_HOME validation (F1)', () => {
   });
 
   it('returns the value when AFK_HOME is a valid absolute non-root path', () => {
-    vi.stubEnv('AFK_HOME', '/tmp/afk-test');
-    expect(getAfkHome()).toBe('/tmp/afk-test');
+    const testHome = join(tmpdir(), 'afk-test');
+    vi.stubEnv('AFK_HOME', testHome);
+    expect(getAfkHome()).toBe(testHome);
   });
 });
 
@@ -372,7 +379,7 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
   });
 
   it('is the inverse of getTraceDir for a valid label', () => {
-    vi.stubEnv('AFK_HOME', '/tmp/afk-label-test');
+    vi.stubEnv('AFK_HOME', join(tmpdir(), 'afk-label-test'));
     const p = join(getTraceDir('default-uuid-1'), 'trace.jsonl');
     expect(sessionLabelFromTracePath(p)).toBe('default-uuid-1');
   });

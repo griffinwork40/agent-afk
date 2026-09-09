@@ -27,6 +27,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join, resolve } from 'path';
@@ -121,7 +123,8 @@ describe('isReadDenied — deliberate divergence from the write denylist', () =>
   });
 });
 
-describe('isReadDenied — reverse-gap closure: password-store + browser secret trees', () => {
+// Windows: ~/Library/Application Support paths are macOS/POSIX-only
+describe.skipIf(isWin32)('isReadDenied — reverse-gap closure: password-store + browser secret trees', () => {
   // These roots were bash-only (`builtinBashSensitiveRoots` in
   // bash-restriction-hook.ts) before this change: blocked for `cat`, wide open
   // for read_file/grep/glob/list_directory. See the module-header History note
@@ -258,7 +261,9 @@ describe('isReadDenied — built-in exception for ~/.afk/config/schedules.json',
 // arbitrary names like `github_key`, so a deny-glob would fail-open), but two
 // well-known NON-secret siblings are carved out as exact files so the agent can
 // do git/ssh host-alias work unconfined. Mirrors the mcp.json carve-out pattern.
-describe('isReadDenied — built-in exceptions for ~/.ssh/config and ~/.ssh/known_hosts', () => {
+// Windows: os.homedir() may return an 8.3 short path while BUILTIN_READ_ALLOWLIST
+// uses safeRealpath (long path), causing path-form mismatches in the test fixture.
+describe.skipIf(isWin32)('isReadDenied — built-in exceptions for ~/.ssh/config and ~/.ssh/known_hosts', () => {
   const sshConfig = join(homedir(), '.ssh', 'config');
   const knownHosts = join(homedir(), '.ssh', 'known_hosts');
 
@@ -339,7 +344,8 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     expect(basename(resolved)).toBe('mcp.json');
   });
 
-  it('keeps every built-in exception inside its expected resolved parent', () => {
+  // Windows: BUILTIN_READ_ALLOWLIST path form may differ from safeRealpath (8.3 vs long path mismatch).
+  it.skipIf(isWin32)('keeps every built-in exception inside its expected resolved parent', () => {
     // mcp.json lives inside ~/.afk/config; .ssh/config & known_hosts live
     // inside ~/.ssh. Each entry must resolve into the dir that floors it.
     const expected: Record<string, string> = {
@@ -357,7 +363,7 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     }
   });
 
-  it('a protected path is still denied when reached directly (the P1 regression)', () => {
+  it.skipIf(isWin32)('a protected path is still denied when reached directly (the P1 regression)', () => {
     // Belt-and-braces on the real built-ins: whatever the exception list resolves
     // to, a direct credential read must never be admitted by it. The carve-out
     // leaves are known non-secret names (mcp.json, config, known_hosts) — NEVER
@@ -438,7 +444,8 @@ describe('read-denylist — AFK_READ_DENYLIST extras', () => {
   // `<cwd>/~/x` that matches nothing — so before PR #734's review fix this
   // exact instruction silently protected no path on either surface. A plain
   // `resolve()` regression fails here rather than in an operator's session.
-  it('expands a leading ~/ so the documented tilde-spelled entry actually denies', () => {
+  // Windows: tilde-expansion uses homedir() but comparison path may differ in path form (8.3 vs long).
+  it.skipIf(isWin32)('expands a leading ~/ so the documented tilde-spelled entry actually denies', () => {
     process.env['AFK_READ_DENYLIST'] = '~/.afk/config/mcp.json';
     _resetReadDenylistCacheForTests();
 
@@ -448,7 +455,7 @@ describe('read-denylist — AFK_READ_DENYLIST extras', () => {
     expect(getReadDenylist().some((p) => p.includes('~'))).toBe(false);
   });
 
-  it('leaves ~user/ unexpanded (no portable home lookup) rather than guessing', () => {
+  it.skipIf(isWin32)('leaves ~user/ unexpanded (no portable home lookup) rather than guessing', () => {
     process.env['AFK_READ_DENYLIST'] = '~someone/.ssh';
     _resetReadDenylistCacheForTests();
     // Resolved relative to cwd, not to another user's home — and crucially it
@@ -607,7 +614,7 @@ describe('parseReadDenylistEntries — the single parser both surfaces share', (
   // Invariant: bash-restriction-hook.ts imports THIS function instead of
   // re-implementing the parse. The duplicate it used to keep is how the tilde
   // bug reached both surfaces at once (PR #734 review, MAJOR 1).
-  it('splits on colons, trims, drops empties, and absolutizes', () => {
+  it.skipIf(process.platform === 'win32')('splits on colons, trims, drops empties, and absolutizes', () => {
     expect(parseReadDenylistEntries('  /a/b : :/c/d  ')).toEqual(['/a/b', '/c/d']);
     expect(parseReadDenylistEntries(undefined)).toEqual([]);
     expect(parseReadDenylistEntries('')).toEqual([]);

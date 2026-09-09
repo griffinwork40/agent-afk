@@ -15,7 +15,7 @@ import { promisify } from 'util';
 import { mkdtempSync } from 'fs';
 import { readdir, stat } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -152,8 +152,8 @@ describe('writeScreenshotSidecar', () => {
         Buffer.from('x'),
         tool,
       );
-      const basename = result.path.split('/').at(-1) ?? '';
-      expect(basename).toMatch(PATTERN);
+      const fileBasename = basename(result.path);
+      expect(fileBasename).toMatch(PATTERN);
     }
   });
 

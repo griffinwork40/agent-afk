@@ -11,6 +11,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setupWorktree, setupWorktreeDeferred } from './worktree.js';
 
+/** Normalize path separators to forward slashes for cross-platform assertions. */
+const fwd = (p: string) => p.replace(/\\/g, '/');
+
 type ExecResult = { stdout: string; stderr: string };
 type ExecCall = { file: string; args: string[]; opts?: { cwd?: string } };
 type ExecHandler = (call: ExecCall) => Promise<ExecResult>;
@@ -96,8 +99,8 @@ describe('setupWorktree', () => {
     expect(addCall!.args).toContain('-b');
     expect(addCall!.args[addCall!.args.indexOf('-b') + 1]).toBe('feat-x');
     const pathArg = addCall!.args[addCall!.args.length - 1];
-    expect(pathArg!.endsWith('/.afk-worktrees/feat-x')).toBe(true);
-    expect(handle.path.endsWith('/.afk-worktrees/feat-x')).toBe(true);
+    expect(fwd(pathArg!).endsWith('/.afk-worktrees/feat-x')).toBe(true);
+    expect(fwd(handle.path).endsWith('/.afk-worktrees/feat-x')).toBe(true);
   });
 
   it('slugifies a branch name with a slash for the directory but keeps branch name unchanged', async () => {
@@ -110,8 +113,8 @@ describe('setupWorktree', () => {
     expect(addCall).toBeDefined();
     expect(addCall!.args[addCall!.args.indexOf('-b') + 1]).toBe('feat/x');
     const pathArg = addCall!.args[addCall!.args.length - 1];
-    expect(pathArg!.endsWith('/.afk-worktrees/feat-x')).toBe(true);
-    expect(handle.path.endsWith('/.afk-worktrees/feat-x')).toBe(true);
+    expect(fwd(pathArg!).endsWith('/.afk-worktrees/feat-x')).toBe(true);
+    expect(fwd(handle.path).endsWith('/.afk-worktrees/feat-x')).toBe(true);
   });
 
   it('creates .gitignore with .afk-worktrees/ entry and is idempotent', async () => {
@@ -865,7 +868,7 @@ describe('setupWorktreeDeferred (born-named)', () => {
     const handle = await deferred.create('afk/fix-cleanup-race');
     expect(mock.calls.some((c) => c.args.includes('add'))).toBe(true);
     expect(handle.branch).toBe('afk/fix-cleanup-race');
-    expect(handle.path.endsWith('/.afk-worktrees/afk-fix-cleanup-race')).toBe(true);
+    expect(fwd(handle.path).endsWith('/.afk-worktrees/afk-fix-cleanup-race')).toBe(true);
     expect(deferred.handle()).toBe(handle);
   });
 
@@ -1062,7 +1065,7 @@ describe('setupWorktree — base ref (--worktree-base / AFK_WORKTREE_BASE)', () 
 
     const addCall = mock.calls.find((c) => c.args.includes('worktree') && c.args.includes('add'));
     // Last arg is the worktree path, NOT a commit-ish — git defaults to HEAD.
-    expect(addCall!.args[addCall!.args.length - 1]!.endsWith('/.afk-worktrees/wt-default')).toBe(true);
+    expect(fwd(addCall!.args[addCall!.args.length - 1]!).endsWith('/.afk-worktrees/wt-default')).toBe(true);
     // No remote default to refresh → no fetch.
     expect(mock.calls.some((c) => c.args.includes('fetch'))).toBe(false);
   });
@@ -1088,7 +1091,7 @@ describe('setupWorktree — base ref (--worktree-base / AFK_WORKTREE_BASE)', () 
     const handle = await setupWorktree('wt-soft', { execFile: mock });
 
     const addCall = mock.calls.find((c) => c.args.includes('worktree') && c.args.includes('add'));
-    expect(addCall!.args[addCall!.args.length - 1]!.endsWith('/.afk-worktrees/wt-soft')).toBe(true);
+    expect(fwd(addCall!.args[addCall!.args.length - 1]!).endsWith('/.afk-worktrees/wt-soft')).toBe(true);
     expect(handle.branch).toBe('wt-soft'); // creation succeeded — no throw
   });
 

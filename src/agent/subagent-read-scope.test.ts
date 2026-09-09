@@ -8,9 +8,13 @@ import {
 
 const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
 
+// Normalise POSIX literal paths so assertions hold on both Windows (where
+// path.resolve('/repo') → 'C:\repo') and POSIX (where it stays '/repo').
+const R = (p: string) => path.resolve(p);
+
 describe('readOpenRootFor', () => {
   it('returns the volume root for an absolute path', () => {
-    expect(readOpenRootFor('/Users/x/proj/.afk-worktrees/wt')).toBe(FS_ROOT);
+    expect(readOpenRootFor(R('/Users/x/proj/.afk-worktrees/wt'))).toBe(FS_ROOT);
   });
   it('falls back to process.cwd volume root when base is undefined', () => {
     expect(readOpenRootFor(undefined)).toBe(FS_ROOT);
@@ -23,7 +27,7 @@ describe('computeInheritedReadRoots', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
         parentCwd: undefined,
-        childCwd: '/repo/.afk-worktrees/iso-1',
+        childCwd: R('/repo/.afk-worktrees/iso-1'),
       });
       expect(roots).toEqual([FS_ROOT]);
     });
@@ -32,13 +36,13 @@ describe('computeInheritedReadRoots', () => {
       const [root] = computeInheritedReadRoots({
         parentReadRoots: undefined,
         parentCwd: undefined,
-        childCwd: '/repo/.afk-worktrees/iso-1',
+        childCwd: R('/repo/.afk-worktrees/iso-1'),
       })!;
       // A path is admitted iff path.relative(root, target) does not escape.
       for (const target of [
-        '/repo/.afk-worktrees/other-wt/src/x.ts',
-        '/Users/me/.afk/state/skill-preflight/pr-1.diff',
-        '/repo/src/agent/subagent.ts',
+        R('/repo/.afk-worktrees/other-wt/src/x.ts'),
+        R('/Users/me/.afk/state/skill-preflight/pr-1.diff'),
+        R('/repo/src/agent/subagent.ts'),
       ]) {
         expect(path.relative(root!, target).startsWith('..')).toBe(false);
       }
@@ -49,21 +53,21 @@ describe('computeInheritedReadRoots', () => {
     it('unions child cwd + parent cwd + worktree main root', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo',
-        childCwd: '/repo/.afk-worktrees/iso-1',
-        worktreeMainRoot: '/repo',
+        parentCwd: R('/repo'),
+        childCwd: R('/repo/.afk-worktrees/iso-1'),
+        worktreeMainRoot: R('/repo'),
       });
-      expect(new Set(roots)).toEqual(new Set(['/repo/.afk-worktrees/iso-1', '/repo']));
+      expect(new Set(roots)).toEqual(new Set([R('/repo/.afk-worktrees/iso-1'), R('/repo')]));
     });
 
     it('inherits explicit parent readRoots (transitive propagation)', () => {
       const roots = computeInheritedReadRoots({
-        parentReadRoots: ['/repo', '/extra/allowed-dir'],
-        parentCwd: '/repo',
-        childCwd: '/repo/.afk-worktrees/iso-2',
+        parentReadRoots: [R('/repo'), R('/extra/allowed-dir')],
+        parentCwd: R('/repo'),
+        childCwd: R('/repo/.afk-worktrees/iso-2'),
       });
       expect(new Set(roots)).toEqual(
-        new Set(['/repo/.afk-worktrees/iso-2', '/repo', '/extra/allowed-dir']),
+        new Set([R('/repo/.afk-worktrees/iso-2'), R('/repo'), R('/extra/allowed-dir')]),
       );
     });
 
@@ -72,26 +76,26 @@ describe('computeInheritedReadRoots', () => {
       // value arrives here as the (explicit) parentReadRoots.
       const roots = computeInheritedReadRoots({
         parentReadRoots: [FS_ROOT],
-        parentCwd: '/repo/.afk-worktrees/iso-1',
-        childCwd: '/repo/.afk-worktrees/iso-1/sub',
+        parentCwd: R('/repo/.afk-worktrees/iso-1'),
+        childCwd: R('/repo/.afk-worktrees/iso-1/sub'),
       });
       expect(roots).toContain(FS_ROOT); // grandchild remains read-open
     });
 
     it('never narrows below the parent scope', () => {
       const roots = computeInheritedReadRoots({
-        parentReadRoots: ['/a', '/b'],
-        parentCwd: '/a',
-        childCwd: '/a/child',
+        parentReadRoots: [R('/a'), R('/b')],
+        parentCwd: R('/a'),
+        childCwd: R('/a/child'),
       })!;
-      expect(roots).toEqual(expect.arrayContaining(['/a', '/b']));
+      expect(roots).toEqual(expect.arrayContaining([R('/a'), R('/b')]));
     });
 
     it('returns undefined when the only root is the child cwd (== provider default, no broadening)', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo',
-        childCwd: '/repo',
+        parentCwd: R('/repo'),
+        childCwd: R('/repo'),
         worktreeMainRoot: undefined,
       });
       // Nothing broader than [cwd] → leave provider default untouched.
@@ -101,9 +105,9 @@ describe('computeInheritedReadRoots', () => {
     it('returns undefined when worktree main root equals the child cwd (defensive)', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo/.afk-worktrees/wt',
-        childCwd: '/repo/.afk-worktrees/wt',
-        worktreeMainRoot: '/repo/.afk-worktrees/wt',
+        parentCwd: R('/repo/.afk-worktrees/wt'),
+        childCwd: R('/repo/.afk-worktrees/wt'),
+        worktreeMainRoot: R('/repo/.afk-worktrees/wt'),
       });
       expect(roots).toBeUndefined();
     });
@@ -130,18 +134,18 @@ describe('computeInheritedReadRoots', () => {
   });
 
   describe('afkStateRoot grant (confined forks reach ~/.afk/state — Gap A)', () => {
-    const STATE = '/Users/me/.afk/state';
+    const STATE = R('/Users/me/.afk/state');
 
     it('folds the AFK state dir into a confined worktree fork union', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo/.afk-worktrees/wt',
-        childCwd: '/repo/.afk-worktrees/wt',
-        worktreeMainRoot: '/repo',
+        parentCwd: R('/repo/.afk-worktrees/wt'),
+        childCwd: R('/repo/.afk-worktrees/wt'),
+        worktreeMainRoot: R('/repo'),
         afkStateRoot: STATE,
       })!;
       expect(new Set(roots)).toEqual(
-        new Set(['/repo/.afk-worktrees/wt', '/repo', STATE]),
+        new Set([R('/repo/.afk-worktrees/wt'), R('/repo'), STATE]),
       );
       // A skill-preflight staged input under the state dir is now admitted
       // (containment is lexical: path.relative does not escape the root).
@@ -153,20 +157,20 @@ describe('computeInheritedReadRoots', () => {
     it('grants [cwd, state] even with no worktree main root (state lifts the fork out of the [cwd] default)', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/plain/repo',
-        childCwd: '/plain/repo',
+        parentCwd: R('/plain/repo'),
+        childCwd: R('/plain/repo'),
         worktreeMainRoot: undefined,
         afkStateRoot: STATE,
       });
       // Without afkStateRoot this is the "only root is cwd" case → undefined.
-      expect(new Set(roots)).toEqual(new Set(['/plain/repo', STATE]));
+      expect(new Set(roots)).toEqual(new Set([R('/plain/repo'), STATE]));
     });
 
     it('is ignored for an unconfined (read-open) parent — read-open already covers state', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
         parentCwd: undefined,
-        childCwd: '/repo/.afk-worktrees/wt',
+        childCwd: R('/repo/.afk-worktrees/wt'),
         afkStateRoot: STATE,
       });
       expect(roots).toEqual([FS_ROOT]); // read-open, not [.., STATE]
@@ -175,8 +179,8 @@ describe('computeInheritedReadRoots', () => {
     it('omitting afkStateRoot preserves the pre-fix behaviour (back-compat)', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo',
-        childCwd: '/repo',
+        parentCwd: R('/repo'),
+        childCwd: R('/repo'),
         worktreeMainRoot: undefined,
       });
       expect(roots).toBeUndefined();
@@ -185,12 +189,12 @@ describe('computeInheritedReadRoots', () => {
     it('never derives ~/.afk/config — only the exact state root passed', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo/.afk-worktrees/wt',
-        childCwd: '/repo/.afk-worktrees/wt',
-        worktreeMainRoot: '/repo',
+        parentCwd: R('/repo/.afk-worktrees/wt'),
+        childCwd: R('/repo/.afk-worktrees/wt'),
+        worktreeMainRoot: R('/repo'),
         afkStateRoot: STATE,
       })!;
-      const CONFIG = '/Users/me/.afk/config';
+      const CONFIG = R('/Users/me/.afk/config');
       // The credential dir is a sibling of state; it must never be granted, and
       // no granted root may lexically admit a config path.
       expect(roots.some((r) => path.resolve(r) === CONFIG)).toBe(false);
@@ -207,19 +211,19 @@ describe('computeInheritedReadRoots', () => {
   // tree their task requires (46 denials / 15 sessions, card
   // subagent-read-denial-ab89c2bd6a6f).
   describe('afkFrameworkRoot grant (confined forks reach ~/.afk/agent-framework — Gap C)', () => {
-    const FRAMEWORK = '/Users/me/.afk/agent-framework';
-    const STATE = '/Users/me/.afk/state';
+    const FRAMEWORK = R('/Users/me/.afk/agent-framework');
+    const STATE = R('/Users/me/.afk/state');
 
     it('folds the agent-framework dir into a confined worktree fork union', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo/.afk-worktrees/wt',
-        childCwd: '/repo/.afk-worktrees/wt',
-        worktreeMainRoot: '/repo',
+        parentCwd: R('/repo/.afk-worktrees/wt'),
+        childCwd: R('/repo/.afk-worktrees/wt'),
+        worktreeMainRoot: R('/repo'),
         afkFrameworkRoot: FRAMEWORK,
       })!;
       expect(new Set(roots)).toEqual(
-        new Set(['/repo/.afk-worktrees/wt', '/repo', FRAMEWORK]),
+        new Set([R('/repo/.afk-worktrees/wt'), R('/repo'), FRAMEWORK]),
       );
       // An improve-pipeline failure card is now admitted (containment is
       // lexical: path.relative does not escape the root).
@@ -235,34 +239,34 @@ describe('computeInheritedReadRoots', () => {
       // under state AND pattern-cards under agent-framework in the same task.
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo/.afk-worktrees/wt',
-        childCwd: '/repo/.afk-worktrees/wt',
-        worktreeMainRoot: '/repo',
+        parentCwd: R('/repo/.afk-worktrees/wt'),
+        childCwd: R('/repo/.afk-worktrees/wt'),
+        worktreeMainRoot: R('/repo'),
         afkStateRoot: STATE,
         afkFrameworkRoot: FRAMEWORK,
       })!;
       expect(new Set(roots)).toEqual(
-        new Set(['/repo/.afk-worktrees/wt', '/repo', STATE, FRAMEWORK]),
+        new Set([R('/repo/.afk-worktrees/wt'), R('/repo'), STATE, FRAMEWORK]),
       );
     });
 
     it('grants [cwd, framework] even with no worktree main root (lifts the fork out of the [cwd] default)', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/plain/repo',
-        childCwd: '/plain/repo',
+        parentCwd: R('/plain/repo'),
+        childCwd: R('/plain/repo'),
         worktreeMainRoot: undefined,
         afkFrameworkRoot: FRAMEWORK,
       });
       // Without afkFrameworkRoot this is the "only root is cwd" case → undefined.
-      expect(new Set(roots)).toEqual(new Set(['/plain/repo', FRAMEWORK]));
+      expect(new Set(roots)).toEqual(new Set([R('/plain/repo'), FRAMEWORK]));
     });
 
     it('is ignored for an unconfined (read-open) parent — read-open already covers it', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
         parentCwd: undefined,
-        childCwd: '/repo/.afk-worktrees/wt',
+        childCwd: R('/repo/.afk-worktrees/wt'),
         afkFrameworkRoot: FRAMEWORK,
       });
       expect(roots).toEqual([FS_ROOT]); // read-open, not [.., FRAMEWORK]
@@ -271,8 +275,8 @@ describe('computeInheritedReadRoots', () => {
     it('omitting afkFrameworkRoot preserves the pre-fix behaviour (back-compat)', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo',
-        childCwd: '/repo',
+        parentCwd: R('/repo'),
+        childCwd: R('/repo'),
         worktreeMainRoot: undefined,
       });
       expect(roots).toBeUndefined();
@@ -281,13 +285,13 @@ describe('computeInheritedReadRoots', () => {
     it('never derives ~/.afk/config — only the exact framework root passed', () => {
       const roots = computeInheritedReadRoots({
         parentReadRoots: undefined,
-        parentCwd: '/repo/.afk-worktrees/wt',
-        childCwd: '/repo/.afk-worktrees/wt',
-        worktreeMainRoot: '/repo',
+        parentCwd: R('/repo/.afk-worktrees/wt'),
+        childCwd: R('/repo/.afk-worktrees/wt'),
+        worktreeMainRoot: R('/repo'),
         afkStateRoot: STATE,
         afkFrameworkRoot: FRAMEWORK,
       })!;
-      const CONFIG = '/Users/me/.afk/config';
+      const CONFIG = R('/Users/me/.afk/config');
       // agent-framework, state and config are all siblings under ~/.afk. Granting
       // two of them must never lexically admit the credential dir.
       expect(roots.some((r) => path.resolve(r) === CONFIG)).toBe(false);
@@ -301,7 +305,7 @@ describe('computeInheritedReadRoots', () => {
 // #547: the choke point skill / inline-skill / compose managers use to derive
 // their parentReadRoots from the parent session's scope + the child's cwd.
 describe('resolveChildManagerReadRoots', () => {
-  const WORKTREE = '/repo/.afk-worktrees/wt';
+  const WORKTREE = R('/repo/.afk-worktrees/wt');
 
   it('grants read-open when the parent session is unconfined and the child has a cwd', () => {
     // THE #547 fix: a skill fork operating in a worktree under an unconfined
@@ -317,18 +321,18 @@ describe('resolveChildManagerReadRoots', () => {
 
   it('unions the child cwd with a confined parent cwd (child ⊇ parent)', () => {
     const roots = resolveChildManagerReadRoots(
-      { parentReadRoots: undefined, parentCwd: '/repo' },
+      { parentReadRoots: undefined, parentCwd: R('/repo') },
       WORKTREE,
     );
-    expect(roots).toEqual([WORKTREE, '/repo']);
+    expect(roots).toEqual([WORKTREE, R('/repo')]);
   });
 
   it('propagates an explicit (e.g. /allow-dir-widened) parent read scope', () => {
     const roots = resolveChildManagerReadRoots(
-      { parentReadRoots: ['/repo', '/tmp/data'], parentCwd: '/repo' },
+      { parentReadRoots: [R('/repo'), R('/tmp/data')], parentCwd: R('/repo') },
       WORKTREE,
     );
-    expect(roots).toEqual([WORKTREE, '/repo', '/tmp/data']);
+    expect(roots).toEqual([WORKTREE, R('/repo'), R('/tmp/data')]);
   });
 
   it('returns undefined when child cwd equals the confined parent cwd (leave cwd-derivation)', () => {

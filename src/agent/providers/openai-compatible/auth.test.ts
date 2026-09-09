@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import {
   resolveOpenAIAuth,
   parseCodexAuthJson,
@@ -12,11 +13,14 @@ import {
   type AuthResolverDeps,
 } from './auth.js';
 
+const TEST_HOME = path.resolve('/home/test');
+const CODEX_AUTH_PATH = path.join(TEST_HOME, '.codex', 'auth.json');
+
 /** Build a deps object with empty env and no-such-file fs by default. */
 function deps(overrides: Partial<AuthResolverDeps> = {}): AuthResolverDeps {
   return {
     readEnv: () => undefined,
-    homedir: () => '/home/test',
+    homedir: () => TEST_HOME,
     readFile: () => null,
     ...overrides,
   };
@@ -78,7 +82,7 @@ describe('resolveOpenAIAuth — precedence', () => {
   it('falls through to ~/.codex/auth.json (apikey mode) when env unset', () => {
     const r = resolveOpenAIAuth(undefined, deps({
       readFile: (p) =>
-        p === '/home/test/.codex/auth.json'
+        p === CODEX_AUTH_PATH
           ? JSON.stringify({ auth_mode: 'apikey', OPENAI_API_KEY: 'sk-codex-5555' })
           : null,
     }));

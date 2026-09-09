@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { homedir } from 'os';
+import { join } from 'path';
 import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
 import type { SubagentManager } from './subagent.js';
 import type { IAgentSession, Message } from './types.js';
@@ -621,12 +623,11 @@ describe('runSubagentDAG', () => {
     });
 
     it('rejects a cwd that is the home directory', async () => {
-      const home = process.env['HOME'] ?? '/home/test';
       const manager = makeFakeManager(() => makeFakeHandle('ok'));
       const result = await runSubagentDAG({
         manager,
         parentSession: makeParent(),
-        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', cwd: home }],
+        nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p', cwd: homedir() }],
         edges: [],
       });
       expect(result.failed).toHaveLength(1);
@@ -658,7 +659,6 @@ describe('runSubagentDAG', () => {
     });
 
     it('rejects writeRoots containing a sensitive root (un-gate guard)', async () => {
-      const home = process.env['HOME'] ?? '/home/test';
       const manager = makeFakeManager(() => makeFakeHandle('ok'));
       const result = await runSubagentDAG({
         manager,
@@ -669,7 +669,7 @@ describe('runSubagentDAG', () => {
             systemPrompt: 's',
             promptBuilder: () => 'p',
             // ~/.ssh is a known sensitive root — ungatedSensitiveRoot returns it.
-            writeRoots: [`${home}/.ssh`],
+            writeRoots: [join(homedir(), '.ssh')],
           },
         ],
         edges: [],

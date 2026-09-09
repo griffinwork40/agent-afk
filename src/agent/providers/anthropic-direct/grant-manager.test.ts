@@ -20,23 +20,41 @@ describe('AnthropicDirectProvider GrantManager', () => {
   let tmpHome: string;
   let prevAfkHome: string | undefined;
   let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
+  // Track open providers so we can close() them before rmSync on Windows.
+  const openProviders: AnthropicDirectProvider[] = [];
 
   beforeEach(() => {
     // Isolate the audit log to a temp dir so this test is hermetic and parallel-safe.
     tmpHome = mkdtempSync(path.join(tmpdir(), 'grant-manager-test-'));
     prevAfkHome = process.env['AFK_HOME'];
     prevHome = process.env['HOME'];
+    prevUserProfile = process.env['USERPROFILE'];
     process.env['AFK_HOME'] = tmpHome;
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
   });
 
   afterEach(() => {
+    // Close all providers before removing the tmpdir — Windows holds exclusive
+    // file locks on open SQLite databases and rmSync throws EBUSY otherwise.
+    for (const p of openProviders) p.close();
+    openProviders.length = 0;
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
     if (prevHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = prevHome;
+    if (prevUserProfile === undefined) delete process.env['USERPROFILE'];
+    else process.env['USERPROFILE'] = prevUserProfile;
     rmSync(tmpHome, { recursive: true, force: true });
   });
+
+  /** Create a tracked provider that is automatically closed in afterEach. */
+  function makeProvider(opts?: ConstructorParameters<typeof AnthropicDirectProvider>[0]): AnthropicDirectProvider {
+    const p = new AnthropicDirectProvider(opts);
+    openProviders.push(p);
+    return p;
+  }
 
   function readAuditEntries(): Array<Record<string, unknown>> {
     // The provider writes to getSessionGrantsPath(); resolved via AFK_HOME.
@@ -59,7 +77,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('non-revocable _currentCwd anchor (Option A / migrating)', () => {
     it('refuses to revoke _currentCwd (migrating anchor) captured by ensureSharedRoots', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       // Prime ensureSharedRoots via addReadRoot which calls it internally.
       // To set initialResolveBase we need to call buildDispatcher OR trigger
       // ensureSharedRoots with a cwd argument — easiest is to add a root then
@@ -80,7 +98,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
       // Now exercise the guard path through a fresh provider that did capture
       // an initial cwd via buildDispatcher.
-      const provider2 = new AnthropicDirectProvider();
+      const provider2 = makeProvider();
       // Manually drive ensureSharedRoots(cwd) by invoking buildDispatcher with
       // a cwd. buildDispatcher is private; we trigger it indirectly through
       // a no-op getGrants then a manual initial-cwd grant via the dispatcher
@@ -131,7 +149,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
           }) as unknown as InstanceType<typeof import('@anthropic-ai/sdk').default>,
       );
 
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       const baseDir = mkdtempSync(path.join(tmpdir(), 'grant-base-'));
       try {
         const q = provider.query({
@@ -163,21 +181,23 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('audit log includes sessionId', () => {
     it('addReadRoot logs sessionId when provided', () => {
-      const provider = new AnthropicDirectProvider();
-      provider.addReadRoot('/x/y', 'slash', 'session-abc-123');
+      const xPath = path.resolve('/x/y');
+      const provider = makeProvider();
+      provider.addReadRoot(xPath, 'slash', 'session-abc-123');
       const entries = readAuditEntries();
       expect(entries.length).toBeGreaterThanOrEqual(1);
       const e = entries[entries.length - 1];
       expect(e['sessionId']).toBe('session-abc-123');
       expect(e['action']).toBe('grant-read');
-      expect(e['path']).toBe('/x/y');
+      expect(e['path']).toBe(xPath);
       expect(e['source']).toBe('slash');
       expect(e['timestamp']).toEqual(expect.any(String));
     });
 
     it('addWriteRoot logs sessionId when provided', () => {
-      const provider = new AnthropicDirectProvider();
-      provider.addWriteRoot('/x/y', 'slash', 'session-write-456');
+      const xPath = path.resolve('/x/y');
+      const provider = makeProvider();
+      provider.addWriteRoot(xPath, 'slash', 'session-write-456');
       const entries = readAuditEntries();
       const e = entries[entries.length - 1];
       expect(e['sessionId']).toBe('session-write-456');
@@ -185,9 +205,10 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('revokeRoot logs sessionId when provided', () => {
-      const provider = new AnthropicDirectProvider();
-      provider.addReadRoot('/x/y', 'slash', 'session-1');
-      provider.revokeRoot('/x/y', 'slash', 'session-2');
+      const xPath = path.resolve('/x/y');
+      const provider = makeProvider();
+      provider.addReadRoot(xPath, 'slash', 'session-1');
+      provider.revokeRoot(xPath, 'slash', 'session-2');
       const entries = readAuditEntries();
       const last = entries[entries.length - 1];
       expect(last['action']).toBe('revoke');
@@ -195,8 +216,9 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('audit entry shape uses null when sessionId is omitted', () => {
-      const provider = new AnthropicDirectProvider();
-      provider.addReadRoot('/x/y', 'slash');
+      const xPath = path.resolve('/x/y');
+      const provider = makeProvider();
+      provider.addReadRoot(xPath, 'slash');
       const entries = readAuditEntries();
       const e = entries[entries.length - 1];
       // Field is present, value is null — distinguishes "no session attribution"
@@ -210,33 +232,35 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('revokeRoot audit gate (Finding 3)', () => {
     it('does NOT emit an audit entry when the path was never granted', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       const before = readAuditEntries().length;
       // Revoke a path that was never added — no-op (not found in roots).
-      provider.revokeRoot('/never/added', 'slash');
+      provider.revokeRoot(path.resolve('/never/added'), 'slash');
       const after = readAuditEntries().length;
       expect(after).toBe(before); // zero new entries
     });
 
     it('DOES emit an audit entry when an existing grant is removed', () => {
-      const provider = new AnthropicDirectProvider();
-      provider.addReadRoot('/x/y', 'slash', 'sess-grant');
+      const xPath = path.resolve('/x/y');
+      const provider = makeProvider();
+      provider.addReadRoot(xPath, 'slash', 'sess-grant');
       const before = readAuditEntries().length;
-      provider.revokeRoot('/x/y', 'slash', 'sess-revoke');
+      provider.revokeRoot(xPath, 'slash', 'sess-revoke');
       const entries = readAuditEntries();
       expect(entries.length).toBe(before + 1);
       const last = entries[entries.length - 1];
       expect(last['action']).toBe('revoke');
-      expect(last['path']).toBe('/x/y');
+      expect(last['path']).toBe(xPath);
     });
 
     it('does NOT emit duplicate audit entries when same path is revoked twice', () => {
       // Second revoke is a no-op (already removed) — must not emit another entry.
-      const provider = new AnthropicDirectProvider();
-      provider.addReadRoot('/x/y', 'slash', 'sess-grant');
-      provider.revokeRoot('/x/y', 'slash', 'sess-1'); // first revoke — real removal
+      const xPath = path.resolve('/x/y');
+      const provider = makeProvider();
+      provider.addReadRoot(xPath, 'slash', 'sess-grant');
+      provider.revokeRoot(xPath, 'slash', 'sess-1'); // first revoke — real removal
       const before = readAuditEntries().length;
-      provider.revokeRoot('/x/y', 'slash', 'sess-2'); // second revoke — no-op
+      provider.revokeRoot(xPath, 'slash', 'sess-2'); // second revoke — no-op
       const after = readAuditEntries().length;
       expect(after).toBe(before); // no new entry for the no-op
     });

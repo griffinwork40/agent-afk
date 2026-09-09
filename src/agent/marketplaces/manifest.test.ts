@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
   isMarketplaceDir,
@@ -35,7 +35,8 @@ afterEach(() => {
 
 describe('manifestPath / isMarketplaceDir', () => {
   it('points at .claude-plugin/marketplace.json under the dir', () => {
-    expect(manifestPath('/tmp/foo')).toBe('/tmp/foo/.claude-plugin/marketplace.json');
+    const tmpFoo = resolve('/tmp/foo');
+    expect(manifestPath(tmpFoo)).toBe(join(tmpFoo, '.claude-plugin', 'marketplace.json'));
   });
 
   it('reports false when the manifest is missing', () => {

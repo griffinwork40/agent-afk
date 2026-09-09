@@ -377,16 +377,19 @@ describe('/config interactive menu — malformed config', () => {
   const configCmd = configDoctorCommands.find((c) => c.name === '/config')!;
   let tmpHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let originalAfkHome: string | undefined;
 
   beforeEach(() => {
     originalHome = process.env['HOME'];
+    originalUserProfile = process.env['USERPROFILE'];
     originalAfkHome = process.env['AFK_HOME'];
     // AFK_HOME (if set in the runner env) would win over HOME — clear it so the
     // config path resolves under our temp HOME.
     delete process.env['AFK_HOME'];
     tmpHome = join(tmpdir(), `afk-cfg-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
     const cfgDir = join(tmpHome, '.afk', 'config');
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(join(cfgDir, 'afk.config.json'), '{ this is : not valid json', 'utf-8');
@@ -396,6 +399,8 @@ describe('/config interactive menu — malformed config', () => {
     if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
     if (originalHome !== undefined) process.env['HOME'] = originalHome;
     else delete process.env['HOME'];
+    if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+    else delete process.env['USERPROFILE'];
     if (originalAfkHome !== undefined) process.env['AFK_HOME'] = originalAfkHome;
   });
 

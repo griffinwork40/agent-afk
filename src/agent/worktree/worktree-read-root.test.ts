@@ -22,8 +22,8 @@ function failingGit(): ExecFileFn {
 }
 
 describe('resolveWorktreeMainRoot', () => {
-  const MAIN = '/repo';
-  const WORKTREE = '/repo/.afk-worktrees/wt';
+  const MAIN = path.resolve('/repo');
+  const WORKTREE = path.resolve('/repo/.afk-worktrees/wt');
 
   it('returns the main-repo root for a linked worktree', async () => {
     // rev-parse --git-common-dir --show-toplevel from a linked worktree:
@@ -78,8 +78,9 @@ describe('resolveWorktreeMainRoot', () => {
   });
 
   it('handles a worktree located OUTSIDE the main repo tree', async () => {
-    const exec = fakeGit(`${MAIN}/.git\n/tmp/external-wt\n`);
-    const root = await resolveWorktreeMainRoot('/tmp/external-wt', exec);
+    const EXT = path.resolve('/tmp/external-wt');
+    const exec = fakeGit(`${MAIN}/.git\n${EXT}\n`);
+    const root = await resolveWorktreeMainRoot(EXT, exec);
     expect(root).toBe(MAIN);
   });
 
@@ -113,7 +114,7 @@ describe('resolveWorktreeMainRoot', () => {
 
   it('returns undefined (never throws) when git fails for a NON-afk path', async () => {
     await expect(
-      resolveWorktreeMainRoot('/plain/repo/sub', failingGit()),
+      resolveWorktreeMainRoot(path.resolve('/plain/repo/sub'), failingGit()),
     ).resolves.toBeUndefined();
   });
 
@@ -125,7 +126,7 @@ describe('resolveWorktreeMainRoot', () => {
     process.env['AFK_DEBUG'] = '1';
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const root = await resolveWorktreeMainRoot('/plain/repo/sub', failingGit());
+      const root = await resolveWorktreeMainRoot(path.resolve('/plain/repo/sub'), failingGit());
       expect(root).toBeUndefined();
       expect(logSpy).toHaveBeenCalledWith(
         expect.stringContaining('[worktree-read-root]'),

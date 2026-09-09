@@ -22,6 +22,7 @@ import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 // This suite asserts the unset-AFK_HOME fallback ($HOME/.afk) — drop the
 // global sentinel AFK_HOME per test; HOME is redirected to a tmp dir below.
@@ -29,14 +30,18 @@ useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   tmpHome = join(tmpdir(), `afk-sep-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
 });
 
 afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
 });
 
 describe('paths — separation helpers', () => {

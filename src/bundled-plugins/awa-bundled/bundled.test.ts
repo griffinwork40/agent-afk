@@ -146,7 +146,7 @@ const SKILLS = Object.keys(PINNED_HASHES) as SkillName[];
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function computeHash(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+  return createHash('sha256').update(content.replace(/\r\n/g, '\n')).digest('hex');
 }
 
 function bundledPath(name: SkillName): string {

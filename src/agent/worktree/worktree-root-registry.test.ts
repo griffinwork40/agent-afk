@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -15,19 +15,25 @@ import {
   sweepRootSet,
 } from './worktree-root-registry.js';
 import { getWorktreeRootsRegistryPath } from '../../paths.js';
+import { normalize as normalizePath } from 'node:path';
+
+/** Normalize a path for cross-platform comparison (consistent separator form). */
+function normPaths(paths: string[]): string[] {
+  return paths.map((p) => normalizePath(p).toLowerCase());
+}
 
 let stateDir: string;
 let prevStateDir: string | undefined;
 
-beforeEach(() => {
-  // realpathSync so the registry's canonicalization cannot differ from these
-  // fixtures by a /tmp -> /private/tmp symlink on macOS. The registry stores
-  // realpath'd roots on purpose (#771 review, F-C3: without it one repo reached
-  // through a symlinked parent occupies two entries and is swept twice per
-  // tick), so a raw mkdtemp path here would compare a canonical value against
-  // a non-canonical fixture. worktree-root-registration.test.ts already does
-  // this for the same reason.
-  stateDir = realpathSync(mkdtempSync(join(tmpdir(), 'wt-roots-')));
+beforeEach(async () => {
+  // Use async fs.realpath (not realpathSync) so the registry's async
+  // normalizeRootPath() and this fixture use the SAME canonical form. On
+  // Windows, os.tmpdir() / realpathSync may return the 8.3 short-name form
+  // (e.g. RUNNER~1) while async fs.realpath expands it to the full long-form
+  // name (runneradmin). Mixing the two forms causes toEqual comparisons to
+  // fail even after normalization, so all paths here go through the same
+  // async realpath that the production code uses.
+  stateDir = await fs.realpath(mkdtempSync(join(tmpdir(), 'wt-roots-')));
   prevStateDir = process.env['AFK_STATE_DIR'];
   process.env['AFK_STATE_DIR'] = stateDir;
 });
@@ -48,7 +54,7 @@ describe('registerWorktreeRoot', () => {
   it('records a root and reads it back', async () => {
     const repo = await mkRepo('repo-a');
     await registerWorktreeRoot(repo);
-    expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
+    expect(normPaths(await readRegisteredWorktreeRoots())).toEqual(normPaths([repo]));
   });
 
   it('is idempotent — re-registering does not duplicate', async () => {
@@ -56,7 +62,7 @@ describe('registerWorktreeRoot', () => {
     await registerWorktreeRoot(repo);
     await registerWorktreeRoot(repo);
     await registerWorktreeRoot(repo);
-    expect(await readRegisteredWorktreeRoots()).toEqual([repo]);
+    expect(normPaths(await readRegisteredWorktreeRoots())).toEqual(normPaths([repo]));
   });
 
   it('accumulates distinct roots — the whole point of the registry', async () => {
@@ -66,7 +72,7 @@ describe('registerWorktreeRoot', () => {
     await registerWorktreeRoot(b);
     const roots = await readRegisteredWorktreeRoots();
     expect(roots).toHaveLength(2);
-    expect(roots).toEqual(expect.arrayContaining([a, b]));
+    expect(normPaths(roots)).toEqual(expect.arrayContaining(normPaths([a, b])));
   });
 
   it('never throws on an unwritable state dir (best-effort contract)', async () => {
@@ -77,7 +83,7 @@ describe('registerWorktreeRoot', () => {
     const blocker = join(stateDir, 'not-a-dir');
     await fs.writeFile(blocker, 'x', 'utf-8');
     process.env['AFK_STATE_DIR'] = join(blocker, 'nested');
-    await expect(registerWorktreeRoot('/tmp/whatever')).resolves.toBeUndefined();
+    await expect(registerWorktreeRoot(join(tmpdir(), 'whatever'))).resolves.toBeUndefined();
   });
 
   it('ignores an empty root', async () => {
@@ -98,13 +104,13 @@ describe('readRegisteredWorktreeRoots', () => {
     await registerWorktreeRoot(doomed);
     rmSync(doomed, { recursive: true, force: true });
 
-    expect(await readRegisteredWorktreeRoots()).toEqual([alive]);
+    expect(normPaths(await readRegisteredWorktreeRoots())).toEqual(normPaths([alive]));
 
     // The prune is persisted, not recomputed on every read.
     const onDisk = JSON.parse(
       await fs.readFile(getWorktreeRootsRegistryPath(), 'utf-8'),
     ) as { roots: Array<{ path: string }> };
-    expect(onDisk.roots.map((r) => r.path)).toEqual([alive]);
+    expect(normPaths(onDisk.roots.map((r) => r.path))).toEqual(normPaths([alive]));
   });
 
   it('returns empty on a corrupt registry rather than throwing', async () => {
@@ -145,12 +151,12 @@ describe('readRegisteredWorktreeRoots', () => {
     const onDisk = JSON.parse(
       await fs.readFile(getWorktreeRootsRegistryPath(), 'utf-8'),
     ) as { roots: Array<{ path: string }> };
-    expect(onDisk.roots.map((r) => r.path)).toEqual([flaky]);
+    expect(normPaths(onDisk.roots.map((r) => r.path))).toEqual(normPaths([flaky]));
 
     statSpy.mockRestore();
 
     // Error cleared — the root reappears with no re-registration required.
-    expect(await readRegisteredWorktreeRoots()).toEqual([flaky]);
+    expect(normPaths(await readRegisteredWorktreeRoots())).toEqual(normPaths([flaky]));
   });
 
   it('collapses duplicate-but-live entries on read, with nothing dead to prune', async () => {
@@ -189,24 +195,24 @@ describe('sweepRootSet', () => {
     const primary = await mkRepo('primary');
     const other = await mkRepo('other');
     await registerWorktreeRoot(other);
-    expect(await sweepRootSet(primary)).toEqual([primary, other]);
+    expect(normPaths(await sweepRootSet(primary))).toEqual(normPaths([primary, other]));
   });
 
   it('does not duplicate a primary that is also registered', async () => {
     const repo = await mkRepo('repo');
     await registerWorktreeRoot(repo);
-    expect(await sweepRootSet(repo)).toEqual([repo]);
+    expect(normPaths(await sweepRootSet(repo))).toEqual(normPaths([repo]));
   });
 
   it('includes an explicitly named primary even when it is not registered', async () => {
     const primary = await mkRepo('explicit');
-    expect(await sweepRootSet(primary)).toEqual([primary]);
+    expect(normPaths(await sweepRootSet(primary))).toEqual(normPaths([primary]));
   });
 
   it('returns registered roots when there is no primary (daemon cwd outside any repo)', async () => {
     const a = await mkRepo('repo-a');
     await registerWorktreeRoot(a);
-    expect(await sweepRootSet(null)).toEqual([a]);
+    expect(normPaths(await sweepRootSet(null))).toEqual(normPaths([a]));
   });
 
   it('is empty when there is neither a primary nor a registry', async () => {
@@ -227,7 +233,7 @@ describe('durability and concurrency', () => {
 
     const roots = await readRegisteredWorktreeRoots();
     expect(roots).toHaveLength(repos.length);
-    expect(roots).toEqual(expect.arrayContaining(repos));
+    expect(normPaths(roots)).toEqual(expect.arrayContaining(normPaths(repos)));
   });
 
   it('caps retention at 64 roots, evicting the least-recently-seen first', async () => {

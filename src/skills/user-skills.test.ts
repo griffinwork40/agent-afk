@@ -4,7 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { _resetRegistry, listSkills, getSkill } from './index.js';
 
@@ -587,8 +587,8 @@ You analyze data.
     const skillRoot = callArgs?.config?.env?.['SKILL_ROOT'] ?? '';
     expect(skillRoot).toBeTruthy();
     expect(skillRoot.endsWith(skillName)).toBe(true);
-    // Must be absolute (starts with /).
-    expect(skillRoot.startsWith('/')).toBe(true);
+    // Must be absolute.
+    expect(isAbsolute(skillRoot)).toBe(true);
   });
 });
 

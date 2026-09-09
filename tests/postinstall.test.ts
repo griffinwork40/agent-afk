@@ -1,7 +1,10 @@
+// Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+const isWin32 = process.platform === 'win32';
 
 type KillStaleDaemonFn = (pidFilePath: string, killFn?: (pid: number, signal: string) => void) => void;
 type IsManualBotRunningFn = (
@@ -29,7 +32,7 @@ beforeAll(async () => {
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
 });
 
-describe('killStaleDaemon', () => {
+describe.skipIf(isWin32)('killStaleDaemon', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -86,7 +89,7 @@ describe('killStaleDaemon', () => {
   });
 });
 
-describe('isManualBotRunning', () => {
+describe.skipIf(isWin32)('isManualBotRunning', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -156,7 +159,7 @@ describe('isManualBotRunning', () => {
   });
 });
 
-describe('restartLaunchdServices', () => {
+describe.skipIf(isWin32)('restartLaunchdServices', () => {
   const HOME = '/Users/tester';
   const TELEGRAM_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.telegram.plist');
   const DAEMON_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.daemon.plist');

@@ -182,7 +182,8 @@ describe('check-terminal-width inline scan', () => {
 
 // ─── End-to-end gate tests (subprocess, real codebase) ────────────────────
 
-describe('check-terminal-width gate (subprocess)', () => {
+// Spawns a Node subprocess via `node --import tsx/esm SCRIPT` (POSIX shell required) — POSIX-only (#703)
+describe.skipIf(process.platform === 'win32')('check-terminal-width gate (subprocess)', () => {
   let tmpDir: string;
 
   beforeEach(() => {

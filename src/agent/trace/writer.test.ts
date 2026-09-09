@@ -267,7 +267,8 @@ describe('NdjsonTraceWriter', () => {
     await expect(readFile(writer.getTracePath(), 'utf8')).rejects.toThrow();
   });
 
-  it('process-exit backstop seals a real crashed subprocess (end-to-end wiring)', async () => {
+  it.skipIf(process.platform === 'win32')('process-exit backstop seals a real crashed subprocess (end-to-end wiring)', async () => {
+    // Spawns a subprocess via node_modules/.bin/tsx (a POSIX shell script) — POSIX-only (#703)
     const { spawnSync } = await import('node:child_process');
     const { fileURLToPath } = await import('node:url');
     const { writeFile: writeFileAsync } = await import('node:fs/promises');

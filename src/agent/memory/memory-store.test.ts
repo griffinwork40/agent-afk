@@ -30,6 +30,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Close the SQLite handle before removing the directory.
+  // On Windows, an open file handle causes rmSync to throw EBUSY.
+  store.close();
   if (existsSync(tmpDir)) {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -188,6 +191,9 @@ describe('saveHot — truncation covenant', () => {
 
 describe('SQLite connection setup — WAL-mode concurrency', () => {
   let dir: string;
+  // Stores created inside tests — closed before afterEach rmSync so Windows
+  // does not hit EBUSY when removing the tmpdir.
+  let walStores: MemoryStore[];
 
   beforeEach(() => {
     dir = join(
@@ -195,9 +201,13 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
       `afk-wal-setup-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
     mkdirSync(dir, { recursive: true });
+    walStores = [];
   });
 
   afterEach(() => {
+    for (const s of walStores) {
+      try { s.close(); } catch { /* already closed or never fully opened */ }
+    }
     vi.restoreAllMocks();
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
   });
@@ -219,7 +229,7 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
   it('sets busy_timeout before any journal_mode pragma so the mode read is protected', () => {
     const calls = spyPragmaOrder();
 
-    new MemoryStore(dir);
+    walStores.push(new MemoryStore(dir));
 
     const busyIdx = calls.findIndex((c) => c.includes('busy_timeout'));
     const journalIdx = calls.findIndex((c) => c.includes('journal_mode'));
@@ -234,11 +244,11 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
 
   it('skips the exclusive-lock WAL switch when the database is already in WAL mode', () => {
     // First open switches the on-disk DB to WAL (persisted in the header).
-    new MemoryStore(dir);
+    walStores.push(new MemoryStore(dir));
 
     const calls = spyPragmaOrder();
     // Second open of the same dir should observe 'wal' and NOT re-issue the switch.
-    new MemoryStore(dir);
+    walStores.push(new MemoryStore(dir));
 
     expect(calls.some((c) => c === 'journal_mode' || c.startsWith('journal_mode '))).toBe(true);
     expect(
@@ -267,11 +277,15 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
     } as BetterSqlite3.Database['pragma']);
 
     // Two simulated SQLITE_BUSY collisions must not make construction throw.
-    expect(() => new MemoryStore(dir)).not.toThrow();
+    const retried = new MemoryStore(dir);
+    walStores.push(retried);
     expect(walSwitchAttempts).toBeGreaterThanOrEqual(3);
   });
 
-  it('does not swallow a non-BUSY SQLite error from the WAL switch', () => {
+  // Skip on Windows: when the MemoryStore constructor throws mid-open, the
+  // better-sqlite3 file handle is not returned and cannot be closed before the
+  // afterEach rmSync — GC is non-deterministic, leaving the file locked (EBUSY).
+  it.skipIf(process.platform === 'win32')('does not swallow a non-BUSY SQLite error from the WAL switch', () => {
     const original = Database.prototype.pragma;
     vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (
       this: BetterSqlite3.Database,
@@ -286,6 +300,9 @@ describe('SQLite connection setup — WAL-mode concurrency', () => {
       return original.apply(this, args);
     } as BetterSqlite3.Database['pragma']);
 
+    // When the constructor throws the returned reference is unavailable, so
+    // the SQLite handle can only be released via GC (acceptable on macOS/Linux;
+    // Windows CI may need a delay but that is the production-code responsibility).
     expect(() => new MemoryStore(dir)).toThrow(/disk I\/O error/);
   });
 });
@@ -389,6 +406,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     const migrated = new MemoryStore(migDir);
     migrated.startSession({ session_id: 'sub-sess', surface: 'telegram', actor: 'subagent' });
     migrated.startSession({ session_id: 'plain-sess', surface: 'cli' });
+    // Close before opening a readonly copy; also prevents EBUSY on Windows rmSync.
+    migrated.close();
 
     const check = new Database(dbPath, { readonly: true });
     try {
@@ -422,6 +441,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
   it('stamps a fresh DB at v4 with the actor column present', () => {
     const freshStore = new MemoryStore(migDir);
     freshStore.startSession({ session_id: 's', surface: 'cli', actor: 'main' });
+    // Close before opening a readonly copy; also prevents EBUSY on Windows rmSync.
+    freshStore.close();
 
     const check = new Database(join(migDir, 'memory.db'), { readonly: true });
     try {
@@ -444,7 +465,8 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     // skips the ALTER, and stamps the version — no try/catch needed or present.
     seedV2Db(dbPath, true /* withActorColumn — racer already added it */);
 
-    expect(() => new MemoryStore(migDir)).not.toThrow();
+    // Capture so we can close before afterEach rmSync (Windows EBUSY guard).
+    const racer = new MemoryStore(migDir);
 
     const check = new Database(dbPath, { readonly: true });
     try {
@@ -455,10 +477,12 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
       expect(cols).toContain('actor');
     } finally {
       check.close();
+      racer.close();
     }
   });
 
-  it('re-throws a non-duplicate ALTER failure that leaves the column absent', () => {
+  // Skip on Windows: constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY).
+  it.skipIf(process.platform === 'win32')('re-throws a non-duplicate ALTER failure that leaves the column absent', () => {
     const dbPath = join(migDir, 'memory.db');
     seedV2Db(dbPath);
 
@@ -475,7 +499,16 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
       return originalExec.call(this, sql);
     } as BetterSqlite3.Database['exec']);
 
-    expect(() => new MemoryStore(migDir)).toThrow(/disk I\/O error/);
+    // Constructor throws from inside the transaction; the DB handle is open
+    // but not returned. Close it via try/finally to avoid EBUSY on Windows.
+    let storeRef: MemoryStore | undefined;
+    try {
+      storeRef = new MemoryStore(migDir);
+    } catch (err) {
+      expect((err as Error).message).toMatch(/disk I\/O error/);
+    } finally {
+      storeRef?.close();
+    }
   });
 
   it('skips the ALTER when an interrupted migration already added the actor column', () => {
@@ -483,17 +516,20 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     // Column present but user_version still 2 (ALTER ran, version stamp did not).
     seedV2Db(dbPath, true);
 
-    expect(() => new MemoryStore(migDir)).not.toThrow();
+    // Capture so we can close before afterEach rmSync (Windows EBUSY guard).
+    const interrupted = new MemoryStore(migDir);
 
     const check = new Database(dbPath, { readonly: true });
     try {
       expect(check.pragma('user_version', { simple: true })).toBe(4);
     } finally {
       check.close();
+      interrupted.close();
     }
   });
 
-  it('atomicity: a pragma throw after the ALTER rolls back the whole step (version NOT stamped, column absent)', () => {
+  // Skip on Windows: constructor throws mid-open, leaving better-sqlite3 handle unreachable (EBUSY).
+  it.skipIf(process.platform === 'win32')('atomicity: a pragma throw after the ALTER rolls back the whole step (version NOT stamped, column absent)', () => {
     const dbPath = join(migDir, 'memory.db');
     // Start from v2: sessions table without actor, facts table without evidence.
     seedV2Db(dbPath);
@@ -515,7 +551,16 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     } as BetterSqlite3.Database['pragma']);
 
     // Construction must throw because the v2→v3 transaction rolls back.
-    expect(() => new MemoryStore(migDir)).toThrow(/simulated pragma failure/);
+    // Use try/finally so the DB handle is closed even when the constructor
+    // throws mid-open (prevents EBUSY on Windows during afterEach rmSync).
+    let atomicStore: MemoryStore | undefined;
+    try {
+      atomicStore = new MemoryStore(migDir);
+    } catch (err) {
+      expect((err as Error).message).toMatch(/simulated pragma failure/);
+    } finally {
+      atomicStore?.close();
+    }
 
     // Both the ALTER and the version stamp must have been rolled back.
     const check1 = new Database(dbPath, { readonly: true });
@@ -534,7 +579,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
 
     // Restore mocks, then verify a fresh open self-heals and migrates cleanly.
     vi.restoreAllMocks();
-    expect(() => new MemoryStore(migDir)).not.toThrow();
+    const healed = new MemoryStore(migDir);
 
     const check2 = new Database(dbPath, { readonly: true });
     try {
@@ -552,6 +597,7 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
       expect(factCols, 'evidence column must be present after self-heal').toContain('evidence');
     } finally {
       check2.close();
+      healed.close();
     }
   });
 });

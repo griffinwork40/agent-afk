@@ -825,7 +825,11 @@ describe('shortenPaths — OSC 8 hyperlink emission', () => {
     resetHyperlinksEnabledForTest(true);
     const out = shortenPaths('/Users/me/proj/src/x.ts');
     expect(stripAnsi(out)).toBe('x.ts');
-    expect(out).toContain('\x1b]8;;file:///Users/me/proj/src/x.ts\x1b\\');
+    // On Windows, pathToFileURL prepends the drive letter (file:///C:/Users/…),
+    // so check for the platform-independent path suffix.
+    expect(out).toContain('Users/me/proj/src/x.ts');
+    expect(out).toContain('file://');
+    expect(out).toContain('\x1b]8;;'); // open sequence present
     expect(out).toContain('\x1b]8;;\x1b\\'); // close sequence present
   });
 
@@ -858,7 +862,9 @@ describe('shortenPaths — OSC 8 hyperlink emission', () => {
     resetHyperlinksEnabledForTest(true);
     const out = formatToolLine('read_file(/Users/me/proj/src/index.ts)', 80);
     expect(stripAnsi(out)).toContain('index.ts');
-    expect(out).toContain('file:///Users/me/proj/src/index.ts');
+    // On Windows, pathToFileURL prepends the drive letter; check path suffix.
+    expect(out).toContain('Users/me/proj/src/index.ts');
+    expect(out).toContain('file://');
     // Balanced open/close: no link bleed past the row.
     const opens = (out.match(/\x1b\]8;;file[^\x1b]*\x1b\\/g) ?? []).length;
     const closes = (out.match(/\x1b\]8;;\x1b\\/g) ?? []).length;
@@ -876,7 +882,7 @@ describe('formatOutcome — persistedPath hyperlink', () => {
       '/home/u',
     );
     expect(stripAnsi(out)).toContain('saved → ~/.afk/state/out.txt');
-    expect(out).toContain('file:///home/u/.afk/state/out.txt');
+    expect(out).toContain('/home/u/.afk/state/out.txt');
   });
 
   it('renders plain text when disabled', () => {

@@ -15,7 +15,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from 'fs';
-import { join, basename, resolve, sep } from 'path';
+import { join, basename, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'node:crypto';
 import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
 import type { SessionStats, TurnRecord } from './slash/types.js';
@@ -121,7 +121,14 @@ function safeResolvePath(
   idOrPath: string,
   { write = false }: { write?: boolean } = {},
 ): string {
-  const raw = idOrPath.includes('/') ? idOrPath : pathForId(idOrPath);
+  // On Windows paths use backslashes, not forward-slashes, so checking only
+  // for '/' misses absolute Windows paths (e.g. 'C:\Users\...\session.json')
+  // and causes pathForId() to wrap them — appending '.json' a second time and
+  // producing a path that never exists. isAbsolute() handles both POSIX and
+  // Windows path forms correctly.
+  const raw = (idOrPath.includes('/') || idOrPath.includes('\\') || isAbsolute(idOrPath))
+    ? idOrPath
+    : pathForId(idOrPath);
   let resolved: string;
   let dir: string;
   if (!write && existsSync(raw)) {

@@ -47,6 +47,8 @@ import type { AgentConfig } from '../agent/types/config-types.js';
 
 let tmpHome: string;
 let savedHome: string | undefined;
+// Track open providers so we can close() them before rmSync on Windows.
+const openProviders: ModelProvider[] = [];
 
 beforeEach(() => {
   tmpHome = mkdtempSync(join(tmpdir(), 'afk-tg-presence-'));
@@ -55,6 +57,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Close all providers before removing the tmpdir — Windows holds exclusive
+  // file locks on open SQLite databases and rmSync throws EBUSY otherwise.
+  for (const p of openProviders) p.close?.();
+  openProviders.length = 0;
   if (savedHome === undefined) delete process.env['AFK_HOME'];
   else process.env['AFK_HOME'] = savedHome;
   rmSync(tmpHome, { recursive: true, force: true });
@@ -112,8 +118,11 @@ interface Branch {
 const branches: Branch[] = [
   {
     name: 'Anthropic-direct (Telegram directProvider branch)',
-    makeProvider: (surface) =>
-      new AnthropicDirectProvider(surface !== undefined ? { surface } : {}),
+    makeProvider: (surface) => {
+      const p = new AnthropicDirectProvider(surface !== undefined ? { surface } : {});
+      openProviders.push(p);
+      return p;
+    },
     config: (sessionId) => ({
       model: 'claude-sonnet-5',
       apiKey: 'sk-ant-oat01-test',
@@ -122,8 +131,11 @@ const branches: Branch[] = [
   },
   {
     name: 'OpenAI-compatible (Telegram codexProvider branch)',
-    makeProvider: (surface) =>
-      new OpenAICompatibleProvider(surface !== undefined ? { surface } : {}),
+    makeProvider: (surface) => {
+      const p = new OpenAICompatibleProvider(surface !== undefined ? { surface } : {});
+      openProviders.push(p);
+      return p;
+    },
     config: (sessionId) => ({
       model: 'gpt-5.1',
       apiKey: 'test-openai-key',

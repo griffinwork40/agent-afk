@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Import after AFK_HOME is set so path helpers resolve into the temp dir.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-prompt-capture-home-'));
 process.env['AFK_HOME'] = tmpHome;
+// Windows: os.homedir() reads USERPROFILE, not HOME. Set both.
+process.env['HOME'] = tmpHome;
+process.env['USERPROFILE'] = tmpHome;
 
 const { getPromptsDir } = await import('../../paths.js');
 const {
@@ -172,7 +175,10 @@ describe('captureSubagentPrompt', () => {
     await captureSubagentPrompt(baseInput());
     const dir = getPromptsDir(SESSION);
     const file = path.join(dir, fs.readdirSync(dir)[0] as string);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('redacts an inline secret before it reaches disk', async () => {
@@ -205,7 +211,8 @@ describe('captureSubagentPrompt', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('creates the prompts dir owner-only — filenames leak subagent ids', async () => {
+  // NTFS does not support POSIX mode bits — the 0o700 assertion is a POSIX-only invariant.
+  it.skipIf(process.platform === 'win32')('creates the prompts dir owner-only — filenames leak subagent ids', async () => {
     await captureSubagentPrompt(baseInput());
     expect(fs.statSync(getPromptsDir(SESSION)).mode & 0o777).toBe(0o700);
   });

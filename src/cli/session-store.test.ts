@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
   saveSession,
@@ -25,6 +25,7 @@ import { useUnsetAfkHome } from '../__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 // This suite asserts the unset-AFK_HOME fallback (store under $HOME/.afk) —
 // drop the global sentinel AFK_HOME per test; HOME is redirected below.
@@ -32,13 +33,21 @@ useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   tmpHome = join(tmpdir(), `afk-sess-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
+  // Windows: os.homedir() may return 8.3 short-path form while tmpdir() returns
+  // the long form (or vice-versa), so homedir() fallback is unreliable. Set
+  // AFK_HOME explicitly to bypass homedir() entirely.
+  process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — test isolation
 });
 
 afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
 });
 
 describe('session-store', () => {
@@ -300,7 +309,7 @@ describe('session-store', () => {
 
 describe('session-store — naming', () => {
   function sessionsDirOf(savedPath: string): string {
-    return savedPath.substring(0, savedPath.lastIndexOf('/'));
+    return dirname(savedPath);
   }
 
   it('auto-name from the first user message round-trips through save/load', () => {

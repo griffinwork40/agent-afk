@@ -557,6 +557,7 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
   const testDataDir = './test-data/sessions-rec';
   let tmpHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let manager: SessionManager;
 
   function makeManager(sessionId?: string): SessionManager {
@@ -573,6 +574,8 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
     originalHome = process.env['HOME'];
     tmpHome = join(tmpdir(), `afk-tg-rec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     manager = makeManager('sdk-live-default');
   });
 
@@ -581,6 +584,9 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
     if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
     if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
     if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+    else delete process.env['USERPROFILE'];
   });
 
   test('records a Telegram turn as a resumable, named, telegram-tagged sidecar', () => {
@@ -658,6 +664,7 @@ describe('SessionManager — session naming (/name)', () => {
   let testDataDir: string;
   let tmpHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let manager: SessionManager;
 
   function makeManager(sessionId?: string, dataDir?: string): SessionManager {
@@ -677,6 +684,8 @@ describe('SessionManager — session naming (/name)', () => {
     originalHome = process.env['HOME'];
     tmpHome = join(tmpdir(), `afk-tg-name-home-${entropy}`);
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     manager = makeManager('sdk-name-default');
   });
 
@@ -685,6 +694,9 @@ describe('SessionManager — session naming (/name)', () => {
     if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
     if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
     if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+    else delete process.env['USERPROFILE'];
   });
 
   test('getSessionName returns undefined before any name is set', () => {
@@ -821,6 +833,7 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
   let testDataDir: string;
   let tmpHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let lastConfig: AgentConfig | undefined;
   let manager: SessionManager;
 
@@ -842,6 +855,8 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     originalHome = process.env['HOME'];
     tmpHome = join(tmpdir(), `afk-tg-sw-home-${entropy}`);
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     lastConfig = undefined;
     manager = makeManager('sdk-live-default');
   });
@@ -851,6 +866,9 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
     if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
     if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+    else delete process.env['USERPROFILE'];
   });
 
   test('listChatSessions lists this chat\'s telegram sidecars, excluding other chats', async () => {
@@ -1081,6 +1099,7 @@ describe('SessionManager — per-route isolation (native topics)', () => {
   let testDataDir: string;
   let tmpHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let manager: SessionManager;
 
   beforeEach(() => {
@@ -1089,6 +1108,8 @@ describe('SessionManager — per-route isolation (native topics)', () => {
     originalHome = process.env['HOME'];
     tmpHome = join(tmpdir(), `afk-tg-iso-home-${entropy}`);
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     let n = 0;
     manager = new SessionManager({
       dataDir: testDataDir,
@@ -1103,6 +1124,9 @@ describe('SessionManager — per-route isolation (native topics)', () => {
     if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
     if (existsSync(testDataDir)) rmSync(testDataDir, { recursive: true, force: true });
     if (originalHome !== undefined) process.env['HOME'] = originalHome;
+    else delete process.env['HOME'];
+    if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+    else delete process.env['USERPROFILE'];
   });
 
   test('two topics in one chat get distinct, concurrent sessions', async () => {

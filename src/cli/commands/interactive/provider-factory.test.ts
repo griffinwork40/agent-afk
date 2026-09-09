@@ -13,6 +13,7 @@
  * through. These tests lock that invariant in place.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import path from 'node:path';
 import { createMemoizedProviderFactory } from './provider-factory.js';
 import { AnthropicDirectProvider, providerForModel } from '../../../agent/providers/index.js';
 import type { ModelProvider } from '../../../agent/provider.js';
@@ -40,7 +41,8 @@ describe('createMemoizedProviderFactory', () => {
     // Simulates bootstrap: build startupProvider for the session's startup model
     // and wire /allow-dir to it.
     const startupProvider = factory('claude-sonnet-4-5') as AnthropicDirectProvider;
-    startupProvider.addReadRoot('/tmp/allow-dir-grant-test', 'slash');
+    const grantPath = path.resolve('/tmp/allow-dir-grant-test');
+    startupProvider.addReadRoot(grantPath, 'slash');
 
     // Simulates the ProviderRouter's buildInner resolving the provider for turn 1
     // (same family, possibly a different model alias).
@@ -48,7 +50,7 @@ describe('createMemoizedProviderFactory', () => {
 
     // The fix: same instance, so the grant is visible to the query runner.
     expect(routerInner).toBe(startupProvider);
-    expect(routerInner.getGrants().readRoots).toContain('/tmp/allow-dir-grant-test');
+    expect(routerInner.getGrants().readRoots).toContain(grantPath);
     // Only one provider was built for the family (no throwaway startup instance).
     expect(built).toHaveLength(1);
   });

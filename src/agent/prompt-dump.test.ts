@@ -9,6 +9,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { existsSync, mkdtempSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -399,7 +401,8 @@ describe('dumpIfEnabled', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('does not throw when write fails; logs to stderr instead', () => {
+  // Windows: /dev/full is a POSIX-only device node for triggering write failures
+  it.skipIf(isWin32)('does not throw when write fails; logs to stderr instead', () => {
     // Try to write to a read-only location. On Unix, /dev/full always fills.
     // On macOS/Linux this is more portable than trying to make a dir read-only.
     const readOnlyPath = '/dev/full';

@@ -5,10 +5,14 @@
  * Two test files hard-code pinned hashes that guard against undocumented edits:
  *
  *   src/skills/_agents/vendored.test.ts     — 3 vendored agent prompt files
- *   src/bundled-plugins/awa-bundled/bundled.test.ts — 14 bundled SKILL.md files
+ *   src/bundled-plugins/awa-bundled/bundled.test.ts — 19 bundled SKILL.md files
  *
- * Both compute hashes as: createHash('sha256').update(rawContent).digest('hex')
- * with NO normalization applied before hashing.
+ * Both compute hashes as:
+ *   createHash('sha256').update(content.replace(/\r\n/g, '\n')).digest('hex')
+ * CRLF is normalized to LF before hashing (defense-in-depth for Windows
+ * `git autocrlf`). The .gitattributes `*.md text eol=lf` rule is the primary
+ * guard; this normalization ensures `pnpm fix:pins` produces consistent hashes
+ * cross-platform even when that rule has not yet been applied. See PR #703.
  *
  * Usage:
  *   pnpm fix:pins             # recompute and rewrite stale pins in both test files
@@ -28,7 +32,7 @@ const isCheck = process.argv.includes('--check');
 // ── Hash helper ────────────────────────────────────────────────────────────────
 
 function computeHash(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+  return createHash('sha256').update(content.replace(/\r\n/g, '\n')).digest('hex');
 }
 
 // ── Target file definitions ────────────────────────────────────────────────────
@@ -69,6 +73,7 @@ const bundledTarget: PinTarget = {
     gather: join(bundledSkillsDir, 'gather/SKILL.md'),
     'ground-claim': join(bundledSkillsDir, 'ground-claim/SKILL.md'),
     'ground-state': join(bundledSkillsDir, 'ground-state/SKILL.md'),
+    orient: join(bundledSkillsDir, 'orient/SKILL.md'),
     parallelize: join(bundledSkillsDir, 'parallelize/SKILL.md'),
     polish: join(bundledSkillsDir, 'polish/SKILL.md'),
     refactor: join(bundledSkillsDir, 'refactor/SKILL.md'),

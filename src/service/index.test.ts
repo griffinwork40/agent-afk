@@ -31,9 +31,10 @@ describe('serviceManagerFor', () => {
     const systemd = serviceManagerFor('linux');
     // launchd: reverse-DNS label + LaunchAgents plist path.
     expect(launchd?.label('telegram')).toBe('com.afk.telegram');
-    expect(launchd?.configPath('telegram')).toContain('Library/LaunchAgents/com.afk.telegram.plist');
+    // Normalize backslashes for Windows CI (paths use homedir() + join()).
+    expect(launchd?.configPath('telegram').replace(/\\/g, '/')).toContain('Library/LaunchAgents/com.afk.telegram.plist');
     // systemd: unit-name label + user-unit path.
     expect(systemd?.label('telegram')).toBe('afk-telegram.service');
-    expect(systemd?.configPath('telegram')).toContain('.config/systemd/user/afk-telegram.service');
+    expect(systemd?.configPath('telegram').replace(/\\/g, '/')).toContain('.config/systemd/user/afk-telegram.service');
   });
 });

@@ -492,8 +492,11 @@ describe('welcomeBanner', () => {
     });
   });
 
-  describe('tildifyHome path-boundary handling', () => {
+  // On Windows, os.homedir() reads USERPROFILE but may not reflect in-process
+  // changes to USERPROFILE (native cache), so POSIX-path fixtures break tildify.
+  describe.skipIf(process.platform === 'win32')('tildifyHome path-boundary handling', () => {
     const prevHome = process.env['HOME'];
+    const prevUserProfile = process.env['USERPROFILE'];
 
     afterEach(() => {
       if (prevHome === undefined) {
@@ -501,11 +504,17 @@ describe('welcomeBanner', () => {
       } else {
         process.env['HOME'] = prevHome;
       }
+      if (prevUserProfile === undefined) {
+        delete process.env['USERPROFILE'];
+      } else {
+        process.env['USERPROFILE'] = prevUserProfile;
+      }
     });
 
     it('does not rewrite a sibling dir that merely shares the $HOME prefix', () => {
       Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
       process.env['HOME'] = '/Users/jane';
+      process.env['USERPROFILE'] = '/Users/jane';
       const out = strip(welcomeBanner({
         mode: 'Interactive Mode',
         model: 'sonnet',
@@ -520,6 +529,7 @@ describe('welcomeBanner', () => {
     it('tildifies exact $HOME match', () => {
       Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
       process.env['HOME'] = '/Users/jane';
+      process.env['USERPROFILE'] = '/Users/jane';
       const out = strip(welcomeBanner({
         mode: 'Interactive Mode',
         model: 'sonnet',
@@ -532,6 +542,7 @@ describe('welcomeBanner', () => {
     it('tildifies real subpaths of $HOME', () => {
       Object.defineProperty(process.stdout, 'columns', { value: 100, configurable: true });
       process.env['HOME'] = '/Users/jane';
+      process.env['USERPROFILE'] = '/Users/jane';
       const out = strip(welcomeBanner({
         mode: 'Interactive Mode',
         model: 'sonnet',

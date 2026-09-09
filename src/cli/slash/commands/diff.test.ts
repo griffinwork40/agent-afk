@@ -42,7 +42,8 @@ function context(cwd: string): { ctx: SlashContext; output: string[] } {
 }
 
 describe('/diff', () => {
-  it('passes a pathspec as data instead of shell syntax', async () => {
+  it.skipIf(process.platform === 'win32')('passes a pathspec as data instead of shell syntax', async () => {
+    // Uses POSIX `test -e` and `touch` commands — POSIX-only.
     const cwd = repo();
     const marker = join(cwd, 'injected');
     writeFileSync(join(cwd, 'file.txt'), 'changed\n');
@@ -53,7 +54,8 @@ describe('/diff', () => {
     expect(() => execFileSync('test', ['-e', marker])).toThrow();
   });
 
-  it('renders mode-only changes that have no text patch headers', async () => {
+  it.skipIf(process.platform === 'win32')('renders mode-only changes that have no text patch headers', async () => {
+    // chmod is a POSIX-only operation — Windows does not track executable bits.
     const cwd = repo();
     chmodSync(join(cwd, 'file.txt'), 0o755);
     const { ctx, output } = context(cwd);

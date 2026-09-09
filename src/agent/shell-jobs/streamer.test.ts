@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { startShell, makeAnsiStripper, utf8SafeTruncate } from './streamer.js';
 
 function newAbortSignal(): AbortSignal {
@@ -19,7 +21,8 @@ describe('startShell', () => {
     expect(result.truncated).toBe(false);
   });
 
-  it('captures stderr alongside stdout', async () => {
+  it.skipIf(process.platform === 'win32')('captures stderr alongside stdout', async () => {
+    // stderr redirect `1>&2` is a POSIX shell feature — POSIX-only (#703)
     const handle = startShell({
       command: 'echo out; echo err 1>&2',
       abort: newAbortSignal(),
@@ -30,7 +33,8 @@ describe('startShell', () => {
     expect(result.displayCaptured).toContain('err');
   });
 
-  it('streams chunks via onChunk before the promise settles', async () => {
+  // Windows: semicolon command separator and echo are POSIX shell conventions
+  it.skipIf(isWin32)('streams chunks via onChunk before the promise settles', async () => {
     const chunks: Array<{ text: string; stream: 'stdout' | 'stderr' }> = [];
     const handle = startShell({
       command: 'echo first; echo second',
@@ -46,7 +50,8 @@ describe('startShell', () => {
     expect(combined).toContain('second');
   });
 
-  it('reports nonzero exit code with errorReason=nonzero-exit', async () => {
+  // Windows: `exit 7` in cmd.exe closes the shell process but exit codes differ
+  it.skipIf(isWin32)('reports nonzero exit code with errorReason=nonzero-exit', async () => {
     const handle = startShell({
       command: 'exit 7',
       abort: newAbortSignal(),
@@ -57,7 +62,8 @@ describe('startShell', () => {
     expect(result.errorMessage).toContain('7');
   });
 
-  it('reports signal-killed when the process dies from an unrequested signal', async () => {
+  it.skipIf(process.platform === 'win32')('reports signal-killed when the process dies from an unrequested signal', async () => {
+    // `kill -9 $$` is a POSIX signal command — POSIX-only (#703)
     // `kill -9 $$` makes the spawned shell SIGKILL itself: `close` fires with
     // code=null + a signal, and we never called handle.kill()/abort. This is
     // the segfault / OOM-killer / external-kill / self-signal path. Without the
@@ -73,7 +79,8 @@ describe('startShell', () => {
     expect(result.errorMessage).toMatch(/signal/i);
   });
 
-  it('honours cwd', async () => {
+  it.skipIf(process.platform === 'win32')('honours cwd', async () => {
+    // `/tmp` is a POSIX path — POSIX-only (#703)
     const handle = startShell({
       command: 'pwd',
       cwd: '/tmp',
@@ -85,7 +92,8 @@ describe('startShell', () => {
     expect(result.displayCaptured).toMatch(/(^|\/)tmp/);
   });
 
-  it('honours an extra env entry', async () => {
+  // Windows: POSIX double-quoted env var expansion ($VAR) not supported in cmd.exe
+  it.skipIf(isWin32)('honours an extra env entry', async () => {
     const handle = startShell({
       command: 'echo "$AFK_SHELL_TEST"',
       abort: newAbortSignal(),
@@ -129,7 +137,8 @@ describe('startShell', () => {
     expect(result.errorMessage).toContain('killed');
   });
 
-  it('strips ANSI escape sequences from the model buffer only', async () => {
+  it.skipIf(process.platform === 'win32')('strips ANSI escape sequences from the model buffer only', async () => {
+    // `printf '\033[...]'` uses POSIX printf escape syntax — POSIX-only (#703)
     // Build the ESC sequence at runtime so the source file stays printable.
     const cmd = `printf '\\033[31mred\\033[0m\\n'`;
     const handle = startShell({
@@ -143,7 +152,8 @@ describe('startShell', () => {
     expect(result.modelCaptured).toBe('red\n');
   });
 
-  it('caps captured output at maxBytes and marks truncated', async () => {
+  it.skipIf(process.platform === 'win32')('caps captured output at maxBytes and marks truncated', async () => {
+    // `yes hello | head -c 5000` uses POSIX `yes` and `head -c` — POSIX-only (#703)
     // Emit ~5000 bytes with a 1000-byte cap.
     const handle = startShell({
       command: 'yes hello | head -c 5000',
@@ -184,7 +194,8 @@ describe('startShell', () => {
     expect(result.errorReason).toBe('nonzero-exit');
   });
 
-  it('kills the child and reports errorReason=overflow when the cap is crossed mid-run (L2)', async () => {
+  it.skipIf(process.platform === 'win32')('kills the child and reports errorReason=overflow when the cap is crossed mid-run (L2)', async () => {
+    // `yes` is a POSIX command — POSIX-only (#703)
     // A long-running flood (cap crossed BEFORE the child would exit on its
     // own) must hit the overflow kill path — not merely post-exit truncation.
     // `yes` never terminates, so the only way this promise settles is the

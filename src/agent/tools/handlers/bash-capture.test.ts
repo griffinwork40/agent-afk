@@ -16,6 +16,8 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { mkdtempSync, rmSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -141,7 +143,8 @@ describe('bash capture — large output (model-truncated, command completes)', (
     expect(result.capturePath!).toContain('sess-path');
   });
 
-  it('capture parent directory has mode 0700 (owner only)', async () => {
+  // Windows: POSIX permission bits (chmod 0700) not supported on NTFS
+  it.skipIf(isWin32)('capture parent directory has mode 0700 (owner only)', async () => {
     const result = await run(
       "python3 -c \"print('D2' * 55000)\"",
       { sessionId: 'sess-dirmode', toolUseId: 'tu-dirmode' },
@@ -164,7 +167,10 @@ describe('bash capture — large output (model-truncated, command completes)', (
     expect(result.capturePath).toBeDefined();
     const stats = statSync(result.capturePath!);
     // Mode 0o600 = owner RW, no group/other. Platform mask: 0o777.
-    expect(stats.mode & 0o777).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      expect(stats.mode & 0o777).toBe(0o600);
+    }
   });
 
   it('durationMs is a non-negative number when output is truncated', async () => {
@@ -247,7 +253,8 @@ describe('bash capture — exitCode omitted when no OS status code is available'
 // SIGKILL (hard cap) path — no capture because middle bytes are unrecoverable
 // ---------------------------------------------------------------------------
 
-describe('bash capture — SIGKILL overflow path (no capture)', () => {
+// Windows: head -c and /dev/zero are POSIX-only
+describe.skipIf(isWin32)('bash capture — SIGKILL overflow path (no capture)', () => {
   it('capturePath is undefined when command is killed at the hard cap', async () => {
     // Generate 9MB — crosses HARD_CAP_BYTES (8MB) and triggers SIGKILL
     const result = await run(
