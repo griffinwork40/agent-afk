@@ -1,4 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as os from 'node:os';
@@ -475,7 +477,8 @@ describe('bashHandler', () => {
     });
   });
 
-  describe('cwd scoping', () => {
+  // Windows: pwd, cat, ls are POSIX-only shell commands
+  describe.skipIf(isWin32)('cwd scoping', () => {
     // These tests guard the worktree-isolation invariant: a session
     // configured with `cwd` must spawn its shell commands in that
     // directory, not in the Node host's `process.cwd()`. Without this,
@@ -573,7 +576,8 @@ describe('bashHandler', () => {
     });
   });
 
-  describe('context.cwd enforcement', () => {
+  // Windows: pwd is a POSIX-only shell command
+  describe.skipIf(isWin32)('context.cwd enforcement', () => {
     it('runs command in context.cwd when set', async () => {
       const handler = createBashHandler('default');
       const dir = mkdtempSync(path.join(os.tmpdir(), 'afk-bash-cwd-'));
@@ -695,7 +699,8 @@ describe('bashHandler', () => {
   });
 });
 
-describe('createBashHandler — cwd parameter', () => {
+// Windows: pwd, cat, ls are POSIX-only shell commands
+describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;
   }

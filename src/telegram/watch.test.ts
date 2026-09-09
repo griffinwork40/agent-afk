@@ -12,6 +12,10 @@ import * as path from 'node:path';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-watch-test-'));
 process.env['AFK_HOME'] = tmpDir;
+// Windows: os.homedir() reads USERPROFILE, not HOME. Isolate both so any
+// code that calls os.homedir() sees the same sentinel dir on all platforms.
+process.env['HOME'] = tmpDir;
+process.env['USERPROFILE'] = tmpDir;
 
 import { SessionWatchManager, renderLedgerRecord, resolveWatchTarget } from './watch.js';
 import { routeKey } from './route.js';

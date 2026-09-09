@@ -27,6 +27,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
 import { basename, dirname, join, resolve } from 'path';
@@ -121,7 +123,8 @@ describe('isReadDenied — deliberate divergence from the write denylist', () =>
   });
 });
 
-describe('isReadDenied — reverse-gap closure: password-store + browser secret trees', () => {
+// Windows: ~/Library/Application Support paths are macOS/POSIX-only
+describe.skipIf(isWin32)('isReadDenied — reverse-gap closure: password-store + browser secret trees', () => {
   // These roots were bash-only (`builtinBashSensitiveRoots` in
   // bash-restriction-hook.ts) before this change: blocked for `cat`, wide open
   // for read_file/grep/glob/list_directory. See the module-header History note

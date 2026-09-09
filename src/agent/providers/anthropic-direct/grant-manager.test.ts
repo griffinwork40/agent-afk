@@ -21,6 +21,8 @@ describe('AnthropicDirectProvider GrantManager', () => {
   let prevAfkHome: string | undefined;
   let prevHome: string | undefined;
   let prevUserProfile: string | undefined;
+  // Track open providers so we can close() them before rmSync on Windows.
+  const openProviders: AnthropicDirectProvider[] = [];
 
   beforeEach(() => {
     // Isolate the audit log to a temp dir so this test is hermetic and parallel-safe.
@@ -34,6 +36,10 @@ describe('AnthropicDirectProvider GrantManager', () => {
   });
 
   afterEach(() => {
+    // Close all providers before removing the tmpdir — Windows holds exclusive
+    // file locks on open SQLite databases and rmSync throws EBUSY otherwise.
+    for (const p of openProviders) p.close();
+    openProviders.length = 0;
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
     if (prevHome === undefined) delete process.env['HOME'];
@@ -42,6 +48,13 @@ describe('AnthropicDirectProvider GrantManager', () => {
     else process.env['USERPROFILE'] = prevUserProfile;
     rmSync(tmpHome, { recursive: true, force: true });
   });
+
+  /** Create a tracked provider that is automatically closed in afterEach. */
+  function makeProvider(opts?: ConstructorParameters<typeof AnthropicDirectProvider>[0]): AnthropicDirectProvider {
+    const p = new AnthropicDirectProvider(opts);
+    openProviders.push(p);
+    return p;
+  }
 
   function readAuditEntries(): Array<Record<string, unknown>> {
     // The provider writes to getSessionGrantsPath(); resolved via AFK_HOME.
@@ -64,7 +77,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('non-revocable _currentCwd anchor (Option A / migrating)', () => {
     it('refuses to revoke _currentCwd (migrating anchor) captured by ensureSharedRoots', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       // Prime ensureSharedRoots via addReadRoot which calls it internally.
       // To set initialResolveBase we need to call buildDispatcher OR trigger
       // ensureSharedRoots with a cwd argument — easiest is to add a root then
@@ -85,7 +98,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
       // Now exercise the guard path through a fresh provider that did capture
       // an initial cwd via buildDispatcher.
-      const provider2 = new AnthropicDirectProvider();
+      const provider2 = makeProvider();
       // Manually drive ensureSharedRoots(cwd) by invoking buildDispatcher with
       // a cwd. buildDispatcher is private; we trigger it indirectly through
       // a no-op getGrants then a manual initial-cwd grant via the dispatcher
@@ -136,7 +149,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
           }) as unknown as InstanceType<typeof import('@anthropic-ai/sdk').default>,
       );
 
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       const baseDir = mkdtempSync(path.join(tmpdir(), 'grant-base-'));
       try {
         const q = provider.query({
@@ -168,7 +181,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('audit log includes sessionId', () => {
     it('addReadRoot logs sessionId when provided', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       provider.addReadRoot('/x/y', 'slash', 'session-abc-123');
       const entries = readAuditEntries();
       expect(entries.length).toBeGreaterThanOrEqual(1);
@@ -181,7 +194,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('addWriteRoot logs sessionId when provided', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       provider.addWriteRoot('/x/y', 'slash', 'session-write-456');
       const entries = readAuditEntries();
       const e = entries[entries.length - 1];
@@ -190,7 +203,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('revokeRoot logs sessionId when provided', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       provider.addReadRoot('/x/y', 'slash', 'session-1');
       provider.revokeRoot('/x/y', 'slash', 'session-2');
       const entries = readAuditEntries();
@@ -200,7 +213,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('audit entry shape uses null when sessionId is omitted', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       provider.addReadRoot('/x/y', 'slash');
       const entries = readAuditEntries();
       const e = entries[entries.length - 1];
@@ -215,7 +228,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('revokeRoot audit gate (Finding 3)', () => {
     it('does NOT emit an audit entry when the path was never granted', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       const before = readAuditEntries().length;
       // Revoke a path that was never added — no-op (not found in roots).
       provider.revokeRoot('/never/added', 'slash');
@@ -224,7 +237,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('DOES emit an audit entry when an existing grant is removed', () => {
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       provider.addReadRoot('/x/y', 'slash', 'sess-grant');
       const before = readAuditEntries().length;
       provider.revokeRoot('/x/y', 'slash', 'sess-revoke');
@@ -237,7 +250,7 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
     it('does NOT emit duplicate audit entries when same path is revoked twice', () => {
       // Second revoke is a no-op (already removed) — must not emit another entry.
-      const provider = new AnthropicDirectProvider();
+      const provider = makeProvider();
       provider.addReadRoot('/x/y', 'slash', 'sess-grant');
       provider.revokeRoot('/x/y', 'slash', 'sess-1'); // first revoke — real removal
       const before = readAuditEntries().length;

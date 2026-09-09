@@ -22,6 +22,13 @@ import { homedir as defaultHomedir } from 'node:os';
 import { sep } from 'node:path';
 import { displayWidth, truncateDisplayWidth } from './display.js';
 
+/**
+ * Display separator: always `/` for user-facing output so the terminal prompt
+ * looks like a shell path on all platforms. Windows filesystem paths use `\`
+ * but the display normalises them to `/` (a pure cosmetic choice).
+ */
+const DISPLAY_SEP = '/';
+
 export interface FormatCwdOptions {
   /** Override homedir resolution for tests. Defaults to `os.homedir()`. */
   homedir?: string;
@@ -44,7 +51,8 @@ export function formatCwd(cwd: string, opts: FormatCwdOptions = {}): string {
   // Always preserve the leaf segment. Collapse interior segments to `…`
   // walking outward until the result fits, or fall back to a hard truncate
   // when even `~/…/<leaf>` doesn't fit.
-  const segments = tildified.split(sep).filter((s) => s.length > 0);
+  // Split on both `/` and `\` so Windows native paths segment correctly.
+  const segments = tildified.split(/[\\/]/).filter((s) => s.length > 0);
   if (segments.length <= 1) {
     return truncateDisplayWidth(tildified, max);
   }
@@ -61,11 +69,11 @@ export function formatCwd(cwd: string, opts: FormatCwdOptions = {}): string {
   const candidates: string[] = [];
   for (let lastKept = segments.length - 2; lastKept >= interiorStartIdx; lastKept--) {
     const interior = segments.slice(interiorStartIdx, lastKept + 1);
-    const body = interior.length > 0 ? interior.join(sep) + sep : '';
-    candidates.push(`${head}${sep}${body}…${sep}${tail}`);
+    const body = interior.length > 0 ? interior.join(DISPLAY_SEP) + DISPLAY_SEP : '';
+    candidates.push(`${head}${DISPLAY_SEP}${body}…${DISPLAY_SEP}${tail}`);
   }
   // Final fallback: just `<head>/…/<tail>` (when head=`~`, that's `~/…/<tail>`).
-  candidates.push(`${head}${sep}…${sep}${tail}`);
+  candidates.push(`${head}${DISPLAY_SEP}…${DISPLAY_SEP}${tail}`);
   for (const c of candidates) {
     if (displayWidth(c) <= max) return c;
   }
@@ -77,10 +85,14 @@ function tildify(path: string, home: string): string {
   if (!home) return path;
   if (path === home) return '~';
   // Match `<home>/...` but not `<home>foo` (different directory that happens
-  // to share a prefix).
-  const prefix = home.endsWith(sep) ? home : home + sep;
+  // to share a prefix). Accept both `/` and `\` as separators (Windows compat).
+  const prefix = home.endsWith(sep) || home.endsWith('/') ? home : home + sep;
   if (path.startsWith(prefix)) {
-    return '~' + sep + path.slice(prefix.length);
+    // Normalise the remainder to use DISPLAY_SEP (`/`) for a consistent
+    // shell-style prompt on all platforms.
+    const rest = path.slice(prefix.length).split(sep).join(DISPLAY_SEP);
+    return '~' + DISPLAY_SEP + rest;
   }
+  // Not under home — return as-is (the caller may further truncate it).
   return path;
 }

@@ -22,7 +22,7 @@ import {
   existsSync,
   writeFileSync,
 } from 'fs';
-import { join } from 'path';
+import path, { join } from 'path';
 import { homedir } from 'os';
 import { tmpdir } from 'os';
 import { writeFileHandler } from './write-file.js';
@@ -239,14 +239,14 @@ describe('safeRealpath', () => {
   it('resolves an existing path without changes (no symlinks)', () => {
     const real = safeRealpath(tmpDir);
     // Should at minimum return an absolute path.
-    expect(real.startsWith('/')).toBe(true);
+    expect(path.isAbsolute(real)).toBe(true);
   });
 
   it('resolves non-existent paths via ancestor walking', () => {
     const nonExistent = join(tmpDir, 'a', 'b', 'c', 'new-file.txt');
     const result = safeRealpath(nonExistent);
     // tmpDir exists, so the real path should be rooted there.
-    expect(result.startsWith('/')).toBe(true);
+    expect(path.isAbsolute(result)).toBe(true);
     // The tail segments should be preserved.
     expect(result).toContain('new-file.txt');
   });

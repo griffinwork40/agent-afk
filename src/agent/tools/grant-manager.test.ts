@@ -191,7 +191,7 @@ describe('PathGrantManager — addWriteRoot', () => {
       const hooks = makeHooks();
       const gm = new PathGrantManager(hooks);
       gm.addWriteRoot('/fresh/write', 'slash', 'test-sess');
-      const entries = readAuditEntries().filter((e) => e['path'] === '/fresh/write');
+      const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/fresh/write'));
       expect(entries.length).toBe(1);
       expect(entries[0]!['action']).toBe('grant-write');
     } finally {
@@ -475,7 +475,7 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     gm.addReadRoot('/dup', 'slash');
     gm.addReadRoot('/dup', 'slash');
     gm.addReadRoot('/dup', 'slash');
-    const entries = readAuditEntries().filter((e) => e['path'] === '/dup');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/dup'));
     expect(entries.length).toBe(1);
   });
 
@@ -485,7 +485,7 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     gm.addReadRoot('/up', 'slash');
     gm.addWriteRoot('/up', 'slash'); // read-root already present — only write-audit fires
     gm.addWriteRoot('/up', 'slash'); // idempotent — no additional row
-    const entries = readAuditEntries().filter((e) => e['path'] === '/up');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/up'));
     expect(entries.map((e) => e['action'])).toEqual(['grant-read', 'grant-write']);
   });
 

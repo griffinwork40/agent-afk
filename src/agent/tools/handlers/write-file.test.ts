@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { existsSync, readFileSync, rmSync, mkdirSync, chmodSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -166,7 +168,8 @@ describe('writeFileHandler', () => {
     expect(result.content).toBe('Aborted');
   });
 
-  it('returns permission error for read-only parent directory', async () => {
+  // Windows: POSIX permission bits (chmod) not supported on NTFS
+  it.skipIf(isWin32)('returns permission error for read-only parent directory', async () => {
     const parentDir = join(tmpDir, 'readonly');
     mkdirSync(parentDir, { recursive: true });
     const filePath = join(parentDir, 'test.txt');
@@ -419,7 +422,8 @@ describe('writeFileHandler cwd containment', () => {
       expect((result as any).render.diff.addedLines).toBeGreaterThan(0);
     });
 
-    it('F14: suppresses diff when readFile throws a non-ENOENT error (e.g. EACCES)', async () => {
+    // Windows: POSIX permission bits (chmod 0o200) not supported on NTFS
+    it.skipIf(isWin32)('F14: suppresses diff when readFile throws a non-ENOENT error (e.g. EACCES)', async () => {
       // Create a file then make it write-only (no read bit).
       // readFile will throw EACCES; the handler must still write successfully
       // and must NOT emit a render diff payload (priorContent stays null).

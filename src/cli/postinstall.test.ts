@@ -1,4 +1,7 @@
+// Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, beforeAll } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 
 type DetectPathGapFn = (
   prefix: string,
@@ -13,7 +16,7 @@ beforeAll(async () => {
   detectPathGap = mod.detectPathGap as DetectPathGapFn;
 });
 
-describe('detectPathGap', () => {
+describe.skipIf(isWin32)('detectPathGap', () => {
   it('returns onPath: true when binDir is already on PATH', () => {
     const result = detectPathGap('/usr/local', '/usr/local/bin:/usr/bin:/bin');
     expect(result.onPath).toBe(true);

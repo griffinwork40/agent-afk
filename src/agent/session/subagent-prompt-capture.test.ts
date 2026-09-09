@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Import after AFK_HOME is set so path helpers resolve into the temp dir.
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-prompt-capture-home-'));
 process.env['AFK_HOME'] = tmpHome;
+// Windows: os.homedir() reads USERPROFILE, not HOME. Set both.
+process.env['HOME'] = tmpHome;
+process.env['USERPROFILE'] = tmpHome;
 
 const { getPromptsDir } = await import('../../paths.js');
 const {

@@ -37,6 +37,8 @@ import type { AgentConfig } from '../../types/config-types.js';
 
 let tmpHome: string;
 let savedHome: string | undefined;
+// Track open providers so we can close() them before rmSync on Windows.
+const openProviders: ModelProvider[] = [];
 
 beforeEach(() => {
   tmpHome = mkdtempSync(join(tmpdir(), 'afk-presence-fresh-'));
@@ -45,6 +47,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Close all providers before removing the tmpdir — Windows holds exclusive
+  // file locks on open SQLite databases and rmSync throws EBUSY otherwise.
+  for (const p of openProviders) p.close?.();
+  openProviders.length = 0;
   if (savedHome === undefined) delete process.env['AFK_HOME'];
   else process.env['AFK_HOME'] = savedHome;
   rmSync(tmpHome, { recursive: true, force: true });
@@ -89,11 +95,27 @@ interface Branch {
   forkConfig: () => AgentConfig;
 }
 
+/** Wrap a provider factory so every created instance is tracked for cleanup. */
+function tracked<T extends ModelProvider>(factory: () => T): () => T {
+  return () => {
+    const p = factory();
+    openProviders.push(p);
+    return p;
+  };
+}
+function trackedWith<A extends unknown[], T extends ModelProvider>(factory: (...args: A) => T): (...args: A) => T {
+  return (...args: A) => {
+    const p = factory(...args);
+    openProviders.push(p);
+    return p;
+  };
+}
+
 const branches: Branch[] = [
   {
     name: 'anthropic-direct',
-    makeProvider: () => new AnthropicDirectProvider({}),
-    makeProviderOnSurface: (surface: string) => new AnthropicDirectProvider({ surface }),
+    makeProvider: tracked(() => new AnthropicDirectProvider({})),
+    makeProviderOnSurface: trackedWith((surface: string) => new AnthropicDirectProvider({ surface })),
     freshConfig: () => ({ model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' }),
     forkConfig: () => ({
       model: 'claude-sonnet-5',
@@ -104,8 +126,8 @@ const branches: Branch[] = [
   },
   {
     name: 'openai-compatible',
-    makeProvider: () => new OpenAICompatibleProvider({}),
-    makeProviderOnSurface: (surface: string) => new OpenAICompatibleProvider({ surface }),
+    makeProvider: tracked(() => new OpenAICompatibleProvider({})),
+    makeProviderOnSurface: trackedWith((surface: string) => new OpenAICompatibleProvider({ surface })),
     freshConfig: () => ({ model: 'gpt-5.1', apiKey: 'test-openai-key' }),
     forkConfig: () => ({
       model: 'gpt-5.1',

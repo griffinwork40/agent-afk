@@ -38,6 +38,8 @@ describe('AnthropicDirectProvider per-session isolation', () => {
   let prevAfkHome: string | undefined;
   let prevHome: string | undefined;
   let prevUserProfile: string | undefined;
+  // Track open providers so we can close() them before rmSync on Windows.
+  const openProviders: AnthropicDirectProvider[] = [];
 
   beforeEach(() => {
     // Isolate audit log writes so concurrent appends don't bleed into the
@@ -67,6 +69,10 @@ describe('AnthropicDirectProvider per-session isolation', () => {
 
   afterEach(() => {
     __setAnthropicClientFactory(null);
+    // Close all providers before removing the tmpdir — Windows holds exclusive
+    // file locks on open SQLite databases and rmSync throws EBUSY otherwise.
+    for (const p of openProviders) p.close();
+    openProviders.length = 0;
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
     if (prevHome === undefined) delete process.env['HOME'];
@@ -76,13 +82,20 @@ describe('AnthropicDirectProvider per-session isolation', () => {
     rmSync(tmpHome, { recursive: true, force: true });
   });
 
+  /** Call resolveProvider and track the result for cleanup. */
+  function makeProvider(model: string): AnthropicDirectProvider {
+    const p = resolveProvider(model) as AnthropicDirectProvider;
+    openProviders.push(p);
+    return p;
+  }
+
   it('resolveProvider returns a fresh AnthropicDirectProvider per call for Claude models', () => {
     // Pin the structural invariant the fix relies on: two calls to
     // resolveProvider for the same Claude model must produce DIFFERENT
     // instances, otherwise the per-session shared-root state remains
     // entangled.
-    const p1 = resolveProvider('sonnet');
-    const p2 = resolveProvider('sonnet');
+    const p1 = makeProvider('sonnet');
+    const p2 = makeProvider('sonnet');
     expect(p1).toBeInstanceOf(AnthropicDirectProvider);
     expect(p2).toBeInstanceOf(AnthropicDirectProvider);
     expect(p1).not.toBe(p2);
@@ -95,8 +108,8 @@ describe('AnthropicDirectProvider per-session isolation', () => {
     const cwdA = mkdtempSync(path.join(tmpdir(), 'session-A-'));
     const cwdB = mkdtempSync(path.join(tmpdir(), 'session-B-'));
     try {
-      const providerA = resolveProvider('sonnet') as AnthropicDirectProvider;
-      const providerB = resolveProvider('sonnet') as AnthropicDirectProvider;
+      const providerA = makeProvider('sonnet');
+      const providerB = makeProvider('sonnet');
 
       // Sanity check: pre-fix this would FAIL because both resolve to the
       // same singleton.
@@ -162,7 +175,7 @@ describe('AnthropicDirectProvider per-session isolation', () => {
     );
     try {
       const providers = cwds.map(
-        () => resolveProvider('sonnet') as AnthropicDirectProvider,
+        () => makeProvider('sonnet'),
       );
       // All instances must be distinct.
       const uniqueRefs = new Set(providers);

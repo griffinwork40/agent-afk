@@ -398,8 +398,9 @@ describe('worktree handler — keep / release', () => {
     const wtPath = join(afkRoot, 'important');
     const mock = makeMock(standardResponder(`${block(repoRoot)}\n\n${block(wtPath)}\n`));
     const handler = createWorktreeHandler(repoRoot, { execFile: mock });
+    // Use join() so the path separator is platform-correct (backslash on Windows).
     const result = await handler(
-      { action: 'keep', path: '.afk-worktrees/important', reason: 'unmerged spike' },
+      { action: 'keep', path: join('.afk-worktrees', 'important'), reason: 'unmerged spike' },
       SIGNAL,
     );
     expect(result.isError).toBeUndefined();

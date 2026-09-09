@@ -135,18 +135,21 @@ describe('resolveQuery', () => {
   });
 
   it('backslash-separated relative: sub\\file → splits on last separator (#703)', () => {
+    // displayPrefix preserves the typed separator (backslash) as-is.
     expect(resolveQuery('sub\\file', ROOT, HOME)).toEqual({
       scanDir: join(ROOT, 'sub'),
       leafPrefix: 'file',
-      displayPrefix: `sub${sep}`,
+      displayPrefix: 'sub\\',
     });
   });
 
   it('tilde with backslash: ~\\docs\\f → recognised as tilde path (#703)', () => {
+    // Tilde displayPrefix always uses '/' for the ~ prefix; the rest portion
+    // preserves the typed backslash separator.
     expect(resolveQuery('~\\docs\\f', ROOT, HOME)).toEqual({
       scanDir: join(HOME, 'docs'),
       leafPrefix: 'f',
-      displayPrefix: `~${sep}docs${sep}`,
+      displayPrefix: '~/docs\\',
     });
   });
 });

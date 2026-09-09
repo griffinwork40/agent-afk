@@ -7,7 +7,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, statSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 // Helper: mask off sticky/setuid/setgid bits to get rwxrwxrwx.
 function permBits(filePath: string): number {
@@ -191,8 +191,8 @@ describe('transcript — default directory resolution (state-tier placement)', (
     const p = handle.path();
 
     // Lands inside the state tier, NOT the legacy flat dir.
-    expect(p.startsWith(join(tmpHome, '.afk', 'state', 'transcripts') + '/')).toBe(true);
-    expect(p.startsWith(join(tmpHome, '.afk', 'transcripts') + '/')).toBe(false);
+    expect(p.startsWith(join(tmpHome, '.afk', 'state', 'transcripts') + sep)).toBe(true);
+    expect(p.startsWith(join(tmpHome, '.afk', 'transcripts') + sep)).toBe(false);
   });
 });
 

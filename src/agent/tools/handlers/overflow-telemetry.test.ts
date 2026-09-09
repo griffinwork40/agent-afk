@@ -18,7 +18,7 @@
  * This file is narrowly scoped to the telemetry surface.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -52,6 +52,12 @@ describe('tool.overflow_kill telemetry — grep', () => {
   beforeEach(() => {
     appendRoutingDecision.mockClear();
     tempDir = mkdtempSync(join(tmpdir(), 'grep-overflow-tel-'));
+  });
+
+  afterEach(() => {
+    // Best-effort cleanup: on Windows an open file handle may cause EBUSY;
+    // ignore errors so a failed cleanup doesn't mask the real test failure.
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
   it('emits tool.overflow_kill with operational fields when grep crosses the scan ceiling', async () => {

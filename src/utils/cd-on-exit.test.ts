@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import {
   clearCdIntent,
@@ -57,26 +57,28 @@ describe('cd-on-exit', () => {
   });
 
   it('recordCdIntent writes the target path to the marker file', () => {
-    recordCdIntent('/some/worktree/path');
+    const target = resolve('/some/worktree/path');
+    recordCdIntent(target);
     expect(existsSync(getCdIntentPath())).toBe(true);
-    expect(readFileSync(getCdIntentPath(), 'utf8')).toBe('/some/worktree/path');
+    expect(readFileSync(getCdIntentPath(), 'utf8')).toBe(target);
   });
 
   it('recordCdIntent creates the state dir if missing', () => {
     // $AFK_HOME/state/ does not yet exist
     expect(existsSync(join(tmp, 'state'))).toBe(false);
-    recordCdIntent('/another/path');
+    recordCdIntent(resolve('/another/path'));
     expect(existsSync(getCdIntentPath())).toBe(true);
   });
 
   it('recordCdIntent overwrites prior contents', () => {
-    recordCdIntent('/first');
-    recordCdIntent('/second');
-    expect(readFileSync(getCdIntentPath(), 'utf8')).toBe('/second');
+    recordCdIntent(resolve('/first'));
+    const second = resolve('/second');
+    recordCdIntent(second);
+    expect(readFileSync(getCdIntentPath(), 'utf8')).toBe(second);
   });
 
   it('clearCdIntent removes an existing marker file', () => {
-    recordCdIntent('/some/path');
+    recordCdIntent(resolve('/some/path'));
     expect(existsSync(getCdIntentPath())).toBe(true);
     clearCdIntent();
     expect(existsSync(getCdIntentPath())).toBe(false);
@@ -123,7 +125,7 @@ describe('cd-on-exit', () => {
     mkdirSync(dirname(stateDir), { recursive: true });
     writeFileSync(stateDir, 'not-a-dir', 'utf8');
     // Should not throw — best-effort contract.
-    expect(() => recordCdIntent('/x')).not.toThrow();
+    expect(() => recordCdIntent(resolve('/x'))).not.toThrow();
   });
 
   it('recordCdIntent rejects a relative path (would resolve against shell cwd)', () => {
@@ -135,16 +137,16 @@ describe('cd-on-exit', () => {
   it('recordCdIntent rejects paths containing newline / CR / NUL', () => {
     // POSIX allows \n in filenames, but $(cat marker) silently truncates
     // to the first line, landing the user in the wrong directory.
-    expect(() => recordCdIntent('/has/new\nline')).toThrow(/newline/);
-    expect(() => recordCdIntent('/has/c\rriage')).toThrow(/newline/);
-    expect(() => recordCdIntent('/has/n\0ul')).toThrow(/newline/);
+    expect(() => recordCdIntent(resolve('/has') + '/new\nline')).toThrow(/newline/);
+    expect(() => recordCdIntent(resolve('/has') + '/c\rriage')).toThrow(/newline/);
+    expect(() => recordCdIntent(resolve('/has') + '/n\0ul')).toThrow(/newline/);
   });
 
   it('recordCdIntent succeeds on paths with spaces, $, backticks, single-quotes', () => {
     // Robustness: a legitimate $AFK_HOME like /Users/Jane Doe/.afk produces
     // a worktree path with spaces. Recording it must not corrupt the file
     // (the wrapper escapes the marker path at read time).
-    const weird = '/Users/Jane Doe/.afk/path with $var and `tick` and \'quote\'';
+    const weird = resolve('/Users/Jane Doe/.afk/path with $var and `tick` and \'quote\'');
     expect(() => recordCdIntent(weird)).not.toThrow();
     expect(readFileSync(getCdIntentPath(), 'utf8')).toBe(weird);
   });
@@ -152,8 +154,9 @@ describe('cd-on-exit', () => {
   it('recordCdIntent writes atomically (no zero-byte marker on a fresh state dir)', () => {
     // The atomic-write contract: at no observable point should the marker
     // exist with a partial / empty content. Verify the final state.
-    recordCdIntent('/atomic/test');
-    expect(readFileSync(getCdIntentPath(), 'utf8')).toBe('/atomic/test');
+    const atomicPath = resolve('/atomic/test');
+    recordCdIntent(atomicPath);
+    expect(readFileSync(getCdIntentPath(), 'utf8')).toBe(atomicPath);
     // No leftover tmp files in the state dir.
     const stateDir = join(tmp, 'state');
     const entries = readdirSync(stateDir);
@@ -168,7 +171,7 @@ describe('cd-on-exit', () => {
     mkdirSync(target, { recursive: true });
     writeFileSync(join(target, 'sentinel'), 'x', 'utf8'); // non-empty
     // Best-effort: must not throw, and must not leave a tmp file behind.
-    expect(() => recordCdIntent('/x')).not.toThrow();
+    expect(() => recordCdIntent(resolve('/x'))).not.toThrow();
     const entries = readdirSync(join(tmp, 'state'));
     const tmps = entries.filter((e) => e.startsWith('last-cwd.tmp.'));
     expect(tmps).toEqual([]);

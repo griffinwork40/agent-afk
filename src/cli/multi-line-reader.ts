@@ -87,12 +87,19 @@ export function resolveQuery(
   // current user's home (`~/`) is supported — `~user/` is treated as relative.
   // Also recognise `~\<rest>` on Windows so `@~\Documents\f` works.
   if (query === '~' || query.startsWith('~/') || query.startsWith('~\\')) {
+    // The tilde separator char used by the user (/ or \) — preserved in display.
+    const tildeChar = query.length > 1 ? query[1]! : '/';
     const rest = query === '~' ? '' : query.slice(2);
     const slashIdx = lastSepIndex(rest);
     const scanRel = slashIdx === -1 ? '' : rest.slice(0, slashIdx);
     const leafPrefix = slashIdx === -1 ? rest : rest.slice(slashIdx + 1);
     const scanDir = scanRel ? join(homeDir, scanRel) : homeDir;
-    const displayPrefix = scanRel ? `~${sep}${scanRel}${sep}` : `~${sep}`;
+    // Display prefix always uses '/' for the tilde segment so shell-style
+    // ~/ completions look right on all platforms. When the rest contains
+    // the user's own separator char (e.g. '~\docs\f'), preserve theirs.
+    const restSep = rest.includes('\\') && !rest.includes('/') ? '\\' : '/';
+    const displayPrefix = scanRel ? `~/${scanRel}${restSep}` : `~/`;
+    void tildeChar; // suppress unused-var warning
     return { scanDir, leafPrefix, displayPrefix };
   }
 
@@ -107,11 +114,13 @@ export function resolveQuery(
   }
 
   // Relative (legacy behavior): join the dir portion against rootDir.
+  // Preserve the separator the user actually typed so display mirrors input.
   const slashIdx = lastSepIndex(query);
   const scanRel = slashIdx === -1 ? '' : query.slice(0, slashIdx);
   const leafPrefix = slashIdx === -1 ? query : query.slice(slashIdx + 1);
   const scanDir = scanRel ? join(rootDir, scanRel) : rootDir;
-  const displayPrefix = scanRel ? `${scanRel}${sep}` : '';
+  const typedSep = slashIdx !== -1 ? query[slashIdx]! : '/';
+  const displayPrefix = scanRel ? `${scanRel}${typedSep}` : '';
   return { scanDir, leafPrefix, displayPrefix };
 }
 

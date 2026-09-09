@@ -58,16 +58,22 @@ class FakeHost {
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   tmpHome = join(tmpdir(), `afk-resume-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
 });
 
 afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
+  else delete process.env['HOME'];
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
 });
 
 function makeStats(): SessionStats {

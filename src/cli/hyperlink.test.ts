@@ -31,13 +31,17 @@ describe('hyperlink', () => {
 describe('fileHyperlink', () => {
   it('targets the absolute path as a file:// URL', () => {
     const out = fileHyperlink('x.ts', '/Users/me/proj/src/x.ts');
-    expect(out).toContain('file:///Users/me/proj/src/x.ts');
+    // On Windows, pathToFileURL prepends the current drive letter
+    // (file:///C:/Users/…) so we check for the platform-independent suffix.
+    expect(out).toContain('Users/me/proj/src/x.ts');
+    expect(out).toContain('file://');
     expect(stripAnsi(out)).toBe('x.ts');
   });
 
   it('percent-encodes spaces, unicode, and control bytes in the URI', () => {
     const out = fileHyperlink('y.ts', '/tmp/a b/x\x07y.ts');
-    expect(out).toContain('file:///tmp/a%20b/x%07y.ts');
+    // Drive-letter prefix may appear on Windows; check the encoded part only.
+    expect(out).toContain('a%20b/x%07y.ts');
     // The raw BEL byte must never appear in the emitted sequence.
     expect(out).not.toContain('\x07');
   });

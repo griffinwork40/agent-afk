@@ -795,7 +795,8 @@ describe('path resolution', () => {
       evidenceRowIndex: 0,
       now: FIXED_NOW,
     });
-    expect(evalCase.replay.fixturePath).toBe(
+    // Normalize backslashes to forward slashes for Windows CI compatibility.
+    expect(evalCase.replay.fixturePath.replace(/\\/g, '/')).toBe(
       'agent-framework/improve/eval-cases/rel.fixture.jsonl',
     );
   });

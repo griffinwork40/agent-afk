@@ -2,10 +2,31 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import type { PermissionMode, ElicitationResult, ElicitationRequest } from './types/sdk-types.js';
 import type { TraceWriter } from './trace/index.js';
+
+// Path constants: resolve() makes POSIX literals into valid absolute paths on
+// every platform (on Windows: /Users/dev/project → C:\Users\dev\project).
+const P_USERS_DEV = resolve('/Users/dev/project');
+const P_USERS_DEV_FEATURE = resolve('/Users/dev/project/feature.ts');
+const P_USERS_DEV_SRC_FEATURE = resolve('/Users/dev/project/src/feature.ts');
+const P_USERS_DEV_SUB = resolve('/Users/dev/project/sub');
+const P_USERS_DEV_SUB_FEATURE = resolve('/Users/dev/project/sub/feature.ts');
+const P_USERS_DEV_WT = resolve('/Users/dev/project/.afk-worktrees/fix-201');
+const P_USERS_DEV_ELSEWHERE = resolve('/Users/dev/elsewhere/evil.ts');
+const P_ETC_CRON = resolve('/etc/cron.d/evil');
+const P_REPO_WT_PARENT = resolve('/repo/.afk-worktrees/parent');
+const P_REPO_WT_PARENT_FEATURE = resolve('/repo/.afk-worktrees/parent/src/feature.ts');
+const P_REPO_WT_PARENT_X = resolve('/repo/.afk-worktrees/parent/x.ts');
+const P_REPO_WT_CHILD = resolve('/repo/.afk-worktrees/child');
+const P_REPO_WT_CHILD_OTHER = resolve('/repo/.afk-worktrees/child/other.ts');
+const P_REPO_WT_CHILD_APP = resolve('/repo/.afk-worktrees/child/packages/app');
+const P_TMP = resolve('/tmp');
+const P_TMP_EVIL = resolve('/tmp/evil.sh');
+const P_TMP_WT_EVIL = resolve('/tmp/.afk-worktrees/evil');
+const P_OTHER_REPO_WT = resolve('/other-repo/.afk-worktrees/evil');
 
 describe('createAfkModeGate', () => {
   // By default inject a route that DECLINES — i.e. no operator approval is
@@ -274,7 +295,7 @@ describe('createAfkModeGate', () => {
 
   // ---- write-path risk ------------------------------------------------------
   it('refuses writes into the .git object store in AFK mode when unapproved', async () => {
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
     const result = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
@@ -284,17 +305,17 @@ describe('createAfkModeGate', () => {
   });
 
   it('refuses writes escaping the workspace root in AFK mode when unapproved', async () => {
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
     const result = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/etc/cron.d/evil' },
+      input: { file_path: P_ETC_CRON },
     });
     expect(result.decision).toBe('block');
   });
 
   it('allows an in-workspace write in AFK mode (reversible, useful work)', async () => {
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
     const result = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
@@ -311,20 +332,20 @@ describe('createAfkModeGate', () => {
     // layer (path-approval is disabled via allowAll), so this must stay live.
     const gate = createAfkModeGate(
       () => 'autonomous' as PermissionMode,
-      '/Users/dev/project',
-      () => '/Users/dev/project/sub',
+      P_USERS_DEV,
+      () => P_USERS_DEV_SUB,
       { route: async (): Promise<ElicitationResult> => ({ action: 'decline' }) },
     );
     const escaping = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/Users/dev/project/feature.ts' },
+      input: { file_path: P_USERS_DEV_FEATURE },
     });
     expect(escaping.decision).toBe('block');
     const inside = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/Users/dev/project/sub/feature.ts' },
+      input: { file_path: P_USERS_DEV_SUB_FEATURE },
     });
     expect(inside.decision).toBeUndefined();
   });
@@ -372,23 +393,23 @@ describe('createAfkModeGate', () => {
     // resolveBase) must classify the child's in-worktree write as inside its
     // workspace, while an absolute write escaping into the parent tree stays
     // blocked — proving the gate reads context.cwd ahead of the static cwd.
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
 
     const allowed = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
       input: { file_path: 'src/feature.ts' },
       parentSessionId: 'parent-session-123',
-      cwd: '/Users/dev/project/.afk-worktrees/fix-201',
+      cwd: P_USERS_DEV_WT,
     });
     expect(allowed.decision).toBeUndefined();
 
     const blocked = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/Users/dev/project/src/feature.ts' },
+      input: { file_path: P_USERS_DEV_SRC_FEATURE },
       parentSessionId: 'parent-session-123',
-      cwd: '/Users/dev/project/.afk-worktrees/fix-201',
+      cwd: P_USERS_DEV_WT,
     });
     expect(blocked.decision).toBe('block');
   });
@@ -400,7 +421,7 @@ describe('createAfkModeGate', () => {
     // (`/tmp`) must NOT have that path trusted as the containment boundary — its
     // writes are measured against the trusted session root, escape it, and are
     // flagged high (blocked; subagents never prompt).
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
 
     // relative write resolves under the untrusted /tmp base → escapes session root
     const relative = await gate({
@@ -408,7 +429,7 @@ describe('createAfkModeGate', () => {
       toolName: 'write_file',
       input: { file_path: 'evil.sh' },
       parentSessionId: 'parent-session-123',
-      cwd: '/tmp',
+      cwd: P_TMP,
     });
     expect(relative.decision).toBe('block');
 
@@ -416,9 +437,9 @@ describe('createAfkModeGate', () => {
     const absolute = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/tmp/evil.sh' },
+      input: { file_path: P_TMP_EVIL },
       parentSessionId: 'parent-session-123',
-      cwd: '/tmp',
+      cwd: P_TMP,
     });
     expect(absolute.decision).toBe('block');
   });
@@ -428,13 +449,13 @@ describe('createAfkModeGate', () => {
     // segment — only a sibling under the SAME worktrees dir as the session. A
     // child cwd at `/tmp/.afk-worktrees/evil` (a different repo family) is
     // untrusted, so its write is measured against the session root and blocked.
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
     const spoofed = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
       input: { file_path: 'evil.sh' },
       parentSessionId: 'parent-session-123',
-      cwd: '/tmp/.afk-worktrees/evil',
+      cwd: P_TMP_WT_EVIL,
     });
     expect(spoofed.decision).toBe('block');
   });
@@ -445,23 +466,23 @@ describe('createAfkModeGate', () => {
     // (/repo/.afk-worktrees/child). The child is not a descendant of the parent
     // but shares the same .afk-worktrees/ dir, so its in-worktree write is trusted
     // (allowed) while an escape into the parent's tree stays blocked.
-    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+    const { gate } = makeGate('autonomous', P_REPO_WT_PARENT);
 
     const inSibling = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
       input: { file_path: 'src/feature.ts' },
       parentSessionId: 'parent-session-123',
-      cwd: '/repo/.afk-worktrees/child',
+      cwd: P_REPO_WT_CHILD,
     });
     expect(inSibling.decision).toBeUndefined();
 
     const escaping = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/repo/.afk-worktrees/parent/src/feature.ts' },
+      input: { file_path: P_REPO_WT_PARENT_FEATURE },
       parentSessionId: 'parent-session-123',
-      cwd: '/repo/.afk-worktrees/child',
+      cwd: P_REPO_WT_CHILD,
     });
     expect(escaping.decision).toBe('block');
   });
@@ -472,15 +493,15 @@ describe('createAfkModeGate', () => {
     // worktree ROOT (not the sub-dir), so a legitimate write elsewhere in the same
     // worktree is allowed rather than wrongly flagged high. Before the normalization
     // the boundary was the raw sub-dir cwd and this write was blocked.
-    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+    const { gate } = makeGate('autonomous', P_REPO_WT_PARENT);
 
     // absolute write OUTSIDE the sub-dir cwd but INSIDE the child worktree
     const inWorktree = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/repo/.afk-worktrees/child/other.ts' },
+      input: { file_path: P_REPO_WT_CHILD_OTHER },
       parentSessionId: 'parent-session-123',
-      cwd: '/repo/.afk-worktrees/child/packages/app',
+      cwd: P_REPO_WT_CHILD_APP,
     });
     expect(inWorktree.decision).toBeUndefined();
 
@@ -488,9 +509,9 @@ describe('createAfkModeGate', () => {
     const escaping = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/repo/.afk-worktrees/parent/x.ts' },
+      input: { file_path: P_REPO_WT_PARENT_X },
       parentSessionId: 'parent-session-123',
-      cwd: '/repo/.afk-worktrees/child/packages/app',
+      cwd: P_REPO_WT_CHILD_APP,
     });
     expect(escaping.decision).toBe('block');
   });
@@ -501,13 +522,13 @@ describe('createAfkModeGate', () => {
     // and the child cwd sits in a DIFFERENT repo's `.afk-worktrees/` dir. The two
     // worktree parents differ, so the child is untrusted, its write is measured
     // against the session root, escapes it, and is blocked.
-    const { gate } = makeGate('autonomous', '/repo/.afk-worktrees/parent');
+    const { gate } = makeGate('autonomous', P_REPO_WT_PARENT);
     const foreign = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
       input: { file_path: 'evil.sh' },
       parentSessionId: 'parent-session-123',
-      cwd: '/other-repo/.afk-worktrees/evil',
+      cwd: P_OTHER_REPO_WT,
     });
     expect(foreign.decision).toBe('block');
   });
@@ -517,23 +538,23 @@ describe('createAfkModeGate', () => {
     // getCwd() in lockstep): the trust check short-circuits on child===root, the
     // boundary is the session root, so an in-tree write is allowed and an absolute
     // escape out of the session tree is blocked.
-    const { gate } = makeGate('autonomous', '/Users/dev/project');
+    const { gate } = makeGate('autonomous', P_USERS_DEV);
 
     const inTree = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
       input: { file_path: 'src/feature.ts' },
       parentSessionId: 'parent-session-123',
-      cwd: '/Users/dev/project',
+      cwd: P_USERS_DEV,
     });
     expect(inTree.decision).toBeUndefined();
 
     const escaping = await gate({
       event: 'PreToolUse',
       toolName: 'write_file',
-      input: { file_path: '/Users/dev/elsewhere/evil.ts' },
+      input: { file_path: P_USERS_DEV_ELSEWHERE },
       parentSessionId: 'parent-session-123',
-      cwd: '/Users/dev/project',
+      cwd: P_USERS_DEV,
     });
     expect(escaping.decision).toBe('block');
   });

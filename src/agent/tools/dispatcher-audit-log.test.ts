@@ -86,7 +86,7 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
     expect('sessionId' in e).toBe(true);
     expect(e['sessionId']).toBeNull();
     expect(e['action']).toBe('grant-read');
-    expect(e['path']).toBe('/some/path');
+    expect(e['path']).toBe(path.resolve('/some/path'));
     expect(e['source']).toBe('slash');
     expect(e['timestamp']).toEqual(expect.any(String));
   });
@@ -142,7 +142,7 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
     dispatcher.addReadRoot('/dup/read', 'tool');
     dispatcher.addReadRoot('/dup/read', 'tool');
     dispatcher.addReadRoot('/dup/read', 'tool');
-    const entries = readAuditEntries().filter((e) => e['path'] === '/dup/read');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/dup/read'));
     expect(entries.length).toBe(1);
     expect(entries[0]!['action']).toBe('grant-read');
   });
@@ -151,7 +151,7 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
     const dispatcher = makeDispatcher();
     dispatcher.addWriteRoot('/dup/write', 'tool');
     dispatcher.addWriteRoot('/dup/write', 'tool');
-    const entries = readAuditEntries().filter((e) => e['path'] === '/dup/write');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/dup/write'));
     expect(entries.length).toBe(1);
     expect(entries[0]!['action']).toBe('grant-write');
   });
@@ -161,7 +161,7 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
     dispatcher.addReadRoot('/upgrade/path', 'tool'); // grant-read (new to readRoots)
     dispatcher.addWriteRoot('/upgrade/path', 'tool'); // grant-write (new to writeRoots)
     dispatcher.addWriteRoot('/upgrade/path', 'tool'); // no-op — already a write root
-    const entries = readAuditEntries().filter((e) => e['path'] === '/upgrade/path');
+    const entries = readAuditEntries().filter((e) => e['path'] === path.resolve('/upgrade/path'));
     expect(entries.map((e) => e['action'])).toEqual(['grant-read', 'grant-write']);
   });
 });

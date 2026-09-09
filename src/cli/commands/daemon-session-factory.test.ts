@@ -81,12 +81,22 @@ describe('buildDaemonSessionFactory', () => {
   // the same temp-dir convention memory-store.test.ts uses.
   let prevAfkHome: string | undefined;
   let tmpHome: string;
+  // Track sessions created per test so we can await close() before rmSync.
+  // On Windows, open SQLite handles cause rmSync to throw EBUSY.
+  const openSessions: Array<{ close: () => Promise<void> | void }> = [];
+  function trackSession<T extends { close: () => Promise<void> | void }>(s: T): T {
+    openSessions.push(s);
+    return s;
+  }
   beforeAll(() => {
     prevAfkHome = process.env['AFK_HOME'];
     tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-factory-test-'));
     process.env['AFK_HOME'] = tmpHome;
   });
-  afterAll(() => {
+  afterAll(async () => {
+    // Close all open sessions before removing the tmpdir on Windows.
+    await Promise.all(openSessions.map((s) => Promise.resolve(s.close()).catch(() => undefined)));
+    openSessions.length = 0;
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
     rmSync(tmpHome, { recursive: true, force: true });
@@ -99,7 +109,7 @@ describe('buildDaemonSessionFactory', () => {
 
   it('factory produces an AgentSession instance', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const session = trackSession(factory(makeConfig()));
     // AgentSession has a `sendMessage` method — use it as a duck-type check.
     expect(typeof session.sendMessage).toBe('function');
     void session.close().catch(() => undefined);
@@ -107,7 +117,7 @@ describe('buildDaemonSessionFactory', () => {
 
   it('session provider is an AnthropicDirectProvider for an Anthropic-routed model', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider;
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);
@@ -116,7 +126,7 @@ describe('buildDaemonSessionFactory', () => {
 
   it("provider allowedTools contains 'agent', 'skill', and 'compose'", () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);
@@ -131,7 +141,7 @@ describe('buildDaemonSessionFactory', () => {
 
   it('subagentExecutor is truthy (not bare provider)', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);
@@ -143,7 +153,7 @@ describe('buildDaemonSessionFactory', () => {
 
   it('skillExecutor is truthy', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);
@@ -155,7 +165,7 @@ describe('buildDaemonSessionFactory', () => {
 
   it('composeExecutor is truthy', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);
@@ -168,7 +178,7 @@ describe('buildDaemonSessionFactory', () => {
   it('preserves permissionMode:bypassPermissions from the incoming config', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const config = makeConfig({ permissionMode: 'bypassPermissions' });
-    const session = factory(config);
+    const session = trackSession(factory(config));
     // AgentSession stores config; the field survives the spread.
     const internals = session as unknown as { config?: AgentConfig };
     expect(internals.config?.permissionMode).toBe('bypassPermissions');
@@ -178,7 +188,7 @@ describe('buildDaemonSessionFactory', () => {
   it('passes a cwd from opts into the config', () => {
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY, cwd: '/tmp/my-repo' });
     const config = makeConfig();
-    const session = factory(config);
+    const session = trackSession(factory(config));
     // cwd comes from opts and is in the provider/executor, but the spread
     // also preserves any cwd the incoming config already set. We just verify
     // the session was created without error.
@@ -202,7 +212,7 @@ describe('buildDaemonSessionFactory', () => {
     } as unknown as NonNullable<AgentConfig['traceWriter']>;
 
     const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig({ traceWriter }));
+    const session = trackSession(factory(makeConfig({ traceWriter })));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     expect(provider).toBeInstanceOf(AnthropicDirectProvider);

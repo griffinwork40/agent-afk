@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import { startShell, makeAnsiStripper, utf8SafeTruncate } from './streamer.js';
 
 function newAbortSignal(): AbortSignal {
@@ -31,7 +33,8 @@ describe('startShell', () => {
     expect(result.displayCaptured).toContain('err');
   });
 
-  it('streams chunks via onChunk before the promise settles', async () => {
+  // Windows: semicolon command separator and echo are POSIX shell conventions
+  it.skipIf(isWin32)('streams chunks via onChunk before the promise settles', async () => {
     const chunks: Array<{ text: string; stream: 'stdout' | 'stderr' }> = [];
     const handle = startShell({
       command: 'echo first; echo second',
@@ -47,7 +50,8 @@ describe('startShell', () => {
     expect(combined).toContain('second');
   });
 
-  it('reports nonzero exit code with errorReason=nonzero-exit', async () => {
+  // Windows: `exit 7` in cmd.exe closes the shell process but exit codes differ
+  it.skipIf(isWin32)('reports nonzero exit code with errorReason=nonzero-exit', async () => {
     const handle = startShell({
       command: 'exit 7',
       abort: newAbortSignal(),
@@ -88,7 +92,8 @@ describe('startShell', () => {
     expect(result.displayCaptured).toMatch(/(^|\/)tmp/);
   });
 
-  it('honours an extra env entry', async () => {
+  // Windows: POSIX double-quoted env var expansion ($VAR) not supported in cmd.exe
+  it.skipIf(isWin32)('honours an extra env entry', async () => {
     const handle = startShell({
       command: 'echo "$AFK_SHELL_TEST"',
       abort: newAbortSignal(),

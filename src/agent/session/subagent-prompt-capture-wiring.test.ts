@@ -17,6 +17,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-prompt-wiring-home-'));
 process.env['AFK_HOME'] = tmpHome;
+// Windows: os.homedir() reads USERPROFILE, not HOME. Set both.
+process.env['HOME'] = tmpHome;
+process.env['USERPROFILE'] = tmpHome;
 
 const { AgentSession } = await import('./agent-session.js');
 const { createMockProvider } = await import('../__fixtures__/mock-provider.js');

@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { join } from 'node:path';
 import { registerAll } from './slash/index.js';
 import { dispatch, list, resetRegistry, lookup } from './slash/registry.js';
 import {
@@ -524,7 +525,7 @@ describe('/plan', () => {
       const lower = message.toLowerCase();
       // Names the exit, the save step (under .afk/plans), and the implement step.
       expect(lower).toContain('switched off plan mode');
-      expect(message).toContain('.afk/plans');
+      expect(message).toContain(join('.afk', 'plans'));
       expect(lower).toContain('save the plan');
       expect(lower).toContain('implement the plan');
     });
@@ -540,7 +541,7 @@ describe('/plan', () => {
       expect(sess.setPermissionMode).toHaveBeenCalledWith('default');
       expect(ctx.stats.permissionMode).toBe('default');
       expect(submitKind(res)).toBe('submit');
-      expect(submitMessage(res)).toContain('.afk/plans');
+      expect(submitMessage(res)).toContain(join('.afk', 'plans'));
     });
 
     it('does NOT seed an implement turn when the flip fails (writes still refused)', async () => {

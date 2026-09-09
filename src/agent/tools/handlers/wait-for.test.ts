@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import path from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Mock the egress guard
@@ -332,13 +333,14 @@ describe('waitForHandler — relative path resolution for file type', () => {
       return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
     });
 
+    const cwd = path.resolve('/home/user/myproject');
     await waitForHandler(
       { type: 'file', path: 'dist/server.js' },
       neverSignal,
-      { cwd: '/home/user/myproject', resolveBase: undefined } as never,
+      { cwd, resolveBase: undefined } as never,
     );
 
-    expect((capturedCond as { path: string })?.path).toBe('/home/user/myproject/dist/server.js');
+    expect((capturedCond as { path: string })?.path).toBe(path.resolve(cwd, 'dist/server.js'));
   });
 
   it('prefers context.resolveBase over context.cwd', async () => {
@@ -350,15 +352,15 @@ describe('waitForHandler — relative path resolution for file type', () => {
       return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
     });
 
+    const cwd = path.resolve('/home/user/myproject');
+    const resolveBase = path.resolve('/home/user/myproject/packages/app');
     await waitForHandler(
       { type: 'file', path: 'dist/server.js' },
       neverSignal,
-      { cwd: '/home/user/myproject', resolveBase: '/home/user/myproject/packages/app' } as never,
+      { cwd, resolveBase } as never,
     );
 
-    expect((capturedCond as { path: string })?.path).toBe(
-      '/home/user/myproject/packages/app/dist/server.js',
-    );
+    expect((capturedCond as { path: string })?.path).toBe(path.resolve(resolveBase, 'dist/server.js'));
   });
 
   it('passes absolute paths through unchanged', async () => {
@@ -370,12 +372,13 @@ describe('waitForHandler — relative path resolution for file type', () => {
       return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
     });
 
+    const absPath = path.resolve('/absolute/path/to/file.txt');
     await waitForHandler(
-      { type: 'file', path: '/absolute/path/to/file.txt' },
+      { type: 'file', path: absPath },
       neverSignal,
-      { cwd: '/home/user/myproject' } as never,
+      { cwd: path.resolve('/home/user/myproject') } as never,
     );
 
-    expect((capturedCond as { path: string })?.path).toBe('/absolute/path/to/file.txt');
+    expect((capturedCond as { path: string })?.path).toBe(absPath);
   });
 });

@@ -58,6 +58,12 @@ if (!OPT_OUT) {
   process.env['AFK_HOME'] = sentinelDir; // audit-env-access: allow — test-setup redirect of the paths tier
   delete process.env['AFK_STATE_DIR']; // audit-env-access: allow — derive from sentinel AFK_HOME
   delete process.env['AFK_FRAMEWORK_DIR']; // audit-env-access: allow — derive from sentinel AFK_HOME
+  // Windows: os.homedir() reads USERPROFILE, not HOME. Set both so any code
+  // that calls os.homedir() (e.g. read-denylist, write-denylist, bash-hook)
+  // sees the same isolated sentinel dir on all platforms.
+  if (process.platform === 'win32') {
+    process.env['USERPROFILE'] = sentinelDir; // audit-env-access: allow — test isolation on Windows
+  }
 }
 
 afterAll(() => {

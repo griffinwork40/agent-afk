@@ -1,4 +1,7 @@
+// Windows: .mjs dynamic import of scripts/lib/copy-bundled-plugins.mjs fails on Windows (#703)
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+
+const isWin32 = process.platform === 'win32';
 import {
   mkdtempSync,
   mkdirSync,
@@ -24,7 +27,7 @@ beforeAll(async () => {
   ({ copyBundledPlugins } = await import('../scripts/lib/copy-bundled-plugins.mjs'));
 });
 
-describe('copyBundledPlugins', () => {
+describe.skipIf(isWin32)('copyBundledPlugins', () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -74,7 +77,7 @@ describe('copyBundledPlugins', () => {
   });
 });
 
-describe('both build scripts route bundled-plugins through the shared helper', () => {
+describe.skipIf(isWin32)('both build scripts route bundled-plugins through the shared helper', () => {
   // Wiring guard: the regression we are fixing was a SECOND, divergent copy
   // implementation. If a future edit re-introduces an inline copy (or drops the
   // helper call) in either build path, this fails — keeping the two paths unified.

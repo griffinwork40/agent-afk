@@ -79,13 +79,13 @@ describe('capSubagentResult', () => {
     expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThan(
       Buffer.byteLength(content, 'utf8'),
     );
-    // Should contain the file pointer.
-    expect(result.content).toContain('subagent-handoffs/sub-2.txt');
+    // Should contain the file pointer (normalize separators for cross-platform).
+    expect(result.content.replace(/\\/g, '/')).toContain('subagent-handoffs/sub-2.txt');
     expect(result.content).toContain('read_file');
     expect(result.content).toContain('40000 bytes');
 
     // Verify the sidecar file was written with the full content.
-    const spillPath = `${TEST_SESSIONS_DIR}/sess-2/subagent-handoffs/sub-2.txt`;
+    const spillPath = join(TEST_SESSIONS_DIR, 'sess-2', 'subagent-handoffs', 'sub-2.txt');
     expect(existsSync(spillPath)).toBe(true);
     expect(readFileSync(spillPath, 'utf8')).toBe(content);
 

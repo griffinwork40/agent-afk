@@ -21,7 +21,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { startTranscript } from './commands/interactive/transcript.js';
 
 describe('transcript autosave — startTranscript', () => {
@@ -54,7 +54,7 @@ describe('transcript autosave — startTranscript', () => {
     const transcriptDir = join(home, 'transcripts');
     const p = await startTranscript(transcriptDir, 'claude-sonnet-4-5');
 
-    expect(p.startsWith(transcriptDir + '/')).toBe(true);
+    expect(p.startsWith(transcriptDir + sep)).toBe(true);
     expect(p).toMatch(/\.md$/);
     const basename = p.slice(transcriptDir.length + 1);
     // ISO timestamp with `:` and `.` replaced by `-` so ls sorts correctly.
@@ -83,7 +83,7 @@ describe('transcript autosave — startTranscript', () => {
   it('creates the transcript directory if it does not exist (mkdir -p)', async () => {
     const nested = join(home, 'transcripts', 'nested', 'deep');
     const p = await startTranscript(nested, 'sonnet');
-    expect(p.startsWith(nested + '/')).toBe(true);
+    expect(p.startsWith(nested + sep)).toBe(true);
     // The file exists and is readable.
     const body = await fs.readFile(p, 'utf8');
     expect(body.length).toBeGreaterThan(0);
