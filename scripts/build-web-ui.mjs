@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync, copyFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { platform } from 'node:os';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const frontendDir = join(repoRoot, 'src', 'web-server', 'frontend');
@@ -47,14 +48,30 @@ async function main() {
 /** React SPA build via Vite. Outputs directly to src/web-ui-assets/. */
 async function buildDashboard() {
   console.log('build-web-ui: building React dashboard (Vite)...');
+
+  // Use the local node_modules/.bin/vite so we always run the pinned version
+  // from dashboard/package.json — never a version silently downloaded by npx.
+  // On Windows, Node resolves shell:true against PATH which includes .bin/, so
+  // the cross-platform pattern is: relative path with shell:true and cwd set.
+  const viteBin =
+    platform() === 'win32'
+      ? join('node_modules', '.bin', 'vite.cmd')
+      : join('node_modules', '.bin', 'vite');
+
   try {
-    execSync('npx vite build', {
+    execSync(`"${viteBin}" build`, {
       cwd: dashboardDir,
       stdio: 'inherit',
+      shell: true,
       env: { ...process.env, NODE_ENV: 'production' },
     });
   } catch {
-    console.error('build-web-ui: Vite build failed, falling back to legacy');
+    if (process.env.CI) {
+      // In CI the fallback would silently ship stale assets — fail loudly instead.
+      console.error('build-web-ui: Vite build failed in CI — exiting non-zero');
+      process.exit(1);
+    }
+    console.error('build-web-ui: Vite build failed, falling back to legacy esbuild');
     await buildLegacy();
   }
 }
