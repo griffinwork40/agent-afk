@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.206.2] - 2026-09-09
+
+### Fixed
+- resolve 401 errors in Vite dev mode (#1599) (47f85347)
+
 ## [5.206.1] - 2026-09-09
 
 ### Fixed
