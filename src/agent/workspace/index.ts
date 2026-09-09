@@ -23,6 +23,7 @@ export {
   workspaceToolSchemas,
   createWorkspaceHandlers,
   WORKSPACE_TOOL_NAMES,
+  WORKSPACE_CHILD_TOOL_NAMES,
 } from './workspace-tools.js';
 
 export {

@@ -227,6 +227,17 @@ describe('buildToolCallStartedPayload', () => {
     expect('resourceFingerprint' in agent).toBe(false);
   });
 
+  it('does not include resourceFingerprint for glob tool calls', () => {
+    // glob is a filesystem tool but has no single named resource that maps
+    // cleanly to a dedup key (pattern + base dir combo is not equivalent to
+    // a file identity), so resourceFingerprint must be absent.
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'gl_1', name: 'glob',
+      input: { pattern: 'src/**/*.ts', path: '/src' },
+    });
+    expect('resourceFingerprint' in payload).toBe(false);
+  });
+
   it('normalizes trailing slashes and consecutive slashes in read_file paths', () => {
     const clean = buildToolCallStartedPayload({
       toolUseId: 'norm_a', name: 'read_file',
@@ -261,6 +272,49 @@ describe('buildToolCallStartedPayload', () => {
     });
     expect(payload.resourceFingerprint).toBeDefined();
     expect(payload.resourceFingerprint).toHaveLength(64);
+  });
+
+  it('produces different resourceFingerprint for grep with different include args (#1565)', () => {
+    // Two greps on the same directory with different file-glob filters read
+    // entirely different files — they must NOT share a resource fingerprint.
+    const ts = buildToolCallStartedPayload({
+      toolUseId: 'gr_inc_ts', name: 'grep',
+      input: { pattern: 'foo', path: '/src', include: '*.ts' },
+    });
+    const py = buildToolCallStartedPayload({
+      toolUseId: 'gr_inc_py', name: 'grep',
+      input: { pattern: 'foo', path: '/src', include: '*.py' },
+    });
+    expect(ts.resourceFingerprint).toBeDefined();
+    expect(py.resourceFingerprint).toBeDefined();
+    expect(ts.resourceFingerprint).not.toBe(py.resourceFingerprint);
+  });
+
+  it('produces identical resourceFingerprint for grep with same include arg', () => {
+    const a = buildToolCallStartedPayload({
+      toolUseId: 'gr_same_a', name: 'grep',
+      input: { pattern: 'bar', path: '/src', include: '*.ts' },
+    });
+    const b = buildToolCallStartedPayload({
+      toolUseId: 'gr_same_b', name: 'grep',
+      input: { pattern: 'baz', path: '/src', include: '*.ts' },
+    });
+    // Same path + same include → same resource (different patterns still scan
+    // identical files; only `path` and `include` define the resource scope).
+    expect(a.resourceFingerprint).toBe(b.resourceFingerprint);
+  });
+
+  it('produces identical resourceFingerprint for grep with and without absent include', () => {
+    // Omitting `include` is equivalent to no filter — both should hash path only.
+    const withoutInclude = buildToolCallStartedPayload({
+      toolUseId: 'gr_no_inc', name: 'grep',
+      input: { pattern: 'foo', path: '/src/agent' },
+    });
+    const emptyInclude = buildToolCallStartedPayload({
+      toolUseId: 'gr_empty_inc', name: 'grep',
+      input: { pattern: 'foo', path: '/src/agent', include: '' },
+    });
+    expect(withoutInclude.resourceFingerprint).toBe(emptyInclude.resourceFingerprint);
   });
 
   it('omits resourceFingerprint for read_file with missing/empty file_path', () => {

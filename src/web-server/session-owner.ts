@@ -20,9 +20,12 @@
 
 import { AgentSession } from '../agent/session/agent-session.js';
 import { createDefaultHookRegistry } from '../agent/default-hook-registry.js';
+import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { getApiKeyForModel, resolveBaseSystemPrompt } from '../cli/shared-helpers.js';
+import { wireWebSession, type WebSessionWiringInternal } from './session-owner.wiring.js';
 import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
+import type { McpManager } from '../agent/mcp/index.js';
 
 export interface CreateSessionRequest {
   /** Working directory. Ignored unless `allowArbitraryCwd` — see the guard. */
@@ -65,6 +68,8 @@ export class SessionOwner {
   readonly owned = new Set<string>();
   private readonly sessions = new Map<string, AgentSession>();
   private readonly info = new Map<string, OwnedSessionInfo>();
+  /** MCP managers per session — disconnected on close. */
+  private readonly mcpManagers = new Map<string, McpManager>();
   /** Per-session serialization chain — see {@link submitPrompt}. */
   private readonly turns = new Map<string, Promise<void>>();
   /**
@@ -92,26 +97,42 @@ export class SessionOwner {
   async create(request: CreateSessionRequest = {}): Promise<OwnedSessionInfo> {
     const cwd = this.options.allowArbitraryCwd === true ? (request.cwd ?? this.baseCwd) : this.baseCwd;
     const model = request.model ?? this.options.model;
+    const apiKey = getApiKeyForModel(model);
 
-    const { prompt, source } = resolveBaseSystemPrompt(cwd);
-    const { registry } = createDefaultHookRegistry(undefined, 'web', undefined, undefined, undefined, {
-      cwd,
-    });
+    const { prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd);
+
+    // Full executor + trace + MCP wiring (mirrors REPL/Telegram Anthropic).
+    const wiring = await wireWebSession({
+      model, apiKey, cwd, rawPrompt, rawPromptSource,
+    }) as WebSessionWiringInternal;
+
+    // Hook registry with the shared memory store so session-end writes land in
+    // the same instance the provider's memory tools read from.
+    const getPermissionMode = () => session?.getSessionMetadata().permissionMode ?? (this.options.permissionMode ?? 'default');
+    const { registry } = createDefaultHookRegistry(
+      undefined, 'web', wiring.memoryStore, getPermissionMode, undefined,
+      { cwd, traceWriter: wiring.traceWriter },
+    );
 
     const config: AgentConfig = {
       model,
-      // Trace `origin` attribution: distinguishes browser-started work from a
-      // REPL or daemon session in the witness trace.
       surface: 'web',
-      apiKey: getApiKeyForModel(model),
+      apiKey,
       cwd,
       hookRegistry: registry,
       permissionMode: this.options.permissionMode ?? 'default',
-      ...(prompt !== undefined ? { systemPrompt: prompt } : {}),
-      ...(source !== undefined ? { systemPromptSource: source } : {}),
+      provider: wiring.provider,
+      drainSubagents: wiring.drainSubagents,
+      ...(wiring.systemPrompt !== undefined ? { systemPrompt: wiring.systemPrompt } : {}),
+      ...(wiring.systemPromptSource !== undefined ? { systemPromptSource: wiring.systemPromptSource } : {}),
+      ...(wiring.traceWriter !== undefined ? { traceWriter: wiring.traceWriter } : {}),
     };
 
-    const session = new AgentSession(config);
+    const session = new AgentSession(config, wiring.traceWriter);
+
+    // Late-bind the deferred parent proxy so executors resolve session fields.
+    wiring.__bindSession(session);
+    seedPersistedGrants(wiring.provider);
 
     // Invariant: the id is provider-issued and undefined until initialization
     // resolves. Registering as owned before this point would make prompt and
@@ -132,6 +153,7 @@ export class SessionOwner {
     this.sessions.set(id, session);
     this.info.set(id, record);
     this.owned.add(id);
+    if (wiring.mcpManager !== undefined) this.mcpManagers.set(id, wiring.mcpManager);
     return record;
   }
 
@@ -204,11 +226,16 @@ export class SessionOwner {
    */
   async closeAll(): Promise<void> {
     const all = [...this.sessions.values()];
+    const mcps = [...this.mcpManagers.values()];
     this.sessions.clear();
     this.info.clear();
     this.owned.clear();
     this.pending.clear();
     this.turns.clear();
+    this.mcpManagers.clear();
+    // Sessions close BEFORE MCP disconnect: a closing session may raise a final
+    // tool call that needs the MCP transport alive.
     await Promise.all(all.map((s) => s.close().catch(() => {})));
+    await Promise.all(mcps.map((m) => m.disconnectAll().catch(() => {})));
   }
 }

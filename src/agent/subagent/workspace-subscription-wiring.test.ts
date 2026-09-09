@@ -126,6 +126,31 @@ describe('wireWorkspaceSubscriptions', () => {
     expect(firstSeqInBuffer).toBe(3); // entries 1 and 2 were evicted
   });
 
+  // provider injection path: setSubscribeHandler is called when a provider is passed
+  it('calls provider.setSubscribeHandler with the subscribeHandler when a provider is given', () => {
+    const store = new WorkspaceStore();
+    let injectedHandler: unknown;
+    const provider = {
+      setSubscribeHandler: (h: unknown) => {
+        injectedHandler = h;
+      },
+    };
+
+    const { subscribeHandler } = wireWorkspaceSubscriptions(store, 'agent-x', undefined, provider);
+
+    // The injected handler must be the exact same function reference
+    expect(injectedHandler).toBe(subscribeHandler);
+  });
+
+  // provider without setSubscribeHandler: no crash, no injection
+  it('does not throw when provider has no setSubscribeHandler', () => {
+    const store = new WorkspaceStore();
+    const provider = {};
+    expect(() =>
+      wireWorkspaceSubscriptions(store, 'agent-x', undefined, provider),
+    ).not.toThrow();
+  });
+
   // (c) drain resets _workspaceDroppedSinceDrain counter
   it('draining _pendingWorkspaceEntries resets the dropped counter', async () => {
     const store = new WorkspaceStore();

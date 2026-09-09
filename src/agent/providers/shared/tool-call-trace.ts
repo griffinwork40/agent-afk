@@ -111,7 +111,16 @@ function redactSensitiveFields(toolName: string, input: unknown): unknown {
  * file path, ignoring offset/limit/pattern so that two reads of the same file
  * at different offsets share a fingerprint.
  *
- * Privacy: the returned value is a SHA-256 hex hash, never a raw path.
+ * Security note: the hash is plain SHA-256 with no salt and no HMAC. This is
+ * intentional. `redactSensitiveFields` is NOT called here — file paths are not
+ * secrets, and the witness trace these values land in is a local-only file
+ * under `~/.afk/state/witness/`. Note: the trace writer uses default umask
+ * (typically 0644 files / 0755 dirs), so on a multi-user host these hashes
+ * are world-readable. This is acceptable because the fingerprints are
+ * truncated SHA-256 digests of project-local paths — low value to other
+ * local users. If resource fingerprints are ever transmitted to an external
+ * service, or if paths may contain sensitive identifiers, add HMAC-SHA256
+ * keyed on a session secret so brute-force path recovery is infeasible.
  */
 function computeResourceFingerprint(
   toolName: string,
@@ -132,13 +141,21 @@ function computeResourceFingerprint(
     }
 
     case 'grep': {
-      // grep's resource is `path` (directory/file being searched) + `pattern`,
-      // but `include` / other args change what is read. Keep it narrow: only
-      // hash when `path` is present.
+      // grep's resource is `path` + `include` (file-glob filter). Two agents
+      // grepping the same directory with different `include` globs read entirely
+      // different files and must NOT share a fingerprint. `pattern` is still
+      // excluded: the same files are scanned regardless of the search expression.
+      // Hash `path` alone when `include` is absent so the behavior is stable for
+      // callers that omit the optional arg.
       const raw = obj['path'] as string | undefined;
       if (typeof raw !== 'string' || raw.length === 0) return undefined;
       const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
-      return createHash('sha256').update(normalized).digest('hex');
+      const include = obj['include'];
+      const key =
+        typeof include === 'string' && include.length > 0
+          ? `${normalized}\0${include}`
+          : normalized;
+      return createHash('sha256').update(key).digest('hex');
     }
 
     default:

@@ -18,7 +18,7 @@ import { BUILTIN_TOOL_NAMES } from './schemas.js';
 import { MEMORY_TOOL_NAMES } from '../memory/index.js';
 import { AWARENESS_TOOL_NAMES } from '../awareness/index.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from './handlers/exit-plan-mode.js';
-import { WORKSPACE_TOOL_NAMES } from '../workspace/index.js';
+import { WORKSPACE_TOOL_NAMES, WORKSPACE_CHILD_TOOL_NAMES } from '../workspace/index.js';
 import { STATE_TOOL_NAMES } from '../state/state-tools.js';
 
 describe('topLevelSurfaceAllowedTools', () => {
@@ -35,6 +35,14 @@ describe('topLevelSurfaceAllowedTools', () => {
     for (const name of WORKSPACE_TOOL_NAMES) expect(list).toContain(name);
     for (const name of STATE_TOOL_NAMES) expect(list).toContain(name);
     expect(list).toContain('get_runtime_state');
+  });
+
+  it('does not include workspace_subscribe (only wired in child/nesting allowlists, #1562)', () => {
+    const list = topLevelSurfaceAllowedTools();
+    expect(list).not.toContain('workspace_subscribe');
+    // Verify the split: WORKSPACE_CHILD_TOOL_NAMES contains subscribe, base does not.
+    expect(WORKSPACE_TOOL_NAMES).not.toContain('workspace_subscribe');
+    expect(WORKSPACE_CHILD_TOOL_NAMES).toContain('workspace_subscribe');
   });
 
   it('includes the full executor set (agent, skill, compose) these surfaces always wire', () => {
