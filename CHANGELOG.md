@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.204.0] - 2026-09-09
+
+### Added
+- React dashboard - full implementation (Phases 1-5) (#1580) (ae5d5e9b)
+
 ## [5.203.1] - 2026-09-09
 
 ### Fixed
