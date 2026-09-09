@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.204.2] - 2026-09-09
+
+### Fixed
+- make tool record toolUseId optional for backward compat (#1588) (#1589) (0f068ef9)
+
+### Changed
+- add route-level tests for memory, models, and bg-jobs endpoints (#1583) (#1594) (cfc025d5)
+
 ## [5.204.1] - 2026-09-09
 
 ### Changed
