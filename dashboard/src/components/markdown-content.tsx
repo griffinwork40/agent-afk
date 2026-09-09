@@ -16,11 +16,18 @@ const components: Components = {
       {children}
     </blockquote>
   ),
-  a: ({ href, children }) => (
-    <a href={href} className="text-brand underline underline-offset-2 hover:text-brand/80" target="_blank" rel="noreferrer">
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    // Only allow safe URL schemes: https, http, root-relative paths, and anchor links.
+    // Anything else (data:, javascript:, vbscript:, …) renders as plain text.
+    const isSafe = href && /^(https?:\/\/|\/|#)/i.test(href);
+    return isSafe ? (
+      <a href={href} className="text-brand underline underline-offset-2 hover:text-brand/80" target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    ) : (
+      <span className="text-brand underline underline-offset-2">{children}</span>
+    );
+  },
   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
   em: ({ children }) => <em className="italic text-muted-foreground">{children}</em>,
   hr: () => <hr className="my-3 border-border" />,
