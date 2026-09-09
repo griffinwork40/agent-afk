@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
-import { join, sep } from 'path';
+import { join, sep, resolve } from 'path';
 import { tmpdir } from 'os';
 import { buildCompleter, readInput, fileMatchesFor, MAX_FILE_MATCHES, resolveQuery } from './multi-line-reader.js';
 import { registerAll } from './slash/index.js';
@@ -31,8 +31,8 @@ afterEach(() => {
 });
 
 describe('resolveQuery', () => {
-  const ROOT = '/cwd';
-  const HOME = '/home/me';
+  const ROOT = resolve('/cwd');
+  const HOME = resolve('/home/me');
 
   it('tilde leaf: ~/foo → scan home, leaf foo, display ~/', () => {
     expect(resolveQuery('~/foo', ROOT, HOME)).toEqual({
@@ -67,26 +67,30 @@ describe('resolveQuery', () => {
   });
 
   it('absolute leaf: /etc/ssh → scan /etc/, leaf ssh, display /etc/', () => {
-    expect(resolveQuery('/etc/ssh', ROOT, HOME)).toEqual({
-      scanDir: '/etc/',
+    const etcSsh = resolve('/etc/ssh');
+    const etcDir = resolve('/etc') + sep;
+    expect(resolveQuery(etcSsh, ROOT, HOME)).toEqual({
+      scanDir: etcDir,
       leafPrefix: 'ssh',
-      displayPrefix: '/etc/',
+      displayPrefix: etcDir,
     });
   });
 
   it('absolute slash only: /etc/ → scan /etc/, empty leaf', () => {
-    expect(resolveQuery('/etc/', ROOT, HOME)).toEqual({
-      scanDir: '/etc/',
+    const etcDir = resolve('/etc') + sep;
+    expect(resolveQuery(resolve('/etc') + sep, ROOT, HOME)).toEqual({
+      scanDir: etcDir,
       leafPrefix: '',
-      displayPrefix: '/etc/',
+      displayPrefix: etcDir,
     });
   });
 
   it('absolute root: / → scan /, empty leaf', () => {
-    expect(resolveQuery('/', ROOT, HOME)).toEqual({
-      scanDir: '/',
+    const fsRoot = resolve('/');
+    expect(resolveQuery(fsRoot, ROOT, HOME)).toEqual({
+      scanDir: fsRoot,
       leafPrefix: '',
-      displayPrefix: '/',
+      displayPrefix: fsRoot,
     });
   });
 

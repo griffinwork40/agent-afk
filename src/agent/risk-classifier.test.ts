@@ -8,9 +8,10 @@ import { describe, it, expect } from 'vitest';
 import { classifyRisk } from './risk-classifier.js';
 import type { RiskContext } from './risk-classifier.js';
 import { homedir } from 'os';
+import * as os from 'os';
 import path from 'path';
 
-const WORKSPACE = '/tmp/agent-afk-test-workspace';
+const WORKSPACE = path.join(os.tmpdir(), 'agent-afk-test-workspace');
 const ctx: RiskContext = { cwd: WORKSPACE, workspaceRoot: WORKSPACE };
 
 // ---- bash high-risk patterns ---------------------------------------------
@@ -290,7 +291,7 @@ describe('classifyRisk — write_file / edit_file', () => {
 
   it('path outside workspaceRoot → high', () => {
     expect(
-      classifyRisk('write_file', { file_path: '/tmp/outside/secret.txt' }, ctx),
+      classifyRisk('write_file', { file_path: path.join(os.tmpdir(), 'outside', 'secret.txt') }, ctx),
     ).toBe('high');
   });
 

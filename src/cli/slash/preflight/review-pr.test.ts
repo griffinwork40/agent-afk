@@ -8,6 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import path from 'path';
+import { tmpdir } from 'os';
 import {
   parsePrRef,
   gatherPrState,
@@ -19,8 +21,8 @@ import {
 import type { PreflightContext, SkillInvocation } from './types.js';
 
 const baseCtx: PreflightContext = {
-  cwd: '/tmp/repo',
-  artifactDir: '/tmp/artifacts',
+  cwd: path.join(tmpdir(), 'repo'),
+  artifactDir: path.join(tmpdir(), 'artifacts'),
 };
 
 const baseInv: SkillInvocation = {
@@ -107,13 +109,13 @@ describe('gatherPrState', () => {
     expect(state.pr).toBe('277');
     expect(state.metadata?.title).toBe('fix: foo');
     expect(state.metadata?.additions).toBe(721);
-    expect(state.diffPath).toBe('/tmp/artifacts/pr-277.diff');
+    expect(state.diffPath).toBe(path.join(tmpdir(), 'artifacts', 'pr-277.diff'));
     // 'diff --git a/foo b/foo\n+line\n' trimEnd → 2 real lines (trailing newline stripped)
     expect(state.diffLineCount).toBe(2);
     expect(state.dirty).toBe(false);
     expect(state.dirtyFiles).toBe(0);
 
-    expect(writeFile).toHaveBeenCalledWith('/tmp/artifacts/pr-277.diff', expect.stringContaining('diff --git'));
+    expect(writeFile).toHaveBeenCalledWith(path.join(tmpdir(), 'artifacts', 'pr-277.diff'), expect.stringContaining('diff --git'));
   });
 
   it('flags dirty working tree without mutating it', async () => {
@@ -186,7 +188,7 @@ describe('renderManifest', () => {
         changedFiles: 6,
         files: Array.from({ length: 6 }, (_, i) => ({ path: `src/file-${i}.ts`, additions: 10, deletions: 1 })),
       },
-      diffPath: '/tmp/pr-277.diff',
+      diffPath: path.join(tmpdir(), 'pr-277.diff'),
       diffLineCount: 931,
       dirty: false,
       dirtyFiles: 0,
@@ -195,7 +197,7 @@ describe('renderManifest', () => {
     expect(manifest.length).toBeLessThan(1600);
     expect(manifest).toContain('<preflight-context skill="review" pr="277">');
     expect(manifest).toContain('</preflight-context>');
-    expect(manifest).toContain('Diff artifact: /tmp/pr-277.diff');
+    expect(manifest).toContain(`Diff artifact: ${path.join(tmpdir(), 'pr-277.diff')}`);
     expect(manifest).toContain('Working tree: clean');
     expect(manifest).toContain('Do not stash');
     expect(manifest).toContain('compose available');
@@ -205,7 +207,7 @@ describe('renderManifest', () => {
     const manifest = renderManifest({
       pr: '277',
       metadata: { title: 't', additions: 1, deletions: 0, changedFiles: 1, files: [] },
-      diffPath: '/tmp/p.diff',
+      diffPath: path.join(tmpdir(), 'p.diff'),
       diffLineCount: 10,
       dirty: true,
       dirtyFiles: 3,

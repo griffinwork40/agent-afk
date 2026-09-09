@@ -28,7 +28,7 @@ import { resetAfkHomeWarnLatchForTests } from '../afk-home-warn.js';
 import type { GrantManager } from '../../../cli/slash/commands/allow-dir.js';
 import type { PreToolUseContext } from '../../hooks.js';
 import { homedir, tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'fs';
 
 function mockGrants(): GrantManager {
@@ -37,7 +37,7 @@ function mockGrants(): GrantManager {
     addWriteRoot: () => {},
     revokeRoot: () => {},
     getGrants() {
-      return { resolveBase: '/tmp/repo', readRoots: ['/tmp/repo'], writeRoots: ['/tmp/repo'] };
+      return { resolveBase: resolve('/tmp/repo'), readRoots: [resolve('/tmp/repo')], writeRoots: [resolve('/tmp/repo')] };
     },
   };
 }
@@ -304,9 +304,9 @@ describe('createBashRestrictionHook — grant containment direction (F4 regressi
       revokeRoot: () => {},
       getGrants() {
         return {
-          resolveBase: '/tmp/repo',
-          readRoots: ['/tmp/repo', extraReadRoot],
-          writeRoots: ['/tmp/repo'],
+          resolveBase: resolve('/tmp/repo'),
+          readRoots: [resolve('/tmp/repo'), extraReadRoot],
+          writeRoots: [resolve('/tmp/repo')],
         };
       },
     };
@@ -353,9 +353,9 @@ describe('createBashRestrictionHook — context.grantManager precedence (#514)',
       revokeRoot: () => {},
       getGrants() {
         return {
-          resolveBase: '/tmp/repo',
-          readRoots: ['/tmp/repo', extraRoot],
-          writeRoots: ['/tmp/repo'],
+          resolveBase: resolve('/tmp/repo'),
+          readRoots: [resolve('/tmp/repo'), extraRoot],
+          writeRoots: [resolve('/tmp/repo')],
         };
       },
     };
@@ -526,7 +526,7 @@ describe('deriveRestrictedSubstrings — Option A (#740): resolveBase can drop a
       writeRoots: [],
     });
     const withBase = deriveRestrictedSubstrings({
-      resolveBase: '/tmp/repo',
+      resolveBase: resolve('/tmp/repo'),
       readRoots: [],
       writeRoots: [],
     });

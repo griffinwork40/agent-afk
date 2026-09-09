@@ -18,6 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'path';
+import { tmpdir } from 'os';
 
 // Keep the credential resolver off the live keychain/env.
 vi.mock('../../auth/credential-resolver.js', () => ({
@@ -34,7 +35,7 @@ import * as promptLoader from '../../../skills/_lib/prompt-loader.js';
 
 const abortSignal = new AbortController().signal;
 const FS_ROOT = path.parse(path.resolve('.')).root || path.sep;
-const WORKTREE = '/repo/.afk-worktrees/wt';
+const WORKTREE = path.resolve('/repo/.afk-worktrees/wt');
 
 function makeCall(input: unknown) {
   return { id: 'test-call', name: 'skill', input, signal: abortSignal };
@@ -119,12 +120,12 @@ describe('skill fork read-scope inheritance (#547)', () => {
     const { getCaptured } = armForkCapture();
     const executor = makeExecutor({
       cwd: WORKTREE,
-      getReadScopeInputs: () => ({ parentReadRoots: undefined, parentCwd: '/repo' }),
+      getReadScopeInputs: () => ({ parentReadRoots: undefined, parentCwd: path.resolve('/repo') }),
     });
 
     await executor.execute(makeCall({ name: 'fork-skill' }));
 
-    expect(getCaptured()?.parentReadRoots).toEqual([WORKTREE, '/repo']);
+    expect(getCaptured()?.parentReadRoots).toEqual([WORKTREE, path.resolve('/repo')]);
   });
 
   it('propagates an explicit /allow-dir-widened parent read scope to the fork', async () => {
@@ -132,14 +133,14 @@ describe('skill fork read-scope inheritance (#547)', () => {
     const executor = makeExecutor({
       cwd: WORKTREE,
       getReadScopeInputs: () => ({
-        parentReadRoots: ['/repo', '/tmp/shared'],
-        parentCwd: '/repo',
+        parentReadRoots: [path.resolve('/repo'), path.join(tmpdir(), 'shared')],
+        parentCwd: path.resolve('/repo'),
       }),
     });
 
     await executor.execute(makeCall({ name: 'fork-skill' }));
 
-    expect(getCaptured()?.parentReadRoots).toEqual([WORKTREE, '/repo', '/tmp/shared']);
+    expect(getCaptured()?.parentReadRoots).toEqual([WORKTREE, path.resolve('/repo'), path.join(tmpdir(), 'shared')]);
   });
 
   it('leaves cwd-derivation untouched when getReadScopeInputs is unwired (back-compat)', async () => {

@@ -7,10 +7,12 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { capSubagentResult } from './foreground-promotion.result-cap.js';
 
 // Stable mock for getSessionsDir — points at a temp dir we control.
-const TEST_SESSIONS_DIR = '/tmp/afk-test-result-cap-sessions';
+const TEST_SESSIONS_DIR = join(tmpdir(), 'afk-test-result-cap-sessions');
 
 vi.mock('../../../paths.js', () => ({
   getSessionsDir: () => TEST_SESSIONS_DIR,

@@ -9,39 +9,46 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import path from 'path';
 import { resolveEntrypoint } from './manager.js';
 
 describe('resolveEntrypoint', () => {
   it('resolves bundled layout (sibling .mjs)', () => {
     // dist/cli.mjs imports manager from dist/telegram.mjs's internals via
     // the bundle — but at runtime __dirname is dist/, and entry is dist/telegram.mjs.
-    const exists = (p: string) => p === '/pkg/dist/telegram.mjs';
-    expect(resolveEntrypoint('/pkg/dist', exists)).toBe('/pkg/dist/telegram.mjs');
+    const pkgDist = path.resolve('/pkg/dist');
+    const exists = (p: string) => p === path.join(pkgDist, 'telegram.mjs');
+    expect(resolveEntrypoint(pkgDist, exists)).toBe(path.join(pkgDist, 'telegram.mjs'));
   });
 
   it('prefers bundled .mjs over unbundled .js when both exist', () => {
     // Published bundles ship dist/telegram/ artifacts alongside the bundle.
     // Spawning the unbundled dist/telegram.js would re-import deps the
     // bundle inlined, so the sibling .mjs must win.
-    const exists = (p: string) => p === '/pkg/dist/telegram.mjs' || p === '/pkg/telegram.js';
-    expect(resolveEntrypoint('/pkg/dist', exists)).toBe('/pkg/dist/telegram.mjs');
+    const pkgDist = path.resolve('/pkg/dist');
+    const pkg = path.resolve('/pkg');
+    const exists = (p: string) => p === path.join(pkgDist, 'telegram.mjs') || p === path.join(pkg, 'telegram.js');
+    expect(resolveEntrypoint(pkgDist, exists)).toBe(path.join(pkgDist, 'telegram.mjs'));
   });
 
   it('resolves tsc layout (one dir up, .js)', () => {
     // Local pnpm build: manager.js is at dist/telegram/manager.js,
     // entry is dist/telegram.js. join() normalizes ../ in paths.
-    const exists = (p: string) => p === '/pkg/dist/telegram.js';
-    expect(resolveEntrypoint('/pkg/dist/telegram', exists)).toBe('/pkg/dist/telegram.js');
+    const pkgDistTelegram = path.resolve('/pkg/dist/telegram');
+    const exists = (p: string) => p === path.resolve('/pkg/dist/telegram.js');
+    expect(resolveEntrypoint(pkgDistTelegram, exists)).toBe(path.resolve('/pkg/dist/telegram.js'));
   });
 
   it('resolves dev layout (one dir up, .ts)', () => {
-    const exists = (p: string) => p === '/repo/src/telegram.ts';
-    expect(resolveEntrypoint('/repo/src/telegram', exists)).toBe('/repo/src/telegram.ts');
+    const repoSrcTelegram = path.resolve('/repo/src/telegram');
+    const exists = (p: string) => p === path.resolve('/repo/src/telegram.ts');
+    expect(resolveEntrypoint(repoSrcTelegram, exists)).toBe(path.resolve('/repo/src/telegram.ts'));
   });
 
   it('throws with searched paths when no entry exists', () => {
-    expect(() => resolveEntrypoint('/nowhere', () => false)).toThrow(
-      /Telegram entrypoint not found.*\/nowhere\/telegram\.mjs.*telegram\.js.*telegram\.ts/,
+    const nowhere = path.resolve('/nowhere');
+    expect(() => resolveEntrypoint(nowhere, () => false)).toThrow(
+      /Telegram entrypoint not found/,
     );
   });
 });

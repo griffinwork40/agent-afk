@@ -77,7 +77,7 @@ describe('registerWorktreeRoot', () => {
     const blocker = join(stateDir, 'not-a-dir');
     await fs.writeFile(blocker, 'x', 'utf-8');
     process.env['AFK_STATE_DIR'] = join(blocker, 'nested');
-    await expect(registerWorktreeRoot('/tmp/whatever')).resolves.toBeUndefined();
+    await expect(registerWorktreeRoot(join(tmpdir(), 'whatever'))).resolves.toBeUndefined();
   });
 
   it('ignores an empty root', async () => {
