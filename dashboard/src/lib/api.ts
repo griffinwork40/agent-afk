@@ -8,6 +8,9 @@
 
 const TOKEN_STORAGE_KEY = 'afk_web_token';
 
+/** The server replaces this in the HTML; when we read it raw, there is no token. */
+const TOKEN_PLACEHOLDER = '__AFK_WEB_TOKEN__';
+
 let cachedToken: string | null = null;
 
 /** Read the bearer token, preferring the meta tag, falling back to storage. */
@@ -17,7 +20,7 @@ export function getToken(): string {
   const meta = document.querySelector<HTMLMetaElement>('meta[name="afk-token"]');
   const metaValue = meta?.content;
 
-  if (metaValue) {
+  if (metaValue && metaValue !== TOKEN_PLACEHOLDER) {
     cachedToken = metaValue;
     try {
       sessionStorage.setItem(TOKEN_STORAGE_KEY, metaValue);
