@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.204.3] - 2026-09-09
+
+### Fixed
+- add URL scheme allowlist to MarkdownContent links (#1590) (9832092c)
+
 ## [5.204.2] - 2026-09-09
 
 ### Fixed
