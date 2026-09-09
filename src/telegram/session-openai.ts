@@ -14,6 +14,13 @@ import { AgentSession } from '../agent/session.js';
 import { OpenAICompatibleProvider } from '../agent/providers/index.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { assembleSystemPrompt } from '../agent/routing-directive.js';
+import { wireExecutors } from '../agent/session/wire-executors.js';
+import { BackgroundAgentRegistry } from '../agent/background-registry.js';
+import { TelegramBgResultNotifier } from './bg-result-notifier.js';
+import {
+  getDefaultSubagentModel,
+  getApiKeyForModel,
+} from '../cli/shared-helpers.js';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
 import { constructTelegramSession } from './construct-session.js';
 import { attachMcpCleanup } from './mcp-session.js';
@@ -33,6 +40,8 @@ export async function buildOpenAiTelegramSession(
     mcpManager,
     memoryStore,
     workspaceStore,
+    chatId,
+    threadId,
     reportSession,
   } = ctx;
 
@@ -45,16 +54,48 @@ export async function buildOpenAiTelegramSession(
   // (parity with the Anthropic branch's telegramOpenaiBaseUrl).
   const codexOpenaiBaseUrl = sessionConfig.openaiBaseUrl ?? config.openaiBaseUrl;
 
+  // Deferred parent proxy (session constructed after executors).
+  let boundSession: AgentSession | undefined;
+  const deferredParent = {
+    get sessionId() { return boundSession?.sessionId; },
+    getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
+    get abortSignal() { return boundSession?.abortSignal ?? new AbortController().signal; },
+    get hookRegistry() { return boundSession?.hookRegistry; },
+  };
+
+  // Background agent registry — enables `agent` tool with mode="background".
+  const backgroundRegistry = new BackgroundAgentRegistry(
+    traceWriter ? { traceWriter } : {},
+  );
+  const bgNotifier = new TelegramBgResultNotifier(backgroundRegistry, chatId, threadId);
+
+  // Executor wiring: one root manager shared by all three executors so forked
+  // subagents inherit cwd, abort graph, and read scope.
+  const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
+    surface: 'telegram',
+    parentSession: deferredParent,
+    apiKey: sessionConfig.apiKey,
+    model: sessionConfig.model,
+    managerParentModel: sessionConfig.model,
+    defaultSubagentModel: getDefaultSubagentModel(sessionConfig.model),
+    resolveApiKeyForModel: getApiKeyForModel,
+    ...(rawPrompt !== undefined ? { systemPrompt: rawPrompt } : {}),
+    ...(codexOpenaiBaseUrl !== undefined ? { openaiBaseUrl: codexOpenaiBaseUrl } : {}),
+    ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
+    ...(traceWriter !== null ? { traceWriter } : {}),
+    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    backgroundRegistry,
+  });
+
   // permissionMode is intentionally omitted here: AgentSession defaults
   // to 'default' (post-C2 fix), which is the correct mode for Telegram
   // sessions that rely on hook-based permission enforcement.
-  // baseURL / apiKey / cwd / roots flow through the per-query config (not the
-  // constructor), so omitting them here is behavior-preserving vs.
-  // resolveProvider(). surface:'telegram' is the lone constructor arg — there
-  // is no per-query surface field — and prevents the presence file
-  // mis-labeling Telegram sessions as 'cli' in `/watch`.
+  // surface:'telegram' prevents the presence file mis-labeling as 'cli'.
   const codexProvider = new OpenAICompatibleProvider({
     surface: 'telegram',
+    subagentExecutor,
+    skillExecutor,
+    composeExecutor,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
     workspaceStore,
   });
@@ -84,6 +125,12 @@ export async function buildOpenAiTelegramSession(
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
+    // Cascade-abort and drain in-flight children before the writer seals.
+    drainSubagents: async (reason) => {
+      bgNotifier.dispose();
+      await backgroundRegistry.cancelAll();
+      return rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset');
+    },
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
     // Sets config.openaiBaseUrl -> effectiveBaseURL (openai-compatible/index.ts)
@@ -102,6 +149,14 @@ export async function buildOpenAiTelegramSession(
   // same persisted-grant replay as the Anthropic branch. The former
   // pathApprovalGrantRef.current wiring has been retired (#528).
   seedPersistedGrants(codexProvider);
+  boundSession = session;
+  // Subagent-success rollup (parity with Anthropic branch).
+  rootManager.setOnSubagentSucceeded((usage, costUsd) => {
+    session.recordSubagentCompletion(usage, costUsd);
+  });
+  composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
+    session.recordSubagentCompletion(usage, costUsd);
+  });
 
   return session;
 }
