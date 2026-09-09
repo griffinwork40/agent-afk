@@ -73,7 +73,7 @@ function buildHotSection(): { root: HTMLElement; update: (r: HotResponse) => voi
   const meta = el('div', 'mem-hot-meta');
   const pctSpan = el('span', 'mem-hot-pct', '');
   const truncBadge = el('span', 'mem-hot-truncated', 'truncated');
-  truncBadge.style.display = 'none';
+  truncBadge.hidden = true;
   meta.appendChild(pctSpan);
   meta.appendChild(truncBadge);
   header.appendChild(title);
@@ -94,7 +94,7 @@ function buildHotSection(): { root: HTMLElement; update: (r: HotResponse) => voi
   function update(r: HotResponse): void {
     const { content, usage } = r;
     pctSpan.textContent = `${usage.pct}% of ~${usage.maxTokens} token cap`;
-    truncBadge.style.display = usage.truncated ? '' : 'none';
+    truncBadge.hidden = !usage.truncated;
 
     // Usage bar colour thresholds.
     fill.style.width = `${usage.pct}%`;
@@ -104,11 +104,11 @@ function buildHotSection(): { root: HTMLElement; update: (r: HotResponse) => voi
 
     if (content) {
       pre.textContent = content;
-      pre.style.display = '';
-      emptyMsg.style.display = 'none';
+      pre.hidden = false;
+      emptyMsg.hidden = true;
     } else {
-      pre.style.display = 'none';
-      emptyMsg.style.display = '';
+      pre.hidden = true;
+      emptyMsg.hidden = false;
     }
   }
 

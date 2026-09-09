@@ -36,22 +36,22 @@
         <span class="brand-name">afk</span>
       </div>
       <div id="meter" class="meter"></div>
-      <div id="status" class="status">idle</div>
-      <button id="menu-toggle" class="menu-toggle" aria-label="Toggle sessions">☰</button>
+      <div id="status" class="status" role="status" aria-live="polite">idle</div>
+      <button id="menu-toggle" type="button" class="menu-toggle" aria-label="Toggle sessions">☰</button>
     </header>
     <div id="toast" class="toast" hidden></div>
 
     <main class="layout">
       <aside id="sidebar" class="sidebar">
         <nav class="sidebar-nav">
-          <button id="nav-sessions" class="sidebar-nav-btn is-active" data-view="sessions">Sessions</button>
-          <button id="nav-schedules" class="sidebar-nav-btn" data-view="schedules">Schedules</button>
-          <button id="nav-bg-jobs" class="sidebar-nav-btn" data-view="bg-jobs">Jobs</button>
-          <button id="nav-memory" class="sidebar-nav-btn" data-view="memory">Memory</button>
+          <button id="nav-sessions" type="button" class="sidebar-nav-btn is-active" data-view="sessions">Sessions</button>
+          <button id="nav-schedules" type="button" class="sidebar-nav-btn" data-view="schedules">Schedules</button>
+          <button id="nav-bg-jobs" type="button" class="sidebar-nav-btn" data-view="bg-jobs">Jobs</button>
+          <button id="nav-memory" type="button" class="sidebar-nav-btn" data-view="memory">Memory</button>
         </nav>
-        <div class="sidebar-head">
+        <div id="sidebar-head" class="sidebar-head">
           <span>Sessions</span>
-          <button id="new-session" class="new-session" title="Start a new session">+ New</button>
+          <button id="new-session" type="button" class="new-session" title="Start a new session">+ New</button>
         </div>
         <div id="sessions" class="sessions"></div>
       </aside>
@@ -72,10 +72,10 @@
                  caret. Both must share text metrics — see styles.css. -->
             <div class="prompt-wrap">
               <div id="prompt-mirror" class="prompt-mirror" aria-hidden="true"></div>
-              <textarea id="prompt" rows="2" placeholder="Message the agent…"></textarea>
+              <textarea id="prompt" rows="2" placeholder="Message the agent…" aria-label="Message the agent"></textarea>
             </div>
-            <button id="stop" class="stop" hidden>Stop</button>
-            <button id="send" class="send">Send</button>
+            <button id="stop" type="button" class="stop" hidden>Stop</button>
+            <button id="send" type="button" class="send">Send</button>
           </div>
         </div>
       </section>

@@ -118,9 +118,9 @@
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .mem-badge-procedure {
-  background: color-mix(in srgb, #a78bfa 12%, transparent);
-  color: #a78bfa;
-  border: 1px solid color-mix(in srgb, #a78bfa 30%, transparent);
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+  color: var(--purple);
+  border: 1px solid color-mix(in srgb, var(--purple) 30%, transparent);
 }
 
 /* Category badge */
@@ -130,10 +130,10 @@
   background: var(--bg-sunken); border: 1px solid var(--border);
   color: var(--text-faint);
 }
-.mem-badge-preference { color: #67e8f9; border-color: color-mix(in srgb, #67e8f9 30%, transparent); }
-.mem-badge-convention  { color: #86efac; border-color: color-mix(in srgb, #86efac 30%, transparent); }
-.mem-badge-decision    { color: #fbbf24; border-color: color-mix(in srgb, #fbbf24 30%, transparent); }
-.mem-badge-learning    { color: #c4b5fd; border-color: color-mix(in srgb, #c4b5fd 30%, transparent); }
+.mem-badge-preference { color: var(--cyan);     border-color: color-mix(in srgb, var(--cyan)     30%, transparent); }
+.mem-badge-convention  { color: var(--mint);     border-color: color-mix(in srgb, var(--mint)     30%, transparent); }
+.mem-badge-decision    { color: var(--warning);  border-color: color-mix(in srgb, var(--warning)  30%, transparent); }
+.mem-badge-learning    { color: var(--lavender); border-color: color-mix(in srgb, var(--lavender) 30%, transparent); }
 
 .mem-card-date {
   margin-left: auto; font-size: 11px; color: var(--text-faint); white-space: nowrap;

@@ -27,7 +27,7 @@ import {
   type LedgerRecordLike,
   type SessionTotals,
 } from './ledger-adapter.js';
-import type { ToolCallItem, TranscriptItem } from './view-model.js';
+import type { ToolCallItem, SubagentItem, TranscriptItem } from './view-model.js';
 import { resetNodeCache } from './render-incremental.js';
 import { QueuePanel } from './queue-panel.js';
 import { isPinnedToBottom } from './scroll-pin.js';
@@ -120,7 +120,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(msg);
   }
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = `${res.status} ${body}`;
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      if (typeof parsed['message'] === 'string') msg = parsed['message'];
+    } catch { /* body isn't JSON — use raw text */ }
+    throw new Error(msg);
+  }
   return (await res.json()) as T;
 }
 
@@ -153,6 +161,7 @@ function selectSession(id: string): void {
   resetIdCounter();
   resetNodeCache();
   const toolIndex = new Map<string, ToolCallItem>();
+  const subagentIndex = new Map<string, SubagentItem>();
   panel().clear();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
   stream?.stop();
@@ -182,7 +191,7 @@ function selectSession(id: string): void {
         // keeps the queue a queue rather than a write-through.
         void panel().flush();
       }
-      const item = ledgerRecordToItem(record, toolIndex);
+      const item = ledgerRecordToItem(record, toolIndex, subagentIndex);
       totals = accumulateTotals(totals, record);
       if (item) {
         items.push(item);

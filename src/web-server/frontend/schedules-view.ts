@@ -182,7 +182,7 @@ export class SchedulesView {
     const toggleDot = el('span', 'sched-toggle-dot');
     toggle.appendChild(toggleDot);
     toggle.title = s.enabled ? 'Disable' : 'Enable';
-    toggle.addEventListener('click', () => void this.toggleSchedule(s.id));
+    toggle.addEventListener('click', () => void this.toggleSchedule(s.id, toggle));
     topRow.appendChild(toggle);
     card.appendChild(topRow);
 
@@ -227,29 +227,44 @@ export class SchedulesView {
     actions.appendChild(editBtn);
 
     const deleteBtn = el('button', 'sched-action-btn sched-action-danger', 'Delete');
-    deleteBtn.addEventListener('click', () => void this.deleteSchedule(s.id, s.name));
+    deleteBtn.addEventListener('click', () => void this.deleteSchedule(s.id, s.name, deleteBtn));
     actions.appendChild(deleteBtn);
 
     card.appendChild(actions);
     return card;
   }
 
-  private async toggleSchedule(id: string): Promise<void> {
+  /** Prevent concurrent toggle/delete calls while an API request is in flight. */
+  private inflight = false;
+
+  private async toggleSchedule(id: string, btn: HTMLButtonElement): Promise<void> {
+    if (this.inflight) return;
+    this.inflight = true;
+    btn.disabled = true;
     try {
       await this.api(`/api/schedules/${encodeURIComponent(id)}/toggle`, { method: 'POST' });
-      await this.load();
+      await this.load(); // rebuilds DOM, so btn is gone after this
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'toggle failed');
+      btn.disabled = false;
+    } finally {
+      this.inflight = false;
     }
   }
 
-  private async deleteSchedule(id: string, name: string): Promise<void> {
+  private async deleteSchedule(id: string, name: string, btn: HTMLButtonElement): Promise<void> {
+    if (this.inflight) return;
     if (!confirm(`Delete schedule "${name}"? This cannot be undone.`)) return;
+    this.inflight = true;
+    btn.disabled = true;
     try {
       await this.api(`/api/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      await this.load();
+      await this.load(); // rebuilds DOM, so btn is gone after this
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'delete failed');
+      btn.disabled = false;
+    } finally {
+      this.inflight = false;
     }
   }
 }

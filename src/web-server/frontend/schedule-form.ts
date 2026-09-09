@@ -69,14 +69,22 @@ export function openScheduleForm(
   overlay.id = 'sched-form-overlay';
 
   const modal = el('div', 'sched-modal');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'sched-form-title');
 
   // Title
-  modal.appendChild(el('h3', 'sched-modal-title', isEdit ? 'Edit Schedule' : 'New Schedule'));
+  const titleEl = el('h3', 'sched-modal-title', isEdit ? 'Edit Schedule' : 'New Schedule');
+  titleEl.id = 'sched-form-title';
+  modal.appendChild(titleEl);
 
   // Name
   const nameGroup = el('div', 'sched-field');
-  nameGroup.appendChild(el('label', 'sched-label', 'Name'));
+  const nameLabel = el('label', 'sched-label', 'Name');
+  nameLabel.htmlFor = 'sf-name';
+  nameGroup.appendChild(nameLabel);
   const nameInput = document.createElement('input');
+  nameInput.id = 'sf-name';
   nameInput.type = 'text';
   nameInput.className = 'sched-input';
   nameInput.placeholder = 'e.g. Nightly forge';
@@ -86,8 +94,11 @@ export function openScheduleForm(
 
   // Command
   const cmdGroup = el('div', 'sched-field');
-  cmdGroup.appendChild(el('label', 'sched-label', 'Command'));
+  const cmdLabel = el('label', 'sched-label', 'Command');
+  cmdLabel.htmlFor = 'sf-command';
+  cmdGroup.appendChild(cmdLabel);
   const cmdInput = document.createElement('input');
+  cmdInput.id = 'sf-command';
   cmdInput.type = 'text';
   cmdInput.className = 'sched-input sched-input-mono';
   cmdInput.placeholder = 'e.g. /forge-friction --auto';
@@ -97,9 +108,12 @@ export function openScheduleForm(
 
   // Cron
   const cronGroup = el('div', 'sched-field');
-  cronGroup.appendChild(el('label', 'sched-label', 'Schedule'));
+  const cronLabel = el('label', 'sched-label', 'Schedule');
+  cronLabel.htmlFor = 'sf-cron-select';
+  cronGroup.appendChild(cronLabel);
 
   const cronSelect = document.createElement('select');
+  cronSelect.id = 'sf-cron-select';
   cronSelect.className = 'sched-select';
   for (const preset of CRON_PRESETS) {
     const opt = document.createElement('option');
@@ -109,6 +123,7 @@ export function openScheduleForm(
   }
 
   const cronInput = document.createElement('input');
+  cronInput.id = 'sf-cron';
   cronInput.type = 'text';
   cronInput.className = 'sched-input sched-input-mono';
   cronInput.placeholder = '0 2 * * *';
@@ -116,32 +131,41 @@ export function openScheduleForm(
 
   const cronPreview = el('div', 'sched-cron-preview');
 
+  // Tracks whether the custom cron text input is active (true) or a preset is
+  // selected (false). This is the authoritative state; never read style.display.
+  let useCustomCron = false;
+
   // Set initial state
   const initialCron = schedule?.cron ?? '';
   const matchingPreset = CRON_PRESETS.find((p) => p.value === initialCron);
   if (matchingPreset && matchingPreset.value !== '') {
     cronSelect.value = matchingPreset.value;
-    cronInput.style.display = 'none';
+    cronInput.hidden = true;
+    useCustomCron = false;
   } else if (initialCron) {
     cronSelect.value = '';
-    cronInput.style.display = '';
+    cronInput.hidden = false;
+    useCustomCron = true;
   } else {
     cronSelect.value = CRON_PRESETS[0]?.value ?? '';
-    cronInput.style.display = 'none';
+    cronInput.hidden = true;
     cronInput.value = cronSelect.value;
+    useCustomCron = false;
   }
 
   const updatePreview = (): void => {
-    const val = cronInput.style.display === 'none' ? cronSelect.value : cronInput.value;
+    const val = useCustomCron ? cronInput.value : cronSelect.value;
     cronPreview.textContent = val ? describeCron(val) : '';
   };
 
   cronSelect.addEventListener('change', () => {
     if (cronSelect.value === '') {
-      cronInput.style.display = '';
+      cronInput.hidden = false;
+      useCustomCron = true;
       cronInput.focus();
     } else {
-      cronInput.style.display = 'none';
+      cronInput.hidden = true;
+      useCustomCron = false;
       cronInput.value = cronSelect.value;
     }
     updatePreview();
@@ -156,8 +180,11 @@ export function openScheduleForm(
 
   // Trigger mode
   const trigGroup = el('div', 'sched-field');
-  trigGroup.appendChild(el('label', 'sched-label', 'Trigger'));
+  const trigLabel = el('label', 'sched-label', 'Trigger');
+  trigLabel.htmlFor = 'sf-trigger';
+  trigGroup.appendChild(trigLabel);
   const trigSelect = document.createElement('select');
+  trigSelect.id = 'sf-trigger';
   trigSelect.className = 'sched-select';
   for (const [val, label] of [
     ['cron', 'Cron schedule only'],
@@ -175,8 +202,11 @@ export function openScheduleForm(
 
   // Notify
   const notifyGroup = el('div', 'sched-field');
-  notifyGroup.appendChild(el('label', 'sched-label', 'Notifications'));
+  const notifyLabel = el('label', 'sched-label', 'Notifications');
+  notifyLabel.htmlFor = 'sf-notify';
+  notifyGroup.appendChild(notifyLabel);
   const notifySelect = document.createElement('select');
+  notifySelect.id = 'sf-notify';
   notifySelect.className = 'sched-select';
   for (const [val, label] of [
     ['failure', 'On failure only'],
@@ -195,9 +225,11 @@ export function openScheduleForm(
   // Buttons
   const btnRow = el('div', 'sched-btn-row');
   const cancelBtn = el('button', 'sched-cancel-btn', 'Cancel');
+  cancelBtn.type = 'button';
   cancelBtn.addEventListener('click', () => overlay.remove());
 
   const saveBtn = el('button', 'sched-save-btn', isEdit ? 'Save Changes' : 'Create Schedule');
+  saveBtn.type = 'button';
   saveBtn.addEventListener('click', () => {
     void save();
   });
@@ -215,6 +247,21 @@ export function openScheduleForm(
   document.body.appendChild(overlay);
   nameInput.focus();
 
+  // Focus trap: cycle Tab/Shift+Tab within the modal
+  const focusableSelectors = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled])';
+  modal.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from(modal.querySelectorAll<HTMLElement>(focusableSelectors));
+    if (focusable.length === 0) return;
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
+
   // Close on Escape or overlay click
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close();
@@ -227,7 +274,7 @@ export function openScheduleForm(
   async function save(): Promise<void> {
     const name = nameInput.value.trim();
     const command = cmdInput.value.trim();
-    const cron = cronInput.style.display === 'none' ? cronSelect.value : cronInput.value.trim();
+    const cron = useCustomCron ? cronInput.value.trim() : cronSelect.value;
 
     if (!name || !command || !cron) {
       showToast('Name, command, and schedule are required');

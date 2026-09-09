@@ -14,7 +14,7 @@
  * collapsing them would erase that distinction.
  */
 
-import type { TranscriptItem, ToolCallItem } from './view-model.js';
+import type { TranscriptItem, ToolCallItem, SubagentItem } from './view-model.js';
 
 /**
  * The subset of ledger record shape the web UI renders.
@@ -60,6 +60,8 @@ export function ledgerRecordToItem(
   record: LedgerRecordLike,
   /** Optional mutable index for matching `tool_result` back to an earlier `tool` item. */
   toolIndex?: Map<string, ToolCallItem>,
+  /** Optional mutable index for deduplicating `subagent_lifecycle` records by subagentId. */
+  subagentIndex?: Map<string, SubagentItem>,
 ): TranscriptItem | undefined {
   const payload = record;
   if (typeof payload.kind !== 'string') return undefined;
@@ -212,7 +214,21 @@ export function ledgerRecordToItem(
       const status = str(payload['status']) ?? 'unknown';
       const agentType = str(payload['agentType']);
       const label = agentType ? `${agentType} (${subId.slice(0, 8)})` : subId.slice(0, 12);
-      return {
+      // Deduplicate: if we've already emitted a card for this subagentId, patch
+      // the existing item in place (status and durationMs come from later records)
+      // rather than appending a new card. This is the exact same pattern used by
+      // tool_result above for tool dedup.
+      if (subagentIndex) {
+        const existing = subagentIndex.get(subId);
+        if (existing) {
+          existing.status = status;
+          if (num(payload['durationMs']) !== undefined) {
+            existing.durationMs = num(payload['durationMs']);
+          }
+          return undefined; // patched in place — no new item
+        }
+      }
+      const item: SubagentItem = {
         kind: 'subagent' as const,
         id: nextId('sa'),
         subagentId: subId,
@@ -222,6 +238,8 @@ export function ledgerRecordToItem(
         durationMs: num(payload['durationMs']),
         promptHead: str(payload['promptHead']),
       };
+      subagentIndex?.set(subId, item);
+      return item;
     }
 
     case 'background_job': {
@@ -243,13 +261,15 @@ export function ledgerRecordToItem(
 
 /**
  * Convert a list of ledger records into transcript items, correlating
- * `tool_result` records with their preceding `tool` records via toolUseId.
+ * `tool_result` records with their preceding `tool` records via toolUseId,
+ * and deduplicating `subagent_lifecycle` records by subagentId.
  */
 export function ledgerToItems(records: LedgerRecordLike[]): TranscriptItem[] {
   const toolIndex = new Map<string, ToolCallItem>();
+  const subagentIndex = new Map<string, SubagentItem>();
   const items: TranscriptItem[] = [];
   for (const rec of records) {
-    const item = ledgerRecordToItem(rec, toolIndex);
+    const item = ledgerRecordToItem(rec, toolIndex, subagentIndex);
     if (item) items.push(item);
   }
   return items;

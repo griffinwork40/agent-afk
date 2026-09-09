@@ -83,8 +83,10 @@ export function toggleNewSessionForm(
   cwdInput.type = 'text';
   cwdInput.className = 'nsf-input';
   cwdInput.placeholder = 'working directory (optional)';
+  cwdInput.setAttribute('aria-label', 'Working directory');
 
   const createBtn = document.createElement('button');
+  createBtn.type = 'button';
   createBtn.className = 'nsf-btn';
   createBtn.textContent = 'Create';
   const commit = (): void => {

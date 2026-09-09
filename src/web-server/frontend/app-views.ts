@@ -19,6 +19,7 @@ import { openScheduleForm } from './schedule-form.js';
 import { openScheduleHistory } from './schedule-history.js';
 import { renderBgJobsPanel, type BgJobMeta } from './bg-jobs-panel.js';
 import { createMemoryPanel } from './memory-panel.js';
+import { showToast } from './app-chrome.js';
 
 export type ApiFunction = <T>(path: string, init?: RequestInit) => Promise<T>;
 
@@ -29,6 +30,9 @@ let schedulesView: SchedulesView | undefined;
 
 /** Lazy singleton — constructed on first switch to the memory view. */
 let memoryPanel: (HTMLElement & { refresh(): void }) | undefined;
+
+/** AbortController for the in-flight bg-jobs fetch. Aborted on each view switch. */
+let bgJobsAbortController: AbortController | undefined;
 
 /** IDs of all nav buttons (toggled is-active). */
 const NAV_IDS = ['nav-sessions', 'nav-schedules', 'nav-bg-jobs', 'nav-memory'] as const;
@@ -51,11 +55,6 @@ function setHidden(id: string, hide: boolean): void {
   if (el) el.hidden = hide;
 }
 
-function setHiddenBySelector(sel: string, hide: boolean): void {
-  const el = document.querySelector(sel) as HTMLElement | null;
-  if (el) el.hidden = hide;
-}
-
 /**
  * Switch between the top-level views.
  *
@@ -74,7 +73,7 @@ export function switchView(view: ViewName, api: ApiFunction): void {
 
   // Toggle session-view elements
   for (const id of SESSION_EL_IDS) setHidden(id, !isSessionsView);
-  setHiddenBySelector('.sidebar-head', !isSessionsView);
+  setHidden('sidebar-head', !isSessionsView);
   setHidden('sessions', !isSessionsView);
 
   // Toggle all alternate view containers — hide all, then show the target.
@@ -104,12 +103,17 @@ export function switchView(view: ViewName, api: ApiFunction): void {
   if (view === 'bg-jobs') {
     const bgView = document.getElementById('bg-jobs-view');
     if (bgView) {
+      // Abort any in-flight request from a previous visit to this view.
+      bgJobsAbortController?.abort();
+      bgJobsAbortController = new AbortController();
+      const { signal } = bgJobsAbortController;
       void (async () => {
         try {
-          const data = (await api<{ jobs: BgJobMeta[] }>('/api/bg-jobs'));
+          const data = await api<{ jobs: BgJobMeta[] }>('/api/bg-jobs', { signal });
           renderBgJobsPanel(bgView, data.jobs);
-        } catch {
-          renderBgJobsPanel(bgView, []);
+        } catch (err) {
+          if (err instanceof Error && err.name === 'AbortError') return;
+          showToast(err instanceof Error ? err.message : 'Failed to load background jobs');
         }
       })();
     }

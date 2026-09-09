@@ -15,6 +15,10 @@
   --success: #4ade80;
   --error: #f87171;
   --warning: #fbbf24;
+  --purple: #a78bfa;
+  --cyan: #67e8f9;
+  --mint: #86efac;
+  --lavender: #c4b5fd;
   --radius: 8px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
@@ -49,6 +53,7 @@ html, body {
   background: var(--bg-raised);
   position: sticky;
   top: 0;
+  /* z-ladder: content=0, backdrop=8, sidebar=9, topbar=10, approvals=15, slash-menu=20, at-popover=25, modal=50 */
   z-index: 10;
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }

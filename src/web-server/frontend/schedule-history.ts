@@ -66,7 +66,12 @@ export function openScheduleHistory(
   overlay.id = 'sched-history-overlay';
 
   const modal = el('div', 'sched-modal sched-modal-wide');
-  modal.appendChild(el('h3', 'sched-modal-title', `History: ${scheduleId}`));
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'sched-history-title');
+  const titleEl = el('h3', 'sched-modal-title', `History: ${scheduleId}`);
+  titleEl.id = 'sched-history-title';
+  modal.appendChild(titleEl);
 
   const body = el('div', 'sched-history-body');
   body.appendChild(el('div', 'sched-history-loading', 'Loading...'));
@@ -78,11 +83,28 @@ export function openScheduleHistory(
   };
 
   const closeBtn = el('button', 'sched-cancel-btn', 'Close');
+  closeBtn.type = 'button';
   closeBtn.addEventListener('click', close);
   modal.appendChild(closeBtn);
 
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
+  closeBtn.focus();
+
+  // Focus trap: cycle Tab/Shift+Tab within the modal
+  const focusableSelectors = 'input:not([disabled]), select:not([disabled]), button:not([disabled]), textarea:not([disabled])';
+  modal.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from(modal.querySelectorAll<HTMLElement>(focusableSelectors));
+    if (focusable.length === 0) return;
+    const first = focusable[0]!;
+    const last = focusable[focusable.length - 1]!;
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  });
 
   // Close on Escape or overlay click
   overlay.addEventListener('click', (e) => {
