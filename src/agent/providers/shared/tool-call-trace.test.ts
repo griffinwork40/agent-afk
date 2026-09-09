@@ -227,6 +227,17 @@ describe('buildToolCallStartedPayload', () => {
     expect('resourceFingerprint' in agent).toBe(false);
   });
 
+  it('does not include resourceFingerprint for glob tool calls', () => {
+    // glob is a filesystem tool but has no single named resource that maps
+    // cleanly to a dedup key (pattern + base dir combo is not equivalent to
+    // a file identity), so resourceFingerprint must be absent.
+    const payload = buildToolCallStartedPayload({
+      toolUseId: 'gl_1', name: 'glob',
+      input: { pattern: 'src/**/*.ts', path: '/src' },
+    });
+    expect('resourceFingerprint' in payload).toBe(false);
+  });
+
   it('normalizes trailing slashes and consecutive slashes in read_file paths', () => {
     const clean = buildToolCallStartedPayload({
       toolUseId: 'norm_a', name: 'read_file',

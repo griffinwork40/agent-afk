@@ -102,7 +102,22 @@ describe('accumulateTotals', () => {
 
   it('tolerates a done record with no cost or duration', () => {
     const t = accumulateTotals(zero, { kind: 'done' });
-    expect(t).toEqual({ costUsd: 0, durationMs: 0, turns: 1 });
+    expect(t.costUsd).toBe(0);
+    expect(t.durationMs).toBe(0);
+    expect(t.turns).toBe(1);
+    expect(t.inputTokens).toBe(0);
+    expect(t.outputTokens).toBe(0);
+    expect(t.cacheReadTokens).toBe(0);
+  });
+
+  it('accumulates token breakdown from done records', () => {
+    let t = zero;
+    t = accumulateTotals(t, { kind: 'done', inputTokens: 100, outputTokens: 50, cacheReadTokens: 10 });
+    t = accumulateTotals(t, { kind: 'done', inputTokens: 200, outputTokens: 75 });
+    expect(t.inputTokens).toBe(300);
+    expect(t.outputTokens).toBe(125);
+    expect(t.cacheReadTokens).toBe(10);
+    expect(t.turns).toBe(2);
   });
 });
 
@@ -162,5 +177,81 @@ describe('ledgerRecordToItem — tool_error legibility', () => {
       name: 'error',
       inputPreview: '',
     });
+  });
+});
+
+describe('ledgerRecordToItem — Wave 1 new kinds', () => {
+  it('renders thinking records as ThinkingItems', () => {
+    const item = ledgerRecordToItem({ kind: 'thinking', text: 'reasoning...' });
+    expect(item?.kind).toBe('thinking');
+    expect(item && 'text' in item ? item.text : undefined).toBe('reasoning...');
+  });
+
+  it('renders tool_activity as a parallel-wave notice', () => {
+    const item3 = ledgerRecordToItem({ kind: 'tool_activity', activeCount: 3, activeToolUseIds: ['a', 'b', 'c'] });
+    expect(item3?.kind).toBe('notice');
+    expect(item3 && 'text' in item3 ? item3.text : '').toContain('3');
+    expect(item3 && 'text' in item3 ? item3.text : '').toContain('parallel');
+
+    const item0 = ledgerRecordToItem({ kind: 'tool_activity', activeCount: 0, activeToolUseIds: [] });
+    expect(item0?.kind).toBe('notice');
+    expect(item0 && 'text' in item0 ? item0.text : '').toContain('complete');
+  });
+
+  it('renders rate_limit as a notice with retry info when available', () => {
+    const withDelay = ledgerRecordToItem({ kind: 'rate_limit', retryAfterMs: 5000 });
+    expect(withDelay?.kind).toBe('notice');
+    expect(withDelay && 'text' in withDelay ? withDelay.text : '').toContain('5s');
+
+    const bare = ledgerRecordToItem({ kind: 'rate_limit' });
+    expect(bare?.kind).toBe('notice');
+    expect(bare && 'text' in bare ? bare.text : '').toContain('Rate limited');
+  });
+
+  it('renders progress as a notice', () => {
+    const item = ledgerRecordToItem({ kind: 'progress', message: 'Analyzing code...' });
+    expect(item?.kind).toBe('notice');
+    expect(item && 'text' in item ? item.text : '').toBe('Analyzing code...');
+  });
+
+  it('renders subagent_lifecycle as a structured card', () => {
+    const item = ledgerRecordToItem({
+      kind: 'subagent_lifecycle',
+      subagentId: 'sa-abc123',
+      status: 'succeeded',
+      agentType: 'research-agent',
+      durationMs: 2500,
+    });
+    expect(item?.kind).toBe('subagent');
+    if (item?.kind === 'subagent') {
+      expect(item.status).toBe('succeeded');
+      expect(item.label).toContain('research-agent');
+      expect(item.durationMs).toBe(2500);
+    }
+  });
+
+  it('renders background_job as a structured card', () => {
+    const item = ledgerRecordToItem({ kind: 'background_job', jobId: 'bg-1', status: 'completed', label: 'my task' });
+    expect(item?.kind).toBe('bg_job');
+    if (item?.kind === 'bg_job') {
+      expect(item.status).toBe('completed');
+      expect(item.label).toBe('my task');
+    }
+  });
+
+  it('renders plan_mode as a notice', () => {
+    const item = ledgerRecordToItem({ kind: 'plan_mode', mode: 'plan' });
+    expect(item?.kind).toBe('notice');
+    const text = item && 'text' in item ? item.text : '';
+    expect(text).toContain('plan');
+  });
+
+  it('done notice includes token breakdown when present', () => {
+    const item = ledgerRecordToItem({ kind: 'done', inputTokens: 100, outputTokens: 50, cacheReadTokens: 10 });
+    expect(item?.kind).toBe('notice');
+    const text = item && 'text' in item ? item.text : '';
+    expect(text).toContain('100in');
+    expect(text).toContain('50out');
+    expect(text).toContain('10cache');
   });
 });

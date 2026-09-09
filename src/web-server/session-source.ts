@@ -50,6 +50,15 @@ const TITLE_MAX_LEN = 80;
  */
 const HEAD_RECORD_SCAN_LIMIT = 20;
 
+/**
+ * Detect plugin/skill preamble text injected as a synthetic first user turn.
+ * These start with a bracketed tag like `[agent-workflow-amplifiers: unlocked]`
+ * or `[skill-routing: active]` and carry no user-authored content.
+ */
+function isPreamble(text: string): boolean {
+  return /^\s*\[[\w-]+[:\s]/.test(text);
+}
+
 function truncateTitle(text: string): string {
   const flat = text.trim().replace(/\s+/g, ' ');
   return flat.length > TITLE_MAX_LEN ? `${flat.slice(0, TITLE_MAX_LEN)}…` : flat;
@@ -77,6 +86,12 @@ async function readLedgerHead(
         if (rec.cwd !== undefined) out.cwd = rec.cwd;
         if (rec.surface !== undefined) out.surface = rec.surface;
       } else if (rec.kind === 'user' && out.title === undefined) {
+        // Invariant: plugin-dispatched sessions open with a synthetic user
+        // turn carrying the plugin preamble ("[plugin-name: unlocked] …").
+        // That boilerplate is identical across sessions and pushes the real
+        // task description past the truncation point (6 distinct titles
+        // across 100 sessions). Skip it and take the next user record.
+        if (isPreamble(rec.text)) continue;
         out.title = truncateTitle(rec.text);
       }
       if (out.title !== undefined && (out.cwd !== undefined || out.surface !== undefined)) break;

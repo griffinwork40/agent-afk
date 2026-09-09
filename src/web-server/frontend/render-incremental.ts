@@ -12,7 +12,7 @@
  * is cleared and all nodes are recreated from scratch.
  */
 
-import type { TranscriptItem } from './view-model.js';
+import type { TranscriptItem } from './ledger-adapter.js';
 
 /**
  * Module-level cache: maps item.id → the DOM node that represents it.
@@ -22,6 +22,11 @@ import type { TranscriptItem } from './view-model.js';
  * reset), so stale entries from a previous session never collide with a new one.
  */
 const nodeCache = new Map<string, HTMLElement>();
+
+/** Explicitly clear the cache on session switch. */
+export function resetNodeCache(): void {
+  nodeCache.clear();
+}
 
 /**
  * True when `item` should replace its existing DOM node rather than be skipped.

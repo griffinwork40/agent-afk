@@ -158,6 +158,39 @@ export type OutputEvent =
       type: 'resumed';
       hotSwapped: boolean;
       accountId?: string;
+    }
+  // Subagent lifecycle marker (Wave 0-C). Mirrors the trace-level
+  // 'subagent_lifecycle' event so live surfaces can display per-fork
+  // status (started / succeeded / failed / cancelled) and cost/timing
+  // metadata without scraping the witness trace. Wave 1 handles emission.
+  | {
+      type: 'subagent_lifecycle';
+      subagentId: string;
+      status: 'started' | 'succeeded' | 'failed' | 'cancelled';
+      model?: string;
+      agentType?: string;
+      durationMs?: number;
+      totalCostUsd?: number;
+      outputBytes?: number;
+      errorClass?: string;
+      errorMessage?: string;
+      promptHead?: string;
+    }
+  // Background-job state marker (Wave 0-C). Surfaces job transitions
+  // (started / completed / failed / cancelled / delivered) to live UIs
+  // without requiring a separate polling channel. Wave 1 handles emission.
+  | {
+      type: 'background_job';
+      jobId: string;
+      status: 'started' | 'completed' | 'failed' | 'cancelled' | 'delivered';
+      label?: string;
+    }
+  // Plan-mode transition marker (Wave 0-C). Emitted when the session
+  // enters or exits plan mode so surfaces can update their rendering
+  // without parsing assistant text. Wave 1 handles emission.
+  | {
+      type: 'plan_mode';
+      mode: 'plan' | 'implement' | 'default';
     };
 
 /** Summary of in-flight subagent / task progress, emitted by the SDK. */

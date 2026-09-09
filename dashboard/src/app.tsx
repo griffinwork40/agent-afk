@@ -1,0 +1,242 @@
+import { useState } from 'react';
+import { Sidebar } from './components/sidebar';
+import { CommandPalette } from './components/command-palette';
+import { KeyboardShortcuts } from './components/keyboard-shortcuts';
+import { TranscriptView } from './components/transcript-view';
+import { SessionMeter } from './components/session-meter';
+import { MemoryView } from './components/memory-view';
+import { SchedulesView } from './components/schedules-view';
+import { BgJobsView } from './components/bg-jobs-view';
+import { Composer } from './components/composer';
+import { ApprovalCards } from './components/approval-cards';
+import { MobileSidebar, HamburgerButton } from './components/mobile-sidebar';
+import { ToastProvider } from './components/toast';
+import { useSessions } from './hooks/use-sessions';
+import { usePendingApprovals } from './hooks/use-pending-approvals';
+import { useTranscript } from './hooks/use-transcript';
+import { useScrollPin } from './hooks/use-scroll-pin';
+
+type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
+
+export function App() {
+  return (
+    <ToastProvider>
+      <Dashboard />
+    </ToastProvider>
+  );
+}
+
+function Dashboard() {
+  const { sessions, loading } = useSessions();
+  const { approvals, pendingSessionIds } = usePendingApprovals();
+
+  const [activeNav, setActiveNav] = useState<NavItem>('sessions');
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  const selectedSession = sessions.find((s) => s.id === selectedSessionId);
+  const { items, totals, status } = useTranscript(selectedSessionId);
+  const { containerRef } = useScrollPin();
+
+  const handleNavigate = (nav: string) => {
+    setActiveNav(nav as NavItem);
+    setMobileSidebarOpen(false);
+  };
+
+  const handleSelectSession = (id: string) => {
+    setSelectedSessionId(id);
+    setMobileSidebarOpen(false);
+  };
+
+  const isBusy = status === 'open' || status === 'connecting';
+
+  const sidebarContent = (
+    <Sidebar
+      sessions={sessions}
+      pendingSessionIds={pendingSessionIds}
+      selectedSessionId={selectedSessionId}
+      onSelectSession={handleSelectSession}
+      activeNav={activeNav}
+      onNavChange={handleNavigate}
+      collapsed={sidebarCollapsed}
+      onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+    />
+  );
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      <CommandPalette onNavigate={handleNavigate} />
+      <KeyboardShortcuts onNavigate={handleNavigate} />
+
+      {/* Desktop sidebar */}
+      <div className="hidden md:block">{sidebarContent}</div>
+
+      {/* Mobile sidebar */}
+      <MobileSidebar
+        open={mobileSidebarOpen}
+        onClose={() => setMobileSidebarOpen(false)}
+      >
+        {sidebarContent}
+      </MobileSidebar>
+
+      <main className="flex flex-1 flex-col overflow-hidden">
+        {/* Top bar */}
+        <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+          <div className="flex items-center gap-3">
+            <HamburgerButton
+              className="md:hidden"
+              onClick={() => setMobileSidebarOpen(true)}
+            />
+            <h1 className="text-sm font-medium text-muted-foreground">
+              {activeNav === 'sessions' && 'Sessions'}
+              {activeNav === 'memory' && 'Memory'}
+              {activeNav === 'schedules' && 'Schedules'}
+              {activeNav === 'jobs' && 'Background Jobs'}
+              {activeNav === 'settings' && 'Settings'}
+            </h1>
+            {activeNav === 'sessions' && selectedSession && (
+              <StreamStatusDot status={status} />
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {activeNav === 'sessions' && selectedSession && (
+              <SessionMeter totals={totals} />
+            )}
+            <kbd className="hidden rounded border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-block">
+              ⌘K
+            </kbd>
+          </div>
+        </header>
+
+        {/* Content area */}
+        <div ref={containerRef} className="relative flex flex-1 flex-col overflow-y-auto">
+          <div className="flex-1">
+            {activeNav === 'sessions' && (
+              <SessionContent
+                loading={loading}
+                sessions={sessions}
+                selectedSession={selectedSession}
+                items={items}
+                totals={totals}
+                status={status}
+              />
+            )}
+            {activeNav === 'memory' && <MemoryView />}
+            {activeNav === 'schedules' && <SchedulesView />}
+            {activeNav === 'jobs' && <BgJobsView />}
+            {activeNav === 'settings' && (
+              <PlaceholderView title="Settings" phase={5} />
+            )}
+          </div>
+
+          {/* Composer + approvals (sessions view only, live sessions) */}
+          {activeNav === 'sessions' && selectedSession && selectedSession.mode === 'live' && (
+            <div className="shrink-0 border-t bg-card">
+              {approvals.length > 0 && (
+                <ApprovalCards approvals={approvals} />
+              )}
+              <Composer
+                sessionId={selectedSession.id}
+                sessionMode={selectedSession.mode}
+                isBusy={isBusy}
+              />
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components (kept in app.tsx to avoid over-splitting trivial pieces)
+// ---------------------------------------------------------------------------
+
+import type { SessionSummary } from './types/api';
+import type { TranscriptItem, SessionTotals } from './components/transcript-view';
+
+function SessionContent({
+  loading,
+  sessions,
+  selectedSession,
+  items,
+  totals,
+  status,
+}: {
+  loading: boolean;
+  sessions: SessionSummary[];
+  selectedSession: SessionSummary | undefined;
+  items: TranscriptItem[];
+  totals: SessionTotals;
+  status: string;
+}) {
+  if (loading && !sessions.length) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+          <div className="size-6 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span className="text-sm">Loading sessions...</span>
+        </div>
+      </div>
+    );
+  }
+  if (!loading && sessions.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        <p className="text-sm">
+          No sessions found. Start one with{' '}
+          <code className="rounded bg-secondary px-1 font-mono">afk web</code>
+        </p>
+      </div>
+    );
+  }
+  if (selectedSession && items.length > 0) {
+    return <TranscriptView items={items} totals={totals} />;
+  }
+  if (selectedSession) {
+    return (
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        <div className="flex flex-col items-center gap-2">
+          {status === 'connecting' || status === 'reconnecting' ? (
+            <>
+              <div className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span className="text-sm">Connecting to session...</span>
+            </>
+          ) : (
+            <span className="text-sm">No transcript data</span>
+          )}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full items-center justify-center text-muted-foreground">
+      <p className="text-sm">Select a session from the sidebar</p>
+    </div>
+  );
+}
+
+function StreamStatusDot({ status }: { status: string }) {
+  if (status === 'open') {
+    return <span className="size-2 rounded-full bg-status-running" title="Live" />;
+  }
+  if (status === 'connecting' || status === 'reconnecting') {
+    return <span className="size-2 animate-pulse rounded-full bg-status-blocked" title={status} />;
+  }
+  if (status === 'ended') {
+    return <span className="size-2 rounded-full bg-muted-foreground" title="Session ended" />;
+  }
+  return null;
+}
+
+function PlaceholderView({ title, phase }: { title: string; phase: number }) {
+  return (
+    <div className="flex h-full items-center justify-center text-muted-foreground">
+      <div className="text-center">
+        <h2 className="text-lg font-medium">{title}</h2>
+        <p className="mt-1 text-sm">Coming in Phase {phase}</p>
+      </div>
+    </div>
+  );
+}

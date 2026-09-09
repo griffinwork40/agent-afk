@@ -15,12 +15,20 @@
   --success: #4ade80;
   --error: #f87171;
   --warning: #fbbf24;
+  --purple: #a78bfa;
+  --cyan: #67e8f9;
+  --mint: #86efac;
+  --lavender: #c4b5fd;
   --radius: 8px;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
+/* Invariant: the hidden attribute must always win over CSS display rules.
+   Elements like .transcript and .composer have explicit display values that
+   override the UA [hidden] { display: none } in some browsers. */
+[hidden] { display: none !important; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #prompt:focus-visible, .approval-input:focus-visible { outline: none; }
 
@@ -45,6 +53,7 @@ html, body {
   background: var(--bg-raised);
   position: sticky;
   top: 0;
+  /* z-ladder: content=0, backdrop=8, sidebar=9, topbar=10, approvals=15, slash-menu=20, at-popover=25, modal=50 */
   z-index: 10;
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -281,7 +290,7 @@ details[open] > .tool-summary::before { transform: rotate(90deg); }
   background: var(--bg-raised); border: 1px solid var(--border);
   border-radius: var(--radius); box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
 }
-.slash-menu[hidden] { display: none; }
+/* [hidden] handled by global rule — no per-element override needed. */
 .slash-status {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
@@ -416,3 +425,256 @@ details[open] > .tool-summary::before { transform: rotate(90deg); }
   font-weight: 600; cursor: pointer;
 }
 .nsf-btn:hover { opacity: 0.88; }
+
+/* ── thinking panel (thinking-panel.ts) ──────────────────────────────────── */
+/*
+ * Invariant: expand/collapse is driven by the `.thinking-block--open` modifier
+ * class toggled in JS — NOT by `<details>` open attribute. This keeps the panel
+ * compatible with the incremental renderer, which keys change-detection off
+ * `.className` and would fight with native `<details>` state.
+ */
+.thinking-host { max-width: 900px; width: 100%; margin-bottom: 14px; }
+
+.thinking-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+/* Summary row — always visible, acts as the click target. */
+.thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  /* No border-bottom by default; appears only when open (see below). */
+}
+.thinking-summary:hover { color: var(--text-dim); }
+
+/* Rotated chevron mirrors the tool-summary::before convention. */
+.thinking-chevron {
+  font-size: 14px;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+  flex: 0 0 auto;
+  line-height: 1;
+}
+.thinking-block--open .thinking-chevron { transform: rotate(90deg); }
+
+.thinking-label { letter-spacing: 0.03em; }
+
+/* Body — hidden until the block is open. */
+.thinking-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.thinking-block--open .thinking-body { display: block; }
+
+/* Verbatim thinking text — monospace, slightly dimmed, scrollable. */
+.thinking-pre {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+/* Focus ring for keyboard navigation (role=button on .thinking-summary). */
+.thinking-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── subagent tree panel (Wave 2-E) ──────────────────────────────────────── */
+.sat-tree {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 6px 0;
+  user-select: none;
+}
+.sat-node { display: flex; flex-direction: column; }
+.sat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sat-row-expandable { cursor: pointer; }
+.sat-row-expandable:hover { background: var(--bg-raised); }
+
+/* toggle arrow */
+.sat-toggle {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: var(--text-faint);
+  width: 12px;
+  display: inline-block;
+}
+
+/* tree connector (monospace spine) */
+.sat-indent {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  white-space: pre;
+}
+
+/* status icons */
+.sat-icon { flex-shrink: 0; font-size: 11px; width: 14px; text-align: center; }
+.sat-icon-started  { color: var(--accent); animation: sat-spin 1.2s linear infinite; }
+.sat-icon-succeeded { color: var(--success); }
+.sat-icon-failed   { color: var(--error); }
+.sat-icon-cancelled { color: var(--text-faint); }
+
+@keyframes sat-spin {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.35; }
+  100% { opacity: 1; }
+}
+
+/* label parts */
+.sat-label { display: flex; align-items: baseline; gap: 0; min-width: 0; overflow: hidden; }
+.sat-type  { color: var(--text); font-weight: 500; flex-shrink: 0; }
+.sat-model { color: var(--text-faint); flex-shrink: 0; }
+.sat-head  {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* right-aligned meta (duration + cost) */
+.sat-meta {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.sat-duration { color: var(--text-faint); }
+.sat-cost     { color: var(--text-faint); }
+
+/* children indent container */
+.sat-children { padding-left: 0; }
+
+/* ── tool-trace-panel (Wave 2-A) ──────────────────────────────────────────── */
+/*
+ * tc-* classes belong to tool-trace-panel.ts. They reuse existing brand
+ * tokens and the diff-* / tool-* classes already defined above so the
+ * panel stays visually coherent with the existing tool rows in render.ts.
+ */
+
+.tc-card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 8px; background: var(--bg-raised); overflow: hidden;
+  max-width: 900px; width: 100%;
+}
+
+.tc-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  cursor: pointer; font-family: var(--mono); font-size: 12px;
+  list-style: none; user-select: none;
+}
+.tc-header::-webkit-details-marker { display: none; }
+.tc-header::before {
+  content: '›';
+  display: inline-block; font-size: 14px; color: var(--text-faint);
+  transition: transform 0.15s ease; margin-right: 4px; flex: 0 0 auto;
+}
+details[open] > .tc-header::before { transform: rotate(90deg); }
+
+/* Status badge: dot + short label */
+.tc-status { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+/* tc-dot reuses the .tool-dot sizing; the colour variant classes (tool-dot-ok
+   / tool-dot-running / tool-dot-error) come from the existing tool-calls block. */
+.tc-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px;
+}
+.tc-status-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.tc-status-running { color: var(--warning); }
+.tc-status-ok      { color: var(--success); }
+.tc-status-error   { color: var(--error); }
+
+.tc-name { color: var(--accent); font-weight: 600; flex: 0 0 auto; }
+.tc-input-preview {
+  color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; flex: 1 1 0; min-width: 0;
+}
+.tc-header-duration {
+  color: var(--text-faint); font-size: 11px; flex: 0 0 auto; margin-left: auto;
+}
+
+/* Body (visible when <details> is open) */
+.tc-body {
+  padding: 0 12px 12px; border-top: 1px solid var(--border);
+}
+.tc-section { margin-top: 10px; }
+.tc-pre-wrap { display: flex; flex-direction: column; gap: 6px; }
+
+/* Duration metadata row */
+.tc-meta-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0 0; font-family: var(--mono); font-size: 11px;
+}
+.tc-meta-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.tc-meta-value { color: var(--text-faint); }
+
+/* "output not available" note — dim, not alarming */
+.tc-unavailable {
+  margin-top: 10px; font-size: 12px; font-style: italic;
+  color: var(--text-faint);
+}
+
+/* ---- subagent / bg-job lifecycle cards ---- */
+.sa-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 12px; margin: 8px 0; border-radius: var(--radius);
+  border-left: 3px solid var(--border); background: var(--bg-sunken);
+  font-family: var(--mono); font-size: 12px;
+}
+.sa-card--started  { border-left-color: var(--accent); }
+.sa-card--succeeded, .sa-card--completed { border-left-color: var(--success); }
+.sa-card--failed   { border-left-color: var(--error); }
+.sa-card--cancelled { border-left-color: var(--text-dim); }
+.sa-header {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.sa-icon {
+  font-size: 13px; width: 18px; text-align: center; flex-shrink: 0;
+}
+.sa-card--started .sa-icon  { color: var(--accent); }
+.sa-card--succeeded .sa-icon, .sa-card--completed .sa-icon { color: var(--success); }
+.sa-card--failed .sa-icon   { color: var(--error); }
+.sa-card--cancelled .sa-icon { color: var(--text-dim); }
+.sa-label {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text);
+}
+.sa-model { color: var(--text-dim); font-size: 11px; }
+.sa-dur   { color: var(--text-faint); font-size: 11px; }
+.sa-prompt {
+  color: var(--text-faint); font-size: 11px; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

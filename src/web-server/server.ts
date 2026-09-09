@@ -37,6 +37,9 @@ import {
   handleToggleSchedule,
   handleUpdateSchedule,
 } from './routes.schedules.js';
+import { handleListModels } from './routes.models.js';
+import { handleSearchMemory, handleGetHotMemory } from './routes.memory.js';
+import { handleListBgJobs, handleGetBgJob } from './routes.bg-jobs.js';
 
 export const DEFAULT_WEB_PORT = 4141;
 export const DEFAULT_WEB_HOST = '127.0.0.1';
@@ -360,6 +363,33 @@ async function dispatch(
   }
   if (path === '/api/daemon/status' && method === 'GET') {
     await handleDaemonStatus(res);
+    return;
+  }
+
+  if (path === '/api/models' && method === 'GET') {
+    handleListModels(res);
+    return;
+  }
+
+  // ---- background job routes ------------------------------------------------
+  if (path === '/api/bg-jobs' && method === 'GET') {
+    await handleListBgJobs(res);
+    return;
+  }
+  const bgJobMatch = /^\/api\/bg-jobs\/([^/]+)$/.exec(path);
+  if (bgJobMatch?.[1] && method === 'GET') {
+    await handleGetBgJob(res, decodeURIComponent(bgJobMatch[1]));
+    return;
+  }
+
+  // ---- memory routes -------------------------------------------------------
+  if (path === '/api/memory/search' && method === 'GET') {
+    const qs = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?') + 1) : '';
+    await handleSearchMemory(res, new URLSearchParams(qs));
+    return;
+  }
+  if (path === '/api/memory/hot' && method === 'GET') {
+    await handleGetHotMemory(res);
     return;
   }
 

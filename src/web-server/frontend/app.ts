@@ -15,25 +15,26 @@ import { showToast, wireSidebarClose, toggleNewSessionForm } from './app-chrome.
 import { $required as $ } from './dom-utils.js';
 import type { CommandEntry } from '../../cli/input/slash-match.js';
 import {
-  renderApprovals,
   renderSidebar,
   renderTranscript,
-  type ApprovalAnswer,
-  type PendingApproval,
   type SessionSummary,
 } from './render.js';
+import { wireAtFileAffordance } from './at-file-panel.js';
 import {
   accumulateTotals,
   ledgerRecordToItem,
+  resetIdCounter,
   type LedgerRecordLike,
   type SessionTotals,
+  type TranscriptItem,
+  type ToolCallItem,
+  type SubagentItem,
 } from './ledger-adapter.js';
+import { resetNodeCache } from './render-incremental.js';
 import { QueuePanel } from './queue-panel.js';
 import { isPinnedToBottom } from './scroll-pin.js';
-import type { TranscriptItem } from './view-model.js';
-import { SchedulesView } from './schedules-view.js';
-import { openScheduleForm } from './schedule-form.js';
-import { openScheduleHistory } from './schedule-history.js';
+import { createApprovalsManager } from './app-approvals.js';
+import { switchView } from './app-views.js';
 
 const token = readAndScrubToken();
 
@@ -42,7 +43,6 @@ let activeId: string | undefined;
 let items: TranscriptItem[] = [];
 let totals: SessionTotals = { costUsd: 0, durationMs: 0, turns: 0 };
 let stream: SessionStream | undefined;
-let pending: PendingApproval[] = [];
 let pendingTimer: ReturnType<typeof setInterval> | undefined;
 /**
  * Whether a turn is in flight on the active session.
@@ -56,9 +56,6 @@ let turnActive = false;
 
 /** True while the SSE transport is in a reconnecting state. */
 let sseReconnecting = false;
-
-/** Lazy singleton for the schedules view. */
-let schedulesView: SchedulesView | undefined;
 
 /**
  * Contract: constructed lazily on first use so this module can be imported
@@ -125,7 +122,15 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(msg);
   }
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  if (!res.ok) {
+    const body = await res.text();
+    let msg = `${res.status} ${body}`;
+    try {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      if (typeof parsed['message'] === 'string') msg = parsed['message'];
+    } catch { /* body isn't JSON — use raw text */ }
+    throw new Error(msg);
+  }
   return (await res.json()) as T;
 }
 
@@ -155,6 +160,10 @@ function selectSession(id: string): void {
   activeId = id;
   const snapshotId = id;
   items = [];
+  resetIdCounter();
+  resetNodeCache();
+  const toolIndex = new Map<string, ToolCallItem>();
+  const subagentIndex = new Map<string, SubagentItem>();
   panel().clear();
   totals = { costUsd: 0, durationMs: 0, turns: 0 };
   stream?.stop();
@@ -169,7 +178,11 @@ function selectSession(id: string): void {
   stream = new SessionStream(id, token, {
     onEvent: (data) => {
       if (activeId !== snapshotId) return;
-      const frame = data as { record?: LedgerRecordLike };
+      const frame = data as { record?: LedgerRecordLike; error?: string };
+      if (frame.error) {
+        showToast(`Stream error: ${frame.error}`);
+        return;
+      }
       const record = frame.record;
       if (!record) return;
       if (record.kind === 'done' || record.kind === 'error') {
@@ -180,7 +193,7 @@ function selectSession(id: string): void {
         // keeps the queue a queue rather than a write-through.
         void panel().flush();
       }
-      const item = ledgerRecordToItem(record);
+      const item = ledgerRecordToItem(record, toolIndex, subagentIndex);
       totals = accumulateTotals(totals, record);
       if (item) {
         items.push(item);
@@ -190,9 +203,10 @@ function selectSession(id: string): void {
         // from "user had scrolled up to read". Unconditional scrolling made
         // history unreadable on a live session: every arriving event yanked the
         // viewport back to the newest row mid-sentence.
-        const wasPinned = isPinnedToBottom($('transcript'));
-        renderTranscript($('transcript'), items);
-        if (wasPinned) scrollToBottom($('transcript'));
+        const transcriptEl = $('transcript');
+        const wasPinned = !transcriptEl.hidden && isPinnedToBottom(transcriptEl);
+        renderTranscript(transcriptEl, items);
+        if (wasPinned) scrollToBottom(transcriptEl);
       }
       renderMeter();
     },
@@ -217,9 +231,15 @@ function selectSession(id: string): void {
   stream.start();
 }
 
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
 function renderMeter(): void {
   const parts = [`${totals.turns} turns`];
   if (totals.costUsd > 0) parts.push(`$${totals.costUsd.toFixed(4)}`);
+  const totalTokens = (totals.inputTokens ?? 0) + (totals.outputTokens ?? 0);
+  if (totalTokens > 0) parts.push(`${fmtTokens(totalTokens)} tokens`);
   if (totals.durationMs > 0) parts.push(`${(totals.durationMs / 1000).toFixed(1)}s`);
   $('meter').textContent = parts.join('  ·  ');
 }
@@ -260,62 +280,6 @@ function syncStop(): void {
 }
 
 /**
- * Switch between the sessions and schedules top-level views.
- *
- * The sessions view includes transcript, approvals, and composer. The schedules
- * view is a standalone panel for CRUD of daemon-scheduled tasks. Switching
- * toggles visibility rather than destroying DOM -- the SSE stream stays alive
- * while viewing schedules so notifications are not missed.
- */
-function switchView(view: 'sessions' | 'schedules'): void {
-  // Nav buttons
-  const navSessions = document.getElementById('nav-sessions');
-  const navSchedules = document.getElementById('nav-schedules');
-  navSessions?.classList.toggle('is-active', view === 'sessions');
-  navSchedules?.classList.toggle('is-active', view === 'schedules');
-
-  // Session-view elements
-  const transcript = document.getElementById('transcript');
-  const approvals = document.getElementById('approvals');
-  const composer = document.getElementById('composer');
-  const sidebarHead = document.querySelector('.sidebar-head') as HTMLElement | null;
-  const sessionsEl = document.getElementById('sessions');
-
-  // Schedule-view element
-  const schedView = document.getElementById('schedules-view');
-
-  if (view === 'sessions') {
-    if (transcript) transcript.style.display = '';
-    if (approvals) approvals.style.display = '';
-    if (composer) composer.style.display = '';
-    if (sidebarHead) sidebarHead.style.display = '';
-    if (sessionsEl) sessionsEl.style.display = '';
-    schedView?.classList.remove('is-active');
-  } else {
-    if (transcript) transcript.style.display = 'none';
-    if (approvals) approvals.style.display = 'none';
-    if (composer) composer.style.display = 'none';
-    if (sidebarHead) sidebarHead.style.display = 'none';
-    if (sessionsEl) sessionsEl.style.display = 'none';
-    schedView?.classList.add('is-active');
-
-    if (!schedulesView && schedView) {
-      schedulesView = new SchedulesView({
-        container: schedView,
-        api,
-        onEdit: (schedule) =>
-          openScheduleForm(schedule.id ? schedule : null, {
-            api,
-            onSaved: () => void schedulesView?.load(),
-          }),
-        onShowHistory: (id) => openScheduleHistory(id, api),
-      });
-    }
-    void schedulesView?.load();
-  }
-}
-
-/**
  * Start a session this process owns, then select it.
  *
  * Contract: the sidebar is refreshed BEFORE selecting, because `selectSession`
@@ -346,53 +310,6 @@ async function createSession(model: string, cwd: string): Promise<void> {
   }
 }
 
-
-
-/**
- * Poll for elicitations awaiting an answer.
- *
- * Invariant: polling runs process-wide rather than per-session, because a
- * blocked turn is blocked whichever session the operator happens to be looking
- * at. Scoping this to the active session would let a background session hang
- * silently on an approval nobody was shown.
- */
-async function pollPending(): Promise<void> {
-  const next = await api<{ pending: PendingApproval[] }>('/api/pending');
-  const changed =
-    next.pending.length !== pending.length ||
-    next.pending.some((p, i) => p.id !== pending[i]?.id);
-  pending = next.pending;
-  if (changed) renderApprovals($('approvals'), pending, answerApproval);
-  document.title = pending.length > 0 ? `(${pending.length}) afk web` : 'afk web';
-}
-
-/**
- * Answer one pending elicitation.
- *
- * Invariant: addressed by REQUEST ID alone, never by session. An elicitation
- * record does not always carry a sessionId, and this used to fall back to
- * whichever session was SELECTED — so answering a prompt while viewing a
- * read-only (foreign-process) session POSTed to that session and got a
- * permanent 409, the 1s poll re-added the card, and the blocked agent turn
- * never unblocked. The request id is what the bridge resolves on anyway, so the
- * session segment constrained nothing it was ever protecting.
- *
- * Optimistic removal here is deliberate and survives that change: the card's
- * only job is to unblock the turn, and the poll re-adds it within a second if
- * the POST failed — so the row is restored by an observed server state rather
- * than assumed away.
- */
-function answerApproval(id: string, answer: ApprovalAnswer): void {
-  pending = pending.filter((p) => p.id !== id);
-  renderApprovals($('approvals'), pending, answerApproval);
-  void api('/api/approve', {
-    method: 'POST',
-    body: JSON.stringify({ requestId: id, response: answer }),
-  }).catch((err: unknown) => {
-    showToast(err instanceof Error ? err.message : 'approval failed');
-  });
-}
-
 async function stopTurn(): Promise<void> {
   if (activeId === undefined) return;
   const stopBtn = $('stop') as HTMLButtonElement;
@@ -421,13 +338,19 @@ async function main(): Promise<void> {
     loadCommands: async () => (await api<{ commands: CommandEntry[] }>('/api/commands')).commands,
   });
   panel().wire();
+  const composerRow = document.querySelector('.composer-row');
+  if (composerRow instanceof HTMLElement) {
+    wireAtFileAffordance({ input: $('prompt') as HTMLTextAreaElement, container: composerRow });
+  }
   $('new-session').addEventListener('click', () => toggleNewSessionForm(
     (model, cwd) => void createSession(model, cwd),
   ));
 
   // Wire nav tab switching
-  document.getElementById('nav-sessions')?.addEventListener('click', () => switchView('sessions'));
-  document.getElementById('nav-schedules')?.addEventListener('click', () => switchView('schedules'));
+  document.getElementById('nav-sessions')?.addEventListener('click', () => switchView('sessions', api));
+  document.getElementById('nav-schedules')?.addEventListener('click', () => switchView('schedules', api));
+  document.getElementById('nav-bg-jobs')?.addEventListener('click', () => switchView('bg-jobs', api));
+  document.getElementById('nav-memory')?.addEventListener('click', () => switchView('memory', api));
   wireSidebarClose();
   $('stop').addEventListener('click', () => {
     void stopTurn().catch((err: unknown) => {
@@ -437,8 +360,10 @@ async function main(): Promise<void> {
   renderMeter();
   await loadSessions();
   setInterval(() => void loadSessions().catch(() => {}), 10_000);
-  pendingTimer = setInterval(() => void pollPending().catch(() => {}), 1_000);
-  void pollPending().catch(() => {});
+
+  const approvals = createApprovalsManager(api, $('approvals'));
+  pendingTimer = setInterval(() => void approvals.pollPending().catch(() => {}), 1_000);
+  void approvals.pollPending().catch(() => {});
   window.addEventListener('beforeunload', () => {
     if (pendingTimer) clearInterval(pendingTimer);
   });
