@@ -39,6 +39,19 @@ export interface RouteContext {
    */
   isBusy: (sessionId: string) => boolean;
   /**
+   * Reserve a pending-turn slot before an async slash dispatch begins, so a
+   * concurrent prompt cannot pass the `isBusy` gate while the dispatch is in
+   * flight. `releaseTurn` must be called when no real turn is ultimately
+   * queued (passthrough / repl-only / unknown). When a skill turn IS queued,
+   * `submitSkillMessage` increments the count itself; the caller releases the
+   * reservation so the net count stays 1.
+   *
+   * Both are optional — absent in attach-only mode where ownership already
+   * 409s every prompt before `isBusy` is consulted.
+   */
+  reserveTurn?: (sessionId: string) => void;
+  releaseTurn?: (sessionId: string) => void;
+  /**
    * Start a new session in this process. Absent when the server was started
    * without an owner, in which case the surface is attach-only.
    */
@@ -228,7 +241,17 @@ export async function handlePrompt(
   // the model as raw text. Native REPL-only commands are rejected; skill
   // commands are built into the structured multi-block payload the model
   // recognises as a skill dispatch.
-  if (text.trimStart().startsWith('/') && ctx.submitSkillMessage) {
+  //
+  // Fix 2: Always run classify for any `/`-prefixed text regardless of
+  // whether ctx.submitSkillMessage is defined. This ensures REPL-only and
+  // unknown commands get proper 422 responses even in attach-only mode
+  // (where submitSkillMessage is absent). Only 'passthrough' falls through.
+  //
+  // Fix 4: Reserve a pending-turn slot BEFORE the async dispatch so a
+  // concurrent prompt cannot pass the isBusy gate during preflight. The
+  // reservation is released inside dispatchSlashForWeb for non-skill paths.
+  if (text.trimStart().startsWith('/')) {
+    ctx.reserveTurn?.(sessionId);
     const result = await dispatchSlashForWeb(ctx, res, sessionId, text);
     if (result) return; // handled — response already sent
   }
@@ -291,6 +314,16 @@ function approveByRequestId(ctx: RouteContext, res: ServerResponse, body: unknow
  * Attempt slash-command dispatch for the web surface. Returns `true` when the
  * input was handled (response already sent); `false` when it should fall
  * through to the plain-text `submitPrompt` path.
+ *
+ * Fix 4: The caller reserves a pending-turn slot before invoking this
+ * function. For every non-skill exit (passthrough, repl-only, unknown),
+ * we release that reservation because no real turn will be queued. For the
+ * skill exit, submitSkillMessage increments pending itself, so we also
+ * release the reservation — net count stays 1.
+ *
+ * Fix 2: For the skill case when submitSkillMessage is absent (attach-only
+ * mode), we return 501 skill_dispatch_unavailable. REPL-only and unknown
+ * always return 422 regardless of submitSkillMessage presence.
  */
 async function dispatchSlashForWeb(
   ctx: RouteContext,
@@ -307,14 +340,30 @@ async function dispatchSlashForWeb(
 
   switch (result.kind) {
     case 'passthrough':
+      // No turn queued — release the reservation and fall through.
+      ctx.releaseTurn?.(sessionId);
       return false;
 
     case 'skill':
-      await ctx.submitSkillMessage!(sessionId, result.message);
+      if (!ctx.submitSkillMessage) {
+        // Attach-only mode: skill dispatch requires an owned session.
+        ctx.releaseTurn?.(sessionId);
+        sendJson(res, 501, {
+          error: 'skill_dispatch_unavailable',
+          message: 'Skill dispatch requires an owned session. Start a session first.',
+        });
+        return true;
+      }
+      await ctx.submitSkillMessage(sessionId, result.message);
+      // submitSkillMessage already incremented pending; release the
+      // reservation so the net count stays 1.
+      ctx.releaseTurn?.(sessionId);
       sendJson(res, 202, { ok: true });
       return true;
 
     case 'repl-only':
+      // No turn queued — release the reservation.
+      ctx.releaseTurn?.(sessionId);
       sendJson(res, 422, {
         error: 'repl_only_command',
         message: `${result.command} is a terminal-only command and cannot run in the web UI.`,
@@ -322,6 +371,8 @@ async function dispatchSlashForWeb(
       return true;
 
     case 'unknown':
+      // No turn queued — release the reservation.
+      ctx.releaseTurn?.(sessionId);
       sendJson(res, 422, {
         error: 'unknown_command',
         message: result.suggestion

@@ -52,6 +52,44 @@ export type SlashDispatchResult =
   | { kind: 'unknown'; command: string; suggestion?: string };
 
 /**
+ * Module-scope memoization guard: `registerAll()` + `registerPluginSkillsForWeb()`
+ * runs once per process. This mirrors the `commandUniverseInitialization` guard
+ * in `routes.ts`. The promise is cleared on failure so the next call retries
+ * rather than permanently caching a transient error.
+ */
+let registrationDone = false;
+let registrationPromise: Promise<void> | null = null;
+
+/** Test seam: drop the memo so a case can re-observe registration. */
+export function resetSlashDispatchRegistration(): void {
+  registrationDone = false;
+  registrationPromise = null;
+}
+
+async function ensureRegistered(): Promise<void> {
+  if (registrationDone) return;
+
+  registrationPromise ??= (async () => {
+    const [{ registerAll }, { registerPluginSkillsForWeb }] = await Promise.all([
+      import('../cli/slash/index.js'),
+      import('./register-plugin-skills.js'),
+    ]);
+    registerAll();
+    // Invariant: registerAll() calls resetRegistry(), wiping any prior plugin
+    // registrations. Re-register plugin skills so lookup() resolves them.
+    await registerPluginSkillsForWeb();
+    registrationDone = true;
+  })().finally(() => {
+    // Clear the in-flight promise so a failure allows retry on next call.
+    // (registrationDone is only set to true on success, so a failure leaves
+    // it false and the next call will retry via a fresh promise.)
+    registrationPromise = null;
+  });
+
+  await registrationPromise;
+}
+
+/**
  * Classify and, for skill commands, build the invocation payload.
  *
  * Returns:
@@ -71,27 +109,34 @@ export async function classifySlashInput(
 
   // Lazy-load the slash registry (matches handleCommands' dynamic import
   // pattern -- keeps the cli/slash import tree off the server's startup).
-  const [{ registerAll }, registry, { registerPluginSkillsForWeb }] = await Promise.all([
-    import('../cli/slash/index.js'),
-    import('../cli/slash/registry.js'),
-    import('./register-plugin-skills.js'),
-  ]);
-  registerAll();
-  // Invariant: registerAll() calls resetRegistry(), wiping any prior plugin
-  // registrations. Re-register plugin skills so lookup() resolves them.
-  await registerPluginSkillsForWeb();
+  // Registration is memoized: registerAll() resets the process-global registry,
+  // so concurrent calls without memoization would race and wipe each other.
+  await ensureRegistered();
+
+  const registry = await import('../cli/slash/registry.js');
 
   const parsed = registry.parse(text);
   if (!parsed) return { kind: 'passthrough' };
 
-  if (REPL_ONLY.has(parsed.name)) {
-    return { kind: 'repl-only', command: parsed.name };
-  }
-
+  // Fix 5: Look up the command first, then check REPL_ONLY on the RESOLVED
+  // canonical name (cmd.name) rather than the raw parsed token. This ensures
+  // aliases (e.g. /quit -> /exit) are correctly caught: the alias resolves to
+  // a cmd whose canonical name IS in REPL_ONLY even though the alias itself
+  // is not.
   const cmd = registry.lookup(parsed.name);
   if (!cmd) {
+    // For unknown commands, check the raw parsed name against REPL_ONLY
+    // (they can't resolve to an alias-target anyway).
+    if (REPL_ONLY.has(parsed.name)) {
+      return { kind: 'repl-only', command: parsed.name };
+    }
     const suggestion = registry.suggest(parsed.name) ?? undefined;
     return { kind: 'unknown', command: parsed.name, suggestion };
+  }
+
+  // Check the RESOLVED canonical name against REPL_ONLY.
+  if (REPL_ONLY.has(cmd.name)) {
+    return { kind: 'repl-only', command: cmd.name };
   }
 
   // Native commands that aren't REPL-only but also aren't skill dispatches
@@ -102,13 +147,17 @@ export async function classifySlashInput(
     return { kind: 'passthrough' };
   }
 
-  // Skill command -- build the invocation message.
-  const bareSkillName = parsed.name
-    .replace(/^\//, '')
-    .split(':')
-    .pop() ?? '';
+  // Fix 3: Use the FULL resolved command name (minus leading `/`) for
+  // getSkill() and buildSkillInvocationMessage. The bare `.split(':').pop()`
+  // would strip the namespace prefix, causing `/user:mint` to resolve to the
+  // vendored `mint` skill instead of the user-scoped one.
+  const fullSkillName = parsed.name.replace(/^\//, '');
 
-  const message = await buildSkillPayload(bareSkillName, parsed.args, cwd, sessionId);
+  // The preflight lookup uses the bare name because preflights are registered
+  // by bare name in the preflight registry.
+  const bareSkillName = fullSkillName.split(':').pop() ?? fullSkillName;
+
+  const message = await buildSkillPayload(fullSkillName, bareSkillName, parsed.args, cwd, sessionId);
   return { kind: 'skill', message };
 }
 
@@ -118,8 +167,13 @@ export async function classifySlashInput(
  * Runs the registered preflight (if any) and produces the same multi-block
  * message shape the REPL's `runSkillDispatchTurn` sends through
  * `sendMessageStream`.
+ *
+ * @param fullSkillName - Full skill name without leading `/` (e.g. `user:mint`).
+ * @param bareSkillName - Bare skill name without namespace (e.g. `mint`), used
+ *   for preflight lookup which is keyed by bare name.
  */
 async function buildSkillPayload(
+  fullSkillName: string,
   bareSkillName: string,
   args: string,
   cwd: string,
@@ -136,6 +190,7 @@ async function buildSkillPayload(
   ]);
 
   // Run preflight if registered (e.g. review-pr gathers diff context).
+  // Preflights are keyed by bare name.
   let manifestBlock: string | undefined;
   const preflight = getPreflight(bareSkillName);
   if (preflight) {
@@ -157,15 +212,16 @@ async function buildSkillPayload(
   }
 
   // Build the skill metadata adapter -- only .name and .context are consumed
-  // by buildSkillInvocationMessage.
+  // by buildSkillInvocationMessage. Use the FULL skill name so that namespaced
+  // skills (e.g. user:mint) resolve correctly in the skills registry.
   let skillMeta;
   try {
-    skillMeta = getSkill(bareSkillName);
+    skillMeta = getSkill(fullSkillName);
   } catch {
-    // Skill not in the TS registry (plugin-only skill). Synthesise a
-    // minimal adapter -- same pattern as makeForwardHandler in dispatch.ts.
+    // Skill not in the TS registry (plugin-only skill or namespaced). Synthesise
+    // a minimal adapter -- same pattern as makeForwardHandler in dispatch.ts.
     skillMeta = {
-      name: bareSkillName,
+      name: fullSkillName,
       description: '',
       handler: async () => undefined,
       context: 'inline' as const,

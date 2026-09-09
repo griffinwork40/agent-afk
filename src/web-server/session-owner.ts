@@ -257,6 +257,32 @@ export class SessionOwner {
     return (this.pending.get(sessionId) ?? 0) > 0;
   }
 
+  /**
+   * Reserve a pending-turn slot synchronously, before an async slash dispatch
+   * begins. This closes the backpressure gap: without it, a second prompt could
+   * arrive after the first passed the `isBusy` gate but before
+   * `submitSkillMessage` incremented `pending`.
+   *
+   * Contract: every `reserveTurn` must be paired with exactly one
+   * `releaseTurn`. For skill turns, `submitSkillMessage` increments `pending`
+   * itself, so the caller releases the reservation after submitting — net
+   * pending stays 1. For non-skill exits (passthrough / repl-only / unknown),
+   * the caller releases immediately because no turn is queued.
+   */
+  reserveTurn(sessionId: string): void {
+    this.pending.set(sessionId, (this.pending.get(sessionId) ?? 0) + 1);
+  }
+
+  /**
+   * Release a previously reserved pending-turn slot. Safe to call even if
+   * the slot was never reserved (count floors at 0 and is deleted).
+   */
+  releaseTurn(sessionId: string): void {
+    const remaining = (this.pending.get(sessionId) ?? 1) - 1;
+    if (remaining > 0) this.pending.set(sessionId, remaining);
+    else this.pending.delete(sessionId);
+  }
+
   /** Soft-interrupt an in-flight turn. The session stays usable afterwards. */
   async interrupt(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
