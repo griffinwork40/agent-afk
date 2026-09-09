@@ -101,7 +101,13 @@ describe('createFarm', () => {
       );
       const stat = await fs.stat(b.path);
       expect(stat.isDirectory()).toBe(true);
-      expect(registered).toContain(b.path);
+      // On Windows, git reports paths with forward slashes and the full-form
+      // user name (e.g. runneradmin) while b.path may use backslashes and
+      // the 8.3 short name (RUNNER~1). Expand b.path through fs.realpath and
+      // normalise separators before the contains check so both sides agree.
+      const resolvedBPath = (await fs.realpath(b.path)).replace(/\\/g, '/').toLowerCase();
+      const normRegistered = registered.replace(/\\/g, '/').toLowerCase();
+      expect(normRegistered).toContain(resolvedBPath);
     }
 
     // Manifest written to disk and round-trips.

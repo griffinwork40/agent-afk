@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { resumeCmd } from './resume.js';
 import { saveSession } from '../../session-store.js';
@@ -124,7 +124,7 @@ describe('/resume — C2 same-session guard', () => {
     const stats = createSessionStats('sonnet');
     recordTurn(stats, 'a', 'b', { totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 }, sessionId: 'sdk-live-id' });
     const path = saveSession(stats);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     const { ctx, lines, requestResumeSpy } = makeCtx('sdk-live-id');
     const result = await resumeCmd.handler(ctx, sidecarId);
@@ -153,7 +153,7 @@ describe('/resume — C2 same-session guard', () => {
     const stats = createSessionStats('sonnet');
     recordTurn(stats, 'a', 'b', { totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 }, sessionId: 'sdk-other-id' });
     const path = saveSession(stats);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     const { ctx, requestResumeSpy } = makeCtx('sdk-live-id');
     const result = await resumeCmd.handler(ctx, sidecarId);
@@ -216,7 +216,7 @@ describe('/resume — no-arg CWD filtering', () => {
     statsC.cwd = '/proj/bar';
     recordTurn(statsC, 'some work', 'done', { sessionId: 'sdk-explicit', totalCostUsd: 0.01, durationMs: 10, usage: { input_tokens: 5, output_tokens: 5 } });
     const path = saveSession(statsC);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     const { ctx, requestResumeSpy } = makeCtx('sdk-other');
     ctx.stats.cwd = '/proj/other';
@@ -369,7 +369,7 @@ describe('/resume — conversation preview (view-mode)', () => {
     });
     stats.name = 'session-preview';
     const path = saveSession(stats);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     const { ctx, requestResumeSpy } = makeCtx('sdk-live');
     const host = new FakeHost();
@@ -399,7 +399,7 @@ describe('/resume — conversation preview (view-mode)', () => {
     });
     stats.name = 'session-preview-cancel';
     const path = saveSession(stats);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     const { ctx, lines, requestResumeSpy } = makeCtx('sdk-other');
     const host = new FakeHost();
@@ -431,7 +431,7 @@ describe('/resume — conversation preview (view-mode)', () => {
     });
     stats.name = 'session-no-tty';
     const path = saveSession(stats);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     // No getCompositor → non-TTY surface. requestResume IS present.
     const { ctx, requestResumeSpy } = makeCtx('sdk-other-live');
@@ -454,7 +454,7 @@ describe('/resume — conversation preview (view-mode)', () => {
     });
     stats.name = 'session-content';
     const path = saveSession(stats);
-    const sidecarId = path.split('/').pop()!.replace(/\.json$/, '');
+    const sidecarId = basename(path, '.json');
 
     const { ctx, requestResumeSpy } = makeCtx('sdk-live-content');
     let capturedRows: readonly string[] = [];

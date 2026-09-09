@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fsp, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalize as normalizePath } from 'node:path';
@@ -51,9 +51,12 @@ function makeMock(repoRoot: string): MockExecFile {
 describe('afk -w launcher — sweep root registration', () => {
   let repoRoot: string;
 
-  beforeEach(() => {
-    // realpath so the registry's resolve() cannot differ by a /private symlink.
-    repoRoot = realpathSync(mkdtempSync(join(tmpdir(), 'afk-wt-reg-')));
+  beforeEach(async () => {
+    // Use async fs.realpath (not realpathSync) so that on Windows the 8.3
+    // short-name (RUNNER~1) returned by realpathSync is expanded to the full
+    // long-form name (runneradmin) — the same form that the registry's
+    // normalizeRootPath() produces when it calls async fs.realpath internally.
+    repoRoot = await fsp.realpath(mkdtempSync(join(tmpdir(), 'afk-wt-reg-')));
   });
 
   afterEach(() => {

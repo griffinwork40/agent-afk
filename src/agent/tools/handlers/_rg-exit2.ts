@@ -43,7 +43,13 @@ export type RgExit2Result = GrepSettleResult & { isError: true };
 //   rg: <path>: No such file or directory (os error 2)
 //
 // Both end with the `(os error 2)` sentinel, so anchoring on the tail matches
-// either without parsing the prefix. Causes that MUST NOT match here:
+// either without parsing the prefix. On Windows, ripgrep maps Win32 ERROR_FILE_NOT_FOUND
+// and ERROR_PATH_NOT_FOUND to os error 3, producing:
+//
+//   rg: <path>: The system cannot find the path specified. (os error 3)
+//   rg: <path>: The system cannot find the file specified. (os error 3)
+//
+// Causes that MUST NOT match here:
 //
 //   rg: <path>: Permission denied (os error 13)   → readable-target problem, alarming
 //   rg: regex parse error: …\n    ^\nerror: …     → caller's pattern, alarming
@@ -52,7 +58,8 @@ export type RgExit2Result = GrepSettleResult & { isError: true };
 // out even though its line is otherwise shaped identically. If ripgrep ever
 // changes this wording the classifier degrades to the generic branch — the
 // pre-existing behavior — never to a wrong classification.
-const ENOENT_LINE_RE = /No such file or directory \(os error 2\)$/;
+const ENOENT_LINE_RE =
+  /No such file or directory \(os error 2\)$|The system cannot find the (?:path|file) specified\. \(os error 3\)$/;
 
 /**
  * Contract: given ripgrep's captured stderr and the resolved search path,
@@ -77,7 +84,14 @@ export function classifyRgExit2(stderr: string, searchPath: string): RgExit2Resu
     .filter((line) => line.length > 0);
 
   const onlyEnoent = lines.length > 0 && lines.every((line) => ENOENT_LINE_RE.test(line));
-  if (onlyEnoent && lines.some((line) => line.includes(searchPath))) {
+  // On Windows, rg may normalise path separators in its error output — compare
+  // case-insensitively with both separator forms for a robust match.
+  const normalise = (p: string): string => p.replace(/\\/g, '/').toLowerCase();
+  const normSearchPath = normalise(searchPath);
+  const pathInStderr = lines.some(
+    (line) => line.includes(searchPath) || normalise(line).includes(normSearchPath),
+  );
+  if (onlyEnoent && pathInStderr) {
     return {
       content:
         `grep: no such path: ${searchPath} — nothing was searched. ` +

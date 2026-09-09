@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { promises as fs, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -25,15 +25,15 @@ function normPaths(paths: string[]): string[] {
 let stateDir: string;
 let prevStateDir: string | undefined;
 
-beforeEach(() => {
-  // realpathSync so the registry's canonicalization cannot differ from these
-  // fixtures by a /tmp -> /private/tmp symlink on macOS. The registry stores
-  // realpath'd roots on purpose (#771 review, F-C3: without it one repo reached
-  // through a symlinked parent occupies two entries and is swept twice per
-  // tick), so a raw mkdtemp path here would compare a canonical value against
-  // a non-canonical fixture. worktree-root-registration.test.ts already does
-  // this for the same reason.
-  stateDir = realpathSync(mkdtempSync(join(tmpdir(), 'wt-roots-')));
+beforeEach(async () => {
+  // Use async fs.realpath (not realpathSync) so the registry's async
+  // normalizeRootPath() and this fixture use the SAME canonical form. On
+  // Windows, os.tmpdir() / realpathSync may return the 8.3 short-name form
+  // (e.g. RUNNER~1) while async fs.realpath expands it to the full long-form
+  // name (runneradmin). Mixing the two forms causes toEqual comparisons to
+  // fail even after normalization, so all paths here go through the same
+  // async realpath that the production code uses.
+  stateDir = await fs.realpath(mkdtempSync(join(tmpdir(), 'wt-roots-')));
   prevStateDir = process.env['AFK_STATE_DIR'];
   process.env['AFK_STATE_DIR'] = stateDir;
 });
