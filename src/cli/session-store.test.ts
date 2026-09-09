@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, rmSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
   saveSession,
@@ -309,7 +309,7 @@ describe('session-store', () => {
 
 describe('session-store — naming', () => {
   function sessionsDirOf(savedPath: string): string {
-    return savedPath.substring(0, savedPath.lastIndexOf('/'));
+    return dirname(savedPath);
   }
 
   it('auto-name from the first user message round-trips through save/load', () => {
