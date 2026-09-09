@@ -249,6 +249,7 @@ export function createBashHandler(
       // so Node picks `/bin/sh` as before. On Windows it returns a path to Git
       // Bash or PowerShell with the appropriate `-c`/`-Command` prefix arg so
       // POSIX-style commands the model emits actually work (cmd.exe would not).
+      const isWin32 = process.platform === 'win32';
       const shellResolution = resolveShell();
       const spawnBaseOpts = {
         // detached: true places the shell in its own process group (PGID = proc.pid).
@@ -258,7 +259,9 @@ export function createBashHandler(
         // Lifecycle note: ownership ends when this tool call settles. Intentionally
         // backgrounded work may outlive the session and cannot be reaped safely
         // without an explicit background-job contract, so cleanup is deferred.
-        detached: true,
+        // On Windows, detached does not create a process group so we disable it
+        // to avoid misleading behaviour — the process-group kill path is POSIX-only.
+        detached: !isWin32,
         stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
         // Effective cwd priority:
         // 1. context?.resolveBase — permission-system anchor (from dispatcher)
