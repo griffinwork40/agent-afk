@@ -4,7 +4,20 @@ import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    // Dev-only: replace the __AFK_WEB_TOKEN__ placeholder with the real token
+    // so the dashboard can authenticate against a running `afk web` backend.
+    // Set AFK_WEB_TOKEN in the environment to match the backend's token.
+    {
+      name: 'afk-dev-token',
+      transformIndexHtml(html) {
+        const token = process.env['AFK_WEB_TOKEN'] ?? '';
+        return html.replace('__AFK_WEB_TOKEN__', token);
+      },
+    },
+  ],
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),
