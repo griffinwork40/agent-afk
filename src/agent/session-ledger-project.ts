@@ -40,7 +40,7 @@ export type LedgerPayload =
   /** Extended-thinking block (clipped). */
   | { kind: 'thinking'; text: string }
   /** A tool invocation starting. `input` is a preview, capped at source. */
-  | { kind: 'tool'; toolName: string; toolUseId: string; input: string }
+  | { kind: 'tool'; toolName: string; toolUseId?: string; input: string }
   /** A failed tool result. */
   | { kind: 'tool_error'; toolName?: string; content: string }
   /** A successful tool result (clipped). */
