@@ -372,7 +372,8 @@ describe('bashHandler', () => {
     // only after waiting out the 3s sleep. NB: 'q'/'z' are the phase markers
     // because neither letter appears in the truncation marker text — 'b',
     // for one, collides with the word "bytes".
-    it('mid-stream hard cap: SIGKILLs a runaway before it completes (V8 overflow guard)', async () => {
+    it.skipIf(process.platform === 'win32')('mid-stream hard cap: SIGKILLs a runaway before it completes (V8 overflow guard)', async () => {
+      // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
       const start = Date.now();
       const result = await bashHandler(
         {
@@ -407,7 +408,8 @@ describe('bashHandler', () => {
     // long-running commands write progress to stderr (e.g. `find /` with
     // permission errors), so a stderr-only flood must also trigger the
     // mid-stream kill.
-    it('mid-stream hard cap: protects stderr from unbounded accumulation', async () => {
+    it.skipIf(process.platform === 'win32')('mid-stream hard cap: protects stderr from unbounded accumulation', async () => {
+      // `head -c`, `/dev/zero`, and stderr redirect `>&2` are POSIX-only (#703)
       const start = Date.now();
       const result = await bashHandler(
         {
@@ -753,7 +755,8 @@ describe('createBashHandler — cwd parameter', () => {
 // produce a large elapsed time). A handler that sends SIGKILL terminates it
 // promptly regardless of signal disposition.
 // ---------------------------------------------------------------------------
-describe('bash SIGKILL — S10', () => {
+// `trap '' TERM`, `kill -0`, and `sleep 9999 & echo $!; wait` are POSIX-only (#703)
+describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;
   }

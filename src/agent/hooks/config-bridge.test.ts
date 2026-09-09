@@ -133,10 +133,10 @@ describe('trust gate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Matcher filtering
+// Matcher filtering — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
-describe('matcher filtering', () => {
+describe.skipIf(process.platform === 'win32')('matcher filtering', () => {
   it('exact matcher "bash" → fires for bash, skips write_file', async () => {
     const scriptPath = writeScript('approve.sh', '#!/bin/sh\necho \'{"decision":"approve"}\'\n');
     const registry = createHookRegistry();
@@ -235,10 +235,10 @@ describe('matcher filtering', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Non-tool events (no matcher applied)
+// Non-tool events (no matcher applied) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
-describe('non-tool events', () => {
+describe.skipIf(process.platform === 'win32')('non-tool events', () => {
   it('SubagentStop with additionalContext → injectContext propagates', async () => {
     const scriptPath = writeScript(
       'subagent-stop.sh',
@@ -285,10 +285,10 @@ describe('non-tool events', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Blocking
+// Blocking — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
-describe('blocking', () => {
+describe.skipIf(process.platform === 'win32')('blocking', () => {
   it('exit 2 from hook → HookBlockedError propagated from dispatch', async () => {
     const scriptPath = writeScript(
       'block.sh',
@@ -336,10 +336,10 @@ describe('multiple handlers', () => {
 });
 
 // ---------------------------------------------------------------------------
-// createDefaultHookRegistry integration
+// createDefaultHookRegistry integration — some tests dispatch #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
-describe('createDefaultHookRegistry integration', () => {
+describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integration', () => {
   let afkHome: string;
   let projectCwd: string;
   let originalAfkHome: string | undefined;
@@ -467,10 +467,10 @@ describe('createDefaultHookRegistry integration', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Plugin-tier hooks (Claude Code compat) — independent of enableShellHooks
+// Plugin-tier hooks (Claude Code compat) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
-describe('plugin-tier hooks', () => {
+describe.skipIf(process.platform === 'win32')('plugin-tier hooks', () => {
   it('plugin-tier group registers even when userGlobalEnabled is false', () => {
     const registry = createHookRegistry();
     const config = makeDisabledConfig({

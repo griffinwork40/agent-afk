@@ -700,7 +700,8 @@ describe('grepHandler cwd containment', () => {
     return new AbortController().signal;
   }
 
-  it('rejects absolute path outside context.cwd', async () => {
+  it.skipIf(process.platform === 'win32')('rejects absolute path outside context.cwd', async () => {
+    // `/etc` is a POSIX absolute path — POSIX-only (#703)
     const context: ToolHandlerContext = { cwd: tempDir };
     // parseGrepInput throws for containment violations — grepHandler propagates the throw
     await expect(

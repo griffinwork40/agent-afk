@@ -124,7 +124,8 @@ describe('tool.overflow_kill telemetry — bash', () => {
     appendRoutingDecision.mockClear();
   });
 
-  it('emits tool.overflow_kill with operational fields when bash crosses the hard cap', async () => {
+  it.skipIf(process.platform === 'win32')('emits tool.overflow_kill with operational fields when bash crosses the hard cap', async () => {
+    // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
     // Fast generator: head -c 9000000 from /dev/zero crosses the 8MB hard
     // cap and exits within seconds. Pipe through tr to make the bytes
     // printable so the buffer accumulation path is identical to a real
@@ -144,7 +145,8 @@ describe('tool.overflow_kill telemetry — bash', () => {
     expect(evt!['total_bytes'] as number).toBeGreaterThanOrEqual(100_000);
   }, 30_000);
 
-  it('does NOT include the bash command string in the telemetry payload', async () => {
+  it.skipIf(process.platform === 'win32')('does NOT include the bash command string in the telemetry payload', async () => {
+    // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
     // Distinctive marker we can scan for in the serialized mock calls.
     const result = await bashHandler(
       {

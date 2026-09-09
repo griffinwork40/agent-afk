@@ -36,6 +36,8 @@ vi.mock('../../utils/kill-process-group.js', () => ({
 import * as cp from 'node:child_process';
 import { executeCommand } from './command-executor.js';
 import type { HookContext } from '../hooks.js';
+// resolveShell is used on Windows to determine the spawn shape.
+import { resolveShell } from '../../utils/resolve-shell.js';
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal fake ChildProcess that satisfies the executor's
@@ -94,13 +96,20 @@ describe('spawn call — shell: true (cross-platform fix #703)', () => {
     await resultPromise;
 
     expect(vi.mocked(cp.spawn)).toHaveBeenCalledOnce();
-    const [spawnedCommand, spawnOpts] = vi.mocked(cp.spawn).mock.calls[0] as [string, Record<string, unknown>];
+    const callArgs = vi.mocked(cp.spawn).mock.calls[0] as [string, unknown, Record<string, unknown>?];
 
-    // The command string is passed as the first argument (not wrapped in sh -c).
-    expect(spawnedCommand).toBe('echo hello');
-
-    // shell: true must be present so Node resolves the OS shell itself.
-    expect(spawnOpts).toMatchObject({ shell: true });
+    if (process.platform === 'win32') {
+      // On Windows the executor uses resolveShell() to pick Git Bash or PowerShell.
+      // spawn(shell, ['-c', command], opts) — first arg is the shell path, second is an array.
+      const { shell } = resolveShell();
+      expect(callArgs[0]).toBe(shell); // gitBash path or 'powershell.exe'
+      expect(Array.isArray(callArgs[1])).toBe(true); // ['-c', 'echo hello']
+    } else {
+      // On POSIX: spawn(command, { shell: true, ... }) — command is the raw string.
+      expect(callArgs[0]).toBe('echo hello');
+      // shell: true must be present so Node resolves the OS shell itself.
+      expect(callArgs[1]).toMatchObject({ shell: true });
+    }
   });
 
   it('does NOT pass an args array as the second argument (no sh -c)', async () => {
@@ -120,9 +129,16 @@ describe('spawn call — shell: true (cross-platform fix #703)', () => {
     expect(vi.mocked(cp.spawn)).toHaveBeenCalledOnce();
     const callArgs = vi.mocked(cp.spawn).mock.calls[0];
 
-    // With shell: true, spawn(command, options) — the second argument is the
-    // options object, not an array like ['-c', command].
-    expect(Array.isArray(callArgs[1])).toBe(false);
-    expect(typeof callArgs[1]).toBe('object');
+    if (process.platform === 'win32') {
+      // On Windows: spawn(shell, ['-c', command], opts) — second arg IS an array.
+      const { shell } = resolveShell();
+      expect(callArgs[0]).toBe(shell); // gitBash or powershell path
+      expect(Array.isArray(callArgs[1])).toBe(true); // ['-c', command]
+    } else {
+      // On POSIX: spawn(command, options) — the second argument is the
+      // options object, not an array like ['-c', command].
+      expect(Array.isArray(callArgs[1])).toBe(false);
+      expect(typeof callArgs[1]).toBe('object');
+    }
   });
 });
