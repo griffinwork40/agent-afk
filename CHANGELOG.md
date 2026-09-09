@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.203.1] - 2026-09-09
+
+### Fixed
+- wire executors, MCP, and trace for web and Telegram OpenAI/xAI surfaces (#1579) (b07828dd)
+
+### Changed
+- review follow-ups from #1554 and #1555 — tests and comments (#1566) (#1576) (35b69c84)
+
 ## [5.203.0] - 2026-09-09
 
 ### Added
