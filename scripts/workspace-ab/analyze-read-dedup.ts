@@ -101,11 +101,16 @@ function computeDuplication(groups: Map<string, FingerprintGroup>) {
     // Cross-agent duplicates: every agent beyond the first contributes all
     // of its calls (the earliest agent "owns" the original read).
     if (perAgent.size > 1) {
-      const agents = [...perAgent.entries()].sort((a, b) => {
-        const aFirst = g.callDetails.find(d => d.subagentId === a[0])!;
-        const bFirst = g.callDetails.find(d => d.subagentId === b[0])!;
-        return aFirst.seq - bFirst.seq;
-      });
+      // Pre-compute each agent's earliest seq to avoid O(n) .find() inside
+      // the comparator (which makes the sort O(n² log n) for large groups).
+      const firstSeq = new Map<string, number>();
+      for (const d of g.callDetails) {
+        const prev = firstSeq.get(d.subagentId);
+        if (prev === undefined || d.seq < prev) firstSeq.set(d.subagentId, d.seq);
+      }
+      const agents = [...perAgent.entries()].sort(
+        (a, b) => firstSeq.get(a[0])! - firstSeq.get(b[0])!,
+      );
       for (let i = 1; i < agents.length; i++) {
         crossAgentDuplicates += agents[i]![1];
       }
@@ -155,11 +160,16 @@ function computeFileOverlapRatio(calls: ToolCallStarted[]): number | null {
   let duplicates = 0;
   for (const g of groups.values()) {
     if (g.agents.size > 1) {
-      const agents = [...g.agents.entries()].sort((a, b) => {
-        const aFirst = g.details.find(d => d.subagentId === a[0])!;
-        const bFirst = g.details.find(d => d.subagentId === b[0])!;
-        return aFirst.seq - bFirst.seq;
-      });
+      // Pre-compute each agent's earliest seq to avoid O(n) .find() inside
+      // the comparator (which makes the sort O(n² log n) for large groups).
+      const firstSeq = new Map<string, number>();
+      for (const d of g.details) {
+        const prev = firstSeq.get(d.subagentId);
+        if (prev === undefined || d.seq < prev) firstSeq.set(d.subagentId, d.seq);
+      }
+      const agents = [...g.agents.entries()].sort(
+        (a, b) => firstSeq.get(a[0])! - firstSeq.get(b[0])!,
+      );
       for (let i = 1; i < agents.length; i++) {
         duplicates += agents[i]![1];
       }

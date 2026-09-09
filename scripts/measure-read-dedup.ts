@@ -123,10 +123,20 @@ async function parseTrace(tracePath: string, allTools: boolean): Promise<{
   calls: ToolCallStarted[];
   skippedNoFingerprint: number;
   totalToolCallStarted: number;
+  hasValidClosure: boolean;
+  childFailureRate: number;
 }> {
   const calls: ToolCallStarted[] = [];
   let skippedNoFingerprint = 0;
   let totalToolCallStarted = 0;
+
+  // Subagent lifecycle counters for childFailureRate.
+  let subagentSucceeded = 0;
+  let subagentFailed = 0;
+  let subagentCancelled = 0;
+
+  // Whether the trace includes at least one successful (non-error) closure.
+  let hasValidClosure = false;
 
   const rl = createInterface({ input: createReadStream(tracePath), crlfDelay: Infinity });
 
@@ -134,6 +144,22 @@ async function parseTrace(tracePath: string, allTools: boolean): Promise<{
     if (!line.trim()) continue;
     let event: { kind: string; payload: Record<string, unknown>; seq: number; ts: string };
     try { event = JSON.parse(line); } catch { continue; }
+
+    if (event.kind === 'closure') {
+      // A closure whose reason is not 'budget_exceeded' / 'aborted' counts as
+      // valid.  The closure.payload.reason field is the authoritative signal.
+      const reason = event.payload['reason'] as string | undefined;
+      if (reason !== 'aborted' && reason !== 'budget_exceeded') hasValidClosure = true;
+      continue;
+    }
+
+    if (event.kind === 'subagent_lifecycle') {
+      const transition = event.payload['transition'] as string | undefined;
+      if (transition === 'succeeded') subagentSucceeded++;
+      else if (transition === 'failed') subagentFailed++;
+      else if (transition === 'cancelled') subagentCancelled++;
+      continue;
+    }
 
     if (event.kind !== 'tool_call') continue;
     const p = event.payload;
@@ -158,7 +184,11 @@ async function parseTrace(tracePath: string, allTools: boolean): Promise<{
     });
   }
 
-  return { calls, skippedNoFingerprint, totalToolCallStarted };
+  const totalTerminal = subagentSucceeded + subagentFailed + subagentCancelled;
+  const childFailureRate =
+    totalTerminal > 0 ? (subagentFailed + subagentCancelled) / totalTerminal : 0;
+
+  return { calls, skippedNoFingerprint, totalToolCallStarted, hasValidClosure, childFailureRate };
 }
 
 // ─── Output ─────────────────────────────────────────────────────────────────
@@ -202,15 +232,17 @@ function printHuman(report: DedupReport): void {
 async function main(): Promise<void> {
   const args = parseArgs();
   const tracePath = resolveTraceFile(args);
-  const { calls, skippedNoFingerprint, totalToolCallStarted } = await parseTrace(tracePath, args.allTools);
+  const { calls, skippedNoFingerprint, totalToolCallStarted, hasValidClosure, childFailureRate } =
+    await parseTrace(tracePath, args.allTools);
   const report = analyze({ calls, tracePath, allTools: args.allTools, skippedNoFingerprint, totalToolCallStarted });
+  const validationOpts = { hasValidClosure, childFailureRate };
 
   if (args.json) {
-    const validation = validate(report);
+    const validation = validate(report, validationOpts);
     console.log(JSON.stringify({ ...report, validation }, null, 2));
   } else {
     printHuman(report);
-    const validation = validate(report);
+    const validation = validate(report, validationOpts);
     if (!validation.valid) {
       console.log('  ⚠ Validation failures:');
       for (const f of validation.failures) {
