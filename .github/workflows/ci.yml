@@ -317,6 +317,37 @@ jobs:
       - name: Build
         run: cd website && npm run build
 
+  # The dashboard under dashboard/ is a standalone pnpm app (Vite/React) with
+  # its own pnpm-lock.yaml and dependency tree — not part of the root pnpm
+  # workspace. This job runs the Vitest suite to catch regressions in
+  # component logic (e.g. the MarkdownContent scheme allowlist). See #1597.
+  test-dashboard:
+    name: Test (dashboard)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: cd dashboard && pnpm install --frozen-lockfile
+
+      - name: Test
+        run: cd dashboard && pnpm test
+
   # Exercise the publish-path esbuild bundle on every PR so prompt-inlining
   # regressions, externalised-dep mistakes, or shebang/permission bugs are
   # caught before `prepublishOnly` fires at release time.
