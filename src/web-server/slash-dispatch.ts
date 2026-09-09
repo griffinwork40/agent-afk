@@ -71,11 +71,15 @@ export async function classifySlashInput(
 
   // Lazy-load the slash registry (matches handleCommands' dynamic import
   // pattern -- keeps the cli/slash import tree off the server's startup).
-  const [{ registerAll }, registry] = await Promise.all([
+  const [{ registerAll }, registry, { registerPluginSkillsForWeb }] = await Promise.all([
     import('../cli/slash/index.js'),
     import('../cli/slash/registry.js'),
+    import('./register-plugin-skills.js'),
   ]);
   registerAll();
+  // Invariant: registerAll() calls resetRegistry(), wiping any prior plugin
+  // registrations. Re-register plugin skills so lookup() resolves them.
+  await registerPluginSkillsForWeb();
 
   const parsed = registry.parse(text);
   if (!parsed) return { kind: 'passthrough' };

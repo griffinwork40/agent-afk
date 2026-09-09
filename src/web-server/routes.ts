@@ -109,11 +109,13 @@ let commandUniverseInitialization: Promise<CommandEntry[]> | null = null;
 type CommandUniverseLoader = () => Promise<CommandEntry[]>;
 
 const defaultCommandUniverseLoader: CommandUniverseLoader = async () => {
-  const [{ registerAll }, { buildSlashUniverse }] = await Promise.all([
+  const [{ registerAll }, { buildSlashUniverse }, { registerPluginSkillsForWeb }] = await Promise.all([
     import('../cli/slash/index.js'),
     import('../cli/input/trigger.js'),
+    import('./register-plugin-skills.js'),
   ]);
   registerAll();
+  await registerPluginSkillsForWeb();
   return buildSlashUniverse();
 };
 
