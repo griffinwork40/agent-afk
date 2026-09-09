@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Sidebar } from './components/sidebar';
 import { CommandPalette } from './components/command-palette';
 import { KeyboardShortcuts } from './components/keyboard-shortcuts';
@@ -15,6 +15,8 @@ import { useSessions } from './hooks/use-sessions';
 import { usePendingApprovals } from './hooks/use-pending-approvals';
 import { useTranscript } from './hooks/use-transcript';
 import { useScrollPin } from './hooks/use-scroll-pin';
+import { useQueue } from './hooks/use-queue';
+import { apiFetch } from './lib/api';
 
 type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
 
@@ -36,7 +38,7 @@ function Dashboard() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
-  const { items, totals, status } = useTranscript(selectedSessionId);
+  const { items, totals, status, turnActive, liveTurns } = useTranscript(selectedSessionId);
   const { containerRef } = useScrollPin();
 
   const handleNavigate = (nav: string) => {
@@ -49,7 +51,51 @@ function Dashboard() {
     setMobileSidebarOpen(false);
   };
 
-  const isBusy = status === 'open' || status === 'connecting';
+  const isBusy = turnActive;
+  const [selectedModel, setSelectedModel] = useState('sonnet');
+
+  // Abort controller ref: abort in-flight POSTs when the session changes.
+  const abortRef = useRef<AbortController | null>(null);
+
+  const submitPrompt = useCallback(async (text: string) => {
+    if (!selectedSessionId) throw new Error('no session');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    await apiFetch(`/api/sessions/${selectedSessionId}/prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+  }, [selectedSessionId]);
+
+  const queue = useQueue({
+    submit: submitPrompt,
+    isLive: selectedSession?.mode === 'live',
+  });
+
+  // Track the previous liveTurns value to detect new turn completions.
+  const prevTurnsRef = useRef(0);
+
+  // Clear the queue and abort any in-flight POST when the selected session
+  // changes to prevent a prompt queued for session A from being sent to
+  // session B.
+  useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    queue.clear();
+    prevTurnsRef.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- queue identity is stable; selectedSessionId is the real dep
+  }, [selectedSessionId]);
+
+  // Flush the queue when a live turn completes (liveTurns increments only on
+  // non-replay 'done' records, preventing spurious flushes during initial
+  // replay on session load).
+  useEffect(() => {
+    if (liveTurns > prevTurnsRef.current) {
+      void queue.flush();
+    }
+    prevTurnsRef.current = liveTurns;
+  }, [liveTurns, queue.flush]);
 
   const sidebarContent = (
     <Sidebar
@@ -140,6 +186,9 @@ function Dashboard() {
                 sessionId={selectedSession.id}
                 sessionMode={selectedSession.mode}
                 isBusy={isBusy}
+                queue={queue}
+                onModelSelect={setSelectedModel}
+                currentModel={selectedModel}
               />
             </div>
           )}

@@ -34,6 +34,21 @@ export interface UseTranscriptResult {
   totals: SessionTotals;
   status: StreamStatus;
   error: string | null;
+  /**
+   * True while the agent is actively processing a turn.
+   * Set to true on `user` ledger records, cleared on `done` or `error` records.
+   * Use this to drive the Composer's busy state instead of deriving from
+   * SSE connection status (which stays `open` even when the agent is idle).
+   */
+  turnActive: boolean;
+  /**
+   * Count of live (non-replay) `done` records received since session load.
+   * Unlike `totals.turns` — which counts ALL done records including historical
+   * replay frames — this only increments on frames where `replay` is false.
+   * Use this as the flush trigger to avoid spurious queue flushes during
+   * the initial replay burst on session load.
+   */
+  liveTurns: number;
 }
 
 export function useTranscript(sessionId: string | null): UseTranscriptResult {
@@ -41,6 +56,8 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
 
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [totals, setTotals] = useState<SessionTotals>(EMPTY_TOTALS);
+  const [turnActive, setTurnActive] = useState(false);
+  const [liveTurns, setLiveTurns] = useState(0);
 
   // Stable tool index across renders — keyed by toolUseId for correlation.
   // Reset when sessionId changes.
@@ -52,22 +69,16 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     toolIndexRef.current = new Map();
     setItems([]);
     setTotals(EMPTY_TOTALS);
+    setTurnActive(false);
+    setLiveTurns(0);
   }, [sessionId]);
 
-  // Feed new SSE events into the transcript.
-  useEffect(() => {
-    if (events.length === 0) return;
-
-    // Only process events that arrived since our last render. Because
-    // useSseStream accumulates ALL events, we track how many we've seen.
-    // We use a ref to avoid this effect depending on items/totals state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- processedCount is intentionally a ref
-  }, [events]);
-
-  // A ref-based approach: process events incrementally without depending on
-  // items or totals as effect deps (which would cause infinite re-renders).
+  // Feed new SSE events into the transcript incrementally. We track how many
+  // events we have processed via a ref to avoid depending on items/totals as
+  // effect deps (which would cause infinite re-renders).
   const processedCountRef = useRef(0);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- processedCountRef is intentionally a ref; adding it would cause infinite re-renders
   useEffect(() => {
     const newEvents = events.slice(processedCountRef.current);
     if (newEvents.length === 0) return;
@@ -77,11 +88,26 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     const newItems: TranscriptItem[] = [];
     let deltaTotals: SessionTotals = EMPTY_TOTALS;
     let hasMutation = false;
+    let nextTurnActive: boolean | null = null;
+    let liveTurnsDelta = 0;
 
     for (const raw of newEvents) {
       // Each SSE frame is { record: LedgerRecordLike, replay: boolean }.
       const frame = raw as { record?: unknown; replay?: boolean };
       const record = (frame.record ?? raw) as LedgerRecordLike;
+      const isReplay = frame.replay === true;
+
+      // Track turn activity: user records start a turn; done/error records end it.
+      if (record.kind === 'user') {
+        nextTurnActive = true;
+      } else if (record.kind === 'done' || record.kind === 'error') {
+        nextTurnActive = false;
+      }
+
+      // Count live (non-replay) done records for the flush trigger.
+      if (record.kind === 'done' && !isReplay) {
+        liveTurnsDelta += 1;
+      }
 
       // Accumulate totals from done records.
       deltaTotals = accumulateTotals(deltaTotals, record);
@@ -119,6 +145,14 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
         cacheReadTokens: (prev.cacheReadTokens ?? 0) + (deltaTotals.cacheReadTokens ?? 0),
       }));
     }
+
+    if (nextTurnActive !== null) {
+      setTurnActive(nextTurnActive);
+    }
+
+    if (liveTurnsDelta > 0) {
+      setLiveTurns((prev) => prev + liveTurnsDelta);
+    }
   }, [events]);
 
   // Reset processed count on session change (after items/totals are cleared).
@@ -126,5 +160,5 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     processedCountRef.current = 0;
   }, [sessionId]);
 
-  return { items, totals, status, error };
+  return { items, totals, status, error, turnActive, liveTurns };
 }
