@@ -34,14 +34,16 @@ function ApprovalCard({
     typeof request.questionDefault === 'string' ? request.questionDefault : '',
   );
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const answer = async (action: 'accept' | 'decline', content?: Record<string, unknown>) => {
     setBusy(true);
+    setError(null);
     try {
       await answerApproval({ requestId: id, response: { action, content } });
       onAnswered();
     } catch {
-      // Leave card visible on error
+      setError('Failed to submit — try again');
     } finally {
       setBusy(false);
     }
@@ -121,6 +123,10 @@ function ApprovalCard({
             />
           ))}
         </div>
+      )}
+
+      {error && (
+        <p className="text-xs text-red-400">{error}</p>
       )}
     </div>
   );

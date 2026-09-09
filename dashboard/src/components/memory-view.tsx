@@ -218,7 +218,12 @@ export function MemoryView() {
                 No results found.
               </p>
             ) : (
-              results.map((r, i) => <ResultCard key={i} result={r} />)
+              results.map((r) => (
+                <ResultCard
+                  key={`${r.type}-${r.created_at}-${r.content.slice(0, 32)}`}
+                  result={r}
+                />
+              ))
             )}
           </div>
         )}
