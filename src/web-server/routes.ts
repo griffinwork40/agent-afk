@@ -252,8 +252,16 @@ export async function handlePrompt(
   // reservation is released inside dispatchSlashForWeb for non-skill paths.
   if (text.trimStart().startsWith('/')) {
     ctx.reserveTurn?.(sessionId);
-    const result = await dispatchSlashForWeb(ctx, res, sessionId, text);
-    if (result) return; // handled — response already sent
+    let slashHandled: boolean;
+    try {
+      slashHandled = await dispatchSlashForWeb(ctx, res, sessionId, text);
+    } catch (err) {
+      // Release the reservation on any unexpected throw so the session's
+      // pending counter doesn't get permanently stuck at > 0.
+      ctx.releaseTurn?.(sessionId);
+      throw err;
+    }
+    if (slashHandled) return; // handled — response already sent
   }
 
   await ctx.submitPrompt(sessionId, text);
