@@ -575,6 +575,7 @@ describe('SessionManager — recordTelegramTurn (shared session store)', () => {
     tmpHome = join(tmpdir(), `afk-tg-rec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     process.env['HOME'] = tmpHome;
     process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     manager = makeManager('sdk-live-default');
   });
 
@@ -684,6 +685,7 @@ describe('SessionManager — session naming (/name)', () => {
     tmpHome = join(tmpdir(), `afk-tg-name-home-${entropy}`);
     process.env['HOME'] = tmpHome;
     process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     manager = makeManager('sdk-name-default');
   });
 
@@ -854,6 +856,7 @@ describe('SessionManager — session switcher (/sessions, /switch, /new)', () =>
     tmpHome = join(tmpdir(), `afk-tg-sw-home-${entropy}`);
     process.env['HOME'] = tmpHome;
     process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     lastConfig = undefined;
     manager = makeManager('sdk-live-default');
   });
@@ -1106,6 +1109,7 @@ describe('SessionManager — per-route isolation (native topics)', () => {
     tmpHome = join(tmpdir(), `afk-tg-iso-home-${entropy}`);
     process.env['HOME'] = tmpHome;
     process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     let n = 0;
     manager = new SessionManager({
       dataDir: testDataDir,

@@ -10,7 +10,9 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-watch-test-'));
+// realpathSync normalizes Windows 8.3 short paths (e.g. RUNNER~1) to their
+// long form so session-store's own realpathSync call matches AFK_HOME.
+const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'afk-watch-test-')));
 process.env['AFK_HOME'] = tmpDir;
 // Windows: os.homedir() reads USERPROFILE, not HOME. Isolate both so any
 // code that calls os.homedir() sees the same sentinel dir on all platforms.

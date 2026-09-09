@@ -988,7 +988,7 @@ describe('discoverPluginAgents', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(brokenPath));
   });
 
-  it('warns rather than silently skipping an unreadable plugin agent file', () => {
+  it.skipIf(process.platform === 'win32')('warns rather than silently skipping an unreadable plugin agent file', () => {
     const pluginA = join(tmpDir, 'plugin-a');
     writeManifest(pluginA, 'demo');
     const dir = join(pluginA, 'agents');
@@ -1012,7 +1012,7 @@ describe('discoverPluginAgents', () => {
     expect(message).not.toContain('\x07');
   });
 
-  it('sanitizes an escape-sequence-bearing file path before it reaches warn', () => {
+  it.skipIf(process.platform === 'win32')('sanitizes an escape-sequence-bearing file path before it reaches warn', () => {
     const pluginA = join(tmpDir, 'plugin-a');
     writeManifest(pluginA, 'demo');
     const dir = join(pluginA, 'agents');

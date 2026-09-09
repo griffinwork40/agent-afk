@@ -211,7 +211,8 @@ describe('captureSubagentPrompt', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('creates the prompts dir owner-only — filenames leak subagent ids', async () => {
+  // NTFS does not support POSIX mode bits — the 0o700 assertion is a POSIX-only invariant.
+  it.skipIf(process.platform === 'win32')('creates the prompts dir owner-only — filenames leak subagent ids', async () => {
     await captureSubagentPrompt(baseInput());
     expect(fs.statSync(getPromptsDir(SESSION)).mode & 0o777).toBe(0o700);
   });

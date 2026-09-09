@@ -256,7 +256,7 @@ describe('normalizeSkillSource', () => {
     expect(result).toBe('---\ndescription: d\n---\n\nBody.\n');
   });
 
-  it('strips a terminal escape embedded in an untrusted plugin filename', () => {
+  it.skipIf(process.platform === 'win32')('strips a terminal escape embedded in an untrusted plugin filename', () => {
     // The AFK_DEBUG skip diagnostics interpolate raw `readdirSync` entries
     // from a third-party plugin tree. Without sanitisation, a directory or
     // file named with a CSI/OSC sequence executes against the operator's

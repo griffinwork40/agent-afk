@@ -429,7 +429,8 @@ describe('PathGrantManager — audit log (Finding 1: sessionId, Finding 3: no-op
     expect(entries.length).toBe(before + 1);
     const last = entries[entries.length - 1]!;
     expect(last['action']).toBe('revoke');
-    expect(last['path']).toBe('/p');
+    // path.resolve normalizes to the platform absolute form (e.g. D:\p on Windows).
+    expect(last['path']).toBe(path.resolve('/p'));
   });
 
   it('(Finding 3) emits NO extra entry on a double-revoke (second is no-op)', () => {

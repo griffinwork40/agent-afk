@@ -37,6 +37,10 @@ beforeEach(() => {
   tmpHome = join(tmpdir(), `afk-sess-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
   process.env['USERPROFILE'] = tmpHome;
+  // Windows: os.homedir() may return 8.3 short-path form while tmpdir() returns
+  // the long form (or vice-versa), so homedir() fallback is unreliable. Set
+  // AFK_HOME explicitly to bypass homedir() entirely.
+  process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — test isolation
 });
 
 afterEach(() => {

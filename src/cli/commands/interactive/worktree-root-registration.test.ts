@@ -19,8 +19,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { normalize as normalizePath } from 'node:path';
 import { setupWorktree } from './worktree.js';
 import { readRegisteredWorktreeRoots } from '../../../agent/worktree/worktree-root-registry.js';
+
+/** Normalize paths for cross-platform comparison (consistent sep, lowercase). */
+function normPath(p: string): string { return normalizePath(p).toLowerCase(); }
 
 type ExecResult = { stdout: string; stderr: string };
 type ExecCall = { file: string; args: string[]; opts?: { cwd?: string } };
@@ -68,7 +72,8 @@ describe('afk -w launcher — sweep root registration', () => {
     const addCall = mock.calls.find((c) => c.args.includes('add'));
     expect(addCall).toBeDefined();
     // ...and the root must now be discoverable by the daemon's sweepRootSet().
-    expect(await readRegisteredWorktreeRoots()).toContain(repoRoot);
+    // Normalize paths: on Windows fs.realpath may return different sep form.
+    expect((await readRegisteredWorktreeRoots()).map(normPath)).toContain(normPath(repoRoot));
   });
 
   it('registers only after a successful add', async () => {

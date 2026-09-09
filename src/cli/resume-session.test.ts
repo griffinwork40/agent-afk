@@ -17,6 +17,8 @@ beforeEach(() => {
   tmpHome = join(tmpdir(), `afk-resume-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
   process.env['USERPROFILE'] = tmpHome;
+  // Windows: bypass homedir() to avoid 8.3 short-path vs long-path mismatch.
+  process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — test isolation
 });
 
 afterEach(() => {

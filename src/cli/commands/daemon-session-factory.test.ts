@@ -99,7 +99,8 @@ describe('buildDaemonSessionFactory', () => {
     openSessions.length = 0;
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
-    rmSync(tmpHome, { recursive: true, force: true });
+    // Best-effort: on Windows a lingering SQLite handle (kv.db) may cause EBUSY.
+    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
   it('returns a factory function', () => {

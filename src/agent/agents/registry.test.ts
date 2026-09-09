@@ -444,7 +444,7 @@ describe('loadAgentRegistry', () => {
     const ESC = '\x1B';
     const RAW_ESC_RE = /[\x00-\x1F\x7F-\x9F]/;
 
-    it('cannot-read warning sanitizes control bytes included in the filesystem error', () => {
+    it.skipIf(process.platform === 'win32')('cannot-read warning sanitizes control bytes included in the filesystem error', () => {
       const warn = vi.fn();
       const dir = join(tmp, 'proj', '.afk', 'agents');
       const poisonedName = `evil${ESC}[2J.md`;

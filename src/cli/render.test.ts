@@ -492,7 +492,9 @@ describe('welcomeBanner', () => {
     });
   });
 
-  describe('tildifyHome path-boundary handling', () => {
+  // On Windows, os.homedir() reads USERPROFILE but may not reflect in-process
+  // changes to USERPROFILE (native cache), so POSIX-path fixtures break tildify.
+  describe.skipIf(process.platform === 'win32')('tildifyHome path-boundary handling', () => {
     const prevHome = process.env['HOME'];
     const prevUserProfile = process.env['USERPROFILE'];
 

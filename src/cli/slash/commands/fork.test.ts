@@ -43,6 +43,7 @@ beforeEach(() => {
   tmpHome = join(tmpdir(), `afk-fork-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
   process.env['USERPROFILE'] = tmpHome;
+  process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
 
   // Default: mirror the real trySpawnTab behavior for a non-interactive ctx
   // (no requestResume) — spawn refuses, clipboard would be the only fallback.

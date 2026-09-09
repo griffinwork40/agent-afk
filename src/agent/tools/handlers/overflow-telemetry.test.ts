@@ -110,7 +110,8 @@ describe('tool.overflow_kill telemetry — grep', () => {
     expect(serialized).not.toContain('huge.txt');
     expect(serialized).not.toContain(tempDir);
 
-    rmSync(tempDir, { recursive: true, force: true });
+    // Best-effort inline cleanup; afterEach provides the safety net on Windows.
+    try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* EBUSY on Windows — afterEach will retry */ }
   }, 30_000);
 
   it('does NOT emit tool.overflow_kill on a small grep that stays under the scan ceiling', async () => {

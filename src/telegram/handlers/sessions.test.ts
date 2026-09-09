@@ -90,6 +90,7 @@ describe('session switcher handlers', () => {
     tmpHome = join(tmpdir(), `afk-tg-sh-home-${entropy}`);
     process.env['HOME'] = tmpHome;
     process.env['USERPROFILE'] = tmpHome;
+    process.env['AFK_HOME'] = join(tmpHome, '.afk'); // audit-env-access: allow — Windows isolation
     log = vi.fn();
     manager = makeManager('sdk-live');
   });
