@@ -8,7 +8,7 @@
 
 import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -48,7 +48,9 @@ async function makeRepo(): Promise<string> {
 }
 
 function makeAfkHome(): string {
-  return mkdtempSync(join(tmpdir(), 'afk-farm-home-'));
+  // realpathSync so git-reported paths (long form) match the temp dir path
+  // on Windows where tmpdir() may return an 8.3 short form like RUNNER~1.
+  return realpathSync(mkdtempSync(join(tmpdir(), 'afk-farm-home-')));
 }
 
 let savedAfkHome: string | undefined;
