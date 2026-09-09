@@ -21,6 +21,7 @@ import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { analyze, validate } from './workspace-ab/analyze-read-dedup.js';
 import type { ToolCallStarted } from './workspace-ab/types.js';
@@ -119,7 +120,7 @@ function resolveTraceFile(args: CliArgs): string {
 
 // ─── Trace parsing ──────────────────────────────────────────────────────────
 
-async function parseTrace(tracePath: string, allTools: boolean): Promise<{
+export async function parseTrace(tracePath: string, allTools: boolean): Promise<{
   calls: ToolCallStarted[];
   skippedNoFingerprint: number;
   totalToolCallStarted: number;
@@ -135,7 +136,8 @@ async function parseTrace(tracePath: string, allTools: boolean): Promise<{
   let subagentFailed = 0;
   let subagentCancelled = 0;
 
-  // Whether the trace includes at least one successful (non-error) closure.
+  // Only the top-level session writes session_sealed. Child closures share the
+  // same trace, so they cannot be used to determine the experiment outcome.
   let hasValidClosure = false;
 
   const rl = createInterface({ input: createReadStream(tracePath), crlfDelay: Infinity });
@@ -145,11 +147,9 @@ async function parseTrace(tracePath: string, allTools: boolean): Promise<{
     let event: { kind: string; payload: Record<string, unknown>; seq: number; ts: string };
     try { event = JSON.parse(line); } catch { continue; }
 
-    if (event.kind === 'closure') {
-      // A closure whose reason is not 'budget_exceeded' / 'aborted' counts as
-      // valid.  The closure.payload.reason field is the authoritative signal.
-      const reason = event.payload['reason'] as string | undefined;
-      if (reason !== 'aborted' && reason !== 'budget_exceeded') hasValidClosure = true;
+    if (event.kind === 'session_sealed') {
+      hasValidClosure =
+        event.payload['status'] === 'succeeded' && event.payload['incomplete'] !== true;
       continue;
     }
 
@@ -253,4 +253,6 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch(err => { console.error(err); process.exit(1); });
+}

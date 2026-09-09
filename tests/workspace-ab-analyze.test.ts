@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseTrace } from '../scripts/measure-read-dedup.js';
 import { analyze, validate } from '../scripts/workspace-ab/analyze-read-dedup.js';
 import type { ToolCallStarted } from '../scripts/workspace-ab/types.js';
 
@@ -26,6 +30,48 @@ const baseArgs = {
   skippedNoFingerprint: 0,
   totalToolCallStarted: 10,
 };
+
+async function parseTerminalEvents(events: Array<Record<string, unknown>>) {
+  const dir = await mkdtemp(join(tmpdir(), 'measure-read-dedup-'));
+  const tracePath = join(dir, 'trace.jsonl');
+  try {
+    await writeFile(tracePath, events.map(event => JSON.stringify(event)).join('\n'));
+    return await parseTrace(tracePath, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+describe('parseTrace terminal state', () => {
+  it('uses the top-level session seal instead of a child closure', async () => {
+    const result = await parseTerminalEvents([
+      { kind: 'closure', seq: 1, ts: '2026-01-01T00:00:00Z', payload: { reason: 'model_end_turn' } },
+      { kind: 'session_sealed', seq: 2, ts: '2026-01-01T00:00:01Z', payload: { status: 'cancelled' } },
+    ]);
+
+    expect(result.hasValidClosure).toBe(false);
+  });
+
+  it('rejects an abort closure without a successful top-level seal', async () => {
+    const result = await parseTerminalEvents([
+      { kind: 'closure', seq: 1, ts: '2026-01-01T00:00:00Z', payload: { reason: 'abort' } },
+    ]);
+
+    expect(result.hasValidClosure).toBe(false);
+  });
+
+  it('accepts only a complete, successful top-level seal', async () => {
+    const complete = await parseTerminalEvents([
+      { kind: 'session_sealed', seq: 1, ts: '2026-01-01T00:00:00Z', payload: { status: 'succeeded' } },
+    ]);
+    const incomplete = await parseTerminalEvents([
+      { kind: 'session_sealed', seq: 1, ts: '2026-01-01T00:00:00Z', payload: { status: 'succeeded', incomplete: true } },
+    ]);
+
+    expect(complete.hasValidClosure).toBe(true);
+    expect(incomplete.hasValidClosure).toBe(false);
+  });
+});
 
 describe('analyze', () => {
   it('detects exact duplicate by two different agents', () => {
