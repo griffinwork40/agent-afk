@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.206.1] - 2026-09-09
+
+### Fixed
+- wave 1 - hook executor wiring, EBUSY fix, POSIX test portability (#703) (#1578) (9990099a)
+
 ## [5.206.0] - 2026-09-09
 
 ### Added
