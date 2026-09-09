@@ -14,7 +14,9 @@
 
 import { stripAnsi } from './ansi-strip.js';
 import { renderMarkdown } from './markdown-dom.js';
-import type { TranscriptItem, ToolCallItem, SubagentItem, BgJobItem } from './view-model.js';
+import type { TranscriptItem, ToolCallItem, SubagentItem } from './ledger-adapter.js';
+
+type BgJobItem = Extract<TranscriptItem, { kind: 'bg_job' }>;
 import { applyIncrementalUpdate } from './render-incremental.js';
 import { createThinkingBlockNode } from './thinking-panel.js';
 import { classifySession, renderStatusBadge } from './session-status.js';

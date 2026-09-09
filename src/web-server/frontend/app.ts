@@ -26,8 +26,10 @@ import {
   resetIdCounter,
   type LedgerRecordLike,
   type SessionTotals,
+  type TranscriptItem,
+  type ToolCallItem,
+  type SubagentItem,
 } from './ledger-adapter.js';
-import type { ToolCallItem, SubagentItem, TranscriptItem } from './view-model.js';
 import { resetNodeCache } from './render-incremental.js';
 import { QueuePanel } from './queue-panel.js';
 import { isPinnedToBottom } from './scroll-pin.js';
