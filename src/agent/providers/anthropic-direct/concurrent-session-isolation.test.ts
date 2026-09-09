@@ -37,6 +37,7 @@ describe('AnthropicDirectProvider per-session isolation', () => {
   let tmpHome: string;
   let prevAfkHome: string | undefined;
   let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
 
   beforeEach(() => {
     // Isolate audit log writes so concurrent appends don't bleed into the
@@ -44,8 +45,10 @@ describe('AnthropicDirectProvider per-session isolation', () => {
     tmpHome = mkdtempSync(path.join(tmpdir(), 'concurrent-session-test-'));
     prevAfkHome = process.env['AFK_HOME'];
     prevHome = process.env['HOME'];
+    prevUserProfile = process.env['USERPROFILE'];
     process.env['AFK_HOME'] = tmpHome;
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
 
     // Stub the Anthropic client so query() does no network I/O.
     __setAnthropicClientFactory(
@@ -68,6 +71,8 @@ describe('AnthropicDirectProvider per-session isolation', () => {
     else process.env['AFK_HOME'] = prevAfkHome;
     if (prevHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = prevHome;
+    if (prevUserProfile === undefined) delete process.env['USERPROFILE'];
+    else process.env['USERPROFILE'] = prevUserProfile;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 

@@ -22,6 +22,7 @@ import { useUnsetAfkHome } from '../../../src/__test-utils__/unset-afk-home.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 // HOT.md fixtures are written under $HOME/.afk/state/memory and the loader
 // resolves that via the unset-AFK_HOME fallback — drop the global sentinel
@@ -30,15 +31,19 @@ useUnsetAfkHome();
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   tmpHome = join(tmpdir(), `afk-mem-loader-${randomUUID()}`);
   mkdirSync(join(tmpHome, '.afk', 'state', 'memory'), { recursive: true });
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
 });
 
 afterEach(() => {
   if (existsSync(tmpHome)) rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
 });
 
 describe('loadHotMemory', () => {

@@ -47,7 +47,9 @@ describe('harvestPluginSkillFlags', () => {
 
   it('defaults to ~/.afk/plugins/cache under HOME when cacheRoot is omitted', () => {
     const originalHome = process.env['HOME'];
+    const originalUserProfile = process.env['USERPROFILE'];
     process.env['HOME'] = tmpRoot;
+    process.env['USERPROFILE'] = tmpRoot;
     try {
       mkdirSync(join(tmpRoot, '.afk', 'plugins', 'cache', 'test-plugin', 'skills', 'defaulted'), {
         recursive: true,
@@ -65,6 +67,8 @@ Supports --defaulted.
     } finally {
       if (originalHome !== undefined) process.env['HOME'] = originalHome;
       else delete process.env['HOME'];
+      if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+      else delete process.env['USERPROFILE'];
     }
   });
 

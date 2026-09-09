@@ -65,15 +65,18 @@ function makeHooks(opts?: {
 let tmpHome: string = '';
 let prevAfkHome: string | undefined;
 let prevHome: string | undefined;
+let prevUserProfile: string | undefined;
 let prevStateDir: string | undefined;
 
 function setupAuditEnv(): void {
   tmpHome = mkdtempSync(path.join(tmpdir(), 'pgm-test-'));
   prevAfkHome = process.env['AFK_HOME'];
   prevHome = process.env['HOME'];
+  prevUserProfile = process.env['USERPROFILE'];
   prevStateDir = process.env['AFK_STATE_DIR'];
   process.env['AFK_HOME'] = tmpHome;
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
   delete process.env['AFK_STATE_DIR'];
 }
 
@@ -82,6 +85,8 @@ function teardownAuditEnv(): void {
   else process.env['AFK_HOME'] = prevAfkHome;
   if (prevHome === undefined) delete process.env['HOME'];
   else process.env['HOME'] = prevHome;
+  if (prevUserProfile === undefined) delete process.env['USERPROFILE'];
+  else process.env['USERPROFILE'] = prevUserProfile;
   if (prevStateDir === undefined) delete process.env['AFK_STATE_DIR'];
   else process.env['AFK_STATE_DIR'] = prevStateDir;
   rmSync(tmpHome, { recursive: true, force: true });

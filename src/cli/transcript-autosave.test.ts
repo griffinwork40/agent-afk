@@ -27,19 +27,24 @@ import { startTranscript } from './commands/interactive/transcript.js';
 describe('transcript autosave — startTranscript', () => {
   let home: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let originalStateDir: string | undefined;
 
   beforeEach(() => {
     home = realpathSync(mkdtempSync(join(tmpdir(), 'afk-transcript-')));
     originalHome = process.env['HOME'];
+    originalUserProfile = process.env['USERPROFILE'];
     originalStateDir = process.env['AFK_STATE_DIR'];
     process.env['HOME'] = home;
+    process.env['USERPROFILE'] = home;
     process.env['AFK_STATE_DIR'] = home;
   });
 
   afterEach(() => {
     if (originalHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = originalHome;
+    if (originalUserProfile === undefined) delete process.env['USERPROFILE'];
+    else process.env['USERPROFILE'] = originalUserProfile;
     if (originalStateDir === undefined) delete process.env['AFK_STATE_DIR'];
     else process.env['AFK_STATE_DIR'] = originalStateDir;
     rmSync(home, { recursive: true, force: true });

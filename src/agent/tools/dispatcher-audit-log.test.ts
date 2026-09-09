@@ -21,14 +21,17 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
   let tmpHome: string;
   let prevAfkHome: string | undefined;
   let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
 
   beforeEach(() => {
     // Isolate audit log to a temp dir so the test is hermetic.
     tmpHome = mkdtempSync(path.join(tmpdir(), 'dispatcher-audit-test-'));
     prevAfkHome = process.env['AFK_HOME'];
     prevHome = process.env['HOME'];
+    prevUserProfile = process.env['USERPROFILE'];
     process.env['AFK_HOME'] = tmpHome;
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
   });
 
   afterEach(() => {
@@ -36,6 +39,8 @@ describe('SessionToolDispatcher audit log — sessionId schema symmetry', () => 
     else process.env['AFK_HOME'] = prevAfkHome;
     if (prevHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = prevHome;
+    if (prevUserProfile === undefined) delete process.env['USERPROFILE'];
+    else process.env['USERPROFILE'] = prevUserProfile;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 

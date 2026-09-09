@@ -20,14 +20,17 @@ describe('AnthropicDirectProvider GrantManager', () => {
   let tmpHome: string;
   let prevAfkHome: string | undefined;
   let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
 
   beforeEach(() => {
     // Isolate the audit log to a temp dir so this test is hermetic and parallel-safe.
     tmpHome = mkdtempSync(path.join(tmpdir(), 'grant-manager-test-'));
     prevAfkHome = process.env['AFK_HOME'];
     prevHome = process.env['HOME'];
+    prevUserProfile = process.env['USERPROFILE'];
     process.env['AFK_HOME'] = tmpHome;
     process.env['HOME'] = tmpHome;
+    process.env['USERPROFILE'] = tmpHome;
   });
 
   afterEach(() => {
@@ -35,6 +38,8 @@ describe('AnthropicDirectProvider GrantManager', () => {
     else process.env['AFK_HOME'] = prevAfkHome;
     if (prevHome === undefined) delete process.env['HOME'];
     else process.env['HOME'] = prevHome;
+    if (prevUserProfile === undefined) delete process.env['USERPROFILE'];
+    else process.env['USERPROFILE'] = prevUserProfile;
     rmSync(tmpHome, { recursive: true, force: true });
   });
 

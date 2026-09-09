@@ -45,11 +45,14 @@ import { ensureSessionsMigrated, getSessionsDir } from './paths.js';
 
 let tmpHome: string;
 let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
 
 beforeEach(() => {
   originalHome = process.env['HOME'];
+  originalUserProfile = process.env['USERPROFILE'];
   tmpHome = join(tmpdir(), `afk-exdev-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   process.env['HOME'] = tmpHome;
+  process.env['USERPROFILE'] = tmpHome;
   delete process.env['AFK_HOME'];
 });
 
@@ -57,6 +60,8 @@ afterEach(() => {
   if (realFs.existsSync(tmpHome)) realFs.rmSync(tmpHome, { recursive: true, force: true });
   if (originalHome !== undefined) process.env['HOME'] = originalHome;
   else delete process.env['HOME'];
+  if (originalUserProfile !== undefined) process.env['USERPROFILE'] = originalUserProfile;
+  else delete process.env['USERPROFILE'];
   delete process.env['AFK_HOME'];
 });
 
