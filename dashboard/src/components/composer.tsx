@@ -10,11 +10,21 @@ import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/api';
 import type { SlashCommand } from '@/types/api';
 import { SlashAutocomplete, handleAutocompleteKey } from './slash-autocomplete';
+import { AtFilePopover } from './at-file-popover';
+import { ModelSelector } from './model-selector';
+import { QueuePanel } from './queue-panel';
+import type { UseQueueResult } from '@/hooks/use-queue';
 
 interface ComposerProps {
   sessionId: string;
   sessionMode: 'live' | 'readonly';
   isBusy: boolean;
+  /** Queue for mid-run message management. */
+  queue?: UseQueueResult;
+  /** Called when the operator picks a model from the selector. */
+  onModelSelect?: (modelId: string) => void;
+  /** Currently selected model id (shown in the selector). */
+  currentModel?: string;
 }
 
 /** Cached slash commands — fetched once per page lifecycle. */
@@ -34,7 +44,14 @@ function getSlashQuery(text: string): string | null {
 }
 
 /** Main prompt composer — textarea + send/stop controls. */
-export function Composer({ sessionId, sessionMode, isBusy }: ComposerProps) {
+export function Composer({
+  sessionId,
+  sessionMode,
+  isBusy,
+  queue,
+  onModelSelect,
+  currentModel,
+}: ComposerProps) {
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -114,14 +131,43 @@ export function Composer({ sessionId, sessionMode, isBusy }: ComposerProps) {
 
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        void submit();
+        if (isBusy && queue) {
+          // When a turn is running, Enter queues instead of sending.
+          const trimmed = text.trim();
+          if (trimmed) {
+            queue.enqueue(trimmed);
+            setText('');
+          }
+        } else {
+          void submit();
+        }
       }
     },
     [acVisible, acFiltered, acActiveIdx, selectCommand, submit],
   );
 
+  /** Insert text at the current cursor position. */
+  const insertAtCursor = useCallback((token: string) => {
+    const ta = textareaRef.current;
+    if (!ta) { setText((t) => t + ' ' + token + ' '); return; }
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? start;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    const prefix = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+    const next = before + prefix + token + ' ' + after;
+    setText(next);
+    // Defer cursor placement to after React re-renders.
+    requestAnimationFrame(() => {
+      const pos = start + prefix.length + token.length + 1;
+      ta.setSelectionRange(pos, pos);
+      ta.focus();
+    });
+  }, []);
+
   return (
     <div className={cn('relative flex flex-col gap-2', disabled && 'opacity-50')}>
+      {queue && <QueuePanel queue={queue} />}
       <SlashAutocomplete
         query={slashQuery ?? ''}
         commands={commands}
@@ -129,6 +175,16 @@ export function Composer({ sessionId, sessionMode, isBusy }: ComposerProps) {
         visible={acVisible}
       />
       <div className="flex items-end gap-2">
+        {/* Toolbar: @-file + model selector */}
+        <div className="flex shrink-0 items-center gap-1">
+          <AtFilePopover onInsert={insertAtCursor} />
+          {onModelSelect && (
+            <ModelSelector
+              onSelect={onModelSelect}
+              current={currentModel}
+            />
+          )}
+        </div>
         <textarea
           ref={textareaRef}
           rows={1}

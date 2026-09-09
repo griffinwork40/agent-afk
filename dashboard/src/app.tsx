@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Sidebar } from './components/sidebar';
 import { CommandPalette } from './components/command-palette';
 import { KeyboardShortcuts } from './components/keyboard-shortcuts';
@@ -15,6 +15,8 @@ import { useSessions } from './hooks/use-sessions';
 import { usePendingApprovals } from './hooks/use-pending-approvals';
 import { useTranscript } from './hooks/use-transcript';
 import { useScrollPin } from './hooks/use-scroll-pin';
+import { useQueue } from './hooks/use-queue';
+import { apiFetch } from './lib/api';
 
 type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
 
@@ -50,6 +52,28 @@ function Dashboard() {
   };
 
   const isBusy = status === 'open' || status === 'connecting';
+  const [selectedModel, setSelectedModel] = useState('sonnet');
+
+  const queue = useQueue({
+    submit: async (text: string) => {
+      if (!selectedSessionId) throw new Error('no session');
+      await apiFetch(`/api/sessions/${selectedSessionId}/prompt`, {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      });
+    },
+    isLive: selectedSession?.mode === 'live',
+    isBusy,
+  });
+
+  // Attempt to flush the queue when a turn completes (isBusy transitions to false).
+  const prevBusyRef = useRef(isBusy);
+  useEffect(() => {
+    if (prevBusyRef.current && !isBusy) {
+      void queue.flush();
+    }
+    prevBusyRef.current = isBusy;
+  }, [isBusy, queue]);
 
   const sidebarContent = (
     <Sidebar
@@ -140,6 +164,9 @@ function Dashboard() {
                 sessionId={selectedSession.id}
                 sessionMode={selectedSession.mode}
                 isBusy={isBusy}
+                queue={queue}
+                onModelSelect={setSelectedModel}
+                currentModel={selectedModel}
               />
             </div>
           )}
