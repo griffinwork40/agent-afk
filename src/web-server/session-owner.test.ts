@@ -40,6 +40,29 @@ describe('SessionOwner — submitPrompt on an unknown id', () => {
   });
 });
 
+describe('SessionOwner — submitSkillMessage on an unknown id', () => {
+  it('rejects rather than silently no-op-ing', async () => {
+    const owner = freshOwner();
+    await expect(
+      owner.submitSkillMessage('nope', [{ type: 'text', text: 'mock' }]),
+    ).rejects.toThrow(/nope.*not owned by this process/);
+  });
+});
+
+describe('SessionOwner — getSessionCwd on an unknown id', () => {
+  it('returns undefined rather than throwing', () => {
+    const owner = freshOwner();
+    expect(owner.getSessionCwd('nope')).toBeUndefined();
+  });
+});
+
+describe('SessionOwner — getProviderSessionId on an unknown id', () => {
+  it('returns undefined rather than throwing', () => {
+    const owner = freshOwner();
+    expect(owner.getProviderSessionId('nope')).toBeUndefined();
+  });
+});
+
 describe('SessionOwner — interrupt on an unknown id', () => {
   it('rejects rather than silently no-op-ing', async () => {
     const owner = freshOwner();

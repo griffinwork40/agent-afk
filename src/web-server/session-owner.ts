@@ -26,6 +26,7 @@ import { wireWebSession, type WebSessionWiringInternal } from './session-owner.w
 import type { AgentConfig } from '../agent/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
 import type { McpManager } from '../agent/mcp/index.js';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 export interface CreateSessionRequest {
   /** Working directory. Ignored unless `allowArbitraryCwd` — see the guard. */
@@ -196,6 +197,56 @@ export class SessionOwner {
     // unhandled rejection: a failed turn records an `error` in the ledger,
     // which is the browser's channel for it.
     next.catch(() => {});
+  }
+
+  /**
+   * Queue a skill-invocation message (ContentBlockParam[]) for an owned session.
+   *
+   * Identical turn-serialization and backpressure semantics as `submitPrompt`,
+   * but accepts the pre-built multi-block payload that `buildSkillInvocationMessage`
+   * produces. `sendMessageStream` accepts `string | ContentBlockParam[]`, so the
+   * only difference is the input type.
+   */
+  async submitSkillMessage(sessionId: string, message: ContentBlockParam[]): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`session ${sessionId} is not owned by this process`);
+
+    this.pending.set(sessionId, (this.pending.get(sessionId) ?? 0) + 1);
+
+    const previous = this.turns.get(sessionId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        try {
+          for await (const _event of session.sendMessageStream(message)) {
+            void _event;
+          }
+        } finally {
+          const remaining = (this.pending.get(sessionId) ?? 1) - 1;
+          if (remaining > 0) this.pending.set(sessionId, remaining);
+          else this.pending.delete(sessionId);
+        }
+      });
+
+    this.turns.set(sessionId, next);
+    next.catch(() => {});
+  }
+
+  /**
+   * The session's working directory. Needed by slash dispatch to run preflights
+   * that shell out (e.g. `gh pr view` for /review).
+   */
+  getSessionCwd(sessionId: string): string | undefined {
+    return this.info.get(sessionId)?.cwd;
+  }
+
+  /**
+   * The session id from the provider (may differ from the map key before
+   * initialization). Needed by slash dispatch for preflight artifact dirs.
+   */
+  getProviderSessionId(sessionId: string): string | undefined {
+    const session = this.sessions.get(sessionId);
+    return session?.sessionId;
   }
 
   /**
