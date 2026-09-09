@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.205.0] - 2026-09-09
+
+### Added
+- wire slash-command dispatch into web UI prompt path (#1598) (4c0be1ea)
+
 ## [5.204.4] - 2026-09-09
 
 ### Fixed
