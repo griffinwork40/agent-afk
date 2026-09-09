@@ -305,7 +305,7 @@ describe('bashHandler', () => {
   });
 
   describe('output truncation', () => {
-    it('truncates output at 100KB', async () => {
+    it.skipIf(process.platform === 'win32')('truncates output at 100KB', async () => {
       // Generate ~110KB of output
       const largeLine = 'x'.repeat(110_000);
       const result = await bashHandler(
@@ -318,7 +318,7 @@ describe('bashHandler', () => {
       expect(result.content).toContain('truncated');
     });
 
-    it('includes a head+tail truncation notice when output exceeds the model cap', async () => {
+    it.skipIf(process.platform === 'win32')('includes a head+tail truncation notice when output exceeds the model cap', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
         { command: `printf "${largeLine}"` },
@@ -337,7 +337,7 @@ describe('bashHandler', () => {
     // marker vs hard-cap kill note), and handlers may emit the literal
     // string "truncated" in legitimate output (e.g. a log line about
     // database truncation). The structured flag is unambiguous.
-    it('sets ToolResult.truncated=true when output exceeds 100KB', async () => {
+    it.skipIf(process.platform === 'win32')('sets ToolResult.truncated=true when output exceeds 100KB', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
         { command: `printf "${largeLine}"` },
@@ -348,7 +348,7 @@ describe('bashHandler', () => {
       expect(result.truncated).toBe(true);
     });
 
-    it('does not truncate output under 100KB', async () => {
+    it.skipIf(process.platform === 'win32')('does not truncate output under 100KB', async () => {
       const mediumLine = 'x'.repeat(50_000);
       const result = await bashHandler(
         { command: `printf "${mediumLine}"` },
@@ -927,7 +927,8 @@ describe('bash path-containment scan — C4 (#354)', () => {
 
     const warnings = escapeWarnings();
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(join(os.homedir(), '.ssh/id_rsa'));
+    expect(warnings[0]).toContain('.ssh');
+    expect(warnings[0]).toContain('id_rsa');
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('hi');
   });

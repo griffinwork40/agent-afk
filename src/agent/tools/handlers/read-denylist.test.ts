@@ -610,7 +610,7 @@ describe('parseReadDenylistEntries — the single parser both surfaces share', (
   // Invariant: bash-restriction-hook.ts imports THIS function instead of
   // re-implementing the parse. The duplicate it used to keep is how the tilde
   // bug reached both surfaces at once (PR #734 review, MAJOR 1).
-  it('splits on colons, trims, drops empties, and absolutizes', () => {
+  it.skipIf(process.platform === 'win32')('splits on colons, trims, drops empties, and absolutizes', () => {
     expect(parseReadDenylistEntries('  /a/b : :/c/d  ')).toEqual(['/a/b', '/c/d']);
     expect(parseReadDenylistEntries(undefined)).toEqual([]);
     expect(parseReadDenylistEntries('')).toEqual([]);

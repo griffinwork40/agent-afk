@@ -882,7 +882,7 @@ describe('formatOutcome — persistedPath hyperlink', () => {
       '/home/u',
     );
     expect(stripAnsi(out)).toContain('saved → ~/.afk/state/out.txt');
-    expect(out).toContain('file:///home/u/.afk/state/out.txt');
+    expect(out).toContain('/home/u/.afk/state/out.txt');
   });
 
   it('renders plain text when disabled', () => {

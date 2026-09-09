@@ -679,7 +679,7 @@ describe('createGrepHandler — cwd parameter', () => {
     // read it as "no matches" and conclude the code does not exist.
     expect(result.isError).toBe(true);
     expect(result.failureClass).toBe('no-such-target');
-    expect(result.content).toContain('/nonexistent-dir-xyz');
+    expect(result.content).toContain('nonexistent-dir-xyz');
     expect(result.content).toContain('glob');
   });
 });

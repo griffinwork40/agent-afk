@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { tmpdir } from 'os';
 import {
   getAfkHome,
@@ -270,14 +270,14 @@ describe('assertSafeJobId and bg job path accessors', () => {
       const root = getBgJobsRoot();
       const escaped = join(root, '../../etc/passwd');
       // The resolved path should NOT contain '/state/bg/' as a suffix near the leaf
-      expect(escaped.includes('/etc/passwd')).toBe(true);
+      expect(escaped.replace(/\\/g, '/')).toContain('/etc/passwd');
     });
 
     it('valid jobIds resolve to paths under the bg jobs root', () => {
       const root = getBgJobsRoot();
-      expect(getBgJobDir('bg-abc-1').startsWith(root + '/')).toBe(true);
-      expect(getBgJobLog('bg-abc-1').startsWith(root + '/')).toBe(true);
-      expect(getBgJobMeta('bg-abc-1').startsWith(root + '/')).toBe(true);
+      expect(getBgJobDir('bg-abc-1').startsWith(root + sep) || getBgJobDir('bg-abc-1').startsWith(root + '/')).toBe(true);
+      expect(getBgJobLog('bg-abc-1').startsWith(root + sep) || getBgJobLog('bg-abc-1').startsWith(root + '/')).toBe(true);
+      expect(getBgJobMeta('bg-abc-1').startsWith(root + sep) || getBgJobMeta('bg-abc-1').startsWith(root + '/')).toBe(true);
     });
   });
 });
@@ -330,10 +330,11 @@ describe('assertSafeBrowserProfile and browser vault path accessors', () => {
 
     it('valid profiles resolve under the browser state root, with the storageState leaf', () => {
       const root = getBrowserStateRoot();
-      expect(getBrowserProfileStateDir('work').startsWith(root + '/')).toBe(true);
+      const profileDir = getBrowserProfileStateDir('work');
+      expect(profileDir.startsWith(root + sep) || profileDir.startsWith(root + '/')).toBe(true);
       const statePath = getBrowserStorageStatePath('work');
-      expect(statePath.startsWith(root + '/')).toBe(true);
-      expect(statePath.endsWith('/work/storageState.json')).toBe(true);
+      expect(statePath.startsWith(root + sep) || statePath.startsWith(root + '/')).toBe(true);
+      expect(statePath.replace(/\\/g, '/').endsWith('/work/storageState.json')).toBe(true);
     });
   });
 });

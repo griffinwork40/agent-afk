@@ -100,7 +100,7 @@ describe('capSubagentResult', () => {
     const result = capSubagentResult(content, 'sess-3', 'sub-3');
 
     expect(result.capped).toBe(true);
-    expect(result.content).toContain('subagent-handoffs/sub-3.txt');
+    expect(result.content.replace(/\\/g, '/')).toContain('subagent-handoffs/sub-3.txt');
   });
 
   it('disables the cap when env var is set to 0', () => {

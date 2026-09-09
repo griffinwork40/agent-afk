@@ -181,21 +181,23 @@ describe('AnthropicDirectProvider GrantManager', () => {
 
   describe('audit log includes sessionId', () => {
     it('addReadRoot logs sessionId when provided', () => {
+      const xPath = path.resolve('/x/y');
       const provider = makeProvider();
-      provider.addReadRoot('/x/y', 'slash', 'session-abc-123');
+      provider.addReadRoot(xPath, 'slash', 'session-abc-123');
       const entries = readAuditEntries();
       expect(entries.length).toBeGreaterThanOrEqual(1);
       const e = entries[entries.length - 1];
       expect(e['sessionId']).toBe('session-abc-123');
       expect(e['action']).toBe('grant-read');
-      expect(e['path']).toBe('/x/y');
+      expect(e['path']).toBe(xPath);
       expect(e['source']).toBe('slash');
       expect(e['timestamp']).toEqual(expect.any(String));
     });
 
     it('addWriteRoot logs sessionId when provided', () => {
+      const xPath = path.resolve('/x/y');
       const provider = makeProvider();
-      provider.addWriteRoot('/x/y', 'slash', 'session-write-456');
+      provider.addWriteRoot(xPath, 'slash', 'session-write-456');
       const entries = readAuditEntries();
       const e = entries[entries.length - 1];
       expect(e['sessionId']).toBe('session-write-456');
@@ -203,9 +205,10 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('revokeRoot logs sessionId when provided', () => {
+      const xPath = path.resolve('/x/y');
       const provider = makeProvider();
-      provider.addReadRoot('/x/y', 'slash', 'session-1');
-      provider.revokeRoot('/x/y', 'slash', 'session-2');
+      provider.addReadRoot(xPath, 'slash', 'session-1');
+      provider.revokeRoot(xPath, 'slash', 'session-2');
       const entries = readAuditEntries();
       const last = entries[entries.length - 1];
       expect(last['action']).toBe('revoke');
@@ -213,8 +216,9 @@ describe('AnthropicDirectProvider GrantManager', () => {
     });
 
     it('audit entry shape uses null when sessionId is omitted', () => {
+      const xPath = path.resolve('/x/y');
       const provider = makeProvider();
-      provider.addReadRoot('/x/y', 'slash');
+      provider.addReadRoot(xPath, 'slash');
       const entries = readAuditEntries();
       const e = entries[entries.length - 1];
       // Field is present, value is null — distinguishes "no session attribution"
@@ -231,30 +235,32 @@ describe('AnthropicDirectProvider GrantManager', () => {
       const provider = makeProvider();
       const before = readAuditEntries().length;
       // Revoke a path that was never added — no-op (not found in roots).
-      provider.revokeRoot('/never/added', 'slash');
+      provider.revokeRoot(path.resolve('/never/added'), 'slash');
       const after = readAuditEntries().length;
       expect(after).toBe(before); // zero new entries
     });
 
     it('DOES emit an audit entry when an existing grant is removed', () => {
+      const xPath = path.resolve('/x/y');
       const provider = makeProvider();
-      provider.addReadRoot('/x/y', 'slash', 'sess-grant');
+      provider.addReadRoot(xPath, 'slash', 'sess-grant');
       const before = readAuditEntries().length;
-      provider.revokeRoot('/x/y', 'slash', 'sess-revoke');
+      provider.revokeRoot(xPath, 'slash', 'sess-revoke');
       const entries = readAuditEntries();
       expect(entries.length).toBe(before + 1);
       const last = entries[entries.length - 1];
       expect(last['action']).toBe('revoke');
-      expect(last['path']).toBe('/x/y');
+      expect(last['path']).toBe(xPath);
     });
 
     it('does NOT emit duplicate audit entries when same path is revoked twice', () => {
       // Second revoke is a no-op (already removed) — must not emit another entry.
+      const xPath = path.resolve('/x/y');
       const provider = makeProvider();
-      provider.addReadRoot('/x/y', 'slash', 'sess-grant');
-      provider.revokeRoot('/x/y', 'slash', 'sess-1'); // first revoke — real removal
+      provider.addReadRoot(xPath, 'slash', 'sess-grant');
+      provider.revokeRoot(xPath, 'slash', 'sess-1'); // first revoke — real removal
       const before = readAuditEntries().length;
-      provider.revokeRoot('/x/y', 'slash', 'sess-2'); // second revoke — no-op
+      provider.revokeRoot(xPath, 'slash', 'sess-2'); // second revoke — no-op
       const after = readAuditEntries().length;
       expect(after).toBe(before); // no new entry for the no-op
     });

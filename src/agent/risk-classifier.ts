@@ -206,17 +206,19 @@ function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
   if (!filePath) return 'safe';
 
   const resolved = safeRealpath(path.resolve(ctx.cwd, filePath));
+  // Normalize to forward slashes for portable substring checks.
+  const resolvedNorm = resolved.split(path.sep).join('/');
 
   // Denylist check — matches ~/.ssh, /etc, etc.
   const denylist = getWriteDenylist();
   for (const blocked of denylist) {
-    if (resolved === blocked || resolved.startsWith(blocked + '/')) {
+    if (resolved === blocked || resolved.startsWith(blocked + '/') || resolved.startsWith(blocked + path.sep)) {
       return 'high';
     }
   }
 
   // .git/ directory — writes to the git object store are almost always wrong.
-  if (resolved.includes('/.git/')) return 'high';
+  if (resolvedNorm.includes('/.git/')) return 'high';
 
   // Workspace boundary escape.
   if (ctx.workspaceRoot !== undefined) {
@@ -226,7 +228,7 @@ function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
   }
 
   // node_modules — usually unintentional; not catastrophic.
-  if (resolved.includes('/node_modules/')) return 'medium';
+  if (resolvedNorm.includes('/node_modules/')) return 'medium';
 
   return 'safe';
 }
