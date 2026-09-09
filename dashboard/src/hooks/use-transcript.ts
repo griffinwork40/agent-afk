@@ -34,6 +34,13 @@ export interface UseTranscriptResult {
   totals: SessionTotals;
   status: StreamStatus;
   error: string | null;
+  /**
+   * True while the agent is actively processing a turn.
+   * Set to true on `user` ledger records, cleared on `done` or `error` records.
+   * Use this to drive the Composer's busy state instead of deriving from
+   * SSE connection status (which stays `open` even when the agent is idle).
+   */
+  turnActive: boolean;
 }
 
 export function useTranscript(sessionId: string | null): UseTranscriptResult {
@@ -41,6 +48,7 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
 
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [totals, setTotals] = useState<SessionTotals>(EMPTY_TOTALS);
+  const [turnActive, setTurnActive] = useState(false);
 
   // Stable tool index across renders — keyed by toolUseId for correlation.
   // Reset when sessionId changes.
@@ -52,6 +60,7 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     toolIndexRef.current = new Map();
     setItems([]);
     setTotals(EMPTY_TOTALS);
+    setTurnActive(false);
   }, [sessionId]);
 
   // Feed new SSE events into the transcript.
@@ -77,11 +86,19 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     const newItems: TranscriptItem[] = [];
     let deltaTotals: SessionTotals = EMPTY_TOTALS;
     let hasMutation = false;
+    let nextTurnActive: boolean | null = null;
 
     for (const raw of newEvents) {
       // Each SSE frame is { record: LedgerRecordLike, replay: boolean }.
       const frame = raw as { record?: unknown; replay?: boolean };
       const record = (frame.record ?? raw) as LedgerRecordLike;
+
+      // Track turn activity: user records start a turn; done/error records end it.
+      if (record.kind === 'user') {
+        nextTurnActive = true;
+      } else if (record.kind === 'done' || record.kind === 'error') {
+        nextTurnActive = false;
+      }
 
       // Accumulate totals from done records.
       deltaTotals = accumulateTotals(deltaTotals, record);
@@ -119,6 +136,10 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
         cacheReadTokens: (prev.cacheReadTokens ?? 0) + (deltaTotals.cacheReadTokens ?? 0),
       }));
     }
+
+    if (nextTurnActive !== null) {
+      setTurnActive(nextTurnActive);
+    }
   }, [events]);
 
   // Reset processed count on session change (after items/totals are cleared).
@@ -126,5 +147,5 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     processedCountRef.current = 0;
   }, [sessionId]);
 
-  return { items, totals, status, error };
+  return { items, totals, status, error, turnActive };
 }

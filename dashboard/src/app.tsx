@@ -38,7 +38,7 @@ function Dashboard() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
-  const { items, totals, status } = useTranscript(selectedSessionId);
+  const { items, totals, status, turnActive } = useTranscript(selectedSessionId);
   const { containerRef } = useScrollPin();
 
   const handleNavigate = (nav: string) => {
@@ -51,7 +51,7 @@ function Dashboard() {
     setMobileSidebarOpen(false);
   };
 
-  const isBusy = status === 'open' || status === 'connecting';
+  const isBusy = turnActive;
   const [selectedModel, setSelectedModel] = useState('sonnet');
 
   const queue = useQueue({
@@ -63,17 +63,23 @@ function Dashboard() {
       });
     },
     isLive: selectedSession?.mode === 'live',
-    isBusy,
   });
 
-  // Attempt to flush the queue when a turn completes (isBusy transitions to false).
-  const prevBusyRef = useRef(isBusy);
+  // Clear the queue when the selected session changes to prevent a prompt
+  // queued for session A from being sent to session B.
   useEffect(() => {
-    if (prevBusyRef.current && !isBusy) {
+    queue.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- queue identity is stable; selectedSessionId is the real dep
+  }, [selectedSessionId]);
+
+  // Flush the queue when a turn completes (totals.turns increments on 'done' records).
+  const prevTurnsRef = useRef(totals.turns);
+  useEffect(() => {
+    if (totals.turns > prevTurnsRef.current) {
       void queue.flush();
     }
-    prevBusyRef.current = isBusy;
-  }, [isBusy, queue]);
+    prevTurnsRef.current = totals.turns;
+  }, [totals.turns, queue]);
 
   const sidebarContent = (
     <Sidebar

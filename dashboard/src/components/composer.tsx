@@ -143,7 +143,7 @@ export function Composer({
         }
       }
     },
-    [acVisible, acFiltered, acActiveIdx, selectCommand, submit],
+    [acVisible, acFiltered, acActiveIdx, selectCommand, submit, isBusy, text, queue],
   );
 
   /** Insert text at the current cursor position. */

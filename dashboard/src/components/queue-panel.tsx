@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUp, ArrowDown, Pencil, X, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { UseQueueResult } from '@/hooks/use-queue';
+import type { UseQueueResult, QueueEntry } from '@/hooks/use-queue';
 
 interface QueuePanelProps {
   queue: UseQueueResult;
@@ -27,10 +27,10 @@ export function QueuePanel({ queue }: QueuePanelProps) {
       <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
         Queued ({entries.length})
       </p>
-      {entries.map((text, i) => (
+      {entries.map((entry: QueueEntry, i) => (
         <QueueRow
-          key={`${i}-${text.slice(0, 20)}`}
-          text={text}
+          key={entry.id}
+          text={entry.text}
           index={i}
           isFirst={i === 0}
           isLast={i === entries.length - 1}

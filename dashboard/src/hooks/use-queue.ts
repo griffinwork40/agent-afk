@@ -10,9 +10,20 @@
  * boundaries. POST /prompt answers 202 on ACCEPTANCE, not completion, so a
  * while(queue.length) drain would empty the list instantly. Holding the rest
  * until the turn finishes is what lets entries dwell long enough to reorder.
+ *
+ * Each entry carries a stable numeric `id` so that after the in-flight POST
+ * succeeds the correct entry is removed by identity, not by position.
  */
 
 import { useCallback, useRef, useState } from 'react';
+
+// ---- queue entry type -------------------------------------------------------
+
+/** A queued prompt with a stable identity. */
+export interface QueueEntry {
+  id: number;
+  text: string;
+}
 
 // ---- pure list operations (from queue-reorder.ts) ---------------------------
 
@@ -49,10 +60,10 @@ function removeAt<T>(list: readonly T[], index: number): T[] {
   return next;
 }
 
-function editAt<T>(list: readonly T[], index: number, value: T): T[] {
+function editAt(list: readonly QueueEntry[], index: number, text: string): QueueEntry[] {
   if (!isInBounds(list, index)) return list.slice();
   const next = list.slice();
-  next[index] = value;
+  next[index] = { ...next[index]! , text };
   return next;
 }
 
@@ -63,28 +74,28 @@ interface UseQueueOpts {
   submit: (text: string) => Promise<void>;
   /** Whether the active session can be driven from this process. */
   isLive: boolean;
-  /** Whether a turn is already running. */
-  isBusy: boolean;
 }
 
 export interface UseQueueResult {
-  entries: readonly string[];
+  entries: readonly QueueEntry[];
   enqueue: (text: string) => void;
   moveItemUp: (index: number) => void;
   moveItemDown: (index: number) => void;
   removeItem: (index: number) => void;
-  editItem: (index: number, value: string) => void;
+  editItem: (index: number, text: string) => void;
   clear: () => void;
   /** Attempt to flush the next queued entry. Call on turn-boundary events. */
   flush: () => Promise<void>;
 }
 
-export function useQueue({ submit, isLive, isBusy }: UseQueueOpts): UseQueueResult {
-  const [queue, setQueue] = useState<string[]>([]);
+export function useQueue({ submit, isLive }: UseQueueOpts): UseQueueResult {
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
   const flushingRef = useRef(false);
+  const nextIdRef = useRef(0);
 
   const enqueue = useCallback((text: string) => {
-    setQueue((prev) => [...prev, text]);
+    const id = nextIdRef.current++;
+    setQueue((prev) => [...prev, { id, text }]);
   }, []);
 
   const moveItemUp = useCallback((i: number) => {
@@ -99,25 +110,29 @@ export function useQueue({ submit, isLive, isBusy }: UseQueueOpts): UseQueueResu
     setQueue((prev) => removeAt(prev, i));
   }, []);
 
-  const editItem = useCallback((i: number, value: string) => {
-    setQueue((prev) => editAt(prev, i, value));
+  const editItem = useCallback((i: number, text: string) => {
+    setQueue((prev) => editAt(prev, i, text));
   }, []);
 
   const clear = useCallback(() => setQueue([]), []);
 
   const flush = useCallback(async () => {
     if (flushingRef.current) return;
-    if (!isLive || isBusy) return;
+    if (!isLive) return;
 
     setQueue((prev) => {
-      const next = prev[0];
-      if (next === undefined) return prev;
+      const head = prev[0];
+      if (head === undefined) return prev;
+
+      const headId = head.id;
+      const headText = head.text;
 
       flushingRef.current = true;
-      // Fire-and-forget the submit, then slice on success.
-      void submit(next)
+      // Fire-and-forget the submit, then remove by id on success.
+      void submit(headText)
         .then(() => {
-          setQueue((q) => q.slice(1));
+          // Remove the entry that was submitted, identified by its stable id.
+          setQueue((q) => q.filter((entry) => entry.id !== headId));
         })
         .catch(() => {
           // Keep entry in queue on failure; the UI will show error state.
@@ -128,7 +143,7 @@ export function useQueue({ submit, isLive, isBusy }: UseQueueOpts): UseQueueResu
 
       return prev;
     });
-  }, [submit, isLive, isBusy]);
+  }, [submit, isLive]);
 
   return { entries: queue, enqueue, moveItemUp, moveItemDown, removeItem, editItem, clear, flush };
 }
