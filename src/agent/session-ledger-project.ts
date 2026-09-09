@@ -40,7 +40,7 @@ export type LedgerPayload =
   /** Extended-thinking block (clipped). */
   | { kind: 'thinking'; text: string }
   /** A tool invocation starting. `input` is a preview, capped at source. */
-  | { kind: 'tool'; toolName: string; input: string }
+  | { kind: 'tool'; toolName: string; toolUseId: string; input: string }
   /** A failed tool result. */
   | { kind: 'tool_error'; toolName?: string; content: string }
   /** A successful tool result (clipped). */
@@ -119,11 +119,15 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
         // the first carries a placeholder for `toolInput`, so recording it wrote
         // every tool twice at rest. openai-compatible emits only the completed event.
         if (chunk.pending) return null;
-        return { kind: 'tool', toolName: chunk.toolName, input: clip(chunk.toolInput, MAX_TOOL_INPUT_LEN) };
+        return { kind: 'tool', toolName: chunk.toolName, toolUseId: chunk.toolUseId, input: clip(chunk.toolInput, MAX_TOOL_INPUT_LEN) };
       }
       if (chunk.type === 'tool_result') {
         if (chunk.isError === true) {
-          return { kind: 'tool_error', content: clip(chunk.content, MAX_TOOL_INPUT_LEN) };
+          return {
+            kind: 'tool_error',
+            content: clip(chunk.content, MAX_TOOL_INPUT_LEN),
+            ...(chunk.metadata?.['toolName'] !== undefined ? { toolName: String(chunk.metadata['toolName']) } : {}),
+          };
         }
         // Successful tool results — persist a clipped preview so the web UI can
         // show real output instead of "unavailable after refresh".
