@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Sidebar } from './components/sidebar';
 import { CommandPalette } from './components/command-palette';
 import { KeyboardShortcuts } from './components/keyboard-shortcuts';
@@ -38,7 +38,7 @@ function Dashboard() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
-  const { items, totals, status, turnActive } = useTranscript(selectedSessionId);
+  const { items, totals, status, turnActive, liveTurns } = useTranscript(selectedSessionId);
   const { containerRef } = useScrollPin();
 
   const handleNavigate = (nav: string) => {
@@ -54,32 +54,46 @@ function Dashboard() {
   const isBusy = turnActive;
   const [selectedModel, setSelectedModel] = useState('sonnet');
 
+  // Abort controller ref: abort in-flight POSTs when the session changes.
+  const abortRef = useRef<AbortController | null>(null);
+
+  const submitPrompt = useCallback(async (text: string) => {
+    if (!selectedSessionId) throw new Error('no session');
+    const controller = new AbortController();
+    abortRef.current = controller;
+    await apiFetch(`/api/sessions/${selectedSessionId}/prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+  }, [selectedSessionId]);
+
   const queue = useQueue({
-    submit: async (text: string) => {
-      if (!selectedSessionId) throw new Error('no session');
-      await apiFetch(`/api/sessions/${selectedSessionId}/prompt`, {
-        method: 'POST',
-        body: JSON.stringify({ text }),
-      });
-    },
+    submit: submitPrompt,
     isLive: selectedSession?.mode === 'live',
   });
 
-  // Clear the queue when the selected session changes to prevent a prompt
-  // queued for session A from being sent to session B.
+  // Clear the queue and abort any in-flight POST when the selected session
+  // changes to prevent a prompt queued for session A from being sent to
+  // session B.
   useEffect(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     queue.clear();
+    prevTurnsRef.current = 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- queue identity is stable; selectedSessionId is the real dep
   }, [selectedSessionId]);
 
-  // Flush the queue when a turn completes (totals.turns increments on 'done' records).
-  const prevTurnsRef = useRef(totals.turns);
+  // Flush the queue when a live turn completes (liveTurns increments only on
+  // non-replay 'done' records, preventing spurious flushes during initial
+  // replay on session load).
+  const prevTurnsRef = useRef(0);
   useEffect(() => {
-    if (totals.turns > prevTurnsRef.current) {
+    if (liveTurns > prevTurnsRef.current) {
       void queue.flush();
     }
-    prevTurnsRef.current = totals.turns;
-  }, [totals.turns, queue]);
+    prevTurnsRef.current = liveTurns;
+  }, [liveTurns, queue.flush]);
 
   const sidebarContent = (
     <Sidebar

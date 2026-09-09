@@ -92,57 +92,74 @@ export function useQueue({ submit, isLive }: UseQueueOpts): UseQueueResult {
   const [queue, setQueue] = useState<QueueEntry[]>([]);
   const flushingRef = useRef(false);
   const nextIdRef = useRef(0);
+  // Mirror of the queue state readable synchronously without a state-updater
+  // side effect — avoids running side effects inside the setQueue updater
+  // (which React 18 StrictMode invokes twice).
+  const queueRef = useRef<QueueEntry[]>([]);
 
   const enqueue = useCallback((text: string) => {
     const id = nextIdRef.current++;
-    setQueue((prev) => [...prev, { id, text }]);
+    const next = [...queueRef.current, { id, text }];
+    queueRef.current = next;
+    setQueue(next);
   }, []);
 
   const moveItemUp = useCallback((i: number) => {
-    setQueue((prev) => moveUp(prev, i));
+    const next = moveUp(queueRef.current, i);
+    queueRef.current = next;
+    setQueue(next);
   }, []);
 
   const moveItemDown = useCallback((i: number) => {
-    setQueue((prev) => moveDown(prev, i));
+    const next = moveDown(queueRef.current, i);
+    queueRef.current = next;
+    setQueue(next);
   }, []);
 
   const removeItem = useCallback((i: number) => {
-    setQueue((prev) => removeAt(prev, i));
+    const next = removeAt(queueRef.current, i);
+    queueRef.current = next;
+    setQueue(next);
   }, []);
 
   const editItem = useCallback((i: number, text: string) => {
-    setQueue((prev) => editAt(prev, i, text));
+    const next = editAt(queueRef.current, i, text);
+    queueRef.current = next;
+    setQueue(next);
   }, []);
 
-  const clear = useCallback(() => setQueue([]), []);
+  const clear = useCallback(() => {
+    queueRef.current = [];
+    setQueue([]);
+  }, []);
 
   const flush = useCallback(async () => {
     if (flushingRef.current) return;
     if (!isLive) return;
 
-    setQueue((prev) => {
-      const head = prev[0];
-      if (head === undefined) return prev;
+    // Read the queue head synchronously from the ref — no state-updater side
+    // effect, so React 18 StrictMode double-invocation is harmless.
+    const head = queueRef.current[0];
+    if (head === undefined) return;
 
-      const headId = head.id;
-      const headText = head.text;
+    const headId = head.id;
+    const headText = head.text;
 
-      flushingRef.current = true;
-      // Fire-and-forget the submit, then remove by id on success.
-      void submit(headText)
-        .then(() => {
-          // Remove the entry that was submitted, identified by its stable id.
-          setQueue((q) => q.filter((entry) => entry.id !== headId));
-        })
-        .catch(() => {
-          // Keep entry in queue on failure; the UI will show error state.
-        })
-        .finally(() => {
-          flushingRef.current = false;
-        });
-
-      return prev;
-    });
+    flushingRef.current = true;
+    // Fire-and-forget the submit, then remove by id on success.
+    void submit(headText)
+      .then(() => {
+        // Remove the entry that was submitted, identified by its stable id.
+        const next = queueRef.current.filter((entry) => entry.id !== headId);
+        queueRef.current = next;
+        setQueue(next);
+      })
+      .catch(() => {
+        // Keep entry in queue on failure; the UI will show error state.
+      })
+      .finally(() => {
+        flushingRef.current = false;
+      });
   }, [submit, isLive]);
 
   return { entries: queue, enqueue, moveItemUp, moveItemDown, removeItem, editItem, clear, flush };

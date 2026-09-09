@@ -31,7 +31,6 @@ export function QueuePanel({ queue }: QueuePanelProps) {
         <QueueRow
           key={entry.id}
           text={entry.text}
-          index={i}
           isFirst={i === 0}
           isLast={i === entries.length - 1}
           onMoveUp={() => moveItemUp(i)}
@@ -48,7 +47,6 @@ export function QueuePanel({ queue }: QueuePanelProps) {
 
 interface QueueRowProps {
   text: string;
-  index: number;
   isFirst: boolean;
   isLast: boolean;
   onMoveUp: () => void;
