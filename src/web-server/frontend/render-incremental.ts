@@ -23,6 +23,11 @@ import type { TranscriptItem } from './view-model.js';
  */
 const nodeCache = new Map<string, HTMLElement>();
 
+/** Explicitly clear the cache on session switch. */
+export function resetNodeCache(): void {
+  nodeCache.clear();
+}
+
 /**
  * True when `item` should replace its existing DOM node rather than be skipped.
  *

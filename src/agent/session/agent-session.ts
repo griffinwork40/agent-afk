@@ -985,6 +985,7 @@ export class AgentSession implements IAgentSession {
     this.planExit.recordModeTransition(mode, current);
     await this.providerQuery.setPermissionMode(mode);
     this.stateManager.setSessionMetadata((prev) => ({ ...prev, permissionMode: mode }));
+    this.pushSidebandEvent({ type: 'plan_mode', mode: mode === 'plan' ? 'plan' : 'default' });
   }
 
   /**
@@ -1476,6 +1477,19 @@ export class AgentSession implements IAgentSession {
     if (typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd > 0) {
       this.subagentRunningCostUsd += costUsd;
     }
+  }
+
+  /**
+   * Push a sideband OutputEvent (subagent lifecycle, background-job state,
+   * plan-mode transition) into the broadcast channel and ledger WITHOUT starting
+   * a new provider turn. Called by SubagentManager and BackgroundAgentRegistry
+   * wired at bootstrap time so lifecycle events reach getOutputStream() consumers
+   * (e.g. the web-UI SSE channel). No-op when the session is closed.
+   */
+  pushSidebandEvent(event: OutputEvent): void {
+    if (this.currentState === 'closed') return;
+    this.ledger.recordEvent(event);
+    this.outputBroadcast.push(event);
   }
 
   private assertCanSend(): void {

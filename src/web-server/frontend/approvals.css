@@ -11,7 +11,9 @@
   border-top: 1px solid var(--border); background: var(--bg-sunken);
   padding: 10px 16px; display: flex; flex-direction: column; gap: 8px;
   max-height: 42vh; overflow-y: auto;
-  position: sticky; bottom: 0; z-index: 5;
+  /* z-ladder: approvals=15 must exceed topbar=10 so the card isn't clipped
+     by the sticky topbar on short viewports. */
+  position: sticky; bottom: 0; z-index: 15;
 }
 .approval-card {
   border: 1px solid var(--warning); border-radius: var(--radius);

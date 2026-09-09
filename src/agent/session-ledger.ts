@@ -12,146 +12,31 @@
  *     ledger-worthy event leave no file.
  *   - Disk errors are caught and suppressed on the write path: a session
  *     must never fail because the ledger directory is unwritable.
- *   - The ledger is a PROJECTION, not a transcript: per-token text/thinking
- *     deltas, progress events, suggestions, and panel payloads are skipped.
- *     What lands: user turns, full assistant messages, tool starts, failed
- *     tool results, turn completions, errors, pause/resume, and a terminal
- *     `closed` record. This keeps files compact and phone-renderable.
+ *   - The ledger is a PROJECTION, not a transcript: per-token text deltas,
+ *     suggestions, stream-retry markers, and panel payloads are skipped.
+ *     What lands: user turns, full assistant messages, thinking blocks,
+ *     tool starts, successful + failed tool results, turn completions with
+ *     token breakdown, errors, pause/resume, tool activity, rate-limit,
+ *     progress, subagent lifecycle, background-job, and plan-mode events.
  *   - `tailLedger` polls (250ms) with `fs.watch` as wakeup, yielding records
  *     until the consumer aborts or a `closed` record is read.
+ *
+ * Concerns extracted to sibling modules to stay within the 350-LOC ceiling:
+ *   - Types + `projectOutputEvent`: `session-ledger-project.ts`
+ *   - Read-side utilities: `session-ledger-reader.ts`
  *
  * @module agent/session-ledger
  */
 
 import * as fs from 'node:fs';
-import * as fsp from 'node:fs/promises';
-import * as readline from 'node:readline';
 import { getSessionLedgerDir, getSessionLedgerPath, isSafeLedgerSessionId } from '../paths.js';
 import type { OutputEvent } from './types/session-types.js';
-import type { ElicitationRequest, ElicitationResult } from './types/sdk-types.js';
+import { clip, MAX_TEXT_LEN, projectOutputEvent } from './session-ledger-project.js';
 
-// ---------------------------------------------------------------------------
-// Record schema
-// ---------------------------------------------------------------------------
-
-/** One JSONL line in a session ledger. `v` is the schema version. */
-export type LedgerRecord = { v: 1; ts: number } & LedgerPayload;
-
-export type LedgerPayload =
-  /** Session-level metadata, written once when the ledger opens.
-   *  `traceLabel` is the witness-trace directory name (`state/witness/<label>/`)
-   *  for this session, letting a reader correlate the id-keyed ledger to the
-   *  trace — whose label is a random UUID for fresh sessions, decoupled from
-   *  the session id. `null` means no trace was wired (tracing disabled/failed),
-   *  making that state explicit rather than a silently-absent directory.
-   *  Optional for back-compat with ledgers written before this field existed. */
-  | {
-      kind: 'meta';
-      sessionId: string;
-      model: string;
-      cwd?: string;
-      surface?: string;
-      traceLabel?: string | null;
-    }
-  /** A user turn entering the session (summary text, never raw blocks). */
-  | { kind: 'user'; text: string }
-  /** A complete assistant message. */
-  | { kind: 'assistant'; text: string }
-  /** A tool invocation starting. `input` is a preview, capped at source. */
-  | { kind: 'tool'; toolName: string; input: string }
-  /** A failed tool result (successful results are skipped — too chatty). */
-  | { kind: 'tool_error'; toolName?: string; content: string }
-  /** Turn completed. Cost/duration when the provider reported them. */
-  | { kind: 'done'; costUsd?: number; durationMs?: number }
-  /** Stream-level error. Message only — Error objects don't survive JSON. */
-  | { kind: 'error'; message: string }
-  /** Provider paused on a usage limit. */
-  | { kind: 'paused'; resetsAt?: string }
-  /** Provider resumed after a usage-limit pause. */
-  | { kind: 'resumed' }
-  // Invariant: the three AFK remote-control records below carry the
-  // cross-process elicitation/abort protocol (REPL session <-> Telegram daemon)
-  // over the same ledger file. `elicitation` is written by the REPL when the
-  // agent asks a question while AFK; `elicitation_response` and `abort_request`
-  // are written BACK by the daemon and MUST carry a per-session HMAC (see
-  // afk-channel.ts) — the REPL refuses any whose signature does not verify, so a
-  // stray or cross-session write can never resolve a question or abort a turn.
-  /** AFK: the agent asked a question; `reqId` correlates the response. */
-  | { kind: 'elicitation'; reqId: string; request: ElicitationRequest }
-  /** AFK: an answer to a prior `elicitation`, signed by the daemon. */
-  | { kind: 'elicitation_response'; reqId: string; result: ElicitationResult; hmac: string }
-  /** AFK: a signed request to abort the running turn. */
-  | { kind: 'abort_request'; nonce: string; hmac: string }
-  /** Terminal record: the hosting process closed the session. */
-  | { kind: 'closed'; reason?: string };
-
-/** Cap stored user/assistant text so a pasted file can't bloat the ledger. */
-const MAX_TEXT_LEN = 8_000;
-/** Cap stored tool-input previews. */
-const MAX_TOOL_INPUT_LEN = 400;
-
-function clip(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}… [truncated]` : text;
-}
-
-/**
- * Project an `OutputEvent` onto a ledger payload, or `null` for events the
- * ledger intentionally skips (deltas, progress, suggestions, panels,
- * stream-retry markers).
- */
-export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
-  switch (event.type) {
-    case 'message':
-      if (event.message.role !== 'assistant' || !event.message.content) return null;
-      return { kind: 'assistant', text: clip(event.message.content, MAX_TEXT_LEN) };
-    case 'chunk': {
-      const chunk = event.chunk;
-      if (chunk.type === 'tool_use_detail') {
-        // Skip the pending paint: anthropic-direct announces each call twice and
-        // the first carries a placeholder for `toolInput`, so recording it wrote
-        // every tool twice at rest — once as ' …'. openai-compatible emits only
-        // the completed event and is unaffected.
-        if (chunk.pending) return null;
-        // `toolInput` is redacted at its source (summarizeToolInput) before it
-        // ever reaches this at-rest sink, so no secret-scrub is needed here.
-        return {
-          kind: 'tool',
-          toolName: chunk.toolName,
-          input: clip(chunk.toolInput, MAX_TOOL_INPUT_LEN),
-        };
-      }
-      if (chunk.type === 'tool_result' && chunk.isError === true) {
-        return { kind: 'tool_error', content: clip(chunk.content, MAX_TOOL_INPUT_LEN) };
-      }
-      return null;
-    }
-    case 'done': {
-      const cost = event.metadata?.totalCostUsd;
-      const duration = event.metadata?.durationMs;
-      return {
-        kind: 'done',
-        ...(typeof cost === 'number' ? { costUsd: cost } : {}),
-        ...(typeof duration === 'number' ? { durationMs: duration } : {}),
-      };
-    }
-    case 'error':
-      return { kind: 'error', message: event.error.message };
-    case 'paused':
-      return {
-        kind: 'paused',
-        ...(event.resetsAt ? { resetsAt: event.resetsAt.toISOString() } : {}),
-      };
-    case 'resumed':
-      return { kind: 'resumed' };
-    case 'notice':
-      // Display-only harness notice (issue #970). Skipped from the ledger
-      // — it is operator-facing chrome, not a session event worth persisting.
-      return null;
-    default:
-      // progress | suggestion | stream_retry | panel | rate_limit | tool-activity — intentionally skipped.
-      return null;
-  }
-}
+// Re-export public API from the extracted modules so existing import paths work.
+export type { LedgerRecord, LedgerPayload } from './session-ledger-project.js';
+export { projectOutputEvent } from './session-ledger-project.js';
+export { ledgerExists, readLedger, tailLedger } from './session-ledger-reader.js';
 
 // ---------------------------------------------------------------------------
 // Writer
@@ -196,9 +81,9 @@ export class SessionLedgerWriter {
   }
 
   /** Append a payload as a timestamped JSONL record. Fire-and-forget. */
-  record(payload: LedgerPayload): void {
+  record(payload: import('./session-ledger-project.js').LedgerPayload): void {
     if (this.errored || this.closed) return;
-    const rec: LedgerRecord = { v: 1, ts: Date.now(), ...payload };
+    const rec = { v: 1 as const, ts: Date.now(), ...payload };
     const line = JSON.stringify(rec) + '\n';
     if (!this.stream) {
       this.pendingLines.push(line);
@@ -285,171 +170,5 @@ export class SessionLedgerWriter {
       }
       this.stream.end(() => resolve());
     });
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Reader
-// ---------------------------------------------------------------------------
-
-/** Parse one ledger line; returns null for blank/malformed lines. */
-function parseRecord(line: string): LedgerRecord | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as LedgerRecord;
-    if (parsed.v !== 1 || typeof parsed.ts !== 'number' || typeof parsed.kind !== 'string') {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-/** Whether a ledger file exists for the given session id. */
-export async function ledgerExists(sessionId: string): Promise<boolean> {
-  if (!isSafeLedgerSessionId(sessionId)) return false;
-  try {
-    await fsp.access(getSessionLedgerPath(sessionId));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Read all records from a session ledger (ENOENT → zero records). */
-export async function* readLedger(sessionId: string): AsyncGenerator<LedgerRecord> {
-  if (!isSafeLedgerSessionId(sessionId)) return;
-  let fd: fsp.FileHandle;
-  try {
-    fd = await fsp.open(getSessionLedgerPath(sessionId), 'r');
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw e;
-  }
-  try {
-    const rl = readline.createInterface({
-      input: fd.createReadStream({ encoding: 'utf8' }),
-      crlfDelay: Infinity,
-    });
-    for await (const line of rl) {
-      const rec = parseRecord(line);
-      if (rec) yield rec;
-    }
-  } finally {
-    await fd.close();
-  }
-}
-
-const POLL_INTERVAL_MS = 250;
-
-/**
- * Tail a session ledger — for live following from another process.
- *
- * - `fromStart: true` replays existing records first; otherwise starts at
- *   the current end of file (or 0 if the file doesn't exist yet).
- * - Yields until a `closed` record is read or `signal` aborts.
- * - `fs.watch` on the ledger directory is the wakeup; a 250ms poll is the
- *   fallback — on macOS watch events are coalesced/dropped under load, so
- *   the poll floor is load-bearing, not belt-and-braces.
- */
-export async function* tailLedger(
-  sessionId: string,
-  opts?: { fromStart?: boolean; signal?: AbortSignal },
-): AsyncGenerator<LedgerRecord> {
-  if (!isSafeLedgerSessionId(sessionId)) return;
-  const ledgerPath = getSessionLedgerPath(sessionId);
-  const ledgerDir = getSessionLedgerDir(sessionId);
-  const { fromStart = false, signal } = opts ?? {};
-
-  let fileOffset = 0;
-  let buffer = '';
-  let sawClosed = false;
-
-  async function* readNewRecords(): AsyncGenerator<LedgerRecord> {
-    let fd: fsp.FileHandle | null = null;
-    try {
-      fd = await fsp.open(ledgerPath, 'r');
-      const stat = await fd.stat();
-      if (stat.size <= fileOffset) return;
-      const toRead = stat.size - fileOffset;
-      const readBuf = Buffer.allocUnsafe(toRead);
-      const { bytesRead } = await fd.read(readBuf, 0, toRead, fileOffset);
-      if (bytesRead === 0) return;
-      fileOffset += bytesRead;
-      buffer += readBuf.toString('utf8', 0, bytesRead);
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        const rec = parseRecord(line);
-        if (!rec) continue;
-        if (rec.kind === 'closed') sawClosed = true;
-        yield rec;
-        if (sawClosed) return;
-      }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
-        process.stderr.write(`[afk] session-ledger: tail read error for ${sessionId}: ${String(e)}\n`);
-      }
-    } finally {
-      if (fd) await fd.close().catch(() => { /* ignore */ });
-    }
-  }
-
-  if (!fromStart) {
-    try {
-      const stat = await fsp.stat(ledgerPath);
-      fileOffset = stat.size;
-    } catch {
-      // File doesn't exist yet — start from 0 and wait for it to appear.
-    }
-  } else {
-    yield* readNewRecords();
-    if (sawClosed) return;
-  }
-
-  let watcher: fs.FSWatcher | null = null;
-  let watcherChange: (() => void) | null = null;
-
-  const waitForChange = (): Promise<void> =>
-    new Promise<void>((resolve) => {
-      const pollTimer = setTimeout(() => {
-        watcherChange = null;
-        resolve();
-      }, POLL_INTERVAL_MS);
-      watcherChange = () => {
-        clearTimeout(pollTimer);
-        watcherChange = null;
-        resolve();
-      };
-      signal?.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(pollTimer);
-          watcherChange = null;
-          resolve();
-        },
-        { once: true },
-      );
-    });
-
-  try {
-    // Watch the parent dir, not the file — the file may not exist yet.
-    watcher = fs.watch(ledgerDir, { persistent: false }, () => {
-      watcherChange?.();
-    });
-  } catch {
-    // Pure polling fallback.
-  }
-
-  try {
-    while (!signal?.aborted && !sawClosed) {
-      await waitForChange();
-      if (signal?.aborted) break;
-      yield* readNewRecords();
-    }
-  } finally {
-    watcher?.close();
   }
 }

@@ -61,13 +61,17 @@ describe('projectOutputEvent', () => {
     expect(projectOutputEvent(event)).toBeNull();
   });
 
-  it('skips content deltas and progress (projection, not transcript)', () => {
+  it('skips content deltas and stream_retry (projection, not transcript)', () => {
     expect(
       projectOutputEvent({
         type: 'chunk',
         chunk: { type: 'content', content: 'tok' },
       }),
     ).toBeNull();
+    expect(projectOutputEvent({ type: 'stream_retry' })).toBeNull();
+  });
+
+  it('projects progress events with the description text', () => {
     expect(
       projectOutputEvent({
         type: 'progress',
@@ -79,8 +83,22 @@ describe('projectOutputEvent', () => {
           durationMs: 5,
         },
       }),
-    ).toBeNull();
-    expect(projectOutputEvent({ type: 'stream_retry' })).toBeNull();
+    ).toEqual({ kind: 'progress', message: 'd' });
+
+    // summary takes precedence over description when present
+    expect(
+      projectOutputEvent({
+        type: 'progress',
+        progress: {
+          taskId: 't2',
+          description: 'desc',
+          summary: 'sum',
+          totalTokens: 1,
+          toolUses: 0,
+          durationMs: 5,
+        },
+      }),
+    ).toEqual({ kind: 'progress', message: 'sum' });
   });
 
   it('projects tool starts with a capped input preview', () => {
@@ -128,18 +146,40 @@ describe('projectOutputEvent', () => {
     expect(projectOutputEvent(complete)).toMatchObject({ kind: 'tool', input: 'ls -la' });
   });
 
-  it('projects failed tool results but skips successful ones', () => {
+  it('projects failed tool results as tool_error', () => {
     const failed: OutputEvent = {
       type: 'chunk',
       chunk: { type: 'tool_result', toolUseId: 'tu1', content: 'boom', isError: true },
     };
     expect(projectOutputEvent(failed)).toEqual({ kind: 'tool_error', content: 'boom' });
+  });
 
+  it('projects successful tool results as tool_result (clipped)', () => {
     const ok: OutputEvent = {
       type: 'chunk',
       chunk: { type: 'tool_result', toolUseId: 'tu2', content: 'fine' },
     };
-    expect(projectOutputEvent(ok)).toBeNull();
+    expect(projectOutputEvent(ok)).toEqual({ kind: 'tool_result', toolUseId: 'tu2', content: 'fine' });
+
+    // durationMs forwarded when present
+    const withDuration: OutputEvent = {
+      type: 'chunk',
+      chunk: { type: 'tool_result', toolUseId: 'tu3', content: 'ok', durationMs: 42 },
+    };
+    expect(projectOutputEvent(withDuration)).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'tu3',
+      content: 'ok',
+      durationMs: 42,
+    });
+  });
+
+  it('projects thinking chunks as thinking (clipped)', () => {
+    const event: OutputEvent = {
+      type: 'chunk',
+      chunk: { type: 'thinking', content: 'let me think...' },
+    };
+    expect(projectOutputEvent(event)).toEqual({ kind: 'thinking', text: 'let me think...' });
   });
 
   it('projects done with cost and duration when present', () => {
@@ -149,6 +189,88 @@ describe('projectOutputEvent', () => {
     };
     expect(projectOutputEvent(event)).toEqual({ kind: 'done', costUsd: 0.0123, durationMs: 4200 });
     expect(projectOutputEvent({ type: 'done' })).toEqual({ kind: 'done' });
+  });
+
+  it('enriches done with token breakdown when usage is present', () => {
+    const event: OutputEvent = {
+      type: 'done',
+      metadata: {
+        totalCostUsd: 0.01,
+        durationMs: 1000,
+        stopReason: 'end_turn',
+        usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 10 },
+      },
+    };
+    expect(projectOutputEvent(event)).toEqual({
+      kind: 'done',
+      costUsd: 0.01,
+      durationMs: 1000,
+      stopReason: 'end_turn',
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 10,
+    });
+  });
+
+  it('projects tool-activity events', () => {
+    const event: OutputEvent = {
+      type: 'tool-activity',
+      activeCount: 3,
+      activeToolUseIds: ['a', 'b', 'c'],
+    };
+    expect(projectOutputEvent(event)).toEqual({
+      kind: 'tool_activity',
+      activeCount: 3,
+      activeToolUseIds: ['a', 'b', 'c'],
+    });
+  });
+
+  it('projects rate_limit events', () => {
+    expect(projectOutputEvent({ type: 'rate_limit', retryAfterMs: 5000 })).toEqual({
+      kind: 'rate_limit',
+      retryAfterMs: 5000,
+    });
+    expect(projectOutputEvent({ type: 'rate_limit' })).toEqual({ kind: 'rate_limit' });
+  });
+
+  it('projects subagent_lifecycle events', () => {
+    const event: OutputEvent = {
+      type: 'subagent_lifecycle',
+      subagentId: 'sa-1',
+      status: 'succeeded',
+      model: 'claude-3-5-sonnet',
+      agentType: 'research-agent',
+      durationMs: 1500,
+      totalCostUsd: 0.002,
+      outputBytes: 4096,
+    };
+    expect(projectOutputEvent(event)).toMatchObject({
+      kind: 'subagent_lifecycle',
+      subagentId: 'sa-1',
+      status: 'succeeded',
+      model: 'claude-3-5-sonnet',
+      agentType: 'research-agent',
+      durationMs: 1500,
+      totalCostUsd: 0.002,
+      outputBytes: 4096,
+    });
+  });
+
+  it('projects background_job events', () => {
+    expect(
+      projectOutputEvent({ type: 'background_job', jobId: 'j1', status: 'completed', label: 'my job' }),
+    ).toEqual({ kind: 'background_job', jobId: 'j1', status: 'completed', label: 'my job' });
+
+    expect(
+      projectOutputEvent({ type: 'background_job', jobId: 'j2', status: 'started' }),
+    ).toEqual({ kind: 'background_job', jobId: 'j2', status: 'started' });
+  });
+
+  it('projects plan_mode events', () => {
+    expect(projectOutputEvent({ type: 'plan_mode', mode: 'plan' })).toEqual({
+      kind: 'plan_mode',
+      mode: 'plan',
+    });
   });
 
   it('projects errors as message strings', () => {
