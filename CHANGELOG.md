@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.204.1] - 2026-09-09
+
+### Changed
+- deduplicate ledger-adapter to single source of truth (#1582) (#1596) (5f13806c)
+
 ## [5.204.0] - 2026-09-09
 
 ### Added
