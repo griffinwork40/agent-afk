@@ -178,7 +178,10 @@ describe('validate', () => {
     const noAgents = analyze({ ...baseArgs, calls: [] });
     const result = validate(noAgents);
     expect(result.valid).toBe(false);
-    expect(result.failures.some(f => f.rule === 'no-subagents')).toBe(true);
+    const noSubagentFailures = result.failures.filter(f => f.rule === 'no-subagents');
+    expect(noSubagentFailures.some(f => f.rule === 'no-subagents')).toBe(true);
+    // Guard against double-emission: exactly one failure for this rule.
+    expect(noSubagentFailures).toHaveLength(1);
   });
 
   it('fails when fewer than 2 agents performed reads', () => {
