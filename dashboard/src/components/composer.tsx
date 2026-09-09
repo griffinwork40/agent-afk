@@ -17,8 +17,13 @@ interface ComposerProps {
   isBusy: boolean;
 }
 
-/** Cached slash commands — fetched once per page lifecycle. */
+/** Cached slash commands — cleared on page focus to pick up new skills. */
 let commandsCache: SlashCommand[] | null = null;
+
+/** Clear the cached command list so the next '/' keystroke re-fetches. */
+export function clearCommandsCache(): void {
+  commandsCache = null;
+}
 
 async function fetchCommands(): Promise<SlashCommand[]> {
   if (commandsCache) return commandsCache;
@@ -47,6 +52,15 @@ export function Composer({ sessionId, sessionMode, isBusy }: ComposerProps) {
   const acFiltered = acVisible
     ? commands.filter((c) => c.name.startsWith(slashQuery)).slice(0, 8)
     : [];
+
+  // Clear the command cache when the tab regains focus so new skills are visible.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') clearCommandsCache();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, []);
 
   // Auto-resize textarea (1–5 rows)
   useEffect(() => {
