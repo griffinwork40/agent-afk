@@ -164,7 +164,10 @@ describe('bash capture — large output (model-truncated, command completes)', (
     expect(result.capturePath).toBeDefined();
     const stats = statSync(result.capturePath!);
     // Mode 0o600 = owner RW, no group/other. Platform mask: 0o777.
-    expect(stats.mode & 0o777).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      expect(stats.mode & 0o777).toBe(0o600);
+    }
   });
 
   it('durationMs is a non-negative number when output is truncated', async () => {

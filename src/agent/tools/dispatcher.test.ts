@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import path from 'path';
 import {
   SessionToolDispatcher,
   defaultConcurrencyClassifier,
@@ -1711,8 +1712,8 @@ describe('SessionToolDispatcher grant API', () => {
     const d = makeDispatcher({ cwd: '/base' });
     d.addReadRoot('/extra/read', 'slash');
     const grants = d.getGrants();
-    expect(grants.readRoots).toContain('/extra/read');
-    expect(grants.writeRoots).not.toContain('/extra/read');
+    expect(grants.readRoots).toContain(path.resolve('/extra/read'));
+    expect(grants.writeRoots).not.toContain(path.resolve('/extra/read'));
   });
 
   it('addReadRoot is idempotent', () => {
@@ -1720,15 +1721,16 @@ describe('SessionToolDispatcher grant API', () => {
     d.addReadRoot('/extra', 'slash');
     d.addReadRoot('/extra', 'slash');
     const grants = d.getGrants();
-    expect(grants.readRoots.filter((r) => r === '/extra')).toHaveLength(1);
+    const resolved = path.resolve('/extra');
+    expect(grants.readRoots.filter((r) => r === resolved)).toHaveLength(1);
   });
 
   it('addWriteRoot adds to both readRoots and writeRoots', () => {
     const d = makeDispatcher({ cwd: '/base' });
     d.addWriteRoot('/extra/rw', 'slash');
     const grants = d.getGrants();
-    expect(grants.readRoots).toContain('/extra/rw');
-    expect(grants.writeRoots).toContain('/extra/rw');
+    expect(grants.readRoots).toContain(path.resolve('/extra/rw'));
+    expect(grants.writeRoots).toContain(path.resolve('/extra/rw'));
   });
 
   it('revokeRoot removes from both lists', () => {
@@ -1736,8 +1738,8 @@ describe('SessionToolDispatcher grant API', () => {
     d.addWriteRoot('/extra', 'slash');
     d.revokeRoot('/extra', 'slash');
     const grants = d.getGrants();
-    expect(grants.readRoots).not.toContain('/extra');
-    expect(grants.writeRoots).not.toContain('/extra');
+    expect(grants.readRoots).not.toContain(path.resolve('/extra'));
+    expect(grants.writeRoots).not.toContain(path.resolve('/extra'));
   });
 
   it('revokeRoot does NOT remove resolveBase', () => {
@@ -1757,20 +1759,20 @@ describe('SessionToolDispatcher grant API', () => {
     // the wrapper accepts the parameter without TypeScript error.
     const d = makeDispatcher({ cwd: '/base', sessionId: 'ctor-session' });
     expect(() => d.addReadRoot('/extra', 'slash', 'per-call-session')).not.toThrow();
-    expect(d.getGrants().readRoots).toContain('/extra');
+    expect(d.getGrants().readRoots).toContain(path.resolve('/extra'));
   });
 
   it('addWriteRoot threads optional per-call sessionId through to grant manager', () => {
     const d = makeDispatcher({ cwd: '/base', sessionId: 'ctor-session' });
     expect(() => d.addWriteRoot('/extra', 'slash', 'per-call-session')).not.toThrow();
-    expect(d.getGrants().writeRoots).toContain('/extra');
+    expect(d.getGrants().writeRoots).toContain(path.resolve('/extra'));
   });
 
   it('revokeRoot threads optional per-call sessionId through to grant manager', () => {
     const d = makeDispatcher({ cwd: '/base', sessionId: 'ctor-session' });
     d.addWriteRoot('/extra', 'slash');
     expect(() => d.revokeRoot('/extra', 'slash', 'per-call-session')).not.toThrow();
-    expect(d.getGrants().readRoots).not.toContain('/extra');
+    expect(d.getGrants().readRoots).not.toContain(path.resolve('/extra'));
   });
 
   // --- Finding 2: migrating-anchor policy (Option A) ---
@@ -1783,10 +1785,10 @@ describe('SessionToolDispatcher grant API', () => {
     const d = makeDispatcher({ cwd: '/base' });
     d.addWriteRoot('/extra', 'slash');
     d.revokeRoot('/extra', 'slash'); // first revoke — real removal
-    expect(d.getGrants().readRoots).not.toContain('/extra');
+    expect(d.getGrants().readRoots).not.toContain(path.resolve('/extra'));
     // Second revoke of the same (now-absent) path must be a no-op.
     expect(() => d.revokeRoot('/extra', 'slash')).not.toThrow();
-    expect(d.getGrants().readRoots).not.toContain('/extra');
+    expect(d.getGrants().readRoots).not.toContain(path.resolve('/extra'));
   });
 
   it('revokeRoot on the anchor is a no-op even when the anchor IS in readRoots', () => {
@@ -1828,7 +1830,7 @@ describe('SessionToolDispatcher grant API', () => {
     d.addReadRoot('/old/worktree', 'slash');
     // Revoke must succeed — /old/worktree is no longer the anchor.
     d.revokeRoot('/old/worktree', 'slash');
-    expect(d.getGrants().readRoots).not.toContain('/old/worktree');
+    expect(d.getGrants().readRoots).not.toContain(path.resolve('/old/worktree'));
     // New anchor remains intact.
     expect(d.getGrants().readRoots).toContain('/new/worktree');
   });
@@ -1850,7 +1852,7 @@ describe('SessionToolDispatcher grant API', () => {
     await d.execute(makeCall({ name: 'capture' }));
 
     expect(capturedContext?.readRoots).toContain('/base');
-    expect(capturedContext?.readRoots).toContain('/extra');
+    expect(capturedContext?.readRoots).toContain(path.resolve('/extra'));
   });
 
   it('handlerContext surfaces opts.env when set', async () => {
@@ -1964,13 +1966,13 @@ describe('SessionToolDispatcher.setResolveBase', () => {
     expect(grants.resolveBase).toBe('/new/worktree');
     // /old/worktree → /new/worktree migrated; extras survive.
     expect(grants.readRoots).toContain('/new/worktree');
-    expect(grants.readRoots).toContain('/extra/read');
-    expect(grants.readRoots).toContain('/extra/rw');
+    expect(grants.readRoots).toContain(path.resolve('/extra/read'));
+    expect(grants.readRoots).toContain(path.resolve('/extra/rw'));
     expect(grants.readRoots).not.toContain('/old/worktree');
     expect(grants.writeRoots).toContain('/new/worktree');
-    expect(grants.writeRoots).toContain('/extra/rw');
+    expect(grants.writeRoots).toContain(path.resolve('/extra/rw'));
     expect(grants.writeRoots).not.toContain('/old/worktree');
-    expect(grants.writeRoots).not.toContain('/extra/read');
+    expect(grants.writeRoots).not.toContain(path.resolve('/extra/read'));
   });
 
   it('appends newCwd when old cwd not in roots (e.g. dispatcher built without cwd)', () => {
@@ -2019,11 +2021,11 @@ describe('SessionToolDispatcher.setResolveBase', () => {
     d.revokeRoot('/old/worktree', 'slash');
     // /new/worktree (migrated in) and /extra/grant (unchanged) remain in readRoots.
     expect(d.getGrants().readRoots).toContain('/new/worktree');
-    expect(d.getGrants().readRoots).toContain('/extra/grant');
+    expect(d.getGrants().readRoots).toContain(path.resolve('/extra/grant'));
 
     // The extra root (NOT the anchor) must be revocable normally.
     d.revokeRoot('/extra/grant', 'slash');
-    expect(d.getGrants().readRoots).not.toContain('/extra/grant');
+    expect(d.getGrants().readRoots).not.toContain(path.resolve('/extra/grant'));
   });
 });
 

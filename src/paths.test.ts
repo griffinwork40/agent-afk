@@ -353,8 +353,9 @@ describe('getAfkHome — AFK_HOME validation (F1)', () => {
   });
 
   it('returns the value when AFK_HOME is a valid absolute non-root path', () => {
-    vi.stubEnv('AFK_HOME', '/tmp/afk-test');
-    expect(getAfkHome()).toBe('/tmp/afk-test');
+    const testHome = join(tmpdir(), 'afk-test');
+    vi.stubEnv('AFK_HOME', testHome);
+    expect(getAfkHome()).toBe(testHome);
   });
 });
 
@@ -372,7 +373,7 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
   });
 
   it('is the inverse of getTraceDir for a valid label', () => {
-    vi.stubEnv('AFK_HOME', '/tmp/afk-label-test');
+    vi.stubEnv('AFK_HOME', join(tmpdir(), 'afk-label-test'));
     const p = join(getTraceDir('default-uuid-1'), 'trace.jsonl');
     expect(sessionLabelFromTracePath(p)).toBe('default-uuid-1');
   });

@@ -189,15 +189,21 @@ describe('M2 — permissions.json written 0600', () => {
       { path: '/Users/alice/.ssh', mode: 'read', decision: 'allow', source: 'elicit:repl' },
       storePath,
     );
-    const mode = statSync(storePath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      const mode = statSync(storePath).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 
   it('preserves 0600 after a second appendGrant (temp+rename cycle)', () => {
     appendGrant({ path: '/a', mode: 'read', decision: 'allow', source: 'manual' }, storePath);
     appendGrant({ path: '/b', mode: 'read', decision: 'allow', source: 'manual' }, storePath);
-    const mode = statSync(storePath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      const mode = statSync(storePath).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 });
 

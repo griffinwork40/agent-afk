@@ -16,9 +16,15 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 
-const BASE = '/tmp/repo';
-const OUTSIDE = '/etc/passwd';
-const INSIDE = '/tmp/repo/src/foo.ts';
+// Platform-aware path constants so tests pass on Windows (no /tmp or /etc).
+const BASE = path.join(os.tmpdir(), 'test-repo');
+const OUTSIDE = path.join(os.tmpdir(), 'test-outside-sentinel');
+const INSIDE = path.join(BASE, 'src', 'foo.ts');
+const EXTRA = path.join(os.tmpdir(), 'test-other');
+const DOTFILE = path.join(EXTRA, '.zshrc');
+// Gate 1/Gate 2 containment matrix roots (platform-aware).
+const GATE_ROOT = path.join(os.tmpdir(), 'test-workspace');
+const GATE_EXTRA = path.join(os.tmpdir(), 'test-extra-root');
 
 function ctx(overrides: Partial<ToolHandlerContext> = {}): ToolHandlerContext {
   return {
@@ -52,15 +58,15 @@ describe('resolveAndContain', () => {
   });
 
   it('accepts paths inside an extra granted root', () => {
-    const extra = '/tmp/other';
+    const extra = EXTRA;
     expect(
-      resolveAndContain('/tmp/other/secrets.json', ctx({ readRoots: [BASE, extra] })),
-    ).toBe('/tmp/other/secrets.json');
+      resolveAndContain(path.join(EXTRA, 'secrets.json'), ctx({ readRoots: [BASE, extra] })),
+    ).toBe(path.join(EXTRA, 'secrets.json'));
   });
 
   it('throws on writes to a read-only path', () => {
     expect(() =>
-      resolveAndContain('/tmp/other/x.txt', ctx({ readRoots: [BASE, '/tmp/other'] }), 'write'),
+      resolveAndContain(path.join(EXTRA, 'x.txt'), ctx({ readRoots: [BASE, EXTRA] }), 'write'),
     ).toThrow(/outside the allowed write roots/);
   });
 
@@ -72,7 +78,7 @@ describe('resolveAndContain', () => {
   // least-privilege way to read them. The agent-tool schema + its home-rejection
   // error both now tell callers to do this, so the behavior must stay pinned.
   describe('file-granular read roots', () => {
-    const dotfile = '/tmp/other/.zshrc';
+    const dotfile = DOTFILE;
 
     it('admits the exact granted file', () => {
       expect(resolveAndContain(dotfile, ctx({ readRoots: [BASE, dotfile] }))).toBe(dotfile);
@@ -80,19 +86,19 @@ describe('resolveAndContain', () => {
 
     it('does not admit a sibling of the granted file', () => {
       expect(() =>
-        resolveAndContain('/tmp/other/.netrc', ctx({ readRoots: [BASE, dotfile] })),
+        resolveAndContain(path.join(EXTRA, '.netrc'), ctx({ readRoots: [BASE, dotfile] })),
       ).toThrow(/outside the allowed read roots/);
     });
 
     it('does not admit the granted file\u2019s parent directory', () => {
-      expect(() => resolveAndContain('/tmp/other', ctx({ readRoots: [BASE, dotfile] }))).toThrow(
+      expect(() => resolveAndContain(EXTRA, ctx({ readRoots: [BASE, dotfile] }))).toThrow(
         /outside the allowed read roots/,
       );
     });
 
     it('does not admit a path that merely shares the file name prefix', () => {
       expect(() =>
-        resolveAndContain('/tmp/other/.zshrc.bak', ctx({ readRoots: [BASE, dotfile] })),
+        resolveAndContain(DOTFILE + '.bak', ctx({ readRoots: [BASE, dotfile] })),
       ).toThrow(/outside the allowed read roots/);
     });
   });
@@ -123,9 +129,9 @@ describe('wouldBeRestricted', () => {
   });
 
   it('distinguishes read vs write containment', () => {
-    const c = ctx({ readRoots: [BASE, '/tmp/extra'], writeRoots: [BASE] });
-    expect(wouldBeRestricted('/tmp/extra/x.txt', c, 'read').restricted).toBe(false);
-    expect(wouldBeRestricted('/tmp/extra/x.txt', c, 'write').restricted).toBe(true);
+    const c = ctx({ readRoots: [BASE, EXTRA], writeRoots: [BASE] });
+    expect(wouldBeRestricted(path.join(EXTRA, 'x.txt'), c, 'read').restricted).toBe(false);
+    expect(wouldBeRestricted(path.join(EXTRA, 'x.txt'), c, 'write').restricted).toBe(true);
   });
 
   it('resolves relative paths against resolveBase', () => {
@@ -261,7 +267,7 @@ describe('symlink containment', () => {
     const insideFile = path.join(rootDir, 'file.txt');
     fs.writeFileSync(insideFile, 'data');
 
-    const outsideFile = '/etc/hosts'; // always exists
+    const outsideFile = OUTSIDE; // a path guaranteed to be outside rootDir
 
     const c = ctx({ resolveBase: rootDir, readRoots: [rootDir], writeRoots: [rootDir] });
 
@@ -369,8 +375,8 @@ describe('fallbackBase — factory-cwd resolve tier (issue #434)', () => {
 
   it('context base wins over fallbackBase (no-op on the dispatcher path)', () => {
     // context.resolveBase = BASE; a bogus fallbackBase must be ignored.
-    expect(resolveAndContain('src/foo.ts', ctx(), 'read', '/tmp/other')).toBe(INSIDE);
-    expect(wouldBeRestricted(INSIDE, ctx(), 'read', '/tmp/other').restricted).toBe(false);
+    expect(resolveAndContain('src/foo.ts', ctx(), 'read', EXTRA)).toBe(INSIDE);
+    expect(wouldBeRestricted(INSIDE, ctx(), 'read', EXTRA).restricted).toBe(false);
   });
 
   it('undefined fallbackBase preserves the unconfined fall-through (invariant guard)', () => {
@@ -397,8 +403,8 @@ describe('fallbackBase — factory-cwd resolve tier (issue #434)', () => {
 // covers every case that has historically drifted or been identified as a risk.
 // ---------------------------------------------------------------------------
 describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
-  const root = '/tmp/workspace';
-  const grantedExtra = '/tmp/extra-root';
+  const root = GATE_ROOT;
+  const grantedExtra = GATE_EXTRA;
 
   /** Build a ToolHandlerContext that mirrors what path-approval passes to both
    *  gates: resolveBase + readRoots/writeRoots come from getGrants(). */
@@ -445,18 +451,20 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
   }
 
   it('in-root path: both allow', () => {
-    assertAgree(`${root}/src/foo.ts`, mkCtx(), 'read', 'in-root-read');
-    assertAgree(`${root}/src/foo.ts`, mkCtx(), 'write', 'in-root-write');
+    assertAgree(path.join(root, 'src', 'foo.ts'), mkCtx(), 'read', 'in-root-read');
+    assertAgree(path.join(root, 'src', 'foo.ts'), mkCtx(), 'write', 'in-root-write');
   });
 
   it('out-of-root path: both restrict', () => {
-    assertAgree('/etc/passwd', mkCtx(), 'read', 'out-of-root-read');
-    assertAgree('/tmp/other/file.ts', mkCtx(), 'write', 'out-of-root-write');
+    assertAgree(OUTSIDE, mkCtx(), 'read', 'out-of-root-read');
+    assertAgree(path.join(EXTRA, 'file.ts'), mkCtx(), 'write', 'out-of-root-write');
   });
 
   it('dot-dot escape: both restrict', () => {
-    assertAgree(`${root}/src/../../etc/passwd`, mkCtx(), 'read', 'dotdot-escape');
-    assertAgree(`${root}/../sibling/file.ts`, mkCtx(), 'write', 'dotdot-escape-write');
+    // Use path.join so separators are correct on all platforms; the '..' segments
+    // still resolve to a path outside root after normalization.
+    assertAgree(path.join(root, 'src', '..', '..', 'etc', 'passwd'), mkCtx(), 'read', 'dotdot-escape');
+    assertAgree(path.join(root, '..', 'sibling', 'file.ts'), mkCtx(), 'write', 'dotdot-escape-write');
   });
 
   it('granted extra root: both allow', () => {
@@ -464,8 +472,8 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
       readRoots: [root, grantedExtra],
       writeRoots: [root, grantedExtra],
     });
-    assertAgree(`${grantedExtra}/file.ts`, ctx, 'read', 'granted-root-read');
-    assertAgree(`${grantedExtra}/file.ts`, ctx, 'write', 'granted-root-write');
+    assertAgree(path.join(grantedExtra, 'file.ts'), ctx, 'read', 'granted-root-read');
+    assertAgree(path.join(grantedExtra, 'file.ts'), ctx, 'write', 'granted-root-write');
   });
 
   it('path in extra root escaping with dotdot: both restrict', () => {
@@ -473,24 +481,25 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
       readRoots: [root, grantedExtra],
       writeRoots: [root, grantedExtra],
     });
-    assertAgree(`${grantedExtra}/../file.ts`, ctx, 'read', 'extra-root-dotdot-read');
-    assertAgree(`${grantedExtra}/../file.ts`, ctx, 'write', 'extra-root-dotdot-write');
+    assertAgree(path.join(grantedExtra, '..', 'file.ts'), ctx, 'read', 'extra-root-dotdot-read');
+    assertAgree(path.join(grantedExtra, '..', 'file.ts'), ctx, 'write', 'extra-root-dotdot-write');
   });
 
   it('unconfined session (resolveBase undefined): both allow unconditionally', () => {
     const ctx = mkCtx({ resolveBase: undefined, cwd: undefined });
-    assertAgree('/etc/passwd', ctx, 'read', 'unconfined-etc');
-    assertAgree('/tmp/anywhere.ts', ctx, 'write', 'unconfined-tmp');
+    assertAgree(OUTSIDE, ctx, 'read', 'unconfined-etc');
+    assertAgree(path.join(os.tmpdir(), 'anywhere.ts'), ctx, 'write', 'unconfined-tmp');
   });
 
   it('bypass mode (allowAll): both allow unconditionally', () => {
     const ctx = mkCtx({ allowAll: true });
-    assertAgree('/etc/passwd', ctx, 'read', 'bypass-etc');
-    assertAgree('/tmp/anywhere.ts', ctx, 'write', 'bypass-tmp');
+    assertAgree(OUTSIDE, ctx, 'read', 'bypass-etc');
+    assertAgree(path.join(os.tmpdir(), 'anywhere.ts'), ctx, 'write', 'bypass-tmp');
   });
 
-  it('symlink inside root pointing outside: both restrict', () => {
+  it.skipIf(process.platform === 'win32')('symlink inside root pointing outside: both restrict', () => {
     // Create a real symlink to test the realpath resolution path.
+    // Symlinks to /etc are POSIX-only; skip on Windows where /etc does not exist.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk-gate-sym-'));
     const symLink = path.join(tmpDir, 'link');
     try {

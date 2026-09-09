@@ -113,7 +113,8 @@ describe('PathGrantManager — addReadRoot', () => {
     const hooks = makeHooks();
     const gm = new PathGrantManager(hooks);
     gm.addReadRoot('/some/path', 'slash');
-    expect(hooks._readRoots).toContain('/some/path');
+    // path.resolve normalizes to the platform absolute form (e.g. C:\some\path on Windows).
+    expect(hooks._readRoots).toContain(path.resolve('/some/path'));
   });
 
   it('is idempotent — repeated adds do not duplicate the entry', () => {
@@ -122,7 +123,8 @@ describe('PathGrantManager — addReadRoot', () => {
     gm.addReadRoot('/some/path', 'slash');
     gm.addReadRoot('/some/path', 'slash');
     gm.addReadRoot('/some/path', 'slash');
-    expect(hooks._readRoots.filter((p) => p === '/some/path').length).toBe(1);
+    const resolved = path.resolve('/some/path');
+    expect(hooks._readRoots.filter((p) => p === resolved).length).toBe(1);
   });
 
   it('resolves the path to absolute before storing', () => {
@@ -196,8 +198,8 @@ describe('PathGrantManager — addWriteRoot', () => {
     const hooks = makeHooks();
     const gm = new PathGrantManager(hooks);
     gm.addWriteRoot('/rw/path', 'slash');
-    expect(hooks._readRoots).toContain('/rw/path');
-    expect(hooks._writeRoots).toContain('/rw/path');
+    expect(hooks._readRoots).toContain(path.resolve('/rw/path'));
+    expect(hooks._writeRoots).toContain(path.resolve('/rw/path'));
   });
 
   it('is idempotent on writeRoots', () => {
@@ -205,16 +207,18 @@ describe('PathGrantManager — addWriteRoot', () => {
     const gm = new PathGrantManager(hooks);
     gm.addWriteRoot('/rw/path', 'slash');
     gm.addWriteRoot('/rw/path', 'slash');
-    expect(hooks._writeRoots.filter((p) => p === '/rw/path').length).toBe(1);
+    const resolved = path.resolve('/rw/path');
+    expect(hooks._writeRoots.filter((p) => p === resolved).length).toBe(1);
   });
 
   it('records a read→write upgrade (adds path that was already read-only to writeRoots)', () => {
-    const hooks = makeHooks({ initialRead: ['/shared'] });
+    const hooks = makeHooks({ initialRead: [path.resolve('/shared')] });
     const gm = new PathGrantManager(hooks);
     // Path is already a read root; addWriteRoot must add it to write roots.
     gm.addWriteRoot('/shared', 'slash');
-    expect(hooks._writeRoots).toContain('/shared');
-    expect(hooks._readRoots.filter((p) => p === '/shared').length).toBe(1);
+    expect(hooks._writeRoots).toContain(path.resolve('/shared'));
+    const resolved = path.resolve('/shared');
+    expect(hooks._readRoots.filter((p) => p === resolved).length).toBe(1);
   });
 });
 
@@ -249,29 +253,29 @@ describe('PathGrantManager — revokeRoot', () => {
   // --- Finding 2: migrating anchor policy (Option A) ---
 
   it('(Finding 2) refuses to revoke the current protected root', () => {
-    const hooks = makeHooks({ protectedRoot: '/anchor' });
+    const hooks = makeHooks({ protectedRoot: path.resolve('/anchor') });
     const gm = new PathGrantManager(hooks);
-    hooks._readRoots.push('/anchor'); // manually put it in the list
+    hooks._readRoots.push(path.resolve('/anchor')); // manually put it in the list (resolved form)
     gm.revokeRoot('/anchor', 'slash');
     // Guard fired — path remains in readRoots.
-    expect(hooks._readRoots).toContain('/anchor');
+    expect(hooks._readRoots).toContain(path.resolve('/anchor'));
   });
 
   it('(Finding 2) allows revoking the old anchor after the protected root migrates', () => {
-    const hooks = makeHooks({ protectedRoot: '/old-anchor' });
+    const hooks = makeHooks({ protectedRoot: path.resolve('/old-anchor') });
     const gm = new PathGrantManager(hooks);
-    hooks._readRoots.push('/old-anchor');
-    hooks._readRoots.push('/new-anchor');
+    hooks._readRoots.push(path.resolve('/old-anchor'));
+    hooks._readRoots.push(path.resolve('/new-anchor'));
 
     // Migrate the protected root (simulates setResolveBase / setCwd).
-    hooks._protectedRoot = '/new-anchor';
+    hooks._protectedRoot = path.resolve('/new-anchor');
 
     // /old-anchor is no longer the protected root — revoke must succeed.
     gm.revokeRoot('/old-anchor', 'slash');
-    expect(hooks._readRoots).not.toContain('/old-anchor');
+    expect(hooks._readRoots).not.toContain(path.resolve('/old-anchor'));
     // /new-anchor (the new anchor) is still protected.
     gm.revokeRoot('/new-anchor', 'slash');
-    expect(hooks._readRoots).toContain('/new-anchor');
+    expect(hooks._readRoots).toContain(path.resolve('/new-anchor'));
   });
 
   it('(Finding 2) is a no-op when getReadRoots is undefined (uninit provider)', () => {

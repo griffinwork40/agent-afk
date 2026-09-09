@@ -55,8 +55,11 @@ describe('session key management', () => {
   it('writes the key file with 0600 permissions', () => {
     const id = freshId();
     ensureSessionKey(id);
-    const mode = fs.statSync(getSessionKeyPath(id)).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      const mode = fs.statSync(getSessionKeyPath(id)).mode & 0o777;
+      expect(mode).toBe(0o600);
+    }
   });
 
   it('readSessionKey returns null when no key exists, the key once created', () => {

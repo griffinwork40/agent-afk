@@ -172,7 +172,10 @@ describe('captureSubagentPrompt', () => {
     await captureSubagentPrompt(baseInput());
     const dir = getPromptsDir(SESSION);
     const file = path.join(dir, fs.readdirSync(dir)[0] as string);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // NTFS does not support POSIX mode bits — skip the assertion on Windows.
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('redacts an inline secret before it reaches disk', async () => {
