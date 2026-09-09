@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.206.0] - 2026-09-09
+
+### Added
+- port @-file, model selector, and queue panels to React (#1605) (495a0614)
+
 ## [5.205.0] - 2026-09-09
 
 ### Added
