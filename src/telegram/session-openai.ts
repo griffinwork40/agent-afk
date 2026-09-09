@@ -10,13 +10,14 @@
  * OpenAI-compatible Telegram sessions (PR #202 review H1).
  */
 
-import { AgentSession } from '../agent/session.js';
 import { OpenAICompatibleProvider } from '../agent/providers/index.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
 import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
 import { constructTelegramSession } from './construct-session.js';
 import { attachMcpCleanup } from './mcp-session.js';
+import { wireTelegramExecutors } from './wire-telegram-executors.js';
+import type { AgentSession } from '../agent/session.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
 
 export async function buildOpenAiTelegramSession(
@@ -33,6 +34,8 @@ export async function buildOpenAiTelegramSession(
     mcpManager,
     memoryStore,
     workspaceStore,
+    chatId,
+    threadId,
     reportSession,
   } = ctx;
 
@@ -45,22 +48,37 @@ export async function buildOpenAiTelegramSession(
   // (parity with the Anthropic branch's telegramOpenaiBaseUrl).
   const codexOpenaiBaseUrl = sessionConfig.openaiBaseUrl ?? config.openaiBaseUrl;
 
+  // Shared executor + background + drain scaffolding.
+  const wiring = wireTelegramExecutors({
+    apiKey: sessionConfig.apiKey,
+    model: sessionConfig.model,
+    layeredBasePrompt: rawPrompt,
+    sessionCwd,
+    traceWriter,
+    chatId,
+    threadId,
+    wireExtras: {
+      ...(codexOpenaiBaseUrl !== undefined ? { openaiBaseUrl: codexOpenaiBaseUrl } : {}),
+      ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    },
+  });
+  const { subagentExecutor, skillExecutor, composeExecutor } = wiring.executors;
+
   // permissionMode is intentionally omitted here: AgentSession defaults
   // to 'default' (post-C2 fix), which is the correct mode for Telegram
   // sessions that rely on hook-based permission enforcement.
-  // baseURL / apiKey / cwd / roots flow through the per-query config (not the
-  // constructor), so omitting them here is behavior-preserving vs.
-  // resolveProvider(). surface:'telegram' is the lone constructor arg — there
-  // is no per-query surface field — and prevents the presence file
-  // mis-labeling Telegram sessions as 'cli' in `/watch`.
+  // surface:'telegram' prevents the presence file mis-labeling as 'cli'.
   const codexProvider = new OpenAICompatibleProvider({
     surface: 'telegram',
+    subagentExecutor,
+    skillExecutor,
+    composeExecutor,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
     workspaceStore,
   });
   // Same AFK autonomous-safety wiring as the Anthropic branch (live mode getter
   // registers the afk-mode gate + tracks `/afk on`; afkPromptForApproval:false
-  // hard-refuses high-risk ops) — see createTelegramAfkHookBundle +
+  // hard-refuses high-risk ops) -- see createTelegramAfkHookBundle +
   // docs/afk-telegram-native-host.md.
   let codexSessionForMode: AgentSession | undefined;
   const codexHookBundle = createTelegramAfkHookBundle({
@@ -84,6 +102,7 @@ export async function buildOpenAiTelegramSession(
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
+    drainSubagents: wiring.drainSubagents,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
     // Sets config.openaiBaseUrl -> effectiveBaseURL (openai-compatible/index.ts)
@@ -99,9 +118,9 @@ export async function buildOpenAiTelegramSession(
   codexSessionForMode = session;
   reportSession(session);
   // Seed persisted `persist` grants so the OpenAI Telegram surface gets the
-  // same persisted-grant replay as the Anthropic branch. The former
-  // pathApprovalGrantRef.current wiring has been retired (#528).
+  // same persisted-grant replay as the Anthropic branch.
   seedPersistedGrants(codexProvider);
+  wiring.bindSession(session);
 
   return session;
 }

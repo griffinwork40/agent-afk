@@ -9,7 +9,6 @@
  * @module telegram/session-xai
  */
 
-import { AgentSession } from '../agent/session.js';
 import { XaiProvider } from '../agent/providers/xai/index.js';
 import { resolveXaiConstructionAuthMode } from '../agent/providers/xai/force-mode.js';
 import { seedPersistedGrants } from '../agent/permissions-store.js';
@@ -17,6 +16,8 @@ import { assembleSystemPrompt } from '../agent/routing-directive.js';
 import { createTelegramAfkHookBundle } from './afk-hook-bundle.js';
 import { constructTelegramSession } from './construct-session.js';
 import { attachMcpCleanup } from './mcp-session.js';
+import { wireTelegramExecutors } from './wire-telegram-executors.js';
+import type { AgentSession } from '../agent/session.js';
 import type { TelegramSessionBuildContext } from './session-context.js';
 
 export async function buildXaiTelegramSession(
@@ -32,6 +33,8 @@ export async function buildXaiTelegramSession(
     traceWriter,
     mcpManager,
     memoryStore,
+    chatId,
+    threadId,
     reportSession,
     providerName,
   } = ctx;
@@ -42,10 +45,30 @@ export async function buildXaiTelegramSession(
     ? assembleSystemPrompt(rawPrompt, telegramAutoRouting, 'telegram')
     : rawPrompt;
 
+  // Shared executor + background + drain scaffolding.
+  const wiring = wireTelegramExecutors({
+    apiKey: sessionConfig.apiKey,
+    model: sessionConfig.model,
+    layeredBasePrompt: rawPrompt,
+    sessionCwd,
+    traceWriter,
+    chatId,
+    threadId,
+    wireExtras: {
+      // Invariant: do NOT forward config.openaiBaseUrl -- XaiProvider ignores
+      // AFK_OPENAI_BASE_URL and uses resolveXaiEndpoint + optional xaiBaseUrl.
+      ...(sessionConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: sessionConfig.xaiBaseUrl } : {}),
+    },
+  });
+  const { subagentExecutor, skillExecutor, composeExecutor } = wiring.executors;
+
   // Slot/provider-forced oauth vs auto-routed apikey construction.
   const authMode = resolveXaiConstructionAuthMode(providerName, providerName === 'xai-oauth');
   const xaiProvider = new XaiProvider({
     surface: 'telegram',
+    subagentExecutor,
+    skillExecutor,
+    composeExecutor,
     ...(authMode !== undefined ? { authMode } : {}),
     ...(mcpManager !== undefined ? { mcpManager } : {}),
   });
@@ -69,10 +92,9 @@ export async function buildXaiTelegramSession(
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,
+    drainSubagents: wiring.drainSubagents,
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
-    // Invariant: do NOT forward config.openaiBaseUrl — XaiProvider ignores
-    // AFK_OPENAI_BASE_URL and uses resolveXaiEndpoint + optional xaiBaseUrl.
     ...(sessionConfig.xaiBaseUrl !== undefined ? { xaiBaseUrl: sessionConfig.xaiBaseUrl } : {}),
     ...(sessionCwd !== undefined && sessionCwd.length > 0 ? { cwd: sessionCwd } : {}),
     provider: xaiProvider,
@@ -81,8 +103,8 @@ export async function buildXaiTelegramSession(
 
   sessionForMode = session;
   reportSession(session);
-  // The former pathApprovalGrantRef.current wiring has been retired (#528).
   seedPersistedGrants(xaiProvider);
+  wiring.bindSession(session);
 
   return session;
 }
