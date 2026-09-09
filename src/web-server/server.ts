@@ -10,6 +10,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { bearerFromHeader, checkBind, mintToken, originAllowed, tokensMatch } from './auth.js';
 import { serveStatic, type StaticAuth } from './static-assets.js';
 import { HandoffNonces } from './handoff.js';
@@ -164,6 +165,12 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       ? {
           createSession: (req: CreateSessionRequest) => options.owner!.create(req),
           interrupt: (id: string) => options.owner!.interrupt(id),
+          submitSkillMessage: (id: string, msg: ContentBlockParam[]) =>
+            options.owner!.submitSkillMessage(id, msg),
+          getSessionCwd: (id: string) => options.owner!.getSessionCwd(id),
+          getProviderSessionId: (id: string) => options.owner!.getProviderSessionId(id),
+          reserveTurn: (id: string) => options.owner!.reserveTurn(id),
+          releaseTurn: (id: string) => options.owner!.releaseTurn(id),
         }
       : {}),
   };

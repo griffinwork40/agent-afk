@@ -8,6 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { isSafeLedgerSessionId } from '../paths.js';
 import { jsonDateReplacer } from '../cli/json-date-replacer.js';
 import { listWebSessions } from './session-source.js';
@@ -24,6 +25,12 @@ export interface RouteContext {
   bridge: WebElicitationBridge;
   /** Submit a prompt to an owned session. */
   submitPrompt: (sessionId: string, text: string) => Promise<void>;
+  /** Submit a pre-built skill-invocation message (ContentBlockParam[]). */
+  submitSkillMessage?: (sessionId: string, message: ContentBlockParam[]) => Promise<void>;
+  /** Session cwd for preflight context. */
+  getSessionCwd?: (sessionId: string) => string | undefined;
+  /** Provider-issued session id for preflight artifact dirs. */
+  getProviderSessionId?: (sessionId: string) => string | undefined;
   /**
    * Whether an owned session already has a turn in flight — the backpressure
    * predicate `handlePrompt` gates on. Always present: `server.ts` defaults it
@@ -31,6 +38,19 @@ export interface RouteContext {
    * so attach-only mode (no owner at all) is unaffected.
    */
   isBusy: (sessionId: string) => boolean;
+  /**
+   * Reserve a pending-turn slot before an async slash dispatch begins, so a
+   * concurrent prompt cannot pass the `isBusy` gate while the dispatch is in
+   * flight. `releaseTurn` must be called when no real turn is ultimately
+   * queued (passthrough / repl-only / unknown). When a skill turn IS queued,
+   * `submitSkillMessage` increments the count itself; the caller releases the
+   * reservation so the net count stays 1.
+   *
+   * Both are optional — absent in attach-only mode where ownership already
+   * 409s every prompt before `isBusy` is consulted.
+   */
+  reserveTurn?: (sessionId: string) => void;
+  releaseTurn?: (sessionId: string) => void;
   /**
    * Start a new session in this process. Absent when the server was started
    * without an owner, in which case the surface is attach-only.
@@ -102,11 +122,13 @@ let commandUniverseInitialization: Promise<CommandEntry[]> | null = null;
 type CommandUniverseLoader = () => Promise<CommandEntry[]>;
 
 const defaultCommandUniverseLoader: CommandUniverseLoader = async () => {
-  const [{ registerAll }, { buildSlashUniverse }] = await Promise.all([
+  const [{ registerAll }, { buildSlashUniverse }, { registerPluginSkillsForWeb }] = await Promise.all([
     import('../cli/slash/index.js'),
     import('../cli/input/trigger.js'),
+    import('./register-plugin-skills.js'),
   ]);
   registerAll();
+  await registerPluginSkillsForWeb();
   return buildSlashUniverse();
 };
 
@@ -145,9 +167,10 @@ export function setCommandUniverseLoaderForTests(loader: CommandUniverseLoader):
  * 503 without crashing the server, and the next request retries rather than
  * memoizing a transient failure as an empty universe.
  *
- * The payload is deliberately descriptive only: name, summary, hint. It
- * carries NO claim that a command will execute, because in this surface none
- * of them do — the browser's prompt path sends text to the model verbatim.
+ * The payload is deliberately descriptive only: name, summary, hint. Skill
+ * commands (those with `acceptsAttachments`) are now dispatched via
+ * `classifySlashInput` in `slash-dispatch.ts` — see `handlePrompt`. Native
+ * REPL-only commands still cannot execute on this surface.
  *
  * Invariant: the slash layer is reached through a DYNAMIC import, and that is
  * structural rather than stylistic. `cli/slash/index.js` transitively pulls in
@@ -213,6 +236,34 @@ export async function handlePrompt(
     sendJson(res, 400, { error: 'bad_request', message: 'body must be { text: string }' });
     return;
   }
+
+  // Slash-command dispatch: intercept skill invocations before they reach
+  // the model as raw text. Native REPL-only commands are rejected; skill
+  // commands are built into the structured multi-block payload the model
+  // recognises as a skill dispatch.
+  //
+  // Fix 2: Always run classify for any `/`-prefixed text regardless of
+  // whether ctx.submitSkillMessage is defined. This ensures REPL-only and
+  // unknown commands get proper 422 responses even in attach-only mode
+  // (where submitSkillMessage is absent). Only 'passthrough' falls through.
+  //
+  // Fix 4: Reserve a pending-turn slot BEFORE the async dispatch so a
+  // concurrent prompt cannot pass the isBusy gate during preflight. The
+  // reservation is released inside dispatchSlashForWeb for non-skill paths.
+  if (text.trimStart().startsWith('/')) {
+    ctx.reserveTurn?.(sessionId);
+    let slashHandled: boolean;
+    try {
+      slashHandled = await dispatchSlashForWeb(ctx, res, sessionId, text);
+    } catch (err) {
+      // Release the reservation on any unexpected throw so the session's
+      // pending counter doesn't get permanently stuck at > 0.
+      ctx.releaseTurn?.(sessionId);
+      throw err;
+    }
+    if (slashHandled) return; // handled — response already sent
+  }
+
   await ctx.submitPrompt(sessionId, text);
   sendJson(res, 202, { ok: true });
 }
@@ -265,6 +316,79 @@ function approveByRequestId(ctx: RouteContext, res: ServerResponse, body: unknow
     return;
   }
   sendJson(res, 200, { ok: true });
+}
+
+/**
+ * Attempt slash-command dispatch for the web surface. Returns `true` when the
+ * input was handled (response already sent); `false` when it should fall
+ * through to the plain-text `submitPrompt` path.
+ *
+ * Fix 4: The caller reserves a pending-turn slot before invoking this
+ * function. For every non-skill exit (passthrough, repl-only, unknown),
+ * we release that reservation because no real turn will be queued. For the
+ * skill exit, submitSkillMessage increments pending itself, so we also
+ * release the reservation — net count stays 1.
+ *
+ * Fix 2: For the skill case when submitSkillMessage is absent (attach-only
+ * mode), we return 501 skill_dispatch_unavailable. REPL-only and unknown
+ * always return 422 regardless of submitSkillMessage presence.
+ */
+async function dispatchSlashForWeb(
+  ctx: RouteContext,
+  res: ServerResponse,
+  sessionId: string,
+  text: string,
+): Promise<boolean> {
+  // Dynamic import -- same lazy-load rationale as handleCommands.
+  const { classifySlashInput } = await import('./slash-dispatch.js');
+
+  const cwd = ctx.getSessionCwd?.(sessionId) ?? process.cwd();
+  const providerSessionId = ctx.getProviderSessionId?.(sessionId);
+  const result = await classifySlashInput(text, cwd, providerSessionId);
+
+  switch (result.kind) {
+    case 'passthrough':
+      // No turn queued — release the reservation and fall through.
+      ctx.releaseTurn?.(sessionId);
+      return false;
+
+    case 'skill':
+      if (!ctx.submitSkillMessage) {
+        // Attach-only mode: skill dispatch requires an owned session.
+        ctx.releaseTurn?.(sessionId);
+        sendJson(res, 501, {
+          error: 'skill_dispatch_unavailable',
+          message: 'Skill dispatch requires an owned session. Start a session first.',
+        });
+        return true;
+      }
+      await ctx.submitSkillMessage(sessionId, result.message);
+      // submitSkillMessage already incremented pending; release the
+      // reservation so the net count stays 1.
+      ctx.releaseTurn?.(sessionId);
+      sendJson(res, 202, { ok: true });
+      return true;
+
+    case 'repl-only':
+      // No turn queued — release the reservation.
+      ctx.releaseTurn?.(sessionId);
+      sendJson(res, 422, {
+        error: 'repl_only_command',
+        message: `${result.command} is a terminal-only command and cannot run in the web UI.`,
+      });
+      return true;
+
+    case 'unknown':
+      // No turn queued — release the reservation.
+      ctx.releaseTurn?.(sessionId);
+      sendJson(res, 422, {
+        error: 'unknown_command',
+        message: result.suggestion
+          ? `Unknown command: ${result.command} (did you mean ${result.suggestion}?)`
+          : `Unknown command: ${result.command}`,
+      });
+      return true;
+  }
 }
 
 export function header(req: IncomingMessage, name: string): string | undefined {
