@@ -219,7 +219,7 @@ const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
-  (rel) => join(safeRealpath(homedir()), rel),
+  (rel) => join(homedir(), rel),
 );
 
 /**

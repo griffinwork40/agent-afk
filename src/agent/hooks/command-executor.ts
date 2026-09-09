@@ -136,7 +136,7 @@ export async function executeCommand(
       ? context.toolName
       : '';
 
-  const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME'] as const;
+  const ENV_PASSTHROUGH = ['PATH', 'HOME', 'SHELL', 'LANG', 'TERM', 'TMPDIR', 'TMP', 'TEMP', 'USER', 'LOGNAME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA'] as const;
   const childEnv: NodeJS.ProcessEnv = {};
   for (const key of ENV_PASSTHROUGH) {
     const val = process.env[key];
@@ -209,7 +209,8 @@ export async function executeCommand(
             [...(shellResolution.args ?? []), command],
             spawnOpts,
           );
-    // Don't pin the event loop.
+    // Don't pin the event loop on POSIX (detached=true). On Windows
+    // (detached=false), unref() is a harmless no-op.
     proc.unref();
 
     // --- Output capture with 64 KB per-stream cap ---

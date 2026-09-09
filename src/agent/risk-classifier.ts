@@ -212,7 +212,8 @@ function classifyFilePath(filePath: string, ctx: RiskContext): RiskLevel {
   // Denylist check — matches ~/.ssh, /etc, etc.
   const denylist = getWriteDenylist();
   for (const blocked of denylist) {
-    if (resolved === blocked || resolved.startsWith(blocked + '/') || resolved.startsWith(blocked + path.sep)) {
+    const blockedNorm = blocked.split(path.sep).join('/');
+    if (resolvedNorm === blockedNorm || resolvedNorm.startsWith(blockedNorm + '/')) {
       return 'high';
     }
   }
