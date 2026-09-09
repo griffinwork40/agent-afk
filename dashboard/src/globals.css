@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens for the AFK dashboard.
+ *
+ * Dark-first: .dark is the default (set on <html>). Light mode is secondary.
+ * Brand tokens hand-ported from the existing web UI (src/web-server/frontend/
+ * styles.css) and the docs site (website/app/globals.css). These are the
+ * source of truth for the React SPA; the old CSS is not imported.
+ *
+ * shadcn/ui convention: HSL values without the hsl() wrapper, applied via
+ * hsl(var(--name)) in Tailwind utilities.
+ */
+
+@theme {
+  /* shadcn color tokens */
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  /* Status colors */
+  --color-status-running: hsl(var(--status-running));
+  --color-status-done: hsl(var(--status-done));
+  --color-status-failed: hsl(var(--status-failed));
+  --color-status-blocked: hsl(var(--status-blocked));
+
+  /* Brand */
+  --color-brand: hsl(var(--brand));
+
+  /* Radius */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 222 47% 11%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 22 90% 63%;
+    --radius: 0.5rem;
+
+    --brand: 22 93% 63%;
+    --status-running: 142 76% 36%;
+    --status-done: 217 91% 60%;
+    --status-failed: 0 84% 60%;
+    --status-blocked: 38 92% 50%;
+  }
+
+  .dark {
+    --background: 240 20% 3.5%;
+    --foreground: 240 10% 93%;
+    --card: 240 17% 5.5%;
+    --card-foreground: 240 10% 93%;
+    --popover: 240 17% 5.5%;
+    --popover-foreground: 240 10% 93%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 240 14% 10%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 240 14% 10%;
+    --muted-foreground: 240 5% 60%;
+    --accent: 240 14% 10%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 240 14% 14%;
+    --input: 240 14% 14%;
+    --ring: 22 90% 63%;
+
+    --brand: 22 93% 63%;
+    --status-running: 142 76% 46%;
+    --status-done: 217 91% 70%;
+    --status-failed: 0 84% 70%;
+    --status-blocked: 38 92% 60%;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  }
+}
