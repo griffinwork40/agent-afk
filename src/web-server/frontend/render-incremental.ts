@@ -12,7 +12,7 @@
  * is cleared and all nodes are recreated from scratch.
  */
 
-import type { TranscriptItem } from './view-model.js';
+import type { TranscriptItem } from './ledger-adapter.js';
 
 /**
  * Module-level cache: maps item.id → the DOM node that represents it.
