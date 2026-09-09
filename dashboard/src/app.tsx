@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { Sidebar } from './components/sidebar';
-import { SessionDetailPlaceholder } from './components/session-detail-placeholder';
+import { CommandPalette } from './components/command-palette';
+import { TranscriptView } from './components/transcript-view';
+import { SessionMeter } from './components/session-meter';
 import { useSessions } from './hooks/use-sessions';
 import { usePendingApprovals } from './hooks/use-pending-approvals';
+import { useTranscript } from './hooks/use-transcript';
+import { useScrollPin } from './hooks/use-scroll-pin';
 
 type NavItem = 'sessions' | 'memory' | 'schedules' | 'jobs' | 'settings';
 
@@ -15,9 +19,17 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
+  const { items, totals, status } = useTranscript(selectedSessionId);
+  const { containerRef } = useScrollPin();
+
+  const handleNavigate = (nav: string) => {
+    setActiveNav(nav as NavItem);
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
+      <CommandPalette onNavigate={handleNavigate} />
+
       <Sidebar
         sessions={sessions}
         pendingSessionIds={pendingSessionIds}
@@ -32,22 +44,30 @@ export function App() {
       <main className="flex flex-1 flex-col overflow-hidden">
         {/* Top bar */}
         <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-          <h1 className="text-sm font-medium text-muted-foreground">
-            {activeNav === 'sessions' && 'Sessions'}
-            {activeNav === 'memory' && 'Memory'}
-            {activeNav === 'schedules' && 'Schedules'}
-            {activeNav === 'jobs' && 'Background Jobs'}
-            {activeNav === 'settings' && 'Settings'}
-          </h1>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <kbd className="rounded border bg-secondary px-1.5 py-0.5 font-mono text-[10px]">
+          <div className="flex items-center gap-3">
+            <h1 className="text-sm font-medium text-muted-foreground">
+              {activeNav === 'sessions' && 'Sessions'}
+              {activeNav === 'memory' && 'Memory'}
+              {activeNav === 'schedules' && 'Schedules'}
+              {activeNav === 'jobs' && 'Background Jobs'}
+              {activeNav === 'settings' && 'Settings'}
+            </h1>
+            {activeNav === 'sessions' && selectedSession && (
+              <StreamStatusDot status={status} />
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {activeNav === 'sessions' && selectedSession && (
+              <SessionMeter totals={totals} />
+            )}
+            <kbd className="rounded border bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
               ⌘K
             </kbd>
           </div>
         </header>
 
         {/* Content area */}
-        <div className="flex-1 overflow-y-auto">
+        <div ref={containerRef} className="flex-1 overflow-y-auto">
           {activeNav === 'sessions' && (
             <>
               {loading && !sessions.length && (
@@ -60,11 +80,27 @@ export function App() {
               )}
               {!loading && sessions.length === 0 && (
                 <div className="flex h-full items-center justify-center text-muted-foreground">
-                  <p className="text-sm">No sessions found. Start one with <code className="rounded bg-secondary px-1 font-mono">afk web</code></p>
+                  <p className="text-sm">
+                    No sessions found. Start one with{' '}
+                    <code className="rounded bg-secondary px-1 font-mono">afk web</code>
+                  </p>
                 </div>
               )}
-              {selectedSession ? (
-                <SessionDetailPlaceholder session={selectedSession} />
+              {selectedSession && items.length > 0 ? (
+                <TranscriptView items={items} totals={totals} />
+              ) : selectedSession ? (
+                <div className="flex h-full items-center justify-center text-muted-foreground">
+                  <div className="flex flex-col items-center gap-2">
+                    {status === 'connecting' || status === 'reconnecting' ? (
+                      <>
+                        <div className="size-5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        <span className="text-sm">Connecting to session...</span>
+                      </>
+                    ) : (
+                      <span className="text-sm">No transcript data</span>
+                    )}
+                  </div>
+                </div>
               ) : (
                 sessions.length > 0 && (
                   <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -90,6 +126,19 @@ export function App() {
       </main>
     </div>
   );
+}
+
+function StreamStatusDot({ status }: { status: string }) {
+  if (status === 'open') {
+    return <span className="size-2 rounded-full bg-status-running" title="Live" />;
+  }
+  if (status === 'connecting' || status === 'reconnecting') {
+    return <span className="size-2 animate-pulse rounded-full bg-status-blocked" title={status} />;
+  }
+  if (status === 'ended') {
+    return <span className="size-2 rounded-full bg-muted-foreground" title="Session ended" />;
+  }
+  return null;
 }
 
 function PlaceholderView({ title, phase }: { title: string; phase: number }) {
