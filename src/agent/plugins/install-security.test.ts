@@ -114,7 +114,12 @@ describe('assertWithinPluginsDir — paths that must throw', () => {
 
   it('blocks an absolute path completely outside the plugins dir', () => {
     const pluginsDir = join(tmpDir, 'plugins');
-    expect(() => assertWithinPluginsDir('/etc/passwd', pluginsDir)).toThrow(/Path traversal/);
+    // Use a platform-appropriate absolute path outside the plugins dir.
+    const outsidePath =
+      process.platform === 'win32'
+        ? 'C:\\Windows\\System32\\drivers\\etc\\hosts'
+        : '/etc/passwd';
+    expect(() => assertWithinPluginsDir(outsidePath, pluginsDir)).toThrow(/Path traversal/);
   });
 
   it('blocks the parentDir itself (relative === "")', () => {

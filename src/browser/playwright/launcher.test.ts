@@ -1020,7 +1020,10 @@ describe('BrowserLauncher — session vault', () => {
     const launcher = new BrowserLauncher(VAULT_CONFIG);
     await launcher.ensureContext('s1');
     await launcher.closeSession('s1');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    // NTFS does not expose POSIX permission bits — skip on Windows.
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
   });
 
   it('renderHtml bypasses the vault even when the default profile IS established', async () => {
