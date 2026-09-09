@@ -73,6 +73,9 @@ function Dashboard() {
     isLive: selectedSession?.mode === 'live',
   });
 
+  // Track the previous liveTurns value to detect new turn completions.
+  const prevTurnsRef = useRef(0);
+
   // Clear the queue and abort any in-flight POST when the selected session
   // changes to prevent a prompt queued for session A from being sent to
   // session B.
@@ -87,7 +90,6 @@ function Dashboard() {
   // Flush the queue when a live turn completes (liveTurns increments only on
   // non-replay 'done' records, preventing spurious flushes during initial
   // replay on session load).
-  const prevTurnsRef = useRef(0);
   useEffect(() => {
     if (liveTurns > prevTurnsRef.current) {
       void queue.flush();

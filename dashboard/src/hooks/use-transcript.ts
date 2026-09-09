@@ -73,20 +73,12 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
     setLiveTurns(0);
   }, [sessionId]);
 
-  // Feed new SSE events into the transcript.
-  useEffect(() => {
-    if (events.length === 0) return;
-
-    // Only process events that arrived since our last render. Because
-    // useSseStream accumulates ALL events, we track how many we've seen.
-    // We use a ref to avoid this effect depending on items/totals state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- processedCount is intentionally a ref
-  }, [events]);
-
-  // A ref-based approach: process events incrementally without depending on
-  // items or totals as effect deps (which would cause infinite re-renders).
+  // Feed new SSE events into the transcript incrementally. We track how many
+  // events we have processed via a ref to avoid depending on items/totals as
+  // effect deps (which would cause infinite re-renders).
   const processedCountRef = useRef(0);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- processedCountRef is intentionally a ref; adding it would cause infinite re-renders
   useEffect(() => {
     const newEvents = events.slice(processedCountRef.current);
     if (newEvents.length === 0) return;

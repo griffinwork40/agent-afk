@@ -155,7 +155,7 @@ export function useQueue({ submit, isLive }: UseQueueOpts): UseQueueResult {
         setQueue(next);
       })
       .catch(() => {
-        // Keep entry in queue on failure; the UI will show error state.
+        // Keep entry in queue on failure so the user can retry or remove it.
       })
       .finally(() => {
         flushingRef.current = false;
