@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.204.4] - 2026-09-09
+
+### Fixed
+- approval error feedback and stable React keys in memory view (#1587) (#1592) (00fbbdd0)
+
 ## [5.204.3] - 2026-09-09
 
 ### Fixed
