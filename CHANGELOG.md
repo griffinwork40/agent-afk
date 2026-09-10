@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.206.3] - 2026-09-10
+
+### Fixed
+- harden build-web-ui.mjs with CI fail-fast and pinned Vite (#1591) (9ebc0a6c)
+- fix stale caches in React dashboard (#1584) (#1593) (a0244133)
+
+### Changed
+- address remaining review follow-ups from #1554 and #1555 (#1566) (#1595) (91c11fc8)
+
 ## [5.206.2] - 2026-09-09
 
 ### Fixed
