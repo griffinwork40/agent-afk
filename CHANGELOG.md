@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.207.2] - 2026-09-10
+
+### Fixed
+- align AgentBrowserClient with Agent Browser v0.3.0 API (#1627) (a8035282)
+
 ## [5.207.1] - 2026-09-10
 
 ### Changed
