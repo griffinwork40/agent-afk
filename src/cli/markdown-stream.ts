@@ -426,6 +426,7 @@ export class StreamingMarkdownRenderer {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
     }
+    this.lastPaintTime = 0;
     this.buffer = '';
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
@@ -448,6 +449,7 @@ export class StreamingMarkdownRenderer {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
     }
+    this.lastPaintTime = 0;
 
     if (this.resizeUnsub) {
       this.resizeUnsub();

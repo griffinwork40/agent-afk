@@ -138,7 +138,7 @@ describe('formatBlockForCommit blank-line trimming', () => {
 });
 
 describe('scheduleWithThrottle (leading + trailing)', () => {
-  it('fires immediately (leading edge) when enough time has elapsed', () => {
+  it('fires immediately (leading edge) when enough time has elapsed', async () => {
     let fired = false;
     const cb = () => { fired = true; };
     // lastPaintTime far in the past — leading edge should fire
@@ -148,6 +148,9 @@ describe('scheduleWithThrottle (leading + trailing)', () => {
     expect(result.paintTime).toBeGreaterThan(0);
     // Callback is queued via queueMicrotask, not synchronous
     expect(fired).toBe(false);
+    // Drain the microtask queue and verify callback fires
+    await Promise.resolve();
+    expect(fired).toBe(true);
   });
 
   it('defers to trailing edge when inside the throttle window', () => {

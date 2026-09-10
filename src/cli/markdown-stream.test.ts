@@ -320,6 +320,39 @@ describe('StreamingMarkdownRenderer', () => {
 
       expect(true).toBe(true); // Reached here without hanging
     });
+
+    it('first push after discardPending hits leading edge (F3 regression)', async () => {
+      vi.useFakeTimers();
+
+      const ttyStream = new PassThrough();
+      (ttyStream as any).isTTY = true;
+      (ttyStream as any).columns = 80;
+      (ttyStream as any).rows = 24;
+
+      renderer = new StreamingMarkdownRenderer({
+        out: ttyStream,
+        throttleMs: 33,
+      });
+
+      // Initial push: leading edge fires (lastPaintTime starts at 0)
+      renderer.push('first ');
+      // Drain the leading microtask
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Simulate mid-stream retry: discard pending content
+      renderer.discardPending();
+
+      // Push new content immediately after discard -- should hit leading edge
+      // because discardPending() resets lastPaintTime to 0.
+      // If lastPaintTime were NOT reset, this would take the trailing path
+      // (inside the 33ms throttle window) and delay the first-paint.
+      renderer.push('second ');
+      const throttleTimer = (renderer as any).throttleTimer;
+      expect(throttleTimer).toBeNull(); // leading edge: no trailing timer
+
+      vi.useRealTimers();
+      renderer.dispose();
+    });
   });
 
   describe('Mixed markdown and plain text', () => {
