@@ -1,2 +1,4 @@
 node_modules/
 dist/
+# Prevent compiled .js files from shadowing .ts sources in src/
+src/**/*.js

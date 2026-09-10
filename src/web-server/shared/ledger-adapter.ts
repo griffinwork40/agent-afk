@@ -46,10 +46,16 @@ export type TranscriptItem =
       kind: 'subagent';
       id: string;
       subagentId: string;
+      /** SubagentId of the dispatching agent, for tree-building. */
+      parentId?: string;
       status: string;
       label: string;
       model?: string;
+      /** Resolved agent type (e.g. "research", "composer [1/3]"). */
+      agentType?: string;
       durationMs?: number;
+      /** Total cost in USD from the terminal lifecycle event. */
+      totalCostUsd?: number;
       promptHead?: string;
     }
   | { kind: 'bg_job'; id: string; jobId: string; status: string; label: string };
@@ -310,6 +316,8 @@ export function ledgerRecordToItem(
           existing.status = status;
           const dur = num(record['durationMs']);
           if (dur !== undefined) existing.durationMs = dur;
+          const cost = num(record['totalCostUsd']);
+          if (cost !== undefined) existing.totalCostUsd = cost;
           return undefined; // patched in place — no new item
         }
       }
@@ -318,10 +326,13 @@ export function ledgerRecordToItem(
         kind: 'subagent',
         id: nextId('sa'),
         subagentId: subId,
+        parentId: str(record['parentId']),
         status,
         label,
         model: str(record['model']),
+        agentType: str(record['agentType']),
         durationMs: num(record['durationMs']),
+        totalCostUsd: num(record['totalCostUsd']),
         promptHead: str(record['promptHead']),
       };
 

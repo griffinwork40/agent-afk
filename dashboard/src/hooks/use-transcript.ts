@@ -21,7 +21,7 @@ import {
   ledgerRecordToItem,
   resetIdCounter,
 } from '@/lib/ledger-adapter';
-import type { LedgerRecordLike, SessionTotals, ToolIndex, TranscriptItem } from '@/lib/ledger-adapter';
+import type { LedgerRecordLike, SessionTotals, SubagentIndex, ToolIndex, TranscriptItem } from '@/lib/ledger-adapter';
 
 const EMPTY_TOTALS: SessionTotals = {
   costUsd: 0,
@@ -59,14 +59,17 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
   const [turnActive, setTurnActive] = useState(false);
   const [liveTurns, setLiveTurns] = useState(0);
 
-  // Stable tool index across renders — keyed by toolUseId for correlation.
-  // Reset when sessionId changes.
+  // Stable indexes across renders — reset when sessionId changes.
+  // toolIndex correlates tool_result records back to their tool items.
+  // subagentIndex deduplicates lifecycle events (started → succeeded/failed).
   const toolIndexRef = useRef<ToolIndex>(new Map());
+  const subagentIndexRef = useRef<SubagentIndex>(new Map());
 
   // Reset transcript state when the session changes.
   useEffect(() => {
     resetIdCounter();
     toolIndexRef.current = new Map();
+    subagentIndexRef.current = new Map();
     setItems([]);
     setTotals(EMPTY_TOTALS);
     setTurnActive(false);
@@ -115,11 +118,11 @@ export function useTranscript(sessionId: string | null): UseTranscriptResult {
       // Convert record to a transcript item. ledgerRecordToItem may mutate an
       // existing tool item (for tool_result) and return undefined — in that
       // case we set hasMutation so we trigger a re-render of the items array.
-      const item = ledgerRecordToItem(record, toolIndex);
+      const item = ledgerRecordToItem(record, toolIndex, subagentIndexRef.current);
       if (item !== undefined) {
         newItems.push(item);
-      } else if (record.kind === 'tool_result') {
-        // A tool_result mutated an existing item in place; signal re-render.
+      } else if (record.kind === 'tool_result' || record.kind === 'subagent_lifecycle') {
+        // Mutated an existing item in place; signal re-render.
         hasMutation = true;
       }
     }
