@@ -29,7 +29,9 @@ export interface AgentBrowserTab {
   id: string;
   title: string;
   url: string;
-  loading: boolean;
+  /** v0.3.0 returns `isLoading`, not `loading`. */
+  isLoading: boolean;
+  isActive?: boolean;
 }
 
 export interface InspectElement {
@@ -100,7 +102,18 @@ export class AgentBrowserClient {
         );
       }
 
-      return (await res.json()) as T;
+      // v0.3.0 wraps every response in { ok, result, error }. Unwrap the
+      // envelope so callers receive the payload directly.
+      const envelope = (await res.json()) as Record<string, unknown>;
+      if (envelope['ok'] === false) {
+        const err = envelope['error'] as Record<string, unknown> | undefined;
+        const code = err?.['code'] ?? 'UNKNOWN';
+        const msg = err?.['message'] ?? JSON.stringify(envelope);
+        throw new Error(
+          `Agent Browser ${method} failed: [${String(code)}] ${String(msg)}`,
+        );
+      }
+      return (envelope['result'] ?? envelope) as T;
     } finally {
       clearTimeout(timer);
     }
@@ -111,24 +124,23 @@ export class AgentBrowserClient {
   // -------------------------------------------------------------------------
 
   async listTabs(): Promise<AgentBrowserTab[]> {
-    const result = await this.call<{ tabs: AgentBrowserTab[] }>(
-      'tabs.list',
-      null,
-    );
-    return result.tabs;
+    // v0.3.0 returns the array directly, not wrapped in { tabs }.
+    return this.call<AgentBrowserTab[]>('tabs.list', null);
   }
 
   async openTab(url: string): Promise<{ tabId: string }> {
-    const result = await this.call<{ tab_id: string }>(
+    // v0.3.0 returns { id } not { tab_id }.
+    const result = await this.call<{ id: string }>(
       'tabs.open',
       { url },
       60_000,
     );
-    return { tabId: result.tab_id };
+    return { tabId: result.id };
   }
 
   async closeTab(tabId: string): Promise<void> {
-    await this.call('tabs.close', { tab_id: tabId });
+    // v0.3.0 does not support tabs.close -- best-effort via navigation.
+    await this.call('page.eval', { id: tabId, script: 'window.close()' }).catch(() => {});
   }
 
   // -------------------------------------------------------------------------
@@ -140,7 +152,7 @@ export class AgentBrowserClient {
     opts?: { mode?: string; query?: string; budget?: number },
   ): Promise<ReadResult> {
     return this.call<ReadResult>('page.read', {
-      tab_id: tabId,
+      id: tabId,
       mode: opts?.mode ?? 'main',
       ...(opts?.query ? { query: opts.query } : {}),
       ...(opts?.budget ? { budget: opts.budget } : {}),
@@ -152,7 +164,7 @@ export class AgentBrowserClient {
     opts?: { mode?: string; query?: string; limit?: number },
   ): Promise<{ elements: InspectElement[] }> {
     return this.call<{ elements: InspectElement[] }>('page.inspect', {
-      tab_id: tabId,
+      id: tabId,
       mode: opts?.mode ?? 'interactive',
       ...(opts?.query ? { query: opts.query } : {}),
       ...(opts?.limit ? { limit: opts.limit } : {}),
@@ -164,7 +176,7 @@ export class AgentBrowserClient {
   // -------------------------------------------------------------------------
 
   async click(tabId: string, elementId: string): Promise<void> {
-    await this.call('page.click', { tab_id: tabId, element_id: elementId });
+    await this.call('page.click', { id: tabId, elementId });
   }
 
   async fill(
@@ -173,8 +185,8 @@ export class AgentBrowserClient {
     value: string,
   ): Promise<void> {
     await this.call('page.fill', {
-      tab_id: tabId,
-      element_id: elementId,
+      id: tabId,
+      elementId,
       value,
     });
   }
@@ -185,9 +197,9 @@ export class AgentBrowserClient {
     elementId?: string,
   ): Promise<void> {
     await this.call('page.press', {
-      tab_id: tabId,
+      id: tabId,
       key,
-      ...(elementId ? { element_id: elementId } : {}),
+      ...(elementId ? { elementId } : {}),
     });
   }
 
@@ -197,8 +209,8 @@ export class AgentBrowserClient {
     value: string,
   ): Promise<void> {
     await this.call('page.select', {
-      tab_id: tabId,
-      element_id: elementId,
+      id: tabId,
+      elementId,
       value,
     });
   }
@@ -211,7 +223,7 @@ export class AgentBrowserClient {
     await this.call(
       'page.wait',
       {
-        tab_id: tabId,
+        id: tabId,
         condition,
         ...(opts?.value ? { value: opts.value } : {}),
         ...(opts?.timeout ? { timeout: opts.timeout } : {}),
@@ -225,12 +237,12 @@ export class AgentBrowserClient {
   // -------------------------------------------------------------------------
 
   async evalScript(tabId: string, script: string): Promise<unknown> {
-    return this.call<unknown>('page.eval', { tab_id: tabId, script });
+    return this.call<unknown>('page.eval', { id: tabId, script });
   }
 
   async screenshot(tabId: string): Promise<{ data: string }> {
     return this.call<{ data: string }>('page.screenshot', {
-      tab_id: tabId,
+      id: tabId,
     });
   }
 }
