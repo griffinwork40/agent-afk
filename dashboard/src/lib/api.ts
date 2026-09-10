@@ -13,6 +13,11 @@ let cachedToken: string | null = null;
 /** Evict the in-memory token cache (e.g. after a 401 response). */
 function clearTokenCache(): void {
   cachedToken = null;
+  try {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // sessionStorage may be unavailable in some contexts
+  }
 }
 
 /** Read the bearer token, preferring the meta tag, falling back to storage. */
