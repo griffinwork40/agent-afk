@@ -21,7 +21,7 @@ const components: Components = {
     // Anything else (data:, javascript:, vbscript:, …) renders as plain text.
     const isSafe = href && /^(https?:\/\/|\/(?!\/)|#)/i.test(href);
     return isSafe ? (
-      <a href={href} className="text-brand underline underline-offset-2 hover:text-brand/80" target="_blank" rel="noreferrer">
+      <a href={href} className="text-brand underline underline-offset-2 hover:text-brand/80" target="_blank" rel="noopener noreferrer">
         {children}
       </a>
     ) : (

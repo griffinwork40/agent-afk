@@ -24,6 +24,8 @@ describe('MarkdownContent – scheme allowlist', () => {
       expect(link).toBeInTheDocument();
       expect(link.tagName).toBe('A');
       expect(link).toHaveAttribute('href', 'https://example.com');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
 
     it('renders http:// URLs as an anchor', () => {
@@ -32,6 +34,8 @@ describe('MarkdownContent – scheme allowlist', () => {
       expect(link).toBeInTheDocument();
       expect(link.tagName).toBe('A');
       expect(link).toHaveAttribute('href', 'http://example.com');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
 
     it('renders root-relative paths as an anchor', () => {
@@ -40,6 +44,8 @@ describe('MarkdownContent – scheme allowlist', () => {
       expect(link).toBeInTheDocument();
       expect(link.tagName).toBe('A');
       expect(link).toHaveAttribute('href', '/path');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
 
     it('renders anchor links (#fragment) as an anchor', () => {
@@ -48,6 +54,8 @@ describe('MarkdownContent – scheme allowlist', () => {
       expect(link).toBeInTheDocument();
       expect(link.tagName).toBe('A');
       expect(link).toHaveAttribute('href', '#anchor');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
   });
 
@@ -73,11 +81,11 @@ describe('MarkdownContent – scheme allowlist', () => {
 
   describe('edge cases', () => {
     it('renders anchor safely when href is an empty string', () => {
-      // react-markdown may omit href entirely for empty strings; either way
-      // the component must not throw and must degrade gracefully.
-      const { container } = render(<MarkdownContent text="[click me]()" />);
-      // No assertion on tag type — just assert no exception and something rendered
-      expect(container.textContent).toContain('click me');
+      // react-markdown passes href="" for [text](); the guard `href && /…/.test(href)`
+      // is falsy for empty string, so the component must degrade to <span>.
+      render(<MarkdownContent text="[click me]()" />);
+      expect(screen.queryByRole('link')).toBeNull();
+      expect(screen.getByText('click me').tagName).toBe('SPAN');
     });
   });
 });
