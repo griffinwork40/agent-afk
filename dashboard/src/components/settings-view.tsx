@@ -230,7 +230,7 @@ export function SettingsView() {
             <ModelRow
               key={m.id}
               model={m}
-              last={i === data.models!.length - 1}
+              last={i === data.models.length - 1}
             />
           ))
         )}

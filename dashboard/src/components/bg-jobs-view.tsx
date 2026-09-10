@@ -128,7 +128,7 @@ function JobCard({
         {(job.status === 'failed' || job.status === 'cancelled') && job.stopReason && (
           <div className="pl-5 text-xs text-neutral-500">
             <span className="text-neutral-600">reason:</span>{' '}
-            <span className="font-mono text-neutral-400">{job.stopReason}</span>
+            <span className="font-mono text-neutral-400 line-clamp-2" title={job.stopReason}>{job.stopReason}</span>
           </div>
         )}
 
@@ -153,7 +153,7 @@ function JobCard({
             <DetailRow label="Parent session" value={job.parentSessionId} mono />
           )}
           {job.stopReason && (
-            <DetailRow label="Stop reason" value={job.stopReason} mono />
+            <DetailRow label="Stop reason" value={job.stopReason.length > 200 ? job.stopReason.slice(0, 200) + '\u2026' : job.stopReason} mono />
           )}
           <DetailRow label="Prompt hash" value={job.promptHash} mono />
           <DetailRow label="Schema version" value={String(job.schemaVersion)} />
@@ -251,7 +251,8 @@ export function BgJobsView() {
     // This call will receive a 404 until the route is added. The error surfaces
     // through the JobCard's cancelError state, so the user sees the failure.
     await apiFetch(`/api/bg-jobs/${jobId}/cancel`, { method: 'POST' });
-    // Optimistically update local state; the poll will correct if needed.
+    // Optimistically update local state (only reached on 2xx; inert until
+    // the server route is added — the poll will correct if needed).
     setJobs((prev) =>
       prev.map((j) => j.jobId === jobId ? { ...j, status: 'cancelled' as const } : j),
     );
@@ -259,7 +260,7 @@ export function BgJobsView() {
 
   const running = jobs.filter((j) => j.status === 'running');
   const settled = jobs.filter((j) => isSettled(j));
-  const isPolling = pollRef.current !== null;
+  const isPolling = jobs.some((j) => !isSettled(j));
 
   return (
     <div className="flex flex-col gap-4">

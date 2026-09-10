@@ -230,6 +230,48 @@ describe('ledgerRecordToItem — Wave 1 new kinds', () => {
     }
   });
 
+  it('SubagentIndex dedup: second subagent_lifecycle patches in place and returns undefined', () => {
+    const subagentIndex = new Map();
+
+    // First record — 'started' — creates the card and registers it in the index.
+    const first = ledgerRecordToItem(
+      { kind: 'subagent_lifecycle', subagentId: 'sa-dedup-1', status: 'started', agentType: 'worker' },
+      undefined,
+      subagentIndex,
+    );
+    expect(first?.kind).toBe('subagent');
+    if (first?.kind === 'subagent') {
+      expect(first.status).toBe('started');
+      expect(first.durationMs).toBeUndefined();
+      expect(first.totalCostUsd).toBeUndefined();
+    }
+
+    // Second record — 'succeeded' — patches the existing card, returns undefined.
+    const second = ledgerRecordToItem(
+      { kind: 'subagent_lifecycle', subagentId: 'sa-dedup-1', status: 'succeeded', durationMs: 4200, totalCostUsd: 0.003 },
+      undefined,
+      subagentIndex,
+    );
+    expect(second).toBeUndefined();
+
+    // The ORIGINAL item reference was mutated.
+    if (first?.kind === 'subagent') {
+      expect(first.status).toBe('succeeded');
+      expect(first.durationMs).toBe(4200);
+      expect(first.totalCostUsd).toBe(0.003);
+    }
+
+    // Index has exactly one entry.
+    expect(subagentIndex.size).toBe(1);
+  });
+
+  it('SubagentIndex dedup: without index each subagent_lifecycle emits a new item', () => {
+    const first = ledgerRecordToItem({ kind: 'subagent_lifecycle', subagentId: 'sa-no-idx', status: 'started' });
+    const second = ledgerRecordToItem({ kind: 'subagent_lifecycle', subagentId: 'sa-no-idx', status: 'succeeded' });
+    expect(first?.kind).toBe('subagent');
+    expect(second?.kind).toBe('subagent');
+  });
+
   it('renders background_job as a structured card', () => {
     const item = ledgerRecordToItem({ kind: 'background_job', jobId: 'bg-1', status: 'completed', label: 'my task' });
     expect(item?.kind).toBe('bg_job');

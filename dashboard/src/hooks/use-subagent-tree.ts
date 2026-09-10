@@ -81,5 +81,17 @@ export function buildTree(items: TranscriptItem[]): SubagentTreeNode[] {
     }
   }
 
-  return roots;
+  // Second pass: re-parent any root whose parentId now resolves in `nodes`.
+  // This handles out-of-order replay where a child arrived before its parent.
+  const stillRoots: SubagentTreeNode[] = [];
+  for (const node of roots) {
+    const resolvedParent = node.item.parentId ? nodes.get(node.item.parentId) : undefined;
+    if (resolvedParent) {
+      resolvedParent.children.push(node);
+    } else {
+      stillRoots.push(node);
+    }
+  }
+
+  return stillRoots;
 }

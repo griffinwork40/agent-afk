@@ -124,16 +124,16 @@ function groupItems(items: TranscriptItem[]): Slot[] {
     }
 
     // Collect the contiguous subagent run.
-    const groupItems: Extract<TranscriptItem, { kind: 'subagent' }>[] = [];
+    const subagentRun: Extract<TranscriptItem, { kind: 'subagent' }>[] = [];
     while (i < items.length) {
       const cur = items[i];
       if (cur === undefined || cur.kind !== 'subagent') break;
-      groupItems.push(cur as Extract<TranscriptItem, { kind: 'subagent' }>);
+      subagentRun.push(cur as Extract<TranscriptItem, { kind: 'subagent' }>);
       i++;
     }
 
     // Use the first item's id as the stable group key.
-    slots.push({ kind: 'subagent-group', items: groupItems, id: groupItems[0]!.id });
+    slots.push({ kind: 'subagent-group', items: subagentRun, id: subagentRun[0]!.id });
   }
 
   return slots;
