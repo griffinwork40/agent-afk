@@ -296,6 +296,14 @@ export interface AgentConfig {
   hotMemory?: string;
 
   /**
+   * Active goal prompt fragment — injected into the system prompt between
+   * hot memory and the `# Environment` block. Built by
+   * `buildGoalPromptFragment()` at session construction; empty string or
+   * unset when no active goal exists.
+   */
+  goalPrompt?: string;
+
+  /**
    * MCP server config — typed entry-point for `~/.afk/config/mcp.json`.
    *
    * Populated by `loadMcpConfig()` and consumed by the bootstrap path
