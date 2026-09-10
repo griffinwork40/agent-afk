@@ -65,11 +65,12 @@ async function buildDashboard() {
       shell: true,
       env: { ...process.env, NODE_ENV: 'production' },
     });
-  } catch {
+  } catch (err) {
+    console.error(`build-web-ui: Vite exited status=${err?.status ?? '?'} signal=${err?.signal ?? 'none'}`);
     if (process.env.CI) {
       // In CI the fallback would silently ship stale assets — fail loudly instead.
       console.error('build-web-ui: Vite build failed in CI — exiting non-zero');
-      process.exit(1);
+      throw new Error('build-web-ui: Vite build failed in CI');
     }
     console.error('build-web-ui: Vite build failed, falling back to legacy esbuild');
     await buildLegacy();
