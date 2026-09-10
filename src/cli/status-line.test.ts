@@ -1373,3 +1373,132 @@ describe('StatusLine — turn/budget indicator', () => {
     status.stop();
   });
 });
+
+describe('StatusLine — token budget indicator', () => {
+  /** Create a mock stream with a specific column width for narrow/wide terminal tests. */
+  function mockStreamWide(cols: number): MockStream {
+    const writes: string[] = [];
+    return {
+      writes,
+      write(chunk: string): boolean { writes.push(chunk); return true; },
+      rows: 24,
+      columns: cols,
+      isTTY: true,
+    };
+  }
+
+  it('renders "$N.NN" when budgetUsd is set and no maxBudgetUsd', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', budgetUsd: 1.42 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('$1.42');
+    expect(out).not.toContain('$1.42/$');
+    status.stop();
+  });
+
+  it('renders "$N.NN/$M.NN" when both budgetUsd and maxBudgetUsd are set', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', budgetUsd: 2.50, maxBudgetUsd: 10.00 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('$2.50/$10.00');
+    status.stop();
+  });
+
+  it('omits the budget segment when budgetUsd is undefined', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    // The bare cost field has a dollar sign but no separate budget segment should appear
+    expect(out).not.toContain('/$');
+    status.stop();
+  });
+
+  it('does not render the maxBudgetUsd cap when maxBudgetUsd is 0', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', budgetUsd: 0.10, maxBudgetUsd: 0 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('$0.10');
+    expect(out).not.toContain('$0.10/$');
+    status.stop();
+  });
+
+  it('sheds the budget indicator before turnCount on a narrow terminal (priority 7 > 6)', () => {
+    // 22 cols: narrow enough to force shedding. Budget (priority 7) must drop
+    // before turnCount (priority 6) which must drop before cost (priority 3).
+    const stream = mockStreamWide(22);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', turnCount: 3, budgetUsd: 1.00 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('sonnet');
+    // Budget is shed first (highest droppablePriority = 7)
+    expect(out).not.toContain('$1.00');
+    status.stop();
+  });
+});
+
+describe('StatusLine — active agent fan-out count', () => {
+  /** Create a mock stream with a specific column width for narrow/wide terminal tests. */
+  function mockStreamWide(cols: number): MockStream {
+    const writes: string[] = [];
+    return {
+      writes,
+      write(chunk: string): boolean { writes.push(chunk); return true; },
+      rows: 24,
+      columns: cols,
+      isTTY: true,
+    };
+  }
+
+  it('renders "N↗" when activeAgentCount > 0', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', activeAgentCount: 3 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('3↗');
+    status.stop();
+  });
+
+  it('omits the fan-out segment when activeAgentCount is 0', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', activeAgentCount: 0 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('↗');
+    status.stop();
+  });
+
+  it('omits the fan-out segment when activeAgentCount is undefined', () => {
+    const stream = mockStreamWide(120);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet' });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).not.toContain('↗');
+    status.stop();
+  });
+
+  it('sheds fan-out before budget/turnCount on a narrow terminal (priority 8 = drop first)', () => {
+    // 22 cols: narrow enough to force shedding. Fan-out (priority 8) is the
+    // most peripheral field and sheds before budget (7) and turnCount (6).
+    const stream = mockStreamWide(22);
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start(); stream.writes.length = 0;
+    status.repaint({ model: 'sonnet', turnCount: 3, budgetUsd: 1.00, activeAgentCount: 2 });
+    const out = lastJoined(stream).replace(BROAD_ANSI_RE, '');
+    expect(out).toContain('sonnet');
+    // Fan-out is shed first (highest droppablePriority = 8)
+    expect(out).not.toContain('2↗');
+    status.stop();
+  });
+});

@@ -89,6 +89,32 @@ export interface StatusLineFields {
    * 0 or undefined means "no turn cap" and the segment shows just `turn N`.
    */
   maxTurns?: number;
+  /**
+   * Cumulative session cost in USD. When `maxBudgetUsd` is also set, renders
+   * as `$N.NN/$M.NN` to show spend against cap. Without a cap, renders the
+   * same as the existing `cost` field. Takes droppablePriority 7 (shed before
+   * turnCount) — the most peripheral of the budget fields.
+   *
+   * NOTE: This field is separate from `cost` (which the existing status line
+   * uses for the raw cost display). `budgetUsd` is the new field that pairs
+   * with `maxBudgetUsd` for budget-aware rendering and a slightly different
+   * drop priority in the shed order.
+   */
+  budgetUsd?: number;
+  /**
+   * Maximum allowed session spend in USD (from a cost-budget config). When
+   * present alongside `budgetUsd`, the segment renders as `$N.NN/$M.NN`.
+   * Optional — 0 or undefined means no cap.
+   */
+  maxBudgetUsd?: number;
+  /**
+   * Number of background subagent jobs currently in the 'running' state.
+   * Only rendered when > 0 as `N↗` to signal active parallel fan-out.
+   * Undefined or 0 means no active background agents — draws no segment.
+   * Takes droppablePriority 8 (shed before budgetUsd) — the most peripheral
+   * field on the line.
+   */
+  activeAgentCount?: number;
 }
 
 interface StatusLineOpts {
@@ -609,6 +635,35 @@ export class StatusLine {
       parts.push({
         text: palette.chrome(`turn ${f.turnCount}${capSuffix}`),
         droppablePriority: 6, // drop first — most peripheral; sheds before tokens (4) and quota-calm (5)
+      });
+    }
+
+    // Token budget consumption — droppablePriority 7 (shed before turnCount at
+    // 6, after all other fields). Renders `$N.NN` when no cap is set, or
+    // `$N.NN/$M.NN` when maxBudgetUsd is provided so the user can see spend
+    // against cap. Shows at least 2 decimal places so e.g. `$0.00` doesn't
+    // truncate to `$0`. Only renders when budgetUsd is defined; an undefined
+    // value means budget tracking is not active for this session.
+    if (f.budgetUsd !== undefined) {
+      const capSuffix =
+        f.maxBudgetUsd !== undefined && f.maxBudgetUsd > 0
+          ? `/$${f.maxBudgetUsd.toFixed(2)}`
+          : '';
+      parts.push({
+        text: palette.chrome(`$${f.budgetUsd.toFixed(2)}${capSuffix}`),
+        droppablePriority: 7, // shed after turnCount (6), before activeAgentCount (8)
+      });
+    }
+
+    // Active parallel subagent fan-out count — droppablePriority 8 (shed first
+    // of all droppable fields). Only renders when there are active background
+    // agents (> 0). Renders as `N↗` — the ↗ arrow visually signals "dispatched
+    // up and out" (fan-out). Suppressed when 0 or undefined so idle sessions
+    // have no noise on the status line.
+    if (f.activeAgentCount !== undefined && f.activeAgentCount > 0) {
+      parts.push({
+        text: palette.chrome(`${f.activeAgentCount}↗`),
+        droppablePriority: 8, // shed first — most peripheral; sheds before turnCount (6)
       });
     }
 

@@ -488,3 +488,106 @@ describe('formatStatusFields — turn indicator', () => {
     expect(fields.maxTurns).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// formatStatusFields — token budget indicator
+// ---------------------------------------------------------------------------
+
+describe('formatStatusFields — token budget indicator', () => {
+  afterEach(() => {
+    resetQuotaCacheForTests();
+  });
+
+  function makeCostStats(totalCostUsd: number): SessionStats {
+    return {
+      totalTurns: 1,
+      totalCostUsd,
+      totalTokens: 0,
+      totalDurationMs: 0,
+      sessionStartTime: 0,
+      turnCosts: [],
+      turnTokens: [],
+      turns: [],
+      model: 'sonnet',
+      permissionMode: 'default',
+    };
+  }
+
+  it('includes budgetUsd equal to totalCostUsd', () => {
+    const fields = formatStatusFields(makeCostStats(1.42));
+    expect(fields.budgetUsd).toBe(1.42);
+  });
+
+  it('includes budgetUsd of 0 when cost is 0', () => {
+    const fields = formatStatusFields(makeCostStats(0));
+    expect(fields.budgetUsd).toBe(0);
+  });
+
+  it('omits maxBudgetUsd when not supplied', () => {
+    const fields = formatStatusFields(makeCostStats(1.0));
+    expect(fields.maxBudgetUsd).toBeUndefined();
+  });
+
+  it('omits maxBudgetUsd when supplied as 0 (unconstrained)', () => {
+    const fields = formatStatusFields(makeCostStats(1.0), undefined, undefined, undefined, undefined, 0);
+    expect(fields.maxBudgetUsd).toBeUndefined();
+  });
+
+  it('includes maxBudgetUsd when a positive cap is supplied', () => {
+    const fields = formatStatusFields(makeCostStats(2.50), undefined, undefined, undefined, undefined, 10);
+    expect(fields.budgetUsd).toBe(2.50);
+    expect(fields.maxBudgetUsd).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatStatusFields — active agent fan-out count
+// ---------------------------------------------------------------------------
+
+describe('formatStatusFields — active agent fan-out count', () => {
+  afterEach(() => {
+    resetQuotaCacheForTests();
+  });
+
+  function makeBasicStats(): SessionStats {
+    return {
+      totalTurns: 0,
+      totalCostUsd: 0,
+      totalTokens: 0,
+      totalDurationMs: 0,
+      sessionStartTime: 0,
+      turnCosts: [],
+      turnTokens: [],
+      turns: [],
+      model: 'sonnet',
+      permissionMode: 'default',
+    };
+  }
+
+  it('omits activeAgentCount when no registry is supplied', () => {
+    const fields = formatStatusFields(makeBasicStats());
+    expect(fields.activeAgentCount).toBeUndefined();
+  });
+
+  it('omits activeAgentCount when registry has no running jobs', () => {
+    // BackgroundAgentRegistry with no active jobs — list() returns empty array
+    // We use a simple mock object satisfying the list() interface contract
+    const mockRegistry = {
+      list: () => [],
+    } as unknown as import('../../../../src/agent/background-registry.js').BackgroundAgentRegistry;
+    const fields = formatStatusFields(makeBasicStats(), undefined, undefined, undefined, mockRegistry);
+    expect(fields.activeAgentCount).toBeUndefined();
+  });
+
+  it('includes activeAgentCount equal to the running job count', () => {
+    const mockRegistry = {
+      list: () => [
+        { status: 'running' as const, jobId: 'bg-1', provenance: 'user' as const, subagentId: 'sa-1', label: 'test', model: 'sonnet', startedAt: Date.now() },
+        { status: 'running' as const, jobId: 'bg-2', provenance: 'user' as const, subagentId: 'sa-2', label: 'test2', model: 'sonnet', startedAt: Date.now() },
+        { status: 'completed' as const, jobId: 'bg-3', provenance: 'user' as const, subagentId: 'sa-3', label: 'done', model: 'sonnet', startedAt: Date.now() },
+      ],
+    } as unknown as import('../../../../src/agent/background-registry.js').BackgroundAgentRegistry;
+    const fields = formatStatusFields(makeBasicStats(), undefined, undefined, undefined, mockRegistry);
+    expect(fields.activeAgentCount).toBe(2);
+  });
+});
