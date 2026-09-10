@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.207.1] - 2026-09-10
+
+### Changed
+- convert markdown repaint debounce to leading+trailing throttle (#1626) (f120924c)
+
 ## [5.207.0] - 2026-09-10
 
 ### Added
