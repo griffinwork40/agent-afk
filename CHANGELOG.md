@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.208.0] - 2026-09-10
+
+### Added
+- hierarchical subagent tree, settings view, and bg-jobs polish (#1625) (5d8d7be0)
+
 ## [5.207.2] - 2026-09-10
 
 ### Fixed
