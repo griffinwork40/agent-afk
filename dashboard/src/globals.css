@@ -4,9 +4,14 @@
  * Design tokens for the AFK dashboard.
  *
  * Dark-first: .dark is the default (set on <html>). Light mode is secondary.
- * Brand tokens hand-ported from the existing web UI (src/web-server/frontend/
- * styles.css) and the docs site (website/app/globals.css). These are the
- * source of truth for the React SPA; the old CSS is not imported.
+ * Brand tokens derived from the canonical AFK theme sources:
+ *   - themes/cursor/themes/agent-afk-color-theme.json (dark palette)
+ *   - themes/terax/afk-dark.terax-theme (dark palette)
+ *   - website/app/globals.css (light palette)
+ *   - src/web-server/frontend/styles.css (accent + status)
+ *
+ * Dark base: GitHub-Dark skeleton (#0D1117 / #161B22 / #21262D)
+ * Brand accent: warm orange #E67E4C
  *
  * shadcn/ui convention: HSL values without the hsl() wrapper, applied via
  * hsl(var(--name)) in Tailwind utilities.
@@ -50,62 +55,72 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/*
+ * AFK brand palette
+ *
+ * Source of truth: themes/cursor/themes/agent-afk-color-theme.json (dark)
+ * and website/app/globals.css (light). The dashboard tokens are derived
+ * from those files; keep them in sync when the brand moves.
+ *
+ * Dark base: GitHub-Dark skeleton (#0D1117 bg, #161B22 raised, #21262D chrome)
+ * Brand accent: warm orange #E67E4C / hsl(20 76% 60%)
+ */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --background: 240 7% 97%;
+    --foreground: 240 17% 8%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 240 17% 8%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 222 47% 11%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 210 40% 96%;
-    --accent-foreground: 222 47% 11%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 22 90% 63%;
+    --popover-foreground: 240 17% 8%;
+    --primary: 20 76% 60%;
+    --primary-foreground: 216 28% 7%;
+    --secondary: 240 9% 94%;
+    --secondary-foreground: 240 17% 8%;
+    --muted: 240 9% 94%;
+    --muted-foreground: 240 12% 40%;
+    --accent: 240 10% 90%;
+    --accent-foreground: 20 76% 60%;
+    --destructive: 3 93% 63%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 240 12% 84%;
+    --input: 240 15% 89%;
+    --ring: 20 76% 60%;
     --radius: 0.5rem;
 
-    --brand: 22 93% 63%;
+    --brand: 20 76% 60%;
     --status-running: 142 76% 36%;
-    --status-done: 217 91% 60%;
-    --status-failed: 0 84% 60%;
-    --status-blocked: 38 92% 50%;
+    --status-done: 212 100% 68%;
+    --status-failed: 3 93% 63%;
+    --status-blocked: 39 67% 69%;
   }
 
   .dark {
-    --background: 240 20% 3.5%;
-    --foreground: 240 10% 93%;
-    --card: 240 17% 5.5%;
-    --card-foreground: 240 10% 93%;
-    --popover: 240 17% 5.5%;
-    --popover-foreground: 240 10% 93%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222 47% 11%;
-    --secondary: 240 14% 10%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 240 14% 10%;
-    --muted-foreground: 240 5% 60%;
-    --accent: 240 14% 10%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 240 14% 14%;
-    --input: 240 14% 14%;
-    --ring: 22 90% 63%;
+    --background: 216 28% 7%;
+    --foreground: 210 17% 82%;
+    --card: 215 21% 11%;
+    --card-foreground: 210 17% 82%;
+    --popover: 215 21% 11%;
+    --popover-foreground: 210 17% 82%;
+    --primary: 20 76% 60%;
+    --primary-foreground: 216 28% 7%;
+    --secondary: 215 15% 15%;
+    --secondary-foreground: 210 17% 82%;
+    --muted: 215 21% 11%;
+    --muted-foreground: 215 8% 53%;
+    --accent: 215 15% 15%;
+    --accent-foreground: 20 76% 60%;
+    --destructive: 3 93% 63%;
+    --destructive-foreground: 210 17% 82%;
+    --border: 215 15% 15%;
+    --input: 212 12% 21%;
+    --ring: 20 76% 60%;
 
-    --brand: 22 93% 63%;
-    --status-running: 142 76% 46%;
-    --status-done: 217 91% 70%;
-    --status-failed: 0 84% 70%;
-    --status-blocked: 38 92% 60%;
+    --brand: 20 76% 60%;
+    --status-running: 86 67% 63%;
+    --status-done: 212 100% 68%;
+    --status-failed: 3 93% 63%;
+    --status-blocked: 39 67% 69%;
   }
 }
 
