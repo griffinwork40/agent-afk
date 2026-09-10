@@ -3,8 +3,9 @@ import { AlertCircle, Info } from 'lucide-react';
 import { MarkdownContent } from './markdown-content';
 import { ThinkingPanel } from './thinking-panel';
 import { ToolCallCard } from './tool-call-card';
-import { SubagentCard } from './subagent-card';
+import { SubagentTree } from './subagent-card';
 import { SessionMeter } from './session-meter';
+import { buildTree } from '@/hooks/use-subagent-tree';
 
 // Re-export so consumers import from one place.
 export type { SessionTotals } from './session-meter';
@@ -31,10 +32,13 @@ export type TranscriptItem =
       kind: 'subagent';
       id: string;
       subagentId: string;
+      parentId?: string;
       status: string;
       label: string;
       model?: string;
+      agentType?: string;
       durationMs?: number;
+      totalCostUsd?: number;
       promptHead?: string;
     }
   | { kind: 'bg_job'; id: string; jobId: string; status: string; label: string };
@@ -88,21 +92,61 @@ function BgJobItem({ item }: { item: Extract<TranscriptItem, { kind: 'bg_job' }>
   );
 }
 
-function renderItem(item: TranscriptItem): React.ReactNode {
-  switch (item.kind) {
-    case 'user':      return <UserMessage text={item.text} />;
-    case 'assistant': return <MarkdownContent text={item.text} />;
-    case 'thinking':  return <ThinkingPanel text={item.text} />;
-    case 'tool':      return <ToolCallCard {...item} />;
-    case 'error':     return <ErrorItem message={item.message} />;
-    case 'notice':    return <NoticeItem text={item.text} />;
-    case 'subagent':  return <SubagentCard {...item} />;
-    case 'bg_job':    return <BgJobItem item={item} />;
+// ---------------------------------------------------------------------------
+// Subagent group rendering
+// ---------------------------------------------------------------------------
+
+/**
+ * A "rendered slot" is either a non-subagent item or a contiguous run of
+ * subagent items that should be displayed as a single tree block.
+ *
+ * Contract: subagent items that share the same parentage cluster naturally
+ * because the ledger emits them in dispatch order. Grouping them into one
+ * SubagentTree means parent→child relationships render correctly even when the
+ * parent and child events appear in the same contiguous run.
+ */
+type Slot =
+  | { kind: 'item'; item: TranscriptItem }
+  | { kind: 'subagent-group'; items: Extract<TranscriptItem, { kind: 'subagent' }>[]; id: string };
+
+function groupItems(items: TranscriptItem[]): Slot[] {
+  const slots: Slot[] = [];
+  let i = 0;
+
+  while (i < items.length) {
+    const item = items[i];
+    if (item === undefined) { i++; continue; }
+
+    if (item.kind !== 'subagent') {
+      slots.push({ kind: 'item', item });
+      i++;
+      continue;
+    }
+
+    // Collect the contiguous subagent run.
+    const groupItems: Extract<TranscriptItem, { kind: 'subagent' }>[] = [];
+    while (i < items.length) {
+      const cur = items[i];
+      if (cur === undefined || cur.kind !== 'subagent') break;
+      groupItems.push(cur as Extract<TranscriptItem, { kind: 'subagent' }>);
+      i++;
+    }
+
+    // Use the first item's id as the stable group key.
+    slots.push({ kind: 'subagent-group', items: groupItems, id: groupItems[0]!.id });
   }
+
+  return slots;
 }
+
+// ---------------------------------------------------------------------------
+// Main view
+// ---------------------------------------------------------------------------
 
 /** Root transcript container. Maps TranscriptItem[] to per-kind components. */
 export function TranscriptView({ items, totals }: TranscriptViewProps) {
+  const slots = groupItems(items);
+
   return (
     <div className="flex flex-col gap-3">
       {totals && (
@@ -116,12 +160,36 @@ export function TranscriptView({ items, totals }: TranscriptViewProps) {
           No transcript items yet.
         </p>
       ) : (
-        items.map((item) => (
-          <div key={item.id}>
-            {renderItem(item)}
-          </div>
-        ))
+        slots.map((slot) => {
+          if (slot.kind === 'item') {
+            const { item } = slot;
+            return (
+              <div key={item.id}>
+                {renderNonSubagentItem(item)}
+              </div>
+            );
+          }
+
+          // Subagent group: build tree from the group then render.
+          const roots = buildTree(slot.items);
+          return (
+            <SubagentTree key={slot.id} roots={roots} />
+          );
+        })
       )}
     </div>
   );
+}
+
+function renderNonSubagentItem(item: TranscriptItem): React.ReactNode {
+  switch (item.kind) {
+    case 'user':      return <UserMessage text={item.text} />;
+    case 'assistant': return <MarkdownContent text={item.text} />;
+    case 'thinking':  return <ThinkingPanel text={item.text} />;
+    case 'tool':      return <ToolCallCard {...item} />;
+    case 'error':     return <ErrorItem message={item.message} />;
+    case 'notice':    return <NoticeItem text={item.text} />;
+    case 'bg_job':    return <BgJobItem item={item} />;
+    case 'subagent':  return null; // handled by groupItems above
+  }
 }

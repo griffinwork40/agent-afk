@@ -7,6 +7,7 @@ import { SessionMeter } from './components/session-meter';
 import { MemoryView } from './components/memory-view';
 import { SchedulesView } from './components/schedules-view';
 import { BgJobsView } from './components/bg-jobs-view';
+import { SettingsView } from './components/settings-view';
 import { Composer } from './components/composer';
 import { ApprovalCards } from './components/approval-cards';
 import { MobileSidebar, HamburgerButton } from './components/mobile-sidebar';
@@ -171,9 +172,7 @@ function Dashboard() {
             {activeNav === 'memory' && <MemoryView />}
             {activeNav === 'schedules' && <SchedulesView />}
             {activeNav === 'jobs' && <BgJobsView />}
-            {activeNav === 'settings' && (
-              <PlaceholderView title="Settings" phase={5} />
-            )}
+            {activeNav === 'settings' && <SettingsView />}
           </div>
 
           {/* Composer + approvals (sessions view only, live sessions) */}
@@ -279,13 +278,4 @@ function StreamStatusDot({ status }: { status: string }) {
   return null;
 }
 
-function PlaceholderView({ title, phase }: { title: string; phase: number }) {
-  return (
-    <div className="flex h-full items-center justify-center text-muted-foreground">
-      <div className="text-center">
-        <h2 className="text-lg font-medium">{title}</h2>
-        <p className="mt-1 text-sm">Coming in Phase {phase}</p>
-      </div>
-    </div>
-  );
-}
+
