@@ -894,7 +894,7 @@ export function formatStatusFields(
   // only when a positive cap is configured so the segment renders as
   // `$N.NN/$M.NN`. Suppress when no cost has been recorded yet (undefined
   // totalCostUsd) to keep the status line clean before the first API call.
-  const budgetUsd = stats.totalCostUsd !== undefined ? stats.totalCostUsd : undefined;
+  const budgetUsd = stats.totalCostUsd;
 
   // Active parallel fan-out count: number of background jobs currently running.
   // Only included when > 0 so idle sessions have no noise on the line.

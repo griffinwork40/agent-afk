@@ -579,6 +579,18 @@ describe('formatStatusFields — active agent fan-out count', () => {
     expect(fields.activeAgentCount).toBeUndefined();
   });
 
+  it('omits activeAgentCount when all registry jobs are terminated (not running)', () => {
+    // Registry has jobs but all are completed/failed — running count is 0, field suppressed
+    const mockRegistry = {
+      list: () => [
+        { status: 'completed' as const, jobId: 'bg-1', provenance: 'user' as const, subagentId: 'sa-1', label: 'done1', model: 'sonnet', startedAt: Date.now() },
+        { status: 'failed' as const, jobId: 'bg-2', provenance: 'user' as const, subagentId: 'sa-2', label: 'done2', model: 'sonnet', startedAt: Date.now() },
+      ],
+    } as unknown as import('../../../../src/agent/background-registry.js').BackgroundAgentRegistry;
+    const fields = formatStatusFields(makeBasicStats(), undefined, undefined, undefined, mockRegistry);
+    expect(fields.activeAgentCount).toBeUndefined();
+  });
+
   it('includes activeAgentCount equal to the running job count', () => {
     const mockRegistry = {
       list: () => [

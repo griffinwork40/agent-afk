@@ -106,6 +106,7 @@ describe('interactive bootstrap status line hooks', () => {
       contextSparkline: undefined,
       permissionMode: 'plan',
       cwd: process.cwd(),
+      budgetUsd: 1.25,
     });
 
     // Regression: clearScreen must zero the persistent compositor's overlay
@@ -141,6 +142,7 @@ describe('interactive bootstrap status line hooks', () => {
       contextSparkline: undefined,
       permissionMode: 'plan',
       cwd: process.cwd(),
+      budgetUsd: 1.25,
     });
     const clearCall = stdoutWrite.mock.invocationCallOrder[
       stdoutWrite.mock.calls.findIndex((args) => args[0] === '\x1b[3J\x1b[2J\x1b[H')
