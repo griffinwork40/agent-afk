@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.206.4] - 2026-09-10
+
+### Fixed
+- align design tokens with AFK brand theme (#1624) (c1d8ae73)
+
 ## [5.206.3] - 2026-09-10
 
 ### Fixed
