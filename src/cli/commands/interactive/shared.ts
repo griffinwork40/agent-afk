@@ -846,6 +846,8 @@ export function formatStatusFields(
   sampler?: ContextSampler,
   gitSampler?: GitStatusSampler,
   maxTurns?: number,
+  backgroundRegistry?: BackgroundAgentRegistry,
+  maxBudgetUsd?: number,
 ) {
   const pct = contextRatio(stats, sampler);
   const contextLimit = contextLimitFor(stats.model);
@@ -887,6 +889,20 @@ export function formatStatusFields(
   // until at least one turn has finished.
   const turnCount = stats.totalTurns > 0 ? stats.totalTurns : undefined;
 
+  // Token budget consumption: always include budgetUsd when there is any cost
+  // to show (even $0.00 after the first turn completes). Include maxBudgetUsd
+  // only when a positive cap is configured so the segment renders as
+  // `$N.NN/$M.NN`. Suppress when no cost has been recorded yet (undefined
+  // totalCostUsd) to keep the status line clean before the first API call.
+  const budgetUsd = stats.totalCostUsd;
+
+  // Active parallel fan-out count: number of background jobs currently running.
+  // Only included when > 0 so idle sessions have no noise on the line.
+  const activeAgentCount =
+    backgroundRegistry !== undefined
+      ? backgroundRegistry.list().filter((j) => j.status === 'running').length
+      : undefined;
+
   return {
     model: stats.model,
     cost: stats.totalCostUsd,
@@ -902,5 +918,10 @@ export function formatStatusFields(
     ...(quotaWindows !== undefined ? { quotaWindows } : {}),
     ...(turnCount !== undefined ? { turnCount } : {}),
     ...(turnCount !== undefined && maxTurns && maxTurns > 0 ? { maxTurns } : {}),
+    ...(budgetUsd !== undefined ? { budgetUsd } : {}),
+    ...(budgetUsd !== undefined && maxBudgetUsd !== undefined && maxBudgetUsd > 0
+      ? { maxBudgetUsd }
+      : {}),
+    ...(activeAgentCount !== undefined && activeAgentCount > 0 ? { activeAgentCount } : {}),
   };
 }
