@@ -13,7 +13,6 @@
  * and pass the returned roots to SubagentTree for rendering.
  */
 
-import { useMemo } from 'react';
 import type { TranscriptItem } from '@/lib/ledger-adapter';
 import type { SubagentItem } from '@/lib/ledger-adapter';
 
@@ -24,20 +23,6 @@ import type { SubagentItem } from '@/lib/ledger-adapter';
 export interface SubagentTreeNode {
   item: SubagentItem;
   children: SubagentTreeNode[];
-}
-
-// ---------------------------------------------------------------------------
-// Hook
-// ---------------------------------------------------------------------------
-
-/**
- * Derives the forest of subagent nodes from the flat transcript item list.
- * Returns only the root nodes; children are reachable via node.children.
- *
- * Memoized on the items array reference — re-runs only when new items arrive.
- */
-export function useSubagentTree(items: TranscriptItem[]): SubagentTreeNode[] {
-  return useMemo(() => buildTree(items), [items]);
 }
 
 // ---------------------------------------------------------------------------

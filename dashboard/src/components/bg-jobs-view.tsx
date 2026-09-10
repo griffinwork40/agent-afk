@@ -82,11 +82,13 @@ function JobCard({
 
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 overflow-hidden">
-      {/* Card header — click to expand */}
-      <button
-        type="button"
+      {/* Card header — click to expand (div instead of button to allow nested Cancel button) */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded((v) => !v)}
-        className="w-full text-left px-4 py-3 flex flex-col gap-2 hover:bg-neutral-800/50 transition-colors"
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded((v) => !v); } }}
+        className="w-full text-left px-4 py-3 flex flex-col gap-2 hover:bg-neutral-800/50 transition-colors cursor-pointer"
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -133,9 +135,9 @@ function JobCard({
         )}
 
         {cancelError && (
-          <p className="pl-5 text-xs text-red-400">{cancelError}</p>
+          <p className="pl-5 text-xs text-red-400" title={cancelError}>{cancelError.length > 200 ? cancelError.slice(0, 200) + '…' : cancelError}</p>
         )}
-      </button>
+      </div>
 
       {/* Expandable detail panel */}
       {expanded && (
@@ -250,7 +252,7 @@ export function BgJobsView() {
     // Contract: POST /api/bg-jobs/:id/cancel is not yet wired in server.ts.
     // This call will receive a 404 until the route is added. The error surfaces
     // through the JobCard's cancelError state, so the user sees the failure.
-    await apiFetch(`/api/bg-jobs/${jobId}/cancel`, { method: 'POST' });
+    await apiFetch(`/api/bg-jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
     // Optimistically update local state (only reached on 2xx; inert until
     // the server route is added — the poll will correct if needed).
     setJobs((prev) =>
@@ -306,7 +308,7 @@ export function BgJobsView() {
       {/* Completed / failed / cancelled section */}
       {settled.length > 0 && (
         <div className="flex flex-col gap-2">
-          <SectionHeader label="Completed" count={settled.length} />
+          <SectionHeader label="Settled" count={settled.length} />
           {settled.map((job) => (
             <JobCard key={job.jobId} job={job} now={now} onCancel={handleCancel} />
           ))}

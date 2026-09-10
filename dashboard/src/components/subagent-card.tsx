@@ -106,6 +106,8 @@ function NodeRow({ node, isExpanded, onToggle, isChild }: NodeRowProps) {
       )}
       onClick={hasChildren ? onToggle : undefined}
       role={hasChildren ? 'button' : undefined}
+      tabIndex={hasChildren ? 0 : undefined}
+      onKeyDown={hasChildren ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } } : undefined}
       aria-expanded={hasChildren ? isExpanded : undefined}
     >
       {/* Collapse toggle — only rendered when there are children */}

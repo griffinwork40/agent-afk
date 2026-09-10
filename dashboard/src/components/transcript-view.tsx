@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { AlertCircle, Info } from 'lucide-react';
 import { MarkdownContent } from './markdown-content';
@@ -145,7 +146,7 @@ function groupItems(items: TranscriptItem[]): Slot[] {
 
 /** Root transcript container. Maps TranscriptItem[] to per-kind components. */
 export function TranscriptView({ items, totals }: TranscriptViewProps) {
-  const slots = groupItems(items);
+  const slots = useMemo(() => groupItems(items), [items]);
 
   return (
     <div className="flex flex-col gap-3">
