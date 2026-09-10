@@ -158,6 +158,9 @@ export function useSseStream(sessionId: string | null): UseSseStreamResult {
 
         outer: for (;;) {
           const { done, value } = await reader.read();
+          // Guard: the effect may have been torn down while we were awaiting;
+          // discard this frame rather than forwarding it to a new session.
+          if (stoppedRef.current) break;
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const { events: frames, remainder } = parseSseChunk(buffer);

@@ -13,6 +13,16 @@ const TOKEN_PLACEHOLDER = '__AFK_WEB_TOKEN__';
 
 let cachedToken: string | null = null;
 
+/** Evict the in-memory token cache (e.g. after a 401 response). */
+function clearTokenCache(): void {
+  cachedToken = null;
+  try {
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // sessionStorage may be unavailable in some contexts
+  }
+}
+
 /** Read the bearer token, preferring the meta tag, falling back to storage. */
 export function getToken(): string {
   if (cachedToken) return cachedToken;
@@ -71,6 +81,9 @@ export async function apiFetch<T>(
 
   const res = await fetch(path, { ...options, headers });
   if (!res.ok) {
+    // On 401 the server may have rotated the token — clear the cache so the
+    // next request re-reads from the meta tag instead of reusing the stale one.
+    if (res.status === 401) clearTokenCache();
     const text = await res.text().catch(() => res.statusText);
     throw new ApiError(res.status, text);
   }
