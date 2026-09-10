@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.207.0] - 2026-09-10
+
+### Added
+- add token budget + fan-out count to status line (#1609) (#1623) (af8963a2)
+
+### Changed
+- add test infrastructure and baseline MarkdownContent tests (#1606) (3e52e848)
+
 ## [5.206.4] - 2026-09-10
 
 ### Fixed
