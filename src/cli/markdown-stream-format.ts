@@ -326,16 +326,48 @@ export function accumulateCommitted(current: string, trimmed: string): string {
 }
 
 /**
- * Schedule a callback with throttling. Clears any pending timeout and sets
- * a new one for the specified delay. Returns the new timeout ID.
+ * Leading + trailing throttle for streaming repaints.
+ *
+ * Invariant: the FIRST push after idle fires the callback synchronously (via
+ * `queueMicrotask`) so the user sees the first token appear with zero delay.
+ * Subsequent pushes within the same throttle window are coalesced into a
+ * single trailing-edge callback at most `throttleMs` after the leading paint
+ * -- capping repaints at ~30 fps while still showing content the instant it
+ * arrives.
+ *
+ * History: the original implementation was a pure trailing-edge debounce
+ * (`clearTimeout` + `setTimeout(throttleMs)` on every push). During fast
+ * streaming the timer reset on every token and never fired until the model
+ * paused -- the user saw frozen/laggy text instead of smooth incremental
+ * rendering. The leading edge eliminates the initial delay; the trailing
+ * edge ensures a final paint captures the last chunk of a burst.
  */
 export function scheduleWithThrottle(
   callback: () => void,
   throttleMs: number,
   currentTimer: NodeJS.Timeout | null,
-): NodeJS.Timeout {
+  lastPaintTime: number,
+): { timer: NodeJS.Timeout | null; paintTime: number } {
+  const now = Date.now();
+
+  // Leading edge: enough time has elapsed since the last paint -- fire now.
+  if (now - lastPaintTime >= throttleMs) {
+    if (currentTimer) {
+      clearTimeout(currentTimer);
+    }
+    // Use queueMicrotask so the caller finishes buffer mutation before the
+    // repaint reads `this.buffer`. Keeps the paint off the synchronous hot
+    // path of push() while still firing before the next event-loop task.
+    queueMicrotask(callback);
+    return { timer: null, paintTime: now };
+  }
+
+  // Trailing edge: inside the throttle window -- schedule one deferred paint
+  // for the remaining time so the last token of a burst is always rendered.
   if (currentTimer) {
     clearTimeout(currentTimer);
   }
-  return setTimeout(callback, throttleMs);
+  const remaining = throttleMs - (now - lastPaintTime);
+  const timer = setTimeout(callback, remaining);
+  return { timer, paintTime: lastPaintTime };
 }

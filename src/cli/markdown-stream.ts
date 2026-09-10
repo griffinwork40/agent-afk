@@ -70,6 +70,10 @@ export class StreamingMarkdownRenderer {
   private buffer: string = '';
   private committed: string = '';
   private throttleTimer: NodeJS.Timeout | null = null;
+  /** Epoch ms of the last leading-edge repaint -- enables the leading+trailing
+   *  throttle in `scheduleRepaint`. Starts at 0 so the very first push fires
+   *  immediately (0 - 0 >= 33). */
+  private lastPaintTime = 0;
   private logUpdate: LogUpdateFunction | null = null;
   private isTTY: boolean;
   private flushing = false;
@@ -156,14 +160,18 @@ export class StreamingMarkdownRenderer {
       return; // Skip repaints for non-TTY streams or during flush
     }
 
-    this.throttleTimer = scheduleWithThrottle(
+    const result = scheduleWithThrottle(
       () => {
         this.throttleTimer = null;
+        this.lastPaintTime = Date.now();
         void this.repaint();
       },
       this.throttleMs,
       this.throttleTimer,
+      this.lastPaintTime,
     );
+    this.throttleTimer = result.timer;
+    this.lastPaintTime = result.paintTime;
   }
 
   /**
@@ -418,6 +426,7 @@ export class StreamingMarkdownRenderer {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
     }
+    this.lastPaintTime = 0;
     this.buffer = '';
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
@@ -440,6 +449,7 @@ export class StreamingMarkdownRenderer {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
     }
+    this.lastPaintTime = 0;
 
     if (this.resizeUnsub) {
       this.resizeUnsub();

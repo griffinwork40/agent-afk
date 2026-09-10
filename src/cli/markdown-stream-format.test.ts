@@ -4,6 +4,7 @@ import {
   isInOpenCodeFence,
   formatPendingBuffer,
   formatBlockForCommit,
+  scheduleWithThrottle,
 } from './markdown-stream-format.js';
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -133,5 +134,60 @@ describe('formatBlockForCommit blank-line trimming', () => {
     const out = formatBlockForCommit('## Done\n\n', '  ', WIDTH);
     expect(stripAnsi(out).startsWith('\n')).toBe(false);
     expect(stripAnsi(out)).toContain('Done');
+  });
+});
+
+describe('scheduleWithThrottle (leading + trailing)', () => {
+  it('fires immediately (leading edge) when enough time has elapsed', async () => {
+    let fired = false;
+    const cb = () => { fired = true; };
+    // lastPaintTime far in the past — leading edge should fire
+    const result = scheduleWithThrottle(cb, 33, null, 0);
+    // Leading edge: no trailing timer, paintTime updated to ~now
+    expect(result.timer).toBeNull();
+    expect(result.paintTime).toBeGreaterThan(0);
+    // Callback is queued via queueMicrotask, not synchronous
+    expect(fired).toBe(false);
+    // Drain the microtask queue and verify callback fires
+    await Promise.resolve();
+    expect(fired).toBe(true);
+  });
+
+  it('defers to trailing edge when inside the throttle window', () => {
+    let fired = false;
+    const cb = () => { fired = true; };
+    const now = Date.now();
+    // lastPaintTime is very recent — inside the throttle window
+    const result = scheduleWithThrottle(cb, 33, null, now);
+    // Trailing edge: timer is set, paintTime unchanged
+    expect(result.timer).not.toBeNull();
+    expect(result.paintTime).toBe(now);
+    expect(fired).toBe(false);
+    // Clean up the timer
+    if (result.timer) clearTimeout(result.timer);
+  });
+
+  it('clears existing timer when scheduling trailing edge', () => {
+    let count = 0;
+    const cb = () => { count++; };
+    const now = Date.now();
+    // First call: schedule trailing
+    const r1 = scheduleWithThrottle(cb, 33, null, now);
+    // Second call: should clear the first timer
+    const r2 = scheduleWithThrottle(cb, 33, r1.timer, now);
+    expect(r2.timer).not.toBeNull();
+    // Clean up
+    if (r2.timer) clearTimeout(r2.timer);
+  });
+
+  it('trailing timer uses remaining time in the window', async () => {
+    let fired = false;
+    const cb = () => { fired = true; };
+    // lastPaintTime is 20ms ago, throttle is 33ms — remaining ~13ms
+    const result = scheduleWithThrottle(cb, 33, null, Date.now() - 20);
+    expect(result.timer).not.toBeNull();
+    // Wait for the trailing timer to fire
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fired).toBe(true);
   });
 });
