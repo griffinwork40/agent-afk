@@ -20,7 +20,7 @@ import type { SpineNode } from '@/lib/topology-types';
 const EXECUTION_KINDS = new Set(['tool', 'subagent', 'notice']);
 
 // Items that are prose/text (rendered individually)
-const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'notice', 'bg_job']);
+const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'bg_job']);
 
 /**
  * A rendered slot is either a single text item or a group of execution
