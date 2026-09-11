@@ -81,6 +81,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install dashboard dependencies
+        run: cd dashboard && pnpm install --frozen-lockfile
+
       - name: Compute next version from Conventional Commits
         id: bump
         run: |
