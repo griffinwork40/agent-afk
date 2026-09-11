@@ -48,6 +48,20 @@
   /* Brand */
   --color-brand: hsl(var(--brand));
 
+  /* Topology spine category colors */
+  --color-cat-read: hsl(var(--cat-read));
+  --color-cat-write: hsl(var(--cat-write));
+  --color-cat-shell: hsl(var(--cat-shell));
+  --color-cat-agent: hsl(var(--cat-agent));
+  --color-cat-skill: hsl(var(--cat-skill));
+  --color-cat-dag: hsl(var(--cat-dag));
+  --color-cat-mcp: hsl(var(--cat-mcp));
+  --color-cat-web: hsl(var(--cat-web));
+  --color-cat-browser: hsl(var(--cat-browser));
+  --color-cat-plan: hsl(var(--cat-plan));
+  --color-cat-other: hsl(var(--cat-other));
+  --color-spine: hsl(var(--spine));
+
   /* Radius */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -93,6 +107,20 @@
     --status-done: 212 100% 68%;
     --status-failed: 3 93% 63%;
     --status-blocked: 39 67% 69%;
+
+    /* Topology categories */
+    --cat-read: 187 70% 35%;
+    --cat-write: 30 70% 45%;
+    --cat-shell: 40 80% 40%;
+    --cat-agent: 262 50% 50%;
+    --cat-skill: 330 50% 48%;
+    --cat-dag: 210 70% 45%;
+    --cat-mcp: 170 50% 38%;
+    --cat-web: 20 70% 48%;
+    --cat-browser: 142 50% 38%;
+    --cat-plan: 215 15% 55%;
+    --cat-other: 215 15% 55%;
+    --spine: 215 15% 80%;
   }
 
   .dark {
@@ -121,6 +149,20 @@
     --status-done: 212 100% 68%;
     --status-failed: 3 93% 63%;
     --status-blocked: 39 67% 69%;
+
+    /* Topology categories */
+    --cat-read: 187 80% 58%;      /* cyan - file reads */
+    --cat-write: 39 67% 69%;      /* amber - file writes */
+    --cat-shell: 48 100% 72%;     /* bright yellow - bash/shell */
+    --cat-agent: 262 60% 68%;     /* purple - subagent dispatch */
+    --cat-skill: 330 60% 65%;     /* pink - skill invocation */
+    --cat-dag: 210 80% 65%;       /* blue - DAG compose */
+    --cat-mcp: 170 60% 55%;       /* teal - MCP tools */
+    --cat-web: 20 76% 60%;        /* brand orange - web/http */
+    --cat-browser: 142 60% 55%;   /* green - browser tools */
+    --cat-plan: 215 8% 53%;       /* muted grey - plan mode */
+    --cat-other: 215 8% 53%;      /* muted grey - uncategorized */
+    --spine: 215 15% 25%;         /* dim border for spine lines */
   }
 }
 
@@ -142,6 +184,14 @@
   .animate-fade-in {
     animation: fade-in 0.15s ease-out;
   }
+
+  /* Tool call animations */
+  .animate-shimmer-pulse {
+    animation: shimmer-pulse 2s ease-in-out infinite;
+  }
+  .animate-spin-slow {
+    animation: spin 2s linear infinite;
+  }
 }
 
 @keyframes slide-in-right {
@@ -154,9 +204,16 @@
   to { opacity: 1; }
 }
 
+@keyframes shimmer-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-slide-in-right,
   .animate-fade-in {
     animation: none;
   }
+  .animate-shimmer-pulse { animation: none; }
+  .animate-spin-slow { animation: none; }
 }

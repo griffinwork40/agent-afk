@@ -72,6 +72,16 @@ export type LedgerPayload =
       errorClass?: string;
       errorMessage?: string;
       promptHead?: string;
+      /** Number of turns completed (present on succeeded events). */
+      turnCount?: number;
+      /** Provider stop reason from the last turn (present on succeeded events). */
+      stopReason?: string;
+      /**
+       * tool_use_id of the dispatching `agent`/`compose` call — links a subagent
+       * to the tool row that spawned it for topology rendering. Present on 'started'
+       * events only.
+       */
+      parentToolUseId?: string;
     }
   /** Background-job state transition (Wave 0-C / Wave 1). */
   | { kind: 'background_job'; jobId: string; status: string; label?: string }
@@ -191,6 +201,9 @@ export function projectOutputEvent(event: OutputEvent): LedgerPayload | null {
         ...(event.errorClass !== undefined ? { errorClass: event.errorClass } : {}),
         ...(event.errorMessage !== undefined ? { errorMessage: event.errorMessage } : {}),
         ...(event.promptHead !== undefined ? { promptHead: event.promptHead } : {}),
+        ...(event.turnCount != null ? { turnCount: event.turnCount } : {}),
+        ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+        ...(event.parentToolUseId ? { parentToolUseId: event.parentToolUseId } : {}),
       };
     case 'background_job':
       return {

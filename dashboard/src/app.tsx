@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Plus, ArrowDown } from 'lucide-react';
 import { Sidebar } from './components/sidebar';
 import { CommandPalette } from './components/command-palette';
 import { KeyboardShortcuts } from './components/keyboard-shortcuts';
@@ -40,7 +41,7 @@ function Dashboard() {
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
   const { items, totals, status, turnActive, liveTurns } = useTranscript(selectedSessionId);
-  const { containerRef } = useScrollPin();
+  const { containerRef, scrollToBottom, showScrollButton } = useScrollPin();
 
   const handleNavigate = (nav: string) => {
     setActiveNav(nav as NavItem);
@@ -54,6 +55,15 @@ function Dashboard() {
 
   const isBusy = turnActive;
   const [selectedModel, setSelectedModel] = useState('sonnet');
+
+  const handleNewSession = useCallback(async () => {
+    try {
+      const result = await apiFetch<{ id: string }>('/api/sessions', { method: 'POST' });
+      setSelectedSessionId(result.id);
+    } catch {
+      // best-effort
+    }
+  }, []);
 
   // Abort controller ref: abort in-flight POSTs when the session changes.
   const abortRef = useRef<AbortController | null>(null);
@@ -147,6 +157,15 @@ function Dashboard() {
             )}
           </div>
           <div className="flex items-center gap-3">
+            {activeNav === 'sessions' && (
+              <button
+                onClick={() => void handleNewSession()}
+                title="New Session"
+                className="flex items-center justify-center h-7 w-7 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            )}
             {activeNav === 'sessions' && selectedSession && (
               <SessionMeter totals={totals} />
             )}
@@ -157,7 +176,18 @@ function Dashboard() {
         </header>
 
         {/* Content area */}
-        <div ref={containerRef} className="relative flex flex-1 flex-col overflow-y-auto">
+        <div className="relative flex flex-1 flex-col overflow-hidden">
+          {/* New messages floating button */}
+          {showScrollButton && activeNav === 'sessions' && (
+            <button
+              onClick={scrollToBottom}
+              className="animate-fade-in fixed bottom-24 left-1/2 z-20 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-lg hover:bg-brand/90 transition-colors"
+            >
+              <ArrowDown className="size-3" />
+              New messages
+            </button>
+          )}
+          <div ref={containerRef} className="relative flex flex-1 flex-col overflow-y-auto">
           <div className="flex-1">
             {activeNav === 'sessions' && (
               <SessionContent
@@ -177,7 +207,7 @@ function Dashboard() {
 
           {/* Composer + approvals (sessions view only, live sessions) */}
           {activeNav === 'sessions' && selectedSession && selectedSession.mode === 'live' && (
-            <div className="shrink-0 border-t bg-card">
+            <div className="shrink-0">
               {approvals.length > 0 && (
                 <ApprovalCards approvals={approvals} />
               )}
@@ -191,6 +221,7 @@ function Dashboard() {
               />
             </div>
           )}
+          </div>
         </div>
       </main>
     </div>

@@ -180,64 +180,76 @@ export function Composer({
   }, []);
 
   return (
-    <div className={cn('relative flex flex-col gap-2', disabled && 'opacity-50')}>
-      {queue && <QueuePanel queue={queue} />}
-      <SlashAutocomplete
-        query={slashQuery ?? ''}
-        commands={commands}
-        onSelect={selectCommand}
-        visible={acVisible}
-      />
-      <div className="flex items-end gap-2">
-        {/* Toolbar: @-file + model selector */}
-        <div className="flex shrink-0 items-center gap-1">
-          <AtFilePopover onInsert={insertAtCursor} />
-          {onModelSelect && (
-            <ModelSelector
-              onSelect={onModelSelect}
-              current={currentModel}
-            />
+    <>
+      {/* Gradient fade — blends scroll content into the frosted composer */}
+      <div className="pointer-events-none h-8 bg-gradient-to-t from-background/80 to-transparent" />
+      <div
+        className={cn(
+          'relative flex flex-col gap-2',
+          'border-t border-border/50 px-4 py-3',
+          'backdrop-blur-xl bg-background/80',
+          'shadow-[0_-4px_16px_-4px_rgba(0,0,0,0.1)]',
+          disabled && 'opacity-50',
+        )}
+      >
+        {queue && <QueuePanel queue={queue} />}
+        <SlashAutocomplete
+          query={slashQuery ?? ''}
+          commands={commands}
+          onSelect={selectCommand}
+          visible={acVisible}
+        />
+        <div className="flex items-end gap-2">
+          {/* Toolbar: @-file + model selector */}
+          <div className="flex shrink-0 items-center gap-1">
+            <AtFilePopover onInsert={insertAtCursor} />
+            {onModelSelect && (
+              <ModelSelector
+                onSelect={onModelSelect}
+                current={currentModel}
+              />
+            )}
+          </div>
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={text}
+            disabled={disabled || submitting}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={disabled ? 'Read-only session' : 'Send a message… (/ for commands)'}
+            className={cn(
+              'flex-1 resize-none rounded-xl border border-input bg-background',
+              'px-3 py-2 text-sm leading-5 shadow-sm',
+              'placeholder:text-muted-foreground',
+              'focus:outline-none focus:ring-2 focus:ring-ring',
+              'disabled:cursor-not-allowed',
+            )}
+          />
+          {isBusy ? (
+            <button
+              onClick={() => void interrupt()}
+              title="Stop"
+              className="shrink-0 flex items-center justify-center h-9 w-9 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+            >
+              <Square className="h-4 w-4 fill-current" />
+            </button>
+          ) : (
+            <button
+              onClick={() => void submit()}
+              disabled={!text.trim() || submitting || disabled}
+              title="Send"
+              className={cn(
+                'shrink-0 flex items-center justify-center h-9 w-9 rounded-lg',
+                'bg-primary text-primary-foreground hover:bg-primary/90 transition-colors',
+                'disabled:opacity-40 disabled:cursor-not-allowed',
+              )}
+            >
+              <Send className="h-4 w-4" />
+            </button>
           )}
         </div>
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          value={text}
-          disabled={disabled || submitting}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={disabled ? 'Read-only session' : 'Send a message… (/ for commands)'}
-          className={cn(
-            'flex-1 resize-none rounded-lg border border-input bg-background',
-            'px-3 py-2 text-sm leading-5 shadow-sm',
-            'placeholder:text-muted-foreground',
-            'focus:outline-none focus:ring-2 focus:ring-ring',
-            'disabled:cursor-not-allowed',
-          )}
-        />
-        {isBusy ? (
-          <button
-            onClick={() => void interrupt()}
-            title="Stop"
-            className="shrink-0 flex items-center justify-center h-9 w-9 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-          >
-            <Square className="h-4 w-4 fill-current" />
-          </button>
-        ) : (
-          <button
-            onClick={() => void submit()}
-            disabled={!text.trim() || submitting || disabled}
-            title="Send"
-            className={cn(
-              'shrink-0 flex items-center justify-center h-9 w-9 rounded-lg',
-              'bg-primary text-primary-foreground hover:bg-primary/90 transition-colors',
-              'disabled:opacity-40 disabled:cursor-not-allowed',
-            )}
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        )}
       </div>
-    </div>
+    </>
   );
 }

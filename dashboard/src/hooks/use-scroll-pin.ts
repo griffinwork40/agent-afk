@@ -15,20 +15,26 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 const PINNED_THRESHOLD_PX = 50;
 
+/** Distance from bottom beyond which the "New messages" button is shown. */
+const SHOW_BUTTON_THRESHOLD_PX = 200;
+
 export interface UseScrollPinResult {
   /** Attach this to the scrollable container element. */
   containerRef: React.RefObject<HTMLDivElement | null>;
-  /** Scroll to the bottom of the container. */
+  /** Scroll to the bottom of the container. Always works, regardless of pin state. */
   scrollToBottom: () => void;
   /** Whether the container is currently pinned to the bottom. */
   isPinned: boolean;
+  /** True when user is far enough from the bottom to show the "New messages" button. */
+  showScrollButton: boolean;
 }
 
 export function useScrollPin(): UseScrollPinResult {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [isPinned, setIsPinned] = useState(true);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
-  // Track pin state on scroll.
+  // Track pin state and button visibility on scroll.
   useEffect(() => {
     const el = containerRef.current;
     if (el === null) return;
@@ -37,6 +43,7 @@ export function useScrollPin(): UseScrollPinResult {
       if (el === null) return;
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       setIsPinned(distanceFromBottom <= PINNED_THRESHOLD_PX);
+      setShowScrollButton(distanceFromBottom > SHOW_BUTTON_THRESHOLD_PX);
     }
 
     el.addEventListener('scroll', handleScroll, { passive: true });
@@ -46,9 +53,8 @@ export function useScrollPin(): UseScrollPinResult {
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;
     if (el === null) return;
-    if (!isPinned) return;
     el.scrollTop = el.scrollHeight;
-  }, [isPinned]);
+  }, []);
 
-  return { containerRef, scrollToBottom, isPinned };
+  return { containerRef, scrollToBottom, isPinned, showScrollButton };
 }

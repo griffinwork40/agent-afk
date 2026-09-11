@@ -493,6 +493,8 @@ export class SubagentManager {
             subagentId: id,
             status: terminalStatus,
             ...(handle._lastDurationMs !== undefined ? { durationMs: handle._lastDurationMs } : {}),
+            ...(handle._currentTrace.turnCount > 0 ? { turnCount: handle._currentTrace.turnCount } : {}),
+            ...(handle._lastStopReason !== undefined ? { stopReason: handle._lastStopReason } : {}),
           });
           // Populate the completed cache BEFORE removing from active so that
           // the memory-first /tasks:view path can access the handle after
@@ -593,6 +595,7 @@ export class SubagentManager {
       ...(effectiveChildModel !== undefined ? { model: String(effectiveChildModel) } : {}),
       ...(effectiveAgentType !== undefined ? { agentType: effectiveAgentType } : {}),
       ...(options.promptHead !== undefined ? { promptHead: options.promptHead } : {}),
+      ...(options.parentId ? { parentToolUseId: options.parentId } : {}),
     });
 
     return handle;
