@@ -27,6 +27,7 @@ interface CreateScheduleResponse {
   schedule: ScheduleConfig;
   daemonSynced: boolean;
   syncDetail?: string;
+  syncNote?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +200,7 @@ function CreateScheduleForm({
   onCreated,
   onCancel,
 }: {
-  onCreated: (schedule: ScheduleConfig) => void;
+  onCreated: (schedule: ScheduleConfig, syncNote?: string) => void;
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<CreateScheduleBody>(EMPTY_FORM);
@@ -231,7 +232,7 @@ function CreateScheduleForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form),
       });
-      onCreated(res.schedule);
+      onCreated(res.schedule, res.syncNote);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to create schedule.');
     } finally {
@@ -392,6 +393,7 @@ export function SchedulesView() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ScheduleConfig | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
 
   // Fetch schedules + daemon status in parallel on mount
   useEffect(() => {
@@ -435,9 +437,13 @@ export function SchedulesView() {
     setSchedules((prev) => prev.filter((s) => s.id !== id));
   }, []);
 
-  const handleCreated = useCallback((schedule: ScheduleConfig) => {
+  const handleCreated = useCallback((schedule: ScheduleConfig, syncNote?: string) => {
     setSchedules((prev) => [...prev, schedule]);
     setShowCreateForm(false);
+    if (syncNote) {
+      setSyncWarning(syncNote);
+      setTimeout(() => setSyncWarning(null), 8000);
+    }
   }, []);
 
   if (loading) {
@@ -475,6 +481,12 @@ export function SchedulesView() {
           onCreated={handleCreated}
           onCancel={() => setShowCreateForm(false)}
         />
+      )}
+
+      {syncWarning && (
+        <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-700 dark:text-yellow-400">
+          {syncWarning}
+        </p>
       )}
 
       {error && (
