@@ -47,6 +47,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install dashboard dependencies
+        run: cd dashboard && pnpm install --frozen-lockfile
+
       - name: Lint (tsc --noEmit)
         run: pnpm lint
 
@@ -377,6 +380,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Install dashboard dependencies
+        run: cd dashboard && pnpm install --frozen-lockfile
 
       - name: Build publish bundle (esbuild)
         run: pnpm build:dist

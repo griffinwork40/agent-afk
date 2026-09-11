@@ -1,5 +1,5 @@
 /**
- * SSRF egress guard for the `src/web/` fetch layer.
+ * SSRF egress guard for the `src/http-client/` fetch layer.
  *
  * `web_scrape` is an always-on builtin: the model can call it with any URL, and
  * — because it returns page content back into context — a scraped page can

@@ -1,5 +1,5 @@
 /**
- * Unit tests for the `web_request` core implementation (src/web/web-request.ts).
+ * Unit tests for the `web_request` core implementation (src/http-client/web-request.ts).
  *
  * All tests use injected `fetchFn` and `lookupFn` so no real network or DNS
  * calls are issued.

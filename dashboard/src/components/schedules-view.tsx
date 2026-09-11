@@ -12,6 +12,23 @@ interface ToggleResponse {
   ok: boolean;
   enabled: boolean;
   daemonSynced: boolean;
+  syncNote?: string;
+}
+
+interface CreateScheduleBody {
+  name: string;
+  command: string;
+  cron: string;
+  trigger: 'cron' | 'sessionstart' | 'both';
+  notifyOn: 'failure' | 'always' | 'never';
+  enabled: boolean;
+}
+
+interface CreateScheduleResponse {
+  schedule: ScheduleConfig;
+  daemonSynced: boolean;
+  syncDetail?: string;
+  syncNote?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +185,205 @@ function ScheduleCard({
 }
 
 // ---------------------------------------------------------------------------
+// Create schedule form
+// ---------------------------------------------------------------------------
+
+const EMPTY_FORM: CreateScheduleBody = {
+  name: '',
+  command: '',
+  cron: '',
+  trigger: 'cron',
+  notifyOn: 'failure',
+  enabled: true,
+};
+
+function CreateScheduleForm({
+  onCreated,
+  onCancel,
+}: {
+  onCreated: (schedule: ScheduleConfig, syncNote?: string) => void;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = useState<CreateScheduleBody>(EMPTY_FORM);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+
+    // Basic client-side validation
+    if (!form.name.trim()) {
+      setFormError('Name is required.');
+      return;
+    }
+    if (!form.command.trim()) {
+      setFormError('Command is required.');
+      return;
+    }
+    if (!form.cron.trim()) {
+      setFormError('Cron expression is required.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await apiFetch<CreateScheduleResponse>('/api/schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      onCreated(res.schedule, res.syncNote);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Failed to create schedule.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const field = (label: string, el: React.ReactNode) => (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-medium text-muted-foreground">{label}</label>
+      {el}
+    </div>
+  );
+
+  const inputClass = cn(
+    'h-8 rounded-md border border-border bg-card px-3 text-sm',
+    'placeholder:text-muted-foreground/50',
+    'focus:outline-none focus:ring-2 focus:ring-ring',
+    'disabled:cursor-not-allowed disabled:opacity-50',
+  );
+
+  return (
+    <form
+      onSubmit={(e) => { void handleSubmit(e); }}
+      className="flex flex-col gap-4 rounded-xl border border-brand/40 bg-card p-4"
+    >
+      <p className="text-sm font-semibold">New Schedule</p>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {field(
+          'Name *',
+          <input
+            type="text"
+            className={inputClass}
+            placeholder="e.g. Nightly cleanup"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            required
+            disabled={submitting}
+          />,
+        )}
+        {field(
+          'Cron expression *',
+          <input
+            type="text"
+            className={cn(inputClass, 'font-mono')}
+            placeholder="0 2 * * *"
+            value={form.cron}
+            onChange={(e) => setForm((f) => ({ ...f, cron: e.target.value }))}
+            required
+            disabled={submitting}
+          />,
+        )}
+      </div>
+
+      {field(
+        'Command *',
+        <input
+          type="text"
+          className={cn(inputClass, 'font-mono')}
+          placeholder="/my-skill --auto"
+          value={form.command}
+          onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
+          required
+          disabled={submitting}
+        />,
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {field(
+          'Trigger',
+          <select
+            className={inputClass}
+            value={form.trigger}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, trigger: e.target.value as CreateScheduleBody['trigger'] }))
+            }
+            disabled={submitting}
+          >
+            <option value="cron">cron</option>
+            <option value="sessionstart">session start</option>
+            <option value="both">both</option>
+          </select>,
+        )}
+        {field(
+          'Notify on',
+          <select
+            className={inputClass}
+            value={form.notifyOn}
+            onChange={(e) =>
+              setForm((f) => ({
+                ...f,
+                notifyOn: e.target.value as CreateScheduleBody['notifyOn'],
+              }))
+            }
+            disabled={submitting}
+          >
+            <option value="failure">failure</option>
+            <option value="always">always</option>
+            <option value="never">never</option>
+          </select>,
+        )}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium text-muted-foreground">Enabled</label>
+          <div className="flex h-8 items-center">
+            <ToggleSwitch
+              checked={form.enabled}
+              onChange={() => setForm((f) => ({ ...f, enabled: !f.enabled }))}
+              disabled={submitting}
+            />
+          </div>
+        </div>
+      </div>
+
+      {formError && (
+        <p className="rounded-md border border-status-failed/30 bg-status-failed/10 px-3 py-2 text-xs text-status-failed">
+          {formError}
+        </p>
+      )}
+
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          className={cn(
+            'h-8 rounded-md px-3 text-sm text-muted-foreground',
+            'hover:bg-accent hover:text-foreground',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={submitting}
+          className={cn(
+            'h-8 rounded-md bg-brand px-4 text-sm font-medium text-white',
+            'hover:bg-brand/90',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          {submitting ? 'Creating…' : 'Create'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
@@ -177,6 +393,8 @@ export function SchedulesView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ScheduleConfig | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
 
   // Fetch schedules + daemon status in parallel on mount
   useEffect(() => {
@@ -213,11 +431,24 @@ export function SchedulesView() {
     setSchedules((prev) =>
       prev.map((s) => (s.id === id ? { ...s, enabled: res.enabled } : s)),
     );
+    if (res.syncNote) {
+      setSyncWarning(res.syncNote);
+      setTimeout(() => setSyncWarning(null), 8000);
+    }
   }, []);
 
   const handleDelete = useCallback(async (id: string) => {
     await apiFetch<{ ok: boolean }>(`/api/schedules/${id}`, { method: 'DELETE' });
     setSchedules((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  const handleCreated = useCallback((schedule: ScheduleConfig, syncNote?: string) => {
+    setSchedules((prev) => [...prev, schedule]);
+    setShowCreateForm(false);
+    if (syncNote) {
+      setSyncWarning(syncNote);
+      setTimeout(() => setSyncWarning(null), 8000);
+    }
   }, []);
 
   if (loading) {
@@ -233,8 +464,35 @@ export function SchedulesView() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-base font-semibold">Schedules</h1>
-        <DaemonIndicator status={daemon} />
+        <div className="flex items-center gap-3">
+          <DaemonIndicator status={daemon} />
+          <button
+            onClick={() => setShowCreateForm((v) => !v)}
+            className={cn(
+              'h-7 rounded-md px-3 text-xs font-medium',
+              showCreateForm
+                ? 'bg-muted text-muted-foreground hover:bg-muted/80'
+                : 'bg-brand text-white hover:bg-brand/90',
+            )}
+          >
+            {showCreateForm ? 'Cancel' : '+ New Schedule'}
+          </button>
+        </div>
       </div>
+
+      {/* Create form (collapsed by default) */}
+      {showCreateForm && (
+        <CreateScheduleForm
+          onCreated={handleCreated}
+          onCancel={() => setShowCreateForm(false)}
+        />
+      )}
+
+      {syncWarning && (
+        <p className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-700 dark:text-yellow-400">
+          {syncWarning}
+        </p>
+      )}
 
       {error && (
         <p className="rounded-lg border border-status-failed/30 bg-status-failed/10 px-4 py-3 text-sm text-status-failed">
@@ -242,7 +500,7 @@ export function SchedulesView() {
         </p>
       )}
 
-      {!error && schedules.length === 0 && (
+      {!error && schedules.length === 0 && !showCreateForm && (
         <p className="mt-8 text-center text-sm text-muted-foreground">
           No schedules configured.
         </p>

@@ -387,7 +387,7 @@ hygiene findings, both independent of this refactor:
 
 `src/browser`, `src/cli` (except the depth-2 bootstrap hops), `src/config`,
 `src/improve`, `src/insights`, `src/service`, `src/telegram` (except `:55,309`),
-`src/utils`, `src/web`, `src/__test-utils__`, plus `tests/`, `themes/`,
+`src/utils`, `src/http-client`, `src/__test-utils__`, plus `tests/`, `themes/`,
 `prompts/`, `assets/`, `.github/`. Within `src/agent`, only
 `agents/{builtins,resolve}.ts`; within `src/skills`, only `audit-fit/index.ts`.
 

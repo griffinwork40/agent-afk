@@ -13,7 +13,7 @@ import path from 'node:path';
 // ---------------------------------------------------------------------------
 // Mock the egress guard
 // ---------------------------------------------------------------------------
-vi.mock('../../../web/egress-guard.js', () => ({
+vi.mock('../../../http-client/egress-guard.js', () => ({
   checkEgressTarget: vi.fn().mockResolvedValue({ allowed: true }),
   assertEgressAllowed: vi.fn().mockResolvedValue(undefined),
 }));
@@ -36,7 +36,7 @@ vi.mock('../../providers/shared/sleep-with-abort.js', () => ({
 }));
 
 import { waitForHandler } from './wait-for.js';
-import { checkEgressTarget } from '../../../web/egress-guard.js';
+import { checkEgressTarget } from '../../../http-client/egress-guard.js';
 
 const mockCheckEgress = vi.mocked(checkEgressTarget);
 

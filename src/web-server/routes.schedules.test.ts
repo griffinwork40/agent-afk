@@ -9,6 +9,7 @@ import {
   handleScheduleHistory,
   handleDaemonStatus,
 } from './routes.schedules.js';
+import { trySyncToDaemon } from '../agent/daemon/http-client.js';
 
 // ---- mocks -----------------------------------------------------------------
 
@@ -131,6 +132,38 @@ describe('routes.schedules', () => {
       });
       expect(json().status).toBe(400);
     });
+
+    it('enabled:false skips daemon sync and returns daemonSynced:false without syncNote', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Disabled Task',
+        command: '/test',
+        cron: '0 * * * *',
+        enabled: false,
+      });
+      const { status, body } = json();
+      expect(status).toBe(201);
+      expect(body).toHaveProperty('daemonSynced', false);
+      // syncNote must be absent because no sync was attempted
+      expect(body).not.toHaveProperty('syncNote');
+      // trySyncToDaemon should NOT have been called
+      expect(vi.mocked(trySyncToDaemon)).not.toHaveBeenCalled();
+    });
+
+    it('trySyncToDaemon returning synced:false results in syncNote present', async () => {
+      vi.mocked(trySyncToDaemon).mockResolvedValueOnce({ synced: false, detail: 'no daemon' });
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, {
+        name: 'Test',
+        command: '/test',
+        cron: '0 * * * *',
+        enabled: true,
+      });
+      const { status, body } = json();
+      expect(status).toBe(201);
+      expect(body).toHaveProperty('daemonSynced', false);
+      expect(body).toHaveProperty('syncNote', 'sync note');
+    });
   });
 
   describe('handleUpdateSchedule', () => {
@@ -147,6 +180,12 @@ describe('routes.schedules', () => {
       await handleUpdateSchedule(res, 'nonexistent', { name: 'x' });
       expect(json().status).toBe(404);
     });
+
+    it('returns 400 for invalid id format', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'bad id with spaces', { name: 'x' });
+      expect(json().status).toBe(400);
+    });
   });
 
   describe('handleDeleteSchedule', () => {
@@ -160,6 +199,12 @@ describe('routes.schedules', () => {
       const { res, json } = makeRes();
       await handleDeleteSchedule(res, 'nonexistent');
       expect(json().status).toBe(404);
+    });
+
+    it('returns 400 for invalid id format', async () => {
+      const { res, json } = makeRes();
+      await handleDeleteSchedule(res, '../evil/path');
+      expect(json().status).toBe(400);
     });
   });
 
@@ -178,6 +223,12 @@ describe('routes.schedules', () => {
       await handleToggleSchedule(res, 'nonexistent');
       expect(json().status).toBe(404);
     });
+
+    it('returns 400 for invalid id format', async () => {
+      const { res, json } = makeRes();
+      await handleToggleSchedule(res, 'UPPER_CASE!');
+      expect(json().status).toBe(400);
+    });
   });
 
   describe('handleScheduleHistory', () => {
@@ -187,6 +238,12 @@ describe('routes.schedules', () => {
       const { status, body } = json();
       expect(status).toBe(200);
       expect((body as { history: unknown[] }).history).toEqual([]);
+    });
+
+    it('returns 400 for invalid id format', async () => {
+      const { res, json } = makeRes();
+      await handleScheduleHistory(res, '../../etc/passwd');
+      expect(json().status).toBe(400);
     });
   });
 

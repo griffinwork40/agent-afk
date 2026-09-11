@@ -34,9 +34,9 @@ import {
   type WebRequestOptions,
   type RecordEffectFn,
   type DomainCheckFn,
-} from '../../../web/web-request.js';
-import { EgressBlockedError } from '../../../web/egress-guard.js';
-import type { EgressGuardOptions } from '../../../web/egress-guard.js';
+} from '../../../http-client/web-request.js';
+import { EgressBlockedError } from '../../../http-client/egress-guard.js';
+import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
 import { redactSecrets } from '../../redact-secrets.js';
 
 type FetchFn = typeof fetch;

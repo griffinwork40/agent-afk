@@ -12,7 +12,7 @@
 
 import path from 'node:path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
-import { checkEgressTarget } from '../../../web/egress-guard.js';
+import { checkEgressTarget } from '../../../http-client/egress-guard.js';
 import {
   evaluateUrl,
   evaluateFile,

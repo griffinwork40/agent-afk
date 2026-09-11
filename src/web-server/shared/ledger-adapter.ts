@@ -2,8 +2,7 @@
  * Adapts persisted ledger records into typed transcript items for rendering.
  *
  * This is the SINGLE SOURCE OF TRUTH for the ledger-to-transcript projection.
- * Both the React dashboard (dashboard/src/lib/ledger-adapter.ts) and the legacy
- * vanilla-TS frontend (src/web-server/frontend/ledger-adapter.ts) re-export from
+ * The React dashboard (dashboard/src/lib/ledger-adapter.ts) re-exports from
  * here so a schema change is applied in exactly one place.
  *
  * Invariant: the ledger is a PROJECTION, not a transcript. As of Wave 1, successful

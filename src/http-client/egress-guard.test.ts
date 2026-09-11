@@ -1,5 +1,5 @@
 /**
- * Unit tests for the SSRF egress guard (src/web/egress-guard.ts).
+ * Unit tests for the SSRF egress guard (src/http-client/egress-guard.ts).
  *
  * Strategy: inject `lookupFn` so no real DNS is issued, and inject `fetchFn`
  * into `guardedFetch` so no real socket is opened. The behaviours under test are

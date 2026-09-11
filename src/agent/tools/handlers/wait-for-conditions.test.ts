@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ---------------------------------------------------------------------------
 // Mock guardedFetch so tests don't hit DNS or real HTTP.
 // ---------------------------------------------------------------------------
-vi.mock('../../../web/egress-guard.js', () => ({
+vi.mock('../../../http-client/egress-guard.js', () => ({
   guardedFetch: vi.fn(),
   checkEgressTarget: vi.fn().mockResolvedValue({ allowed: true }),
   assertEgressAllowed: vi.fn().mockResolvedValue(undefined),
@@ -52,7 +52,7 @@ vi.mock('./_cwd-utils.js', () => ({
 }));
 
 import { evaluateUrl, evaluateFile, evaluateProcess, evaluateCommand } from './wait-for-conditions.js';
-import { guardedFetch, EgressBlockedError } from '../../../web/egress-guard.js';
+import { guardedFetch, EgressBlockedError } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import * as fsPromises from 'node:fs/promises';
 import { execSync } from 'node:child_process';
