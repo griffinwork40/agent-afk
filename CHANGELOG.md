@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.208.1] - 2026-09-11
+
+### Fixed
+- add missing dashboard install step to auto-release workflow (070673c3)
+
+### Changed
+- consolidate web layer — remove legacy frontend, rename src/web/ (#1633) (df7705d8)
+- add unit tests for AgentBrowserClient (#1630) (#1631) (cecca5ea)
+
 ## [5.208.0] - 2026-09-10
 
 ### Added
