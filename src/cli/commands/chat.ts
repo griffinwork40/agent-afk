@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { AgentSession } from '../../agent/session.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
@@ -573,7 +573,7 @@ export function registerChatCommand(program: Command): void {
         // Witness layer: `trace` was opened above (before executors) so
         // SkillExecutor could be wired with traceWriter; reuse it here for
         // the AgentSession.
-        session = new AgentSession(injectCompanionPrimer(injectHotMemory({
+        session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
           model: sessionModel,
           // User-facing surface for trace `origin` attribution. One-shot
           // `afk chat` is a CLI entrypoint → 'cli'.
@@ -633,7 +633,7 @@ export function registerChatCommand(program: Command): void {
           // Wire resume/session-id config when a session flag is set.
           ...resumeConfig,
           provider,
-        })), trace?.writer);
+        }))), trace?.writer);
 
         boundSession = session;
 
