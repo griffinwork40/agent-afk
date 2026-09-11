@@ -1,5 +1,5 @@
 /**
- * Shared types for the `src/web/` content-fetching layer.
+ * Shared types for the `src/http-client/` content-fetching layer.
  *
  * This module is the contract between the `web_scrape` tool handler
  * (`src/agent/tools/handlers/web-scrape.ts`) and the pluggable scrape/search

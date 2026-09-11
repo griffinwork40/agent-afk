@@ -1,5 +1,5 @@
 /**
- * Unit tests for the fetch-first scraper (src/web/scrape.ts).
+ * Unit tests for the fetch-first scraper (src/http-client/scrape.ts).
  *
  * Strategy: inject `fetchFn` and `renderFn` so neither a real network nor a
  * real browser is touched. The behaviors under test are the escalation
@@ -54,7 +54,7 @@ function freshSignal(): AbortSignal {
  * Hermetic DNS seam for the SSRF egress guard (issue #575): resolves every
  * hostname to a fixed PUBLIC address so these tests never issue real DNS and
  * never depend on network reachability. Guard behaviour is covered in
- * `src/web/egress-guard.test.ts`; the guard's integration with this module is
+ * `src/http-client/egress-guard.test.ts`; the guard's integration with this module is
  * covered by the `egress guard` describe block at the bottom of this file.
  */
 const publicLookup = async (): Promise<readonly { address: string }[]> => [

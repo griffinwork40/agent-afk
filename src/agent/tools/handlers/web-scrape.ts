@@ -9,17 +9,17 @@
  *     plain fetch yields thin content (a JS-gated SPA, or a blocked/empty
  *     response) the scraper escalates to a real headless-browser render via
  *     the existing `BrowserProvider` and re-runs the same extraction pipeline.
- *     No API key required. See `src/web/scrape.ts`.
+ *     No API key required. See `src/http-client/scrape.ts`.
  *   - `raw`: GET <url> directly. No transformation — caller gets whatever the
  *     origin serves (HTML, JSON, plain text, …). No auth.
  *   - `search`: query a web-search backend and return ranked results as
  *     markdown. Ships Exa Search (`EXA_API_KEY`); the backend interface is
  *     pluggable (Brave / DuckDuckGo / SearXNG / Tavily can be added
  *     later). When no backend is configured the handler returns a clear,
- *     actionable error. See `src/web/search.ts`.
+ *     actionable error. See `src/http-client/search.ts`.
  *
  * Security note: every egress path here (raw, markdown fetch, headless render)
- * goes through the SSRF egress guard in `src/web/egress-guard.ts` —
+ * goes through the SSRF egress guard in `src/http-client/egress-guard.ts` —
  * internal/private targets refused, resolved IP classified, every redirect hop
  * re-checked; see that module for the threat model (issue #575). The render
  * escalation still bypasses the interactive browser domain allowlist
@@ -30,13 +30,13 @@
  */
 
 import type { ToolHandler } from '../types.js';
-import { scrapeToMarkdown } from '../../../web/scrape.js';
-import { resolveSearchBackend, formatSearchResults } from '../../../web/search.js';
-import { checkEgressTarget, guardedFetch, EgressBlockedError } from '../../../web/egress-guard.js';
-import type { EgressGuardOptions as GuardOpts } from '../../../web/egress-guard.js';
-import type { RenderFn } from '../../../web/types.js';
+import { scrapeToMarkdown } from '../../../http-client/scrape.js';
+import { resolveSearchBackend, formatSearchResults } from '../../../http-client/search.js';
+import { checkEgressTarget, guardedFetch, EgressBlockedError } from '../../../http-client/egress-guard.js';
+import type { EgressGuardOptions as GuardOpts } from '../../../http-client/egress-guard.js';
+import type { RenderFn } from '../../../http-client/types.js';
 import { headAndTail } from './_output-cap.js';
-import { withAdvisory } from '../../../web/extraction-advisory.js';
+import { withAdvisory } from '../../../http-client/extraction-advisory.js';
 import {
   hasPlaywrightInstallHint,
   isPlaywrightMissing,

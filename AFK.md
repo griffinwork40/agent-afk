@@ -83,7 +83,7 @@ Key layers under `src/`:
 | `src/skills/` | Headless mirrors of plugin orchestration skills. Each has `prompts/` (markdown) loaded by `src/skills/_lib/prompt-loader.ts`. |
 | `src/skills/_agents/` | Vendored agent definitions. Drift detection: `vendored.test.ts`. |
 | `src/browser/` | Playwright-backed browser-control tools (open/observe/act/screenshot) + witness capture and domain-policy sanitization. |
-| `src/web/` | `web_scrape` pipeline: fetch → Readability → markdown extraction, with headless-render fallback and Exa search. |
+| `src/http-client/` | `web_scrape` pipeline: fetch → Readability → markdown extraction, with headless-render fallback and Exa search. |
 | `src/config/` | `env.ts` is the **canonical** `process.env` read-point (typed lazy getters + `ENV_REGISTRY`); config mutation + settable-key gating. |
 | `src/service/` | macOS LaunchAgent install/manage for always-on telegram bot / daemon (`launchd.ts`). |
 | `src/improve/` | Self-improvement pipeline: telemetry scan → eval-gen → eval-run → propose. |

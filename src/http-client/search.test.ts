@@ -1,5 +1,5 @@
 /**
- * Unit tests for the search backends (src/web/search.ts).
+ * Unit tests for the search backends (src/http-client/search.ts).
  *
  * Strategy: inject `fetchFn` so no real Exa API call is made. Cover the
  * Exa request shape (POST + x-api-key + JSON body), result mapping (highlights

@@ -32,9 +32,10 @@ export interface SubagentTreeNode {
 /**
  * Build a forest from a flat list of transcript items.
  *
- * History: mirrors SubagentTreeState from src/web-server/frontend/subagent-tree.ts
- * but uses SubagentItem.subagentId / parentId instead of SubagentLifecycleEvent
- * fields — the shape is equivalent because ledger-adapter now surfaces parentId.
+ * History: originally mirrored SubagentTreeState from the removed legacy
+ * vanilla-TS frontend, but uses SubagentItem.subagentId / parentId instead
+ * of SubagentLifecycleEvent fields — the shape is equivalent because
+ * ledger-adapter now surfaces parentId.
  */
 export function buildTree(items: TranscriptItem[]): SubagentTreeNode[] {
   const nodes = new Map<string, SubagentTreeNode>();

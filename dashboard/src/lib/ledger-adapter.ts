@@ -4,9 +4,8 @@
  * The canonical implementation lives at:
  *   src/web-server/shared/ledger-adapter.ts
  *
- * Both this file and src/web-server/frontend/ledger-adapter.ts re-export from
- * that single source of truth so schema changes are applied in exactly one
- * place. See #1582.
+ * This file re-exports from that single source of truth so schema changes
+ * are applied in exactly one place. See #1582.
  */
 
 export type {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createWebScrapeHandler } from './web-scrape.js';
 import { decoratePlaywrightLaunchError } from './playwright-hints.js';
-import type { RenderFn } from '../../../web/types.js';
+import type { RenderFn } from '../../../http-client/types.js';
 
 type FetchFn = typeof fetch;
 
@@ -38,7 +38,7 @@ const signal = (): AbortSignal => new AbortController().signal;
  * issuing a real `dns.lookup` — that keeps the suite offline and, critically,
  * keeps the guard's pre-check off the macrotask queue so the cancellation tests
  * still observe fetch being reached. Guard behaviour itself is covered in
- * `src/web/egress-guard.test.ts`.
+ * `src/http-client/egress-guard.test.ts`.
  */
 const publicLookup = async (): Promise<readonly { address: string }[]> => [
   { address: '93.184.216.34' },

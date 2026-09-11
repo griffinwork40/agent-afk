@@ -10,7 +10,7 @@
 
 import * as fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
-import { guardedFetch } from '../../../web/egress-guard.js';
+import { guardedFetch } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';

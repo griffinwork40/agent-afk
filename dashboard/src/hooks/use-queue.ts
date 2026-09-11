@@ -3,8 +3,8 @@
  *
  * Manages a list of queued prompts with reorder/edit/remove operations,
  * and a one-at-a-time drain that sends the next entry only when the current
- * turn is idle. Pure immutable list operations ported from
- * src/web-server/frontend/queue-reorder.ts.
+ * turn is idle. Pure immutable list operations originally ported from
+ * the removed legacy vanilla-TS frontend's queue-reorder module.
  *
  * Contract: the queue holds entries and drains them one at a time on turn
  * boundaries. POST /prompt answers 202 on ACCEPTANCE, not completion, so a

@@ -1,5 +1,5 @@
 /**
- * Public surface of the `src/web/` content-fetching layer.
+ * Public surface of the `src/http-client/` content-fetching layer.
  *
  * Consumed by the `web_scrape` tool handler. Backends are pluggable behind
  * the `SearchBackend` interface and the injected `FetchFn` / `RenderFn` seams.

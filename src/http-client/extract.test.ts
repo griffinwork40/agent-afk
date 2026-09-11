@@ -1,5 +1,5 @@
 /**
- * Unit tests for the HTML → markdown extraction pipeline (src/web/extract.ts).
+ * Unit tests for the HTML → markdown extraction pipeline (src/http-client/extract.ts).
  *
  * Strategy: feed HTML string fixtures (no network, no browser) and assert on
  * the markdown / title / fallback outputs. The key behaviors are (a) main
