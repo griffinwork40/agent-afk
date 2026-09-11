@@ -197,6 +197,7 @@ function Dashboard() {
                 items={items}
                 totals={totals}
                 status={status}
+                turnActive={turnActive}
               />
             )}
             {activeNav === 'memory' && <MemoryView />}
@@ -242,6 +243,7 @@ function SessionContent({
   items,
   totals,
   status,
+  turnActive,
 }: {
   loading: boolean;
   sessions: SessionSummary[];
@@ -249,6 +251,7 @@ function SessionContent({
   items: TranscriptItem[];
   totals: SessionTotals;
   status: string;
+  turnActive: boolean;
 }) {
   if (loading && !sessions.length) {
     return (
@@ -271,7 +274,7 @@ function SessionContent({
     );
   }
   if (selectedSession && items.length > 0) {
-    return <TranscriptView items={items} totals={totals} />;
+    return <TranscriptView items={items} totals={totals} turnActive={turnActive} />;
   }
   if (selectedSession) {
     return (

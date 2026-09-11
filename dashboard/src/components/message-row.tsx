@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils';
 import { AlertCircle, Info } from 'lucide-react';
 import { MarkdownContent } from './markdown-content';
+import { StreamingText } from './streaming-text';
 import { MessageActions } from './message-actions';
 import type { TranscriptItem } from './transcript-view';
 
@@ -31,14 +32,18 @@ export function UserMessage({ text }: { text: string }) {
  * Left-aligned assistant turn. Full-width prose column capped at max-w-3xl.
  * Renders content via MarkdownContent for proper GFM support.
  */
-export function AssistantRow({ text }: { text: string }) {
+export function AssistantRow({ text, isStreaming = false }: { text: string; isStreaming?: boolean }) {
   return (
     <div className="group relative flex flex-col gap-1">
       <span className="text-[11px] font-medium uppercase tracking-widest text-brand/60">
         Agent
       </span>
       <div className="max-w-3xl">
-        <MarkdownContent text={text} />
+        {isStreaming ? (
+          <StreamingText text={text} isStreaming={true} />
+        ) : (
+          <MarkdownContent text={text} />
+        )}
       </div>
       <MessageActions kind="assistant" text={text} />
     </div>
