@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.208.2] - 2026-09-11
+
+### Fixed
+- replace emoji logo with Handoff Arc brand mark (#1634) (c4011bc9)
+
 ## [5.208.1] - 2026-09-11
 
 ### Fixed
