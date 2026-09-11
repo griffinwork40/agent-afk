@@ -16,8 +16,8 @@ export type ToolCategory =
  * A node in the topology spine tree.
  *
  * Invariant: `children` contains only nodes that were dispatched by this node
- * (tool → subagent relationship via parentToolUseId, or subagent → subagent
- * via parentId). Root-level nodes have no such link.
+ * (subagent → subagent relationship via parentId). Root-level nodes have no
+ * such link. Tool nodes are always standalone leaves.
  */
 export interface SpineNode {
   /** Stable unique id for React keys. */

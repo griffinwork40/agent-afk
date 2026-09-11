@@ -98,6 +98,11 @@ export function StreamingText({
   const onCompleteRef = useRef(onComplete);
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
 
+  // Speed ref: updated every render so the running rAF loop always reads the
+  // current value rather than the value captured at loop creation time.
+  const speedRef = useRef(speed);
+  useEffect(() => { speedRef.current = speed; });
+
   // Edge case: if the component mounts with text already present and streaming
   // is already false (e.g. a replayed/historical message), skip animation and
   // show the full text immediately.
@@ -112,7 +117,7 @@ export function StreamingText({
       const elapsed = timestamp - last;
       lastTimestampRef.current = timestamp;
 
-      const charsPerMs = speed / 1000;
+      const charsPerMs = speedRef.current / 1000;
       const advance = Math.max(1, Math.floor(charsPerMs * elapsed));
 
       const currentLen = displayedLengthRef.current;
@@ -143,7 +148,7 @@ export function StreamingText({
     }
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [speed, text, isStreaming]);
+  }, [text, isStreaming]);
 
   useEffect(() => {
     // Fast path: historical/replayed message — render full text immediately.

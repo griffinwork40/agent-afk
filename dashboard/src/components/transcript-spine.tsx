@@ -12,8 +12,12 @@ import { TopologySpine } from './topology-spine';
 import { buildSpineTree } from '@/lib/topology';
 import type { SpineNode } from '@/lib/topology-types';
 
-// Items that represent execution (grouped into spine blocks)
-const EXECUTION_KINDS = new Set(['tool', 'subagent']);
+// Items that represent execution (grouped into spine blocks).
+// 'notice' is included so that activity notices between a tool call and its
+// dispatched subagent do not break the contiguous execution run. The tree
+// builder filters by kind === 'tool' | 'subagent', so notices pass through
+// harmlessly without affecting topology linking.
+const EXECUTION_KINDS = new Set(['tool', 'subagent', 'notice']);
 
 // Items that are prose/text (rendered individually)
 const TEXT_KINDS = new Set(['user', 'assistant', 'thinking', 'error', 'notice', 'bg_job']);

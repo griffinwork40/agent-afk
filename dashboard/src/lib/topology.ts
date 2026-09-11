@@ -3,14 +3,13 @@
  *
  * Builds a hierarchical SpineNode tree from a flat TranscriptItem array.
  * The tree mirrors what the TUI's topology spine renders: tool calls are
- * leaves; subagents that were dispatched by a tool call are children of that
- * tool node; top-level subagents (no parentToolUseId) and tool calls that
- * did not dispatch a subagent are roots.
+ * leaves; subagents are nested under their parent subagent node via parentId;
+ * top-level subagents (no parentId) appear as roots alongside standalone
+ * tool leaves.
  *
- * Invariant: `parentToolUseId` is the primary linkage. When it is absent (older
- * sessions), subagents fall back to parentId-only nesting (agent→agent), or
- * appear flat if neither link is present. Out-of-order SSE is handled by a
- * two-pass approach: first pass builds nodes, second pass re-parents orphans.
+ * Invariant: `parentId` is the sole linkage mechanism. When it is absent,
+ * the subagent appears as a flat root item. Out-of-order SSE is handled by
+ * a two-pass approach: first pass builds nodes, second pass re-parents orphans.
  */
 
 import type { TranscriptItem, ToolCallItem, SubagentItem } from '@/lib/ledger-adapter';
@@ -168,17 +167,17 @@ function makeAgentNode(sub: SubagentItem): SpineNode {
  *
  * Algorithm:
  *   1. Separate items into tool items and subagent items.
- *   2. Build lookup maps: toolUseId → ToolCallItem, subagentId → SubagentItem.
+ *   2. Build a lookup map: subagentId → SubagentItem.
  *   3. Create SpineNodes for all tools and subagents.
- *   4. Link subagent nodes to their dispatching tool node via parentToolUseId
- *      (primary), or to a parent subagent node via parentId (secondary).
- *   5. Tool nodes that have a subagent child become 'agent'-kind containers.
- *      Pure tool nodes (no dispatched subagent) remain 'tool'-kind.
+ *   4. Link subagent nodes to their parent subagent node via parentId.
+ *      Subagents with no parentId are roots.
+ *   5. Tool nodes appear as standalone leaves (they are never parents of
+ *      agents in this data model — there is no parentToolUseId field).
  *   6. Second pass: re-parent any orphaned nodes whose parent appeared later.
  *   7. Return root nodes (no parent link, or parent not found after both passes).
  *
- * Invariant: parentToolUseId is preferred over parentId when both are present.
- * When neither is present, the subagent appears as a flat root item.
+ * Invariant: parentId is the sole linkage mechanism. When absent, the
+ * subagent appears as a flat root item.
  *
  * Contract: items are processed in order — tools before subagents that
  * reference them is the common case (SSE order). Out-of-order items are
@@ -194,34 +193,20 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
     if (item.kind === 'subagent') subagentItems.push(item);
   }
 
-  // Build lookup maps for O(1) linking.
-  const toolByUseId  = new Map<string, ToolCallItem>();
-  const subById      = new Map<string, SubagentItem>();
-
-  for (const t of toolItems) {
-    if (t.toolUseId) toolByUseId.set(t.toolUseId, t);
-  }
-  for (const s of subagentItems) {
-    subById.set(s.subagentId, s);
-  }
-
   // --- Pass 2: build SpineNodes ---
-  // nodeByToolId: spine node for each tool item (keyed by item.id)
-  const nodeByToolId    = new Map<string, SpineNode>();
   // nodeBySubId: spine node for each subagent (keyed by subagentId)
-  const nodeBySubId     = new Map<string, SpineNode>();
-  // Track which tool nodes have been claimed by a subagent (and should be
-  // promoted to agent-kind containers rather than standalone tool nodes).
-  const toolClaimedByAgent = new Set<string>(); // item.id of claimed tool nodes
+  const nodeBySubId = new Map<string, SpineNode>();
 
   for (const t of toolItems) {
-    nodeByToolId.set(t.id, makeToolNode(t));
+    // Tool nodes are roots by default; we'll add them in pass 5.
+    // Build them here so nodeByToolId is available if needed in future passes.
+    void t; // tool nodes handled in pass 5
   }
   for (const s of subagentItems) {
     nodeBySubId.set(s.subagentId, makeAgentNode(s));
   }
 
-  // --- Pass 3: link subagents to parent tool or parent subagent ---
+  // --- Pass 3: link subagents to parent subagent via parentId ---
   const roots: SpineNode[] = [];
   const orphanedAgentNodes: SpineNode[] = []; // may be re-parented in pass 4
 
@@ -229,25 +214,7 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
     const agentNode = nodeBySubId.get(s.subagentId);
     if (!agentNode) continue;
 
-    // Primary link: parentToolUseId → find the tool node that dispatched this.
-    if (s.parentToolUseId) {
-      const parentTool = toolByUseId.get(s.parentToolUseId);
-      if (parentTool) {
-        const parentToolNode = nodeByToolId.get(parentTool.id);
-        if (parentToolNode) {
-          // Promote the tool node to an agent-kind container.
-          parentToolNode.kind = 'agent';
-          parentToolNode.children.push(agentNode);
-          toolClaimedByAgent.add(parentTool.id);
-          continue;
-        }
-      }
-      // parentToolUseId set but tool node not yet seen — defer to pass 4.
-      orphanedAgentNodes.push(agentNode);
-      continue;
-    }
-
-    // Secondary link: parentId → nest under a parent subagent node.
+    // Link: parentId → nest under a parent subagent node.
     if (s.parentId) {
       const parentSubNode = nodeBySubId.get(s.parentId);
       if (parentSubNode) {
@@ -273,20 +240,7 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
 
     let placed = false;
 
-    if (s.parentToolUseId) {
-      const parentTool = toolByUseId.get(s.parentToolUseId);
-      if (parentTool) {
-        const parentToolNode = nodeByToolId.get(parentTool.id);
-        if (parentToolNode) {
-          parentToolNode.kind = 'agent';
-          parentToolNode.children.push(agentNode);
-          toolClaimedByAgent.add(parentTool.id);
-          placed = true;
-        }
-      }
-    }
-
-    if (!placed && s.parentId) {
+    if (s.parentId) {
       const parentSubNode = nodeBySubId.get(s.parentId);
       if (parentSubNode) {
         parentSubNode.children.push(agentNode);
@@ -302,13 +256,11 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
     roots.push(node);
   }
 
-  // --- Pass 5: add unclaimed tool nodes as roots ---
-  // Tools that were not claimed by any subagent appear as standalone tool leaves.
+  // --- Pass 5: add all tool nodes as roots ---
+  // Tool nodes are standalone leaves — they are not parents of agents in this
+  // data model (there is no parentToolUseId field on SubagentItem).
   for (const t of toolItems) {
-    if (!toolClaimedByAgent.has(t.id)) {
-      const toolNode = nodeByToolId.get(t.id);
-      if (toolNode) roots.push(toolNode);
-    }
+    roots.push(makeToolNode(t));
   }
 
   return roots;
