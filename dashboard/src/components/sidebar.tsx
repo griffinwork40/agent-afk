@@ -51,7 +51,7 @@ export function Sidebar({
       <div className="flex h-12 items-center justify-between border-b px-3">
         {!collapsed && (
           <div className="flex items-center gap-2">
-            <span className="text-lg">🌀</span>
+            <img src="/brand-mark.svg" alt="AFK" width={24} height={24} />
             <span className="text-sm font-semibold tracking-tight">AFK</span>
           </div>
         )}
