@@ -28,6 +28,12 @@ import { join } from 'node:path';
 const VALID_TRIGGERS = new Set(['cron', 'sessionstart', 'both']);
 const VALID_NOTIFY_ON = new Set(['failure', 'always', 'never']);
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+const VALID_ID_RE = /^[a-z0-9-]+$/;
+
+/** Return true if `id` is a valid slugified schedule identifier. */
+function isValidId(id: string): boolean {
+  return VALID_ID_RE.test(id);
+}
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -123,7 +129,7 @@ export async function handleCreateSchedule(
     schedule: config,
     daemonSynced,
     syncDetail,
-    ...(daemonSynced ? {} : { syncNote: SYNC_FAILED_NOTE }),
+    ...(!daemonSynced && config.enabled ? { syncNote: SYNC_FAILED_NOTE } : {}),
   });
 }
 
@@ -133,6 +139,10 @@ export async function handleUpdateSchedule(
   id: string,
   body: unknown,
 ): Promise<void> {
+  if (!isValidId(id)) {
+    sendJson(res, 400, { error: 'bad_request', message: 'invalid schedule id format' });
+    return;
+  }
   const schedules = loadSchedules();
   const idx = schedules.findIndex((s) => s.id === id);
   if (idx === -1) {
@@ -213,6 +223,10 @@ export async function handleDeleteSchedule(
   res: ServerResponse,
   id: string,
 ): Promise<void> {
+  if (!isValidId(id)) {
+    sendJson(res, 400, { error: 'bad_request', message: 'invalid schedule id format' });
+    return;
+  }
   const removed = removeSchedule(id);
   if (!removed) {
     sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
@@ -233,6 +247,10 @@ export async function handleToggleSchedule(
   res: ServerResponse,
   id: string,
 ): Promise<void> {
+  if (!isValidId(id)) {
+    sendJson(res, 400, { error: 'bad_request', message: 'invalid schedule id format' });
+    return;
+  }
   const existing = getSchedule(id);
   if (!existing) {
     sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
@@ -271,6 +289,10 @@ export async function handleScheduleHistory(
   res: ServerResponse,
   id: string,
 ): Promise<void> {
+  if (!isValidId(id)) {
+    sendJson(res, 400, { error: 'bad_request', message: 'invalid schedule id format' });
+    return;
+  }
   const telemetryPath = getTelemetryPath();
   if (!existsSync(telemetryPath)) {
     sendJson(res, 200, { history: [] });

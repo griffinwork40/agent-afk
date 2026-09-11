@@ -12,6 +12,7 @@ interface ToggleResponse {
   ok: boolean;
   enabled: boolean;
   daemonSynced: boolean;
+  syncNote?: string;
 }
 
 interface CreateScheduleBody {
@@ -430,6 +431,10 @@ export function SchedulesView() {
     setSchedules((prev) =>
       prev.map((s) => (s.id === id ? { ...s, enabled: res.enabled } : s)),
     );
+    if (res.syncNote) {
+      setSyncWarning(res.syncNote);
+      setTimeout(() => setSyncWarning(null), 8000);
+    }
   }, []);
 
   const handleDelete = useCallback(async (id: string) => {
