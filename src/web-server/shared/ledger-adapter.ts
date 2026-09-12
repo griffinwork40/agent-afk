@@ -56,6 +56,12 @@ export type TranscriptItem =
       /** Total cost in USD from the terminal lifecycle event. */
       totalCostUsd?: number;
       promptHead?: string;
+      /** Number of conversation turns the subagent ran. */
+      turnCount?: number;
+      /** How the subagent stopped (e.g. 'end_turn', 'max_tokens'). */
+      stopReason?: string;
+      /** The toolUseId of the agent/compose call that spawned this subagent. */
+      parentToolUseId?: string;
     }
   | { kind: 'bg_job'; id: string; jobId: string; status: string; label: string };
 
@@ -317,6 +323,10 @@ export function ledgerRecordToItem(
           if (dur !== undefined) existing.durationMs = dur;
           const cost = num(record['totalCostUsd']);
           if (cost !== undefined) existing.totalCostUsd = cost;
+          const turns = num(record['turnCount']);
+          if (turns !== undefined) existing.turnCount = turns;
+          const stop = str(record['stopReason']);
+          if (stop !== undefined) existing.stopReason = stop;
           return undefined; // patched in place — no new item
         }
       }
@@ -333,6 +343,9 @@ export function ledgerRecordToItem(
         durationMs: num(record['durationMs']),
         totalCostUsd: num(record['totalCostUsd']),
         promptHead: str(record['promptHead']),
+        turnCount: num(record['turnCount']),
+        stopReason: str(record['stopReason']),
+        parentToolUseId: str(record['parentToolUseId']),
       };
 
       subagentIndex?.set(subId, item);

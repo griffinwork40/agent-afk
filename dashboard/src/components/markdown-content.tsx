@@ -2,6 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 import type { Components } from 'react-markdown';
+import { CodeBlock } from './code-block';
 
 const components: Components = {
   h1: ({ children }) => <h1 className="mb-3 text-xl font-bold">{children}</h1>,
@@ -50,18 +51,13 @@ const components: Components = {
       </code>
     );
   },
-  pre: ({ children, ...props }) => {
-    // Extract language from nested code className
-    const codeEl = (children as React.ReactElement | null);
-    const lang = /language-(\w+)/.exec((codeEl?.props as { className?: string } | undefined)?.className ?? '')?.[1];
-    return (
-      <pre {...props} className="mb-2 overflow-x-auto rounded bg-secondary p-3 font-mono text-xs leading-5">
-        {lang && (
-          <div className="mb-1 text-[10px] text-muted-foreground">{lang}</div>
-        )}
-        {children}
-      </pre>
-    );
+  pre: ({ children }) => {
+    // Extract language and raw code text from the nested <code> element that
+    // react-markdown always wraps inside <pre> for fenced code blocks.
+    const codeEl = children as React.ReactElement<{ className?: string; children?: React.ReactNode }> | null;
+    const lang = /language-(\w+)/.exec(codeEl?.props?.className ?? '')?.[1];
+    const code = String(codeEl?.props?.children ?? '').replace(/\n$/, '');
+    return <CodeBlock code={code} language={lang} />;
   },
 };
 

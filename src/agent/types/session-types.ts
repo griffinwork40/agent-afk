@@ -175,6 +175,16 @@ export type OutputEvent =
       errorClass?: string;
       errorMessage?: string;
       promptHead?: string;
+      /** Number of turns the subagent completed (present on succeeded events). */
+      turnCount?: number;
+      /** Provider stop reason from the subagent's last turn (present on succeeded events). */
+      stopReason?: string;
+      /**
+       * The tool_use_id of the `agent` / `compose` call that dispatched this
+       * subagent — links a subagent card to the tool row that spawned it,
+       * enabling topology rendering. Present on 'started' events only.
+       */
+      parentToolUseId?: string;
     }
   // Background-job state marker (Wave 0-C). Surfaces job transitions
   // (started / completed / failed / cancelled / delivered) to live UIs
