@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Cpu, Server, Keyboard, Info } from 'lucide-react';
+import { Cpu, Keyboard, Info, FolderOpen, Globe } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import type { ModelInfo, DaemonStatus } from '@/types/api';
+import type { ModelInfo, DaemonStatus, ConfigInfo } from '@/types/api';
 
 // ---------------------------------------------------------------------------
 // Section wrapper
@@ -64,16 +64,10 @@ function Row({
 }
 
 // ---------------------------------------------------------------------------
-// Model list
+// Model list row
 // ---------------------------------------------------------------------------
 
-function ModelRow({
-  model,
-  last,
-}: {
-  model: ModelInfo;
-  last: boolean;
-}) {
+function ModelRow({ model, last }: { model: ModelInfo; last: boolean }) {
   return (
     <div
       className={cn(
@@ -99,15 +93,7 @@ const SHORTCUTS: { keys: string; description: string }[] = [
   { keys: '⌘4', description: 'Go to Background Jobs' },
 ];
 
-function ShortcutRow({
-  keys,
-  description,
-  last,
-}: {
-  keys: string;
-  description: string;
-  last: boolean;
-}) {
+function ShortcutRow({ keys, description, last }: { keys: string; description: string; last: boolean }) {
   return (
     <div
       className={cn(
@@ -128,9 +114,7 @@ function ShortcutRow({
 // ---------------------------------------------------------------------------
 
 function DaemonPill({ status }: { status: DaemonStatus | null }) {
-  if (!status) {
-    return <span className="text-xs text-muted-foreground">–</span>;
-  }
+  if (!status) return <span className="text-xs text-muted-foreground">–</span>;
   return (
     <span className="flex items-center gap-1.5">
       <span
@@ -153,16 +137,20 @@ function DaemonPill({ status }: { status: DaemonStatus | null }) {
 // ---------------------------------------------------------------------------
 
 interface SettingsData {
+  config: ConfigInfo | null;
   models: ModelInfo[] | null;
   daemon: DaemonStatus | null;
+  configError: string | null;
   modelsError: string | null;
   daemonError: string | null;
 }
 
 export function SettingsView() {
   const [data, setData] = useState<SettingsData>({
+    config: null,
     models: null,
     daemon: null,
+    configError: null,
     modelsError: null,
     daemonError: null,
   });
@@ -170,18 +158,26 @@ export function SettingsView() {
   useEffect(() => {
     let cancelled = false;
 
+    const toErr = (e: unknown) => (e instanceof Error ? e.message : 'Failed to load');
+
     Promise.all([
+      apiFetch<ConfigInfo>('/api/config').then(
+        (r) => ({ ok: true as const, config: r }),
+        (e: unknown) => ({ ok: false as const, error: toErr(e) }),
+      ),
       apiFetch<{ models: ModelInfo[] }>('/api/models').then(
         (r) => ({ ok: true as const, models: r.models }),
-        (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : 'Failed to load models' }),
+        (e: unknown) => ({ ok: false as const, error: toErr(e) }),
       ),
       apiFetch<DaemonStatus>('/api/daemon/status').then(
         (r) => ({ ok: true as const, daemon: r }),
-        (e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : 'Failed to load daemon status' }),
+        (e: unknown) => ({ ok: false as const, error: toErr(e) }),
       ),
-    ]).then(([modelsResult, daemonResult]) => {
+    ]).then(([cfgResult, modelsResult, daemonResult]) => {
       if (cancelled) return;
       setData({
+        config: cfgResult.ok ? cfgResult.config : null,
+        configError: cfgResult.ok ? null : cfgResult.error,
         models: modelsResult.ok ? modelsResult.models : null,
         modelsError: modelsResult.ok ? null : modelsResult.error,
         daemon: daemonResult.ok ? daemonResult.daemon : null,
@@ -192,67 +188,58 @@ export function SettingsView() {
     return () => { cancelled = true; };
   }, []);
 
+  const cfg = data.config;
+  const loading = <span className="text-xs text-muted-foreground">Loading…</span>;
+
   return (
     <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
 
-      {/* Server info */}
-      <Section icon={Server} title="Server">
-        <Row
-          label="Daemon"
-          value={<DaemonPill status={data.daemon} />}
-        />
-        {data.daemonError && (
-          <Row
-            label="Error"
-            value={data.daemonError}
-            last
-          />
-        )}
-        {!data.daemonError && (
-          <Row
-            label="Tasks scheduled"
-            value={data.daemon?.tasks != null ? String(data.daemon.tasks) : '–'}
-            last
-          />
-        )}
+      {/* About */}
+      <Section icon={Info} title="About">
+        <Row label="AFK version" value={cfg ? cfg.version : loading} mono />
+        <Row label="Node.js" value={cfg ? cfg.nodeVersion : loading} mono />
+        <Row label="App" value="AFK Dashboard" last />
       </Section>
 
       {/* Model configuration */}
-      <Section icon={Cpu} title="Available Models">
+      <Section icon={Cpu} title="Model">
+        <Row label="Default model" value={cfg ? cfg.model : loading} mono />
         {data.modelsError ? (
           <div className="px-4 py-3 text-xs text-status-failed">{data.modelsError}</div>
         ) : data.models === null ? (
-          <div className="px-4 py-3 text-xs text-muted-foreground">Loading…</div>
+          <Row label="Available tiers" value={loading} last />
         ) : data.models.length === 0 ? (
-          <div className="px-4 py-3 text-xs text-muted-foreground italic">No models listed.</div>
+          <Row label="Available tiers" value="None listed" last />
         ) : (
           data.models.map((m, i) => (
-            <ModelRow
-              key={m.id}
-              model={m}
-              last={i === data.models.length - 1}
-            />
+            <ModelRow key={m.id} model={m} last={i === (data.models?.length ?? 0) - 1} />
           ))
         )}
+      </Section>
+
+      {/* Paths */}
+      <Section icon={FolderOpen} title="Paths">
+        <Row label="AFK home" value={cfg ? cfg.afkHome : loading} mono />
+        <Row label="State dir" value={cfg ? cfg.stateDir : loading} mono />
+        <Row label="Config dir" value={cfg ? cfg.configDir : loading} mono last />
+      </Section>
+
+      {/* Web server */}
+      <Section icon={Globe} title="Web Server">
+        <Row label="Host" value={cfg ? cfg.webHost : loading} mono />
+        <Row label="Port" value={cfg ? String(cfg.webPort) : loading} mono />
+        <Row label="Daemon" value={<DaemonPill status={data.daemon} />} />
+        {!data.daemonError && (
+          <Row label="Tasks scheduled" value={data.daemon?.tasks != null ? String(data.daemon.tasks) : '–'} last />
+        )}
+        {data.daemonError && <Row label="Daemon error" value={data.daemonError} last />}
       </Section>
 
       {/* Keyboard shortcuts */}
       <Section icon={Keyboard} title="Keyboard Shortcuts">
         {SHORTCUTS.map((s, i) => (
-          <ShortcutRow
-            key={s.keys}
-            keys={s.keys}
-            description={s.description}
-            last={i === SHORTCUTS.length - 1}
-          />
+          <ShortcutRow key={s.keys} keys={s.keys} description={s.description} last={i === SHORTCUTS.length - 1} />
         ))}
-      </Section>
-
-      {/* About */}
-      <Section icon={Info} title="About">
-        <Row label="App" value="AFK Dashboard" />
-        <Row label="API" value="/api/*" mono />
-        <Row label="Model tiers" value="sonnet · haiku · opus" last />
       </Section>
 
     </div>
