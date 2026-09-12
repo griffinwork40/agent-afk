@@ -25,7 +25,7 @@ import {
   copyFileSync,
   renameSync,
 } from 'fs';
-import { join, basename, resolve, relative } from 'path';
+import { join, basename, resolve, relative, isAbsolute } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
@@ -908,7 +908,7 @@ function isValidWALEntry(entry: unknown): entry is WALEntry {
 
 function assertWithinDir(filePath: string, dir: string): void {
   const rel = relative(dir, filePath);
-  if (rel.startsWith('..') || rel.startsWith('/')) {
+  if (rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error('Path traversal detected');
   }
 }

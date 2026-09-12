@@ -10,8 +10,7 @@
 
 import { env } from '../../config/env.js';
 import { mkdirSync, appendFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
-import { dirname } from 'path';
+import { resolve, dirname, isAbsolute } from 'path';
 import { looksLikeFilesystemPath } from '../redact-secrets.js';
 
 export type PromptShape = 'string' | 'string[]' | 'preset' | 'undefined';
@@ -97,7 +96,7 @@ function pathGuardedRedact(m: RegExpMatchArray): string {
       ? value.slice(1, -1)
       : value;
   const hasPathName = /(?:^|_)(?:PATH|FILE)(?:_|$)/i.test(name);
-  const hasPathPrefix = pathValue.startsWith('/') || pathValue.startsWith('~/');
+  const hasPathPrefix = isAbsolute(pathValue) || pathValue.startsWith('~/');
   // Secondary guard: real filesystem paths almost always have at least one segment
   // containing an uppercase letter, a digit, a dot, or a hyphen — characters that
   // appear naturally in directory names (e.g. `Users`, `.config`, `token.json`,
@@ -110,7 +109,7 @@ function pathGuardedRedact(m: RegExpMatchArray): string {
   // genuine filesystem paths. The guard is intentionally loose — `/usr/local/bin`
   // fails it (all lowercase, no digits/dots/hyphens), so those are redacted, which
   // is the safe side when the name already matched a secret keyword.
-  const segments = pathValue.split('/').filter(Boolean);
+  const segments = pathValue.split(/[\\/]/).filter(Boolean);
   const hasPathSignal = segments.some((s) => /[A-Z0-9.\-]/.test(s));
   if (hasPathName && hasPathPrefix && hasPathSignal && looksLikeFilesystemPath(pathValue)) {
     return `${name}=${value}`;
