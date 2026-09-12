@@ -104,6 +104,15 @@ export class AgentBrowserClient {
 
       // v0.3.0 wraps every response in { ok, result, error }. Unwrap the
       // envelope so callers receive the payload directly.
+      //
+      // Contract (v0.3.0+): `result` is the canonical payload key. For void-
+      // result methods (e.g. page.eval with no return value, page.click),
+      // `result` is absent or `undefined`, so `envelope['result']` evaluates to
+      // `undefined` — which is the correct value for `Promise<void>` callers.
+      //
+      // We do NOT fall back to the full envelope object (`?? envelope`) because
+      // that would silently hand callers the `{ ok: true }` wrapper instead of
+      // `undefined`, breaking any code that checks for a falsy return.
       const envelope = (await res.json()) as Record<string, unknown>;
       if (envelope['ok'] === false) {
         const err = envelope['error'] as Record<string, unknown> | undefined;
@@ -113,7 +122,7 @@ export class AgentBrowserClient {
           `Agent Browser ${method} failed: [${String(code)}] ${String(msg)}`,
         );
       }
-      return (envelope['result'] ?? envelope) as T;
+      return envelope['result'] as T;
     } finally {
       clearTimeout(timer);
     }

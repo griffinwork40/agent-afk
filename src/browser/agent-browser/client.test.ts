@@ -2,7 +2,8 @@
  * Unit tests for src/browser/agent-browser/client.ts
  *
  * Covers:
- * 1. Envelope unwrapping -- `ok: true` with `result` payload returns the payload directly
+ * 1. Envelope unwrapping -- `ok: true` with `result` payload returns the payload directly;
+ *    void-result methods (`ok: true`, no `result` key) return `undefined` (not the envelope)
  * 2. `ok: false` error path -- throws with structured `code`/`message` from server error
  * 3. `ok: false` edge cases -- `{ok: false, error: null}`, `{ok: false}` (missing error field), `{ok: 0}` (non-boolean falsy)
  * 4. `listTabs` -- returns array directly (not `{tabs:[...]}`), objects have `isLoading: boolean` and optional `isActive`
@@ -119,13 +120,23 @@ describe('AgentBrowserClient', () => {
       });
     });
 
-    it('falls back to envelope when result field is omitted (backward compatibility)', async () => {
-      const rawEnvelope = { ok: true, legacyData: 'fallback' };
-      mockFetchResponse(200, rawEnvelope);
+    it('returns undefined for void-result methods when result key is absent', async () => {
+      // v0.3.0 void-result response: { ok: true } with no `result` key.
+      // The caller receives `undefined`, NOT the envelope object. This guards
+      // against callers typed as Promise<void> silently receiving { ok: true }.
+      mockFetchResponse(200, { ok: true });
 
       const res = await client.evalScript('tab-1', '1 + 1');
 
-      expect(res).toEqual(rawEnvelope);
+      expect(res).toBeUndefined();
+    });
+
+    it('returns undefined for void-result methods when result is explicitly undefined', async () => {
+      mockFetchResponse(200, { ok: true, result: undefined });
+
+      const res = await client.evalScript('tab-1', 'void 0');
+
+      expect(res).toBeUndefined();
     });
   });
 
