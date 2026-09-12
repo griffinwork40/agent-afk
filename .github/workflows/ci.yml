@@ -255,6 +255,54 @@ jobs:
       - name: Test (no coverage gate — see job comment)
         run: pnpm test
 
+      - name: Build publish bundle (esbuild)
+        run: pnpm build:dist
+
+      - name: Smoke test — CLI --version (mandatory, issue #1603)
+        # Mirrors the equivalent step in the `publish-bundle` job but runs on
+        # Windows so we exercise shell resolution, path handling, and config
+        # loading on win32. A dummy API key bypasses the startup credential
+        # check (see the publish-bundle job comment for rationale — same quirk).
+        # Uses PowerShell (the default Windows shell on GitHub Actions) so we
+        # can capture stdout/stderr and inspect the exit code in one block.
+        shell: pwsh
+        env:
+          ANTHROPIC_API_KEY: sk-ant-dummy-not-used-version-only
+        run: |
+          $output = node dist/cli.mjs --version 2>&1
+          $exitCode = $LASTEXITCODE
+          Write-Host "afk --version exit code: $exitCode"
+          Write-Host "afk --version output: $output"
+          if ($exitCode -ne 0) {
+            Write-Host "::error::dist/cli.mjs --version exited $exitCode on Windows — integration broken"
+            exit 1
+          }
+          if ($output -notmatch '\d+\.\d+\.\d+') {
+            Write-Host "::error::dist/cli.mjs --version printed no semver on Windows"
+            exit 1
+          }
+          Write-Host "Windows CLI smoke test passed."
+
+      - name: Smoke test — CLI chat (conditional on API key, issue #1603)
+        # Only runs when ANTHROPIC_API_KEY is available as a repository secret.
+        # Skip gracefully (grey step) when no key is present — the mandatory
+        # --version step above already exercises the full boot path. This step
+        # goes one layer deeper: a real API round-trip through the Windows stack.
+        if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        shell: pwsh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          $output = node dist/cli.mjs chat "respond with exactly the word OK" --model haiku -f json 2>&1
+          $exitCode = $LASTEXITCODE
+          Write-Host "afk chat exit code: $exitCode"
+          Write-Host "afk chat output: $output"
+          if ($exitCode -ne 0) {
+            Write-Host "::error::afk chat exited $exitCode on Windows"
+            exit 1
+          }
+          Write-Host "Windows chat smoke test passed."
+
   # Real-PTY scrollback harness (issue #541). Isolated from the main `test` job
   # because it depends on the native `node-pty` module (compiled from source on
   # Linux via pnpm.onlyBuiltDependencies — the same path better-sqlite3 already
