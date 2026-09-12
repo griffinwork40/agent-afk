@@ -14,6 +14,7 @@
  */
 
 import type { AgentBrowserConnection } from './connection.js';
+import { debugLog } from '../../utils/debug.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -138,9 +139,13 @@ export class AgentBrowserClient {
     return { tabId: result.id };
   }
 
+  // window.close() is a no-op on non-script-opened WebKit tabs; tab leaks are expected
+  // until Agent Browser exposes a native close endpoint.
   async closeTab(tabId: string): Promise<void> {
     // v0.3.0 does not support tabs.close -- best-effort via navigation.
-    await this.call('page.eval', { id: tabId, script: 'window.close()' }).catch(() => {});
+    await this.call('page.eval', { id: tabId, script: 'window.close()' }).catch((err: unknown) => {
+      debugLog('[browser/agent-browser] closeTab window.close() failed (tab leak expected)', { tabId, err });
+    });
   }
 
   // -------------------------------------------------------------------------
