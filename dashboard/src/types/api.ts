@@ -101,6 +101,21 @@ export interface ModelInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
+export interface ConfigInfo {
+  version: string;
+  nodeVersion: string;
+  model: string;
+  stateDir: string;
+  configDir: string;
+  afkHome: string;
+  webPort: number;
+  webHost: string;
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
