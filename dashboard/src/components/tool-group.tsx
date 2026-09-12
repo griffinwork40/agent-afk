@@ -172,7 +172,7 @@ export function ToolGroup({ tools, isActive }: ToolGroupProps) {
       <Collapse open={open}>
         <div className="flex flex-col gap-1.5 border-t border-border/50 p-2">
           {tools.map((tool, i) => (
-            <ToolCallCard key={i} {...tool} />
+            <ToolCallCard key={tool.toolUseId ?? i} {...tool} />
           ))}
         </div>
       </Collapse>

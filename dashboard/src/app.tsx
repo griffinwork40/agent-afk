@@ -41,7 +41,12 @@ function Dashboard() {
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId);
   const { items, totals, status, turnActive, liveTurns } = useTranscript(selectedSessionId);
-  const { containerRef, scrollToBottom, showScrollButton } = useScrollPin();
+  const { containerRef, scrollToBottom, isPinned, showScrollButton } = useScrollPin();
+
+  // Auto-scroll when new transcript items arrive and user is pinned to the bottom.
+  useEffect(() => {
+    if (isPinned) scrollToBottom();
+  }, [items.length, isPinned, scrollToBottom]);
 
   const handleNavigate = (nav: string) => {
     setActiveNav(nav as NavItem);

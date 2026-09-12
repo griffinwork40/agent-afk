@@ -21,6 +21,7 @@ import { DiffViewer } from './diff-viewer';
 type Status = 'running' | 'ok' | 'error';
 
 export interface ToolCallCardProps {
+  toolUseId?: string;
   name: string;
   inputPreview: string;
   status: Status;
