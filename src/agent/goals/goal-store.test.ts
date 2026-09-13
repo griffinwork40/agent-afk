@@ -62,6 +62,19 @@ describe('setGoal', () => {
     const goal = mod.setGoal('goal with session', 'sess-abc');
     expect(goal.createdBy).toBe('sess-abc');
   });
+
+  it('throws when text exceeds MAX_GOAL_CHARS', () => {
+    const oversize = 'x'.repeat(501);
+    expect(() => mod.setGoal(oversize)).toThrow(/exceeds the 500-character limit/);
+    // Nothing was persisted.
+    expect(mod.getGoal()).toBeNull();
+  });
+
+  it('accepts text at exactly MAX_GOAL_CHARS', () => {
+    const exact = 'x'.repeat(500);
+    const goal = mod.setGoal(exact);
+    expect(goal.text).toBe(exact);
+  });
 });
 
 describe('getGoal', () => {

@@ -18,14 +18,19 @@ import { getGoal } from './goal-store.js';
 export function buildGoalPromptFragment(): string {
   const goal = getGoal();
   if (!goal || goal.status !== 'active') return '';
-  // Strip any injected tag wrappers before interpolation, mirroring the
-  // hot-memory sanitize in memory-loader.ts — prevents prompt injection
-  // via a crafted goal text that embeds </active-goal> to escape the block.
-  const sanitized = goal.text.replace(/<\/?active-goal\b[^>]*>/gi, '');
+  // Strip ALL XML-like tags from goal text — not just <active-goal>.
+  // A crafted goal containing <cross-session-memory>, <thinking>, or other
+  // agent-structural tags would be interpolated verbatim into the system
+  // prompt. Stripping all tags neutralizes the class of injection.
+  const sanitized = goal.text.replace(/<\/?[a-z_][\w-]*(\s[^>]*)?\/?>/gi, '');
+  // Sanitize createdAt: the value is always a valid ISO timestamp when
+  // written by setGoal(), but is read from SQLite via an unchecked cast.
+  // Strip newlines and angle brackets to prevent prompt-block escape.
+  const safeTs = goal.createdAt.replace(/[\r\n<>]/g, '');
   return [
     '<active-goal>',
     sanitized,
-    `(set: ${goal.createdAt})`,
+    `(set: ${safeTs})`,
     '</active-goal>',
   ].join('\n');
 }

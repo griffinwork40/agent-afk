@@ -31,8 +31,15 @@ export interface Goal {
 
 const NAMESPACE = 'goals';
 const ACTIVE_KEY = 'current';
+/** Hard cap on goal text to prevent system-prompt inflation. */
+export const MAX_GOAL_CHARS = 500;
 
-/** Lazy singleton — avoids opening the DB until first use. */
+// Invariant: _store is a process-global singleton shared across all concurrent
+// sessions in this process (REPL, Telegram, daemon). This is intentional —
+// goals are cross-session state persisted in kv.db, visible to every surface.
+// A session calling setGoal mutates what all sibling sessions observe at the
+// store layer; already-constructed sessions see the change only on next start
+// (goalPrompt is baked at construction time — see inject.ts).
 let _store: StateStore | undefined;
 function store(): StateStore {
   _store ??= new StateStore(getStateDatabasePath());
@@ -52,6 +59,9 @@ export function getGoal(): Goal | null {
  * Set a new active goal. Replaces any existing goal (active or paused).
  */
 export function setGoal(text: string, sessionId?: string): Goal {
+  if (text.length > MAX_GOAL_CHARS) {
+    throw new Error(`Goal text exceeds the ${MAX_GOAL_CHARS}-character limit (got ${text.length}). Shorten it and try again.`);
+  }
   const now = new Date().toISOString();
   const goal: Goal = {
     text,
