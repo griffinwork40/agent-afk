@@ -13,7 +13,8 @@
  *
  * Goals persist in the durable state store (~/.afk/state/kv/kv.db) and
  * survive across sessions, compaction, and terminal disconnects. The active
- * goal is injected into the system prompt so the model sees it every turn.
+ * goal is injected into the system prompt at session construction; mid-session
+ * changes are persisted immediately but take effect on the next session start.
  */
 
 import { palette } from '../../palette.js';
@@ -54,6 +55,12 @@ export const goalCmd: SlashCommand = {
   async handler(ctx, args) {
     const trimmed = args.trim();
 
+    // History: goalPrompt is baked into stableSystemPrefix at session construction
+    // (injectGoalPrompt / cwd-dependents.ts). Mid-session writes persist to DB
+    // immediately but the running session's prompt is not rebuilt. The UX notes
+    // below surface this boundary so users are not surprised.
+    const SESSION_NOTE = 'Goal change saved — takes effect at the start of the next session.';
+
     // No args or "status" → show current goal
     if (!trimmed || trimmed === 'status') {
       printGoal(ctx);
@@ -73,12 +80,14 @@ export const goalCmd: SlashCommand = {
         }
         const goal = setGoal(rem, ctx.stats.sessionId);
         ctx.out.success(`Goal set: ${goal.text}`);
+        ctx.out.info(SESSION_NOTE);
         return 'continue';
       }
       case 'pause': {
         const result = pauseGoal();
         if (result) {
           ctx.out.success('Goal paused.');
+          ctx.out.info(SESSION_NOTE);
         } else {
           const current = getGoal();
           if (!current) ctx.out.warn('No goal to pause.');
@@ -91,6 +100,7 @@ export const goalCmd: SlashCommand = {
         const result = resumeGoal();
         if (result) {
           ctx.out.success('Goal resumed.');
+          ctx.out.info(SESSION_NOTE);
         } else {
           const current = getGoal();
           if (!current) ctx.out.warn('No goal to resume.');
@@ -104,6 +114,7 @@ export const goalCmd: SlashCommand = {
         const result = completeGoal();
         if (result) {
           ctx.out.success(`Goal completed: ${result.text}`);
+          ctx.out.info(SESSION_NOTE);
         } else {
           const current = getGoal();
           if (!current) ctx.out.warn('No goal to complete.');
@@ -116,6 +127,7 @@ export const goalCmd: SlashCommand = {
         const deleted = clearGoal();
         if (deleted) {
           ctx.out.success('Goal cleared.');
+          ctx.out.info(SESSION_NOTE);
         } else {
           ctx.out.info('No goal to clear.');
         }
@@ -129,6 +141,7 @@ export const goalCmd: SlashCommand = {
         // Bare text without a verb → treat as "set"
         const goal = setGoal(trimmed, ctx.stats.sessionId);
         ctx.out.success(`Goal set: ${goal.text}`);
+        ctx.out.info(SESSION_NOTE);
         return 'continue';
       }
     }
