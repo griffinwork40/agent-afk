@@ -18,9 +18,13 @@ import { getGoal } from './goal-store.js';
 export function buildGoalPromptFragment(): string {
   const goal = getGoal();
   if (!goal || goal.status !== 'active') return '';
+  // Strip any injected tag wrappers before interpolation, mirroring the
+  // hot-memory sanitize in memory-loader.ts — prevents prompt injection
+  // via a crafted goal text that embeds </active-goal> to escape the block.
+  const sanitized = goal.text.replace(/<\/?active-goal\b[^>]*>/gi, '');
   return [
     '<active-goal>',
-    goal.text,
+    sanitized,
     `(set: ${goal.createdAt})`,
     '</active-goal>',
   ].join('\n');

@@ -65,12 +65,14 @@ export function setGoal(text: string, sessionId?: string): Goal {
 }
 
 /**
- * Pause the current goal. No-op if no goal exists or goal is already
- * paused/completed.
+ * Pause the current goal. Returns the updated goal on actual transition
+ * (active → paused), or null when no state change occurred (no goal, already
+ * paused, or completed). Callers distinguish success from no-op by checking
+ * for null rather than inspecting the returned status field.
  */
 export function pauseGoal(): Goal | null {
   const goal = getGoal();
-  if (!goal || goal.status !== 'active') return goal;
+  if (!goal || goal.status !== 'active') return null;
   goal.status = 'paused';
   goal.updatedAt = new Date().toISOString();
   store().put(NAMESPACE, ACTIVE_KEY, goal);
@@ -78,11 +80,13 @@ export function pauseGoal(): Goal | null {
 }
 
 /**
- * Resume a paused goal. No-op if no goal exists or goal is not paused.
+ * Resume a paused goal. Returns the updated goal on actual transition
+ * (paused → active), or null when no state change occurred (no goal, already
+ * active, or completed).
  */
 export function resumeGoal(): Goal | null {
   const goal = getGoal();
-  if (!goal || goal.status !== 'paused') return goal;
+  if (!goal || goal.status !== 'paused') return null;
   goal.status = 'active';
   goal.updatedAt = new Date().toISOString();
   store().put(NAMESPACE, ACTIVE_KEY, goal);
@@ -90,11 +94,13 @@ export function resumeGoal(): Goal | null {
 }
 
 /**
- * Mark the current goal as completed.
+ * Mark the current goal as completed. Only transitions from `active` — a
+ * paused goal must be resumed first. Returns null when no goal exists, when
+ * the goal is already completed, or when the goal is paused.
  */
 export function completeGoal(): Goal | null {
   const goal = getGoal();
-  if (!goal) return null;
+  if (!goal || goal.status !== 'active') return null;
   goal.status = 'completed';
   goal.updatedAt = new Date().toISOString();
   store().put(NAMESPACE, ACTIVE_KEY, goal);

@@ -82,6 +82,7 @@ vi.mock('../../agent/default-hook-registry.js', () => ({
 vi.mock('../../agent/memory/index.js', () => ({
   MemoryStore: vi.fn(() => ({ close: vi.fn() })),
   injectHotMemory: (c: unknown) => c,
+  injectGoalPrompt: (config: unknown) => config,
   MEMORY_TOOL_NAMES: [],
 }));
 

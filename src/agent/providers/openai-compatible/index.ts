@@ -433,6 +433,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
         })
       : '';
     const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
+    const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
     const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
 
     // Contract: given the cwd-dependent `# Environment` fragment, return the
@@ -445,7 +446,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       parts.push(memoryPrompt);
       const workspacePrompt = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined);
       if (workspacePrompt) parts.push(workspacePrompt);
-      if (hotMemory.length > 0) parts.push(hotMemory);
+      for (const frag of [hotMemory, goalPrompt]) { if (frag.length > 0) parts.push(frag); }
       parts.push(envFragment);
       if (manifest.length > 0) parts.push(manifest);
       return parts.join('\n\n');

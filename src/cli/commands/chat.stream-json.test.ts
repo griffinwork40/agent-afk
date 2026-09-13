@@ -100,6 +100,7 @@ vi.mock('../../agent/memory/index.js', () => {
   return {
     MemoryStore: vi.fn(() => ({ close })),
     injectHotMemory: (config: unknown) => config,
+    injectGoalPrompt: (config: unknown) => config,
     MEMORY_TOOL_NAMES: [],
     // The (unmocked) openai-compatible provider imports these from
     // memory/index.js at module load; empty/no-op stubs keep the mocked memory

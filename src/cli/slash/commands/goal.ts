@@ -76,34 +76,39 @@ export const goalCmd: SlashCommand = {
         return 'continue';
       }
       case 'pause': {
-        const goal = pauseGoal();
-        if (!goal) {
-          ctx.out.warn('No goal to pause.');
-        } else if (goal.status === 'paused') {
+        const result = pauseGoal();
+        if (result) {
           ctx.out.success('Goal paused.');
         } else {
-          ctx.out.info(`Goal is ${goal.status}, not active — cannot pause.`);
+          const current = getGoal();
+          if (!current) ctx.out.warn('No goal to pause.');
+          else if (current.status === 'paused') ctx.out.warn('Goal is already paused.');
+          else ctx.out.info(`Goal is ${current.status} — cannot pause.`);
         }
         return 'continue';
       }
       case 'resume': {
-        const goal = resumeGoal();
-        if (!goal) {
-          ctx.out.warn('No goal to resume.');
-        } else if (goal.status === 'active') {
+        const result = resumeGoal();
+        if (result) {
           ctx.out.success('Goal resumed.');
         } else {
-          ctx.out.info(`Goal is ${goal.status}, not paused — cannot resume.`);
+          const current = getGoal();
+          if (!current) ctx.out.warn('No goal to resume.');
+          else if (current.status === 'active') ctx.out.warn('Goal is already active.');
+          else ctx.out.info(`Goal is ${current.status} — cannot resume.`);
         }
         return 'continue';
       }
       case 'done':
       case 'complete': {
-        const goal = completeGoal();
-        if (!goal) {
-          ctx.out.warn('No goal to complete.');
+        const result = completeGoal();
+        if (result) {
+          ctx.out.success(`Goal completed: ${result.text}`);
         } else {
-          ctx.out.success(`Goal completed: ${goal.text}`);
+          const current = getGoal();
+          if (!current) ctx.out.warn('No goal to complete.');
+          else if (current.status === 'completed') ctx.out.warn('Goal is already completed.');
+          else ctx.out.warn(`Goal is ${current.status} — resume it before completing.`);
         }
         return 'continue';
       }
