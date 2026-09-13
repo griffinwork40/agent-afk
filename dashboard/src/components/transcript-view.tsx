@@ -12,46 +12,7 @@ import {
   NoticeItem,
   BgJobItem,
 } from './message-row';
-
-// Re-export so consumers import from one place.
-export type { SessionTotals } from './session-meter';
-
-export type TranscriptItem =
-  | { kind: 'user'; id: string; text: string }
-  | { kind: 'assistant'; id: string; text: string }
-  | { kind: 'thinking'; id: string; text: string }
-  | {
-      kind: 'tool';
-      id: string;
-      name: string;
-      toolUseId?: string;
-      inputPreview: string;
-      status: 'running' | 'ok' | 'error';
-      output?: string;
-      outputUnavailable?: boolean;
-      diff?: string;
-      durationMs?: number;
-    }
-  | { kind: 'error'; id: string; message: string }
-  | { kind: 'notice'; id: string; text: string }
-  | {
-      kind: 'subagent';
-      id: string;
-      subagentId: string;
-      parentId?: string;
-      status: string;
-      label: string;
-      model?: string;
-      agentType?: string;
-      durationMs?: number;
-      totalCostUsd?: number;
-      promptHead?: string;
-      turnCount?: number;
-      stopReason?: string;
-      parentToolUseId?: string;
-    }
-  | { kind: 'bg_job'; id: string; jobId: string; status: string; label: string };
-
+import type { TranscriptItem } from '@/lib/ledger-adapter';
 import type { SessionTotals } from './session-meter';
 
 interface TranscriptViewProps {

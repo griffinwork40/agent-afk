@@ -7,7 +7,7 @@
  * a hierarchical execution view.
  */
 import { useMemo } from 'react';
-import type { TranscriptItem } from './transcript-view';
+import type { TranscriptItem } from '@/lib/ledger-adapter';
 import { TopologySpine } from './topology-spine';
 import { buildSpineTree } from '@/lib/topology';
 import type { SpineNode } from '@/lib/topology-types';

@@ -3,7 +3,7 @@ import { AlertCircle, Info } from 'lucide-react';
 import { MarkdownContent } from './markdown-content';
 import { StreamingText } from './streaming-text';
 import { MessageActions } from './message-actions';
-import type { TranscriptItem } from './transcript-view';
+import type { TranscriptItem } from '@/lib/ledger-adapter';
 
 // ---------------------------------------------------------------------------
 // UserMessage

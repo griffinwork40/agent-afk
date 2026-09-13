@@ -239,7 +239,8 @@ function Dashboard() {
 // ---------------------------------------------------------------------------
 
 import type { SessionSummary } from './types/api';
-import type { TranscriptItem, SessionTotals } from './components/transcript-view';
+import type { TranscriptItem } from '@/lib/ledger-adapter';
+import type { SessionTotals } from './components/session-meter';
 
 function SessionContent({
   loading,
