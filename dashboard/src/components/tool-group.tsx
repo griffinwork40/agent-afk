@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { CheckCircle2, AlertCircle, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Collapse } from './collapse';
 import { ToolCallCard, type ToolCallCardProps } from './tool-call-card';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -19,23 +20,6 @@ function sumDurations(tools: ToolCallCardProps[]): number | undefined {
 
 function formatMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
-}
-
-// ── Animated collapse (same CSS grid technique as ToolCallCard) ───────────────
-
-// Invariant: grid-rows transition is hardware-accelerated; inner div uses
-// min-h-0 to contain overflow without explicit height calculations.
-function Collapse({ open, children }: { open: boolean; children: React.ReactNode }) {
-  return (
-    <div
-      className={cn(
-        'grid transition-[grid-template-rows] duration-200 ease-out',
-        open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
-      )}
-    >
-      <div className="min-h-0 overflow-hidden">{children}</div>
-    </div>
-  );
 }
 
 // ── Header states ─────────────────────────────────────────────────────────────
