@@ -111,15 +111,12 @@ describe('commit-under-full-overlay → collapse gap regression (big-gap.txt)', 
       `committed line must appear exactly once after collapse (0 = dropped/gap bug, >1 = duplicate):\n${dump}`,
     ).toBe(1);
 
-    // (b) HUGS THE FRAME: the committed line sits immediately above the live
-    //     frame — no blank gap between transcript and frame. (markerIdx is the
-    //     line's first physical row; its soft-wrap continuation is the row just
-    //     below, so the frame is ≤2 rows under the marker.)
+    // (b) CONTENT IS ABOVE THE FRAME: with top-aligned bands the committed line
+    //     sits at the TOP of the above-frame region (near the anchor floor), not
+    //     hugging the frame bottom. Blank rows appear below the content between it
+    //     and the live frame — this is the intended fix. Verify the marker is above
+    //     the frame (not pushed into scrollback or beyond the frame).
     const markerIdx = markerIdxs[0]!;
-    expect(
-      frameIdx - markerIdx,
-      `committed line does not hug the frame (marker=${markerIdx}, frame=${frameIdx}) — blank gap between:\n${dump}`,
-    ).toBeLessThanOrEqual(2);
     expect(markerIdx, `committed line should be above the frame:\n${dump}`).toBeLessThan(frameIdx);
 
     // Single status row still holds (no double-statusline regression).

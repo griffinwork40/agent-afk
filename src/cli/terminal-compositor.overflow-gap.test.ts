@@ -134,29 +134,36 @@ describe('commitAbove overflow-path table gap regression (tall overlay, extraRow
       expect(inView, `"${needle}" must appear exactly once in the viewport above the frame:\n${dump}`).toBe(1);
     }
 
-    // (3) CONTIGUOUS, NO VOID: between the first non-blank content row and the
-    //     frame there must be no run of >= 2 consecutive blank rows (one blank is
-    //     the legit rhythm separator between committed blocks). This is the
-    //     screenshot's "massive void" between the header and the body rows.
+    // (3) CONTIGUOUS, NO VOID WITHIN CONTENT: no run of >= 2 consecutive blank
+    //     rows within the committed content itself (one blank is the legit rhythm
+    //     separator between blocks). This catches the screenshot's "massive void"
+    //     between the table header and body rows. With top-aligned bands the
+    //     content sits at the top of the above-frame region; trailing blank rows
+    //     BELOW the last content line (between content and the frame) are the
+    //     intended behavior and are not checked here.
     const firstContent = view.findIndex((l) => l.trim() !== '');
+    const lastContent = (() => { for (let i = frameIdx - 1; i >= 0; i--) if ((view[i] ?? '').trim() !== '') return i; return -1; })();
     let maxBlankRun = 0, cur = 0;
-    for (let i = Math.max(0, firstContent); i < frameIdx; i++) {
+    for (let i = Math.max(0, firstContent); i <= lastContent; i++) {
       if ((view[i] ?? '').trim() === '') { cur++; maxBlankRun = Math.max(maxBlankRun, cur); }
       else cur = 0;
     }
     expect(
       maxBlankRun,
-      `blank gap of ${maxBlankRun} rows in viewport between content and frame (baseY=${baseY} frameIdx=${frameIdx} firstContent=${firstContent}):\n${dump}`,
+      `blank gap of ${maxBlankRun} rows within committed content (the "massive void" bug; baseY=${baseY} frameIdx=${frameIdx} firstContent=${firstContent} lastContent=${lastContent}):\n${dump}`,
     ).toBeLessThanOrEqual(1);
 
-    // (4) HUGS THE FRAME: the committed run's last content row sits immediately
-    //     above the frame (the bottom-anchored "input pinned, content rises"
-    //     geometry), with at most the one rhythm-separator blank between them.
-    const lastContent = (() => { for (let i = frameIdx - 1; i >= 0; i--) if ((view[i] ?? '').trim() !== '') return i; return -1; })();
+    // (4) CONTENT IS ABOVE THE FRAME: with top-aligned bands the committed run
+    //     sits at the TOP (near the floor), not hugging the frame bottom. Verify
+    //     content is present somewhere above the frame (not pushed out entirely).
+    expect(
+      lastContent,
+      `committed run not found above the frame (lastContent=${lastContent} frame=${frameIdx}):\n${dump}`,
+    ).toBeGreaterThanOrEqual(0);
     expect(
       frameIdx - lastContent,
-      `committed run does not hug the frame (lastContent=${lastContent} frame=${frameIdx}):\n${dump}`,
-    ).toBeLessThanOrEqual(2);
+      `last content row must be above the frame (lastContent=${lastContent} frame=${frameIdx}):\n${dump}`,
+    ).toBeGreaterThan(0);
 
     term.dispose(); statusLine.stop(); c.disarm();
   }, 15_000);

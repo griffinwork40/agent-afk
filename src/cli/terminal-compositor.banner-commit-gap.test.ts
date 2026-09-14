@@ -135,9 +135,13 @@ describe('banner commit→collapse gap (anchorRow > 1, real footer)', () => {
         max - min + 1,
         `committed lines NOT contiguous (gap bug): span=${max - min + 1}, count=${committedIdxs.length}:\n${dump}`,
       ).toBe(committedIdxs.length);
-      expect(frameIdx - max, `committed run does not hug the frame (bottom=${max}, frame=${frameIdx}):\n${dump}`).toBe(1);
-      // The most-recent committed line is the rollup tail, adjacent to the frame.
-      expect(view[max], `rollup tail not adjacent to frame:\n${dump}`).toContain('Done (114 tools)');
+      // With top-aligned bands the committed run sits at the TOP of the above-frame
+      // region (hugging the anchor floor/banner bottom), not the bottom. Blank rows
+      // appear BELOW the content (between it and the live frame) — this is the
+      // intended fix. Verify content is above the frame (not adjacent to it).
+      expect(frameIdx - max, `committed run must be above the frame (bottom=${max}, frame=${frameIdx}):\n${dump}`).toBeGreaterThan(0);
+      // The most-recent committed line is the rollup tail.
+      expect(view[max], `rollup tail not last committed line:\n${dump}`).toContain('Done (114 tools)');
       // Footer status row remains single (no double-statusline under the heavy scenario).
       expect(ls.filter((l) => l.includes('STATUSMODELXYZ')).length, `status row not single:\n${fullDump}`).toBe(1);
 

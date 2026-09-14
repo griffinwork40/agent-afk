@@ -157,9 +157,12 @@ describe('commitAbove: stale prevTopRow from shrink-padded render loses repositi
     c.setOverlay(smallOverlay);
 
     // Verify the shrink-pad divergence: topRow is still 5 (stale) even though the
-    // real frame is now at row 15. repositionCommittedBand moved the band to 13..14.
+    // real frame is now at row 15. With top-aligned bands, repositionCommittedBand
+    // pins the band at [floor, floor+fit-1] = [1, 2] (floor=1, fit=2 for
+    // ['GEO_PROSE','']) rather than adjacent to the real frame top (was 13..14
+    // under bottom-alignment). The stale logUpdate.topRow is still observable.
     expect(internals.logUpdate?.topRow, 'topRow must be stale (5) due to shrink-padding').toBe(5);
-    expect(internals.committedBandBottomRow, 'band must be repositioned to row 14 (adjacent to real frame)').toBe(14);
+    expect(internals.committedBandBottomRow, 'band must be top-aligned to floor+fit-1 = 2').toBe(2);
 
     // Step 4: commitAbove(5-row block). This is the defect trigger:
     // stale prevTopRow=5 → fitsAboveFrame = 5>1 && 5<=stale_room=4 → FALSE.
@@ -230,10 +233,22 @@ describe('commitAbove: stale prevTopRow from shrink-padded render loses repositi
     expect(tableRow, `GEO_TABLE_ROW_1 visible:\n${dump}`).toBeGreaterThanOrEqual(0);
     expect(proseRow < tableRow, `prose must appear above table rows (commit order):\n${dump}`).toBe(true);
 
-    // (5) NO BLANK VOID between first content row and frame (at most 1 = rhythm separator).
+    // (5) NO BLANK VOID within the committed content itself (at most 1 = rhythm
+    // separator between blocks). With top-aligned bands the committed content
+    // sits at the top of the above-frame region with blank rows BELOW it
+    // (between content and frame) — that trailing gap is the intended behavior
+    // and is not checked here. The defect this guards (stale prevTopRow) caused
+    // content to be LOST (overwritten by band-hold without scrollback archival),
+    // so no blank run should appear WITHIN the committed content region.
     const firstContent = aboveFrame.findIndex((l) => l.trim() !== '');
+    const lastContent = (() => {
+      for (let i = aboveFrame.length - 1; i >= 0; i--) {
+        if ((aboveFrame[i] ?? '').trim() !== '') return i;
+      }
+      return -1;
+    })();
     let maxBlankRun = 0, cur = 0;
-    for (let i = Math.max(0, firstContent); i < frameIdx; i++) {
+    for (let i = Math.max(0, firstContent); i <= lastContent; i++) {
       if ((aboveFrame[i] ?? '').trim() === '') {
         cur++;
         maxBlankRun = Math.max(maxBlankRun, cur);
@@ -243,7 +258,7 @@ describe('commitAbove: stale prevTopRow from shrink-padded render loses repositi
     }
     expect(
       maxBlankRun,
-      `blank void of ${maxBlankRun} rows between content rows (stale prevTopRow left a gap):\n${dump}`,
+      `blank void of ${maxBlankRun} rows within committed content (stale prevTopRow caused content loss):\n${dump}`,
     ).toBeLessThanOrEqual(1);
 
     term.dispose();

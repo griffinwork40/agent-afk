@@ -185,10 +185,14 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   // rides into the band-hold model as PENDING content rather than being treated
   // as "not contiguous" and silently left to be overwritten by the next frame
   // render with no scrollback copy ever having been made.
+  // Invariant (top-aligned band contiguity): the band is always pinned at
+  // [anchorFloor, anchorFloor + fit - 1]. Its validity is checked against
+  // the floor (where the band is top-aligned), not against the frame top
+  // (which may be far below the band's bottom when the dropdown is open).
   const overflowPriorContiguous =
     committedBand.length > 0 &&
     anchorRow <= 1 &&
-    (geometryStale || committedBandBottomRow === frameTop - 1);
+    (geometryStale || committedBandBottomRow <= frameTop - 1);
   const overflowRun = overflowPriorContiguous ? [...committedBand, ...textLines] : textLines;
   const overflowHasPending =
     overflowPriorContiguous && committedBand.length > committedBandPaintedRows;

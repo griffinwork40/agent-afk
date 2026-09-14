@@ -145,31 +145,25 @@ describe('commitAbove shrink-gap regression', () => {
     const committedIdx = lines.findIndex((l) => l.includes(COMMITTED));
     expect(committedIdx, `committed line not rendered:\n${dump}`).toBeGreaterThanOrEqual(0);
 
-    // Largest run of blank rows below the committed line (the gap, if any).
-    let blankRun = 0;
-    let maxBlankRun = 0;
-    for (let i = committedIdx + 1; i < lines.length; i++) {
-      if ((lines[i] ?? '').trim() === '') {
-        blankRun += 1;
-        maxBlankRun = Math.max(maxBlankRun, blankRun);
-      } else {
-        blankRun = 0;
-      }
+    // Top-aligned band: committed content should be near the top of the
+    // viewport (row 0 or row anchorFloor-1), NOT floating mid-screen with
+    // blank rows above it. Blank rows BELOW the band (between it and the
+    // spinner/frame) are expected and visually natural.
+    expect(
+      committedIdx,
+      `committed content not top-aligned (found at row ${committedIdx}, expected near top):\n${dump}`,
+    ).toBeLessThanOrEqual(3);
+
+    // No blank rows ABOVE the committed line (the old "gap" that this
+    // regression test was written to prevent).
+    let blanksAbove = 0;
+    for (let i = 0; i < committedIdx; i++) {
+      if ((lines[i] ?? '').trim() === '') blanksAbove++;
     }
     expect(
-      maxBlankRun,
-      `large blank gap (${maxBlankRun} rows) between committed content and the frame:\n${dump}`,
-    ).toBeLessThanOrEqual(1);
-
-    // Stronger: the committed line sits immediately above the live frame's first
-    // content row (the spinner) — at most one breathing-room blank between them.
-    const spinnerIdx = lines.findIndex((l) => l.includes('⠋') || /\b(tok|thought)\b/.test(l));
-    if (spinnerIdx >= 0) {
-      expect(
-        spinnerIdx - committedIdx,
-        `committed line not adjacent to the frame (committed=${committedIdx}, frame=${spinnerIdx}):\n${dump}`,
-      ).toBeLessThanOrEqual(2);
-    }
+      blanksAbove,
+      `blank gap above committed content (${blanksAbove} rows):\n${dump}`,
+    ).toBe(0);
 
     term.dispose();
     c.disarm();

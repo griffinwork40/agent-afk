@@ -187,11 +187,16 @@ describe('triplicate-echo: committed-band single-copy invariant (GREEN regressio
     c.setInputMode('idle'); // drain guard → repaint → repin may re-write same row
 
     const windowEnd = writes.all().length;
-    const segment = writes.all().slice(windowStart, windowEnd);
+    // Analyze the ENTIRE write stream (not just the collapse segment): with
+    // top-aligned bands the repin paints at the floor (row 1), which may have
+    // been written in an earlier repaint before the collapse window opened.
+    // The single-copy invariant must hold across the full session output.
+    const fullStream = writes.all();
+    const segment = fullStream.slice(windowStart, windowEnd);
 
-    // Analyze: find the last write to each row in the window.
+    // Analyze: find the last write to each row in the FULL stream.
     const ECHO_MARKER = 'ECHO_T1'; // substring of the committed echo text
-    const rowStates = lastWritePerRow(segment, ECHO_MARKER);
+    const rowStates = lastWritePerRow(fullStream, ECHO_MARKER);
 
     // Count rows whose FINAL state is un-erased echo content.
     const unErasedEchoRows = [...rowStates.entries()]

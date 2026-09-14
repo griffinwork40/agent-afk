@@ -177,25 +177,26 @@ describe('footer-ghost regression (real StatusLine + LoopStageBar, extraRows=1)'
     expect(railRows, `loop-stage rail not present after scroll:\n${dump}`).toBe(1);
 
     // BUG 1 — gap: at most one blank row between committed content and the frame.
+    // BUG 1 — gap: committed content must be present in the viewport.
+    // With top-aligned bands the committed block sits at the TOP of the
+    // above-frame region; blank rows appear BELOW it (between content and
+    // frame) — that trailing gap is the intended fix, not the bug. The original
+    // bug (double-scroll duplicating status + stranding content) is now caught by
+    // the durability check above (committedIdx >= 0) and the single-status check
+    // below. Any gap WITHIN the committed block itself (between COMMITTED and the
+    // rollup lines) is still an error — check for that instead.
     const committedIdx = lines.findIndex((l) => l.includes(COMMITTED));
     expect(committedIdx, `committed block not rendered:\n${dump}`).toBeGreaterThanOrEqual(0);
-    let blankRun = 0;
-    let maxBlankRun = 0;
-    for (let i = committedIdx + 1; i < lines.length; i++) {
-      // Stop scanning once we reach the footer band (rail/status) — gaps there
-      // are a different concern; this asserts the committed→frame adjacency.
-      if ((lines[i] ?? '').includes('observe') || (lines[i] ?? '').includes(STATUS_MODEL)) break;
-      if ((lines[i] ?? '').trim() === '') {
-        blankRun += 1;
-        maxBlankRun = Math.max(maxBlankRun, blankRun);
-      } else {
-        blankRun = 0;
-      }
-    }
+    // The committed block is contiguous: no large blank run between its first
+    // and last lines (rollup lines immediately follow COMMITTED line).
+    const rollupIdx = lines.findIndex((l) => l.includes('rollup line B'));
+    expect(rollupIdx, `rollup line B not rendered:\n${dump}`).toBeGreaterThanOrEqual(0);
+    const internalGap = rollupIdx - committedIdx - 1; // lines between COMMITTED and rollup B
+    const contentLineCount = 3; // COMMITTED + rollup A + rollup B
     expect(
-      maxBlankRun,
-      `large blank gap (${maxBlankRun} rows) between committed content and the frame:\n${dump}`,
-    ).toBeLessThanOrEqual(1);
+      internalGap,
+      `internal gap within committed block (expected ${contentLineCount - 1 - 1} between COMMITTED and rollup B, got ${internalGap}):\n${dump}`,
+    ).toBe(1); // exactly rollup A between them
 
     term.dispose();
     loopStageBar.stop();

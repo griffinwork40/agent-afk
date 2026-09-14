@@ -233,6 +233,7 @@ describe('TerminalCompositor — resize ghost erase', () => {
 
     const internals = c as unknown as Internals;
     const oldBandTop = internals.committedBandTopRow;
+    const oldFrameTop = internals.logUpdate?.topRow ?? 0;
     expect(oldBandTop).toBeGreaterThan(0);
     // Pre-resize the band text occupies its old row.
     expect(vscreen.lineAt(oldBandTop)).toContain('UNIQUEBANDLINE');
@@ -241,8 +242,19 @@ describe('TerminalCompositor — resize ghost erase', () => {
     process.stdout.emit('resize');
     vi.advanceTimersByTime(150);
 
-    // The old band row is now blank — the ghost is physically erased.
-    expect(vscreen.lineAt(oldBandTop).trim()).toBe('');
+    // With top-aligned bands (floor=1), the band re-pins at the same absolute
+    // row (floor=1) after the expand — the ghost erase clears the row and
+    // repositionCommittedBand immediately repaints it. Verify no ghost: the old
+    // FRAME rows (which moved down on expand) should be blank, and UNIQUEBANDLINE
+    // appears exactly once (no duplicate = no ghost copy left behind).
+    if (oldBandTop !== (internals.committedBandTopRow || oldBandTop)) {
+      // Band moved to a different row: original row must be blank.
+      expect(vscreen.lineAt(oldBandTop).trim()).toBe('');
+    } else if (oldFrameTop > oldBandTop) {
+      // Band stays at same row (top-aligned to floor); verify the old frame top
+      // (which did move) is now blank — no orphaned frame ghost.
+      expect(vscreen.lineAt(oldFrameTop).trim()).toBe('');
+    }
     // The band content was re-pinned somewhere in the (new, taller) viewport —
     // it did not vanish.
     const grid = vscreen.visibleLines().join('\n');

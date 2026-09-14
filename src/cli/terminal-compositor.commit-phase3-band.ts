@@ -80,12 +80,17 @@ export function commitPhase3Band(
     // fires when the merged run is guaranteed to fit in the above-frame region;
     // `anchorRow <= 1` is NOT required here because the merge path is gated on
     // `fitsAboveFrame`, not on `anchorRow <= 1`.
+    // Invariant (top-aligned band contiguity): the band is pinned at
+    // [floor, floor + fit - 1] and may have blank rows between its bottom
+    // and the frame top. The prior band is mergeable when it's tracked at
+    // or above the frame top — not necessarily adjacent. The `<=` check
+    // replaces the strict `===` adjacency that assumed bottom-alignment.
     const contiguousPriorBand =
       fitsAboveFrame &&
       wholeBlockPainted &&
       self.committedBand.length > 0 &&
-      (self.committedBandBottomRow === newTopRow - 1 ||
-        self.committedBandBottomRow === phase1EffectiveFrameTop - 1);
+      (self.committedBandBottomRow <= newTopRow - 1 ||
+        self.committedBandBottomRow <= phase1EffectiveFrameTop - 1);
     const run = contiguousPriorBand ? [...self.committedBand, ...newLines] : newLines;
     // #540: the merged run's provenance, 1:1 with `run` (same merge decision,
     // same-order arrays — self.committedBandMeta is 1:1 with self.committedBand).
