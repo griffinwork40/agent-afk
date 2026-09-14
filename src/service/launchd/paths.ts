@@ -36,7 +36,7 @@
  * @module service/launchd
  */
 
-import { homedir } from 'os';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'path';
 import { getLogsDir } from '../../paths.js';
 
@@ -71,7 +71,7 @@ export function serviceLogPath(name: ServiceName): string {
  * Modern launchctl requires `gui/<uid>` domain targets.
  */
 export function guiDomain(): string {
-  return `gui/${process.getuid?.() ?? 501}`;
+  return `gui/${process.getuid?.() ?? userInfo().uid}`;
 }
 
 /**
