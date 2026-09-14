@@ -165,20 +165,17 @@ export function makeNextWithTimeout(
       //
       // When pausedUntil fires at the same moment apiRoundInFlight is true
       // (e.g. a rate-limit pause arriving while the provider is retrying its
-      // next round), the effective worst-case tolerance is:
+      // next round), the effective worst-case tolerance without a guard would be:
       //
       //   pause_window + PAUSE_SLACK_MS + resolveMaxApiRoundInflightMs()
       //   ≈ (pause_window) + 90 s + resolveMaxApiRoundInflightMs()
       //
       // where pause_window is provider-governed (typically 60–600 s for
-      // Anthropic overload responses). There is no single cap combining
-      // all three; this is intentional — each mechanism covers a distinct
-      // legitimate silence that could exceed any single unified ceiling on
-      // its own. The tradeoff is that a pathological overlap (rate-limit
-      // pause + wedged API round) could defer a user-visible timeout by
-      // 10+ minutes. If that becomes a problem in practice, gate the
-      // apiRoundInFlight branch on `pausedUntil === null` to prevent the
-      // additive stack.
+      // Anthropic overload responses). To prevent that additive stack, the
+      // apiRoundInFlight branch is gated on `pausedUntil === null` (fix #1660):
+      // during a pause the windowMs above is already inflated to cover the pause
+      // window + PAUSE_SLACK_MS, so the API-round deferral is both redundant and
+      // harmful. Each mechanism still covers its own distinct legitimate silence.
       const arm = (): void => {
         const remaining = windowMs - (Date.now() - state.lastActivityAt);
         if (remaining <= 0) {
@@ -200,9 +197,19 @@ export function makeNextWithTimeout(
           // model processes the context. Suspend the watchdog like we do for
           // in-flight tools, bounded by resolveMaxApiRoundInflightMs() so a
           // genuinely wedged API call still eventually trips.
+          //
+          // Invariant: gate on pausedUntil === null so the two suspension
+          // windows cannot stack additively. When a rate-limit pause is active
+          // the windowMs above is already inflated to cover the pause window +
+          // PAUSE_SLACK_MS; adding resolveMaxApiRoundInflightMs() on top would
+          // create a worst-case silence of 10+ minutes with no user-visible
+          // signal. During a pause the API round silence is subsumed by the
+          // already-extended window, so the extra deferral is redundant as well
+          // as harmful. (Fix for #1660.)
           if (
             state.apiRoundInFlight &&
             state.apiRoundSince !== null &&
+            state.pausedUntil === null &&
             Date.now() - state.apiRoundSince < resolveMaxApiRoundInflightMs()
           ) {
             timeoutId = setTimeout(arm, TOOL_INFLIGHT_RECHECK_MS);

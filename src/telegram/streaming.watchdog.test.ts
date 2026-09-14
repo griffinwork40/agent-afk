@@ -881,6 +881,100 @@ describe('makeNextWithTimeout — pausedUntil + PAUSE_SLACK_MS extension', () =>
 });
 
 // ---------------------------------------------------------------------------
+// makeNextWithTimeout — suspension ceiling stacking (#1660)
+// ---------------------------------------------------------------------------
+
+describe('makeNextWithTimeout — apiRoundInFlight does NOT stack with pausedUntil (#1660)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('does not defer a StreamTimeoutError by resolveMaxApiRoundInflightMs() when pausedUntil is set', async () => {
+    // Scenario: a rate-limit pause of 300s is active (pausedUntil far in future)
+    // AND apiRoundInFlight=true. Without the fix the effective timeout would be:
+    //   (300s + PAUSE_SLACK_MS=90s) + resolveMaxApiRoundInflightMs()=420s = 810s
+    // With the fix the apiRoundInFlight branch is skipped (pausedUntil !== null),
+    // so the timeout fires at the extended window = 390s from start.
+    vi.useFakeTimers();
+    const { iter } = makeHangingIter();
+
+    const pauseDurationMs = 300_000;
+    const pausedUntil = new Date(Date.now() + pauseDurationMs);
+    const state = makeState({
+      receivedAny: true,
+      pausedUntil,
+      apiRoundInFlight: true,
+      apiRoundSince: Date.now(),
+    });
+
+    // windowMs = max(NEXT_EVENT_TIMEOUT_MS, 300_000 + PAUSE_SLACK_MS) = 390_000
+    const p = makeNextWithTimeout(iter, state)();
+    let settled = false;
+    void p.then(() => { settled = true; }, () => { settled = true; });
+
+    // Advance to just past the extended pause window — must fire here.
+    const extendedWindow = pauseDurationMs + PAUSE_SLACK_MS; // 390_000
+    await vi.advanceTimersByTimeAsync(extendedWindow - 1);
+    expect(settled).toBe(false);
+
+    const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+    // Cross the extended window.
+    await vi.advanceTimersByTimeAsync(2);
+    await rejection;
+    // Total elapsed: extendedWindow + 1 ms — well under 810s (the stacking scenario).
+    expect(settled).toBe(true);
+  }, 20_000);
+
+  it('apiRoundInFlight DOES suspend when pausedUntil is null', async () => {
+    // Control: the fix must not regress the normal apiRoundInFlight suspension.
+    vi.useFakeTimers();
+    const { iter } = makeHangingIter();
+
+    const state = makeState({
+      receivedAny: true,
+      pausedUntil: null,
+      apiRoundInFlight: true,
+      apiRoundSince: Date.now(),
+    });
+
+    const p = makeNextWithTimeout(iter, state)();
+    let settled = false;
+    void p.then(() => { settled = true; }, () => { settled = true; });
+
+    // Advance well past NEXT_EVENT_TIMEOUT_MS — apiRoundInFlight should suspend.
+    await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+    expect(settled).toBe(false);
+
+    // Still suspended at 2× NEXT_EVENT_TIMEOUT_MS (within resolveMaxApiRoundInflightMs).
+    await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+    expect(settled).toBe(false);
+  }, 15_000);
+
+  it('apiRoundInFlight fires once apiRoundSince exceeds resolveMaxApiRoundInflightMs() with no pause', async () => {
+    // Ensure the apiRoundInFlight ceiling still applies without a pause.
+    vi.useFakeTimers();
+    const { iter } = makeHangingIter();
+    const apiRoundSince = Date.now();
+    const state = makeState({
+      receivedAny: true,
+      pausedUntil: null,
+      apiRoundInFlight: true,
+      apiRoundSince,
+    });
+
+    const p = makeNextWithTimeout(iter, state)();
+
+    // Advance past NEXT_EVENT_TIMEOUT_MS first.
+    await vi.advanceTimersByTimeAsync(NEXT_EVENT_TIMEOUT_MS + 1);
+
+    // Then advance past resolveMaxApiRoundInflightMs() — must fire.
+    const maxApi = resolveMaxApiRoundInflightMs();
+    const elapsed = NEXT_EVENT_TIMEOUT_MS + 1;
+    const rejection = expect(p).rejects.toBeInstanceOf(StreamTimeoutError);
+    await vi.advanceTimersByTimeAsync(maxApi - elapsed + TOOL_INFLIGHT_RECHECK_MS + 1);
+    await rejection;
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
 // armProgressGateTimer
 // ---------------------------------------------------------------------------
 
