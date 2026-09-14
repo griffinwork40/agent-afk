@@ -24,7 +24,7 @@ export const metadata: Metadata = {
   // pinned-tab mask-icon reusing the same SVG in the brand orange.
   icons: {
     icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
-    other: [{ rel: 'mask-icon', url: '/favicon.svg', color: '#f97316' }],
+    other: [{ rel: 'mask-icon', url: '/favicon.svg', color: '#fb923c' }],
   },
 };
 

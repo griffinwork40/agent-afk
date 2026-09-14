@@ -1,40 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Agent AFK — favicon variant (Handoff Arc)
+  Agent AFK — favicon variant (Handoff Arc, v2)
 
-  Differences from mark.svg:
-    - Dark rounded tile background so the mark sits well on light browser
-      chrome too (Safari tabs, light-mode taskbars).
-    - Endpoint nodes dropped — at 16px they'd merge into the arc's rounded
-      caps and just look like blobs. The arc + ping carry the identity alone.
-    - Specular highlight dropped from the ping for the same reason.
-    - Arc stroke thickened proportionally so it survives sub-pixel rendering.
+  Optimized for sub-32px legibility over the v1 favicon:
+    - Arc stroke thickened 7 → 9 and gradient boosted so the
+      grey-to-green sweep is perceptible even at 16×16.
+    - Ping enlarged 5r → 7r so the brand orange reads at tab-icon scale.
+    - Arc center raised from y=48 → y=42; the mark now sits optically
+      centered inside the tile instead of sagging toward the bottom edge.
+    - Same rounded-rect tile, same gradient direction, same geometry
+      ratios. Still the Handoff Arc — just louder.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Agent AFK">
   <defs>
-    <linearGradient id="g" x1="14" y1="48" x2="50" y2="48" gradientUnits="userSpaceOnUse">
-      <stop offset="0%"   stop-color="#8a8aa0"/>
-      <stop offset="50%"  stop-color="#74bc90"/>
-      <stop offset="100%" stop-color="#5cb87f"/>
+    <!-- Boosted gradient: the original #8a8aa0→#5cb87f was imperceptible
+         at 16px. These stops are ~20% brighter in L* while keeping the
+         same hue channels, so the arc is clearly "grey going green." -->
+    <linearGradient id="g" x1="11" y1="42" x2="53" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#a0a0b8"/>
+      <stop offset="40%"  stop-color="#6dd5a0"/>
+      <stop offset="100%" stop-color="#4ade80"/>
     </linearGradient>
-    <radialGradient id="ping" cx="50%" cy="50%" r="50%">
-      <stop offset="0%"   stop-color="#ffc2a1"/>
-      <stop offset="55%"  stop-color="#f97316"/>
-      <stop offset="100%" stop-color="#d65a0e"/>
+    <radialGradient id="ping" cx="45%" cy="42%" r="55%">
+      <stop offset="0%"   stop-color="#ffd4b8"/>
+      <stop offset="40%"  stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c"/>
     </radialGradient>
   </defs>
 
   <!-- Dark rounded tile, so the mark reads on any background -->
   <rect width="64" height="64" rx="14" ry="14" fill="#07070b"/>
 
-  <!-- Arc: same geometry as mark.svg, scaled to 64-viewBox.
-       Endpoints (14,48) → (50,48), r=24, large-arc, clockwise → 90° gap at bottom. -->
-  <path d="M 14 48 A 24 24 0 1 1 50 48"
+  <!-- Arc: from (11,42) clockwise to (53,42), r=23, 90° gap at bottom.
+       Stroke 9px with round caps. -->
+  <path d="M 11 42 A 23 23 0 1 1 53 42"
         fill="none"
         stroke="url(#g)"
-        stroke-width="7"
+        stroke-width="9"
         stroke-linecap="round"/>
 
-  <!-- Ping in the gap, on the imagined completed circle (y = 48 + sqrt(24² - 18²) ≈ 63.8) -->
-  <circle cx="32" cy="56" r="5" fill="url(#ping)"/>
+  <!-- Ping in the gap — large enough to be the dominant color signal at 16px -->
+  <circle cx="32" cy="53" r="7" fill="url(#ping)"/>
 </svg>

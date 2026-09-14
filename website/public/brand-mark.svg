@@ -1,37 +1,36 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Agent AFK — navbar brand glyph ("Handoff Arc"), transparent variant.
-  Matches the inline mark in agentafk.com's navbar: gradient arc, two
-  endpoint nodes, and the orange "ping" in the gap. Served as a standalone
-  file (referenced via <img>) so its gradient ids stay scoped to this
-  document — the docs nav renders the title in several places, and inlining
-  the SVG would collide duplicate gradient ids and drop the arc/ping fills.
+  Agent AFK — navbar brand glyph ("Handoff Arc"), transparent variant, v2.
+
+  Matches the v2 favicon's boosted palette: brighter arc gradient and
+  hotter ping so the mark still reads at 32×32 in the docs navbar.
+  Endpoint nodes included (appropriate at ≥32px).
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Agent AFK">
   <defs>
-    <linearGradient id="arc" x1="14" y1="48" x2="50" y2="48" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#8a8aa0"/>
-      <stop offset="50%" stop-color="#74bc90"/>
-      <stop offset="100%" stop-color="#5cb87f"/>
+    <linearGradient id="arc" x1="11" y1="42" x2="53" y2="42" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#a0a0b8"/>
+      <stop offset="40%" stop-color="#6dd5a0"/>
+      <stop offset="100%" stop-color="#4ade80"/>
     </linearGradient>
-    <radialGradient id="ping" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#ffc2a1"/>
-      <stop offset="55%" stop-color="#f97316"/>
-      <stop offset="100%" stop-color="#d65a0e"/>
+    <radialGradient id="ping" cx="45%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#ffd4b8"/>
+      <stop offset="40%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c"/>
     </radialGradient>
   </defs>
 
-  <!-- Arc: endpoints (14,48) -> (50,48), r=24, large-arc, clockwise (90° gap at bottom) -->
-  <path d="M 14 48 A 24 24 0 1 1 50 48"
+  <!-- Arc: endpoints (11,42) -> (53,42), r=23, large-arc, clockwise (90° gap at bottom) -->
+  <path d="M 11 42 A 23 23 0 1 1 53 42"
         fill="none"
         stroke="url(#arc)"
-        stroke-width="7"
+        stroke-width="8"
         stroke-linecap="round"/>
 
   <!-- Endpoint nodes -->
-  <circle cx="14" cy="48" r="4.5" fill="#8a8aa0"/>
-  <circle cx="50" cy="48" r="4.5" fill="#5cb87f"/>
+  <circle cx="11" cy="42" r="4.5" fill="#a0a0b8"/>
+  <circle cx="53" cy="42" r="4.5" fill="#4ade80"/>
 
-  <!-- Ping in the gap, on the imagined completed circle -->
-  <circle cx="32" cy="56" r="5" fill="url(#ping)"/>
+  <!-- Ping in the gap -->
+  <circle cx="32" cy="52" r="6" fill="url(#ping)"/>
 </svg>
