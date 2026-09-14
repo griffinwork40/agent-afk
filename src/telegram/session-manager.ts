@@ -195,8 +195,9 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>> &
-    Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>;
+  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>;
+  /** Timer handle for periodic sessionData eviction. Unref'd so it never prevents process exit. */
+  private _evictionTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: SessionManagerOptions) {
     this.options = {
@@ -213,6 +214,8 @@ export class SessionManager {
       registry: options.registry,
       onResumptionOffer: options.onResumptionOffer,
     };
+    // Periodic eviction keeps the sessionData Map bounded during long uptime (#1657).
+    this._evictionTimer = setInterval(() => this._evictStaleSessionData(), 60 * 60 * 1000); this._evictionTimer.unref();
   }
 
   /**
@@ -502,21 +505,14 @@ export class SessionManager {
    * appending to the previous conversation's sidecar.
    */
   private _resetStats(key: string): void {
-    // Clear the elicitation route mapping for the session being torn down, so
-    // a future session that reuses the same SDK sessionId cannot accidentally
-    // route prompts to this route. Clear before deleting the stats entry, while
-    // the sessionId is still accessible.
-    const sessionId = this.sessionStats.get(key)?.sessionId
-      ?? this.sessionData.get(key)?.sessionId;
-    if (sessionId) clearElicitationRoute(sessionId);
-
+    // Clear elicitation route before deleting stats (sessionId must still be accessible).
+    this._clearElicitationRouteForKey(key);
     this.sessionStats.delete(key);
     // Fresh conversation → allow the autosave-failure notice to fire again.
     this.autosaveFailureLogged.delete(key);
     // Drop any staged /switch resume so a teardown always starts fresh.
     this.pendingResume.delete(key);
-    const data = this.sessionData.get(key);
-    if (data) delete data.sessionId;
+    const data = this.sessionData.get(key); if (data) delete data.sessionId;
   }
 
   /**
@@ -730,6 +726,7 @@ export class SessionManager {
     // Drop in-memory stats so the resumed session hydrates the TARGET's stats
     // (name/turns/sessionId) from its sidecar on next access — never the
     // previous conversation's. autosave-failure notice re-arms for the switch.
+    this._clearElicitationRouteForKey(key); // clear before dropping stats (#1662)
     this.sessionStats.delete(key);
     this.autosaveFailureLogged.delete(key);
 
@@ -846,23 +843,28 @@ export class SessionManager {
    * always retained regardless of lastActivity.
    */
   private _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): void {
-    const now = Date.now();
     for (const [key, data] of this.sessionData) {
       if (this.sessions.has(key)) continue; // live session — never evict
-      const age = now - new Date(data.lastActivity).getTime();
-      if (age > maxAgeMs) this.sessionData.delete(key);
+      if (Date.now() - new Date(data.lastActivity).getTime() > maxAgeMs) this.sessionData.delete(key);
     }
+  }
+
+  /** Resolve the sessionId for a route key and clear its elicitation mapping. */
+  private _clearElicitationRouteForKey(key: string): void {
+    const sid = this.sessionStats.get(key)?.sessionId ?? this.sessionData.get(key)?.sessionId;
+    if (sid) clearElicitationRoute(sid);
   }
 
   /**
    * Close all sessions and clean up
    */
   async closeAll(): Promise<void> {
-    this._evictStaleSessionData();
+    if (this._evictionTimer !== undefined) clearInterval(this._evictionTimer); this._evictStaleSessionData();
     await this.saveSessions();
-    await Promise.all(Array.from(this.sessions.values()).map(
-      session => session.close().catch(err => console.error('Error closing session:', err))
-    ));
+    // Clear elicitation route entries for every live session before closing so
+    // the module-scope registry does not accumulate orphan mappings (#1662).
+    for (const key of this.sessions.keys()) this._clearElicitationRouteForKey(key);
+    await Promise.all([...this.sessions.values()].map(s => s.close().catch(e => console.error('Error closing session:', e))));
     this.sessions.clear();
   }
 
