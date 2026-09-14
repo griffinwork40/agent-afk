@@ -5,8 +5,8 @@
  * directly. The I/O-bearing parts (install/uninstall) run against a real
  * per-test tmpdir pointed at via `HOME` + `AFK_HOME` — the same pattern
  * `launchd.test.ts` uses (cheaper to reason about than vi.mock('fs') and
- * it exercises the real atomic-write + rename path). `execFileSync` is the
- * only mock; `systemctl` never runs in CI.
+ * it exercises the real atomic-write + rename path). `execFileSync` and
+ * `spawnSync` are mocked; `systemctl` never runs in CI.
  *
  * Mirrors `launchd.test.ts`: if any systemd sub-module is relocated, the
  * `vi.mock('../telegram/manager.js')` specifier below must track the SUT's
@@ -18,15 +18,19 @@ import { homedir, tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockExecFileSync, telegram } = vi.hoisted(() => ({
+/** Shared mutable state hoisted ahead of vi.mock() calls (vitest requirement). */
+const { mockExecFileSync, mockSpawnSync, telegram } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
+  // Default: systemctl --version succeeds and reports a modern version (252),
+  // so existing install tests stay green without explicitly configuring it.
+  mockSpawnSync: vi.fn().mockReturnValue({ status: 0, stdout: 'systemd 252\n', stderr: '', error: undefined }),
   // Mutable so a test can point the resolved entrypoint at a dev-tree path
   // (under $HOME) to exercise the .path-unit auto-restart branch.
   telegram: { entrypoint: '/fake/dist/telegram.mjs' },
 }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
-  return { ...actual, execFileSync: mockExecFileSync };
+  return { ...actual, execFileSync: mockExecFileSync, spawnSync: mockSpawnSync };
 });
 vi.mock('../telegram/manager.js', () => ({
   resolveEntrypoint: () => telegram.entrypoint,
@@ -34,6 +38,7 @@ vi.mock('../telegram/manager.js', () => ({
 
 // SUT imported after mocks are declared.
 import {
+  detectSystemdVersion,
   installSystemdService,
   readUnitFile,
   uninstallSystemdService,
