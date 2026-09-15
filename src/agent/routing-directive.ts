@@ -34,6 +34,8 @@ Route recurring work through registered skills instead of rolling ad-hoc solutio
 
 Do NOT reach for \`/mint\` for: bug fixes (use \`/diagnose\`), refactors with known shape, single-feature edits, work already spec'd in chat, or anything where the spec/approve pause would feel like ceremony. Implement directly in those cases.
 
+Default to parallel execution. When a task decomposes into 2+ independent sub-tasks, dispatch them in a single compose wave or parallel agent calls -- do not run them one after another. Sequential dispatch is reserved for chains where an earlier output materially shapes the later prompt.
+
 Common composed sequences — reach for these when the task shape matches:
 
 - Bug with failing test and non-trivial fix → \`/diagnose\` → \`/shadow-verify\` on the proposed fix
