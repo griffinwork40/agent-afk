@@ -681,7 +681,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       exactlyOnce: ['SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
       // Warnings sit above the first turn's output, below the banner.
       order: [
-        ['POSTCLEAR_BANNER_10', 'SHADOWWARN'],
+        ['POSTCLEAR_BANNER_9', 'SHADOWWARN'],
         ['SHADOWWARN', 'MCPWARN'],
         ['MCPWARN', 'FIRST_TURN_OUTPUT'],
       ],
