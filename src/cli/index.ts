@@ -83,6 +83,7 @@ import { registerImproveCommand } from './commands/improve/index.js';
 import { registerShellInitCommand } from './commands/shell-init.js';
 import { registerTranscriptCommand } from './commands/transcript.js';
 import { registerInsightsCommand } from './commands/insights.js';
+import { registerCapturesCommand } from './commands/captures.js';
 import { setInteractiveUpdateNotices } from './commands/interactive.js';
 import { loadConfig, loadCredential } from './config.js';
 import { providerForModel } from '../agent/providers/index.js';
@@ -147,6 +148,7 @@ registerImproveCommand(program);
 registerShellInitCommand(program);
 registerTranscriptCommand(program);
 registerInsightsCommand(program);
+registerCapturesCommand(program);
 
 // Add aliases
 program.commands.find((c) => c.name() === 'chat')?.alias('c');
