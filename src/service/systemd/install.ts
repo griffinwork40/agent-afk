@@ -11,7 +11,7 @@
  * @module service/systemd/install
  */
 
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname } from 'path';
@@ -54,6 +54,31 @@ function errorDetail(err: unknown): string {
   const text = stderr ? stderr.toString().trim() : '';
   return text || (err as Error).message;
 }
+
+/**
+ * Detect the installed systemd version by running `systemctl --version` and
+ * parsing the first integer on the first output line (format: `systemd NNN`).
+ * Returns `undefined` when `systemctl` is absent or the output cannot be parsed
+ * — callers treat that as "unknown, warn the user".
+ *
+ * Exported for unit-test injection of mock output.
+ */
+export function detectSystemdVersion(): number | undefined {
+  const result = spawnSync('systemctl', ['--version'], {
+    encoding: 'utf-8',
+    timeout: SYSTEMCTL_TIMEOUT_MS,
+  });
+  if (result.error || result.status !== 0) return undefined;
+  // `systemctl --version` first line: "systemd 252" or "systemd 237 (237-...)".
+  const firstLine = (result.stdout ?? '').split('\n')[0] ?? '';
+  const match = /\b(\d+)\b/.exec(firstLine);
+  if (!match) return undefined;
+  const v = parseInt(match[1]!, 10);
+  return isNaN(v) ? undefined : v;
+}
+
+/** Minimum systemd version that supports `StandardOutput=append:<path>`. */
+const SYSTEMD_APPEND_MIN_VERSION = 240;
 
 /** Candidate absolute paths checked before falling back to a bare lookup. */
 const SYSTEMCTL_CANDIDATES: readonly string[] = ['/usr/bin/systemctl', '/bin/systemctl'];
@@ -201,16 +226,30 @@ export function installSystemdService(name: ServiceName, opts: SystemdInstallOpt
   }
 
   if (opts.dryRun) {
+    const dryNotes: string[] = [
+      `(dry-run) systemctl was skipped; service is NOT yet running.`,
+      `Load manually: systemctl --user daemon-reload && systemctl --user enable --now ${unitFileName(name)}`,
+      LINGER_NOTE,
+    ];
+    const dryVersion = detectSystemdVersion();
+    if (dryVersion === undefined) {
+      dryNotes.push(
+        'Could not detect the systemd version. Log output (StandardOutput=append:) requires systemd ≥ 240; ' +
+          'on older versions all service output will be silently discarded.',
+      );
+    } else if (dryVersion < SYSTEMD_APPEND_MIN_VERSION) {
+      dryNotes.push(
+        `Detected systemd ${dryVersion}. Log output (StandardOutput=append:) requires systemd ≥ 240; ` +
+          `on systemd ${dryVersion} all service output will be silently discarded. ` +
+          `Upgrade systemd or redirect logs manually.`,
+      );
+    }
     return {
       kind: 'installed',
       configPath: path,
       label: unitFileName(name),
       autoRestartOnRebuild: pathUnitActive,
-      notes: [
-        `(dry-run) systemctl was skipped; service is NOT yet running.`,
-        `Load manually: systemctl --user daemon-reload && systemctl --user enable --now ${unitFileName(name)}`,
-        LINGER_NOTE,
-      ],
+      notes: dryNotes,
     };
   }
 
@@ -227,12 +266,26 @@ export function installSystemdService(name: ServiceName, opts: SystemdInstallOpt
     return { kind: 'failed', reason: `systemctl enable failed: ${errorDetail(err)}` };
   }
 
+  const notes: string[] = [LINGER_NOTE];
+  const systemdVersion = detectSystemdVersion();
+  if (systemdVersion === undefined) {
+    notes.push(
+      'Could not detect the systemd version. Log output (StandardOutput=append:) requires systemd ≥ 240; ' +
+        'on older versions all service output will be silently discarded.',
+    );
+  } else if (systemdVersion < SYSTEMD_APPEND_MIN_VERSION) {
+    notes.push(
+      `Detected systemd ${systemdVersion}. Log output (StandardOutput=append:) requires systemd ≥ 240; ` +
+        `on systemd ${systemdVersion} all service output will be silently discarded. ` +
+        `Upgrade systemd or redirect logs manually.`,
+    );
+  }
   return {
     kind: 'installed',
     configPath: path,
     label: unitFileName(name),
     autoRestartOnRebuild: pathUnitActive,
-    notes: [LINGER_NOTE],
+    notes,
   };
 }
 

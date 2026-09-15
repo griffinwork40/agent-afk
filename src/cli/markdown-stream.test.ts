@@ -1264,4 +1264,104 @@ describe('StreamingMarkdownRenderer', () => {
       expect(renderer.getPendingBuffer().trim()).toBe('');
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Input micro-buffer (bufferMs / AFK_STREAM_BUFFER_MS)
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('input micro-buffer (bufferMs)', () => {
+    it('bufferMs=0 (default) passes chunks through immediately', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream });
+      renderer.push('hello ');
+      renderer.push('world');
+      // With no buffer, both chunks land in the parse buffer immediately.
+      expect(renderer.getPendingBuffer()).toBe('hello world');
+    });
+
+    it('bufferMs>0 accumulates chunks and flushes on leading edge', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 50 });
+      // First push after idle fires immediately (leading edge: lastInputFlushTime=0).
+      renderer.push('first ');
+      expect(renderer.getPendingBuffer()).toBe('first ');
+    });
+
+    it('bufferMs>0 accumulates subsequent chunks within the window', async () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 30 });
+      // Leading edge fires immediately.
+      renderer.push('A');
+      expect(renderer.getPendingBuffer()).toBe('A');
+
+      // Immediately push more -- within the 30ms window, these should buffer.
+      renderer.push('B');
+      renderer.push('C');
+      // B and C are in the input buffer, not yet in the parse buffer.
+      expect(renderer.getPendingBuffer()).toBe('A');
+      expect((renderer as any).inputBuffer).toBe('BC');
+
+      // After the trailing-edge timer fires, they flush.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(renderer.getPendingBuffer()).toBe('ABC');
+      expect((renderer as any).inputBuffer).toBe('');
+    });
+
+    it('commitPending() drains the input buffer first', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 100 });
+      renderer.push('leading ');
+      // Push more within window -- buffered.
+      renderer.push('trailing');
+      expect((renderer as any).inputBuffer).toBe('trailing');
+
+      // commitPending should drain input buffer before committing.
+      renderer.commitPending();
+      expect((renderer as any).inputBuffer).toBe('');
+      expect(renderer.getCommittedOutput()).toContain('leading trailing');
+    });
+
+    it('discardPending() discards the input buffer', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 100 });
+      renderer.push('leading ');
+      renderer.push('buffered');
+      expect((renderer as any).inputBuffer).toBe('buffered');
+
+      renderer.discardPending();
+      expect((renderer as any).inputBuffer).toBe('');
+      expect(renderer.getPendingBuffer()).toBe('');
+    });
+
+    it('flush() drains the input buffer before finalizing', async () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 100 });
+      renderer.push('hello\n\n');
+      // Push more within window.
+      renderer.push('world\n\n');
+      expect((renderer as any).inputBuffer).toBe('world\n\n');
+
+      await renderer.flush();
+      // Both blocks should be committed.
+      const committed = renderer.getCommittedOutput();
+      expect(committed).toContain('hello');
+      expect(committed).toContain('world');
+    });
+
+    it('dispose() clears the input buffer and timer', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 100 });
+      renderer.push('leading ');
+      renderer.push('buffered');
+
+      renderer.dispose();
+      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputBufferTimer).toBeNull();
+    });
+
+    it('hasEmitted() accounts for input buffer', () => {
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 100 });
+      expect(renderer.hasEmitted()).toBe(false);
+
+      // After leading-edge push, both inputBuffer and buffer contribute.
+      renderer.push('a');
+      expect(renderer.hasEmitted()).toBe(true);
+
+      // After draining into parse buffer and disposing, everything is cleared.
+      renderer.dispose();
+      expect(renderer.hasEmitted()).toBe(false);
+    });
+  });
 });

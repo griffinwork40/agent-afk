@@ -16,7 +16,7 @@
  */
 
 import { execFileSync, spawn } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, openSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync, openSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getAfkStateDir, getLogsDir } from '../paths.js';
@@ -154,43 +154,51 @@ export async function start(): Promise<StartResult | StartFailure> {
   const out = openSync(logFile, 'a');
   const err = openSync(logFile, 'a');
 
-  let child;
+  // Contract: both FDs must be closed in the parent regardless of the
+  // spawn outcome. The child process inherits its own copies; the parent
+  // holds duplicates that are never read from and must be released.
   try {
-    child = spawn(process.execPath, [entrypoint], {
-      detached: true,
-      stdio: ['ignore', out, err],
-      env: process.env,
-    });
-  } catch (error) {
-    return {
-      kind: 'spawn-failed',
-      message: `Failed to spawn bot: ${(error as Error).message}`,
-    };
+    let child;
+    try {
+      child = spawn(process.execPath, [entrypoint], {
+        detached: true,
+        stdio: ['ignore', out, err],
+        env: process.env,
+      });
+    } catch (error) {
+      return {
+        kind: 'spawn-failed',
+        message: `Failed to spawn bot: ${(error as Error).message}`,
+      };
+    }
+
+    if (child.pid === undefined) {
+      return {
+        kind: 'spawn-failed',
+        message: 'Spawned child has no PID',
+      };
+    }
+
+    writeFileSync(pidFile, String(child.pid), { mode: 0o644 });
+    child.unref();
+
+    // Settle window: if the bot's auth/env validation fails it exits within
+    // ~100ms. Give it 1.5s, then check the PID is still alive.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+
+    if (isRunning(pidFile) === null) {
+      return {
+        kind: 'exited-immediately',
+        logTail: tailLog(logFile, 20),
+        message: 'Bot exited immediately after launch. Check the log for details.',
+      };
+    }
+
+    return { kind: 'started', pid: child.pid, logFile };
+  } finally {
+    closeSync(out);
+    closeSync(err);
   }
-
-  if (child.pid === undefined) {
-    return {
-      kind: 'spawn-failed',
-      message: 'Spawned child has no PID',
-    };
-  }
-
-  writeFileSync(pidFile, String(child.pid), { mode: 0o644 });
-  child.unref();
-
-  // Settle window: if the bot's auth/env validation fails it exits within
-  // ~100ms. Give it 1.5s, then check the PID is still alive.
-  await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-
-  if (isRunning(pidFile) === null) {
-    return {
-      kind: 'exited-immediately',
-      logTail: tailLog(logFile, 20),
-      message: 'Bot exited immediately after launch. Check the log for details.',
-    };
-  }
-
-  return { kind: 'started', pid: child.pid, logFile };
 }
 
 /**

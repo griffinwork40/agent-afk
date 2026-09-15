@@ -15,6 +15,14 @@ import { Lexer } from 'marked';
 interface StreamingMarkdownRendererOptions {
   out?: NodeJS.WriteStream;
   throttleMs?: number;
+  /**
+   * Input buffer window in milliseconds. When positive, incoming `push()`
+   * chunks are accumulated and flushed to the parse pipeline on a
+   * leading+trailing timer -- reducing per-token `Lexer.lex()` overhead and
+   * producing visually smoother bursts. First chunk after idle passes
+   * through immediately (leading-edge). 0 = disabled (default).
+   */
+  bufferMs?: number;
   indent?: string;
   /**
    * When provided: overlay routes through `compositor.setOverlay()`, scrollback
@@ -92,9 +100,19 @@ export class StreamingMarkdownRenderer {
    */
   private resizeUnsub: (() => void) | null = null;
 
+  // -- Input micro-buffer (AFK_STREAM_BUFFER_MS) --------------------------
+  // Accumulates incoming push() chunks and flushes them as one batch to
+  // reduce per-token Lexer.lex() / findBlockBoundary() overhead.
+  // Leading+trailing pattern: first chunk after idle fires immediately.
+  private bufferMs: number;
+  private inputBuffer: string = '';
+  private inputBufferTimer: NodeJS.Timeout | null = null;
+  private lastInputFlushTime = 0;
+
   constructor(opts?: StreamingMarkdownRendererOptions) {
     this.out = opts?.out ?? process.stdout;
     this.throttleMs = opts?.throttleMs ?? 33;
+    this.bufferMs = opts?.bufferMs ?? 0;
     this.indent = opts?.indent ?? '   ';
     this.isTTY = this.out.isTTY ?? false;
     this.compositor = opts?.compositor ?? null;
@@ -250,10 +268,57 @@ export class StreamingMarkdownRenderer {
   }
 
   /**
-   * Push a chunk of markdown text and schedule incremental rendering
+   * Push a chunk of markdown text. When `bufferMs > 0`, chunks are
+   * micro-batched via a leading+trailing timer before reaching the parse
+   * pipeline. When `bufferMs === 0` (default), this is a direct passthrough.
    */
   push(chunk: string): void {
-    if (this.flushing) return; // Terminal after flush — don't accumulate orphan committed content
+    if (this.flushing) return;
+    if (this.bufferMs <= 0) {
+      this.pushDirect(chunk);
+      return;
+    }
+    this.inputBuffer += chunk;
+    const now = Date.now();
+    // Leading edge: enough time since last flush -- fire immediately.
+    if (now - this.lastInputFlushTime >= this.bufferMs) {
+      this.drainInputBuffer();
+      return;
+    }
+    // Trailing edge: schedule one deferred flush for the remaining window.
+    if (this.inputBufferTimer) clearTimeout(this.inputBufferTimer);
+    const remaining = this.bufferMs - (now - this.lastInputFlushTime);
+    this.inputBufferTimer = setTimeout(() => this.drainInputBuffer(), remaining);
+    this.inputBufferTimer.unref();
+  }
+
+  /** Flush accumulated input buffer to the parse pipeline. */
+  private drainInputBuffer(): void {
+    if (this.inputBufferTimer) {
+      clearTimeout(this.inputBufferTimer);
+      this.inputBufferTimer = null;
+    }
+    if (!this.inputBuffer) return;
+    const batched = this.inputBuffer;
+    this.inputBuffer = '';
+    this.lastInputFlushTime = Date.now();
+    this.pushDirect(batched);
+  }
+
+  /** Discard accumulated input buffer without flushing to the parse pipeline. */
+  private discardInputBuffer(): void {
+    if (this.inputBufferTimer) {
+      clearTimeout(this.inputBufferTimer);
+      this.inputBufferTimer = null;
+    }
+    this.inputBuffer = '';
+  }
+
+  /**
+   * Push a chunk directly into the parse pipeline (block detection + repaint).
+   */
+  private pushDirect(chunk: string): void {
+    if (this.flushing) return;
     this.buffer += chunk;
 
     // Try to extract completed blocks
@@ -301,6 +366,9 @@ export class StreamingMarkdownRenderer {
    * and clear the log-update overlay
    */
   async flush(): Promise<void> {
+    // Drain any micro-buffered input before finalizing.
+    this.drainInputBuffer();
+
     // Cancel throttle timer
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
@@ -358,7 +426,7 @@ export class StreamingMarkdownRenderer {
    * O(1), no side effects.
    */
   hasEmitted(): boolean {
-    return this.buffer.length > 0 || this.committed.length > 0;
+    return this.inputBuffer.length > 0 || this.buffer.length > 0 || this.committed.length > 0;
   }
 
   /**
@@ -376,6 +444,7 @@ export class StreamingMarkdownRenderer {
    * the turn — where it leaks into scrollback every time `commitAbove` repaints.
    */
   commitPending(): void {
+    this.drainInputBuffer();
     if (!this.buffer.trim()) return;
     const pending = this.buffer;
     // Empty the buffer and re-compose the overlay (now empty) BEFORE committing,
@@ -422,6 +491,7 @@ export class StreamingMarkdownRenderer {
    * — only the in-progress pending block is recoverable.
    */
   discardPending(): void {
+    this.discardInputBuffer();
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
@@ -445,6 +515,7 @@ export class StreamingMarkdownRenderer {
    * Clean up resources: clear timers and release log-update state
    */
   dispose(): void {
+    this.discardInputBuffer();
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
