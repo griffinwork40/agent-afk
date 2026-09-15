@@ -29,7 +29,7 @@ import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getApiKeyForModel, getModel, getThinking, getEffort, parseProvider, getDefaultSubagentModel, getMaxToolUseIterations } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { AgentSession } from '../../agent/session.js';
-import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory } from '../../agent/memory/index.js';
+import { MemoryStore, MEMORY_TOOL_NAMES, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
 import { StateStore } from '../../agent/state/state-store.js';
 import { STATE_TOOL_NAMES } from '../../agent/state/state-tools.js';
 import { getStateDatabasePath } from '../../paths.js';
@@ -167,7 +167,7 @@ export function buildDaemonSessionFactory(
     // production chokepoint the scheduler routes every task through, so it also
     // caps scheduler/cron-spawned top-level sessions.
     const daemonMaxToolUseIterations = config.maxToolUseIterations ?? getMaxToolUseIterations();
-    const session = new AgentSession(injectCompanionPrimer(injectHotMemory({
+    const session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
       ...config,
       provider,
       // Daemon sessions are headless by default: no human watches to answer
@@ -189,7 +189,7 @@ export function buildDaemonSessionFactory(
       ...(daemonMaxToolUseIterations !== undefined
         ? { maxToolUseIterations: daemonMaxToolUseIterations }
         : {}),
-    })), ownedTraceWriter);
+    }))), ownedTraceWriter);
     // Subagent-success rollup: wire both the root manager and the compose
     // executor so all subagent token/cost data (including compose DAG nodes)
     // accumulates into this session's session_sealed telemetry. Late-bound

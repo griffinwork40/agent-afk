@@ -134,6 +134,7 @@ function makeHost(
     dismissPromptGhost: vi.fn(() => false),
     applyDropdownSelection: overrides.applyDropdownSelection ?? vi.fn(() => false),
     applyGhostAccept: vi.fn(),
+    applyGhostWordAccept: vi.fn(),
     ...overrides,
   } as never;
 }

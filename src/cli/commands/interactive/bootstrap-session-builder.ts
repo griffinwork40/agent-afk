@@ -1,6 +1,6 @@
 import { AgentSession } from '../../../agent/session.js';
 import type { PermissionMode } from '../../../agent/types/sdk-types.js';
-import { injectHotMemory } from '../../../agent/memory/index.js';
+import { injectHotMemory, injectGoalPrompt } from '../../../agent/memory/index.js';
 import { injectCompanionPrimer } from '../../../agent/companion/index.js';
 import type { ThinkingConfig, EffortLevel } from '../../../agent/types.js';
 import type { AgentConfig } from '../../../agent/types.js';
@@ -64,7 +64,7 @@ export interface BuildAgentSessionDeps {
  * without duplicating the constructor argument list.
  */
 export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
-  return new AgentSession(injectCompanionPrimer(injectHotMemory({
+  return new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
     model: deps.model,
     // User-facing surface for trace `origin` attribution. The REPL is a CLI
     // entrypoint → 'cli'. (Mid-session swap reuses this helper, also 'cli'.)
@@ -96,7 +96,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
       : {}),
     ...(deps.baseUrl !== undefined ? { baseUrl: deps.baseUrl } : {}),
     providerFactory: deps.providerFactory,
-  })), deps.traceWriter);
+  }))), deps.traceWriter);
 }
 
 /**

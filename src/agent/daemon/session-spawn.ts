@@ -4,7 +4,7 @@ import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
-import { MemoryStore, injectHotMemory } from '../memory/index.js';
+import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
 import { injectCompanionPrimer } from '../companion/index.js';
 import { AgentSession } from '../session/agent-session.js';
@@ -171,7 +171,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     const traceOwner = options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined;
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
-      : new AgentSession(injectCompanionPrimer(injectHotMemory(config)), traceOwner);
+      : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))), traceOwner);
     // Step 7: register the daemon session in the cross-surface registry.
     // Best-effort; dispose() (archive) is invoked by runOnce on session close
     // so the long-running daemon never accumulates registry handles.

@@ -76,3 +76,6 @@ pr1387-diff.txt
 # Local-only research artifacts (not for public repo)
 docs/research/
 tests/false-completion-benchmark.test.ts
+
+# Local planning docs
+docs/goal-feature-plan.md

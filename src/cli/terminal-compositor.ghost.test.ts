@@ -410,9 +410,9 @@ describe('TerminalCompositor ghost text', () => {
     c.disarm();
   });
 
-  // ── Accept: Right-arrow ──────────────────────────────────────────────────────
+  // ── Accept: Right-arrow (word-by-word) ───────────────────────────────────────
 
-  it('Right-arrow at end-of-buffer accepts ghost', async () => {
+  it('Right-arrow at end-of-buffer accepts one word from ghost', async () => {
     const engine = makeEngine({ tier1Result: 'hello world' });
     const c = new TerminalCompositor({
       stdout, stdin,
@@ -425,8 +425,88 @@ describe('TerminalCompositor ghost text', () => {
     }
     expect(c.getBuffer().text).toBe('hel');
 
+    // Right-arrow completes the current word + trailing space.
     stdin.emit('keypress', undefined, { name: 'right' });
-    expect(c.getBuffer().text).toBe('hello world');
+    expect(c.getBuffer().text).toBe('hello ');
+    // Ghost remains active for the un-accepted tail.
+    expect(c.activeGhost).toBe('hello world');
+    c.disarm();
+  });
+
+  it('repeated Right-arrows nibble word by word until ghost is consumed', async () => {
+    const engine = makeEngine({ tier1Result: 'fix the failing test' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+
+    for (const ch of 'fi') {
+      stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    }
+    expect(c.getBuffer().text).toBe('fi');
+
+    // Word 1: complete "fix " (finishes current word + space)
+    stdin.emit('keypress', undefined, { name: 'right' });
+    expect(c.getBuffer().text).toBe('fix ');
+    expect(c.activeGhost).toBe('fix the failing test');
+
+    // Word 2: "the "
+    stdin.emit('keypress', undefined, { name: 'right' });
+    expect(c.getBuffer().text).toBe('fix the ');
+    expect(c.activeGhost).toBe('fix the failing test');
+
+    // Word 3: "failing "
+    stdin.emit('keypress', undefined, { name: 'right' });
+    expect(c.getBuffer().text).toBe('fix the failing ');
+    expect(c.activeGhost).toBe('fix the failing test');
+
+    // Word 4: "test" (last word, no trailing space — ghost is fully consumed)
+    stdin.emit('keypress', undefined, { name: 'right' });
+    expect(c.getBuffer().text).toBe('fix the failing test');
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('Tab still accepts full ghost after partial Right-arrow acceptance', async () => {
+    const engine = makeEngine({ tier1Result: 'hello beautiful world' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+
+    for (const ch of 'hel') {
+      stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    }
+
+    // Nibble one word.
+    stdin.emit('keypress', undefined, { name: 'right' });
+    expect(c.getBuffer().text).toBe('hello ');
+
+    // Tab swallows the rest.
+    stdin.emit('keypress', undefined, { name: 'tab' });
+    expect(c.getBuffer().text).toBe('hello beautiful world');
+    expect(c.activeGhost).toBeNull();
+    c.disarm();
+  });
+
+  it('Right-arrow on last word clears ghost completely', async () => {
+    const engine = makeEngine({ tier1Result: 'hello' });
+    const c = new TerminalCompositor({
+      stdout, stdin,
+      suggest: { engine, getContext: makeCtx },
+    });
+    await c.arm();
+
+    for (const ch of 'hel') {
+      stdin.emit('keypress', ch, { name: ch, sequence: ch });
+    }
+
+    // Only one word in the ghost remainder — Right-arrow consumes it all.
+    stdin.emit('keypress', undefined, { name: 'right' });
+    expect(c.getBuffer().text).toBe('hello');
+    expect(c.activeGhost).toBeNull();
     c.disarm();
   });
 

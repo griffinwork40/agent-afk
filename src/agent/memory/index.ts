@@ -1,5 +1,6 @@
 export { MemoryStore, estimateTokens } from './memory-store.js';
 export { loadHotMemory, injectHotMemory } from './memory-loader.js';
+export { injectGoalPrompt } from '../goals/inject.js';
 export { createMemorySessionEndHook } from './memory-hooks.js';
 export {
   memorySearchTool,

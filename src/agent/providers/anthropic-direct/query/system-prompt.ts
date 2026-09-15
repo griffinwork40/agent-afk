@@ -29,6 +29,8 @@ export interface StableSystemPromptInputs {
    * when none. Placed in the cross-session-memory region, after `memoryPrompt`.
    */
   hotMemory: string;
+  /** Active goal fragment; empty string or absent when none. */
+  goalPrompt?: string;
   /** Skill/agent manifest block; empty string when none. */
   manifest: string;
   /** Operator system-prompt overlay; empty string or null when none. */
@@ -75,6 +77,7 @@ export interface EnvironmentIdentity {
  *   3. `memoryPrompt`    — cross-session-memory instructions
  *   4. `workspacePrompt` — shared-workspace usage instructions (when enabled)
  *   5. `hotMemory`       — `<cross-session-memory>` project-context block
+ *  5b. `goalPrompt`      — `<active-goal>` persistent objective (when set)
  *   6. `# Environment`   — cwd/session/workspace (recomputed per cwd)
  *   7. `manifest`        — skill/agent catalog
  * Optional parts (`userSystem`, `hotMemory`, `manifest`) are skipped when
@@ -106,6 +109,7 @@ export function assembleSystemPrompt(
   ordered.push(parts.memoryPrompt);
   if (parts.workspacePrompt.length > 0) ordered.push(parts.workspacePrompt);
   if (parts.hotMemory.length > 0) ordered.push(parts.hotMemory);
+  if (parts.goalPrompt && parts.goalPrompt.length > 0) ordered.push(parts.goalPrompt);
   ordered.push(environment);
   if (parts.manifest.length > 0) ordered.push(parts.manifest);
   return ordered.join('\n\n');

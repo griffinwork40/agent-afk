@@ -11,6 +11,32 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.210.0] - 2026-09-15
+
+### Added
+- word-by-word ghost acceptance via Right arrow (#1673) (693d5f9d)
+
+## [5.209.5] - 2026-09-15
+
+### Changed
+- extract shared Collapse component (#1648) (#1667) (f0bc0279)
+
+## [5.209.4] - 2026-09-15
+
+### Added
+- persistent cross-session objective tracking (#1632) (2467ad19)
+
+### Fixed
+- use os.userInfo().uid fallback in guiDomain() (#1661) (#1664) (d3967925)
+
+## [5.209.3] - 2026-09-15
+
+### Fixed
+- warn about systemd >= 240 requirement for log output (#1659) (#1669) (7a9c606c)
+
+### Changed
+- bump react and @types/react in /website (#1653) (6ed00fbc)
+
 ## [5.209.2] - 2026-09-15
 
 ### Added

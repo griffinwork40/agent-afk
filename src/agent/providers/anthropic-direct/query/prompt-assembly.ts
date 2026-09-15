@@ -114,6 +114,7 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
     // instructions rather than ahead of the # Agent AFK doctrine. Unset for
     // child sessions (subagents never inject hot memory) → treated as absent.
     hotMemory: config.hotMemory ?? '',
+    goalPrompt: config.goalPrompt ?? '',
     manifest,
     userSystem: args.userSystem,
   });
