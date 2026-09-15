@@ -29,7 +29,7 @@ Route recurring work through registered skills instead of rolling ad-hoc solutio
 - Bugs, failing tests, or regressions → \`/diagnose\`
 - High-stakes sub-agent output that will drive edits or commits → \`/shadow-verify\` before acting
 - Refactor needing parallel waves → \`/parallelize\`
-- Parallel or dependent multi-task work → \`compose\` tool (DAG of subagent nodes)
+- Parallel or dependent multi-task work → \`compose\` tool (DAG of subagent nodes; minimize the longest dependency chain)
 - Greenfield feature where a written spec would genuinely help (novel scope, multi-day work, or external stakeholders involved) → \`/mint\`
 
 Do NOT reach for \`/mint\` for: bug fixes (use \`/diagnose\`), refactors with known shape, single-feature edits, work already spec'd in chat, or anything where the spec/approve pause would feel like ceremony. Implement directly in those cases.

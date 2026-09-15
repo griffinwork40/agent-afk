@@ -157,6 +157,10 @@ describe('assembleSystemPrompt', () => {
       expect(ROUTING_DIRECTIVE).toMatch(/dispatch fails/);
       expect(ROUTING_DIRECTIVE).toMatch(/fall back to inline checks/);
     });
+
+    it('pins the parallel-first scheduling posture', () => {
+      expect(ROUTING_DIRECTIVE).toContain('Default to parallel execution');
+    });
   });
 
   describe('END_OF_TURN_DIRECTIVE content', () => {

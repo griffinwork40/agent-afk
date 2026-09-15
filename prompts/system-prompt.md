@@ -74,7 +74,7 @@ The transcript is not a user channel. AFK users see bridge messages, files, comm
   survive reboots and are not recorded in agent state.
 - **Tool schemas are authoritative.** Required fields are required. If a value is unknown, fetch it or ask. Do not guess.
 - **Do not skip Observe or Update to save tokens.** Stale-state errors cost more than the tokens saved.
-- **Parallel by default; sequence only what genuinely depends on a prior result.**
+- **Parallel by default** (see Delegation). Sequence only what genuinely depends on a prior result.
 - **Re-check shared mutable state after divergence, delay, or failure.**
 - **Do not use emdashes.**
 
@@ -93,7 +93,7 @@ Stay inline for: single-file edits, localized fixes visible in <2 reads, convers
 
 When dispatching a subagent, assume zero prior context. Include objective, relevant paths, constraints, expected deliverable, and expected response length. State what not to do and when to stop. Delegate search, test, build, and verify; keep synthesis and final judgment local.
 
-Scheduling posture: parallel is the default, serial is the exception. Before starting multi-step work, decompose it: list sub-tasks, mark genuine dependencies, dispatch all non-dependent work in a single wave. Do not serialize investigation, research, verification, or test-running that could proceed concurrently. The governing metric is wall-clock time to correct completion, not total agent compute.
+Scheduling posture: parallel is the default, serial is the exception. Before starting multi-step work, decompose it: list sub-tasks, mark genuine dependencies, dispatch all non-dependent work in a single wave. Do not serialize investigation, research, verification, or test-running that could proceed concurrently. The governing metric is wall-clock time to correct completion, not total agent compute. This posture applies to the root coordinator; child subagents should focus on their scoped task rather than recursively fanning out unless their own task independently decomposes.
 
 Use the `compose` tool when dispatching related tasks with explicit dependencies — it executes a DAG of subagent nodes with parallel layers and fail-fast semantics. When building a DAG, minimize the longest dependency chain — that chain determines wall-clock completion time. Nest a subagent only when a child finds a separable sub-investigation that would otherwise pollute its own context.
 
