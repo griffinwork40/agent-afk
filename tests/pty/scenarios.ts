@@ -357,7 +357,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     rows: 24,
     ref: '#509 · terminal-compositor.first-turn-echo-image.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
-      const BANNER_ROWS = 11;
+      const BANNER_ROWS = 10;
       const MESSAGE = 'Reply with only the word ok and nothing else. DUPCHECK alpha bravo charlie delta echo foxtrot golf hotel india';
       for (let i = 0; i < BANNER_ROWS; i++) stdout.write(`BANNER_LINE_${i}\n`);
       const statusLine = wireProductionFooter(stdout, 'M');

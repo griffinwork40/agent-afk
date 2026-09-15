@@ -251,8 +251,8 @@ describe('first turn after banner — idle banner-followed frame commit', () => 
     // leaving the separator and body rows permanently blank.
     //
     // Scenario that reproduces the gap:
-    //  • anchorRow=12, 4 echo commits (sep + body1 + body2 + blank) → band rows 18..21
-    //  • overlay grows to 7 rows + spinner → banner-path evictions shift band to ~9..12,
+    //  • anchorRow=11, 4 echo commits (sep + body1 + body2 + blank) → band rows 17..20
+    //  • overlay grows to 7 rows + spinner → banner-path evictions shift band to ~8..11,
     //    anchorRow drops to ~3
     //  • setOverlay('') + setSpinner(false) → idle repaint at contentFloor+1 (NOT 22);
     //    repositionCommittedBand: moved=false, renderErasedBand=false → no re-pin
