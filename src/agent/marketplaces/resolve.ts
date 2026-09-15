@@ -129,7 +129,7 @@ function isRelativeOrLocal(source: string): boolean {
   return (
     source.startsWith('./') ||
     source.startsWith('../') ||
-    source.startsWith('/') ||
+    isAbsolute(source) ||
     source.startsWith('~')
   );
 }

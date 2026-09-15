@@ -152,7 +152,7 @@ function looksLikePath(raw: string): boolean {
     raw.startsWith('./') ||
     raw.startsWith('../') ||
     raw.startsWith('~') ||
-    raw.startsWith('/')
+    isAbsolute(raw)
   );
 }
 

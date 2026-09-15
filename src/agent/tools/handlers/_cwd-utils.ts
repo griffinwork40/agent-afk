@@ -307,7 +307,7 @@ export function extractCandidatePaths(command: string): string[] {
       .replace(/^['"]/, '')
       .replace(/['";,)]+$/, '');
     if (token.length === 0) continue;
-    const isAbsolute = token.startsWith('/');
+    const isAbsolute = path.isAbsolute(token);
     const isHomeRelative = token === '~' || token.startsWith('~/');
     if (!isAbsolute && !isHomeRelative) continue;
     if (seen.has(token)) continue;

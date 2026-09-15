@@ -22,7 +22,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { TraceEventSchema } from '../../agent/trace/events.js';
 import type { TraceEvent } from '../../agent/trace/types.js';
 import { getWitnessRoot } from '../paths.js';
@@ -255,7 +255,7 @@ function pathRelativeTo(absolutePath: string, root: string): string {
   if (!root) return absolutePath;
   if (absolutePath.startsWith(root)) {
     let rel = absolutePath.slice(root.length);
-    if (rel.startsWith('/')) rel = rel.slice(1);
+    if (rel.startsWith('/') || rel.startsWith(sep)) rel = rel.slice(1);
     return rel;
   }
   return absolutePath;
