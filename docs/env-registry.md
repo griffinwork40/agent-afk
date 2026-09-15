@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**181 vars** across 12 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**182 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -156,6 +156,12 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_BROWSER_DOM_SNAPSHOTS` | boolean |  |  | `1` | Phase 2 opt-in: when set to 1, every browser_act writes a gzipped DOM snapshot sidecar under ~/.afk/state/witness/<sid>/browser/dom-snapshots/. Off by default because snapshots are large; useful for post-mortem analysis of failed actions. |
 | `AFK_BROWSER_HEADLESS` | boolean |  |  | `1` | Override the default headless mode for native browser-control tools. `1`/`true` forces headless; `0`/`false` forces headed. When unset the default is headless on every AFK surface — the CLI entrypoint reports surface `afk`, which is in the headless set — so watching the agent work in a visible window is opt-in via `AFK_BROWSER_HEADLESS=0`, not implied by running the REPL. Note headed and headless use different chromium downloads (`chromium-*` vs `chromium_headless_shell-*`). |
 | `AFK_SESSION_ID` | string |  | `default` | `session-abc123` | Override the browser session ID used by the native browser-control tools. Defaults to 'default' for single-session use. Subagents inherit the parent's session by default. Set this when running multiple concurrent AFK processes that should each manage an isolated browser context. |
+
+## Display
+
+| Name | Type | Required | Default | Example | Description |
+|------|------|----------|---------|---------|-------------|
+| `AFK_STREAM_BUFFER_MS` | number |  | `0` | `16` | Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50. |
 
 ## Debug
 

@@ -55,6 +55,7 @@ function renderMarkdown(registry: readonly EnvVarMeta[]): string {
     'mcp',
     'routing',
     'browser',
+    'display',
     'debug',
     'process',
     'misc',

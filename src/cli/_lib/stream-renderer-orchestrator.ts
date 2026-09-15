@@ -25,6 +25,7 @@ import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { ToolLane } from '../commands/interactive/tool-lane.js';
 import type { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { StreamingMarkdownRenderer } from '../markdown-stream.js';
+import { env } from '../../config/env.js';
 import type { CommitCoordinator } from './commit-coordinator.js';
 import type { OverlayComposer } from './overlay-composer.js';
 import type { CardSpec } from '../render.js';
@@ -365,6 +366,7 @@ export function handleOrchestratorEvent(
             ctx.streamingMarkdown.current = new StreamingMarkdownRenderer({
               ...(ctx.compositor ? { compositor: ctx.compositor } : {}),
               ...(ctx.overlayComposer ? { overlayComposer: ctx.overlayComposer } : {}),
+              bufferMs: Number(env.AFK_STREAM_BUFFER_MS) || 0,
             });
           }
           ctx.streamingMarkdown.current.push(cleaned);

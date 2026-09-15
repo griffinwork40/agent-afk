@@ -60,6 +60,7 @@ export type EnvVarCategory =
   | 'routing'
   | 'browser'
   | 'process'
+  | 'display'
   | 'misc';
 
 export interface EnvVarMeta {
@@ -1238,6 +1239,15 @@ export const ENV_REGISTRY = [
     required: false,
     example: '0',
     category: 'misc',
+  },
+  {
+    name: 'AFK_STREAM_BUFFER_MS',
+    description: 'Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50.',
+    type: 'number',
+    required: false,
+    default: '0',
+    example: '16',
+    category: 'display',
   },
   {
     name: 'AFK_SKILL_STREAM_VERBOSE',

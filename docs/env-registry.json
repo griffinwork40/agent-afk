@@ -781,6 +781,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STREAM_BUFFER_MS",
+      "description": "Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50.",
+      "type": "number",
+      "required": false,
+      "default": "0",
+      "example": "16",
+      "category": "display"
+    },
+    {
       "name": "AFK_SUBAGENT_IDLE_TIMEOUT_MS",
       "description": "Forked-subagent progress-aware idle-watchdog window in ms; 0 disables the watchdog; an explicit per-fork config.idleTimeoutMs still wins. Fires when a forked child produces no observable output event for this window, aborting the same controller the wall-clock timeout targets so partial output is preserved and the run classifies as a failure. This is distinct from AFK_SUBAGENT_TIMEOUT_MS, the blunt wall-clock that bounds total turn time: the idle watchdog is the tighter first-to-fire bound and never fires while the stream is legitimately parked on a provider-communicated backoff (OAuth pause, or a rate-limit event carrying a retry-after), extending the deadline for the pause window instead. Default 480000 (8 min) clears the worst-case transient-429 backoff the watchdog is currently blind to (about 363s) with roughly 2 min of margin, while staying materially tighter than the 45-min wall-clock. Unset, empty, or unparseable input falls back to the default; a negative value is treated as invalid and also falls back. Set to 0 to disable the idle watchdog for a whole session (the wall-clock still applies). v1 applies to forked sub-agent turns only, not top-level or daemon sessions.",
       "type": "number",
