@@ -8,6 +8,10 @@ import {
 import { Send, Square } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/api';
+import {
+  formatSlashCommandName,
+  slashCommandMatchesQuery,
+} from '@/lib/slash-command';
 import type { SlashCommand } from '@/types/api';
 import { SlashAutocomplete, handleAutocompleteKey } from './slash-autocomplete';
 import { AtFilePopover } from './at-file-popover';
@@ -67,7 +71,9 @@ export function Composer({
   const slashQuery = getSlashQuery(text);
   const acVisible = slashQuery !== null && commands.length > 0;
   const acFiltered = acVisible
-    ? commands.filter((c) => c.name.startsWith(slashQuery)).slice(0, 8)
+    ? commands
+        .filter((c) => slashCommandMatchesQuery(c.name, slashQuery))
+        .slice(0, 8)
     : [];
 
   // Clear the command cache when the tab regains focus so new skills are visible.
@@ -122,7 +128,7 @@ export function Composer({
   }, [sessionId]);
 
   const selectCommand = useCallback((name: string) => {
-    setText(`/${name} `);
+    setText(`${formatSlashCommandName(name)} `);
     setAcActiveIdx(0);
     textareaRef.current?.focus();
   }, []);

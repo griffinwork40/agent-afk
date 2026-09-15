@@ -5,6 +5,10 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { cn } from '@/lib/utils';
+import {
+  formatSlashCommandName,
+  slashCommandMatchesQuery,
+} from '@/lib/slash-command';
 import type { SlashCommand } from '@/types/api';
 
 interface SlashAutocompleteProps {
@@ -25,7 +29,7 @@ export function SlashAutocomplete({
   const listRef = useRef<HTMLUListElement>(null);
 
   const filtered = commands
-    .filter((c) => c.name.startsWith(query))
+    .filter((c) => slashCommandMatchesQuery(c.name, query))
     .slice(0, 8);
 
   // Reset selection when filter changes
@@ -69,7 +73,9 @@ export function SlashAutocomplete({
             onSelect(cmd.name);
           }}
         >
-          <span className="font-mono font-semibold shrink-0">/{cmd.name}</span>
+          <span className="font-mono font-semibold shrink-0">
+            {formatSlashCommandName(cmd.name)}
+          </span>
           <span className="text-muted-foreground truncate">{cmd.summary}</span>
         </li>
       ))}
