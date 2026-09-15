@@ -75,8 +75,9 @@ export interface KeyDispatchHost {
   dismissPromptGhost(): boolean;
   /** Apply the highlighted dropdown candidate; false when the dropdown is closed/empty. */
   applyDropdownSelection(): boolean;
-  /** Accept the active ghost text; false when no ghost is showing. */
+  /** Accept ghost text: full (applyGhostAccept) or one word (applyGhostWordAccept). */
   applyGhostAccept(): boolean;
+  applyGhostWordAccept(): boolean;
 
   /** Whether the compositor holds raw mode + a keypress listener (dispatch gate). */
   readonly armed: boolean;
@@ -1018,21 +1019,19 @@ function handleCursorAndEdit(self: KeyDispatchHost, key: KeyInfo): boolean {
     return true;
   }
 
-  if (key?.name === 'left') {
-    self.applyEdit(InputCore.moveLeft(self.input));
-    return true;
-  }
+  if (key?.name === 'left') { self.applyEdit(InputCore.moveLeft(self.input)); return true; }
 
   if (key?.name === 'right') {
     // When cursor is already at end-of-buffer and a ghost is showing,
-    // Right-arrow accepts the ghost instead of doing a no-op cursor move.
+    // Right-arrow accepts ONE WORD from the ghost (nibble), keeping the
+    // rest visible as dim text. Tab accepts the full ghost in one shot.
     // Mid-buffer Right-arrow keeps its normal cursor-advance behavior.
     if (
       self.input.cursor === self.input.buffer.length &&
       self.activeGhost !== null &&
       !self.autocompleteState?.dropdownOpen
     ) {
-      self.applyGhostAccept();
+      self.applyGhostWordAccept();
     } else {
       self.applyEdit(InputCore.moveRight(self.input));
     }

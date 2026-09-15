@@ -1210,14 +1210,17 @@ export class TerminalCompositor {
   }
 
   /**
-   * Accept the current ghost text (replace buffer with the full ghost, cursor
-   * to end, clear ghost, repaint). Body extracted to
-   * terminal-compositor.ghost.ts — see {@link Ghost.applyGhostAccept} for the
-   * accept preconditions. Returns `true` when a ghost was accepted.
+   * Accept ghost text -- full or one word.
+   *
+   * Full accept (no arg / default): replace the buffer with the complete ghost,
+   * clear the ghost, repaint. See {@link Ghost.applyGhostAccept}.
+   *
+   * Word accept: extend the buffer through the next word boundary, keep the
+   * remaining ghost visible. See {@link Ghost.applyGhostWordAccept}.
+   *
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  applyGhostAccept(): boolean {
-    return Ghost.applyGhostAccept(this);
-  }
+  applyGhostAccept(): boolean { return Ghost.applyGhostAccept(this); }
+  applyGhostWordAccept(): boolean { return Ghost.applyGhostWordAccept(this); }
 
 }

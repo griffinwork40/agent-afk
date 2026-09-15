@@ -216,3 +216,55 @@ export function applyGhostAccept(self: AutocompleteHost): boolean {
   self.repaint();
   return true;
 }
+
+/**
+ * Accept one word from the ghost text: extend the buffer through the next
+ * word boundary, keep the remaining ghost visible, and repaint.
+ *
+ * "One word" means: advance past any non-whitespace to complete the current
+ * word, then past any trailing whitespace so the cursor lands at the start
+ * of the next word. This gives the user a clean word-at-a-time nibble
+ * through the ghost, with Tab available to swallow the rest at any point.
+ *
+ * When the accepted portion consumes the entire ghost remainder, the ghost
+ * and prompt suggestion are cleared (same as a full accept).
+ *
+ * Same preconditions as {@link applyGhostAccept}.
+ */
+export function applyGhostWordAccept(self: AutocompleteHost): boolean {
+  const ghost = self.activeGhost;
+  if (ghost === null) return false;
+  const ac = self.autocompleteState;
+  if (ac?.dropdownOpen) return false;
+  if (self.input.cursor !== self.input.buffer.length) return false;
+  if (!ghost.startsWith(self.input.buffer) || ghost.length <= self.input.buffer.length) return false;
+
+  const remainder = ghost.slice(self.input.buffer.length);
+
+  // Find the next word boundary in the remainder:
+  //   1. Skip non-whitespace (finish the current word)
+  //   2. Skip trailing whitespace (land at the start of the next word)
+  let i = 0;
+  while (i < remainder.length && !/\s/.test(remainder[i]!)) i++;
+  while (i < remainder.length && /\s/.test(remainder[i]!)) i++;
+
+  // Edge case: if no boundary was found (e.g. remainder is all whitespace),
+  // accept the entire remainder.
+  if (i === 0) i = remainder.length;
+
+  const accepted = stripGhostControlChars(remainder.slice(0, i));
+  const newBuffer = self.input.buffer + accepted;
+  self.input = InputCore.seed(newBuffer);
+
+  // If this nibble consumed the entire ghost, clean up fully (same as
+  // applyGhostAccept). Otherwise keep the ghost alive -- the render path
+  // will show only the un-accepted tail as dim text.
+  if (newBuffer.length >= ghost.length) {
+    self.activeGhost = null;
+    self.ghostEngine?.clearPromptSuggestion?.();
+  }
+
+  updateAutocomplete(self);
+  self.repaint();
+  return true;
+}
