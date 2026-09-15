@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.209.2] - 2026-09-15
+
+### Added
+- add AFK_STREAM_BUFFER_MS for smoother streaming output (#1671) (126772d3)
+
+### Fixed
+- close leaked FDs in start() (#1656) (#1663) (fe23c824)
+
+### Changed
+- bump the fumadocs group in /website with 2 updates (#1650) (ef2c14ce)
+
 ## [5.209.1] - 2026-09-14
 
 ### Fixed
