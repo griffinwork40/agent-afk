@@ -646,7 +646,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
 
       // Phase 3 — the pre-arm print block, in production order: banner, then
       // the drained bootstrap warnings, then the trailing blank line.
-      const BANNER_ROWS = 11;
+      const BANNER_ROWS = 10;
       for (let i = 0; i < BANNER_ROWS; i++) stdout.write(`POSTCLEAR_BANNER_${i}\n`);
       stdout.write('  [afk] agents: SHADOWWARN overrides built-in agent "research-agent"\n');
       stdout.write('  [mcp] MCPWARN unknown key\n');

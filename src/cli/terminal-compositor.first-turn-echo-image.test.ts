@@ -90,7 +90,7 @@ function wireFooter(stdout: MockStdout): StatusLine {
 
 const COLS = 80;
 const ROWS = 24;
-const BANNER_ROWS = 11; // live geometry from first-turn-banner-echo.test.ts: anchorRow = 12
+const BANNER_ROWS = 10; // live geometry from first-turn-banner-echo.test.ts: anchorRow = 11
 const SUMMARY = '[image attached]';
 
 // A message long enough to wrap into a multi-row user card. DUPCHECK marks the
