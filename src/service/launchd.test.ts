@@ -110,6 +110,8 @@ describe.skipIf(process.platform !== 'darwin')('renderPlist', () => {
         <true/>
         <key>KeepAlive</key>
         <true/>
+        <key>ThrottleInterval</key>
+        <integer>30</integer>
         <key>ProcessType</key>
         <string>Interactive</string>
       </dict>
