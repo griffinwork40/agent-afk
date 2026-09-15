@@ -843,7 +843,7 @@ export function registerInteractiveCommand(program: Command): void {
         const resumeMeta = ctx.resumeTarget
           ? `Resuming ${ctx.resumeTarget.id} · ${ctx.stats.totalTurns} prior turn${ctx.stats.totalTurns === 1 ? '' : 's'}`
           : undefined;
-        console.log('\n' + welcomeBanner({
+        console.log(welcomeBanner({
           mode: 'Interactive Mode',
           model: ctx.stats.model,
           version: getVersion(),
