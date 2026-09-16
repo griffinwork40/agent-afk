@@ -1,6 +1,6 @@
 ---
 name: fix-pr
-description: "One-verb pipeline for the operator's highest-frequency manual loop: fetch a PR's unresolved reviewer feedback (inline review comments, review-summary bodies, and issue-level conversation comments) and failing CI checks, fix them in an isolated managed worktree via a budget-bounded subagent, verify with the project's test gates, and push the fix back to the PR branch. Replaces the retyped recipe 'send a subagent in a worktree to fix <PR feedback>, then push.' Use when a PR has review comments or red CI that needs addressing — e.g. 'fix pr 286', 'address the review on #215', 'CI is red on the worktree-sweep PR'. Never force-pushes, never touches main, fails closed on missing gh auth or un-pushable fork PRs."
+description: "One-verb pipeline for the operator's highest-frequency manual loop: fetch a PR's unresolved reviewer feedback (inline review comments, review-summary bodies, and issue-level conversation comments) and failing CI checks, triage each issue via parallel read-only probes, fix the validated items in an isolated managed worktree via a budget-bounded subagent, verify with the project's test gates, and push the fix back to the PR branch. Replaces the retyped recipe 'send a subagent in a worktree to fix <PR feedback>, then push.' Use when a PR has review comments or red CI that needs addressing — e.g. 'fix pr 286', 'address the review on #215', 'CI is red on the worktree-sweep PR'. Never force-pushes, never touches main, fails closed on missing gh auth or un-pushable fork PRs."
 when-to-use: "A PR has review feedback or red CI that needs fixing."
 argument-hint: "<PR-number-or-URL> [--repo <path>] [--no-push] [--re-review]"
 surface: "afk"
@@ -9,12 +9,13 @@ failure_modes:
   - nested /review max_depth self-collision
   - silent partial fix (some comments addressed, done claimed for all)
   - unmanaged worktree leak
+  - triage probe misclassifies a valid item as invalid (filtered before write agent sees it)
 ---
 
 ## Sub-agent contract
 /contract
 
-`fix-pr` turns "review feedback / red CI on PR N" into a pushed fix commit with test evidence, using worktree isolation so the operator's working tree is never disturbed. It is the composition the operator previously chained by hand: `/resolve`-style feedback interpretation + managed worktree + budget-bounded fix subagent + test gate + push.
+`fix-pr` turns "review feedback / red CI on PR N" into a pushed fix commit with test evidence, using worktree isolation so the operator's working tree is never disturbed. The pipeline has three stages: **harvest** (collect feedback from all GitHub stores), **triage** (parallel read-only probes validate each issue independently), and **fix** (a single write agent applies pre-validated proposals). The parallel triage wave eliminates false-positive spec items and pre-computes fix proposals before any write begins, reducing cycling.
 
 **Skip when:** the fix is a one-line suggestion the operator pointed at directly (apply inline); the PR is already green with all threads resolved (report and stop); or the work is local-only and unpushed (use `/ship`).
 
@@ -67,20 +68,52 @@ If a managed worktree for this PR already exists, reuse it only if clean; otherw
 
 ---
 
+### Phase 2.5 — Parallel issue triage (read-only probes)
+
+This phase validates each spec item independently before any writes begin. The goals: filter false positives, detect already-addressed items, and pre-compute fix proposals so the write agent receives validated work orders instead of raw review comments.
+
+**Fast-path:** if the numbered spec contains exactly 1 item, skip this phase entirely -- dispatch directly to Phase 3 with the raw spec item. The parallel wave's value is proportional to item count; for a single item the overhead exceeds the benefit.
+
+**For 2+ spec items:** dispatch N read-only sub-agents in parallel via `compose` (one node per spec item, no edges -- pure fan-out). Each probe:
+
+- **inputs:** one numbered spec item (comment text, source URL, file/line if known), the worktree path (as `cwd`), and the `head_branch`.
+- **agent_type:** `research-agent` (mechanically read-only -- cannot write files, run bash, or commit).
+- **model:** `haiku` (sufficient for validation; keeps the fan-out cheap).
+- **max_tool_rounds_per_node:** 8 (read the cited code, check surrounding context, form a verdict -- more than enough).
+- **goal:** read the cited file(s) and surrounding context in the worktree. Determine whether the reviewer's request is (a) valid and unaddressed, (b) already addressed by existing code, or (c) a false positive / misunderstanding. If valid, propose the minimal fix: exact file, location, and the change to make.
+- **deliverable (structured):**
+  - `item_id`: the spec item number.
+  - `verdict`: `valid` | `already-addressed` | `invalid` | `unclear`.
+  - `reasoning`: 2-3 sentences explaining the verdict with file:line citations.
+  - `proposed_fix` (when verdict is `valid`): exact file path, location description, and a concrete description of the change needed. NOT a diff -- a plain-language description the write agent can execute.
+  - `risk`: `low` | `medium` | `high` -- whether the fix might have non-obvious side effects.
+
+**After all probes return,** the orchestrator consolidates:
+
+1. **Filter:** items with verdict `already-addressed` or `invalid` are removed from the fix spec. Note them in the terminal report as "triaged out" with the probe's reasoning.
+2. **Escalate:** items with verdict `unclear` stay in the spec but are flagged -- the write agent sees the probe's reasoning and must make its own determination.
+3. **Enrich:** items with verdict `valid` carry the probe's `proposed_fix` and `risk` forward into Phase 3 as pre-validated work orders.
+
+If ALL items are triaged out (every probe returned `already-addressed` or `invalid`), report "All spec items were triaged out by parallel probes -- no changes needed" with the per-item triage table and stop (Done, no mutation). Clean up the worktree.
+
+**Rate note:** for PRs with >6 spec items, cap the parallel wave at 6 concurrent probes (use `compose` with 6 nodes per wave, remaining items in a second wave) to respect API rate ceilings.
+
+---
+
 ### Phase 3 — Fix dispatch (one subagent, budget-bounded)
 
 Size the dispatch per `/right-size-delegation` if available; defaults otherwise:
 
-Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max_turns: 25`, model right-sized to the diff — `sonnet` default, `haiku` never for code fixes):
-- inputs: the numbered fix spec, `head_branch`, repo test/lint commands (inferred from package.json / Makefile / pyproject.toml and passed explicitly).
-- goal: address every numbered item with minimal diffs; run the narrowest relevant tests per item; **do NOT commit yet** — emit the manifest first (see below).
-- non_goals: do NOT push, do NOT touch branches other than the checked-out one, do NOT invoke /review or any skill, do NOT expand scope beyond the numbered items, do NOT modify files that are not named in the numbered fix spec unless a fix structurally requires it (e.g. a shared helper, a test file, a baseline file the gate checks).
-- deliverable — **two-part, manifest-then-commit:**
+Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max_turns: 25`, model right-sized to the diff -- `sonnet` default, `haiku` never for code fixes):
+- inputs: the **triaged fix spec** (not raw review comments): each surviving item carries its original numbered ID, the reviewer's request, the triage probe's `proposed_fix` and `risk` assessment, and `unclear` items carry the probe's reasoning. Also: `head_branch`, repo test/lint commands (inferred from package.json / Makefile / pyproject.toml and passed explicitly).
+- goal: apply every surviving spec item with minimal diffs, using the triage probe's proposed fixes as a starting point (the probe proposals are guidance, not mandates -- the write agent may deviate if it discovers a better approach). Run the narrowest relevant tests per item. **Do NOT commit yet** -- emit the manifest first (see below).
+- non_goals: do NOT push, do NOT touch branches other than the checked-out one, do NOT invoke /review or any skill, do NOT expand scope beyond the surviving spec items, do NOT modify files that are not named in the triaged spec unless a fix structurally requires it (e.g. a shared helper, a test file, a baseline file the gate checks).
+- deliverable -- **two-part, manifest-then-commit:**
   1. **Pre-commit manifest** (emit BEFORE running `git commit`):
      - `touched_files`: list of every file modified or created.
-     - `spec_item_map`: `{ file: [spec_item_ids] }` — which numbered spec items justified touching each file. Every file must map to at least one item; a file not named in the spec must carry an explicit justification (e.g. "shared helper used by the fixed call site", "test file covering the changed behavior", "baseline file that the CI gate requires after the edit").
-     - `invariant_per_file`: `{ file: "one-sentence claim about what changed and why it is correct" }` — a falsifiable statement the orchestrator can verify by re-reading the file.
-     - `out_of_scope`: `{ [spec_item_id]: "reason" }` — spec items the subagent determined cannot be addressed in this PR, with a reason for each.
+     - `spec_item_map`: `{ file: [spec_item_ids] }` -- which numbered spec items justified touching each file. Every file must map to at least one item; a file not named in the spec must carry an explicit justification (e.g. "shared helper used by the fixed call site", "test file covering the changed behavior", "baseline file that the CI gate requires after the edit").
+     - `invariant_per_file`: `{ file: "one-sentence claim about what changed and why it is correct" }` -- a falsifiable statement the orchestrator can verify by re-reading the file.
+     - `out_of_scope`: `{ [spec_item_id]: "reason" }` -- spec items the subagent determined cannot be addressed in this PR, with a reason for each.
   2. **After orchestrator validates the manifest** (see Phase 3.5): emit the per-item status table (`fixed` | `out-of-scope <reason>`), unified diff summary, and targeted test output.
 
 ---
@@ -93,7 +126,7 @@ Run all three checks below, collecting violations into a single list. Do NOT re-
 
 1. **Scope check:** independently enumerate the worktree's modified and untracked files using the union of: `git diff --name-only HEAD` (unstaged changes), `git diff --name-only --cached` (staged changes), and `git ls-files --others --exclude-standard` (untracked files) — deduplicate the combined list. Require an exact match with the subagent's `touched_files` list. Any file present in the worktree diff but absent from `touched_files` → record violation: "File `<path>` was modified in the worktree but not declared in your `touched_files` manifest. Add it to the manifest or revert the change." Then, for each file in `touched_files`, verify it appears in `spec_item_map` with a valid spec item or an explicit justification. Any unjustified file → record violation: "File `<path>` was modified but is not covered by any spec item. Either remove the change or provide a justification."
 2. **Invariant spot-check:** re-read each file in `touched_files` in the worktree. For each, check whether the `invariant_per_file` claim is consistent with the file's actual content. Flag obvious contradictions (e.g. claim says "added try/catch around writeFn" but the file has no try/catch near writeFn). A contradicted invariant → record violation naming the specific discrepancy.
-3. **Compound-fix completeness:** cross-reference the numbered fix spec against `spec_item_map`. If any spec item is absent from the map AND absent from `out_of_scope`, record violation: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
+3. **Compound-fix completeness:** cross-reference the triaged spec (surviving items only) against `spec_item_map`. If any surviving spec item is absent from the map AND absent from `out_of_scope`, record violation: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
 
 **After all three checks:** zero violations → pass. One or more violations → re-dispatch with the full violation list as a single message.
 
@@ -112,10 +145,14 @@ Run the project's full test/lint gates in the worktree yourself — do not trust
 
 ---
 
-### Phase 5 — Push (guarded)
+### Phase 5 — Push (guarded, with PR state re-check)
 
 - `no_push` set → `worktree keep` (reason: "fix-pr --no-push review pending"), emit the diff summary + per-item table, stop (Done, no remote mutation).
-- Otherwise: `git push origin <head_branch>` from the worktree. **Plain push only — never `--force`, never `--force-with-lease`, never any other ref.** If push is rejected (non-fast-forward because the PR moved), fetch + rebase the fix commits onto the new head, re-run Phase 4 gates, push again. If still rejected → Blocked.
+- Otherwise, **re-check PR state before pushing** -- the PR may have been merged or closed during the fix work:
+  1. `gh pr view <pr> --json state,mergedAt,mergeCommit` — if `state === "MERGED"`: STOP. Report "PR #N was merged during fix work (merged at `<mergedAt>`, commit `<mergeCommit.oid>`). Fix commits are on branch `<head_branch>` in worktree `<path>` — cherry-pick to a fresh branch if the fixes are still needed." Keep the worktree, emit Done (no push).
+  2. If `state === "CLOSED"` (no `mergedAt`): STOP. Report "PR #N was closed without merge during fix work." Keep the worktree, emit Done (no push).
+  3. If `state === "OPEN"`: proceed with push.
+- `git push origin <head_branch>` from the worktree. **Plain push only -- never `--force`, never `--force-with-lease`, never any other ref.** If push is rejected (non-fast-forward because the PR moved), fetch + rebase the fix commits onto the new head, re-run Phase 4 gates, push again. If still rejected → Blocked.
 
 ---
 
@@ -134,5 +171,5 @@ If `re_review`: invoke `/review` **directly from this top-level session only —
 - Success: `worktree remove` (branch ref is preserved automatically).
 - Failure/Blocked: keep the worktree, name its path and branch in the report.
 
-**Done** must cite: pushed commit SHA(s), the PR URL, the per-item fix table, and test-gate output location.
+**Done** must cite: pushed commit SHA(s), the PR URL, the triage table (per-item verdict from Phase 2.5, including items triaged out), the per-item fix table, and test-gate output location.
 **Blocked** must cite: exact unblock condition (auth, fork perms, surviving test failures), worktree path, and everything already fixed.

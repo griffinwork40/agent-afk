@@ -75,7 +75,7 @@ const PINNED_HASHES = {
   //   fix Phase 3.5 scope-check gap (add --cached to catch staged files), mandate Phase 3.5
   //   re-run after each Phase 4 re-dispatch.
   'fix-pr':
-    'a5d1029c046f11ce18bc487033479bfac02ea500391a53b9806fb58e17411ee4',
+    'a87b445c94aecc3943459960ddc16bb3e13cd9b35ad89d3ee58e68e9b434d534',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
