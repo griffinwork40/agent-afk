@@ -80,6 +80,7 @@ Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max
      - `touched_files`: list of every file modified or created.
      - `spec_item_map`: `{ file: [spec_item_ids] }` — which numbered spec items justified touching each file. Every file must map to at least one item; a file not named in the spec must carry an explicit justification (e.g. "shared helper used by the fixed call site", "test file covering the changed behavior", "baseline file that the CI gate requires after the edit").
      - `invariant_per_file`: `{ file: "one-sentence claim about what changed and why it is correct" }` — a falsifiable statement the orchestrator can verify by re-reading the file.
+     - `out_of_scope`: `{ [spec_item_id]: "reason" }` — spec items the subagent determined cannot be addressed in this PR, with a reason for each.
   2. **After orchestrator validates the manifest** (see Phase 3.5): commit locally with a message referencing the PR (`fix(pr-<pr>): address review feedback`), then emit the per-item status table (`fixed` | `out-of-scope <reason>`), unified diff summary, targeted test output, and local commit SHA.
 
 ---
@@ -88,11 +89,11 @@ Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max
 
 After the fix subagent emits its pre-commit manifest, the orchestrator validates it **before** allowing the commit:
 
-1. **Scope check:** for each file in `touched_files`, verify it appears in `spec_item_map` with a valid spec item or an explicit justification. Any unjustified file → re-dispatch with: "File `<path>` was modified but is not covered by any spec item. Either remove the change or provide a justification."
+1. **Scope check:** first, independently enumerate the worktree's modified and untracked files (`git diff --name-only HEAD` + `git ls-files --others --exclude-standard`). Require an exact match with the subagent's `touched_files` list. Any file present in the worktree diff but absent from `touched_files` → re-dispatch with: "File `<path>` was modified in the worktree but not declared in your `touched_files` manifest. Add it to the manifest or revert the change." Then, for each file in `touched_files`, verify it appears in `spec_item_map` with a valid spec item or an explicit justification. Any unjustified file → re-dispatch with: "File `<path>` was modified but is not covered by any spec item. Either remove the change or provide a justification."
 2. **Invariant spot-check:** re-read each file in `touched_files` in the worktree. For each, check whether the `invariant_per_file` claim is consistent with the file's actual content. Flag obvious contradictions (e.g. claim says "added try/catch around writeFn" but the file has no try/catch near writeFn). A contradicted invariant → re-dispatch with the specific discrepancy.
-3. **Compound-fix completeness:** cross-reference the numbered fix spec against `spec_item_map`. If any spec item is absent from the map AND absent from an explicit `out-of-scope` declaration, flag it: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
+3. **Compound-fix completeness:** cross-reference the numbered fix spec against `spec_item_map`. If any spec item is absent from the map AND absent from `out_of_scope`, flag it: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
 
-Pass → signal the subagent to commit (or commit inline from the orchestrator). Fail → re-dispatch with the specific validation failures, **≤2 re-dispatch iterations** on manifest validation. Cap reached → proceed to Phase 4 with the current state and note the manifest failures in the terminal report.
+Pass → signal the subagent to commit (or commit inline from the orchestrator). Fail → re-dispatch with the specific validation failures, **≤2 re-dispatch iterations** on manifest validation. Cap reached with outstanding **scope violations** (unjustified files in `touched_files`, or missing spec items not declared out-of-scope) → emit **Blocked** naming the unresolved violations, the worktree path, and the branch. Cap reached with **unverified invariants only** (invariant claims the orchestrator could not confirm but no scope violation) → proceed to Phase 4 with the current state and note the unverified invariants in the terminal report.
 
 ---
 
@@ -118,7 +119,7 @@ Run the project's full test/lint gates in the worktree yourself — do not trust
 
 If `re_review`: invoke `/review` **directly from this top-level session only — NEVER from inside a subagent** (known max_depth self-collision: 100+ `delegation.skipped reason:"max_depth" requested_name:"review"` entries in routing-decisions.jsonl). If the current session is itself a subagent (check `get_runtime_state` depth), skip re-review and note it in the terminal report instead.
 
-**Scope the re-review via `--brief`:** pass the numbered fix spec from Phase 1 as the `--brief` argument to `/review`. This anchors the re-review's spec-compliance assessment to "were these specific items addressed?" rather than a full open-ended sweep. The review skill's stated-intent pathway (`review:SKILL.md:36-41, 75-77`) will assess the fix against the original findings as its spec — new findings outside that scope are still reported but contextualized against the stated intent, and the reviewer can judge whether the original items were resolved rather than discovering an entirely new surface.
+**Scope the re-review via `--brief`:** pass the numbered fix spec from Phase 1 as the `--brief` argument to `/review`. This anchors the re-review's spec-compliance assessment to "were these specific items addressed?" rather than a full open-ended sweep. The review skill's stated-intent pathway (`review:SKILL.md:36-37, 75-76`) will assess the fix against the original findings as its spec — Findings from other review dimensions (security, api-compat, perf, etc.) are reported normally and unaffected by `--brief`; the spec-compliance dimension flags deviations from the original findings as scope creep or unmet intent, so the reviewer can judge whether the original items were resolved.
 
 ---
 
