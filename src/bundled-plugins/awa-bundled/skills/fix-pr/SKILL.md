@@ -74,12 +74,13 @@ This phase validates each spec item independently before any writes begin. The g
 
 **Fast-path:** if the numbered spec contains exactly 1 item, skip this phase entirely -- dispatch directly to Phase 3 with the raw spec item. The parallel wave's value is proportional to item count; for a single item the overhead exceeds the benefit.
 
-**For 2+ spec items:** dispatch N read-only sub-agents in parallel via `compose` (one node per spec item, no edges -- pure fan-out). Each probe:
+**For 2+ spec items:** dispatch N read-only sub-agents in parallel via the `agent` tool (one call per spec item in the same tool-use turn -- pure fan-out). Do NOT use `compose` for this wave: compose nodes accept only `{ id, prompt, model }` and cannot carry `agent_type` or per-node `cwd`, so the read-only and worktree-scoping guarantees would be silently lost. Each probe:
 
-- **inputs:** one numbered spec item (comment text, source URL, file/line if known), the worktree path (as `cwd`), and the `head_branch`.
 - **agent_type:** `research-agent` (mechanically read-only -- cannot write files, run bash, or commit).
+- **cwd:** `<worktree path>` (so file reads target the PR branch, not the main working tree).
 - **model:** `haiku` (sufficient for validation; keeps the fan-out cheap).
-- **max_tool_rounds_per_node:** 8 (read the cited code, check surrounding context, form a verdict -- more than enough).
+- **max_tool_use_iterations:** 8 (read the cited code, check surrounding context, form a verdict -- more than enough).
+- **inputs (in prompt):** one numbered spec item (comment text, source URL, file/line if known) and the `head_branch`.
 - **goal:** read the cited file(s) and surrounding context in the worktree. Determine whether the reviewer's request is (a) valid and unaddressed, (b) already addressed by existing code, or (c) a false positive / misunderstanding. If valid, propose the minimal fix: exact file, location, and the change to make.
 - **deliverable (structured):**
   - `item_id`: the spec item number.
@@ -96,7 +97,7 @@ This phase validates each spec item independently before any writes begin. The g
 
 If ALL items are triaged out (every probe returned `already-addressed` or `invalid`), report "All spec items were triaged out by parallel probes -- no changes needed" with the per-item triage table and stop (Done, no mutation). Clean up the worktree.
 
-**Rate note:** for PRs with >6 spec items, cap the parallel wave at 6 concurrent probes (use `compose` with 6 nodes per wave, remaining items in a second wave) to respect API rate ceilings.
+**Rate note:** for PRs with >6 spec items, cap the parallel wave at 6 concurrent `agent` calls per turn (remaining items in a second turn) to respect API rate ceilings.
 
 ---
 
@@ -130,7 +131,7 @@ Run all three checks below, collecting violations into a single list. Do NOT re-
 
 **After all three checks:** zero violations → pass. One or more violations → re-dispatch with the full violation list as a single message.
 
-Pass → the orchestrator commits inline: run `git commit -m 'fix(pr-<pr>): address review feedback'` in the worktree. Fail → **≤2 manifest-validation re-dispatch iterations** (all violations from steps 1-3 in a single re-dispatch message per iteration). Cap reached with outstanding **scope violations** (unjustified files in `touched_files`, or missing spec items not declared out-of-scope) → emit **Blocked** naming the unresolved violations, the worktree path, and the branch (keep the worktree for manual follow-up). Cap reached with **unverified invariants only** (invariant claims the orchestrator could not confirm but no scope violation) → commit inline (`git commit -m 'fix(pr-<pr>): address review feedback'`), proceed to Phase 4 with the current state, and note the unverified invariants in the terminal report.
+Pass → the orchestrator commits inline: run `git commit -m 'fix(pr-<pr>): address review feedback'` in the worktree. Fail → **≤2 manifest-validation re-dispatch iterations** (all violations from steps 1-3 in a single re-dispatch message per iteration). Cap reached with outstanding **scope violations** (unjustified files in `touched_files`, or missing spec items not declared out-of-scope) → emit **Blocked** naming the unresolved violations, the worktree path, and the branch (keep the worktree for manual follow-up). Cap reached with **unverified invariants only** (invariant claims the orchestrator could not confirm but no scope violation) → for each file whose invariant remains unverified, require the subagent to either restate the invariant in a falsifiable form (concrete line number + observable property) or declare the file `out-of-scope`. If at least one file retains a verifiable invariant, commit only the files with verified or restated-and-verified invariants. If zero files pass, emit **Blocked** naming the unverifiable claims. In all cases, note unverified invariants in the terminal report.
 
 ---
 
