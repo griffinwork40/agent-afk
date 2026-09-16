@@ -118,6 +118,10 @@ try {
   execFileSync('pnpm', ['exec', 'tsc', '-p', 'tsconfig.declarations.json'], {
     cwd: repoRoot,
     stdio: 'inherit',
+    // On Windows, pnpm is a .cmd shim, not a native binary. execFileSync
+    // without shell:true skips PATH resolution for .cmd files and throws
+    // ENOENT. This is the same pattern build-web-ui.mjs uses for vite.
+    shell: process.platform === 'win32',
   });
   const typesEntry = join(distDir, 'index.d.ts');
   if (!existsSync(typesEntry)) {
