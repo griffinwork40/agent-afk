@@ -73,9 +73,26 @@ Size the dispatch per `/right-size-delegation` if available; defaults otherwise:
 
 Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max_turns: 25`, model right-sized to the diff — `sonnet` default, `haiku` never for code fixes):
 - inputs: the numbered fix spec, `head_branch`, repo test/lint commands (inferred from package.json / Makefile / pyproject.toml and passed explicitly).
-- goal: address every numbered item with minimal diffs; run the narrowest relevant tests per item; commit locally with a message referencing the PR (`fix(pr-<pr>): address review feedback`).
-- non_goals: do NOT push, do NOT touch branches other than the checked-out one, do NOT invoke /review or any skill, do NOT expand scope beyond the numbered items.
-- deliverable: per-item status table (`fixed` | `out-of-scope <reason>`), unified diff summary, targeted test output, local commit SHA.
+- goal: address every numbered item with minimal diffs; run the narrowest relevant tests per item; **do NOT commit yet** — emit the manifest first (see below).
+- non_goals: do NOT push, do NOT touch branches other than the checked-out one, do NOT invoke /review or any skill, do NOT expand scope beyond the numbered items, do NOT modify files that are not named in the numbered fix spec unless a fix structurally requires it (e.g. a shared helper, a test file, a baseline file the gate checks).
+- deliverable — **two-part, manifest-then-commit:**
+  1. **Pre-commit manifest** (emit BEFORE running `git commit`):
+     - `touched_files`: list of every file modified or created.
+     - `spec_item_map`: `{ file: [spec_item_ids] }` — which numbered spec items justified touching each file. Every file must map to at least one item; a file not named in the spec must carry an explicit justification (e.g. "shared helper used by the fixed call site", "test file covering the changed behavior", "baseline file that the CI gate requires after the edit").
+     - `invariant_per_file`: `{ file: "one-sentence claim about what changed and why it is correct" }` — a falsifiable statement the orchestrator can verify by re-reading the file.
+  2. **After orchestrator validates the manifest** (see Phase 3.5): commit locally with a message referencing the PR (`fix(pr-<pr>): address review feedback`), then emit the per-item status table (`fixed` | `out-of-scope <reason>`), unified diff summary, targeted test output, and local commit SHA.
+
+---
+
+### Phase 3.5 — Manifest validation (inline, before commit)
+
+After the fix subagent emits its pre-commit manifest, the orchestrator validates it **before** allowing the commit:
+
+1. **Scope check:** for each file in `touched_files`, verify it appears in `spec_item_map` with a valid spec item or an explicit justification. Any unjustified file → re-dispatch with: "File `<path>` was modified but is not covered by any spec item. Either remove the change or provide a justification."
+2. **Invariant spot-check:** re-read each file in `touched_files` in the worktree. For each, check whether the `invariant_per_file` claim is consistent with the file's actual content. Flag obvious contradictions (e.g. claim says "added try/catch around writeFn" but the file has no try/catch near writeFn). A contradicted invariant → re-dispatch with the specific discrepancy.
+3. **Compound-fix completeness:** cross-reference the numbered fix spec against `spec_item_map`. If any spec item is absent from the map AND absent from an explicit `out-of-scope` declaration, flag it: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
+
+Pass → signal the subagent to commit (or commit inline from the orchestrator). Fail → re-dispatch with the specific validation failures, **≤2 re-dispatch iterations** on manifest validation. Cap reached → proceed to Phase 4 with the current state and note the manifest failures in the terminal report.
 
 ---
 
@@ -100,6 +117,8 @@ Run the project's full test/lint gates in the worktree yourself — do not trust
 ### Phase 6 — Optional re-review (top-level guard)
 
 If `re_review`: invoke `/review` **directly from this top-level session only — NEVER from inside a subagent** (known max_depth self-collision: 100+ `delegation.skipped reason:"max_depth" requested_name:"review"` entries in routing-decisions.jsonl). If the current session is itself a subagent (check `get_runtime_state` depth), skip re-review and note it in the terminal report instead.
+
+**Scope the re-review via `--brief`:** pass the numbered fix spec from Phase 1 as the `--brief` argument to `/review`. This anchors the re-review's spec-compliance assessment to "were these specific items addressed?" rather than a full open-ended sweep. The review skill's stated-intent pathway (`review:SKILL.md:36-41, 75-77`) will assess the fix against the original findings as its spec — new findings outside that scope are still reported but contextualized against the stated intent, and the reviewer can judge whether the original items were resolved rather than discovering an entirely new surface.
 
 ---
 

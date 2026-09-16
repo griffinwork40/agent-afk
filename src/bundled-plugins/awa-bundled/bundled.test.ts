@@ -70,7 +70,7 @@ const PINNED_HASHES = {
   'false-completion-gate':
     '9b0d90e150a9a4690c713d1063dd1901ce5b659d33b6c9f12b74e44b3d0163ce',
   'fix-pr':
-    'c89030fd9ab9200d9676ee503ae3db7e06fcb862d52a55eb67cb85786e585ff9',
+    '200e607eeebfdbb932ae531d60c7b4d283295fb7cdc210e5ea65e09f8cc3373f',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
