@@ -157,12 +157,11 @@ describe('commitAbove: stale prevTopRow from shrink-padded render loses repositi
     c.setOverlay(smallOverlay);
 
     // Verify the shrink-pad divergence: topRow is still 5 (stale) even though the
-    // real frame is now at row 15. With top-aligned bands, repositionCommittedBand
-    // pins the band at [floor, floor+fit-1] = [1, 2] (floor=1, fit=2 for
-    // ['GEO_PROSE','']) rather than adjacent to the real frame top (was 13..14
-    // under bottom-alignment). The stale logUpdate.topRow is still observable.
+    // real frame is now at row 15. With bottom-aligned bands, repositionCommittedBand
+    // pins the band at [targetBottom-fit+1, targetBottom] where targetBottom =
+    // desiredTopRow-1. desiredTopRow=15 → targetBottom=14, fit=2 → band at 13..14.
     expect(internals.logUpdate?.topRow, 'topRow must be stale (5) due to shrink-padding').toBe(5);
-    expect(internals.committedBandBottomRow, 'band must be top-aligned to floor+fit-1 = 2').toBe(2);
+    expect(internals.committedBandBottomRow, 'band must be bottom-aligned at targetBottom = 14').toBe(14);
 
     // Step 4: commitAbove(5-row block). This is the defect trigger:
     // stale prevTopRow=5 → fitsAboveFrame = 5>1 && 5<=stale_room=4 → FALSE.

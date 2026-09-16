@@ -145,24 +145,25 @@ describe('commitAbove shrink-gap regression', () => {
     const committedIdx = lines.findIndex((l) => l.includes(COMMITTED));
     expect(committedIdx, `committed line not rendered:\n${dump}`).toBeGreaterThanOrEqual(0);
 
-    // Top-aligned band: committed content should be near the top of the
-    // viewport (row 0 or row anchorFloor-1), NOT floating mid-screen with
-    // blank rows above it. Blank rows BELOW the band (between it and the
-    // spinner/frame) are expected and visually natural.
+    // Bottom-aligned band: committed content hugs the frame top, sitting
+    // immediately above the spinner/input area. Blank rows appear ABOVE
+    // the band (between scrollback and the committed text) and are not
+    // visible without scrolling. The critical invariant: no blank gap
+    // BETWEEN the committed content and the frame below it.
+    const firstFrameIdx = lines.findIndex((l, i) => i > committedIdx && l.trim() !== '');
     expect(
-      committedIdx,
-      `committed content not top-aligned (found at row ${committedIdx}, expected near top):\n${dump}`,
-    ).toBeLessThanOrEqual(3);
-
-    // No blank rows ABOVE the committed line (the old "gap" that this
-    // regression test was written to prevent).
-    let blanksAbove = 0;
-    for (let i = 0; i < committedIdx; i++) {
-      if ((lines[i] ?? '').trim() === '') blanksAbove++;
+      firstFrameIdx,
+      `no frame content found below committed line at row ${committedIdx}:\n${dump}`,
+    ).toBeGreaterThan(committedIdx);
+    // No blank rows between the committed band and the frame (the actual
+    // regression this test guards against).
+    let gapBetweenBandAndFrame = 0;
+    for (let i = committedIdx + 1; i < firstFrameIdx; i++) {
+      if ((lines[i] ?? '').trim() === '') gapBetweenBandAndFrame++;
     }
     expect(
-      blanksAbove,
-      `blank gap above committed content (${blanksAbove} rows):\n${dump}`,
+      gapBetweenBandAndFrame,
+      `blank gap between committed content and frame (${gapBetweenBandAndFrame} rows):\n${dump}`,
     ).toBe(0);
 
     term.dispose();

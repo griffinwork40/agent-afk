@@ -350,10 +350,10 @@ describe('TerminalCompositor — resize-window stale-geometry corruption (H1 + H
     // stable-width session.
     const smallOverlay = Array.from({ length: 4 }, (_, i) => `overlay shrunk ${i}`).join('\n');
     c.setOverlay(smallOverlay);
-    // With top-aligned bands, repositionCommittedBand pins the band at
-    // [floor, floor+fit-1] = [1, 2] (floor=1, fit=2 for ['GEO_PROSE',''])
-    // rather than adjacent to the real frame top (was row 14 under bottom-alignment).
-    expect(internals.committedBandBottomRow).toBe(2); // repositionCommittedBand re-pinned it (top-aligned)
+    // With bottom-aligned bands, repositionCommittedBand pins the band at
+    // [targetBottom-fit+1, targetBottom]. desiredTopRow=15 → targetBottom=14,
+    // fit=2 for ['GEO_PROSE',''] → band at rows 13..14.
+    expect(internals.committedBandBottomRow).toBe(14); // repositionCommittedBand re-pinned it (bottom-aligned)
 
     c.commitAbove(
       'GEO_TABLE_ROW_1 | data | col\n' +
