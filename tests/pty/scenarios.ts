@@ -395,13 +395,13 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // into real scrollback — the property this scenario is named for. Assert
       // the REGION (not just whole-buffer presence via exactlyOnce/order), so a
       // regression that left the banner in the viewport would fail here.
-      inScrollback: ['BANNER_LINE_0', 'BANNER_LINE_10'],
+      inScrollback: ['BANNER_LINE_0', 'BANNER_LINE_9'],
       exactlyOnce: [
         'DUPCHECK', 'india', '[image attached]', 'RESPONSE_OK',
-        'BANNER_LINE_0', 'BANNER_LINE_5', 'BANNER_LINE_10',
+        'BANNER_LINE_0', 'BANNER_LINE_5', 'BANNER_LINE_9',
       ],
       order: [
-        ['BANNER_LINE_10', 'DUPCHECK'],
+        ['BANNER_LINE_9', 'DUPCHECK'],
         ['DUPCHECK', 'india'],
         ['india', '[image attached]'],
         ['[image attached]', 'RESPONSE_OK'],
