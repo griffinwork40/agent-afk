@@ -81,7 +81,7 @@ Dispatch ONE implementation subagent (`agent` tool, `cwd: <worktree path>`, `max
      - `spec_item_map`: `{ file: [spec_item_ids] }` — which numbered spec items justified touching each file. Every file must map to at least one item; a file not named in the spec must carry an explicit justification (e.g. "shared helper used by the fixed call site", "test file covering the changed behavior", "baseline file that the CI gate requires after the edit").
      - `invariant_per_file`: `{ file: "one-sentence claim about what changed and why it is correct" }` — a falsifiable statement the orchestrator can verify by re-reading the file.
      - `out_of_scope`: `{ [spec_item_id]: "reason" }` — spec items the subagent determined cannot be addressed in this PR, with a reason for each.
-  2. **After orchestrator validates the manifest** (see Phase 3.5): commit locally with a message referencing the PR (`fix(pr-<pr>): address review feedback`), then emit the per-item status table (`fixed` | `out-of-scope <reason>`), unified diff summary, targeted test output, and local commit SHA.
+  2. **After orchestrator validates the manifest** (see Phase 3.5): emit the per-item status table (`fixed` | `out-of-scope <reason>`), unified diff summary, and targeted test output.
 
 ---
 
@@ -91,7 +91,7 @@ After the fix subagent emits its pre-commit manifest, the orchestrator validates
 
 Run all three checks below, collecting violations into a single list. Do NOT re-dispatch after each individual check -- aggregate first, re-dispatch once after step 3.
 
-1. **Scope check:** independently enumerate the worktree's modified and untracked files (`git diff --name-only HEAD` + `git ls-files --others --exclude-standard`). Require an exact match with the subagent's `touched_files` list. Any file present in the worktree diff but absent from `touched_files` → record violation: "File `<path>` was modified in the worktree but not declared in your `touched_files` manifest. Add it to the manifest or revert the change." Then, for each file in `touched_files`, verify it appears in `spec_item_map` with a valid spec item or an explicit justification. Any unjustified file → record violation: "File `<path>` was modified but is not covered by any spec item. Either remove the change or provide a justification."
+1. **Scope check:** independently enumerate the worktree's modified and untracked files using the union of: `git diff --name-only HEAD` (unstaged changes), `git diff --name-only --cached` (staged changes), and `git ls-files --others --exclude-standard` (untracked files) — deduplicate the combined list. Require an exact match with the subagent's `touched_files` list. Any file present in the worktree diff but absent from `touched_files` → record violation: "File `<path>` was modified in the worktree but not declared in your `touched_files` manifest. Add it to the manifest or revert the change." Then, for each file in `touched_files`, verify it appears in `spec_item_map` with a valid spec item or an explicit justification. Any unjustified file → record violation: "File `<path>` was modified but is not covered by any spec item. Either remove the change or provide a justification."
 2. **Invariant spot-check:** re-read each file in `touched_files` in the worktree. For each, check whether the `invariant_per_file` claim is consistent with the file's actual content. Flag obvious contradictions (e.g. claim says "added try/catch around writeFn" but the file has no try/catch near writeFn). A contradicted invariant → record violation naming the specific discrepancy.
 3. **Compound-fix completeness:** cross-reference the numbered fix spec against `spec_item_map`. If any spec item is absent from the map AND absent from `out_of_scope`, record violation: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
 
@@ -106,7 +106,7 @@ Pass → the orchestrator commits inline: run `git commit -m 'fix(pr-<pr>): addr
 Run the project's full test/lint gates in the worktree yourself — do not trust the subagent's report alone.
 
 - All green → Phase 5.
-- Failures → iterate: re-dispatch the fix subagent with the failure output as an updated spec (or hand off to `/heal` semantics if that skill is loadable), **≤2 test-failure re-dispatch iterations** (independent of Phase 3.5's manifest-validation counter). Cap reached → keep the worktree, emit **Blocked** naming the branch, the worktree path, the surviving failures, and the per-item status table.
+- Failures → iterate: re-dispatch the fix subagent with the failure output as an updated spec (or hand off to `/heal` semantics if that skill is loadable), **≤2 test-failure re-dispatch iterations** (independent of Phase 3.5's manifest-validation counter). Each Phase 4 re-dispatch must also pass through Phase 3.5 manifest validation (with a fresh counter) before the orchestrator commits the resulting changes. Cap reached → keep the worktree, emit **Blocked** naming the branch, the worktree path, the surviving failures, and the per-item status table.
 
 **Completeness check:** every numbered spec item must be `fixed` or explicitly `out-of-scope` with a reason. A partially addressed spec is never reported as Done.
 
