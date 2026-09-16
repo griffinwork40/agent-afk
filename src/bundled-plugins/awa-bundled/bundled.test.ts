@@ -69,8 +69,9 @@ const PINNED_HASHES = {
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
     '9b0d90e150a9a4690c713d1063dd1901ce5b659d33b6c9f12b74e44b3d0163ce',
+  // Hash bumped: PR #1680 — Phase 3.5 manifest gate + Phase 6 --brief re-review scoping.
   'fix-pr':
-    'a4dffdf9152fdf9ae6c6a25c1f733c1fa5ad4c3580ff3182bbc006e52614b681',
+    '3c7a7e36b48ce1af904e30040769ca77dc2f489dcb00f20f847a81c1de89e9a6',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,

@@ -93,7 +93,7 @@ After the fix subagent emits its pre-commit manifest, the orchestrator validates
 2. **Invariant spot-check:** re-read each file in `touched_files` in the worktree. For each, check whether the `invariant_per_file` claim is consistent with the file's actual content. Flag obvious contradictions (e.g. claim says "added try/catch around writeFn" but the file has no try/catch near writeFn). A contradicted invariant → re-dispatch with the specific discrepancy.
 3. **Compound-fix completeness:** cross-reference the numbered fix spec against `spec_item_map`. If any spec item is absent from the map AND absent from `out_of_scope`, flag it: "Spec item N is not addressed by any touched file and was not declared out-of-scope."
 
-Pass → signal the subagent to commit (or commit inline from the orchestrator). Fail → re-dispatch with the specific validation failures, **≤2 re-dispatch iterations** on manifest validation. Cap reached with outstanding **scope violations** (unjustified files in `touched_files`, or missing spec items not declared out-of-scope) → emit **Blocked** naming the unresolved violations, the worktree path, and the branch. Cap reached with **unverified invariants only** (invariant claims the orchestrator could not confirm but no scope violation) → proceed to Phase 4 with the current state and note the unverified invariants in the terminal report.
+Pass → the orchestrator commits inline: run `git commit -m 'fix(pr-<pr>): address review feedback'` in the worktree. Fail → re-dispatch with the specific validation failures, **≤2 manifest-validation re-dispatch iterations** (aggregate all failures from steps 1–3 into a single re-dispatch message per iteration). Cap reached with outstanding **scope violations** (unjustified files in `touched_files`, or missing spec items not declared out-of-scope) → emit **Blocked** naming the unresolved violations, the worktree path, and the branch (keep the worktree for manual follow-up). Cap reached with **unverified invariants only** (invariant claims the orchestrator could not confirm but no scope violation) → proceed to Phase 4 with the current state and note the unverified invariants in the terminal report.
 
 ---
 
@@ -102,7 +102,7 @@ Pass → signal the subagent to commit (or commit inline from the orchestrator).
 Run the project's full test/lint gates in the worktree yourself — do not trust the subagent's report alone.
 
 - All green → Phase 5.
-- Failures → iterate: re-dispatch the fix subagent with the failure output as an updated spec (or hand off to `/heal` semantics if that skill is loadable), **≤2 iterations**. Cap reached → keep the worktree, emit **Blocked** naming the branch, the worktree path, the surviving failures, and the per-item status table.
+- Failures → iterate: re-dispatch the fix subagent with the failure output as an updated spec (or hand off to `/heal` semantics if that skill is loadable), **≤2 test-failure re-dispatch iterations** (independent of Phase 3.5's manifest-validation counter). Cap reached → keep the worktree, emit **Blocked** naming the branch, the worktree path, the surviving failures, and the per-item status table.
 
 **Completeness check:** every numbered spec item must be `fixed` or explicitly `out-of-scope` with a reason. A partially addressed spec is never reported as Done.
 
@@ -119,7 +119,9 @@ Run the project's full test/lint gates in the worktree yourself — do not trust
 
 If `re_review`: invoke `/review` **directly from this top-level session only — NEVER from inside a subagent** (known max_depth self-collision: 100+ `delegation.skipped reason:"max_depth" requested_name:"review"` entries in routing-decisions.jsonl). If the current session is itself a subagent (check `get_runtime_state` depth), skip re-review and note it in the terminal report instead.
 
-**Scope the re-review via `--brief`:** pass the numbered fix spec from Phase 1 as the `--brief` argument to `/review`. This anchors the re-review's spec-compliance assessment to "were these specific items addressed?" rather than a full open-ended sweep. The review skill's stated-intent pathway (`review:SKILL.md:36-37, 75-76`) will assess the fix against the original findings as its spec — Findings from other review dimensions (security, api-compat, perf, etc.) are reported normally and unaffected by `--brief`; the spec-compliance dimension flags deviations from the original findings as scope creep or unmet intent, so the reviewer can judge whether the original items were resolved.
+**Scope the re-review via `--brief`:** pass the numbered fix spec from Phase 1 as the `--brief` argument to `/review`. This anchors the re-review's spec-compliance assessment to "were these specific items addressed?" rather than a full open-ended sweep. The review skill's stated-intent capture and spec-compliance assessment will assess the fix against the original findings as its spec — findings from other review dimensions (security, api-compat, perf, etc.) are reported normally and unaffected by `--brief`; the spec-compliance dimension flags deviations from the original findings as scope creep or unmet intent, so the reviewer can judge whether the original items were resolved.
+
+**Note:** the manifest gate (Phase 3.5) catches over-broad scope; logic inversions introduced by the fix subagent are caught only when `--re-review` is passed. For high-risk fixes, pass `--re-review` to enable this detection.
 
 ---
 
