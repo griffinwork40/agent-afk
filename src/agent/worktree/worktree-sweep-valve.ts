@@ -50,8 +50,14 @@
  */
 
 import { promises as fs, type Stats } from 'node:fs';
-import { O_WRONLY, O_CREAT, O_TRUNC, O_NOFOLLOW } from 'node:constants';
+import { O_WRONLY, O_CREAT, O_TRUNC } from 'node:constants';
+import * as nodeConstants from 'node:constants';
 import { join } from 'node:path';
+
+// O_NOFOLLOW is POSIX-only; node:constants does not export it on Windows.
+// Fall back to 0 (no-op flag) so the open() calls work on all platforms.
+// The symlink-following protection remains active on Linux/macOS (SEC-4).
+const O_NOFOLLOW: number = nodeConstants.O_NOFOLLOW ?? 0;
 
 /** Previews a root must accumulate before the sweep may remove anything. */
 export const SOFT_LAUNCH_RUNS = 3;

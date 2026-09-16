@@ -17,10 +17,16 @@
 
 import { readFile, mkdir, stat, open } from 'fs/promises';
 import { dirname } from 'path';
-import { O_WRONLY, O_CREAT, O_APPEND, O_NOFOLLOW, O_TRUNC } from 'node:constants';
+import { O_WRONLY, O_CREAT, O_APPEND, O_TRUNC } from 'node:constants';
+import * as nodeConstants from 'node:constants';
 import { getReplHistoryPath } from '../../paths.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
+
+// O_NOFOLLOW is POSIX-only; node:constants does not export it on Windows.
+// Fall back to 0 (no-op flag) so the open() calls work on all platforms.
+// The symlink-following protection remains active on Linux/macOS (SEC-4).
+const O_NOFOLLOW: number = nodeConstants.O_NOFOLLOW ?? 0;
 
 const MAX_ENTRIES = 1_000;
 
