@@ -49,11 +49,14 @@ export function flushResizeGhostErase(self: CommittedBandHost): void {
   // Reset them to 0 so repositionCommittedBand detects `moved = true` and
   // repaints the band at its new position, rather than treating the erased
   // rows as still-valid and skipping the repaint.
+  // Invariant: use interval-intersection (any overlap triggers reset), not
+  // full containment — a partial erase that clips only part of the band still
+  // invalidates the tracked pointers.
   if (
     self.committedBand.length > 0 &&
     self.committedBandBottomRow > 0 &&
-    self.committedBandTopRow >= top &&
-    self.committedBandBottomRow <= bottom
+    self.committedBandTopRow <= bottom &&
+    self.committedBandBottomRow >= top
   ) {
     self.committedBandTopRow = 0;
     self.committedBandBottomRow = 0;
@@ -157,7 +160,8 @@ export function repositionCommittedBand(
   // the tracked top drifted below them) is erased unconditionally, so it is
   // gap-free by construction rather than by trusting the incremental
   // `committedBandTopRow` adjacency. The banner/anchor above `floor` is never
-  // touched.
+  // touched. When fit === maxFit the band fills all available room, so
+  // newTop === floor and this loop is a no-op — paint below starts immediately.
   for (let r = floor; r < newTop; r++) {
     out += eraseAndPaintRow(r);
   }

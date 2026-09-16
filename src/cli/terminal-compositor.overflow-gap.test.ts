@@ -137,10 +137,10 @@ describe('commitAbove overflow-path table gap regression (tall overlay, extraRow
     // (3) CONTIGUOUS, NO VOID WITHIN CONTENT: no run of >= 2 consecutive blank
     //     rows within the committed content itself (one blank is the legit rhythm
     //     separator between blocks). This catches the screenshot's "massive void"
-    //     between the table header and body rows. With top-aligned bands the
-    //     content sits at the top of the above-frame region; trailing blank rows
-    //     BELOW the last content line (between content and the frame) are the
-    //     intended behavior and are not checked here.
+    //     between the table header and body rows. With bottom-aligned bands the
+    //     content hugs the frame top; blank rows appear ABOVE the content
+    //     (between scrollback and the committed text) and are not visible
+    //     without scrolling — not checked here.
     const firstContent = view.findIndex((l) => l.trim() !== '');
     const lastContent = (() => { for (let i = frameIdx - 1; i >= 0; i--) if ((view[i] ?? '').trim() !== '') return i; return -1; })();
     let maxBlankRun = 0, cur = 0;
@@ -153,9 +153,9 @@ describe('commitAbove overflow-path table gap regression (tall overlay, extraRow
       `blank gap of ${maxBlankRun} rows within committed content (the "massive void" bug; baseY=${baseY} frameIdx=${frameIdx} firstContent=${firstContent} lastContent=${lastContent}):\n${dump}`,
     ).toBeLessThanOrEqual(1);
 
-    // (4) CONTENT IS ABOVE THE FRAME: with top-aligned bands the committed run
-    //     sits at the TOP (near the floor), not hugging the frame bottom. Verify
-    //     content is present somewhere above the frame (not pushed out entirely).
+    // (4) CONTENT IS ABOVE THE FRAME: with bottom-aligned bands the committed
+    //     run hugs the frame top. Verify content is present somewhere above the
+    //     frame (not pushed out entirely).
     expect(
       lastContent,
       `committed run not found above the frame (lastContent=${lastContent} frame=${frameIdx}):\n${dump}`,

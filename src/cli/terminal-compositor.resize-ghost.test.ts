@@ -242,17 +242,17 @@ describe('TerminalCompositor — resize ghost erase', () => {
     process.stdout.emit('resize');
     vi.advanceTimersByTime(150);
 
-    // With top-aligned bands (floor=1), the band re-pins at the same absolute
-    // row (floor=1) after the expand — the ghost erase clears the row and
-    // repositionCommittedBand immediately repaints it. Verify no ghost: the old
-    // FRAME rows (which moved down on expand) should be blank, and UNIQUEBANDLINE
-    // appears exactly once (no duplicate = no ghost copy left behind).
+    // With bottom-aligned bands, the band re-pins at [targetBottom - fit + 1,
+    // targetBottom] after the expand — the ghost erase clears the old rows and
+    // repositionCommittedBand repaints at the new position. Verify no ghost: the
+    // old FRAME rows (which moved down on expand) should be blank, and
+    // UNIQUEBANDLINE appears exactly once (no duplicate = no ghost copy).
     if (oldBandTop !== (internals.committedBandTopRow || oldBandTop)) {
       // Band moved to a different row: original row must be blank.
       expect(vscreen.lineAt(oldBandTop).trim()).toBe('');
     } else if (oldFrameTop > oldBandTop) {
-      // Band stays at same row (top-aligned to floor); verify the old frame top
-      // (which did move) is now blank — no orphaned frame ghost.
+      // Band stayed at same row; verify the old frame top (which did move) is
+      // now blank — no orphaned frame ghost.
       expect(vscreen.lineAt(oldFrameTop).trim()).toBe('');
     }
     // The band content was re-pinned somewhere in the (new, taller) viewport —
@@ -262,6 +262,65 @@ describe('TerminalCompositor — resize ghost erase', () => {
     // And it appears exactly once (no duplicate ghost + re-pin).
     const occurrences = grid.split('UNIQUEBANDLINE').length - 1;
     expect(occurrences).toBe(1);
+  });
+
+  it('partial-overlap ghost erase resets band pointers when erase range clips only part of a multi-row band', async () => {
+    // Regression coverage for the interval-intersection check in
+    // flushResizeGhostErase: when the ghost-erase range [top, bottom] clips
+    // only part of the band (e.g. band bottom within range but band top above
+    // it), the tracking pointers must still be reset so repositionCommittedBand
+    // repaints. Without the intersection check, full-containment logic would
+    // skip the reset and leave stale pointers for physically-erased rows.
+    vi.useFakeTimers();
+    stdout.rows = 24;
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn() });
+    armed.push(c);
+    await c.arm();
+
+    // Commit a multi-row block so the band occupies several rows.
+    c.commitAbove('PARTIAL-1\nPARTIAL-2\nPARTIAL-3\nPARTIAL-4\nPARTIAL-5');
+    c.setOverlay('OVERLAY');
+
+    const internals = c as unknown as Internals;
+    expect(internals.committedBand.length).toBeGreaterThan(0);
+    const bandTop = internals.committedBandTopRow;
+    const bandBottom = internals.committedBandBottomRow;
+    // Precondition: band spans multiple rows.
+    expect(bandBottom - bandTop).toBeGreaterThanOrEqual(2);
+
+    // EXPAND: the immediate handler snapshots the pre-resize footprint.
+    stdout.rows = 40;
+    process.stdout.emit('resize');
+    expect(internals.pendingResizeErase).not.toBeNull();
+    const snap = internals.pendingResizeErase!;
+
+    // Verify the ghost-erase range overlaps the band (at least partially).
+    const overlaps =
+      bandTop <= snap.bottom && bandBottom >= snap.top;
+    expect(
+      overlaps,
+      `ghost-erase range [${snap.top}, ${snap.bottom}] must overlap band [${bandTop}, ${bandBottom}]`,
+    ).toBe(true);
+
+    // Advance timers so the debounced repaint fires and flushResizeGhostErase
+    // runs. The interval-intersection check should detect the overlap and
+    // reset pointers to 0, enabling repositionCommittedBand to repaint.
+    vi.advanceTimersByTime(150);
+
+    // After the ghost erase + repin, pointers must reflect the new geometry
+    // (repainted at the new position), NOT the stale pre-resize values.
+    expect(
+      internals.committedBandTopRow !== bandTop || internals.committedBandBottomRow !== bandBottom,
+      `band pointers must change after expand (repin to new geometry); ` +
+        `got top=${internals.committedBandTopRow} bottom=${internals.committedBandBottomRow}, ` +
+        `was top=${bandTop} bottom=${bandBottom}`,
+    ).toBe(true);
+    // The band model is preserved (content not lost).
+    expect(internals.committedBand.length).toBeGreaterThan(0);
+    // The new bottom must be adjacent to the expanded frame top.
+    expect(internals.committedBandBottomRow).toBeGreaterThan(bandBottom);
+
+    c.disarm();
   });
 
   it('EXPAND then SHRINK before any repaint drops the stale expand snapshot (no ghost-erase wipes reflowed rows)', async () => {

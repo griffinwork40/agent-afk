@@ -111,9 +111,9 @@ describe('multi-commit gap regression (real footer, extraRows=1)', () => {
       max - min + 1,
       `committed lines are NOT contiguous in the viewport (the gap bug): span=${max - min + 1}, count=${committedIdxs.length}:\n${dump}`,
     ).toBe(committedIdxs.length);
-    // With top-aligned bands the committed run sits at the TOP of the above-frame
-    // region (hugging the anchor floor), not the bottom — blank rows appear BELOW
-    // the content between it and the live frame. Verify content is above the frame.
+    // With bottom-aligned bands the committed run hugs the frame top — the most
+    // recent output sits immediately above the input line. Blank rows appear ABOVE
+    // the band (between scrollback and the committed text). Verify content is above.
     expect(
       frameIdx - max,
       `committed run must be above the frame (bottom=${max}, frame=${frameIdx}):\n${dump}`,
