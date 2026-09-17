@@ -90,10 +90,11 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       if (!result.parsed || result.items.length === 0) return {};
 
       // ── Apply items ───────────────────────────────────────────────────
-      // Contract: reuse the snapshot taken before classifyDiff. A second
-      // readSpine here would create a TOCTOU window — concurrent sessions
-      // writing during the ~30s classify call would have their new-addition
-      // entries clobbered by whichever session writes last.
+      // v1 limitation: reuse the pre-classify snapshot. Concurrent sessions
+      // running simultaneously will independently derive the same nextId and
+      // the last writer will overwrite the first — this is known last-writer-wins
+      // behaviour. A second readSpine() here would not fix this (the race window
+      // is between the classify call and the write, not between the reads).
       const doc = currentDoc ?? makeEmptyDoc();
 
       let dirty = false;
@@ -114,12 +115,18 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           if (existing) {
             // Append a parenthetical note to the description to surface the
             // strengthening without creating a new entry (v1 keeps IDs stable).
+            // Strip any pre-existing annotation (including truncated ones where
+            // the closing paren was sliced off) before appending the new one so
+            // that date-rollover and truncation do not accumulate duplicates.
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (reinforced ${isoDate})`;
-            if (!existing.description.endsWith(suffix)) {
-              existing.description = (existing.description + suffix).slice(0, MAX_DESCRIPTION_LEN);
+            const newDescription = (
+              existing.description.replace(/ \(reinforced \d{4}-\d{2}-\d{2}\)?$/, '') + suffix
+            ).slice(0, MAX_DESCRIPTION_LEN);
+            if (newDescription !== existing.description) {
+              existing.description = newDescription;
+              dirty = true;
             }
-            dirty = true;
           } else {
             // existingId not found — log for review so hallucinated IDs are visible
             appendSpinePending({
@@ -138,10 +145,16 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           if (existing) {
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (partially weakened ${isoDate})`;
-            if (!existing.description.endsWith(suffix)) {
-              existing.description = (existing.description + suffix).slice(0, MAX_DESCRIPTION_LEN);
+            // Strip any pre-existing annotation (including truncated ones) before
+            // appending the new one — same date-rollover / truncation guard as
+            // the strengthens branch above.
+            const newDescription = (
+              existing.description.replace(/ \(partially weakened \d{4}-\d{2}-\d{2}\)?$/, '') + suffix
+            ).slice(0, MAX_DESCRIPTION_LEN);
+            if (newDescription !== existing.description) {
+              existing.description = newDescription;
+              dirty = true;
             }
-            dirty = true;
             weakenedItems.push({
               type: 'weakens',
               sessionId,

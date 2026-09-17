@@ -403,3 +403,318 @@ describe('createSpineSessionEndHook — label branches', () => {
     expect(result).toEqual({});
   });
 });
+
+// ── Idempotency guard regression tests ───────────────────────────────────────
+
+describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+  });
+
+  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
+    const { execFileSync } = await import('node:child_process');
+    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr.includes('rev-parse')) return '/fake/repo';
+      if (argsArr.includes('diff')) return diffContent;
+      return '';
+    });
+  }
+
+  function makeStrengthensMock(existingDescription: string) {
+    return {
+      items: [
+        {
+          label: 'strengthens' as const,
+          existingId: 'INV-001',
+          existingDescription,
+          description: 'Confirms the pattern',
+          rationale: 'See src/foo.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    };
+  }
+
+  it('same-day idempotency: firing hook twice does not double-append', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const baseDesc = 'All env vars go through env.ts';
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: baseDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeStrengthensMock(baseDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+
+    // First fire
+    await hook(makeSessionEndContext());
+    const afterFirst = mockEntry.description;
+
+    // Second fire — findEntry still returns the (now-mutated) mockEntry
+    await hook(makeSessionEndContext());
+    const afterSecond = mockEntry.description;
+
+    // The description after the second fire must equal the description after the first fire
+    expect(afterSecond).toBe(afterFirst);
+    // And it must contain exactly one "reinforced" annotation
+    const reinforcedMatches = afterSecond.match(/\(reinforced /g) ?? [];
+    expect(reinforcedMatches).toHaveLength(1);
+    expect(afterSecond).toContain(`(reinforced ${today})`);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('date-rollover: replaces yesterday annotation with today annotation', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const yesterday = '2026-09-14';
+    const today = new Date().toISOString().slice(0, 10);
+    const baseWithYesterday = `All env vars go through env.ts (reinforced ${yesterday})`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: baseWithYesterday,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeStrengthensMock(baseWithYesterday));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Must contain today's annotation, not yesterday's
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    expect(mockEntry.description).not.toContain(`(reinforced ${yesterday})`);
+    // Exactly one annotation
+    const matches = mockEntry.description.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('truncation resilience: long base description still produces exactly one annotation ≤ 120 chars', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    // 97 chars base — after appending ` (reinforced 2026-09-14)` (25 chars) = 122, gets sliced to 120
+    // The closing paren is cut off, leaving ` (reinforced 2026-09-14` at the tail
+    const longBase = 'A'.repeat(97);
+    const yesterday = '2026-09-14';
+    // Simulate a previously-truncated description (missing closing paren)
+    const truncatedDesc = (longBase + ` (reinforced ${yesterday}`).slice(0, 120);
+    expect(truncatedDesc).toHaveLength(120);
+    expect(truncatedDesc.endsWith(')')).toBe(false); // confirm truncation scenario
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: truncatedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeStrengthensMock(truncatedDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Result must be ≤ MAX_DESCRIPTION_LEN (120)
+    expect(mockEntry.description.length).toBeLessThanOrEqual(120);
+    // Must contain today's annotation (even if itself truncated)
+    expect(mockEntry.description).toMatch(/\(reinforced /);
+    // Must NOT still contain the old date
+    expect(mockEntry.description).not.toContain(yesterday);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+});
+
+describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+  });
+
+  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
+    const { execFileSync } = await import('node:child_process');
+    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr.includes('rev-parse')) return '/fake/repo';
+      if (argsArr.includes('diff')) return diffContent;
+      return '';
+    });
+  }
+
+  function makeWeakensMock(existingDescription: string) {
+    return {
+      items: [
+        {
+          label: 'weakens' as const,
+          existingId: 'INV-001',
+          existingDescription,
+          description: 'One module bypasses env.ts for legacy reasons',
+          rationale: 'See legacy-compat.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    };
+  }
+
+  it('same-day idempotency: firing hook twice does not double-append', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const baseDesc = 'All env vars go through env.ts';
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: baseDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeWeakensMock(baseDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+
+    // First fire
+    await hook(makeSessionEndContext());
+    const afterFirst = mockEntry.description;
+
+    // Second fire
+    await hook(makeSessionEndContext());
+    const afterSecond = mockEntry.description;
+
+    expect(afterSecond).toBe(afterFirst);
+    const weakenedMatches = afterSecond.match(/\(partially weakened /g) ?? [];
+    expect(weakenedMatches).toHaveLength(1);
+    expect(afterSecond).toContain(`(partially weakened ${today})`);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('date-rollover: replaces yesterday annotation with today annotation', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const yesterday = '2026-09-14';
+    const today = new Date().toISOString().slice(0, 10);
+    const baseWithYesterday = `All env vars go through env.ts (partially weakened ${yesterday})`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: baseWithYesterday,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeWeakensMock(baseWithYesterday));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
+    expect(mockEntry.description).not.toContain(`(partially weakened ${yesterday})`);
+    const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('truncation resilience: long base description still produces exactly one annotation ≤ 120 chars', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    // 89 chars base — after appending ` (partially weakened 2026-09-14)` (32 chars) = 121, sliced to 120
+    const longBase = 'B'.repeat(89);
+    const yesterday = '2026-09-14';
+    const truncatedDesc = (longBase + ` (partially weakened ${yesterday}`).slice(0, 120);
+    expect(truncatedDesc).toHaveLength(120);
+    expect(truncatedDesc.endsWith(')')).toBe(false); // confirm truncation
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: truncatedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeWeakensMock(truncatedDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    expect(mockEntry.description.length).toBeLessThanOrEqual(120);
+    expect(mockEntry.description).toMatch(/\(partially weakened /);
+    expect(mockEntry.description).not.toContain(yesterday);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+});
