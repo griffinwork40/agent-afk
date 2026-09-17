@@ -17,11 +17,36 @@
 
 export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 
+/**
+ * Executor discriminant for scheduled tasks.
+ *
+ * - `'agent'` (default): spawn an AgentSession and send `command` as a user message.
+ * - `'shell'`: run `command` as a shell command via execFile('/bin/sh', ['-c', command]).
+ *   No agent session, no MCP, no hooks -- just shell exec + telemetry.
+ * - `'builtin'`: dispatch to an internally-registered builtin handler keyed by `command`
+ *   (e.g. `'worktree-prune'`). Replaces the former `__BUILTIN_WORKTREE_PRUNE__` sentinel.
+ */
+export type TaskExecutor = 'agent' | 'shell' | 'builtin';
+
+/** Known builtin task names that `executor: 'builtin'` can dispatch to. */
+export const KNOWN_BUILTINS = ['worktree-prune'] as const;
+export type BuiltinTaskName = (typeof KNOWN_BUILTINS)[number];
+
 export interface ScheduledTask {
   /** Stable identifier; stops/restarts target this. */
   taskId: string;
-  /** Command sent as a user message into the spawned session (e.g. `/forge-friction --auto`). */
+  /**
+   * Meaning depends on `executor`:
+   * - `'agent'` (default): prompt sent as a user message into the spawned session.
+   * - `'shell'`: shell command run via `/bin/sh -c`.
+   * - `'builtin'`: the registered builtin name (e.g. `'worktree-prune'`).
+   */
   command: string;
+  /**
+   * Execution strategy. Default: `'agent'` (spawn an AgentSession).
+   * See {@link TaskExecutor} for the full set.
+   */
+  executor?: TaskExecutor;
   /** Trigger mode. */
   trigger: TriggerMode;
   /** Cron expression (5- or 6-field). Required when trigger includes `'cron'`. */
@@ -69,6 +94,12 @@ export function validateScheduledTask(task: ScheduledTask): void {
   if (task.trigger === 'pull' && task.cronExpression !== undefined) {
     throw new Error(
       `task ${task.taskId}: cronExpression must not be set when trigger='pull' — pull tasks are dequeued from the queue directory, not scheduled via cron`,
+    );
+  }
+  const executor = task.executor ?? 'agent';
+  if (executor === 'builtin' && !KNOWN_BUILTINS.includes(task.command as BuiltinTaskName)) {
+    throw new Error(
+      `task ${task.taskId}: unknown builtin '${task.command}' — known: ${KNOWN_BUILTINS.join(', ')}`,
     );
   }
 }

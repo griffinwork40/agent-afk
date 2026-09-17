@@ -992,6 +992,13 @@ export const ENV_REGISTRY = [
     required: false,
     category: 'daemon',
   },
+  {
+    name: 'AFK_DAEMON_SHELL_TIMEOUT_MS',
+    description: 'Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 300000 (5 minutes). The child process is killed on timeout.',
+    type: 'number',
+    required: false,
+    category: 'daemon',
+  },
 
   // ── Web UI (`afk web`) ────────────────────────────────────────────────────
   {

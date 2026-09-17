@@ -19,17 +19,27 @@ import {
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
-import type { ScheduledTask } from './triggers.js';
+import type { ScheduledTask, TaskExecutor } from './triggers.js';
 
 export interface ScheduledTaskConfig {
   /** Slug ID, e.g. "nightly-forge". Auto-generated from `name` via `slugify`. */
   id: string;
   /** Human-readable label, e.g. "Nightly forge friction". */
   name: string;
-  /** Command sent to the spawned session, e.g. "/forge-friction --auto". */
+  /**
+   * Meaning depends on `executor`:
+   * - `'agent'` (default): prompt sent as a user message (e.g. "/forge-friction --auto").
+   * - `'shell'`: shell command run via `/bin/sh -c` (e.g. "pg_dump mydb > /backups/nightly.sql").
+   */
   command: string;
   /** 5- or 6-field cron expression, e.g. "0 2 * * *". */
   cron: string;
+  /**
+   * Execution strategy. Default: `'agent'` (spawn an AgentSession).
+   * `'shell'` runs the command as a raw shell command with no agent session.
+   * Builtins are not user-creatable -- they are registered internally.
+   */
+  executor?: Exclude<TaskExecutor, 'builtin'>;
   /** Trigger mode. Default: 'cron'. */
   trigger?: 'cron' | 'sessionstart' | 'both';
   /** Whether the task is active. */
@@ -184,6 +194,7 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     taskId: config.id,
     command: config.command,
     trigger: config.trigger ?? 'cron',
+    ...(config.executor !== undefined ? { executor: config.executor } : {}),
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),

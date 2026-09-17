@@ -720,11 +720,21 @@ export const createScheduleTool: AnthropicToolDef = {
       },
       command: {
         type: 'string',
-        description: 'Command to run, e.g. "/my-skill --auto".',
+        description:
+          'Command to run. For executor "agent" (default): a prompt or slash command, e.g. "/my-skill --auto". ' +
+          'For executor "shell": a shell command, e.g. "pg_dump mydb > /backups/nightly.sql".',
       },
       cron: {
         type: 'string',
         description: '5-field cron expression, e.g. "0 2 * * *".',
+      },
+      executor: {
+        type: 'string',
+        enum: ['agent', 'shell'],
+        description:
+          'Execution strategy. "agent" (default) spawns an AgentSession and sends the command as a user message. ' +
+          '"shell" runs the command as a raw shell command via /bin/sh, skipping the agent session entirely -- ' +
+          'use for simple jobs like backups, health checks, or log rotation.',
       },
       trigger: {
         type: 'string',

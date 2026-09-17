@@ -32,6 +32,7 @@ export function registerScheduleCommand(program: Command): void {
     .requiredOption('--name <name>', 'Human-readable label')
     .requiredOption('--command <cmd>', 'Command to run')
     .requiredOption('--cron <expr>', 'Cron expression (5-field)')
+    .option('--executor <type>', 'agent | shell (default: agent)', 'agent')
     .option('--trigger <mode>', 'cron | sessionstart | both', 'cron')
     .option('--notify <when>', 'failure | always | never', 'failure')
     .option('--disabled', 'Add in disabled state', false)
@@ -40,28 +41,37 @@ export function registerScheduleCommand(program: Command): void {
         name: string;
         command: string;
         cron: string;
+        executor: string;
         trigger: string;
         notify: string;
         disabled: boolean;
       }) => {
         try {
+          const executor = opts.executor as 'agent' | 'shell';
+          if (executor !== 'agent' && executor !== 'shell') {
+            console.error('Error: --executor must be "agent" or "shell"');
+            process.exitCode = 1;
+            return;
+          }
           const config = addSchedule({
             name: opts.name,
             command: opts.command,
             cron: opts.cron,
+            ...(executor !== 'agent' ? { executor } : {}),
             trigger: opts.trigger as 'cron' | 'sessionstart' | 'both',
             notifyOn: opts.notify as 'failure' | 'always' | 'never',
             enabled: !opts.disabled,
           });
           // Mirror the create_schedule tool handler: enabled tasks are
           // POST-registered; a disabled task sends an idempotent DELETE so it
-          // is never live-registered into (and fired by) a running daemon —
+          // is never live-registered into (and fired by) a running daemon --
           // a 404 (not registered) counts as synced under end-state semantics.
           const syncAdd = config.enabled
             ? await trySyncToDaemon('POST', '/tasks', {
                 taskId: config.id,
                 command: config.command,
                 cron: config.cron,
+                ...(config.executor !== undefined ? { executor: config.executor } : {}),
                 trigger: config.trigger,
                 notifyOn: config.notifyOn,
               })

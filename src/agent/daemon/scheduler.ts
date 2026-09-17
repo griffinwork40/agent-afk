@@ -34,7 +34,8 @@ import type { Telegraf } from 'telegraf';
 
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
-import { runBuiltinWorktreePruneTask } from './worktree-prune-task.js';
+import { runBuiltinTask } from './builtin-task.js';
+import { runShellTask } from './shell-task.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
 import { spawnDaemonSession } from './session-spawn.js';
@@ -371,9 +372,23 @@ export class CronScheduler {
   }
 
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
-    // Intercept built-in tasks before spawning a session
-    if (task.command === '__BUILTIN_WORKTREE_PRUNE__') {
-      return this.runBuiltinWorktreePrune(task, trigger);
+    // Dispatch by executor type -- default to 'agent' for backward compat.
+    // Legacy sentinel retained as fallback for un-migrated schedules.json.
+    const executor = task.executor
+      ?? (task.command === '__BUILTIN_WORKTREE_PRUNE__' ? 'builtin' as const : 'agent' as const);
+    if (executor === 'builtin') {
+      return runBuiltinTask(task, trigger, {
+        now: this.now, telemetryPath: () => this.telemetryPath(),
+        writeTelemetry: (r) => this.writeTelemetry(r, task),
+      });
+    }
+    if (executor === 'shell') {
+      this.idleDetector.increment();
+      try {
+        return await runShellTask(task, trigger, {
+          now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task),
+        });
+      } finally { this.idleDetector.decrement(); }
     }
 
     const triggeredAt = new Date(this.now());
@@ -497,18 +512,6 @@ export class CronScheduler {
     this.writeTelemetry(record, task);
     return record;
   }
-
-  private async runBuiltinWorktreePrune(
-    task: ScheduledTask,
-    trigger: TelemetryTrigger,
-  ): Promise<TelemetryRecord> {
-    return runBuiltinWorktreePruneTask(task, trigger, {
-      now: this.now,
-      telemetryPath: () => this.telemetryPath(),
-      writeTelemetry: (record) => this.writeTelemetry(record, task),
-    });
-  }
-
 
   private async spawnSession(taskId: string, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
     return spawnDaemonSession(taskId, { ...this.options, trigger });

@@ -66,10 +66,19 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  const executor = obj['executor'] as 'agent' | 'shell' | undefined;
+  if (executor !== undefined && executor !== 'agent' && executor !== 'shell') {
+    return {
+      content: 'Invalid input: executor must be "agent" or "shell"',
+      isError: true,
+    };
+  }
+
   const config = addSchedule({
     name: obj['name'] as string,
     command: obj['command'] as string,
     cron: obj['cron'] as string,
+    ...(executor !== undefined ? { executor } : {}),
     trigger:
       (obj['trigger'] as 'cron' | 'sessionstart' | 'both' | undefined) ?? 'cron',
     notifyOn: obj['notifyOn'] as 'failure' | 'always' | 'never' | undefined,
@@ -86,6 +95,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         taskId: config.id,
         command: config.command,
         cron: config.cron,
+        ...(config.executor !== undefined ? { executor: config.executor } : {}),
         trigger: config.trigger,
         notifyOn: config.notifyOn,
         ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
@@ -113,6 +123,7 @@ export const listSchedulesHandler: ToolHandler = async (_input, _signal) => {
         id: s.id,
         name: s.name,
         cron: s.cron,
+        executor: s.executor ?? 'agent',
         trigger: s.trigger,
         enabled: s.enabled,
         notifyOn: s.notifyOn,

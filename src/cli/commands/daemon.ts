@@ -391,7 +391,8 @@ export function registerDaemonCommand(program: Command): void {
 
       const worktreePruneTask: ScheduledTask = {
         taskId: 'worktree-prune',
-        command: '__BUILTIN_WORKTREE_PRUNE__',
+        executor: 'builtin',
+        command: 'worktree-prune',
         trigger: 'cron',
         cronExpression: WORKTREE_PRUNE_CRON,
       };
