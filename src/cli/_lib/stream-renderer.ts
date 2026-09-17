@@ -372,8 +372,12 @@ export class StreamRenderer {
     // Wire the flash tracker: completed tool glyphs pulse bold for 150ms.
     // Repaint callback reuses deferFlush (same deferred-flush pattern as
     // setInterrupting / setSoftStopping) to avoid double-setOverlay races.
-    this.toolLaneFlash = new ToolLaneFlash(() => this.deferFlush('tool-lane'));
-    this.toolLane.flash = this.toolLaneFlash;
+    // Gated on reducedMotion, same as the spinner — users who prefer reduced
+    // motion should not see any timed animation at all.
+    if (!this.reducedMotion) {
+      this.toolLaneFlash = new ToolLaneFlash(() => this.deferFlush('tool-lane'));
+      this.toolLane.flash = this.toolLaneFlash;
+    }
 
     // Reduced-motion suppresses the spinner ticker at the source. State-transition
     // repaints remain active — only the high-frequency 12.5 Hz animation is gated.

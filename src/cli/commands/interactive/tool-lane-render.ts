@@ -458,7 +458,7 @@ export function buildChildMap(
   for (const id of order) {
     const entry = entries.get(id);
     if (!entry) continue;
-    const ctx = entry.kind === 'tool' ? entry.agentContext : entry.agentContext;
+    const ctx = entry.agentContext;
     if (!ctx) continue;
     let children = map.get(ctx);
     if (!children) { children = []; map.set(ctx, children); }
