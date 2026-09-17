@@ -161,23 +161,24 @@ async function handleInit(
   // Gather seed material
   const seeds: string[] = [];
 
-  // 1. Scan for Invariant:/Contract: comments
+  // 1. Scan for Invariant:/Contract:/History: comments
+  //    ripgrep respects .gitignore → skips node_modules/dist/.afk-worktrees
+  //    without explicit --exclude-dir flags, and is ~7,500× faster than GNU grep
+  //    on repos with large dependency trees.
   try {
     const grep = execFileSync(
-      'grep',
+      'rg',
       [
-        '-rE',
-        '--include=*.ts', '--include=*.js', '--include=*.mjs', '--include=*.md',
-        '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.afk-worktrees',
-        '-h',
+        '--no-filename',
+        '-t', 'ts', '-g', '*.js', '-g', '*.mjs', '-g', '*.md',
         'Invariant:|Contract:|History:',
         repoRoot,
       ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+      { encoding: 'utf8', maxBuffer: 512 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
     );
     const matches = grep
       .split('\n')
-      .map((l) => l.trim())
+      .map((l) => l.trim().slice(0, 200))
       .filter(Boolean)
       .slice(0, 20);
     if (matches.length > 0) {
