@@ -56,7 +56,14 @@ export class ToolLaneFlash {
     const timer = setTimeout(() => {
       this.flashing.delete(toolUseId);
       this.timers.delete(toolUseId);
-      if (!this.disposed) this.onRepaint();
+      if (!this.disposed) {
+        try {
+          this.onRepaint();
+        } catch {
+          // Defense-in-depth: swallow throws from controlled callback so a
+          // repaint error never surfaces as an uncaught timer exception.
+        }
+      }
     }, FLASH_DURATION_MS);
     this.timers.set(toolUseId, timer);
     // Flash-start repaint happens naturally: addResult() is always followed by
