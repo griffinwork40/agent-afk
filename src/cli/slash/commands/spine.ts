@@ -165,7 +165,14 @@ async function handleInit(
   try {
     const grep = execFileSync(
       'grep',
-      ['-rE', '--include=*.ts', '-h', 'Invariant:|Contract:', repoRoot],
+      [
+        '-rE',
+        '--include=*.ts', '--include=*.js', '--include=*.mjs', '--include=*.md',
+        '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.afk-worktrees',
+        '-h',
+        'Invariant:|Contract:|History:',
+        repoRoot,
+      ],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     );
     const matches = grep
