@@ -178,6 +178,47 @@ describe('listCaptures — limit', () => {
     const result = await listCaptures();
     expect(result).toHaveLength(20);
   });
+
+  it('falls back to DEFAULT_LIMIT (20) when limit is 0', async () => {
+    for (let i = 0; i < 25; i++) {
+      makeCapture('sess-zero', `tool-${i}`, `output ${i}\n`);
+    }
+    const result = await listCaptures({ limit: 0 });
+    expect(result).toHaveLength(20);
+  });
+
+  it('falls back to DEFAULT_LIMIT (20) when limit is -1', async () => {
+    for (let i = 0; i < 25; i++) {
+      makeCapture('sess-neg', `tool-${i}`, `output ${i}\n`);
+    }
+    const result = await listCaptures({ limit: -1 });
+    expect(result).toHaveLength(20);
+  });
+});
+
+describe('listCaptures — sort order', () => {
+  it('returns captures newest-first by mtime', async () => {
+    const pathOld = makeCapture('sess-sort', 'tool-old', 'older output\n');
+    // Backdate the first file by 2 seconds so mtimes are distinct.
+    const { utimesSync } = await import('node:fs');
+    const oldTime = (Date.now() - 2000) / 1000;
+    utimesSync(pathOld, oldTime, oldTime);
+    makeCapture('sess-sort', 'tool-new', 'newer output\n');
+    const result = await listCaptures({ limit: 10 });
+    expect(result).toHaveLength(2);
+    expect(result[0]!.toolUseId).toBe('tool-new');
+    expect(result[1]!.toolUseId).toBe('tool-old');
+    expect(result[0]!.mtimeMs).toBeGreaterThan(result[1]!.mtimeMs);
+  });
+});
+
+describe('listCaptures — escape stripping', () => {
+  it('strips ANSI escape sequences from the preview', async () => {
+    // ESC[32m = green foreground; ESC[0m = reset. The visible text is "hello".
+    makeCapture('sess-ansi', 'tool-ansi', '\x1b[32mhello\x1b[0m\nmore\n');
+    const [entry] = await listCaptures();
+    expect(entry!.preview).toBe('hello');
+  });
 });
 
 describe('listCaptures — robustness', () => {
