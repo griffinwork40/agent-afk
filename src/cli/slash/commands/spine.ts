@@ -16,7 +16,8 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { palette } from '../../palette.js';
 import { readSpine, serializeSpine, findEntry } from '../../../agent/spine/index.js';
 import type { SpineDocument } from '../../../agent/spine/index.js';
@@ -47,6 +48,44 @@ function makeEmptyDoc(): SpineDocument {
     ],
     trailer: '',
   };
+}
+
+async function collectGrepMatches(repoRoot: string, limit: number): Promise<string[]> {
+  const grep = spawn(
+    'grep',
+    [
+      '-rE',
+      '--include=*.ts', '--include=*.js', '--include=*.mjs', '--include=*.md',
+      '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.afk-worktrees',
+      '-h',
+      'Invariant:|Contract:|History:',
+      repoRoot,
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const spawnError = new Promise<never>((_resolve, reject) => {
+    grep.once('error', reject);
+  });
+  const readMatches = async (): Promise<string[]> => {
+    const lines = createInterface({ input: grep.stdout });
+    const matches: string[] = [];
+    try {
+      for await (const line of lines) {
+        const match = line.trim();
+        if (!match) continue;
+        matches.push(match);
+        if (matches.length === limit) {
+          grep.kill();
+          break;
+        }
+      }
+    } finally {
+      lines.close();
+    }
+    return matches;
+  };
+
+  return Promise.race([readMatches(), spawnError]);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,25 +200,9 @@ async function handleInit(
   // Gather seed material
   const seeds: string[] = [];
 
-  // 1. Scan for Invariant:/Contract: comments
+  // 1. Scan for Invariant:/Contract:/History: comments
   try {
-    const grep = execFileSync(
-      'grep',
-      [
-        '-rE',
-        '--include=*.ts', '--include=*.js', '--include=*.mjs', '--include=*.md',
-        '--exclude-dir=node_modules', '--exclude-dir=dist', '--exclude-dir=.afk-worktrees',
-        '-h',
-        'Invariant:|Contract:|History:',
-        repoRoot,
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    const matches = grep
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .slice(0, 20);
+    const matches = await collectGrepMatches(repoRoot, 20);
     if (matches.length > 0) {
       seeds.push('### Discovered invariant/contract comments:', ...matches, '');
     }
