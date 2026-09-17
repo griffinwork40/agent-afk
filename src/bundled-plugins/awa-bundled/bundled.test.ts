@@ -94,7 +94,7 @@ const PINNED_HASHES = {
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
   'ground-state':
-    '5c924f6a685e50fa40650f62fdbc163d4acc02a5155dc35807dc52b7536e9025',
+    '40822ecdc763a99731ded4f1cdff265a15525111d319b04322d3b7f5e49b3745',
 
   polish:
     '03c7d8d1f593d4aca3327247d5c226e957bae84982b8a438c5834ba74ee4184c',

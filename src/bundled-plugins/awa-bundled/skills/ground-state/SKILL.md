@@ -18,7 +18,7 @@ If the survey reveals a fix that's tempting to apply, **return it as a recommend
 
 ## Inline reconnaissance
 
-Run the three surveys below **directly using your own tools**. Do NOT dispatch any sub-agents via the `agent` or `skill` tools — every lookup in this phase is a deterministic read that you execute yourself using `bash`, `glob`, `read_file`, `grep`, `list_directory`, and `memory_search`. Issue all three surveys in a single batched tool-use round where possible.
+Run the four surveys below **directly using your own tools**. Do NOT dispatch any sub-agents via the `agent` or `skill` tools — every lookup in this phase is a deterministic read that you execute yourself using `bash`, `glob`, `read_file`, `grep`, `list_directory`, and `memory_search`. Issue all four surveys in a single batched tool-use round where possible.
 
 ### State survey *(bash)*
 
@@ -62,13 +62,18 @@ Call the **`memory_search` tool** with keywords from the user's current request 
 
 Return: relevant facts with 1-line summaries, **plus the stores actually consulted** — e.g. `memory_search: 3 queries, 0 hits; HOT.md: read; AFK.md: read` — so the orchestrator can tell "no relevant memory exists" from "the fork never looked." If `memory_search` is unavailable on this surface, say so explicitly.
 
+### Spine survey *(read_file)*
+
+Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file does not exist or is empty, skip silently — do not mention it in the snapshot. If it exists and has entries, extract the invariant, rejected-pattern, and taste-call entries and include them in the snapshot so the agent knows architectural constraints before proposing changes.
+
 ## Synthesis
 
-Assemble the survey results into a **6-line ground-truth snapshot**:
+Assemble the survey results into a **7-line ground-truth snapshot**:
 - Branch: `<current>`, `<clean|diverged>`, upstream: `<fresh|stale>`
 - Recent work: last 3 commits or stash items
 - Infrastructure: CI present? package scripts? authoritative configs for this task
 - Memory hits: facts (1-line each) + which stores were consulted, or `none (consulted: …)`
+- Spine constraints: INV-*, REJ-*, TST-* entries from SPINE.md, or `none (SPINE.md absent)`
 - Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"
 - Epistemic confidence: `<high|medium|low>` — based on how much state could be verified. Flag if working directory is sparse, if domain is unfamiliar, or if key artifacts may be missing.
 
@@ -76,7 +81,7 @@ Surface the snapshot and stop. The orchestrator then uses these verified facts �
 
 ## Brief Anchor (auto-runs after synthesis)
 
-After the 6-line snapshot is assembled, construct the **Brief Anchor** — a path-verified grounding preamble the orchestrator pastes verbatim into every subsequent sub-agent brief.
+After the 7-line snapshot is assembled, construct the **Brief Anchor** — a path-verified grounding preamble the orchestrator pastes verbatim into every subsequent sub-agent brief.
 
 **Construction procedure:**
 
