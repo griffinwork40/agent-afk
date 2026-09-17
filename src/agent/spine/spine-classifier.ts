@@ -13,12 +13,15 @@
  * @module agent/spine/spine-classifier
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { oneShotCompletion } from '../providers/anthropic-direct/oneshot.js';
 import { loadAnthropicCredential } from '../auth/credential-resolver.js';
 import type { SpineIdPrefix } from './spine-store.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,30 +63,15 @@ export interface ClassifierResult {
 // Prompt loading
 // ---------------------------------------------------------------------------
 
-const PROMPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'prompts');
-const PROMPT_PATH = join(PROMPTS_DIR, 'classifier.md');
-const INIT_PROMPT_PATH = join(PROMPTS_DIR, 'init-classifier.md');
+// Invariant: prompts are loaded via the inline `readFileSync(join(__dirname, ...))`
+// pattern so the esbuild inliner (`scripts/esbuild-plugin-inline-prompts.mjs`,
+// Pattern A) can replace them with string literals at bundle time. Intermediate
+// variable forms (`const path = join(...); readFileSync(path)`) silently escape
+// the inliner regex and produce runtime "file not found" errors in the published
+// npm package — this was the root cause of the hook being dead since launch.
 
-/**
- * Load a classifier prompt by path. Lazy-cached at module scope so repeated
- * hook invocations don't re-read the file.
- */
-const _promptCache = new Map<string, string>();
-
-function loadPrompt(path: string): string {
-  const cached = _promptCache.get(path);
-  if (cached !== undefined) return cached;
-  if (!existsSync(path)) {
-    throw new Error(`SPINE classifier prompt not found at ${path}`);
-  }
-  const content = readFileSync(path, 'utf-8');
-  _promptCache.set(path, content);
-  return content;
-}
-
-function loadClassifierPrompt(): string {
-  return loadPrompt(PROMPT_PATH);
-}
+const CLASSIFIER_PROMPT = readFileSync(join(__dirname, 'prompts/classifier.md'), 'utf-8');
+const INIT_CLASSIFIER_PROMPT = readFileSync(join(__dirname, 'prompts/init-classifier.md'), 'utf-8');
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -111,7 +99,7 @@ export async function classifyDiff(
     throw new Error('No Anthropic credential available for SPINE classifier');
   }
 
-  const systemPrompt = loadClassifierPrompt();
+  const systemPrompt = CLASSIFIER_PROMPT;
 
   // Truncate enormous diffs to avoid token budget blowout. The classifier
   // only needs architectural signals, which appear early in most diffs.
@@ -148,7 +136,7 @@ export async function classifySeedMaterial(
     throw new Error('No Anthropic credential available for SPINE init classifier');
   }
 
-  const systemPrompt = loadPrompt(INIT_PROMPT_PATH);
+  const systemPrompt = INIT_CLASSIFIER_PROMPT;
   const truncated =
     seedText.length > DIFF_CHAR_LIMIT
       ? seedText.slice(0, DIFF_CHAR_LIMIT) + '\n\n... (seed material truncated at 20k chars)'
