@@ -120,5 +120,5 @@ behavior. A killed trace is in `sealed-crashed` state, which readers can disting
 ## Next benchmarks
 
 - ~~Abort-cascade correctness~~ -- shipped: [abort-cascade.md](./abort-cascade.md)
-- Crash-to-resume (DAG checkpoint: kill mid-DAG, restart, verify no re-run of completed nodes)
+- ~~Crash-to-resume~~ -- shipped: [crash-to-resume.md](./crash-to-resume.md)
 - Concurrent-emitter trace integrity (10 parallel writers, SIGKILL mid-batch)
