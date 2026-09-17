@@ -25,7 +25,7 @@
   "scripts": {
     "postinstall": "node dist/postinstall.mjs || node scripts/postinstall.mjs || true",
     "build": "tsc && node scripts/build-web-ui.mjs && node scripts/copy-prompts.js",
-    "dev": "tsx watch src/cli/index.ts",
+    "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",
     "start:chat": "node dist/cli/index.js chat",
     "start:interactive": "node dist/cli/index.js interactive",
