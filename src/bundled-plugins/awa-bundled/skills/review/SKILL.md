@@ -7,7 +7,7 @@ context: load
 
 ## Read-only — hard constraint
 
-This skill **analyzes and reports**; it never mutates the repository, the PR/MR, or anything external. After you emit the merge recommendation, **STOP**.
+This skill **analyzes and reports**; it never mutates the repository, the PR/MR, or anything external. After you emit the merge recommendation, **STOP** -- unless the **Merge offer** conditions (below) are met.
 
 Never — not for a real bug, not for a blocking defect, not even when there is no human reviewer and "someone has to fix it":
 - edit, create, or delete files (no `write`/`edit`-style mutations);
@@ -144,7 +144,7 @@ State the counts that drove the decision on the same line, **with a dimension br
 
 This is the terminal step. A blocking bug is a finding to report, not a fix to apply -- no edits, commits, pushes, or PR/MR mutations.
 
-**Merge offer (docs/test-only PR reviews).** When **all four** hold: (1) the decision is **MERGE**, (2) the review target was a **PR** (URL or number), (3) every surviving finding is in the `test-coverage` dimension or is a documentation-only concern (comments, doc strings, README) -- no `security`, `correctness`, `api-compat`, `perf-observability`, or `spec-compliance` findings survived, and (4) every changed file in the PR is a test or documentation file (test files: `*.test.*`, `*.spec.*`, files under `__tests__/`, `/test/`, `/tests/`; doc files: `*.md`, `*.mdx`, doc-only config such as `typedoc.json`) -- no production source files changed -- ask the user: "Would you like me to merge this PR?" via `ask_question` with `type: "confirm"`. On accept (`value: true`), run `gh pr merge <pr-ref> --squash --match-head-commit <reviewed-ref>` where `<reviewed-ref>` is the SHA captured at triage time, so the merge is pinned to the exact commit that was reviewed. On decline, cancel, skip, non-PR target, or any condition not met: stop.
+**Merge offer (docs/test-only PR reviews).** When **all four** hold: (1) the decision is **MERGE**, (2) the review target was a **PR** (URL or number), (3) every surviving finding is in the `test-coverage` dimension or is a documentation-only concern (comments, doc strings, README) -- no `security`, `correctness`, `api-compat`, `perf-observability`, or `spec-compliance` findings survived, and (4) every changed file in the PR is a test or documentation file (test files: `*.test.*`, `*.spec.*`, files under `__tests__/`, `/test/`, `/tests/`; doc files: `*.md`, `*.mdx`, doc-only config such as `typedoc.json`) -- no production source files changed -- ask the user: "Would you like me to merge this PR?" via `ask_question` with `type: "confirm"`. On accept (`value: true`), run `gh pr merge <pr-ref> --squash --match-head-commit <reviewed-ref>` where `<reviewed-ref>` is the SHA captured at triage time, so the merge is pinned to the exact commit that was reviewed. If `gh pr merge` exits non-zero, surface the error output to the user and stop. On decline, cancel, skip, non-PR target, or any condition not met: stop.
 
 **Severity rubric (impact axis only — severity measures blast radius and reachability, never category):**
 - `critical` — data loss, auth bypass, secret exposure, RCE. If it cannot cause unauthorized access or data loss, it is NOT critical.
