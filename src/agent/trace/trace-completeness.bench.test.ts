@@ -157,9 +157,9 @@ function buildMidWriteChildScript(
 
 /** Spawn child, wait for READY signal, send SIGKILL, wait for child to exit. */
 async function spawnAndKill(scriptPath: string): Promise<void> {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(tsxBin, [scriptPath], {
-      env: { ...process.env },
+      env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '' },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
 
@@ -175,7 +175,10 @@ async function spawnAndKill(scriptPath: string): Promise<void> {
     });
 
     child.on('exit', () => resolve());
-    child.on('error', () => resolve()); // SIGKILL may surface as error
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') { reject(new Error(`tsx not found at: ${tsxBin}`)); return; }
+      resolve(); // SIGKILL may surface as error
+    });
   });
 }
 
@@ -232,8 +235,11 @@ describe.skipIf(process.platform === 'win32')(
       const traceDir = join(rootDir, 'zero-events');
       const scriptPath = join(rootDir, 'zero-events.mts');
       writeFileSync(scriptPath, [
-        `process.stdout.write('READY\\n');`,
-        `await new Promise(r => setTimeout(r, 60_000));`,
+        `async function main() {`,
+        `  process.stdout.write('READY\\n');`,
+        `  await new Promise(r => setTimeout(r, 60_000));`,
+        `}`,
+        `main().catch(e => { console.error(e); process.exit(1); });`,
       ].join('\n'));
 
       await spawnAndKill(scriptPath);
@@ -261,7 +267,7 @@ describe.skipIf(process.platform === 'win32')(
 
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const recovered = countToolCalls(events);
-      const mono = events.length === 0 || isMonotonic(events);
+      const mono = isMonotonic(events);
       const sealed = events.some((e) => e.kind === 'session_sealed');
 
       expect(recovered).toBe(2); // 1 pair = started + completed
@@ -283,7 +289,7 @@ describe.skipIf(process.platform === 'win32')(
 
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const recovered = countToolCalls(events);
-      const mono = events.length === 0 || isMonotonic(events);
+      const mono = isMonotonic(events);
       const sealed = events.some((e) => e.kind === 'session_sealed');
 
       expect(recovered).toBe(10); // 5 pairs × 2 events
@@ -311,7 +317,7 @@ describe.skipIf(process.platform === 'win32')(
 
       const events = await readTrace(join(traceDir, 'trace.jsonl'));
       const recovered = countToolCalls(events);
-      const mono = events.length === 0 || isMonotonic(events);
+      const mono = isMonotonic(events);
       const sealed = events.some((e) => e.kind === 'session_sealed');
 
       // At least the 3 pre-signal pairs (6 events) must survive.
