@@ -159,17 +159,25 @@ describe('evictIdleSessions', () => {
   });
 
   test('boundary: lastActivity exactly at maxAgeMs is NOT evicted (> not >=)', async () => {
-    const session = makeSession('idle');
-    const sessions = new Map([['key1', session as IAgentSession]]);
-    // Exactly at the boundary — age === maxAgeMs, condition is > so this should be skipped.
-    const sessionData = new Map([
-      ['key1', makeData({ lastActivity: new Date(Date.now() - MAX_AGE_MS).toISOString() })],
-    ]);
+    // Freeze the clock so Date.now() cannot advance between setup and the function under test.
+    const frozenNow = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(frozenNow);
+    try {
+      const session = makeSession('idle');
+      const sessions = new Map([['key1', session as IAgentSession]]);
+      // Exactly at the boundary — age === maxAgeMs, condition is > so this should be skipped.
+      const sessionData = new Map([
+        ['key1', makeData({ lastActivity: new Date(Date.now() - MAX_AGE_MS).toISOString() })],
+      ]);
 
-    const evicted = await evictIdleSessions(sessions, sessionData, MAX_AGE_MS);
+      const evicted = await evictIdleSessions(sessions, sessionData, MAX_AGE_MS);
 
-    // At exactly maxAgeMs the condition `<= maxAgeMs` is true, so skip fires.
-    expect(evicted).toBe(0);
+      // At exactly maxAgeMs the condition `<= maxAgeMs` is true, so skip fires.
+      expect(evicted).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
