@@ -200,6 +200,9 @@ export function registerServiceCommand(program: Command): void {
           process.exit(1);
         }
         console.log(palette.success(`✓ Restarted ${result.label}`));
+        for (const note of result.notes ?? []) {
+          console.log(palette.warning(`  ⚠ ${note}`));
+        }
       } catch (err) {
         handleCommandError(err);
       }

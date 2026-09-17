@@ -66,7 +66,16 @@ export type ServiceUninstallOutcome =
 
 /** Outcome of {@link ServiceManager.restart}. */
 export type ServiceRestartOutcome =
-  | { kind: 'restarted'; label: string }
+  | {
+      kind: 'restarted';
+      label: string;
+      /**
+       * Non-fatal warnings from the restart sequence (e.g. the plist upgrade
+       * step failed but the kickstart still succeeded). Callers should surface
+       * these to the user so silent partial failures are visible.
+       */
+      notes?: string[];
+    }
   | { kind: 'not-installed'; configPath: string }
   | { kind: 'failed'; reason: string };
 

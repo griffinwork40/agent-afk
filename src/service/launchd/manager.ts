@@ -157,6 +157,15 @@ export const launchdManager: ServiceManager = {
       }
     }
 
+    // Plist upgrade failed — collect the reason as a note so the caller can
+    // surface it. We still proceed with kickstart -k: the service must be
+    // restarted regardless, and a failed upgrade is non-fatal for the restart
+    // itself (the existing on-disk plist is still valid).
+    const upgradeNotes: string[] = [];
+    if (upgradeResult.kind === 'failed') {
+      upgradeNotes.push(`Warning: plist upgrade failed (${upgradeResult.reason}). The service was restarted with the existing config.`);
+    }
+
     // Plist unchanged (already-current), not installed, or upgrade failed —
     // fall back to kickstart -k for a lighter-weight process restart.
     try {
@@ -164,7 +173,11 @@ export const launchdManager: ServiceManager = {
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: LAUNCHCTL_TIMEOUT_MS,
       });
-      return { kind: 'restarted', label: labelFor(name) };
+      return {
+        kind: 'restarted',
+        label: labelFor(name),
+        ...(upgradeNotes.length > 0 ? { notes: upgradeNotes } : {}),
+      };
     } catch (e) {
       return { kind: 'failed', reason: (e as Error).message };
     }

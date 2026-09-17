@@ -888,6 +888,43 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       if (result.kind !== 'failed') return;
       expect(result.reason).toMatch(/no such job/);
     });
+
+    // #1695: upgradeService failure must be surfaced via notes, not silently swallowed.
+    // The telegram service mocked entrypoint (/fake/dist/telegram.mjs) does not exist
+    // on disk, so upgradeService('telegram') reliably returns { kind: 'failed' } via
+    // resolveProgramArguments → existsCheck → throw, without needing to intercept
+    // execFileSync or fs — it's purely a consequence of the existing telegram mock.
+    it('returns restarted with a warning note when upgradeService fails but kickstart succeeds', () => {
+      // Install telegram with _entrypointExistsCheck: () => true so the plist is
+      // written to disk (isInstalled() → true). The plist exists, but when restart()
+      // calls upgradeService('telegram') without that override, existsSync on the
+      // fake entrypoint path returns false → resolveProgramArguments throws →
+      // upgradeService returns { kind: 'failed' }.
+      mockExecFileSync.mockReturnValue('' as never);
+      installService('telegram', { _entrypointExistsCheck: () => true });
+      mockExecFileSync.mockReset();
+
+      const argv: string[][] = [];
+      mockExecFileSync.mockImplementation((_cmd: string, args?: readonly string[]) => {
+        if (Array.isArray(args)) argv.push([...args]);
+        // Let kickstart succeed so the restart path completes.
+        if (Array.isArray(args) && args[0] === 'kickstart') return '' as never;
+        return '' as never;
+      });
+
+      const result = launchdManager.restart('telegram');
+      expect(result.kind).toBe('restarted');
+      if (result.kind !== 'restarted') return;
+
+      // Upgrade failure must be surfaced via notes — not silently swallowed.
+      expect(result.notes).toBeDefined();
+      expect(result.notes!.length).toBeGreaterThan(0);
+      expect(result.notes![0]).toMatch(/plist upgrade failed/i);
+      expect(result.notes![0]).toMatch(/restarted with the existing config/i);
+
+      // kickstart must still have been called despite the upgrade failure.
+      expect(argv.some((a) => a[0] === 'kickstart')).toBe(true);
+    });
   });
 
   // ─────────────────────────────────────────────────────────────────────────
