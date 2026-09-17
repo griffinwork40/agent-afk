@@ -68,12 +68,12 @@ Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file doe
 
 ## Synthesis
 
-Assemble the survey results into a **7-line ground-truth snapshot**:
+Assemble the survey results into a ground-truth snapshot (6 lines minimum, 7 when SPINE.md has entries):
 - Branch: `<current>`, `<clean|diverged>`, upstream: `<fresh|stale>`
 - Recent work: last 3 commits or stash items
 - Infrastructure: CI present? package scripts? authoritative configs for this task
 - Memory hits: facts (1-line each) + which stores were consulted, or `none (consulted: …)`
-- Spine constraints: INV-*, REJ-*, TST-* entries from SPINE.md, or `none (SPINE.md absent)`
+- Spine constraints *(only when SPINE.md exists with entries)*: INV-*, REJ-*, TST-* entries. Omit this line entirely when SPINE.md is absent or empty.
 - Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"
 - Epistemic confidence: `<high|medium|low>` — based on how much state could be verified. Flag if working directory is sparse, if domain is unfamiliar, or if key artifacts may be missing.
 
@@ -81,7 +81,7 @@ Surface the snapshot and stop. The orchestrator then uses these verified facts �
 
 ## Brief Anchor (auto-runs after synthesis)
 
-After the 7-line snapshot is assembled, construct the **Brief Anchor** — a path-verified grounding preamble the orchestrator pastes verbatim into every subsequent sub-agent brief.
+After the snapshot is assembled, construct the **Brief Anchor** — a path-verified grounding preamble the orchestrator pastes verbatim into every subsequent sub-agent brief.
 
 **Construction procedure:**
 
