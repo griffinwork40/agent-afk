@@ -238,11 +238,15 @@ export async function runFirstRunDetector(argv: string[] = process.argv): Promis
 }
 
 // Parse and execute — only when run directly as CLI (not imported by tests)
-import { realpathSync, writeSync } from 'fs';
+import { realpathSync } from 'fs';
+import { pathToFileURL } from 'url';
 const argv1 = process.argv[1] ?? '';
+// pathToFileURL normalizes backslashes → forward slashes and applies
+// percent-encoding, so `file:///D:/path` matches on Windows where a
+// naive `file://${argv1}` would produce `file:///D:\path` and miss.
 const isDirectRun =
-  import.meta.url === `file://${argv1}` ||
-  import.meta.url === `file://${realpathSync(argv1)}`;
+  import.meta.url === pathToFileURL(argv1).href ||
+  import.meta.url === pathToFileURL(realpathSync(argv1)).href;
 if (isDirectRun) {
   (async () => {
     await runFirstRunDetector();
@@ -312,13 +316,12 @@ if (isDirectRun) {
     }
 
     // Early-exit version flag — must precede parseAsync() so Commander never
-    // handles --version itself. On Windows, PowerShell's pipe capture
-    // (| Out-String) drops stdout when process.exit() fires — even with
-    // fs.writeSync, because PowerShell's pipeline teardown races with the
-    // child process exit. Avoiding process.exit() entirely lets Node drain
-    // stdout naturally and PowerShell reads the full buffer.
+    // handles --version itself. Commander's internal handler calls
+    // process.stdout.write then immediately process.exit(0), which can
+    // race on some shells. We print and return without process.exit so
+    // Node drains stdout naturally before the event loop terminates.
     if (process.argv.includes('--version') || process.argv.includes('-V')) {
-      writeSync(1, getVersion() + '\n');
+      console.log(getVersion());
       return;
     }
 

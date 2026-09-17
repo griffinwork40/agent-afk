@@ -303,25 +303,28 @@ jobs:
         # Windows so we exercise shell resolution, path handling, and config
         # loading on win32. A dummy API key bypasses the startup credential
         # check (see the publish-bundle job comment for rationale — same quirk).
-        # Uses PowerShell (the default Windows shell on GitHub Actions) so we
-        # can capture stdout/stderr and inspect the exit code in one block.
-        shell: pwsh
+        # Uses Git Bash (not PowerShell) because PowerShell's pipe capture
+        # (| Out-String) drops Node stdout on Windows — PowerShell pipeline
+        # teardown races with the child process, producing empty output even
+        # with synchronous writes. Bash subshell capture $(...) is reliable.
+        shell: bash
         env:
           ANTHROPIC_API_KEY: sk-ant-dummy-not-used-version-only
         run: |
-          $output = (node dist/cli.mjs --version 2>&1 | Out-String)
-          $exitCode = $LASTEXITCODE
-          Write-Host "afk --version exit code: $exitCode"
-          Write-Host "afk --version output: $output"
-          if ($exitCode -ne 0) {
-            Write-Host "::error::dist/cli.mjs --version exited $exitCode on Windows — integration broken"
+          set +e
+          output=$(node dist/cli.mjs --version 2>&1)
+          exitCode=$?
+          echo "afk --version exit code: $exitCode"
+          echo "afk --version output: $output"
+          if [ "$exitCode" -ne 0 ]; then
+            echo "::error::dist/cli.mjs --version exited $exitCode on Windows — integration broken"
             exit 1
-          }
-          if ($output -notmatch '\d+\.\d+\.\d+') {
-            Write-Host "::error::dist/cli.mjs --version printed no semver on Windows"
+          fi
+          if ! echo "$output" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::dist/cli.mjs --version printed no semver on Windows"
             exit 1
-          }
-          Write-Host "Windows CLI smoke test passed."
+          fi
+          echo "Windows CLI smoke test passed."
 
       - name: Smoke test — CLI chat (conditional on API key, issue #1603)
         # Only runs when ANTHROPIC_API_KEY is available as a repository secret.

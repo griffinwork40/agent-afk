@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.212.12] - 2026-09-17
+
+### Fixed
+- callback-gated exit for Windows --version + widen watch.test timing budget (#1689) (1de4bcdd)
+
 ## [5.212.11] - 2026-09-16
 
 ### Fixed
