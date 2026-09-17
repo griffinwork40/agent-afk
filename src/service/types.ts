@@ -108,7 +108,7 @@ export interface ServiceManager {
   install(name: ServiceName, opts?: ServiceInstallOptions): ServiceInstallOutcome;
   uninstall(name: ServiceName): ServiceUninstallOutcome;
   status(name: ServiceName): ServiceStatus;
-  restart(name: ServiceName): ServiceRestartOutcome;
+  restart(name: ServiceName, opts?: ServiceInstallOptions): ServiceRestartOutcome;
 
   /**
    * Re-render the service config from the current code and atomically

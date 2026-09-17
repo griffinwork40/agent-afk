@@ -100,7 +100,7 @@ export const launchdManager: ServiceManager = {
     return { kind: 'failed', reason: result.reason };
   },
 
-  restart(name: ServiceName): ServiceRestartOutcome {
+  restart(name: ServiceName, opts?: ServiceInstallOptions): ServiceRestartOutcome {
     if (!this.isInstalled(name)) {
       return { kind: 'not-installed', configPath: plistPath(name) };
     }
@@ -130,7 +130,7 @@ export const launchdManager: ServiceManager = {
       return { kind: 'failed', reason: 'process.getuid is unavailable — restart requires a POSIX system.' };
     }
 
-    const upgradeResult = upgradeService(name);
+    const upgradeResult = upgradeService(name, opts ?? {});
     if (upgradeResult.kind === 'upgraded') {
       // Plist was rewritten — force launchd to re-read from disk via a
       // full bootout → bootstrap cycle (mirrors installService / uninstallService).

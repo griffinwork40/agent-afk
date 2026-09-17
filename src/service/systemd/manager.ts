@@ -47,7 +47,7 @@ export const systemdManager: ServiceManager = {
     return { kind: 'failed', reason: 'In-place upgrade not yet supported for systemd. Run `afk service uninstall <name>` then `afk service install <name>`.' };
   },
 
-  restart(name: ServiceName): ServiceRestartOutcome {
+  restart(name: ServiceName, _opts?: ServiceInstallOptions): ServiceRestartOutcome {
     if (!existsSync(unitPath(name))) {
       return { kind: 'not-installed', configPath: unitPath(name) };
     }
