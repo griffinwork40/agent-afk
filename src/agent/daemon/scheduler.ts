@@ -373,11 +373,19 @@ export class CronScheduler {
 
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
     // Dispatch by executor type -- default to 'agent' for backward compat.
-    // Legacy sentinel retained as fallback for un-migrated schedules.json.
+    // History: single legacy compat point for un-migrated schedules.json entries
+    // that predate executor: 'builtin'. Remove once all deployments have cycled
+    // through a migration write (target: after next major release).
+    const isLegacySentinel = task.command === '__BUILTIN_WORKTREE_PRUNE__';
     const executor = task.executor
-      ?? (task.command === '__BUILTIN_WORKTREE_PRUNE__' ? 'builtin' as const : 'agent' as const);
+      ?? (isLegacySentinel ? 'builtin' as const : 'agent' as const);
     if (executor === 'builtin') {
-      return runBuiltinTask(task, trigger, {
+      // Normalize the legacy sentinel to the canonical builtin name here --
+      // the single compat point -- so runBuiltinTask only sees canonical names.
+      const normalizedTask = isLegacySentinel
+        ? { ...task, command: 'worktree-prune' }
+        : task;
+      return runBuiltinTask(normalizedTask, trigger, {
         now: this.now, telemetryPath: () => this.telemetryPath(),
         writeTelemetry: (r) => this.writeTelemetry(r, task),
       });

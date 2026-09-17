@@ -18,21 +18,17 @@ export interface BuiltinTaskOptions {
 }
 
 /**
- * Dispatch a builtin task by name. The `command` field carries the builtin
- * name (e.g. `'worktree-prune'`). Also handles the legacy
- * `__BUILTIN_WORKTREE_PRUNE__` sentinel for backward compatibility.
+ * Dispatch a builtin task by name. The `command` field carries the canonical
+ * builtin name (e.g. `'worktree-prune'`). The legacy `__BUILTIN_WORKTREE_PRUNE__`
+ * sentinel is normalized to `executor: 'builtin'` by the scheduler before this
+ * function is called -- no compat shim needed here.
  */
 export async function runBuiltinTask(
   task: { taskId: string; command: string; cronExpression?: string },
   trigger: TelemetryTrigger,
   options: BuiltinTaskOptions,
 ): Promise<TelemetryRecord> {
-  // Normalize: legacy sentinel -> builtin name
-  const builtinName = task.command === '__BUILTIN_WORKTREE_PRUNE__'
-    ? 'worktree-prune'
-    : task.command;
-
-  if (builtinName === 'worktree-prune') {
+  if (task.command === 'worktree-prune') {
     return runBuiltinWorktreePruneTask(task, trigger, options);
   }
 
