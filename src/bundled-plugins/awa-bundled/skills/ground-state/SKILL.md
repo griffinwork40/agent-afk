@@ -64,7 +64,7 @@ Return: relevant facts with 1-line summaries, **plus the stores actually consult
 
 ### Spine survey *(read_file)*
 
-Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file does not exist or is empty, skip silently — do not mention it in the snapshot. If it exists and has entries, extract the invariant, rejected-pattern, and taste-call entries and include them in the snapshot so the agent knows architectural constraints before proposing changes.
+Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file does not exist or is empty, skip silently -- do not mention it in the snapshot. If it exists and has entries, extract its invariant (INV-*), rejected-pattern (REJ-*), and taste entries (TST-*) and include them in the snapshot so architectural constraints are visible before proposing changes.
 
 ## Synthesis
 
