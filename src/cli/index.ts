@@ -239,10 +239,14 @@ export async function runFirstRunDetector(argv: string[] = process.argv): Promis
 
 // Parse and execute — only when run directly as CLI (not imported by tests)
 import { realpathSync } from 'fs';
+import { pathToFileURL } from 'url';
 const argv1 = process.argv[1] ?? '';
+// pathToFileURL normalizes backslashes → forward slashes and applies
+// percent-encoding, so `file:///D:/path` matches on Windows where a
+// naive `file://${argv1}` would produce `file:///D:\path` and miss.
 const isDirectRun =
-  import.meta.url === `file://${argv1}` ||
-  import.meta.url === `file://${realpathSync(argv1)}`;
+  import.meta.url === pathToFileURL(argv1).href ||
+  import.meta.url === pathToFileURL(realpathSync(argv1)).href;
 if (isDirectRun) {
   (async () => {
     await runFirstRunDetector();
