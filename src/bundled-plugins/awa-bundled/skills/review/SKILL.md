@@ -14,7 +14,7 @@ Never — not for a real bug, not for a blocking defect, not even when there is 
 - `git add` / `commit` / `stash` / `reset`, `git checkout` to discard changes, or `git push`;
 - `gh pr comment` / `review` / `edit` / `merge` / `create`, or post or edit any PR/MR body, comment, or description;
 
-**Exception:** `gh pr merge` is permitted after a **MERGE** verdict on a docs/test-only PR review, but **only** after the user explicitly confirms via `ask_question` (see **Merge offer** below).
+**Exception:** `gh pr merge` is permitted after a **MERGE** verdict on a PR review in-which the findings are docs/test-related only, but **only** after the user explicitly confirms via `ask_question` (see **Merge offer** below).
 - run any other write- or network-mutating shell command.
 
 The only shell permitted is **read-only inspection**: `git diff` / `git show` / `gh pr diff`, `grep` / `rg`, and file reads — plus dispatching the review sub-agents. Resolving findings, fixing bugs, resolving merge conflicts, and "making the branch mergeable" are explicitly **out of scope**: a fixable defect is a finding to report (`file:line` + a one-line fix in the `suggestion` field), never a license to act.
