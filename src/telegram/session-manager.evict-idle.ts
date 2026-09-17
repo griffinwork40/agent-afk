@@ -38,7 +38,8 @@ export async function evictIdleSessions(
   maxAgeMs: number,
 ): Promise<number> {
   const now = Date.now();
-  let evicted = 0;
+  // Collect eligible keys before mutating so the iteration is never mid-delete.
+  const toEvict: Array<[string, IAgentSession]> = [];
   for (const [key, session] of sessions) {
     const data = sessionData.get(key);
     // No sessionData → can't judge staleness; skip.
@@ -47,14 +48,15 @@ export async function evictIdleSessions(
     if (now - new Date(data.lastActivity).getTime() <= maxAgeMs) continue;
     // Mid-turn → skip. Only evict idle sessions.
     if (session.state !== 'idle') continue;
-
+    toEvict.push([key, session]);
+  }
+  for (const [key, session] of toEvict) {
     try { await session.close(); } catch (err) {
       console.error('[session-manager] idle-evict close error for', key, err);
     }
     sessions.delete(key);
-    evicted++;
   }
-  return evicted;
+  return toEvict.length;
 }
 
 /**
@@ -83,11 +85,14 @@ export function evictStaleSessionData(
   maxAgeMs: number,
 ): void {
   const now = Date.now();
+  // Collect eligible keys before mutating so the iteration is never mid-delete.
+  const toEvict: string[] = [];
   for (const [key, data] of sessionData) {
     if (sessions.has(key)) continue; // live session -- never evict
-    if (now - new Date(data.lastActivity).getTime() > maxAgeMs) {
-      clearElicitationRouteForKey(key, sessionStats, sessionData);
-      sessionData.delete(key);
-    }
+    if (now - new Date(data.lastActivity).getTime() > maxAgeMs) toEvict.push(key);
+  }
+  for (const key of toEvict) {
+    clearElicitationRouteForKey(key, sessionStats, sessionData);
+    sessionData.delete(key);
   }
 }

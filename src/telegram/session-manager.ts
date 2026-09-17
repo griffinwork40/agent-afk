@@ -218,7 +218,7 @@ export class SessionManager {
     // Periodic eviction keeps the sessionData AND idle-session maps bounded
     // during long uptime (#1657, #1662). Fire-and-forget: the async return is
     // intentionally not awaited — the timer is best-effort housekeeping.
-    this._evictionTimer = setInterval(() => { this._evictStaleSessionData().catch(() => {}); }, 60 * 60 * 1000); this._evictionTimer.unref();
+    this._evictionTimer = setInterval(() => { this._evictStaleSessionData().catch(err => console.error('[session-manager] eviction cycle error:', err)); }, 60 * 60 * 1000); this._evictionTimer.unref();
   }
 
   /**
