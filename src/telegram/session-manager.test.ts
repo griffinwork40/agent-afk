@@ -1473,8 +1473,61 @@ describe('SessionManager — elicitation route registry cleanup (#1662)', () => 
 
     // Trigger eviction with maxAgeMs=0 so the just-added entry qualifies.
     // Access private method via cast — test-only.
-    (manager as unknown as { _evictStaleSessionData(ms: number): void })._evictStaleSessionData(0);
+    await (manager as unknown as { _evictStaleSessionData(ms: number): Promise<void> })._evictStaleSessionData(0);
     expect(getElicitationRoute(sid)).toBeUndefined();
+  });
+
+  test('_evictStaleSessionData closes idle live sessions and clears their registry entries (#1700)', async () => {
+    // This is the exact case Codex flagged: a user stops chatting, the session
+    // sits idle in this.sessions, and _evictStaleSessionData's sessions.has()
+    // guard previously shielded it from eviction. After the fix, Phase 1
+    // (evictIdleSessions) closes and removes it from the live map, then Phase 2
+    // evicts its sessionData and clears the elicitation-route entry.
+    const session = await manager.getSession(7005);
+    const sid = session.sessionId!;
+    expect(getElicitationRoute(sid)).toBeDefined();
+
+    // The session is still in this.sessions — we do NOT manually delete it.
+    // Its state is 'idle' (mock default). Wait so lastActivity qualifies.
+    await new Promise((r) => setTimeout(r, 2));
+
+    await (manager as unknown as { _evictStaleSessionData(ms: number): Promise<void> })._evictStaleSessionData(0);
+
+    // Phase 1 should have closed and removed it from the live map.
+    expect((manager as unknown as { sessions: Map<string, IAgentSession> }).sessions.has('7005')).toBe(false);
+    // Phase 2 should have cleared the registry entry.
+    expect(getElicitationRoute(sid)).toBeUndefined();
+  });
+
+  test('_evictStaleSessionData skips non-idle sessions', async () => {
+    // A session that is actively processing should never be evicted.
+    let sessionState = 'processing';
+    const customManager = new SessionManager({
+      dataDir: testDataDir,
+      apiKey: 'test-key',
+      defaultModel: 'sonnet',
+      createSession: async () =>
+        ({ get state() { return sessionState; }, sessionId: `sdk-${Math.random().toString(36).slice(2)}`, async close() {}, async reset() {}, abort() {}, async sendMessage() { return { role: 'assistant' as const, content: '', timestamp: new Date() }; }, async *getOutputStream() { yield { type: 'done' as const }; } } as unknown as IAgentSession),
+    });
+
+    const session = await customManager.getSession(7006);
+    const sid = session.sessionId!;
+    expect(getElicitationRoute(sid)).toBeDefined();
+
+    await new Promise((r) => setTimeout(r, 2));
+
+    // Evict with maxAgeMs=0 — should skip because state is 'processing'.
+    await (customManager as unknown as { _evictStaleSessionData(ms: number): Promise<void> })._evictStaleSessionData(0);
+    expect((customManager as unknown as { sessions: Map<string, IAgentSession> }).sessions.has('7006')).toBe(true);
+    expect(getElicitationRoute(sid)).toBeDefined();
+
+    // Transition to idle — now it should be evicted.
+    sessionState = 'idle';
+    await (customManager as unknown as { _evictStaleSessionData(ms: number): Promise<void> })._evictStaleSessionData(0);
+    expect((customManager as unknown as { sessions: Map<string, IAgentSession> }).sessions.has('7006')).toBe(false);
+    expect(getElicitationRoute(sid)).toBeUndefined();
+
+    await customManager.closeAll().catch(() => {});
   });
 
   test('registry does not grow across multiple record-then-closeAll cycles', async () => {

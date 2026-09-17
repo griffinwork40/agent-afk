@@ -6,7 +6,7 @@
 import type { IAgentSession, AgentConfig, AgentModelInput, ThinkingConfig, EffortLevel, ResponseMetadata } from '../agent/types.js';
 import { injectHotMemory, injectGoalPrompt } from '../agent/memory/index.js';
 import { injectCompanionPrimer } from '../agent/companion/index.js';
-import { setElicitationRoute, clearElicitationRoute } from './elicitation-route-registry.js';
+import { setElicitationRoute } from './elicitation-route-registry.js';
 import { runTelegramReconcile } from '../agent/manifest/startup-reconcile.js';
 // Shared session-persistence utilities. These live under src/cli/ but are
 // surface-agnostic (pure functions over SessionStats / sidecar files); the
@@ -23,6 +23,7 @@ import { sessionRegistry, type SessionRegistry } from '../agent/session/session-
 import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
 import { resolveActiveRouteForChat } from './session-manager.active-route.js';
 import { hydrateStatsFromStore } from './session-manager.hydrate-stats.js';
+import { evictIdleSessions, evictStaleSessionData, clearElicitationRouteForKey } from './session-manager.evict-idle.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -214,8 +215,10 @@ export class SessionManager {
       registry: options.registry,
       onResumptionOffer: options.onResumptionOffer,
     };
-    // Periodic eviction keeps the sessionData Map bounded during long uptime (#1657).
-    this._evictionTimer = setInterval(() => this._evictStaleSessionData(), 60 * 60 * 1000); this._evictionTimer.unref();
+    // Periodic eviction keeps the sessionData AND idle-session maps bounded
+    // during long uptime (#1657, #1662). Fire-and-forget: the async return is
+    // intentionally not awaited — the timer is best-effort housekeeping.
+    this._evictionTimer = setInterval(() => { this._evictStaleSessionData().catch(() => {}); }, 60 * 60 * 1000); this._evictionTimer.unref();
   }
 
   /**
@@ -506,7 +509,7 @@ export class SessionManager {
    */
   private _resetStats(key: string): void {
     // Clear elicitation route before deleting stats (sessionId must still be accessible).
-    this._clearElicitationRouteForKey(key);
+    clearElicitationRouteForKey(key, this.sessionStats, this.sessionData);
     this.sessionStats.delete(key);
     // Fresh conversation → allow the autosave-failure notice to fire again.
     this.autosaveFailureLogged.delete(key);
@@ -726,7 +729,7 @@ export class SessionManager {
     // Drop in-memory stats so the resumed session hydrates the TARGET's stats
     // (name/turns/sessionId) from its sidecar on next access — never the
     // previous conversation's. autosave-failure notice re-arms for the switch.
-    this._clearElicitationRouteForKey(key); // clear before dropping stats (#1662)
+    clearElicitationRouteForKey(key, this.sessionStats, this.sessionData); // clear before dropping stats (#1662)
     this.sessionStats.delete(key);
     this.autosaveFailureLogged.delete(key);
 
@@ -832,40 +835,35 @@ export class SessionManager {
   }
 
   /**
-   * Evict sessionData entries that have had no activity for longer than
-   * `maxAgeMs` (default 24 hours). Called from closeAll so stale entries
-   * accumulated over a long bot uptime are pruned on each orderly shutdown
-   * without being so aggressive that UX-continuity state (model, cwd, name)
-   * is lost mid-conversation.
+   * Two-phase eviction that bounds both the live-session map and the
+   * sessionData map during long bot uptime.
    *
-   * Invariant: only entries whose route has NO live session are eligible — a
-   * session in `this.sessions` is by definition still active, so its data is
-   * always retained regardless of lastActivity.
+   * Phase 1 (idle-session eviction): closes and removes IAgentSession objects
+   * from `this.sessions` when their matching sessionData entry has been idle
+   * longer than `maxAgeMs` AND the session state is `'idle'`. This prevents
+   * the "user stops chatting" leak where `getSession()` inserts a session
+   * that no turn-completion path ever removes (#1662).
+   *
+   * Phase 2 (sessionData eviction): removes sessionData entries that are no
+   * longer live — including those just freed by Phase 1 — and clears their
+   * elicitation-route registry mappings.
+   *
+   * Called hourly from the periodic timer (fire-and-forget) and synchronously
+   * from `closeAll` at shutdown.
    */
-  private _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): void {
-    for (const [key, data] of this.sessionData) {
-      if (this.sessions.has(key)) continue; // live session — never evict
-      if (Date.now() - new Date(data.lastActivity).getTime() > maxAgeMs) {
-        // Clear the elicitation-route registry entry before evicting so the
-        // module-scope singleton does not accumulate orphan sessionId→route
-        // mappings for sessions that ran to natural completion (#1662).
-        this._clearElicitationRouteForKey(key);
-        this.sessionData.delete(key);
-      }
-    }
-  }
-
-  /** Resolve the sessionId for a route key and clear its elicitation mapping. */
-  private _clearElicitationRouteForKey(key: string): void {
-    const sid = this.sessionStats.get(key)?.sessionId ?? this.sessionData.get(key)?.sessionId;
-    if (sid) clearElicitationRoute(sid);
+  private async _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
+    // Phase 1: close and remove idle sessions from the live map so Phase 2's
+    // sessions.has(key) guard no longer shields them from eviction (#1662).
+    await evictIdleSessions(this.sessions, this.sessionData, maxAgeMs);
+    // Phase 2: evict sessionData entries that are no longer live.
+    evictStaleSessionData(this.sessions, this.sessionData, this.sessionStats, maxAgeMs);
   }
 
   /**
    * Close all sessions and clean up
    */
   async closeAll(): Promise<void> {
-    if (this._evictionTimer !== undefined) clearInterval(this._evictionTimer); this._evictStaleSessionData();
+    if (this._evictionTimer !== undefined) clearInterval(this._evictionTimer); await this._evictStaleSessionData();
     await this.saveSessions();
     // Clear elicitation route entries for ALL known routes — both live sessions
     // and routes that had turns recorded (sessionStats) but no live session
@@ -877,7 +875,7 @@ export class SessionManager {
       ...this.sessionStats.keys(),
       ...this.sessionData.keys(),
     ]);
-    for (const key of allKeys) this._clearElicitationRouteForKey(key);
+    for (const key of allKeys) clearElicitationRouteForKey(key, this.sessionStats, this.sessionData);
     await Promise.all([...this.sessions.values()].map(s => s.close().catch(e => console.error('Error closing session:', e))));
     this.sessions.clear();
   }
