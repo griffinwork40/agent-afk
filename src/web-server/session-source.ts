@@ -53,10 +53,77 @@ const HEAD_RECORD_SCAN_LIMIT = 20;
 /**
  * Detect plugin/skill preamble text injected as a synthetic first user turn.
  * These start with a bracketed tag like `[agent-workflow-amplifiers: unlocked]`
- * or `[skill-routing: active]` and carry no user-authored content.
+ * or `[skill-routing: active]`.
  */
 function isPreamble(text: string): boolean {
   return /^\s*\[[\w-]+[:\s]/.test(text);
+}
+
+/**
+ * Extract user-authored content from a ledger record whose text begins with
+ * plugin/bridge preamble.
+ *
+ * History: the harness concatenates the plugin preamble, bridge context, memory
+ * hints, and the real user message into a single `user` record. The old code
+ * skipped the whole record on `isPreamble()`, leaving every plugin session
+ * untitled in the dashboard. This function peels known boilerplate sections
+ * and returns whatever the user actually typed, or `undefined` when the record
+ * is pure boilerplate with no user content.
+ *
+ * Invariant: the bridge section always ends with a recognizable tail marker
+ * ("Read any referenced file for deeper context before acting"). User content
+ * appears either on the same line (after the marker's trailing punctuation)
+ * or on subsequent lines. When no bridge marker is present, fall back to
+ * collecting lines after the last bracketed section header.
+ */
+function extractUserContent(text: string): string | undefined {
+  // Strategy 1: find the bridge-tail marker and take everything after it.
+  // The user message is appended either on the same line (after "not full
+  // content.") or on the lines that follow.
+  const bridgeMarker = 'Read any referenced file for deeper context before acting';
+  const markerIdx = text.lastIndexOf(bridgeMarker);
+  if (markerIdx >= 0) {
+    // Skip past the marker line's known suffixes (punctuation variants).
+    const afterMarker = text.slice(markerIdx + bridgeMarker.length);
+    // Strip the rest of the marker line's boilerplate tail, e.g.
+    // " — these are pointers, not full content." before user text.
+    const cleaned = afterMarker.replace(
+      /^[^.]*\.\s*/,
+      '',
+    );
+    const result = cleaned.trim();
+    return result || undefined;
+  }
+
+  // Strategy 2 (no bridge marker): collect lines after the last bracketed
+  // section header. Handles minimal preambles like "[skill-routing: active]\n…"
+  const lines = text.split('\n');
+  let lastBracketLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*\[[\w-]+[:\s]/.test(lines[i]!)) lastBracketLine = i;
+  }
+  if (lastBracketLine < 0) return undefined;
+
+  // Take everything after the last bracketed header, skipping the header's
+  // own body (indented/bulleted continuation lines).
+  const tail: string[] = [];
+  let pastBody = false;
+  for (let i = lastBracketLine + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    const trimmed = line.trim();
+    if (!pastBody) {
+      // Skip blank lines and lines that look like preamble body (bullets,
+      // indented text, known boilerplate starters).
+      if (!trimmed || /^[-*]/.test(trimmed)) continue;
+      if (/^\[[\w-]+[:\s]/.test(trimmed)) continue;
+      pastBody = true;
+    }
+    tail.push(line);
+  }
+
+  const result = tail.join('\n').trim();
+  if (!result || /^\s*\[[\w-]+[:\s]/.test(result)) return undefined;
+  return result;
 }
 
 function truncateTitle(text: string): string {
@@ -86,13 +153,17 @@ async function readLedgerHead(
         if (rec.cwd !== undefined) out.cwd = rec.cwd;
         if (rec.surface !== undefined) out.surface = rec.surface;
       } else if (rec.kind === 'user' && out.title === undefined) {
-        // Invariant: plugin-dispatched sessions open with a synthetic user
-        // turn carrying the plugin preamble ("[plugin-name: unlocked] …").
-        // That boilerplate is identical across sessions and pushes the real
-        // task description past the truncation point (6 distinct titles
-        // across 100 sessions). Skip it and take the next user record.
-        if (isPreamble(rec.text)) continue;
-        out.title = truncateTitle(rec.text);
+        // Invariant: plugin-dispatched sessions concatenate the plugin
+        // preamble, bridge context, and the real user message into a single
+        // `user` record. Skipping the whole record (the pre-2026-09 behavior)
+        // left every plugin session untitled. Instead, peel the preamble and
+        // extract whatever the user actually typed.
+        const content = isPreamble(rec.text)
+          ? extractUserContent(rec.text)
+          : rec.text;
+        if (content) out.title = truncateTitle(content);
+        // If extraction returned nothing (pure-boilerplate record), fall
+        // through and let a subsequent user record supply the title.
       }
       if (out.title !== undefined && (out.cwd !== undefined || out.surface !== undefined)) break;
       if (seen >= HEAD_RECORD_SCAN_LIMIT) break;

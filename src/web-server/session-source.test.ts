@@ -170,6 +170,124 @@ describe('listWebSessions', () => {
     expect(entry?.mode).toBe('live');
     expect(entry?.alive).toBeUndefined();
   });
+  // -------------------------------------------------------------------------
+  // Preamble extraction — the harness concatenates plugin boilerplate, bridge
+  // context, and the real user message into a single `user` ledger record.
+  // The title must come from the user content, not the preamble prefix.
+  // -------------------------------------------------------------------------
+
+  it('extracts user content from a preamble-bearing user record', async () => {
+    const preambleText = [
+      '[agent-workflow-amplifiers: unlocked]',
+      '',
+      'Treat the agent-workflow-amplifiers plugin as default infrastructure.',
+      '- Multi-file implementation or new features -> /mint',
+      '[bridge: prior-session context]',
+      '',
+      'Recent commits:',
+      '24ca8537 bench: add crash-to-resume DAG checkpoint benchmark',
+      '',
+      'Read any referenced file for deeper context before acting.',
+      'why do none of the sessions have titles',
+    ].join('\n');
+
+    writeLedger('preamble-1', [metaLine('preamble-1'), userLine(preambleText)]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'preamble-1');
+
+    expect(entry?.title).toBe('why do none of the sessions have titles');
+  });
+
+  it('falls through to next user record when preamble record is pure boilerplate', async () => {
+    // A preamble-only record with no user content after the last bracket
+    // section -- only bullets and blank lines. extractUserContent should
+    // return undefined, letting the next user record supply the title.
+    const pureBoilerplate = [
+      '[skill-routing: active]',
+      '',
+      '- Multi-file implementation -> /mint',
+      '- Bugs or failing tests -> /diagnose',
+    ].join('\n');
+
+    writeLedger('pure-preamble-1', [
+      metaLine('pure-preamble-1'),
+      userLine(pureBoilerplate),
+      userLine('the actual second message'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'pure-preamble-1');
+
+    expect(entry?.title).toBe('the actual second message');
+  });
+
+  it('extracts user content appended on the same line as the bridge marker', async () => {
+    const text = [
+      '[agent-workflow-amplifiers: unlocked]',
+      '',
+      'Some plugin boilerplate.',
+      '[bridge: prior-session context]',
+      '',
+      'Recent commits:',
+      '24ca8537 some commit',
+      '',
+      // User content on the same line, after the marker's trailing punctuation
+      'Read any referenced file for deeper context before acting — these are pointers, not full content. fix the login page',
+    ].join('\n');
+
+    writeLedger('same-line-1', [metaLine('same-line-1'), userLine(text)]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'same-line-1');
+
+    expect(entry?.title).toBe('fix the login page');
+  });
+
+  it('handles multi-line user content after preamble', async () => {
+    const text = [
+      '[agent-workflow-amplifiers: unlocked]',
+      '',
+      'Some plugin instructions here.',
+      '[bridge: prior-session context]',
+      'Read any referenced file for deeper context before acting.',
+      'fix the login bug',
+      'it crashes on submit',
+    ].join('\n');
+
+    writeLedger('multiline-user-1', [metaLine('multiline-user-1'), userLine(text)]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'multiline-user-1');
+
+    expect(entry?.title).toBe('fix the login bug it crashes on submit');
+  });
+
+  it('returns undefined for preamble with bridge marker but no user content', async () => {
+    const text = [
+      '[agent-workflow-amplifiers: unlocked]',
+      '',
+      'Plugin instructions.',
+      '[bridge: prior-session context]',
+      '',
+      'Recent commits:',
+      '24ca8537 some commit',
+      '',
+      'Read any referenced file for deeper context before acting.',
+    ].join('\n');
+
+    writeLedger('bridge-no-user-1', [
+      metaLine('bridge-no-user-1'),
+      userLine(text),
+      userLine('second message has the real content'),
+    ]);
+
+    const results = await listWebSessions(new Set());
+    const entry = results.find((r) => r.id === 'bridge-no-user-1');
+
+    expect(entry?.title).toBe('second message has the real content');
+  });
+
   // A long-lived install accumulates tens of thousands of session dirs. Before
   // the cap, listing them took ~810ms and produced a 2.4MB payload on a real
   // machine — per sidebar load, growing without bound.
