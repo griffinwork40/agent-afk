@@ -111,8 +111,8 @@ export interface StatusLineFields {
    * Number of background subagent jobs currently in the 'running' state.
    * Only rendered when > 0 as `N↗` to signal active parallel fan-out.
    * Undefined or 0 means no active background agents — draws no segment.
-   * Takes droppablePriority 8 (shed before budgetUsd) — the most peripheral
-   * field on the line.
+   * Takes droppablePriority 8 (shed after tokPerSec) — sheds after
+   * tokPerSec (priority 9) on the narrowest terminals.
    */
   activeAgentCount?: number;
   /**
@@ -663,26 +663,26 @@ export class StatusLine {
       });
     }
 
-    // Active parallel subagent fan-out count — droppablePriority 8 (shed first
-    // of all droppable fields). Only renders when there are active background
+    // Active parallel subagent fan-out count — droppablePriority 8 (sheds after
+    // tokPerSec at 9). Only renders when there are active background
     // agents (> 0). Renders as `N↗` — the ↗ arrow visually signals "dispatched
     // up and out" (fan-out). Suppressed when 0 or undefined so idle sessions
     // have no noise on the status line.
     if (f.activeAgentCount !== undefined && f.activeAgentCount > 0) {
       parts.push({
         text: palette.chrome(`${f.activeAgentCount}↗`),
-        droppablePriority: 8, // shed first — most peripheral; sheds before turnCount (6)
+        droppablePriority: 8, // shed after tokPerSec (9); before budgetUsd (7) and lower-priority fields
       });
     }
 
-    // Live tok/s momentum ticker — droppablePriority 9 (shed before
-    // activeAgentCount at 8). Only rendered during active model streaming
+    // Live tok/s momentum ticker — droppablePriority 9 (shed first of all
+    // droppable fields, before activeAgentCount at 8). Only rendered during active model streaming
     // (tokPerSec is undefined between turns). Shows the smoothed
     // tokens-per-second rate as e.g. `847 tok/s`.
     if (f.tokPerSec !== undefined && f.tokPerSec > 0) {
       parts.push({
         text: palette.chrome(`${Math.round(f.tokPerSec)} tok/s`),
-        droppablePriority: 9, // shed first of all droppable fields
+        droppablePriority: 9, // shed first (most peripheral); before activeAgentCount (8)
       });
     }
 
