@@ -40,7 +40,7 @@ delays to widen the kill window. The parent sends `SIGKILL` at four boundary pos
 | Scenario | Kill timing |
 |---|---|
 | `zero-events` | Before any write (baseline -- no file should exist) |
-| `mid-sequence` | After 1 of 5 pairs, before remaining pairs |
+| `mid-sequence` | After 1 pair flushed, before seal |
 | `batch-complete` | After all 5 pairs flushed, before seal |
 | `mid-write` | After 3 pairs flushed + READY, kill races 10 more fire-and-forget pairs |
 
