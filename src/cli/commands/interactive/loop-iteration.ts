@@ -29,6 +29,8 @@ import type { ReplHistory } from '../../input/history.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
 import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-block-register.js';
+import { MomentumTicker } from './momentum-ticker.js';
+import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
 
 /** Per-handler timeout for the post-turn Stop notification. Tighter than the
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
@@ -54,34 +56,6 @@ const MAX_AUTO_RESUMES_PER_TURN = 3;
  */
 const AUTO_RESUME_DIRECTIVE =
   '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
-
-async function runFirstTurnHookIfNeeded(ctx: InteractiveCtx, text: string): Promise<void> {
-  // First-turn hook — awaited before any first-turn side effect that relies on
-  // the session cwd. For born-named worktrees the hook creates the worktree this
-  // turn will run in and points the session cwd at it, so it MUST complete
-  // before plugin preflights or model tool calls compute a cwd — otherwise they
-  // would run in the launch cwd (the parent repo) instead of the isolated
-  // worktree.
-  //
-  // Single-fire: guarded on `totalTurns === 0`. Detach before awaiting so a
-  // slow hook cannot re-fire if the loop is re-entered mid-await.
-  if (ctx.firstTurnHook && ctx.stats.totalTurns === 0) {
-    const hook = ctx.firstTurnHook;
-    ctx.firstTurnHook = undefined;
-    try {
-      await hook(text);
-    } catch (err) {
-      // Defensive — hook implementations are expected to swallow their own
-      // errors, but never let one break the REPL. When called before runTurn the
-      // compositor is not yet armed, so completionWriter routes to a plain
-      // console.log — no clear/repaint race to lose.
-      ctx.completionWriter.fn(
-        palette.warning('⚠ ') + 'first-turn hook failed: ' +
-          (err instanceof Error ? err.message : String(err)),
-      );
-    }
-  }
-}
 
 /**
  * Phase 3 of the REPL loop — the main input loop.
@@ -643,6 +617,16 @@ export async function runInputLoop(
       // before the first runTurn and stays set for every subsequent turn.
       enableCodeBlockRegister();
       resetCodeBlockRegister();
+      // Per-turn momentum ticker: computes a smoothed tok/s rate from streaming
+      // text deltas. The repaint callback is invoked internally by the ticker
+      // at a throttled cadence so the status line updates smoothly.
+      const momentumTicker = new MomentumTicker((rate) => {
+        ctx.statusLine.repaint({
+          ...formatStatusFields(ctx.stats, ctx.contextSampler, ctx.gitStatusSampler, maxTurnsNum),
+          tokPerSec: rate ?? undefined,
+        });
+      });
+      momentumTicker.start();
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
         // Forward the promotion seam so Ctrl+B can background a running
@@ -692,6 +676,9 @@ export async function runInputLoop(
           }
         },
         async onAfterTurn() {
+          // Stop the momentum ticker first so tokPerSec clears to undefined and
+          // the status line repaints without the streaming segment.
+          momentumTicker.stop();
           await ctx.contextSampler.onTurn(ctx.stats.totalTurns);
           // Re-sample the git branch each turn (cheap, local). The PR lookup
           // (network) is detached inside refresh() and lands on a later repaint.
@@ -779,6 +766,9 @@ export async function runInputLoop(
         // callback into the tool lane during arm(). Absent on non-REPL callers.
         ...(ctx.addPreviewDiffRef ? { addPreviewDiffRef: ctx.addPreviewDiffRef } : {}),
         bashTailSetter: ctx.bashTailSetter,
+        // Live tok/s: delegate to the momentum ticker, which handles EMA
+        // smoothing and throttled repaint internally.
+        onTextDelta: (charCount) => momentumTicker.update(charCount),
       }, ctx.stats.thinkingUi ?? ctx.options.thinkingUi, ctx.completionWriter,
         // Surface refs threaded into the per-turn StreamRenderer for the
         // legacy non-borrow path (non-TTY, when surface.getCompositor()

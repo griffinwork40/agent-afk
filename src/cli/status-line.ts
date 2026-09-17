@@ -115,6 +115,14 @@ export interface StatusLineFields {
    * field on the line.
    */
   activeAgentCount?: number;
+  /**
+   * Live tokens-per-second rate during model streaming, computed by the
+   * MomentumTicker module. Rendered as `847 tok/s` only while the model is
+   * streaming; the field is undefined (and the segment absent) between turns.
+   * Takes droppablePriority 9 (shed before activeAgentCount) — the most
+   * peripheral field; vanishes first on narrow terminals.
+   */
+  tokPerSec?: number;
 }
 
 interface StatusLineOpts {
@@ -664,6 +672,17 @@ export class StatusLine {
       parts.push({
         text: palette.chrome(`${f.activeAgentCount}↗`),
         droppablePriority: 8, // shed first — most peripheral; sheds before turnCount (6)
+      });
+    }
+
+    // Live tok/s momentum ticker — droppablePriority 9 (shed before
+    // activeAgentCount at 8). Only rendered during active model streaming
+    // (tokPerSec is undefined between turns). Shows the smoothed
+    // tokens-per-second rate as e.g. `847 tok/s`.
+    if (f.tokPerSec !== undefined && f.tokPerSec > 0) {
+      parts.push({
+        text: palette.chrome(`${Math.round(f.tokPerSec)} tok/s`),
+        droppablePriority: 9, // shed first of all droppable fields
       });
     }
 

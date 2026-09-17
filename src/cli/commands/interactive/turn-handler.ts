@@ -90,8 +90,7 @@ export async function runTurn(
   // that chunk opens a NEW assistant text block, so it joins across a round
   // seam (paragraph break) rather than concatenating verbatim like an
   // intra-round delta. See {@link joinAtRoundSeam}.
-  let pendingRoundSeam = false;
-  let streamingStarted = false;
+  let pendingRoundSeam = false, streamingStarted = false;
   let streamErrorRendered = false;
   let rendererDisposed = false;
   let doneFired = false;
@@ -446,6 +445,9 @@ export async function runTurn(
           // That lets the content and waiting-line removal share one flush,
           // rather than briefly painting an empty intermediate frame.
           streamingStarted = true;
+          // Feed the momentum ticker so it can compute a live tok/s rate.
+          // Best-effort: absent on non-TTY surfaces and non-interactive callers.
+          h.onTextDelta?.(event.chunk.content.length);
         } else if (event.type === 'message' && !streamingStarted) {
           responseText = event.message.content;
         }

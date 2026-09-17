@@ -815,6 +815,13 @@ export interface TurnHandles {
    * per-turn ToolLane.
    */
   bashTailSetter?: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
+  /**
+   * Fired on each streaming text-content chunk with the character length of
+   * the chunk. Wired by the REPL to the MomentumTicker so it can compute a
+   * smoothed tok/s rate and repaint the status line during streaming.
+   * Best-effort — absent on non-interactive callers and non-TTY surfaces.
+   */
+  onTextDelta?(charCount: number): void;
 }
 
 // `discardStdin: false` is load-bearing — ora's default wraps process.stdin
