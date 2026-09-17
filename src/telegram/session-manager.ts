@@ -845,7 +845,13 @@ export class SessionManager {
   private _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): void {
     for (const [key, data] of this.sessionData) {
       if (this.sessions.has(key)) continue; // live session — never evict
-      if (Date.now() - new Date(data.lastActivity).getTime() > maxAgeMs) this.sessionData.delete(key);
+      if (Date.now() - new Date(data.lastActivity).getTime() > maxAgeMs) {
+        // Clear the elicitation-route registry entry before evicting so the
+        // module-scope singleton does not accumulate orphan sessionId→route
+        // mappings for sessions that ran to natural completion (#1662).
+        this._clearElicitationRouteForKey(key);
+        this.sessionData.delete(key);
+      }
     }
   }
 
@@ -861,9 +867,17 @@ export class SessionManager {
   async closeAll(): Promise<void> {
     if (this._evictionTimer !== undefined) clearInterval(this._evictionTimer); this._evictStaleSessionData();
     await this.saveSessions();
-    // Clear elicitation route entries for every live session before closing so
-    // the module-scope registry does not accumulate orphan mappings (#1662).
-    for (const key of this.sessions.keys()) this._clearElicitationRouteForKey(key);
+    // Clear elicitation route entries for ALL known routes — both live sessions
+    // and routes that had turns recorded (sessionStats) but no live session
+    // object (e.g. sessions that ran to natural completion without a /clear).
+    // The union of sessions + sessionStats + sessionData covers every path by
+    // which a sessionId could have been registered (#1662).
+    const allKeys = new Set([
+      ...this.sessions.keys(),
+      ...this.sessionStats.keys(),
+      ...this.sessionData.keys(),
+    ]);
+    for (const key of allKeys) this._clearElicitationRouteForKey(key);
     await Promise.all([...this.sessions.values()].map(s => s.close().catch(e => console.error('Error closing session:', e))));
     this.sessions.clear();
   }

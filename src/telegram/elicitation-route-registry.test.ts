@@ -11,6 +11,7 @@ import {
   setElicitationRoute,
   getElicitationRoute,
   clearElicitationRoute,
+  elicitationRegistrySize,
 } from './elicitation-route-registry.js';
 
 // The registry is a module-level singleton, so tests must clean up after themselves.
@@ -74,5 +75,17 @@ describe('elicitation-route-registry', () => {
 
     expect(getElicitationRoute(SESSION_A)).toBeUndefined();
     expect(getElicitationRoute(SESSION_B)).toEqual(ROUTE_TOPIC);
+  });
+
+  it('elicitationRegistrySize reflects set and clear operations', () => {
+    const before = elicitationRegistrySize();
+    setElicitationRoute(SESSION_A, ROUTE_GENERAL);
+    expect(elicitationRegistrySize()).toBe(before + 1);
+    setElicitationRoute(SESSION_B, ROUTE_TOPIC);
+    expect(elicitationRegistrySize()).toBe(before + 2);
+    clearElicitationRoute(SESSION_A);
+    expect(elicitationRegistrySize()).toBe(before + 1);
+    clearElicitationRoute(SESSION_B);
+    expect(elicitationRegistrySize()).toBe(before);
   });
 });

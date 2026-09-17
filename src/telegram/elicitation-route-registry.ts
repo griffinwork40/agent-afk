@@ -54,3 +54,12 @@ export function getElicitationRoute(sessionId: string): TelegramRoute | undefine
 export function clearElicitationRoute(sessionId: string): void {
   registry.delete(sessionId);
 }
+
+/**
+ * Return the current number of entries in the registry.
+ * Exposed for testing only — callers that need the route should use
+ * `getElicitationRoute`.
+ */
+export function elicitationRegistrySize(): number {
+  return registry.size;
+}
