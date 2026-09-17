@@ -433,6 +433,9 @@ export class StreamingMarkdownRenderer {
    * Get the raw pending buffer (for testing)
    */
   getPendingBuffer(): string {
+    // Drain the micro-buffer first so the returned string reflects all
+    // pushed content — mirrors the pattern in commitPending() and flush().
+    this.drainInputBuffer();
     return this.buffer;
   }
 
@@ -473,6 +476,9 @@ export class StreamingMarkdownRenderer {
    * block in the response, with no trailing `\n\n`, so it stays pending.
    */
   stripPendingFrom(offset: number): boolean {
+    // Drain the micro-buffer first so the strip sees the full pending
+    // content — mirrors the pattern in commitPending() and flush().
+    this.drainInputBuffer();
     if (offset < 0 || offset >= this.buffer.length) return false;
     this.buffer = this.buffer.slice(0, offset).trimEnd();
     return true;

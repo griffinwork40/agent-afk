@@ -1263,6 +1263,34 @@ describe('StreamingMarkdownRenderer', () => {
       expect(renderer.stripPendingFrom(offset)).toBe(true);
       expect(renderer.getPendingBuffer().trim()).toBe('');
     });
+
+    it('bufferMs>0: content in inputBuffer is visible to getPendingBuffer() and strippable by stripPendingFrom()', () => {
+      vi.useFakeTimers();
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 50 });
+
+      // Leading-edge push fires immediately (lastInputFlushTime=0).
+      renderer.push('prose here ');
+      // Within the buffer window — this chunk lands in inputBuffer, not yet in this.buffer.
+      renderer.push('**Done**\n- What was done: fixed it');
+      expect((renderer as any).inputBuffer).toBe('**Done**\n- What was done: fixed it');
+
+      // getPendingBuffer() must drain inputBuffer first so the full content is visible.
+      const pending = renderer.getPendingBuffer();
+      expect(pending).toContain('**Done**');
+      expect((renderer as any).inputBuffer).toBe('');
+
+      // stripPendingFrom() must also drain inputBuffer and successfully strip.
+      // Push again to re-populate inputBuffer for a fresh stripPendingFrom() call.
+      renderer.push('**Done**\n- second');
+      expect((renderer as any).inputBuffer).toBe('**Done**\n- second');
+
+      const pending2 = renderer.getPendingBuffer();
+      const offset = pending2.indexOf('**Done**');
+      expect(renderer.stripPendingFrom(offset)).toBe(true);
+      expect(renderer.getPendingBuffer()).not.toContain('Done');
+
+      vi.useRealTimers();
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1293,11 +1321,13 @@ describe('StreamingMarkdownRenderer', () => {
       // Immediately push more -- within the 30ms window, these should buffer.
       renderer.push('B');
       renderer.push('C');
-      // B and C are in the input buffer, not yet in the parse buffer.
-      expect(renderer.getPendingBuffer()).toBe('A');
-      expect((renderer as any).inputBuffer).toBe('BC');
+      // B and C are in the input buffer, not yet drained into the parse buffer.
+      // getPendingBuffer() now drains inputBuffer before returning, so it returns
+      // the full 'ABC' and clears inputBuffer as a side-effect.
+      expect(renderer.getPendingBuffer()).toBe('ABC');
+      expect((renderer as any).inputBuffer).toBe('');
 
-      // After the trailing-edge timer fires, they flush.
+      // After the trailing-edge timer fires, nothing new to flush.
       await new Promise((r) => setTimeout(r, 50));
       expect(renderer.getPendingBuffer()).toBe('ABC');
       expect((renderer as any).inputBuffer).toBe('');
@@ -1362,6 +1392,26 @@ describe('StreamingMarkdownRenderer', () => {
       // After draining into parse buffer and disposing, everything is cleared.
       renderer.dispose();
       expect(renderer.hasEmitted()).toBe(false);
+    });
+
+    it('getPendingBuffer() drains inputBuffer before returning', () => {
+      vi.useFakeTimers();
+      renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 50 });
+
+      // Leading-edge push fires immediately.
+      renderer.push('first ');
+      expect(renderer.getPendingBuffer()).toBe('first ');
+
+      // Subsequent push within the window — lands in inputBuffer only.
+      renderer.push('second');
+      expect((renderer as any).inputBuffer).toBe('second');
+
+      // getPendingBuffer() must drain inputBuffer so caller sees full content.
+      const pending = renderer.getPendingBuffer();
+      expect(pending).toBe('first second');
+      expect((renderer as any).inputBuffer).toBe('');
+
+      vi.useRealTimers();
     });
   });
 });
