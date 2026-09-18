@@ -20,6 +20,7 @@ import type {
   Surface,
   PhaseRole,
   McpServerSummary,
+  McpFailedServer,
 } from './types.js';
 import { gatherWorkspace } from './workspace-source.js';
 
@@ -71,6 +72,14 @@ export interface RuntimeSourceDeps {
   getMcpTools: () => readonly AnthropicToolDef[];
 
   /**
+   * Live accessor for MCP server states. Returns per-server connection status
+   * including `error` and `oauth_pending` entries — the source for surfacing
+   * failed servers in `get_runtime_state` (issue #1702). Returns `[]` when no
+   * manager is wired.
+   */
+  getMcpServerStates: () => readonly { serverName: string; status: string; error?: string }[];
+
+  /**
    * Live accessor for the active foreground subagents + background jobs.
    * Returns `{ active: [], backgroundJobs: [] }` when no executor is wired.
    */
@@ -120,6 +129,7 @@ export function buildRuntimeStateSource(deps: RuntimeSourceDeps): RuntimeStateSo
       return {
         enabled: deps.getEnabledToolNames(),
         mcpServers: summarizeMcpServers(deps.getMcpTools()),
+        failedServers: collectFailedServers(deps.getMcpServerStates()),
       };
     },
     getSubagents(): RuntimeSubagents {
@@ -200,5 +210,19 @@ function summarizeMcpServers(tools: readonly AnthropicToolDef[]): McpServerSumma
   }
   return [...counts.entries()]
     .map(([name, toolCount]) => ({ name, toolCount }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Collect MCP servers that failed to connect. Filters to `error` status only
+ * (not `disabled`, `connecting`, `connected`, or `oauth_pending`) and returns
+ * a sorted summary with server name + human-readable reason (issue #1702).
+ */
+function collectFailedServers(
+  states: readonly { serverName: string; status: string; error?: string }[],
+): McpFailedServer[] {
+  return states
+    .filter((s) => s.status === 'error')
+    .map((s) => ({ name: s.serverName, reason: s.error ?? 'unknown error' }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }

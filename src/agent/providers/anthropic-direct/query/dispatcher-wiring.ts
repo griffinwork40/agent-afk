@@ -74,6 +74,8 @@ export interface DispatcherWiringArgs {
   getCwd: () => string;
   /** Live MCP tool accessor for the awareness source. */
   getMcpTools: () => readonly AnthropicToolDef[];
+  /** Live MCP server-state accessor for surfacing failed servers (#1702). */
+  getMcpServerStates: () => readonly { serverName: string; status: string; error?: string }[];
   /** Live subagent accessor for the awareness source. */
   getSubagents: () => RuntimeSubagents;
   /** Provider-owned memoized top-level session id. */
@@ -132,6 +134,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ? queryDispatcher.toolDefs.map((t) => t.name)
         : [],
     getMcpTools: args.getMcpTools,
+    getMcpServerStates: args.getMcpServerStates,
     getSubagents: args.getSubagents,
   });
 

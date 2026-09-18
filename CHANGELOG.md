@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.220.0] - 2026-09-18
+
+### Added
+- streaming UX phase 1 — atomic sync output + inline syntax close (#1752) (2f4fcf3d)
+- remove deprecated PR body for bash preview configuration (3e3b2c15)
+- add new invariants for hook block decision tracing and error handling (494bd67a)
+
+### Changed
+- complete #832 Tier 3 extractions -- dispatcher, session, scheduler, daemon (#1755) (40726323)
+
+## [5.219.4] - 2026-09-18
+
+### Fixed
+- surface failed MCP servers in get_runtime_state and REPL startup (#1702) (#1748) (3bdf7c07)
+
 ## [5.219.3] - 2026-09-18
 
 ### Fixed

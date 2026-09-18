@@ -29,6 +29,7 @@ function defaultDeps() {
     permissionMode: 'default',
     getEnabledToolNames: () => ['bash', 'read_file'],
     getMcpTools: () => [] as AnthropicToolDef[],
+    getMcpServerStates: () => [] as { serverName: string; status: string; error?: string }[],
     getSubagents: () => ({ active: [], backgroundJobs: [] }) as RuntimeSubagents,
   };
 }
@@ -206,6 +207,40 @@ describe('buildRuntimeStateSource.getTools', () => {
   it('returns empty mcpServers list when no MCP tools are wired', () => {
     const src = buildRuntimeStateSource(defaultDeps());
     expect(src.getTools().mcpServers).toEqual([]);
+  });
+
+  it('returns failed servers with name and reason (#1702)', () => {
+    const src = buildRuntimeStateSource({
+      ...defaultDeps(),
+      getMcpServerStates: () => [
+        { serverName: 'ok-server', status: 'connected' },
+        { serverName: 'bad-server', status: 'error', error: 'ECONNREFUSED' },
+        { serverName: 'also-bad', status: 'error', error: 'timeout after 10s' },
+        { serverName: 'disabled-one', status: 'disabled' },
+        { serverName: 'auth-pending', status: 'oauth_pending' },
+      ],
+    });
+    expect(src.getTools().failedServers).toEqual([
+      { name: 'also-bad', reason: 'timeout after 10s' },
+      { name: 'bad-server', reason: 'ECONNREFUSED' },
+    ]);
+  });
+
+  it('uses "unknown error" when error field is undefined', () => {
+    const src = buildRuntimeStateSource({
+      ...defaultDeps(),
+      getMcpServerStates: () => [
+        { serverName: 'mystery', status: 'error' },
+      ],
+    });
+    expect(src.getTools().failedServers).toEqual([
+      { name: 'mystery', reason: 'unknown error' },
+    ]);
+  });
+
+  it('returns empty failedServers when no servers failed', () => {
+    const src = buildRuntimeStateSource(defaultDeps());
+    expect(src.getTools().failedServers).toEqual([]);
   });
 });
 

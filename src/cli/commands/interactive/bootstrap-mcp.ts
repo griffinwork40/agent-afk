@@ -100,9 +100,21 @@ export async function connectReplMcp(a: {
       });
     }
   }
-  // No `else` branch for warnings: the no-enabled-servers case used to
-  // console.warn here, and both branches are now covered by the single
-  // bootWarnings collection above.
+  // Surface non-alwaysLoad server connection failures as user-visible boot
+  // warnings (#1702). These ride the same bootWarnings array as config-loader
+  // warnings, so they survive the REPL startup clear and appear post-clear.
+  if (mcpManager !== undefined) {
+    for (const s of mcpManager.getServerStates()) {
+      if (s.status === 'error') {
+        await recordBootWarning({
+          bootWarnings: a.bootWarnings,
+          traceWriter: a.traceWriter,
+          producer: 'mcp',
+          message: `[mcp] server "${s.serverName}" failed to connect: ${s.error ?? 'unknown error'}`,
+        });
+      }
+    }
+  }
 
   return mcpManager;
 }
