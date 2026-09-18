@@ -726,15 +726,16 @@ describe('StreamingMarkdownRenderer', () => {
       expect(writes.join('')).toContain('legacy');
     });
 
-    it('streams a table as a compact overlay placeholder, then commits it exactly once', async () => {
+    it('streams a table as a live dimmed preview in the overlay, then commits it exactly once', async () => {
       // Regression (the "ghost table rows" bug): a streaming markdown table has
       // no internal blank line, so the whole growing table accumulated in the
       // pending buffer and was painted into the live overlay every chunk. Once
       // taller than the viewport, rows scrolled into scrollback where the
       // overlay's absolute-cursor erase could not reclaim them — leaving ghost
-      // tail rows beside the final committed table. The fix paints a
-      // fixed-height placeholder for an in-progress table, so the overlay never
-      // grows past the viewport. The full table still commits once.
+      // tail rows beside the final committed table. The fix now paints a dimmed
+      // live preview of the pipe-delimited rows (instead of a fixed placeholder),
+      // so the user sees real content during streaming. The full table still
+      // commits exactly once as a properly-formatted table at close time.
       const prevCols = process.stdout.columns;
       Object.defineProperty(process.stdout, 'columns', { value: 200, configurable: true });
       vi.useFakeTimers();
@@ -760,14 +761,22 @@ describe('StreamingMarkdownRenderer', () => {
           await vi.runAllTimersAsync();
         }
 
-        // The live overlay only ever shows the compact placeholder…
+        // The live overlay shows a dimmed preview of the actual pipe-delimited rows.
         expect(overlayCalls.length).toBeGreaterThan(0);
-        expect(overlayCalls.some((s) => s.includes('streaming table'))).toBe(true);
-        // …never the growing table rows (the un-clearable ghost source).
-        expect(overlayCalls.some((s) => s.includes('ROW_11'))).toBe(false);
+        // The old fixed placeholder text must never appear — real content is shown instead.
+        expect(overlayCalls.some((s) => s.includes('streaming table'))).toBe(false);
+        // The overlay shows actual row content (stripped of ANSI for comparison).
+        const ANSI_RE = /\x1b\[[0-9;]*m/g;
+        const anyCallContainsRow = overlayCalls.some((s) =>
+          s.replace(ANSI_RE, '').includes('Col A'),
+        );
+        expect(anyCallContainsRow).toBe(true);
+
+        // Viewport-height guard: overlay must never exceed terminal height
+        // (prevents ghost-row regression where un-clearable rows linger).
         for (const call of overlayCalls) {
           const nonEmpty = call.split('\n').filter((l) => l.trim().length > 0);
-          expect(nonEmpty.length).toBeLessThanOrEqual(2);
+          expect(nonEmpty.length).toBeLessThanOrEqual(24);
         }
 
         // Close the block → the full table commits to scrollback exactly once.

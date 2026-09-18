@@ -3,6 +3,7 @@ import { renderMarkdownToTerminal } from './formatter.js';
 import { wrapToWidth } from './wrap.js';
 import { capToMeasure, capToProseMeasure } from './render/measure.js';
 import { closePendingInlineSyntax } from './markdown-stream-inline-close.js';
+import { previewCodeFence, previewTable } from './markdown-stream-format.preview.js';
 
 /**
  * Pure markdown formatting and analysis helpers for StreamingMarkdownRenderer.
@@ -65,15 +66,16 @@ export function formatPendingBuffer(
   let pendingRender: string;
 
   if (isInOpenCodeFence(buffer)) {
-    pendingRender = '\n▍ streaming code…\n';
+    // Show the real code content (dimmed) instead of a placeholder.
+    // previewCodeFence wraps to the code measure (contentWidth) and applies
+    // palette.dim — no syntax highlighting, which is deferred to commit time.
+    pendingRender = previewCodeFence(buffer, contentWidth);
   } else if (isInOpenTable(buffer)) {
     // A streaming table has no internal blank line, so the whole (growing)
     // table stays in the pending buffer until a trailing blank line commits
-    // it. Painting that growing table into the live overlay every chunk leaves
-    // ghost rows once it exceeds the viewport height — so substitute a
-    // fixed-height placeholder here, exactly as the open-code-fence path does.
-    // The full table still renders once at commit via formatBlockForCommit.
-    pendingRender = '\n▍ streaming table…\n';
+    // it. Show the real pipe-delimited rows (dimmed) instead of a placeholder;
+    // column alignment happens at commit time via formatBlockForCommit.
+    pendingRender = previewTable(buffer, contentWidth);
   } else {
     pendingRender = renderTextBlock(closePendingInlineSyntax(buffer), contentWidth);
   }

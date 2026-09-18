@@ -13,14 +13,13 @@ const stripAnsi = (s: string): string => s.replace(ANSI_RE, '');
 /**
  * Tests for the pure formatting helpers behind StreamingMarkdownRenderer.
  *
- * Focus: the streaming-table placeholder guard. A markdown table has no
+ * Focus: the streaming-table live preview guard. A markdown table has no
  * internal blank line, so the whole (growing) table accumulates in the pending
  * buffer and was painted into the live overlay every chunk. Once the table
  * exceeds the viewport height, the overlay's absolute-cursor erase can no
  * longer reclaim rows that scrolled into scrollback, leaving ghost tail rows
- * beside the final committed table. `formatPendingBuffer` now substitutes a
- * fixed-height placeholder for an in-progress table, mirroring the existing
- * open-code-fence guard.
+ * beside the final committed table. `formatPendingBuffer` now shows a dimmed
+ * live preview instead of a placeholder, mirroring the open-code-fence path.
  */
 
 describe('isInOpenTable', () => {
@@ -68,28 +67,53 @@ describe('isInOpenTable', () => {
 describe('formatPendingBuffer', () => {
   const WIDTH = 80;
 
-  it('renders a compact placeholder for an in-progress table, not the table', () => {
+  it('shows live table row content for an in-progress table (not a placeholder)', () => {
     const tall = ['| Col A | Col B |', '|-------|-------|']
       .concat(Array.from({ length: 40 }, (_, i) => `| row ${i} | value ${i} |`))
       .join('\n');
 
     const out = formatPendingBuffer(tall, WIDTH, true);
 
-    expect(out).toContain('streaming table');
-    // The actual table rows / borders must never reach the ephemeral overlay.
-    expect(out).not.toContain('value 39');
+    // Live preview: the actual pipe-delimited rows must be visible (dimmed).
+    expect(stripAnsi(out)).toContain('Col A');
+    expect(stripAnsi(out)).toContain('value 39');
+    // The rendered table borders (│) from the commit-time table renderer must
+    // NOT appear — alignment is deferred to commit time.
     expect(out).not.toContain('│');
-    // Placeholder is fixed-height regardless of table size (no ghost source).
-    const nonEmptyLines = out.split('\n').filter((l) => l.trim().length > 0);
-    expect(nonEmptyLines.length).toBeLessThanOrEqual(2);
+    // Must NOT contain the old fixed placeholder text.
+    expect(out).not.toContain('streaming table');
   });
 
-  it('still renders the open-code-fence placeholder (precedence over table)', () => {
+  it('shows live code content for an open code fence (not a placeholder)', () => {
+    const buf = '```python\ndef hello():\n    print("wor';
+    const out = formatPendingBuffer(buf, WIDTH, true);
+    // Live preview: actual code lines must be visible (dimmed).
+    expect(stripAnsi(out)).toContain('def hello():');
+    expect(stripAnsi(out)).toContain('print("wor');
+    // Language tag should be shown as a label.
+    expect(stripAnsi(out)).toContain('[python]');
+    // Must NOT contain the old fixed placeholder text.
+    expect(out).not.toContain('streaming code');
+    // Table guard must not fire for a code fence containing table-like content.
+    expect(out).not.toContain('streaming table');
+  });
+
+  it('code fence with no language tag shows code content without a label', () => {
+    const buf = '```\nconst x = 1;\n';
+    const out = formatPendingBuffer(buf, WIDTH, true);
+    expect(stripAnsi(out)).toContain('const x = 1;');
+    expect(out).not.toContain('streaming code');
+  });
+
+  it('still prioritises code-fence guard over table guard', () => {
     // A fenced block whose body looks table-ish must be treated as code, not a
     // table — the code-fence guard is checked first.
     const out = formatPendingBuffer('```\n|---|---|\n| a | b |', WIDTH, true);
-    expect(out).toContain('streaming code');
+    // Code content is shown; old placeholder strings must be absent.
+    expect(out).not.toContain('streaming code');
     expect(out).not.toContain('streaming table');
+    // The delimiter row appears in the dimmed code preview.
+    expect(stripAnsi(out)).toContain('|---|---|');
   });
 
   it('renders plain prose normally (no placeholder)', () => {
