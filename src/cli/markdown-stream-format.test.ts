@@ -105,6 +105,19 @@ describe('formatPendingBuffer', () => {
   it('returns empty string for a whitespace-only buffer', () => {
     expect(formatPendingBuffer('   ', WIDTH, true)).toBe('');
   });
+
+  it('does not produce a dangling unclosed bold when buffer contains unclosed **', () => {
+    // Integration test: a buffer with an unclosed bold marker must not render
+    // with a stray opening ** that the marked lexer would see as unclosed.
+    // closePendingInlineSyntax is called inside formatPendingBuffer, so the
+    // output should have a matching closing ** appended.
+    const out = formatPendingBuffer('**bold text in progress', WIDTH, true);
+    // The rendered output must not end with a dangling unclosed **.
+    // A proper close means occurrences of ** are even in the stripped text.
+    const stripped = stripAnsi(out);
+    const boldMarkerCount = (stripped.match(/\*\*/g) ?? []).length;
+    expect(boldMarkerCount % 2).toBe(0);
+  });
 });
 
 describe('isInOpenCodeFence (precedence sanity)', () => {

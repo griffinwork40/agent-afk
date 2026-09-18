@@ -88,6 +88,17 @@ describe('closePendingInlineSyntax', () => {
     expect(closePendingInlineSyntax('```code```')).toBe('```code```');
   });
 
+  // ── italic before strikethrough ─────────────────────────────────────────────
+
+  it('closes both unclosed italic and strikethrough in fixed marker order', () => {
+    // Input: one unclosed * (italic) and one unclosed ~~ (strikethrough).
+    // MARKERS order: ['**', '~~', '*', '`'].
+    // ** count in cleaned=0 (even→no append), ~~ count=1 (odd→append ~~),
+    // then ~~ removed from cleaned; * count=1 (odd→append *), ` count=0.
+    // Appended in order: ~~ then * → result is '*italic ~~strike~~*'.
+    expect(closePendingInlineSyntax('*italic ~~strike')).toBe('*italic ~~strike~~*');
+  });
+
   // ── pure-function guarantee ─────────────────────────────────────────────────
 
   it('does not mutate the input string', () => {
