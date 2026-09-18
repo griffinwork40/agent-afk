@@ -166,16 +166,26 @@ async function spawnAndKill(scriptPath: string): Promise<void> {
     let buf = '';
     let killed = false;
 
+    const timer = setTimeout(() => {
+      if (!killed) {
+        killed = true;
+        child.kill('SIGTERM');
+        reject(new Error('child timed out waiting for READY'));
+      }
+    }, 12_000);
+
     child.stdout.on('data', (chunk: Buffer) => {
       buf += chunk.toString();
       if (!killed && buf.includes('READY')) {
         killed = true;
+        clearTimeout(timer);
         child.kill('SIGKILL');
       }
     });
 
-    child.on('exit', () => resolve());
+    child.on('exit', () => { clearTimeout(timer); resolve(); });
     child.on('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
       if (err.code === 'ENOENT') { reject(new Error(`tsx not found at: ${tsxBin}`)); return; }
       resolve(); // SIGKILL may surface as error
     });
