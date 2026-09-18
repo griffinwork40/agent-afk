@@ -772,6 +772,13 @@ describe('StreamingMarkdownRenderer', () => {
         );
         expect(anyCallContainsRow).toBe(true);
 
+        // Viewport-height guard: overlay must never exceed terminal height
+        // (prevents ghost-row regression where un-clearable rows linger).
+        for (const call of overlayCalls) {
+          const nonEmpty = call.split('\n').filter((l) => l.trim().length > 0);
+          expect(nonEmpty.length).toBeLessThanOrEqual(24);
+        }
+
         // Close the block → the full table commits to scrollback exactly once.
         vi.useRealTimers();
         renderer.push('\n\n');
