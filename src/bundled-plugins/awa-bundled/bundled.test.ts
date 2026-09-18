@@ -120,7 +120,10 @@ const PINNED_HASHES = {
   // external-constraint rule it contradicted, and put the merge-decision rule
   // in Wave 2's receives list.
   // Full rationale: docs/bundled-plugins.md#review-726
-  review: '3a0816490976f0588517084c13a00228a66a4b4c28bf2d324499d7b7404199f7',
+
+
+
+  review: '3b4595d7645137483f5eb493589bfb97067eddd3513f23a63dad75df334d4509',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
