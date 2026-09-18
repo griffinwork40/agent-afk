@@ -24,6 +24,16 @@ const execFile = promisify(execFileCb);
 /** Tail cap for stdout/stderr carried in `responseExcerpt`. */
 const EXCERPT_CAP = 4096;
 
+/**
+ * Contract: Slice `s` from `start`, bumping by 1 if `start` falls on a low
+ * surrogate (0xDC00–0xDFFF) to avoid splitting a surrogate pair.
+ */
+function sliceSafe(s: string, start: number): string {
+  const code = s.charCodeAt(start);
+  const safe = start + (code >= 0xdc00 && code <= 0xdfff ? 1 : 0);
+  return s.slice(safe);
+}
+
 export interface ShellTaskOptions {
   now: () => number;
   writeTelemetry: (record: TelemetryRecord) => void;
@@ -63,7 +73,7 @@ export async function runShellTask(
     });
     const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
     const excerpt = combined.length > EXCERPT_CAP
-      ? combined.slice(combined.length - EXCERPT_CAP)
+      ? sliceSafe(combined, combined.length - EXCERPT_CAP)
       : combined;
     const record: TelemetryRecord = {
       ...baseRecord,
@@ -83,7 +93,7 @@ export async function runShellTask(
     // On nonzero exit, execFile rejects but still carries stdout/stderr
     const combined = [errObj.stdout ?? '', errObj.stderr ?? ''].filter(Boolean).join('\n').trim();
     const excerpt = combined.length > EXCERPT_CAP
-      ? combined.slice(combined.length - EXCERPT_CAP)
+      ? sliceSafe(combined, combined.length - EXCERPT_CAP)
       : combined;
     const exitInfo = typeof errObj.code === 'number'
       ? `exit ${errObj.code}`
