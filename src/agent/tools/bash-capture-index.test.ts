@@ -241,3 +241,111 @@ describe('listCaptures — robustness', () => {
     expect(result[0]!.sessionId).toBe('sess-has-captures');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression tests: path-traversal filename filter (PR #1783 / issue #1790)
+// ---------------------------------------------------------------------------
+
+describe('listCaptures — path-traversal filename filter', () => {
+  // Regression: the capture filename filter /^[a-zA-Z0-9._-]+\.txt$/ must
+  // reject names that contain slash characters, which are the only characters
+  // that can cause path traversal when combined with join(). File system
+  // entries returned by readdir() are always bare names (no slashes), so the
+  // filter's job is to exclude non-.txt files and names whose characters fall
+  // outside the safe set.
+  //
+  // Invariant: the security boundary is the slash. A bare name like "..evil.txt"
+  // returned by readdir() is NOT a traversal risk because
+  // join(capturesDir, "..evil.txt") stays inside capturesDir — only a name
+  // containing "/" could escape it on POSIX. The regex is therefore the
+  // authoritative guard for both slash-containing names and wrong extensions.
+
+  it('rejects slash-containing filenames via the safe-name regex', () => {
+    // These names cannot appear as bare readdir() entries on POSIX, but the
+    // regex is the first line of defence; verify it would reject them if they
+    // somehow appeared (e.g. on emulated file systems or in future code paths).
+    const traversalNames = [
+      '../../etc/passwd.txt',
+      '../sibling.txt',
+      '/absolute/path.txt',
+      'foo/bar.txt',
+    ];
+    for (const name of traversalNames) {
+      expect(/^[a-zA-Z0-9._-]+\.txt$/.test(name)).toBe(false);
+    }
+  });
+
+  it('rejects non-txt extensions via the safe-name regex', () => {
+    const badExtensions = ['capture.sh', 'capture.json', 'capture', 'capture.txt.sh'];
+    for (const name of badExtensions) {
+      expect(/^[a-zA-Z0-9._-]+\.txt$/.test(name)).toBe(false);
+    }
+  });
+
+  it('accepts safe filenames via the safe-name regex', () => {
+    const goodNames = [
+      '1726123456.txt',
+      'capture-abc.txt',
+      'tool_use_id.txt',
+      'a.txt',
+      'UPPER.txt',
+      'mix-123_abc.txt',
+    ];
+    for (const name of goodNames) {
+      expect(/^[a-zA-Z0-9._-]+\.txt$/.test(name)).toBe(true);
+    }
+  });
+
+  it('includes timestamp-style filenames in scan results', async () => {
+    makeCapture('sess-ts', '1726123456', 'output from timestamp-named capture\n');
+    const result = await listCaptures({ limit: 10 });
+    expect(result).toHaveLength(1);
+    expect(result[0]!.toolUseId).toBe('1726123456');
+  });
+
+  it('includes kebab-style filenames in scan results', async () => {
+    makeCapture('sess-kebab', 'capture-abc', 'output from kebab capture\n');
+    const result = await listCaptures({ limit: 10 });
+    expect(result).toHaveLength(1);
+    expect(result[0]!.toolUseId).toBe('capture-abc');
+  });
+
+  it('includes both legitimate filenames and excludes wrong-extension files', async () => {
+    const dir = join(witnessRoot(), 'sess-mixed', 'bash-captures');
+    mkdirSync(dir, { recursive: true });
+    // Files with wrong extensions must be excluded by the filter.
+    writeFileSync(join(dir, 'script.sh'), '#!/bin/sh\n');
+    writeFileSync(join(dir, 'data.json'), '{}');
+    // Legitimate captures must pass through.
+    writeFileSync(join(dir, '1726123456.txt'), 'ts-named\n');
+    writeFileSync(join(dir, 'capture-abc.txt'), 'kebab-named\n');
+    const result = await listCaptures({ limit: 10 });
+    const toolIds = result.map((e) => e.toolUseId).sort();
+    expect(toolIds).toEqual(['1726123456', 'capture-abc']);
+  });
+
+  it('excludes dot-prefixed session directory names from the scan', async () => {
+    // The session-level filter /^[a-zA-Z0-9_-]+$/ rejects directory names
+    // that start with "." so the scanner never descends into them even if
+    // readdir() returns them (e.g. ".traversal", "..evil").
+    makeCapture('sess-valid', 'tool-ok', 'valid output\n');
+    const dotDir = join(witnessRoot(), '.traversal', 'bash-captures');
+    mkdirSync(dotDir, { recursive: true });
+    writeFileSync(join(dotDir, 'sneaky.txt'), 'should not appear\n');
+    const result = await listCaptures({ limit: 10 });
+    expect(result).toHaveLength(1);
+    expect(result[0]!.sessionId).toBe('sess-valid');
+  });
+
+  it('excludes session dirs containing dots from the scan', async () => {
+    // A session directory name containing "." (e.g. "sess..evil") fails
+    // /^[a-zA-Z0-9_-]+$/ and must be skipped entirely.
+    makeCapture('sess-clean', 'tool-clean', 'clean session\n');
+    const dotDir = join(witnessRoot(), 'sess..evil', 'bash-captures');
+    mkdirSync(dotDir, { recursive: true });
+    writeFileSync(join(dotDir, 'bad.txt'), 'should not appear\n');
+    const result = await listCaptures({ limit: 10 });
+    expect(result).toHaveLength(1);
+    expect(result[0]!.sessionId).toBe('sess-clean');
+  });
+});
