@@ -100,6 +100,12 @@ export interface McpServerSummary {
   toolCount: number;
 }
 
+/** An MCP server that was configured but failed to connect. */
+export interface McpFailedServer {
+  name: string;
+  reason: string;
+}
+
 /**
  * Tool affordances visible to the agent.
  *
@@ -111,6 +117,7 @@ export interface McpServerSummary {
 export interface RuntimeTools {
   enabled: string[];
   mcpServers: McpServerSummary[];
+  failedServers: McpFailedServer[];
 }
 
 /** Compact identity for an active foreground subagent handle. */

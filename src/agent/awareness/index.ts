@@ -15,6 +15,7 @@ export type {
   BgJobLite,
   BgJobStatus,
   McpServerSummary,
+  McpFailedServer,
   RuntimeSelf,
   RuntimeTools,
   RuntimeSubagents,
