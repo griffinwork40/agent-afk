@@ -353,7 +353,7 @@ export function registerChatCommand(program: Command): void {
 
         const providerHints = explicitProviderHints(options.provider);
         const apiKey = getApiKeyForModel(getModel(), providerHints);
-        // System-prompt layering: the framework base (`prompts/system-prompt.md`)
+        // System-prompt layering: the framework base (`system-prompt.md`)
         // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
         // is appended on top via resolveBaseSystemPrompt(), never substituted for
         // the base. `source` is the layered provenance string surfaced by

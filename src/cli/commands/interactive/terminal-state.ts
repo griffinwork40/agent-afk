@@ -3,7 +3,7 @@
  *
  * AFK's system prompt mandates that every assistant turn end in one of four
  * named terminal states — Done / Blocked / Asking / Interrupted — with a
- * structured set of bullets describing the outcome (per `prompts/system-prompt.md`,
+ * structured set of bullets describing the outcome (per `system-prompt.md`,
  * §"End-of-turn"). The parser extracts that structure from the trailing
  * portion of the assistant's final text so the REPL can render it as a
  * first-class verdict surface instead of leaving it buried in the markdown

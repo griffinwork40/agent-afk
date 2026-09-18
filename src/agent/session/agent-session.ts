@@ -423,6 +423,7 @@ export class AgentSession implements IAgentSession {
     return { message: seed.message, mode: seed.mode };
   }
 
+
   setSystemPrompt(basePrompt: string | undefined): boolean {
     this.config = { ...this.config, systemPrompt: basePrompt };
     return this.providerQuery.setSystemPrompt?.(basePrompt) ?? false;

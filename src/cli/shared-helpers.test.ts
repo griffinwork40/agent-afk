@@ -2,7 +2,7 @@
  * Tests for system-prompt layering helpers and GrantManager type guard.
  *
  * Invariant under test (system-prompt): the framework base
- * (`prompts/system-prompt.md`) is the UNCONDITIONAL foundation; the operator
+ * (`system-prompt.md`) is the UNCONDITIONAL foundation; the operator
  * overlay (AFK_SYSTEM_PROMPT → afk.config.json → AFK.md) is APPENDED on top,
  * never substituted for the base. This is the inverse of the historical
  * `overlay ?? framework` behavior, where any operator prompt replaced the
@@ -72,7 +72,7 @@ describe('getApiKey / getModel provider agreement (regression: default-model div
 
 // Mock the config module so loadConfig() (the overlay source) is controllable.
 // loadSystemPrompt() is an in-module call in shared-helpers and reads the real
-// prompts/system-prompt.md from the package tree — i.e. the framework base is
+// system-prompt.md from the package tree — i.e. the framework base is
 // genuinely present in these tests, which is the production invariant.
 vi.mock('./config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./config.js')>();

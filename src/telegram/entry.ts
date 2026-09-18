@@ -54,7 +54,7 @@ export async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Framework base prompt (`prompts/system-prompt.md`, inlined at publish-build).
+  // Framework base prompt (`system-prompt.md`, inlined at publish-build).
   // Resolved once here and layered under the operator overlay per session,
   // so Telegram sessions carry the same unconditional base as chat / REPL.
   const frameworkBase = loadSystemPrompt();

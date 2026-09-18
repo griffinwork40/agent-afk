@@ -66,7 +66,7 @@ The plugin surface writes to `~/.claude/agent-framework/` independently — no s
 
 ## System prompt discovery
 
-The base system prompt is **layered**. The framework prompt (`prompts/system-prompt.md`, inlined into the bundle at publish-build) is the unconditional foundation; the resolved operator overlay is **appended** on top of it beneath an `# Operator configuration` header — it never replaces the framework base. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) performs the layering for every top-level surface (one-shot `chat`, REPL, Telegram, farm), and `composeSystemPrompt()` is the pure compose primitive.
+The base system prompt is **layered**. The framework prompt (`system-prompt.md`, inlined into the bundle at publish-build) is the unconditional foundation; the resolved operator overlay is **appended** on top of it beneath an `# Operator configuration` header — it never replaces the framework base. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) performs the layering for every top-level surface (one-shot `chat`, REPL, Telegram, farm), and `composeSystemPrompt()` is the pure compose primitive.
 
 `loadConfig()` resolves the **operator overlay** across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone (unchanged — it does not include the framework base):
 

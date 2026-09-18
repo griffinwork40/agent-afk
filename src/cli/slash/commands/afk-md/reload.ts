@@ -53,7 +53,7 @@ export function currentOverlayTokens(cwd?: string): number {
  *      report a successful reload while applying nothing.
  *   2. RE-DERIVE through `resolveBaseSystemPrompt()`, never by hand. That helper
  *      returns the FULL composed prompt: the framework doctrine
- *      (`prompts/system-prompt.md`) plus the operator overlay under the
+ *      (`system-prompt.md`) plus the operator overlay under the
  *      `# Operator configuration` header. Passing the bare `loadAfkMd().content`
  *      instead would replace the entire system prompt with just the AFK.md text
  *      and silently delete the framework doctrine from the running session.

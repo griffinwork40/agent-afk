@@ -32,7 +32,7 @@ import type { TelegramBotConfig, TelegramSessionBuildContext } from './session-c
 export interface TelegramSessionFactoryOptions {
   /** Bot-level config resolved once at startup by `loadConfig()`. */
   config: TelegramBotConfig;
-  /** Framework base prompt (`prompts/system-prompt.md`), resolved once. */
+  /** Framework base prompt (`system-prompt.md`), resolved once. */
   frameworkBase: string | undefined;
   /** Bot-global cwd override (`AFK_TELEGRAM_CWD`), if any. */
   telegramCwd: string | undefined;

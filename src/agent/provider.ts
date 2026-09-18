@@ -478,7 +478,7 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * conversation history.
    *
    * Contract: `basePrompt` is the FULLY COMPOSED base prompt — the framework
-   * doctrine (`prompts/system-prompt.md`) plus the `# Operator configuration`
+   * doctrine (`system-prompt.md`) plus the `# Operator configuration`
    * overlay — i.e. exactly the shape of `AgentConfig.systemPrompt`, as produced
    * by `resolveBaseSystemPrompt()`. It is NOT the bare AFK.md overlay text;
    * passing only the overlay would silently drop the framework prompt from a

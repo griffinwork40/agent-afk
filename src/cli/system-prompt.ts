@@ -6,7 +6,7 @@ import { loadConfig } from './config.js';
 
 /**
  * Load the runtime system prompt from the installed package
- * (`<root>/prompts/system-prompt.md`), not from the user's cwd. Resolves
+ * (`<root>/system-prompt.md`), not from the user's cwd. Resolves
  * correctly from both the compiled `dist/cli/` and the source `src/cli/`
  * locations.
  *
@@ -16,7 +16,7 @@ import { loadConfig } from './config.js';
  */
 export function loadSystemPrompt(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
-  const promptPath = resolve(here, '..', '..', 'prompts', 'system-prompt.md');
+  const promptPath = resolve(here, '..', '..', 'system-prompt.md');
   if (!existsSync(promptPath)) return undefined;
   try {
     return readFileSync(promptPath, 'utf-8');
@@ -63,7 +63,7 @@ export const OPERATOR_CONFIG_HEADER =
  * Compose the final base system prompt from the unconditional framework base
  * and the optional operator overlay.
  *
- * Contract: the framework base (`prompts/system-prompt.md`) is the foundation
+ * Contract: the framework base (`system-prompt.md`) is the foundation
  * whenever present; the overlay is APPENDED beneath {@link OPERATOR_CONFIG_HEADER},
  * never substituted for the base. Empty / whitespace-only inputs are treated
  * as absent so a blank AFK.md or a missing prompt file never injects a
@@ -86,7 +86,7 @@ export function composeSystemPrompt(
 
 /**
  * Resolve the surface base system prompt: the unconditional framework base
- * (`prompts/system-prompt.md`, inlined at publish-build) with the resolved
+ * (`system-prompt.md`, inlined at publish-build) with the resolved
  * operator overlay (`AFK_SYSTEM_PROMPT` → `afk.config.json` → `AFK.md`)
  * appended on top. Used by every top-level surface (one-shot `chat`, REPL,
  * Telegram, farm) so they share one layering rule.

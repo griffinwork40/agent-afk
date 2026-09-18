@@ -327,7 +327,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
 
   const baseSha = manifest.baseRef;
   const resolvedModel = model ?? (getModel() as string);
-  // Framework base (`prompts/system-prompt.md`) + operator overlay, layered.
+  // Framework base (`system-prompt.md`) + operator overlay, layered.
   const systemPrompt = resolveBaseSystemPrompt().prompt ?? '';
 
   // -- Build DAG nodes --

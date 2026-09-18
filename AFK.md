@@ -121,7 +121,7 @@ All AFK state under `~/.afk/` (never `~/.claude/`), resolved exclusively through
 
 ### System prompt discovery
 
-The base system prompt is **layered**: the framework prompt (`prompts/system-prompt.md`, inlined at publish-build) is the unconditional foundation; the operator overlay is **appended** beneath an `# Operator configuration` header — never a replacement. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) layers them for every top-level surface (chat, REPL, Telegram, farm). `loadConfig()` resolves the overlay across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone, and no tier resolving yields `undefined`:
+The base system prompt is **layered**: the framework prompt (`system-prompt.md`, inlined at publish-build) is the unconditional foundation; the operator overlay is **appended** beneath an `# Operator configuration` header — never a replacement. `resolveBaseSystemPrompt()` (`src/cli/shared-helpers.ts`) layers them for every top-level surface (chat, REPL, Telegram, farm). `loadConfig()` resolves the overlay across three tiers (highest wins); `loadConfig().systemPrompt` is that overlay alone, and no tier resolving yields `undefined`:
 
 | Tier | Overlay source | `loadConfig().systemPromptSource` |
 |------|--------|----------------------|
@@ -134,7 +134,7 @@ The base system prompt is **layered**: the framework prompt (`prompts/system-pro
 ## Conventions
 
 - **`tsconfig.json` is maximally strict**: `noUnusedLocals`, `noUnusedParameters`, `noUncheckedIndexedAccess`, `noPropertyAccessFromIndexSignature`. All code must pass `tsc --noEmit`.
-- The agent-afk system prompt is the framework base (`prompts/system-prompt.md`) with the operator overlay (env/config/AFK.md) appended, composed by `resolveBaseSystemPrompt()` and sent to the Messages API as a raw string. No SDK preset is loaded.
+- The agent-afk system prompt is the framework base (`system-prompt.md`) with the operator overlay (env/config/AFK.md) appended, composed by `resolveBaseSystemPrompt()` and sent to the Messages API as a raw string. No SDK preset is loaded.
 - `AgentSession` constructor is **synchronous**; SDK lifecycle runs async via `initSdkLifecycle()` and surfaces through the provider event stream.
 - DAG executor (`src/agent/dag.ts`, 266 LOC) is fully implemented: layer-by-layer Kahn execution, per-node `AbortController`s, fail-fast with transitive skip, node-level timeouts.
 - **SDK dependency tracking**: every import from `@anthropic-ai/sdk` is in `.sdk-dependency.lock.json`. CI fails on unlocked new symbols. After adding an SDK import, run `pnpm audit:sdk:update-lock` and edit the new entry's `reason` field before commit.

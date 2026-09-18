@@ -86,7 +86,7 @@ Reserve \`ask_question\` for the narrow set of things no tool can resolve: a gen
  *
  * This constant is the single source of truth for the end-of-turn protocol;
  * do NOT duplicate it in any prompt file (the duplicated copy in
- * `prompts/system-prompt.md` was removed precisely because it could drift
+ * `system-prompt.md` was removed precisely because it could drift
  * from this constant and reach the model on top of it). Kept here as a code
  * constant — not loaded from the prompt file — so it survives every
  * user-configurable system-prompt tier (env, afk.config.json, AFK.md). The

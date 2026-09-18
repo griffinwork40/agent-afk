@@ -152,10 +152,10 @@ export function prepareSources() {
   // Copy entire src/ tree
   cpSync(srcRoot, tmpSrc, { recursive: true });
 
-  // Also copy the root prompts/ directory if it exists
-  const rootPrompts = join(repoRoot, 'prompts');
-  if (existsSync(rootPrompts)) {
-    cpSync(rootPrompts, join(tmpBase, 'prompts'), { recursive: true });
+  // Also copy the root system-prompt.md if it exists
+  const rootSystemPrompt = join(repoRoot, 'system-prompt.md');
+  if (existsSync(rootSystemPrompt)) {
+    cpSync(rootSystemPrompt, join(tmpBase, 'system-prompt.md'));
   }
 
   // BONUS: stub forge/index.ts in the temp copy to a no-op so forge's
@@ -262,7 +262,7 @@ export function prepareSources() {
   // Pattern C: inline the root-level system prompt in system-prompt.ts.
   // The code uses a two-line pattern: resolve(...) into a variable, then readFileSync(variable).
   const systemPromptSourcePath = join(tmpSrc, 'cli', 'system-prompt.ts');
-  const systemPromptPath = join(repoRoot, 'prompts', 'system-prompt.md');
+  const systemPromptPath = join(repoRoot, 'system-prompt.md');
   if (existsSync(systemPromptSourcePath) && existsSync(systemPromptPath)) {
     let shContent = readFileSync(systemPromptSourcePath, 'utf-8').replace(/\r\n/g, '\n');
     const systemPrompt = readFileSync(systemPromptPath, 'utf-8');
@@ -270,7 +270,7 @@ export function prepareSources() {
     // Find and replace the exact function body using string search
     const oldFn = `export function loadSystemPrompt(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
-  const promptPath = resolve(here, '..', '..', 'prompts', 'system-prompt.md');
+  const promptPath = resolve(here, '..', '..', 'system-prompt.md');
   if (!existsSync(promptPath)) return undefined;
   try {
     return readFileSync(promptPath, 'utf-8');
@@ -282,7 +282,7 @@ export function prepareSources() {
     if (shContent.includes(oldFn)) {
       shContent = shContent.replace(oldFn, newFn);
       writeFileSync(systemPromptSourcePath, shContent);
-      console.log(`  [inline-prompts] Inlined prompts/system-prompt.md into loadSystemPrompt()`);
+      console.log(`  [inline-prompts] Inlined system-prompt.md into loadSystemPrompt()`);
       stats.inlinedFiles++;
       stats.replacedCalls++;
     } else {

@@ -74,7 +74,7 @@ export function resolveBootstrapConfig(
   // env default only (unset/<=0 → undefined → unlimited; no behavior change).
   const maxToolUseIterations = getMaxToolUseIterations();
 
-  // System-prompt layering: the framework base (`prompts/system-prompt.md`)
+  // System-prompt layering: the framework base (`system-prompt.md`)
   // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
   // is appended on top via resolveBaseSystemPrompt(), never substituted for
   // the base. `source` is the layered provenance string surfaced by
