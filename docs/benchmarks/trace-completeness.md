@@ -122,3 +122,8 @@ behavior. A killed trace is in `sealed-crashed` state, which readers can disting
 - ~~Abort-cascade correctness~~ -- shipped: [abort-cascade.md](./abort-cascade.md)
 - ~~Crash-to-resume~~ -- shipped: [crash-to-resume.md](./crash-to-resume.md)
 - ~~Concurrent-emitter trace integrity~~ -- shipped: [concurrent-emitter.md](./concurrent-emitter.md)
+- ~~Hook-block fidelity~~ -- shipped: [hook-block-fidelity.md](./hook-block-fidelity.md)
+- At-most-once effects -- covered by construction: the session loop never replays
+  completed tool calls (the model emits new `tool_use` blocks; the dispatcher
+  executes each `toolUseId` exactly once per turn). The trace provides the audit
+  trail via paired `tool_call` started/completed events.
