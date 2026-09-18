@@ -22,6 +22,7 @@
  */
 
 import { palette } from './palette.js';
+import { getTerminalHeight } from './terminal-size.js';
 
 // ---------------------------------------------------------------------------
 // 2A: Live code fence preview
@@ -75,7 +76,7 @@ export function previewCodeFence(buffer: string, _contentWidth: number): string 
   // Everything after the opener (may be empty if only the opening line arrived).
   // Cap to viewport height so the overlay never overflows into scrollback and
   // leaves un-erasable ghost rows that re-appear when the block commits.
-  const viewportRows = Math.max(1, (process.stdout.rows ?? 24) - 2);
+  const viewportRows = Math.max(1, getTerminalHeight() - 2);
   const codeLines = lines.slice(openerIdx + 1).slice(0, viewportRows);
   const codeBody = codeLines.join('\n');
 
@@ -113,7 +114,7 @@ export function previewCodeFence(buffer: string, _contentWidth: number): string 
 export function previewTable(buffer: string, _contentWidth: number): string {
   // Cap to viewport height so the overlay never overflows into scrollback and
   // leaves un-erasable ghost rows that re-appear when the block commits.
-  const viewportRows = Math.max(1, (process.stdout.rows ?? 24) - 2);
+  const viewportRows = Math.max(1, getTerminalHeight() - 2);
   const tableLines = buffer
     .split('\n')
     .filter((line) => line.includes('|'))

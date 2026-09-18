@@ -1,4 +1,4 @@
-import { getTerminalWidth } from './terminal-size.js';
+import { getTerminalWidth, getTerminalHeight } from './terminal-size.js';
 import { renderMarkdownToTerminal } from './formatter.js';
 import { wrapToWidth } from './wrap.js';
 import { capToMeasure, capToProseMeasure } from './render/measure.js';
@@ -92,7 +92,7 @@ export function formatPendingBuffer(
   // can expand a single long line into multiple physical rows.
   // The per-branch caps in previewCodeFence/previewTable guard their own
   // content pre-wrap; this is the uniform post-wrap ceiling.
-  const viewportRows = Math.max(1, (process.stdout.rows ?? 24) - 2);
+  const viewportRows = Math.max(1, getTerminalHeight() - 2);
   const lines = wrapped.split('\n');
   if (lines.length > viewportRows) {
     return lines.slice(0, viewportRows).join('\n');
