@@ -119,6 +119,7 @@ const PINNED_HASHES = {
   // named), exempted a downgrade-preserved `blocking: true` from the low/nit
   // external-constraint rule it contradicted, and put the merge-decision rule
   // in Wave 2's receives list.
+  // Hash re-bumped: prior-reviewer-feedback awareness + cross-run dedup rubric (#1720).
   // Full rationale: docs/bundled-plugins.md#review-726
 
 
@@ -275,6 +276,18 @@ describe('bundled skills', () => {
 
       // Wave 2 emits the verdict, so its receives list carries the rule.
       expect(content).toContain('**the merge-decision rule and its counts format below**');
+    });
+
+    // Invariant: #1720 — the "addressed since prior review" downgrade path
+    // explicitly overrides the assignment-order blocking-preservation contract.
+    // Removing this override would silently re-block findings that reviewers
+    // already accepted, creating noise on re-reviews.
+    it('review prior-feedback dedup overrides blocking when addressed (#1720)', () => {
+      const content = readBundled('review');
+      // Assert the override text exists
+      expect(content).toContain('addressed since prior review');
+      // Assert the prior-feedback capture section exists
+      expect(content).toContain('Capture prior reviewer feedback');
     });
 
     // Invariant: #1134 — ground-state runs inline reconnaissance only. The skill
