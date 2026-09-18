@@ -395,7 +395,7 @@ Compare-and-swap write. Updates the document only when its current version match
 | `expected_version` | number | ✓ | Version the document must currently have for the update to succeed. |
 | `value` | any | ✓ | New value to store if the CAS matches. |
 | `ttl_ms` | number | | Optional TTL in milliseconds from the write time. |
-| `metadata` | any | | Optional metadata object. |
+| `metadata` | any | | Optional metadata object (not returned by `state_get` — for audit/tagging). |
 
 ### `state_delete`
 

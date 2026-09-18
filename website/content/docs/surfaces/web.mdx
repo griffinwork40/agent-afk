@@ -28,14 +28,19 @@ Press **Ctrl+C** to stop the server. All in-flight sessions are closed before th
 
 `afk web` is a React single-page app bundled into the package. The server hands the bundle to any browser that presents a valid credential, then acts as the API backend for that page.
 
-Every `/api/*` request requires a bearer token (sent in the `Authorization` header, not as a query parameter). The token is minted fresh on each run and printed in the startup URL:
+The server uses bearer-token auth, but the token flows differently for the initial page load versus API calls:
+
+- **Initial page load** — The startup URL carries `?token=<64-hex-chars>`. The browser sends this once so the server can set a session cookie. After that the cookie authenticates subsequent navigations without the token appearing in every URL.
+- **API calls** — Every `/api/*` request must include `Authorization: Bearer <token>` in the request header. The browser-side app attaches this automatically using the token it received on page load. Query-string tokens are never accepted for API calls.
+
+The token is minted fresh on each run and printed in the startup URL:
 
 ```
 ✔ afk web listening on http://127.0.0.1:4141
   http://127.0.0.1:4141/?token=<64-hex-chars>
 ```
 
-The URL you copy and share carries `?token=`. The URL the auto-open path passes to your OS launcher carries a one-time handoff nonce instead (`?k=`), so the real bearer token never appears in your process table or shell history.
+The URL the auto-open path passes to your OS launcher carries a one-time handoff nonce instead (`?k=`), so the real bearer token never appears in your process table or shell history.
 
 ## Sessions
 

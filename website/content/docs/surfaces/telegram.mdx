@@ -67,6 +67,7 @@ All Telegram-related env vars belong in `~/.afk/config/afk.env`. Prefer `afk con
 | Variable | Required | Description |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather. |
+| `AFK_TELEGRAM_BOT_TOKEN` | No | Alternative name for the bot token, accepted by the setup wizard. Use this when `TELEGRAM_BOT_TOKEN` conflicts with another tool in your environment. |
 | `AFK_TELEGRAM_ALLOWED_CHAT_IDS` | Yes | Comma-separated chat IDs the bot will accept messages from. |
 | `AFK_TELEGRAM_PRIMARY_CHAT_ID` | No | Default chat for outbound notifications. When unset, notifications go to the first private/DM chat in `AFK_TELEGRAM_ALLOWED_CHAT_IDS`. Overridden by `telegram.notify` in `afk.config.json`. |
 | `AFK_TELEGRAM_NOTIFY_MODE` | No | Outbound notification fan-out: `primary` (default — one chat), `broadcast` (every allowed chat), or `custom` (`telegram.notify.targets` in `afk.config.json` picks the list). Overridden by `telegram.notify.mode`. |
