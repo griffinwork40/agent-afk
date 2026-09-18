@@ -40,8 +40,11 @@ import type { Message } from '../types.js';
 
 /**
  * Context bag passed to {@link TurnStreamRunner} at construction.
- * All mutable fields are accessed via their owning objects — no raw
- * primitive refs that would diverge on reset.
+ * Most mutable fields are accessed via their owning objects — no raw
+ * primitive refs that would diverge on reset. Exception: `conversationHistory`
+ * is a raw array reference, but this is safe because the runner is always
+ * reconstructed when the history array is replaced on reset, so the ref can
+ * never point to a stale array.
  */
 export interface TurnRunnerDeps {
   getConfig: () => AgentConfig;

@@ -689,13 +689,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const gateResult = await this.runPreDispatchGates(call);
     if (gateResult) return gateResult;
 
-    // 3. Agent routing + handler dispatch + PostToolUse. Delegates to
-    // executeCore() — the shared core executeBatch() already calls per-tool
-    // (see lines ~936/972). execute() previously inlined a verbatim copy of
-    // that body (agent/skill/compose special-cases + handler lookup +
-    // PostToolUse firing); the duplicate only added drift risk with no
-    // behavioral difference, so the single-call path now delegates too.
-    const coreResult = await this.executeCore(call);
+    // 3. Agent routing + handler dispatch + PostToolUse. Hoisting coreExecDeps()
+    // here avoids the duplicate allocation that occurred when executeCore() called
+    // it again internally (gateDeps() already called it once inside
+    // runPreDispatchGates). executeBatch() is unaffected — it uses its own
+    // gateDeps()/executeCore() sequence per tool, which is correct for batches.
+    const cDeps = this.coreExecDeps();
+    const coreResult = await _executeCore(call, cDeps);
     this.repeatFailureGuard.note(call, coreResult);
     // Reset-on-success: a completed (non-error) tool call is progress, so the
     // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
