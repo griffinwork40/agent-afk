@@ -310,6 +310,53 @@ describe('StatusLine.withFullScrollRegion', () => {
   });
 });
 
+describe('StatusLine.eraseReservedBand', () => {
+  it('withFullScrollRegion CUP-erases the reserved band when extraRows > 0', () => {
+    const stream = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    status.setExtraRows(2); // reserved = 3, band rows = [22, 23]
+    stream.writes.length = 0;
+    status.withFullScrollRegion(() => {});
+    const out = lastJoined(stream);
+    // The reserved band (rows 22 and 23) must be CUP-erased between the
+    // scroll-region bottom (row 21) and the status line (row 24).
+    expect(out).toContain('\x1b[22;1H\x1b[2K');
+    expect(out).toContain('\x1b[23;1H\x1b[2K');
+  });
+
+  it('rearm CUP-erases the reserved band when extraRows > 0', () => {
+    const stream = mockStream({ isTTY: true, rows: 24 });
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    status.setExtraRows(2);
+    stream.writes.length = 0;
+    status.rearm();
+    const out = lastJoined(stream);
+    expect(out).toContain('\x1b[22;1H\x1b[2K');
+    expect(out).toContain('\x1b[23;1H\x1b[2K');
+  });
+
+  it('eraseReservedBand is a no-op when rows <= reserved (extreme terminal height)', () => {
+    // Regression: when the terminal is shorter than the reserved band (e.g.
+    // rows=2, extraRows=2 -> reserved=3), the loop start r = rows-reserved+1
+    // would be 0 (invalid VT100 row). The guard must bail out.
+    const stream = mockStream({ isTTY: true, rows: 2 });
+    const status = new StatusLine({ stream: stream as unknown as NodeJS.WriteStream, throttleMs: 0 });
+    status.start();
+    status.setExtraRows(2); // reserved = 3 > rows = 2
+    stream.writes.length = 0;
+    status.rearm();
+    const out = lastJoined(stream);
+    // Must NOT contain a CUP to row 0 (invalid) or row -1.
+    expect(out).not.toContain(';0H');
+    expect(out).not.toContain('\x1b[0;1H');
+    // The band erase should be entirely skipped, so no \x1b[2K from the
+    // eraseReservedBand path. (writeScrollRegion + flush still emit their
+    // own sequences.)
+  });
+});
+
 describe('StatusLine resize handling', () => {
   afterEach(() => {
     vi.useRealTimers();

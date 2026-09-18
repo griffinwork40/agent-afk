@@ -147,6 +147,34 @@ describe('CupFrameRenderer — no trailing-\\n scroll', () => {
     expect(out).toContain('\x1b[19;1H');
   });
 
+  it('erase pass skips rows beyond the new bottomRow (footer-startup clamp)', () => {
+    // Regression: at boot, the compositor renders an idle frame BEFORE footer
+    // subsystems claim extraRows. When the footer starts, bottomRow contracts.
+    // The erase pass for the next render must break before touching footer-
+    // owned rows. Without the `if (row > bottomRow) break` guard, the erase
+    // pass would CUP-erase row 23 (now footer-owned), producing the ghost
+    // status-line artifact.
+    const stream = makeMockStream(true, 80, 24);
+    // Attach listener to put PassThrough in flow mode so first-render writes
+    // drain immediately and do not contaminate the second-render capture.
+    const allWrites = collectWrites(stream);
+    const renderer = new CupFrameRenderer(stream);
+
+    // First render: pre-footer, bottomRow = 23.
+    renderer.render('idle', 23); // previousTopRow = 23, previousLineCount = 1
+    void allWrites(); // drain first render
+
+    // Second render: footer has claimed row 23, so bottomRow drops to 22.
+    const capture = collectWrites(stream);
+    renderer.render('idle', 22);
+    const out = capture();
+
+    // Row 23 is now footer-owned -- the erase pass must NOT touch it.
+    expect(out).not.toContain('\x1b[23;1H');
+    // Row 22 (the new bottomRow) is where the frame now paints.
+    expect(out).toContain('\x1b[22;1H');
+  });
+
   it('erases previous frame rows on second render, still no bare \\n', () => {
     // On the second render, the renderer erases the previous frame via CUP +
     // erase-line. Verify no \n appears during the erase pass or the new frame.

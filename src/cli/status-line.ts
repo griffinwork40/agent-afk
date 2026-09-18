@@ -402,7 +402,7 @@ export class StatusLine {
     // When reserved === 1 (no footer bars), the range is empty: the status
     // line at `rows` is the only reserved row, and its own repaint covers
     // any ghost at that position.
-    if (reserved <= 1) return;
+    if (reserved <= 1 || rows <= reserved) return;
     let erase = '';
     for (let r = rows - reserved + 1; r < rows; r++) {
       erase += `\x1b[${r};1H\x1b[2K`;
