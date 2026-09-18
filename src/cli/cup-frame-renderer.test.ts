@@ -300,8 +300,8 @@ describe('CupFrameRenderer — no trailing-\\n scroll', () => {
     const doneOut = chunks.join('');
     void allWrites();
 
-    // done() must show the cursor.
-    expect(doneOut).toContain('\x1b[?25h');
+    // done() must emit the full atomic sync block: SYNC_START + CURSOR_SHOW + SYNC_END.
+    expect(doneOut).toContain('\x1b[?2026h\x1b[?25h\x1b[?2026l');
   });
 
   it('clamps to row 1 when targetBottomRow is 0 (pathological/resized-to-1-row)', () => {
@@ -340,10 +340,10 @@ describe('CupFrameRenderer — no trailing-\\n scroll', () => {
   // -------------------------------------------------------------------------
   // H1 regression: frame-write failure restores cursor visibility.
   //
-  // Scenario: CURSOR_HIDE is emitted as a separate write() call BEFORE the
-  // frame content (so terminals without synchronized-output still see the
-  // hide before flicker). If the subsequent frame-content write() throws
-  // (TTY closed mid-render, EPIPE on a closed pipe), the cursor is left
+  // Scenario: CURSOR_HIDE is emitted atomically inside the sync block together
+  // with frame content (SYNC_START + CURSOR_HIDE + erase/write + SYNC_END), so
+  // a single write() call carries both the hide and the frame. If that write()
+  // throws (TTY closed mid-render, EPIPE on a closed pipe), the cursor is left
   // invisible on the host terminal. The catch path must emit CURSOR_SHOW
   // best-effort so a partial teardown doesn't strand a phantom cursor.
   // -------------------------------------------------------------------------

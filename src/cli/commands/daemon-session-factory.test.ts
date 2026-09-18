@@ -19,7 +19,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildDaemonSessionFactory } from './daemon.js';
+import { buildDaemonSessionFactory } from './daemon-session-factory.js';
 import type { AgentConfig } from '../../agent/types.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import type { ToolPermissionConfig } from '../../agent/tools/permissions.js';

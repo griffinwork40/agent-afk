@@ -156,6 +156,7 @@ export function setUpQuerySession(
     // `- Working directory:` and `- Workspace:` lines can never disagree.
     getCwd: () => ctx.getCurrentCwd() || config.cwd || process.cwd(),
     getMcpTools: () => ctx.mcpManager?.getMcpTools() ?? [],
+    getMcpServerStates: () => ctx.mcpManager?.getServerStates() ?? [],
     getSubagents: () =>
       ctx.subagentExecutor
         ? ctx.subagentExecutor.getSubagentsLite()

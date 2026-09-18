@@ -190,6 +190,11 @@ export class CupFrameRenderer {
     let out = '';
 
     if (useSyncOutput) {
+      // CURSOR_HIDE is placed inside the sync block (after SYNC_START) so that
+      // the hide and the frame content land in a single write() call. This is
+      // safe for sync-unaware terminals: they process SYNC_START as a no-op and
+      // see CURSOR_HIDE immediately followed by the frame — identical visible
+      // behavior to a separate pre-frame write, without the extra syscall.
       out += SYNC_START + CURSOR_HIDE;
     }
 

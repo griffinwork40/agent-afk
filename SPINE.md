@@ -23,6 +23,9 @@
 - **INV-016** (2026-09-17, 2aafb714): Atomic plist upgrade uses tmp-then-rename write strategy; byte-equal content skips write (no-op safety)
 - **INV-017** (2026-09-17, 151dc338): Service upgrade must detect and safely skip writes when config content is byte-identical to disk (no-op idempotence)
 - **INV-018** (2026-09-17, 151dc338): ServiceManager.upgrade() must never invoke launchctl; caller responsible for applying updated config to running job
+- **INV-019** (2026-09-18, 3c2d6194-0ab7-4c30-a9e2-56e9d477ae2d): Hook block decisions must be traced with hook_decision events; blocks/throws always emit trace records
+- **INV-020** (2026-09-18, 3c2d6194-0ab7-4c30-a9e2-56e9d477ae2d): Handler exception caught in hook dispatch must wrap in HookBlockedError (fail-safe, not fail-open)
+- **INV-021** (2026-09-18, 3c2d6194-0ab7-4c30-a9e2-56e9d477ae2d): Hook handler return { decision: 'block' } must short-circuit the handler chain immediately
 
 
 ## Explicitly Rejected Patterns

@@ -16,10 +16,7 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
-import { dequeueNext } from './queue-store.js';
-import { completeTask } from './lease-store.js';
 import { makeDaemonElicitationHandler } from './handoff-wiring.js';
-import { processAnsweredHandoffs } from './handoff-consume.js';
 import { elicitationRouter } from '../elicitation-router.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
@@ -45,6 +42,13 @@ import {
   type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
+import {
+  sweepAnsweredHandoffs,
+  executePullTick,
+  fireOnTaskComplete,
+  type PullTickContext,
+  type FireOnTaskCompleteOptions,
+} from './scheduler.pull-tick.js';
 
 
 export interface SchedulerOptions {
@@ -279,96 +283,19 @@ export class CronScheduler {
     recoverDaemonQueues(this.queueDir);
 
     // Pick up any answers that arrived while the daemon was down.
-    void processAnsweredHandoffs(this.queueDir)
-      .then((r) => {
-        if (r.requeued > 0) {
-          // eslint-disable-next-line no-console
-          console.error(`[daemon] handoff-consume: re-enqueued ${r.requeued} answered handoff(s)`);
-        }
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        // eslint-disable-next-line no-console
-        console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
-      });
+    sweepAnsweredHandoffs(this.queueDir);
     this.pullPollTimer = setInterval(() => { void this.pullTick(); }, interval).unref();
   }
 
   private async pullTick(): Promise<void> {
-    if (!this.idleDetector.isIdle()) return;
-    if (this.isDequeuing) return;
-    this.isDequeuing = true;
-    try {
-      // ORDERING INVARIANT: file is removed by dequeueNext BEFORE runOnce
-      // spawns a session — reverse order risks double-fire on daemon restart
-      // if the process crashes between dequeue and spawn.
-      const queued = dequeueNext(this.queueDir);
-      if (queued === null) {
-        // Queue is empty this tick — still sweep for answered handoffs. An
-        // answer that arrives between ticks would otherwise wait indefinitely
-        // if no other task completes to trigger the post-run sweep at :349.
-        void processAnsweredHandoffs(this.queueDir)
-          .then((r) => {
-            if (r.requeued > 0) {
-              // eslint-disable-next-line no-console
-              console.error(`[daemon] handoff-consume: re-enqueued ${r.requeued} answered handoff(s)`);
-            }
-          })
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            // eslint-disable-next-line no-console
-            console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
-          });
-        return;
-      }
-      const syntheticTask: ScheduledTask = {
-        taskId: queued.id,
-        command: queued.command,
-        trigger: 'pull',
-        ...(queued.notifyOn !== undefined ? { notifyOn: queued.notifyOn } : {}),
-      };
-      const record = await this.runOnce(syntheticTask, 'pull');
-      // Finalize the lease: move the leased/<id>.json to completed/ so the task
-      // does not appear as an expired lease on the next daemon restart.
-      // Best-effort: a completeTask failure must never crash the pull loop.
-      try {
-        completeTask(
-          queued.id,
-          record.status === 'error' ? 'failed' : 'succeeded',
-          record.errorMessage,
-          this.queueDir,
-        );
-      } catch {
-        // Non-fatal — the lease recovery path (recoverExpiredLeases on next
-        // startup) will re-enqueue or dead-letter based on the record's attempts.
-      }
-      // If the session answered a handoff during this run, re-enqueue it now.
-      void processAnsweredHandoffs(this.queueDir)
-        .then((r) => {
-          if (r.requeued > 0) {
-            // eslint-disable-next-line no-console
-            console.error(`[daemon] handoff-consume: re-enqueued ${r.requeued} answered handoff(s)`);
-          }
-        })
-        .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          // eslint-disable-next-line no-console
-          console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
-        });
-    } catch (err) {
-      // Errors thrown INSIDE runOnce are captured there and written to
-      // telemetry. Errors reaching here come from the dequeue path (now
-      // quarantined inside dequeueNext) or from synthetic-task construction.
-      // Log so a bad tick is visible in daemon logs instead of vanishing;
-      // the poll loop still survives (mirrors writeTelemetry's logging path).
-      // Redact error-derived text before logging, matching the runOnce
-      // telemetry path (a synthetic task's command may carry an inline secret).
-      const msg = redactInlineSecrets(err instanceof Error ? err.message : String(err));
-      // eslint-disable-next-line no-console
-      console.error(`[daemon] pull tick failed: ${msg}`);
-    } finally {
-      this.isDequeuing = false;
-    }
+    const ctx: PullTickContext = {
+      queueDir: this.queueDir,
+      isIdle: () => this.idleDetector.isIdle(),
+      getIsDequeuing: () => this.isDequeuing,
+      setIsDequeuing: (v) => { this.isDequeuing = v; },
+      runOnce: (task, trigger) => this.runOnce(task, trigger),
+    };
+    return executePullTick(ctx);
   }
 
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
@@ -525,7 +452,6 @@ export class CronScheduler {
     return spawnDaemonSession(taskId, { ...this.options, trigger });
   }
 
-
   private telemetryPath(): string {
     return this.options.telemetryPath ?? getTelemetryPath();
   }
@@ -545,53 +471,13 @@ export class CronScheduler {
   ): void {
     try {
       appendFileSync(this.telemetryPath(), `${JSON.stringify(record)}\n`, 'utf-8');
-      this.fireOnTaskComplete(record, task, details);
+      const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
+      fireOnTaskComplete(record, opts, task, details);
     } catch (err) {
       // Telemetry failure must not crash the daemon. Log to stderr and move on.
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] telemetry write failed: ${msg}`);
-    }
-  }
-
-  private fireOnTaskComplete(
-    record: TelemetryRecord,
-    task?: ScheduledTask,
-    details?: TaskCompletionDetails,
-  ): void {
-    const cb = this.options.onTaskComplete;
-    if (!cb) return;
-    // notifyOn filter — only applies when the triggering task is known
-    if (task !== undefined) {
-      if (task.notifyOn === 'never') return;
-      if (task.notifyOn === 'failure' && record.status !== 'error') return;
-      // 'always' or undefined (legacy behavior) falls through
-    }
-    // Thread the task's explicit chat target (if any) onto the details so the
-    // injected callback can route the push. Merged here — rather than at every
-    // writeTelemetry call site — because this is the single funnel every
-    // completion path flows through, and the scheduler must not resolve/validate
-    // the target itself (layering: no src/cli import). An explicit
-    // details.notifyChat (should never happen today) is preserved.
-    const effectiveDetails: TaskCompletionDetails | undefined =
-      task?.notifyChat !== undefined
-        ? { ...(details ?? {}), notifyChat: details?.notifyChat ?? task.notifyChat }
-        : details;
-    // Fire-and-forget. Notification callbacks must not block telemetry
-    // writes or crash the scheduler — every error is swallowed and logged.
-    try {
-      const result = cb(record, effectiveDetails);
-      if (result instanceof Promise) {
-        void result.catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          // eslint-disable-next-line no-console
-          console.error(`[daemon] onTaskComplete callback failed: ${msg}`);
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.error(`[daemon] onTaskComplete callback failed: ${msg}`);
     }
   }
 }

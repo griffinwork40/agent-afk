@@ -297,6 +297,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ? dispatcher.toolDefs.map((t) => t.name)
           : [],
       getMcpTools: () => this.providerOpts.mcpManager?.getMcpTools() ?? [],
+      getMcpServerStates: () => this.providerOpts.mcpManager?.getServerStates() ?? [],
       getSubagents: () =>
         this.providerOpts.subagentExecutor
           ? this.providerOpts.subagentExecutor.getSubagentsLite()
