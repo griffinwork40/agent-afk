@@ -178,7 +178,7 @@ export async function listCaptures(options: ListCapturesOptions = {}): Promise<C
 
         await Promise.all(
           files
-            .filter((f) => f.endsWith('.txt'))
+            .filter((f) => /^[a-zA-Z0-9._-]+\.txt$/.test(f))
             .map(async (fname) => {
               const filePath = join(capturesDir, fname);
               let fileStat: Awaited<ReturnType<typeof stat>>;
