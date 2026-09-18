@@ -119,7 +119,7 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
  */
 export async function runInitialization(
   config: AgentConfig,
-  providerIterator: AsyncIterator<ProviderEvent>,
+  getProviderIterator: () => AsyncIterator<ProviderEvent>,
   abortSignal: AbortSignal,
   stateManager: SessionStateManager,
   accounting: AccountingAccumulator,
@@ -155,7 +155,7 @@ export async function runInitialization(
     }
 
     while (true) {
-      const result = await providerIterator.next();
+      const result = await getProviderIterator().next();
       if (result.done) {
         stateManager.resolveInitializationIfNeeded();
         return;

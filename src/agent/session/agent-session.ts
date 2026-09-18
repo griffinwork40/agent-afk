@@ -283,7 +283,7 @@ export class AgentSession implements IAgentSession {
 
     this.initPromise = runInitialization(
       this.config,
-      this.providerIterator,
+      () => this.providerIterator,
       this.abortController.signal,
       this.stateManager,
       this.accounting,
