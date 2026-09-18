@@ -428,8 +428,9 @@ export class TerminalCompositor {
    * `'cursor-follow'` by `resetState()` for each arm cycle.
    *
    * See {@link import('./terminal-compositor.types.js').FramePlacementMode}.
+   *
+   * @internal Relaxed from `private` for the frame module (FrameHost).
    */
-  /** @internal Relaxed from `private` for the frame module (FrameHost). */
   placementMode: import('./terminal-compositor.types.js').FramePlacementMode = 'cursor-follow';
 
   // History: the committed-band re-pin closes the "weird gap" residual of PR
