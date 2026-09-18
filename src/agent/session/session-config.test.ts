@@ -296,10 +296,11 @@ describe('takePendingPlanExitSeed', () => {
   });
 
   it('returns the seed message and mode when a seed is pending', async () => {
-    const { deps, planExit } = makeMockDeps();
+    const { deps, planExit, pushSidebandEvent } = makeMockDeps();
     planExit.requestImplementSeed('implement this', 'default');
     const result = await takePendingPlanExitSeed(deps);
     expect(result).toEqual({ message: 'implement this', mode: 'default' });
+    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'default' });
   });
 
   it('atomically drains the seed — a second call returns undefined', async () => {
@@ -310,10 +311,11 @@ describe('takePendingPlanExitSeed', () => {
   });
 
   it('applies the deferred permission-mode flip (updates metadata)', async () => {
-    const { deps, stateManager, planExit } = makeMockDeps();
+    const { deps, stateManager, planExit, pushSidebandEvent } = makeMockDeps();
     planExit.requestImplementSeed('go', 'default');
     await takePendingPlanExitSeed(deps);
     expect(stateManager.getSessionMetadata().permissionMode).toBe('default');
+    expect(pushSidebandEvent).toHaveBeenCalledWith({ type: 'plan_mode', mode: 'default' });
   });
 
   it('returns undefined and drops the seed when the permission-mode flip rejects', async () => {
