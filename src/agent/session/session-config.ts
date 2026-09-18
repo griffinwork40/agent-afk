@@ -2,19 +2,16 @@
  * Config-mutation methods, extracted from {@link AgentSession}.
  *
  * Owns five public mutators that change live session configuration
- * without starting a new provider turn:
+ * without starting a new provider turn, plus the plan-exit seed drainer:
  *   - `setModel()` — swap the active model
  *   - `setPermissionMode()` — flip plan/default mode
  *   - `setSystemPrompt()` — override the base system prompt
  *   - `setCwd()` — update the working directory
  *   - `reauth()` — trigger a provider credential refresh
+ *   - `takePendingPlanExitSeed()` — atomically drain and apply a queued plan-exit
  *
- * Also owns the plan-exit bridge accessors (getPrePlanMode,
- * setPlanExitQueueCheck, takePendingPlanExitSeed) which straddle
- * config-mutation and plan-mode state.
- *
- * All functions receive their dependencies explicitly; no back-reference
- * to {@link AgentSession} is retained here.
+ * Also exports the {@link ConfigDeps} interface that threads dependencies into
+ * each function without a back-reference to {@link AgentSession}.
  *
  * @module agent/session/session-config
  */
