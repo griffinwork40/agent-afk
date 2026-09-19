@@ -100,7 +100,12 @@ try {
     platform: 'node',
     target: 'node20',
     format: 'esm',
-    minify: true,
+    // Invariant: keep identifiers unminified so npm consumers get readable
+    // stack traces when filing issues.  Syntax and whitespace minification
+    // remain on -- they shrink output without harming debuggability.
+    minifySyntax: true,
+    minifyWhitespace: true,
+    minifyIdentifiers: false,
     sourcemap: false,
     external: externalDeps,
     outdir: distDir,
