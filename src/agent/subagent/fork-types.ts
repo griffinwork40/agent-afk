@@ -85,6 +85,13 @@ export interface ForkSubagentOptions<T = unknown> {
    * `compose` tool to pass its own `tool_use_id` so spawned subagents render
    * nested under the compose tool-lane entry rather than as top-level
    * siblings. Does not affect execution — purely a rendering hint.
+   *
+   * **Contract**: when present, this value MUST be a `tool_use_id` (i.e. the
+   * Anthropic-format id of a `tool_use` content block, e.g.
+   * `"toolu_01Abc…"`). It is emitted verbatim as `parentToolUseId` on the
+   * `subagent_lifecycle` SSE event consumed by renderers and live surfaces.
+   * Passing a session UUID or any other id type will silently corrupt the
+   * topology links those consumers rely on to reconstruct the subagent tree.
    */
   parentId?: string;
   /**
