@@ -46,6 +46,12 @@ function ensureLanguageLoaded(lang: string): Promise<void> {
     // check above and the await on getHighlighter().
     if (hl.getLoadedLanguages().includes(lang)) return;
     await hl.loadLanguage(factory as Parameters<typeof hl.loadLanguage>[0]);
+  }).catch((err) => {
+    // Evict failed entry so a retry is possible on next mount (e.g. after a
+    // transient chunk-load failure). Without this, the rejected promise stays
+    // cached and the language is permanently broken until page reload.
+    langLoadPromises.delete(lang);
+    throw err;
   });
 
   langLoadPromises.set(lang, p);
@@ -59,6 +65,7 @@ interface CodeBlockProps {
 
 export function CodeBlock({ code, language }: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null);
+  const [reHighlightTick, setReHighlightTick] = useState(0);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -71,20 +78,23 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
 
       // Resolve language: attempt on-demand load if the lang was requested and
       // is not yet loaded. While loading, fall through to plaintext immediately
-      // so the user sees highlighted output right away; a second render will
-      // fire once the grammar resolves and we re-enter this effect via the
-      // langLoadPromises resolution updating the language gate.
+      // so the user sees highlighted output right away; once the grammar loads,
+      // reHighlightTick increments to re-run this effect with the real grammar.
       let resolvedLang: string = 'plaintext';
       if (language) {
+        // Check special langs first — shiki's getLoadedLanguages() does NOT
+        // include built-in special langs (plaintext, ansi, text, txt) even
+        // after init, so we must check isSpecialLang before the loaded list.
+        const { isSpecialLang } = await import('shiki');
         const loadedLangs = hl.getLoadedLanguages();
-        if (loadedLangs.includes(language)) {
+        if (isSpecialLang(language) || loadedLangs.includes(language)) {
           resolvedLang = language;
         } else {
-          // Kick off load (idempotent). On completion the Promise resolves and
-          // we re-run this effect via a forceHighlight state tick below.
+          // Kick off load (idempotent). On completion, bump the tick counter
+          // to re-run this effect — the grammar will be in the highlighter.
           ensureLanguageLoaded(language)
             .then(() => {
-              if (!cancelled) setHtml(null); // clear so the re-render runs fresh
+              if (!cancelled) setReHighlightTick((t) => t + 1);
             })
             .catch(() => {
               // Unknown or failed lang — plaintext fallback stays.
@@ -113,7 +123,9 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
     });
 
     return () => { cancelled = true; };
-  }, [code, language]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reHighlightTick is
+  // an intentional re-trigger for when an on-demand grammar finishes loading.
+  }, [code, language, reHighlightTick]);
 
   // Cleanup copy timer on unmount.
   useEffect(() => {
