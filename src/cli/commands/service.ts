@@ -177,7 +177,7 @@ export function registerServiceCommand(program: Command): void {
           process.exit(1);
         }
         console.log(palette.success(`Upgraded ${result.label} config at ${result.configPath}`));
-        console.log(palette.meta(`  Run 'afk service restart ${name}' to apply the new config.`));
+        console.log(palette.meta(`  Config updated. Use 'afk service restart ${name}' to reload — restart automatically applies the latest config.`));
       } catch (err) {
         handleCommandError(err);
       }

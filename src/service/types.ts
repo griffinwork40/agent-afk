@@ -117,6 +117,20 @@ export interface ServiceManager {
   install(name: ServiceName, opts?: ServiceInstallOptions): ServiceInstallOutcome;
   uninstall(name: ServiceName): ServiceUninstallOutcome;
   status(name: ServiceName): ServiceStatus;
+  /**
+   * Restart the named service.
+   *
+   * Side-effect: before restarting the process this method first calls
+   * {@link upgrade} to ensure the on-disk config matches what the current
+   * code would render. When the config was actually rewritten ('upgraded')
+   * the supervisor is asked to reload from disk (bootout → bootstrap on
+   * launchd; `daemon-reload` + `restart` on systemd) so new config keys take
+   * effect immediately. When the config is already current a lighter-weight
+   * process restart is used (kickstart -k / `restart` without daemon-reload).
+   * If the upgrade step fails the restart still proceeds against the existing
+   * on-disk config and the failure is surfaced as a warning in
+   * {@link ServiceRestartOutcome.notes}.
+   */
   restart(name: ServiceName, opts?: ServiceInstallOptions): ServiceRestartOutcome;
 
   /**

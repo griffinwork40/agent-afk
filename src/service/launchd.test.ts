@@ -889,6 +889,45 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
       expect(result.reason).toMatch(/no such job/);
     });
 
+    // F-7 (#1696): explicit test that mocks upgradeService returning { kind: 'failed' }
+    // to verify the kickstart fallback path. Uses vi.spyOn on the install module so the
+    // plist is already seeded (isInstalled → true) and upgradeService is forced to fail,
+    // isolating the restart() control flow from entrypoint-resolution details.
+    it('falls back to kickstart and surfaces note when upgradeService returns failed (F-7)', async () => {
+      // Seed a plist so isInstalled() returns true (restart() does not early-return).
+      mockExecFileSync.mockReturnValue('' as never);
+      installService('telegram', { _entrypointExistsCheck: () => true });
+      mockExecFileSync.mockReset();
+
+      // Spy on upgradeService in the install module to force a 'failed' result.
+      const installModule = await import('./launchd/install.js');
+      const spy = vi.spyOn(installModule, 'upgradeService').mockReturnValueOnce({
+        kind: 'failed',
+        reason: 'synthetic failure for F-7 test',
+      } as never);
+
+      const argv: string[][] = [];
+      mockExecFileSync.mockImplementation((_cmd: string, args?: readonly string[]) => {
+        if (Array.isArray(args)) argv.push([...args]);
+        return '' as never;
+      });
+
+      const result = launchdManager.restart('telegram');
+      spy.mockRestore();
+
+      expect(result.kind).toBe('restarted');
+      if (result.kind !== 'restarted') return;
+
+      // Warning note must mention the upgrade failure and that the old config was used.
+      expect(result.notes).toBeDefined();
+      expect(result.notes!.length).toBeGreaterThan(0);
+      expect(result.notes![0]).toMatch(/plist upgrade failed/i);
+      expect(result.notes![0]).toMatch(/restarted with the existing config/i);
+
+      // kickstart must have been called despite upgrade failure.
+      expect(argv.some((a) => a[0] === 'kickstart')).toBe(true);
+    });
+
     // #1695: upgradeService failure must be surfaced via notes, not silently swallowed.
     // The telegram service mocked entrypoint (/fake/dist/telegram.mjs) does not exist
     // on disk, so upgradeService('telegram') reliably returns { kind: 'failed' } via

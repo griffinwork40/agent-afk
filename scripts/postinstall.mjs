@@ -169,7 +169,7 @@ export function restartLaunchdServices(opts = {}) {
     // Falls back to raw kickstart when dist/cli.mjs is unavailable
     // (e.g. source checkout without a build).
     let restarted_via_cli = false;
-    if (existsSync(cliMjs)) {
+    if (existsFn(cliMjs)) {
       try {
         restartFn(process.execPath, cliMjs, name);
         restarted_via_cli = true;
