@@ -931,6 +931,15 @@
       "category": "telegram"
     },
     {
+      "name": "AFK_TELEGRAM_SESSION_IDLE_MS",
+      "description": "Milliseconds of inactivity after which an idle AgentSession is closed and its memory freed. sessionData (model/cwd preferences) is kept in-memory and reloaded on demand from disk. Default: 14400000 (4 hours).",
+      "type": "number",
+      "required": false,
+      "default": "14400000",
+      "example": "3600000",
+      "category": "telegram"
+    },
+    {
       "name": "AFK_TELEGRAM_TAG_ONLY_CHAT_IDS",
       "description": "Comma-separated list of Telegram chat IDs where the bot answers only when addressed (a reply to the bot, an @mention of the bot, or a text_mention resolving to the bot). Slash-commands are unaffected; chats not listed behave as usual. The afk.config.json telegram.tagOnlyChats block takes precedence. Requires Telegram privacy mode OFF (BotFather /setprivacy Disable) for non-addressed group messages to reach the bot.",
       "type": "string",

@@ -887,6 +887,15 @@ export const ENV_REGISTRY = [
     required: false,
     category: 'telegram',
   },
+  {
+    name: 'AFK_TELEGRAM_SESSION_IDLE_MS',
+    description: 'Milliseconds of inactivity after which an idle AgentSession is closed and its memory freed. sessionData (model/cwd preferences) is kept in-memory and reloaded on demand from disk. Default: 14400000 (4 hours).',
+    type: 'number',
+    required: false,
+    default: '14400000',
+    example: '3600000',
+    category: 'telegram',
+  },
 
   // ── Paths / state ─────────────────────────────────────────────────────────
   {

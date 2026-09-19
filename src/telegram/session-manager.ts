@@ -24,6 +24,7 @@ import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.r
 import { resolveActiveRouteForChat } from './session-manager.active-route.js';
 import { hydrateStatsFromStore } from './session-manager.hydrate-stats.js';
 import { evictIdleSessions, evictStaleSessionData, clearElicitationRouteForKey } from './session-manager.evict-idle.js';
+import { demandLoadSidecar } from './session-manager.demand-load.js';
 import { promises as fs } from 'fs';
 import { join } from 'path';
 
@@ -134,6 +135,12 @@ export interface SessionManagerOptions {
 
   /** Factory function to create agent sessions */
   createSession: (config: AgentConfig) => Promise<IAgentSession>;
+  /**
+   * Milliseconds of inactivity after which an idle AgentSession is closed and
+   * its memory freed (P2-1, #1687). sessionData (model/cwd) is kept and
+   * reloaded on demand. Default: 4h. Sourced from AFK_TELEGRAM_SESSION_IDLE_MS.
+   */
+  idleSessionMs?: number;
 
   /**
    * Optional session registry override for test isolation. Defaults to the
@@ -196,7 +203,7 @@ export class SessionManager {
    * resuming a stale target.
    */
   private pendingResume = new Map<string, string>();
-  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>;
+  private options: Required<Omit<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>> & Pick<SessionManagerOptions, 'createSession' | 'settingSources' | 'thinking' | 'effort' | 'botCwd' | 'registry' | 'onResumptionOffer'>; // idleSessionMs is in the Required half
   /** Timer handle for periodic sessionData eviction. Unref'd so it never prevents process exit. */
   private _evictionTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -214,6 +221,7 @@ export class SessionManager {
       createSession: options.createSession,
       registry: options.registry,
       onResumptionOffer: options.onResumptionOffer,
+      idleSessionMs: options.idleSessionMs ?? 4 * 60 * 60 * 1000,
     };
     // Periodic eviction keeps the sessionData AND idle-session maps bounded
     // during long uptime (#1657, #1662). Fire-and-forget: the async return is
@@ -342,12 +350,8 @@ export class SessionManager {
 
   /** Build a fresh SessionData for a route, carrying chatId + topic threadId. */
   private _newData(route: TelegramRoute): SessionData {
-    const data: SessionData = {
-      chatId: route.chatId,
-      model: this.options.defaultModel,
-      createdAt: new Date().toISOString(),
-      lastActivity: new Date().toISOString(),
-    };
+    const ts = new Date().toISOString();
+    const data: SessionData = { chatId: route.chatId, model: this.options.defaultModel, createdAt: ts, lastActivity: ts };
     if (route.threadId !== undefined) data.threadId = route.threadId;
     return data;
   }
@@ -586,7 +590,7 @@ export class SessionManager {
    * @returns Current model
    */
   getModel(target: RouteTarget): AgentModelInput {
-    const data = this.sessionData.get(routeKey(toRoute(target)));
+    const route = toRoute(target); const data = this.sessionData.get(routeKey(route)) ?? demandLoadSidecar(this.options.dataDir, this.sessionData, route);
     return data?.model || this.options.defaultModel;
   }
 
@@ -638,7 +642,7 @@ export class SessionManager {
    * @returns Effective cwd, or undefined when no override is configured
    */
   getCwd(target: RouteTarget): string | undefined {
-    const data = this.sessionData.get(routeKey(toRoute(target)));
+    const route = toRoute(target); const data = this.sessionData.get(routeKey(route)) ?? demandLoadSidecar(this.options.dataDir, this.sessionData, route);
     return data?.cwd ?? this.options.botCwd;
   }
 
@@ -836,25 +840,34 @@ export class SessionManager {
 
   /**
    * Two-phase eviction that bounds both the live-session map and the
-   * sessionData map during long bot uptime.
+   * sessionData map during long bot uptime (#1687).
    *
-   * Phase 1 (idle-session eviction): closes and removes IAgentSession objects
-   * from `this.sessions` when their matching sessionData entry has been idle
-   * longer than `maxAgeMs` AND the session state is `'idle'`. This prevents
-   * the "user stops chatting" leak where `getSession()` inserts a session
-   * that no turn-completion path ever removes (#1662).
+   * Phase 1 (idle-session eviction): closes IAgentSession objects after
+   * `idleSessionMs` (default 4h) of no activity, freeing per-session memory.
+   * sessionData is NOT evicted here — it stays so model/cwd survive the close
+   * and are reloaded on demand from disk (P2-2) rather than reverting to defaults.
+   * Sessions in any non-idle state are never evicted.
    *
-   * Phase 2 (sessionData eviction): removes sessionData entries that are no
-   * longer live — including those just freed by Phase 1 — and clears their
-   * elicitation-route registry mappings.
+   * Phase 2 (sessionData eviction): removes sessionData entries that have been
+   * idle longer than `maxAgeMs` (default 24h) and have no live session object.
+   * Clears elicitation-route registry mappings for each evicted key.
    *
    * Called hourly from the periodic timer (fire-and-forget) and synchronously
    * from `closeAll` at shutdown.
+   *
+   * Invariant: Phase 1 uses `min(maxAgeMs, idleSessionMs)` as its threshold so
+   * that a test-only call like `_evictStaleSessionData(0)` triggers both phases
+   * immediately without requiring a custom `idleSessionMs` at construction time.
+   * In production `maxAgeMs` defaults to 24h and `idleSessionMs` defaults to 4h,
+   * so Phase 1 always uses the shorter 4h window.
    */
   private async _evictStaleSessionData(maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
-    // Phase 1: close and remove idle sessions from the live map so Phase 2's
-    // sessions.has(key) guard no longer shields them from eviction (#1662).
-    await evictIdleSessions(this.sessions, this.sessionData, maxAgeMs);
+    // Phase 1 (P2-1, #1687): close idle sessions. Use the smaller of maxAgeMs
+    // and idleSessionMs so a single-argument call with 0 triggers immediate
+    // eviction in both phases (test-only path); production callers see the
+    // natural min(24h, 4h) = 4h idle threshold.
+    const p1Threshold = Math.min(maxAgeMs, this.options.idleSessionMs);
+    await evictIdleSessions(this.sessions, this.sessionData, p1Threshold);
     // Phase 2: evict sessionData entries that are no longer live.
     evictStaleSessionData(this.sessions, this.sessionData, this.sessionStats, maxAgeMs);
   }

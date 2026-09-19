@@ -146,6 +146,7 @@ export async function main(): Promise<void> {
   // `process.cwd()`. Use this to point the bot at a specific repo or
   // worktree without changing cwd before launch.
   const telegramCwd = env.AFK_TELEGRAM_CWD;
+  const idleSessionMs = env.AFK_TELEGRAM_SESSION_IDLE_MS !== undefined ? parseInt(env.AFK_TELEGRAM_SESSION_IDLE_MS, 10) : undefined;
 
   const bot = new TelegramBot({
     botToken,
@@ -160,9 +161,8 @@ export async function main(): Promise<void> {
     settingSources: ['user', 'project'],
     // Bot-global cwd fallback used by SessionManager when no per-chat
     // override is set via /cd. Per-session `data.cwd` takes precedence.
-    ...(telegramCwd !== undefined && telegramCwd.length > 0
-      ? { botCwd: telegramCwd }
-      : {}),
+    ...(telegramCwd !== undefined && telegramCwd.length > 0 ? { botCwd: telegramCwd } : {}),
+    ...(idleSessionMs !== undefined && !isNaN(idleSessionMs) ? { idleSessionMs } : {}),
     createSession: createTelegramSessionFactory({
       config,
       frameworkBase,
