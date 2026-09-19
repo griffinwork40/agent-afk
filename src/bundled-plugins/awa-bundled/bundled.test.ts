@@ -124,7 +124,7 @@ const PINNED_HASHES = {
 
 
 
-  review: '3b4595d7645137483f5eb493589bfb97067eddd3513f23a63dad75df334d4509',
+  review: 'ebf930c14958adea68de9a22e8d1f97090e20139ad79e17da45e048eeb9285d7',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
