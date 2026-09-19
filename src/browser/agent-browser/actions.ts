@@ -17,6 +17,7 @@ import type { ActInput, InteractiveElement, Target } from '../types.js';
 import { enforceDomainPolicy } from '../config.js';
 import type { BrowserConfig } from '../types.js';
 import type { AgentBrowserClient, InspectElement } from './client.js';
+import { escapeShellString } from '../../utils/shell-escape.js';
 
 // ---------------------------------------------------------------------------
 // Element mapping (shared with provider)
@@ -105,7 +106,7 @@ export async function executeAction(
         'hover is not supported by Agent Browser; use element_id from a prior observation to target clicks instead',
       );
     case 'scroll_to': {
-      const safeId = elementId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const safeId = escapeShellString(elementId);
       await client.evalScript(
         tabId,
         `document.querySelector('[data-element-id="${safeId}"]')?.scrollIntoView({behavior:'smooth',block:'center'})`,

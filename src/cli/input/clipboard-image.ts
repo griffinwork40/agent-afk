@@ -23,6 +23,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { ImageAttachment } from './attachments.js';
 import { env } from '../../config/env.js';
+import { escapeShellString } from '../../utils/shell-escape.js';
 import { readClipboardImageLinux } from './clipboard-image-linux.js';
 
 /**
@@ -218,7 +219,7 @@ async function coerceClipboardToFile(klass: 'PNGf' | 'TIFF', outPath: string): P
  * for filesystem paths produced by `path.join(tmpdir(), ...)`.
  */
 function jsonForOsa(s: string): string {
-  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  return '"' + escapeShellString(s) + '"';
 }
 
 /**

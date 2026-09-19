@@ -6,6 +6,8 @@
  * @module service/systemd/unit
  */
 
+import { escapeShellString } from '../../utils/shell-escape.js';
+
 /** Inputs that fully determine a generated `.service` unit. Pure data. */
 export interface ServiceUnitOptions {
   /** `[Unit] Description=`. */
@@ -62,9 +64,7 @@ export interface RestartUnitOptions {
  *      incidentally correct). See systemd.service(5) "Specifiers".
  */
 function escapeUnitValue(s: string): string {
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
+  return escapeShellString(s)
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '\\r')
     .replace(/%/g, '%%');

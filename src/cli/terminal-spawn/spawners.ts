@@ -17,6 +17,7 @@ import { resolve } from 'node:path';
 import { shellQuoteToken } from '../resume-command.js';
 import type { AgentModelInput } from '../../agent/types.js';
 import type { SpawnCapability, TerminalKind } from './detect.js';
+import { escapeShellString } from '../../utils/shell-escape.js';
 
 export interface ResumeInvocation {
   /** Executable + args that launch the forked REPL (no shell). */
@@ -67,9 +68,7 @@ export function resolveResumeInvocation(
 }
 
 /** Escape a string for embedding inside an AppleScript double-quoted literal. */
-function osaEscape(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
+const osaEscape = escapeShellString;
 
 /** A shell command that cd's into cwd first, then runs the invocation. */
 function cdThen(inv: ResumeInvocation): string {

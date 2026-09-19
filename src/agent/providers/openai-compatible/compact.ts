@@ -32,10 +32,11 @@ import type { CompactionTrigger } from '../../trace/types.js';
 import {
   COMPACT_ACK_TEXT,
   COMPACT_SUMMARY_HEADER,
-  DEFAULT_COMPACT_SHRINK_THRESHOLD,
   byteLengthOf,
   isMicrocompactPlaceholder,
   microcompactToolResults as sharedMicrocompactToolResults,
+  readKeepLastN,
+  readShrinkFraction,
   resolveMicrocompactOptions,
   runCompactionCore,
   type CompactionOps,
@@ -44,9 +45,10 @@ import {
   type MicrocompactResult,
   type ToolResultRef,
 } from '../shared/compaction.js';
-import type { OpenAIMessage } from './messages.js';
 
-const DEFAULT_COMPACT_KEEP_LAST_TURNS = 2;
+// Re-export for callers (e.g. query.ts) that still import from this module.
+export { readShrinkFraction };
+import type { OpenAIMessage } from './messages.js';
 
 /** Minimal structural view of an assistant `tool_calls[]` entry (runtime-present). */
 interface OpenAIToolCallView {
@@ -196,30 +198,6 @@ export const openaiCompactionOps: CompactionOps<OpenAIMessage> = {
   },
   countChars,
 };
-
-/** How many trailing fresh user turns to keep uncompacted. */
-export function readKeepLastN(): number {
-  const raw = env.AFK_COMPACT_KEEP_LAST_TURNS;
-  if (raw !== undefined && raw.length > 0) {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return DEFAULT_COMPACT_KEEP_LAST_TURNS;
-}
-
-/**
- * Fullness fraction at/above which the keep-window may shrink so a
- * short-but-full session can still be compacted. `AFK_COMPACT_SHRINK_FRACTION`
- * overrides it; values outside (0, 1) exclusive fall back to the default.
- */
-export function readShrinkFraction(): number {
-  const raw = env.AFK_COMPACT_SHRINK_FRACTION;
-  if (raw !== undefined && raw.length > 0) {
-    const n = Number.parseFloat(raw);
-    if (Number.isFinite(n) && n > 0 && n < 1) return n;
-  }
-  return DEFAULT_COMPACT_SHRINK_THRESHOLD;
-}
 
 /** Injected collaborators for {@link compactOpenAIHistory}. */
 export interface CompactOpenAIHistoryDeps {

@@ -22,6 +22,9 @@
  * @module service/types
  */
 
+import { join } from 'path';
+import { getLogsDir } from '../paths.js';
+
 /**
  * Service kinds AFK can register. Mirrors `launchd/paths.ts`'s ServiceName
  * (kept as a separate declaration so the launchd module and its test-suite
@@ -152,3 +155,28 @@ export interface ServiceManager {
   /** Read the on-disk config file contents, if installed. */
   readConfigFile(name: ServiceName): string | undefined;
 }
+
+/**
+ * Per-service log file path under `~/.afk/logs/`. Shared by both the launchd
+ * and systemd backends so `afk service status` reports the same file path
+ * regardless of platform.
+ *
+ * Both backends re-export this under their own backend-scoped name (e.g.
+ * `serviceLogPath` in `launchd/paths.ts` and `systemd/paths.ts`) for
+ * backward compatibility with existing callers.
+ */
+export function serviceLogPath(name: ServiceName): string {
+  return join(getLogsDir(), `service-${name}.log`);
+}
+
+/**
+ * Hard timeout cap shared by all supervisor invocations (`launchctl` on macOS,
+ * `systemctl` on Linux). Both backends expose this under a backend-specific
+ * name (`LAUNCHCTL_TIMEOUT_MS` / `SYSTEMCTL_TIMEOUT_MS`) as re-exports for
+ * backward compatibility; new code should import this canonical constant.
+ *
+ * 8 seconds covers normal bootstrap/bootout (~50–500 ms) with generous
+ * head-room for a slow XPC/DBus handshake, while still being well inside
+ * user-perceptible "this is broken" territory.
+ */
+export const SERVICE_TIMEOUT_MS = 8_000;

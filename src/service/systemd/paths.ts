@@ -14,7 +14,7 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { getLogsDir } from '../../paths.js';
+import { SERVICE_TIMEOUT_MS, serviceLogPath as sharedServiceLogPath } from '../types.js';
 import type { ServiceName } from '../types.js';
 
 /** Per-user systemd generator directory. Never `/etc/systemd/system`. */
@@ -68,17 +68,14 @@ export function systemdLabel(name: ServiceName): string {
 }
 
 /**
- * Per-service log file under `~/.afk/logs/`. Identical to the launchd
- * backend's log path so `afk service status` reports the same file
- * regardless of platform.
+ * Per-service log file under `~/.afk/logs/`. Re-export from shared types —
+ * identical to the launchd backend's log path so `afk service status`
+ * reports the same file regardless of platform.
  */
-export function serviceLogPath(name: ServiceName): string {
-  return join(getLogsDir(), `service-${name}.log`);
-}
+export const serviceLogPath = sharedServiceLogPath;
 
 /**
- * Hard cap on any `systemctl --user` invocation. Mirrors launchd's
- * LAUNCHCTL_TIMEOUT_MS rationale: a wedged DBus/user-manager handshake
- * must not hang the AFK CLI forever.
+ * Hard cap on any `systemctl --user` invocation. Re-export from the shared
+ * `SERVICE_TIMEOUT_MS` constant in `service/types.ts`.
  */
-export const SYSTEMCTL_TIMEOUT_MS = 8_000;
+export const SYSTEMCTL_TIMEOUT_MS = SERVICE_TIMEOUT_MS;

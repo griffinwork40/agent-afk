@@ -2,7 +2,6 @@ import { Command } from 'commander';
 import { palette } from '../palette.js';
 import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';
 import { AgentSession } from '../../agent/session.js';
@@ -18,7 +17,7 @@ import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/t
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
 import { formatDuration } from '../format-utils.js';
 import { costTokenParts } from '../render/session-summary.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints } from '../shared-helpers.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints, activateDumpPrompt } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
 import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
@@ -36,6 +35,7 @@ import { saveSession, findSession } from '../session-store.js';
 import { createSessionStats, recordTurn } from '../slash/session-stats.js';
 import { runReviewPostPublish, parsePostTargets, type PostTarget } from '../slash/_lib/review-post.js';
 import type { Writer } from '../slash/types.js';
+import { createStderrWriter } from '../slash/writer.js';
 import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
 import { jsonDateReplacer } from '../json-date-replacer.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
@@ -339,17 +339,7 @@ export function registerChatCommand(program: Command): void {
         }
 
         // --- prompt-dump activation ---
-        if (options.dumpPrompt !== undefined) {
-          const val: string = options.dumpPrompt === true
-            ? path.join(os.homedir(), '.afk', 'logs', `prompt-dump-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-            : String(options.dumpPrompt);
-          process.env['AFK_DUMP_PROMPT'] = val;
-          // Provider coverage warning: dumpIfEnabled is only wired into AnthropicDirectProvider.
-          // openai-compatible and other non-Anthropic providers will not produce a dump file.
-          if (options.provider !== undefined && options.provider !== 'anthropic' && options.provider !== 'anthropic-direct') {
-            console.error(`[--dump-prompt] WARNING: active provider (${options.provider}) does not support prompt dumping. No file will be written.`);
-          }
-        }
+        activateDumpPrompt(options.dumpPrompt, options.provider);
 
         const providerHints = explicitProviderHints(options.provider);
         const apiKey = getApiKeyForModel(getModel(), providerHints);
@@ -668,14 +658,7 @@ export function registerChatCommand(program: Command): void {
         // ---------------------------------------------------------------------------
         const maybePublish = async (reviewText: string, errored: boolean): Promise<void> => {
           if (postTargets.length === 0 || errored) return;
-          const out: Writer = {
-            line: (t?: string) => { process.stderr.write(`${t ?? ''}\n`); },
-            raw: (t: string) => { process.stderr.write(t); },
-            success: (t: string) => { process.stderr.write(`✔ ${t}\n`); },
-            info: (t: string) => { process.stderr.write(`ℹ ${t}\n`); },
-            warn: (t: string) => { process.stderr.write(`⚠ ${t}\n`); },
-            error: (t: string) => { process.stderr.write(`✖ ${t}\n`); },
-          };
+          const out: Writer = createStderrWriter();
           try {
             await runReviewPostPublish(out, {
               targets: postTargets,

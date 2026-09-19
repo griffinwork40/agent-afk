@@ -16,6 +16,20 @@
  * @module agent/providers/shared/sleep-with-abort
  */
 
+/**
+ * Plain unconditional sleep with no abort awareness. Uses `timer.unref()` so
+ * Node does not keep the event loop alive solely due to this timeout.
+ *
+ * Use this instead of `new Promise(r => setTimeout(r, ms))` so the behaviour
+ * (no event-loop pin) is consistent across every call site.
+ */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, ms));
+    timer.unref();
+  });
+}
+
 export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) { resolve(); return; }

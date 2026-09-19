@@ -69,6 +69,7 @@ vi.mock('../shared-helpers.js', () => ({
   loadSystemPrompt: vi.fn(() => undefined),
   loadConfigSystemPrompt: vi.fn(() => undefined),
   resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),
+  activateDumpPrompt: vi.fn(),
 }));
 
 vi.mock('../../agent/routing-directive.js', () => ({

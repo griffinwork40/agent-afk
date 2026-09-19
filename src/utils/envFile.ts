@@ -124,8 +124,15 @@ export function readEnvVarFromFile(filePath: string, key: string): string | unde
  * Parse every `KEY=value` line from a `.env`-style file into a plain object,
  * preserving last-write-wins for duplicate keys. Comment lines (`#…`) and
  * blank lines are skipped. Returns `{}` when the file does not exist.
+ *
+ * When `stripQuotes` is true, matching surrounding single or double quotes are
+ * stripped from each value (dotenv-compatible behaviour used by the Telegram
+ * config-file reader).
  */
-export function readEnvFile(filePath: string): Record<string, string> {
+export function readEnvFile(
+  filePath: string,
+  options?: { stripQuotes?: boolean },
+): Record<string, string> {
   const out: Record<string, string> = {};
   if (!existsSync(filePath)) return out;
   const contents = readFileSync(filePath, 'utf-8');
@@ -135,7 +142,18 @@ export function readEnvFile(filePath: string): Record<string, string> {
     const eq = line.indexOf('=');
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1);
+    let value = line.slice(eq + 1);
+    if (options?.stripQuotes) {
+      const trimmed = value.trim();
+      if (
+        (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ) {
+        value = trimmed.slice(1, -1);
+      } else {
+        value = trimmed;
+      }
+    }
     out[key] = value;
   }
   return out;
