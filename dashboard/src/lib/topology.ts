@@ -179,7 +179,7 @@ function makeAgentNode(sub: SubagentItem, seq: number): SpineNode {
  *      becomes its child; the tool is marked as "claimed".
  *   5. Fallback: parentId → nest under a parent subagent node (agent→agent).
  *   6. Second pass: re-parent any orphaned nodes using the same two-step logic.
- *   7. Pass 5: add ONLY unclaimed tool nodes as roots.
+ *   7. Pass 5: add ALL tool nodes as roots (claimed tools carry subagent children).
  *   8. Sort all roots by input position to preserve SSE arrival order.
  *
  * Invariant: parentToolUseId is the primary linkage mechanism. When absent
@@ -304,14 +304,14 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
     roots.push(node);
   }
 
-  // --- Pass 5: add unclaimed tool nodes as roots ---
-  // Only tool nodes that were NOT claimed by a subagent appear as standalone
-  // roots. Claimed nodes are already nested under their dispatching subagent.
+  // --- Pass 5: add all tool nodes as roots ---
+  // Every tool node is a root — claimed tools are roots that happen to have
+  // a child subagent node nested under them. The guard that previously skipped
+  // claimed tools was wrong: it caused the tool node (and its whole subtree)
+  // to be silently dropped from the output.
   for (const t of toolItems) {
-    if (!toolClaimedByAgent.has(t.id)) {
-      const toolNode = nodeByToolId.get(t.id);
-      if (toolNode) roots.push(toolNode);
-    }
+    const toolNode = nodeByToolId.get(t.id);
+    if (toolNode) roots.push(toolNode);
   }
 
   // Sort roots by SSE arrival index (set at construction time) so agents and
