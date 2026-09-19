@@ -55,6 +55,15 @@ export interface LogUpdateFn {
    * test stubs — callers fall back to the logical line count.
    */
   measure?: (content: string, targetBottomRow: number) => { topRow: number; lineCount: number };
+  /**
+   * Optional one-shot override for the erase-loop ceiling in the next
+   * `render()` call. When set, the erase pass covers old rows up to this
+   * row (inclusive) instead of the new frame's `bottomRow`. The compositor
+   * sets this before a repaint where `targetBottomRow` will shrink
+   * (cursor-follow dropdown collapse) so the erase pass reaches the old
+   * frame's full footprint. Consumed by `render()` after use.
+   */
+  setEraseBottomOverride?: (row: number) => void;
 }
 
 export interface KeyInfo {

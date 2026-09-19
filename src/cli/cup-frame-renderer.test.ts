@@ -175,6 +175,66 @@ describe('CupFrameRenderer — no trailing-\\n scroll', () => {
     expect(out).toContain('\x1b[22;1H');
   });
 
+  it('erases old dropdown rows below the new targetBottomRow (cursor-follow ghost regression)', () => {
+    // Regression: in cursor-follow mode, the dropdown pushes targetBottomRow
+    // toward absoluteBottom. Closing the dropdown snaps targetBottomRow back to
+    // anchorRow (near the banner). Without the eraseBottomOverride, the erase
+    // loop breaks at the new (low) bottomRow and leaves old dropdown rows
+    // below anchorRow as visible ghost text.
+    const stream = makeMockStream(true, 80, 24);
+    const allWrites = collectWrites(stream);
+    const renderer = new CupFrameRenderer(stream);
+
+    // Render 1: dropdown open — frame spans rows 17..23 (7 lines, bottom = 23).
+    // anchorRow would be ~17 in cursor-follow mode.
+    const dropdownFrame = 'candidate1\ncandidate2\ncandidate3\ncandidate4\nhint\ngap\ninput';
+    renderer.render(dropdownFrame, 23);
+    void allWrites(); // drain
+
+    // Render 2: dropdown closed — frame is 1 line, targetBottomRow snaps to 17
+    // (anchorRow in cursor-follow mode). Without the fix, the erase loop
+    // breaks at row 17 and rows 18..23 (old dropdown rows) are ghosted.
+    // Set the erase override so the erase pass can reach the old footprint.
+    renderer.setEraseBottomOverride(23);
+    const capture = collectWrites(stream);
+    renderer.render('input', 17);
+    const out = capture();
+
+    // The erase pass must reach rows 17 through 23 (the full old frame).
+    for (let r = 17; r <= 23; r++) {
+      expect(out).toContain(`\x1b[${r};1H`);
+    }
+    // The new frame writes at row 17 only.
+    expect(out).toContain('\x1b[17;1H');
+    expect(out).toContain('input');
+  });
+
+  it('eraseBottomOverride is consumed (one-shot) and does not affect subsequent renders', () => {
+    const stream = makeMockStream(true, 80, 24);
+    const allWrites = collectWrites(stream);
+    const renderer = new CupFrameRenderer(stream);
+
+    // Render 1: tall frame at bottom.
+    renderer.render('line1\nline2\nline3', 23);
+    void allWrites();
+
+    // Render 2: with override, short frame at row 17.
+    renderer.setEraseBottomOverride(23);
+    renderer.render('input', 17);
+    void allWrites();
+
+    // Render 3: normal render without override — footer clamp is back to
+    // default (bottomRow). previousTopRow=17, previousLineCount=1.
+    // No rows beyond bottomRow should be erased.
+    const capture = collectWrites(stream);
+    renderer.render('input', 17);
+    const out = capture();
+
+    // Should only touch row 17 (erase + write), no rows below.
+    expect(out).toContain('\x1b[17;1H');
+    expect(out).not.toContain('\x1b[18;1H');
+  });
+
   it('erases previous frame rows on second render, still no bare \\n', () => {
     // On the second render, the renderer erases the previous frame via CUP +
     // erase-line. Verify no \n appears during the erase pass or the new frame.

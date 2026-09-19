@@ -298,6 +298,30 @@ export function repaint(self: FrameHost): void {
   // whether the render wiped the band (the collapse render, whose stale-tall
   // top erases down through it).
   const preRenderFrameTop = self.logUpdate.topRow ?? 0;
+  // Invariant (cursor-follow erase reach): in cursor-follow mode the dropdown
+  // can push targetBottomRow toward absoluteBottom, then closing the dropdown
+  // snaps it back to anchorRow. The renderer's erase loop is clamped at the new
+  // targetBottomRow by default, which would skip old dropdown rows sitting below
+  // anchorRow — the "ghost autocomplete" artifact. When the new targetBottomRow
+  // is less than the previous frame's bottom, override the erase ceiling so the
+  // renderer clears the full old footprint. Cap at absoluteBottom to avoid
+  // erasing footer-owned rows below the compositor's region.
+  if (
+    self.logUpdate.setEraseBottomOverride
+    && self.logUpdate.topRow
+    && self.logUpdate.topRow > 0
+  ) {
+    // The previous frame's bottom row (topRow is the PREVIOUS frame's top,
+    // tracked by CupFrameRenderer after each render).
+    // previousLineCount is not exposed, but we can infer the previous bottom
+    // from the tracked state: the renderer's render() sets lineCount (padded),
+    // so the previous bottom is at most absoluteBottom (bottom-pinned), or
+    // in cursor-follow it might be lower. We use absoluteBottom as the safe
+    // upper bound since we know the renderer never writes below it.
+    if (targetBottomRow < absoluteBottom) {
+      self.logUpdate.setEraseBottomOverride(absoluteBottom);
+    }
+  }
   self.logUpdate.render(frame, targetBottomRow, self.anchorRow);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
 }

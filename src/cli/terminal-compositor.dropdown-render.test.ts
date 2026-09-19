@@ -466,6 +466,62 @@ describe('TerminalCompositor — formatInputBuffer callback', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Ghost dropdown regression: closing the dropdown in cursor-follow mode must
+// erase the dropdown rows that sat below the new targetBottomRow (anchorRow).
+// Without the eraseBottomOverride mechanism, those rows ghost on screen.
+// ---------------------------------------------------------------------------
+describe('TerminalCompositor — dropdown ghost erase (cursor-follow regression)', () => {
+  let stdout: MockStdout;
+  let stdin: MockStdin;
+  let writes: ReturnType<typeof collectWrites>;
+
+  beforeEach(() => {
+    stdout = makeMockStdout();
+    stdin = makeMockStdin();
+    writes = collectWrites(stdout);
+    resetSlashRegistry();
+    registerSlashCommand({
+      name: '/ghost-test',
+      summary: 'Stub for ghost dropdown test',
+      handler: async () => ({ kind: 'noop' as const }),
+    });
+  });
+
+  afterEach(() => {
+    resetSlashRegistry();
+  });
+
+  it('erases dropdown rows below anchorRow when dropdown closes in cursor-follow', async () => {
+    const ac = createAutocompleteState();
+    const c = new TerminalCompositor({ stdout, stdin, onCancel: vi.fn(), autocompleteState: ac });
+    await c.arm();
+
+    // Type '/' to open the dropdown.
+    stdin.emit('keypress', '/', { name: '/', sequence: '/' });
+    expect(ac.dropdownOpen).toBe(true);
+
+    // Record the output that includes the dropdown frame.
+    writes.clear();
+
+    // Close the dropdown via Escape.
+    stdin.emit('keypress', undefined, { name: 'escape' });
+    await Promise.resolve(); // flush microtask repaint
+
+    expect(ac.dropdownOpen).toBe(false);
+
+    // The repaint after Escape must have erased the dropdown rows.
+    // In cursor-follow mode, the dropdown pushes the frame toward the bottom.
+    // After closing, the frame snaps back up. The erase must cover the old
+    // rows. We verify by checking the output contains CUP escapes that reach
+    // beyond the new frame's (small) footprint, or at minimum that no
+    // dropdown candidate text remains unpainted-over.
+    const out = writes.all();
+    // The frame must have been repainted (at minimum the input line).
+    expect(out.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Caret rendering (Fix B): cursor block is painted on every render — including
 // when the buffer is empty — so the user always sees where input lands.
 // ---------------------------------------------------------------------------

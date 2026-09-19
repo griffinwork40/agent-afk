@@ -65,8 +65,32 @@ export class CupFrameRenderer {
   private previousLineCount = 0;
   private previousRawLineCount = 0;
 
+  /**
+   * One-shot override for the erase-loop ceiling in the next `render()` call.
+   * When set, the erase pass covers old rows up to this row (inclusive) instead
+   * of the new frame's `bottomRow`. Consumed (cleared) by `render()` after use.
+   *
+   * The compositor sets this before a repaint that moves `targetBottomRow`
+   * upward (cursor-follow dropdown collapse) so the erase pass can reach the
+   * old frame's full footprint without the default `bottomRow` guard truncating
+   * it. The compositor knows the footer boundary and caps this value
+   * accordingly; the renderer does not need to reason about the footer here.
+   */
+  private eraseBottomOverride: number | undefined;
+
   constructor(stream: NodeJS.WriteStream & Writable) {
     this.stream = stream;
+  }
+
+  /**
+   * Set the erase-ceiling override for the NEXT `render()` call. The erase
+   * pass will clear old rows up to `row` (inclusive) instead of the new
+   * frame's `bottomRow`. Consumed after one render. The compositor uses this
+   * when `targetBottomRow` will shrink (cursor-follow dropdown collapse) to
+   * prevent ghost rows below the new frame.
+   */
+  setEraseBottomOverride(row: number): void {
+    this.eraseBottomOverride = row;
   }
 
   /**
@@ -201,18 +225,32 @@ export class CupFrameRenderer {
     // Erase the previous frame's rows. Covers cases where the new frame is
     // shorter than the previous (rows that would otherwise be stale on screen).
     //
-    // Invariant (reserved-band safety): skip rows beyond bottomRow — those
-    // belong to the reserved footer band (StatusLine + LoopStageBar +
-    // HealthRail + VerdictLedger). At boot the compositor renders its first
-    // idle frame BEFORE footer subsystems claim their extraRows, so
-    // previousTopRow can land inside the band once it is established. Without
-    // this clamp the next repaint's erase pass CUP-erases footer-owned rows,
-    // producing the "ghost status-line" artifact (the footer painter redraws
-    // on its own tick, but the erased row is visible in the gap).
+    // Two bounds limit the erase:
+    //   1. `effectiveEraseBottom` (the erase ceiling) prevents erasing rows
+    //      now owned by the footer band (StatusLine, LoopStageBar, etc.).
+    //   2. The loop naturally terminates at previousLineCount.
+    //
+    // The ceiling defaults to `bottomRow` (the new frame's target bottom),
+    // which is safe for the common bottom-pinned case where targetBottomRow
+    // is constant. For the boot scenario (footer claimed rows after the
+    // first idle render), `bottomRow < previousBottomRow` and the guard
+    // protects footer-owned rows from being erased.
+    //
+    // History: in cursor-follow mode the dropdown can push targetBottomRow
+    // toward absoluteBottom, then closing the dropdown snaps targetBottomRow
+    // back to anchorRow -- well above the old frame's bottom. The original
+    // `row > bottomRow` clamp broke out early and left the dropdown's lower
+    // rows unerased (the "ghost autocomplete" artifact). The compositor now
+    // sets `eraseBottomOverride` (capped at absoluteBottom, footer-safe)
+    // before repainting, so the erase pass reaches the old frame's full
+    // footprint without touching the footer band.
+    const eraseTop = this.previousTopRow;
+    const effectiveEraseBottom = this.eraseBottomOverride ?? bottomRow;
+    this.eraseBottomOverride = undefined; // consumed — one-shot
     if (this.previousLineCount > 0) {
       for (let i = 0; i < this.previousLineCount; i++) {
-        const row = this.previousTopRow + i;
-        if (row > bottomRow) break;
+        const row = eraseTop + i;
+        if (row > effectiveEraseBottom) break;
         out += cup(row, 1) + ERASE_LINE;
       }
     }
@@ -299,6 +337,7 @@ export class CupFrameRenderer {
     this.previousTopRow = 0;
     this.previousLineCount = 0;
     this.previousRawLineCount = 0;
+    this.eraseBottomOverride = undefined;
   }
 
   /**
@@ -356,6 +395,7 @@ export class CupFrameRenderer {
     this.previousTopRow = 0;
     this.previousLineCount = 0;
     this.previousRawLineCount = 0;
+    this.eraseBottomOverride = undefined;
   }
 
   /**
@@ -366,6 +406,7 @@ export class CupFrameRenderer {
     this.previousTopRow = 0;
     this.previousLineCount = 0;
     this.previousRawLineCount = 0;
+    this.eraseBottomOverride = undefined;
     if (this.stream.isTTY) {
       try {
         this.stream.write(SYNC_START + CURSOR_SHOW + SYNC_END);
