@@ -5,6 +5,25 @@ import { dirname } from 'path';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, launchAgentsDir, plistPath, serviceLogPath, type ServiceName } from './paths.js';
 import { type PlistOptions, renderPlist, resolveServicePath, resolveWatchPaths, resolveProgramArguments } from './plist.js';
 
+/**
+ * Extract `EnvironmentVariables` key→value pairs from a plist string.
+ * Used by `upgradeService` to preserve installed env vars when
+ * `opts.environment` is undefined (#1717). Never throws; returns {} on
+ * any parse failure so the caller degrades to a PATH-only environment.
+ */
+export function extractPlistEnvVars(plistXml: string): Record<string, string> {
+  try {
+    const section = plistXml.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/);
+    if (!section?.[1]) return {};
+    const vars: Record<string, string> = {};
+    const re = /<key>([^<]+)<\/key>\s*<string>([^<]*)<\/string>/g;
+    const unescape = (s: string) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(section[1])) !== null) vars[unescape(m[1]!)] = unescape(m[2]!);
+    return vars;
+  } catch { return {}; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Install / uninstall I/O
 // ─────────────────────────────────────────────────────────────────────────
@@ -239,18 +258,10 @@ export function uninstallService(name: ServiceName, opts: { skipBootout?: boolea
 
 /**
  * Re-render the plist for an already-installed service and atomically
- * replace the on-disk file when its content has changed.
- *
- * Invariant: existing plists installed by older versions of AFK may be
- * missing keys added in later releases (e.g. ThrottleInterval). Running
- * `afk service install` returns `already-installed` and never rewrites
- * the file. This function closes that gap so upgrades propagate to the
- * on-disk plist without requiring a manual uninstall/reinstall cycle.
- *
- * Write atomicity: same tmp+rename pattern as `installService()`.
- * Uses `wx` (O_EXCL) like `installService()` to close the TOCTOU
- * symlink window; catches EEXIST from a stale crash-leftover tmp
- * and retries once after cleanup.
+ * replace it when the content has changed. Preserves existing env vars
+ * (minus PATH, which is always freshly resolved) when opts.environment
+ * is not supplied (#1717). Write atomicity: same tmp+rename + O_EXCL
+ * pattern as installService().
  */
 export function upgradeService(name: ServiceName, opts: InstallOptions = {}): UpgradeResult {
   const path = plistPath(name);
@@ -267,8 +278,21 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
   const watchPaths = opts.noWatch ? undefined : resolveWatchPaths(name, opts._entrypointExistsCheck);
   const logFile = serviceLogPath(name);
 
+  // Read current plist; never throws (result-only contract).
+  let current: string;
+  try {
+    current = readFileSync(path, 'utf-8');
+  } catch (err) {
+    return { kind: 'failed', reason: `Failed to read current plist: ${(err as Error).message}` };
+  }
+  // #1717: preserve installed env vars when opts.environment is not supplied.
+  const preservedEnv: Record<string, string> = opts.environment === undefined
+    ? (({ PATH: _p, ...rest }) => rest)(extractPlistEnvVars(current))
+    : {};
+
   const environmentVariables: Record<string, string> = {
     PATH: resolveServicePath(),
+    ...preservedEnv,
     ...(opts.environment ?? {}),
   };
 
@@ -282,16 +306,6 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
     environmentVariables,
   };
   const desired = renderPlist(plistOpts);
-
-  // Compare to on-disk content. If identical, no-op.
-  // Invariant: readFileSync is wrapped so upgradeService() never throws —
-  // callers (manager.restart, postinstall) rely on result-only returns.
-  let current: string;
-  try {
-    current = readFileSync(path, 'utf-8');
-  } catch (err) {
-    return { kind: 'failed', reason: `Failed to read current plist: ${(err as Error).message}` };
-  }
   if (current === desired) {
     return { kind: 'already-current', plistPath: path, label: labelFor(name) };
   }

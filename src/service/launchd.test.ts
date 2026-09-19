@@ -45,6 +45,7 @@ vi.mock('../telegram/manager.js', () => ({
 // SUT imported AFTER mocks are declared so the proxied modules are
 // already in place by the time launchd.ts executes its imports.
 import {
+  extractPlistEnvVars,
   installService,
   labelFor,
   parseLaunchctlListRow,
@@ -721,6 +722,156 @@ describe.skipIf(process.platform !== 'darwin')('install/uninstall/status I/O', (
 
       const mode = statSync(path).mode & 0o777;
       expect(mode).toBe(0o600);
+    });
+
+    // Issue #1717: upgradeService must preserve existing env vars when
+    // opts.environment is not supplied ("restart should not change config
+    // unless you ask it to").
+    it('preserves existing env vars from plist when opts.environment is undefined', () => {
+      // Install with a custom env var baked in.
+      mockExecFileSync.mockReturnValue('' as never);
+      const installResult = installService('telegram', {
+        _entrypointExistsCheck: () => true,
+        environment: { TELEGRAM_BOT_TOKEN: 'secret-token-123', CUSTOM: 'value' },
+      });
+      expect(installResult.kind).toBe('installed');
+      const path = plistPath('telegram', tmpHome);
+
+      // Corrupt the plist so upgradeService sees a diff (forces a rewrite).
+      // We do this by adding a comment that doesn't exist in the rendered output.
+      // Instead, directly verify by seeding a plist with env vars already in it,
+      // then calling upgradeService with no opts.environment and checking the
+      // upgraded plist still carries those vars.
+      const existingContent = readFileSync(path, 'utf-8');
+      // Sanity: the installed plist already has the custom var.
+      expect(existingContent).toContain('<key>TELEGRAM_BOT_TOKEN</key>');
+
+      // Force a mismatch by writing a stale plist that lacks ThrottleInterval
+      // but has the env vars baked in — this triggers the upgrade path.
+      const fsModule = require('fs') as typeof import('fs');
+      fsModule.writeFileSync(path, [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+        '<plist version="1.0">',
+        '<dict>',
+        '  <key>Label</key>',
+        '  <string>com.afk.telegram</string>',
+        '  <key>EnvironmentVariables</key>',
+        '  <dict>',
+        '    <key>CUSTOM</key>',
+        '    <string>value</string>',
+        '    <key>PATH</key>',
+        '    <string>/old/path</string>',
+        '    <key>TELEGRAM_BOT_TOKEN</key>',
+        '    <string>secret-token-123</string>',
+        '  </dict>',
+        '</dict>',
+        '</plist>',
+        '',
+      ].join('\n'));
+
+      // Upgrade without supplying opts.environment — must preserve TELEGRAM_BOT_TOKEN and CUSTOM.
+      mockExecFileSync.mockReturnValue('' as never);
+      const result = upgradeService('telegram', { _entrypointExistsCheck: () => true });
+      expect(result.kind).toBe('upgraded');
+
+      const upgraded = readFileSync(path, 'utf-8');
+      // Custom vars must be preserved.
+      expect(upgraded).toContain('<key>TELEGRAM_BOT_TOKEN</key>');
+      expect(upgraded).toContain('<string>secret-token-123</string>');
+      expect(upgraded).toContain('<key>CUSTOM</key>');
+      expect(upgraded).toContain('<string>value</string>');
+      // PATH must be freshly resolved (not the stale '/old/path').
+      expect(upgraded).not.toContain('<string>/old/path</string>');
+    });
+
+    it('does NOT preserve existing env vars when opts.environment is explicitly supplied', () => {
+      // Seed a plist with existing env vars.
+      const launchAgentsDir = join(tmpHome, 'Library', 'LaunchAgents');
+      const fsModule = require('fs') as typeof import('fs');
+      fsModule.mkdirSync(launchAgentsDir, { recursive: true });
+      const path = plistPath('telegram', tmpHome);
+      fsModule.writeFileSync(path, [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+        '<plist version="1.0">',
+        '<dict>',
+        '  <key>EnvironmentVariables</key>',
+        '  <dict>',
+        '    <key>OLD_TOKEN</key>',
+        '    <string>should-be-gone</string>',
+        '    <key>PATH</key>',
+        '    <string>/old/path</string>',
+        '  </dict>',
+        '</dict>',
+        '</plist>',
+        '',
+      ].join('\n'));
+
+      mockExecFileSync.mockReturnValue('' as never);
+      // Caller explicitly passes opts.environment — their values WIN, old vars are dropped.
+      const result = upgradeService('telegram', {
+        _entrypointExistsCheck: () => true,
+        environment: { NEW_VAR: 'new-value' },
+      });
+      expect(result.kind).toBe('upgraded');
+
+      const upgraded = readFileSync(path, 'utf-8');
+      // The old token must NOT appear — caller supplied fresh env.
+      expect(upgraded).not.toContain('OLD_TOKEN');
+      expect(upgraded).not.toContain('should-be-gone');
+      // The new var must be present.
+      expect(upgraded).toContain('<key>NEW_VAR</key>');
+      expect(upgraded).toContain('<string>new-value</string>');
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // extractPlistEnvVars — unit tests (issue #1717)
+  // ─────────────────────────────────────────────────────────────────────────
+  describe('extractPlistEnvVars', () => {
+    it('extracts key-value pairs from an EnvironmentVariables dict', () => {
+      const xml = renderPlist({
+        label: 'com.afk.telegram',
+        programArguments: ['/usr/bin/node', '/x.mjs'],
+        workingDirectory: '/h',
+        standardOutPath: '/o',
+        standardErrorPath: '/e',
+        environmentVariables: { PATH: '/usr/bin', TOKEN: 'abc', CUSTOM: 'val' },
+      });
+      const result = extractPlistEnvVars(xml);
+      expect(result['TOKEN']).toBe('abc');
+      expect(result['CUSTOM']).toBe('val');
+      expect(result['PATH']).toBe('/usr/bin');
+    });
+
+    it('returns empty record when no EnvironmentVariables dict present', () => {
+      const xml = renderPlist({
+        label: 'l',
+        programArguments: ['x'],
+        workingDirectory: '/',
+        standardOutPath: '/o',
+        standardErrorPath: '/e',
+      });
+      expect(extractPlistEnvVars(xml)).toEqual({});
+    });
+
+    it('returns empty record on completely unparseable input', () => {
+      expect(extractPlistEnvVars('not xml at all')).toEqual({});
+      expect(extractPlistEnvVars('')).toEqual({});
+    });
+
+    it('round-trips XML-escaped characters (ampersand, angle brackets)', () => {
+      const xml = renderPlist({
+        label: 'l',
+        programArguments: ['x'],
+        workingDirectory: '/',
+        standardOutPath: '/o',
+        standardErrorPath: '/e',
+        environmentVariables: { 'K&EY': 'v<a>lue' },
+      });
+      const result = extractPlistEnvVars(xml);
+      expect(result['K&EY']).toBe('v<a>lue');
     });
   });
 
