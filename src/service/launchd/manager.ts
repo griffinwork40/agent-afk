@@ -130,7 +130,18 @@ export const launchdManager: ServiceManager = {
       return { kind: 'failed', reason: 'process.getuid is unavailable — restart requires a POSIX system.' };
     }
 
+    const upgradeStart = Date.now();
     const upgradeResult = upgradeService(name, opts ?? {});
+    const upgradeElapsedMs = Date.now() - upgradeStart;
+    // Invariant: debug line is intentionally low-cost — always emitted so a
+    // failed upgrade is visible in logs even when the restart itself succeeds.
+    // Uses process.stderr to avoid cluttering CLI stdout; callers that want
+    // quiet output (tests, CI) set stdio:'ignore' on the outer execFileSync.
+    if (process.env['AFK_DEBUG']) {
+      process.stderr.write(
+        `[afk:service] restart upgradeService kind=${upgradeResult.kind} elapsed=${upgradeElapsedMs}ms\n`,
+      );
+    }
     if (upgradeResult.kind === 'upgraded') {
       // Plist was rewritten — force launchd to re-read from disk via a
       // full bootout → bootstrap cycle (mirrors installService / uninstallService).

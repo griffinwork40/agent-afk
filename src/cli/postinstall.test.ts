@@ -8,12 +8,23 @@ type DetectPathGapFn = (
   pathEnv: string,
 ) => { onPath: boolean; binDir: string };
 
+type RestartLaunchdServicesFn = (opts?: {
+  home?: string;
+  uid?: number;
+  labels?: string[];
+  existsFn?: (p: string) => boolean;
+  execFn?: (argv: string[]) => void;
+  restartFn?: (node: string, cli: string, name: string) => void;
+}) => string[];
+
 let detectPathGap: DetectPathGapFn;
+let restartLaunchdServices: RestartLaunchdServicesFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
   const mod = await import('../../scripts/postinstall.mjs');
   detectPathGap = mod.detectPathGap as DetectPathGapFn;
+  restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
 });
 
 describe.skipIf(isWin32)('detectPathGap', () => {
@@ -63,5 +74,100 @@ describe.skipIf(isWin32)('detectPathGap', () => {
     const result = detectPathGap('/Users/alice/.npm-global', '/usr/bin');
     expect(result.binDir).toBe('/Users/alice/.npm-global/bin');
     expect(result.onPath).toBe(false);
+  });
+});
+
+// F-6: test coverage for the CLI-path branch in restartLaunchdServices.
+// existsFn controls both plist presence AND cli.mjs presence, so we can
+// exercise the two branches (CLI-path taken, CLI-path skipped) without
+// touching the filesystem or invoking launchctl.
+describe.skipIf(isWin32)('restartLaunchdServices — CLI-path branch (F-6)', () => {
+  it('uses restartFn (CLI path) when existsFn reports both plist and cli.mjs present', () => {
+    const calls: Array<{ node: string; cli: string; name: string }> = [];
+    const restarted = restartLaunchdServices({
+      home: '/fake/home',
+      uid: 501,
+      labels: ['com.afk.daemon'],
+      // existsFn: plist AND cli.mjs both "exist"
+      existsFn: (_p: string) => true,
+      restartFn: (node: string, cli: string, name: string) => {
+        calls.push({ node, cli, name });
+      },
+      // execFn must not be called when restartFn succeeds
+      execFn: (_argv: string[]) => {
+        throw new Error('execFn should not be called when CLI path is taken');
+      },
+    });
+    expect(restarted).toEqual(['com.afk.daemon']);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe('daemon');
+    expect(calls[0]?.node).toBe(process.execPath);
+    expect(calls[0]?.cli).toContain('cli.mjs');
+  });
+
+  it('falls back to execFn (raw kickstart) when existsFn reports cli.mjs absent', () => {
+    // plist exists but cli.mjs does not — simulates a source checkout
+    // without a build, or a fresh install where dist/ is not yet present.
+    const kickstartArgvs: string[][] = [];
+    const restarted = restartLaunchdServices({
+      home: '/fake/home',
+      uid: 501,
+      labels: ['com.afk.daemon'],
+      // existsFn: plist exists (path ends with .plist), cli.mjs absent
+      existsFn: (p: string) => p.endsWith('.plist'),
+      restartFn: (_node: string, _cli: string, _name: string) => {
+        throw new Error('restartFn should not be called when cli.mjs is absent');
+      },
+      execFn: (argv: string[]) => {
+        kickstartArgvs.push(argv);
+      },
+    });
+    expect(restarted).toEqual(['com.afk.daemon']);
+    expect(kickstartArgvs).toHaveLength(1);
+    expect(kickstartArgvs[0]?.[0]).toBe('kickstart');
+    expect(kickstartArgvs[0]?.[1]).toBe('-k');
+    expect(kickstartArgvs[0]?.[2]).toContain('com.afk.daemon');
+  });
+
+  it('falls back to execFn when restartFn throws (CLI path failed)', () => {
+    // CLI restart throws → should fall through to raw kickstart.
+    const kickstartArgvs: string[][] = [];
+    const restarted = restartLaunchdServices({
+      home: '/fake/home',
+      uid: 501,
+      labels: ['com.afk.daemon'],
+      existsFn: (_p: string) => true,
+      restartFn: () => {
+        throw new Error('simulated CLI restart failure');
+      },
+      execFn: (argv: string[]) => {
+        kickstartArgvs.push(argv);
+      },
+    });
+    expect(restarted).toEqual(['com.afk.daemon']);
+    expect(kickstartArgvs).toHaveLength(1);
+    expect(kickstartArgvs[0]?.[0]).toBe('kickstart');
+  });
+
+  it('skips labels whose plist does not exist', () => {
+    // Only the daemon plist exists; telegram plist is absent.
+    // existsFn must handle both the plist check (LaunchAgents path) and the
+    // cli.mjs presence check (dist/cli.mjs path). Both daemon paths return
+    // true so the CLI restart path fires for daemon; telegram is skipped
+    // entirely at the plist guard.
+    const restarted_names: string[] = [];
+    const restarted = restartLaunchdServices({
+      home: '/fake/home',
+      uid: 501,
+      labels: ['com.afk.daemon', 'com.afk.telegram'],
+      // daemon plist and cli.mjs both "present"; telegram plist absent.
+      existsFn: (p: string) => !p.includes('telegram'),
+      restartFn: (_node: string, _cli: string, name: string) => {
+        restarted_names.push(name);
+      },
+      execFn: (_argv: string[]) => {},
+    });
+    expect(restarted).toEqual(['com.afk.daemon']);
+    expect(restarted_names).toEqual(['daemon']);
   });
 });
