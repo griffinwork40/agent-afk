@@ -46,7 +46,7 @@ Never fabricate intent. When none is available the value is the literal `(none s
 
 **Capture prior reviewer feedback (inline, PR targets only).** When the review target is a PR URL or number, fetch existing reviewer feedback from all three GitHub comment stores before dispatching Wave 1:
 
-1. Inline review comments (anchored to diff lines): `gh api "repos/{owner}/{repo}/pulls/<n>/comments?per_page=25&sort=created&direction=desc"`.
+1. Inline review comments (anchored to diff lines): `gh api "repos/{owner}/{repo}/pulls/<n>/comments?per_page=100&sort=created&direction=desc"`.
 2. Review summary bodies (top-level body per review submission): `gh pr view <n> -R {owner}/{repo} --json reviews -q '.reviews[] | {author: .author.login, state: .state, body: .body, submittedAt: .submittedAt}'`.
 3. Conversation comments (issue-level PR comments): `gh pr view <n> -R {owner}/{repo} --json comments -q '.comments[] | {author: .author.login, body: .body, createdAt: .createdAt}'`.
 
