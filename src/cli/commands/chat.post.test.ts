@@ -72,7 +72,7 @@ vi.mock('../shared-helpers.js', () => ({
 
 vi.mock('../../agent/mcp/index.js', () => ({
   McpManager: {
-    fromConfig: vi.fn(),
+    fromConfig: vi.fn().mockResolvedValue({ manager: undefined, failedServers: [] }),
   },
   loadMcpConfig: vi.fn(() => ({ mcpServers: {}, sources: [], warnings: [] })),
 }));
