@@ -60,6 +60,16 @@ export interface ListCapturesOptions {
 // Constants
 // ---------------------------------------------------------------------------
 
+/**
+ * Safe-name regex for bash-capture filenames.
+ *
+ * Accepts only filenames consisting of alphanumerics, dots, underscores, and
+ * hyphens that end with `.txt`. Rejects any name containing a slash (path
+ * traversal) or a non-`.txt` extension. Exported so test files can import
+ * the authoritative pattern instead of duplicating it.
+ */
+export const CAPTURE_FILENAME_RE = /^[a-zA-Z0-9._-]+\.txt$/;
+
 /** Maximum characters shown in the command preview. */
 const PREVIEW_MAX_CHARS = 120;
 
@@ -178,7 +188,7 @@ export async function listCaptures(options: ListCapturesOptions = {}): Promise<C
 
         await Promise.all(
           files
-            .filter((f) => /^[a-zA-Z0-9._-]+\.txt$/.test(f))
+            .filter((f) => CAPTURE_FILENAME_RE.test(f))
             .map(async (fname) => {
               const filePath = join(capturesDir, fname);
               let fileStat: Awaited<ReturnType<typeof stat>>;

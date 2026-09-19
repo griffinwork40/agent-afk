@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { listCaptures } from './bash-capture-index.js';
+import { listCaptures, CAPTURE_FILENAME_RE } from './bash-capture-index.js';
 
 // ---------------------------------------------------------------------------
 // Test isolation: redirect AFK_STATE_DIR so listCaptures reads our fixtures.
@@ -271,14 +271,14 @@ describe('listCaptures — path-traversal filename filter', () => {
       'foo/bar.txt',
     ];
     for (const name of traversalNames) {
-      expect(/^[a-zA-Z0-9._-]+\.txt$/.test(name)).toBe(false);
+      expect(CAPTURE_FILENAME_RE.test(name)).toBe(false);
     }
   });
 
   it('rejects non-txt extensions via the safe-name regex', () => {
     const badExtensions = ['capture.sh', 'capture.json', 'capture', 'capture.txt.sh'];
     for (const name of badExtensions) {
-      expect(/^[a-zA-Z0-9._-]+\.txt$/.test(name)).toBe(false);
+      expect(CAPTURE_FILENAME_RE.test(name)).toBe(false);
     }
   });
 
@@ -292,7 +292,7 @@ describe('listCaptures — path-traversal filename filter', () => {
       'mix-123_abc.txt',
     ];
     for (const name of goodNames) {
-      expect(/^[a-zA-Z0-9._-]+\.txt$/.test(name)).toBe(true);
+      expect(CAPTURE_FILENAME_RE.test(name)).toBe(true);
     }
   });
 
