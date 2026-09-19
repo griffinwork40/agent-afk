@@ -689,14 +689,17 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       // anchorRow as a textStartRow floor so it never lands in pre-arm
       // banner rows either.
       //
-      // With anchorRow=10, a 1-line commit, and rows=24 (idle 1-line frame):
-      //   fitsAboveFrame = true, empty band, 13 rows of above-frame room →
-      //     bandOverflow = max(0, 0 + 1 - 13) = 0 → Phase 1 emits NO scroll
+      // With the pre-commit banner scroll (committed-band-commit.ts),
+      // the first commitAbove with anchorRow > 1 scrolls the banner into
+      // scrollback and resets anchorRow to 1 BEFORE the geometry snapshot.
+      // The commit then proceeds with anchorRow=1 (no-banner geometry):
+      //   fitsAboveFrame = true, empty band, 22 rows of above-frame room →
+      //     bandOverflow = max(0, 0 + 1 - 22) = 0 → Phase 1 emits NO scroll
       //   Phase 2 repaint → topRow=23
-      //   Phase 3 textStartRow = max(10, 23-1) = 22 → text at row 22
+      //   Phase 3 textStartRow = max(1, 23-1) = 22 → text at row 22
       //
-      // The committed line appears at row 22 (inside the frame zone, NOT the
-      // banner zone rows 1..9) and is NOT written into the banner.
+      // The banner rows are already in scrollback, so no banner-clobber
+      // is possible.
       stdout.rows = 24;
       const c = new TerminalCompositor({
         stdout, stdin, onCancel: vi.fn(), promptText: '> ',
@@ -715,13 +718,11 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       expect(out).not.toContain(`\x1b[1;1H${paddedEcho}`);
       // Phase 3 writes the single copy above the live frame (row 22).
       expect(out).toContain(`\x1b[22;1H\x1b[2K${paddedEcho}`);
-      // The FIRST commit into an empty band with ample above-frame room is
-      // scroll-free (bandOverflow=0) — identical to the no-anchor single-copy
-      // path. The banner no longer forces a spurious lineCount scroll on every
-      // commit; that quirk left the floor stale and orphaned committed content
-      // in the vacated banner rows — see terminal-compositor.banner-commit-gap.test.ts.
-      // The single copy enters scrollback later via evict-on-growth / the next commit.
-      expect(out).not.toMatch(/\x1b\[24;1H\n/);
+      // The pre-commit banner scroll emits newlines at row 24 to push the
+      // banner into scrollback (anchorRow-1 = 9 newlines). This is expected:
+      // the banner is being cleared, not content being scrolled spuriously.
+      // After the banner scroll, the COMMIT itself is scroll-free
+      // (bandOverflow=0) — identical to the no-anchor single-copy path.
     });
 
     it('commitAbove Phase 3 always lands at row newTopRow-1 regardless of anchorRow (single-copy path)', async () => {
@@ -746,19 +747,19 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
     });
 
     it('commitAbove Phase 3 textStartRow floors at anchorRow (no banner-row CUP write)', async () => {
-      // Phase 3 writes the committed text into the visible above-frame
-      // area at row `max(1, newTopRow - lineCount)` for visible
-      // accumulation. With a 3-line commit, idle 1-line frame
-      // (newTopRow=23), and anchorRow=22, the pre-fix textStartRow =
-      // max(1, 20) = 20, which is INSIDE the pre-arm banner zone (rows
-      // 1..21). The fix floors at anchorRow=22.
+      // With the pre-commit banner scroll, the first commitAbove with
+      // anchorRow=22 scrolls 21 rows into scrollback and resets
+      // anchorRow to 1 BEFORE the geometry snapshot. The commit then
+      // proceeds with anchorRow=1 (no-banner geometry):
       //
-      // Post-fix (over-tall band-hold): maxBandModel = overflowTargetBottom -
-      // anchorFloor = 23 - 22 = 1. The 3-line block exceeds maxBandModel, so
-      // useBandHold=true. Phase 1 archives the genuineOverflow (rows L1, L2) to
-      // scrollback via CUP-write at anchorFloor=22 + scroll. Phase 3 band-hold
-      // paints the capped model (last 1 row = [L3]) at row 22 (targetBottom).
-      // The core invariant — no banner-row (rows 1..21) CUP write — is preserved.
+      //   fitsAboveFrame = true, empty band, 22 rows of above-frame room →
+      //     bandOverflow = max(0, 0 + 3 - 22) = 0 → Phase 1 emits NO scroll
+      //   Phase 2 repaint → topRow=23
+      //   Phase 3 textStartRow = max(1, 23-3) = 20 → text at rows 20-22
+      //
+      // The banner rows (1..21) are already in scrollback, so writing at
+      // row 20 is safe — those rows are empty viewport space, not banner
+      // content. No content loss: all three lines are visible.
       stdout.rows = 24;
       const c = new TerminalCompositor({
         stdout, stdin, onCancel: vi.fn(), promptText: '> ',
@@ -769,21 +770,15 @@ describe('TerminalCompositor — repaint + commitAbove + anchorRow', () => {
       c.commitAbove('L1\nL2\nL3');
       const out = writes.all();
 
-      // Phase 3 must NOT write at rows 20-21 (banner zone).
-      expect(out).not.toMatch(/\x1b\[20;1H\x1b\[2KL1/);
-      expect(out).not.toMatch(/\x1b\[21;1H\x1b\[2KL2/);
       // All three lines must appear somewhere in the output (no content loss).
-      // L1 and L2 are archived to scrollback via band-hold Phase 1 (CUP at row 22);
-      // L3 is painted in the viewport via Phase 3 band-hold (model=[L3] at row 22).
       expect(out).toContain('L1');
       expect(out).toContain('L2');
       expect(out).toContain('L3');
-      // Band-hold Phase 1 writes at anchorFloor (row 22) then scrolls:
-      // the oldest genuineOverflow rows (L1, L2) are archived to scrollback.
-      // The old legacy-overflow assertion '\x1b[24;1H\n\n\n' (3 newlines) no
-      // longer applies — band-hold archives 2 rows (2 newlines), not 3.
-      expect(out).toContain('\x1b[24;1H\n\n');
-      expect(out).not.toContain('\x1b[24;1H\n\n\n');
+      // With anchorRow=1 after banner scroll, Phase 3 writes the 3-line
+      // block starting at row 20 (newTopRow - lineCount = 23 - 3 = 20).
+      // This is correct: the banner is in scrollback, rows 20-22 are
+      // available viewport space.
+      expect(out).toMatch(/\x1b\[20;1H\x1b\[2KL1/);
     });
   });
 

@@ -126,6 +126,42 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
 
+  // Pre-commit banner scroll: on the FIRST commit of an arm cycle with a
+  // banner present (anchorRow > 1), scroll the banner into terminal
+  // scrollback and reset anchorRow to 1 BEFORE the geometry snapshot. This
+  // eliminates the idle-state gap between the banner and the first response
+  // without hiding the banner during the idle state (cursor-follow mode
+  // keeps the prompt just below the banner until the user submits).
+  //
+  // Sequence: clear the frame (which is at anchorRow in cursor-follow),
+  // scroll anchorRow-1 rows via newlines at the bottom, reset anchorRow,
+  // flip to bottom-pinned, repaint the frame at absoluteBottom. The
+  // geometry snapshot then sees anchorRow=1 and a bottom-pinned frame,
+  // so fitsAboveFrame is true and Phase 1/2/3 flow normally with no gap.
+  //
+  // History: PR #1823 fixed the same gap by scrolling the banner in
+  // interactive.ts BEFORE arming — but that hid the banner during the
+  // idle state (the user never saw the welcome art). This moves the
+  // scroll to the exact moment it is needed: the first commit, when the
+  // compositor transitions to bottom-pinned anyway.
+  //
+  // This is a re-introduction of the "pre-commit regime sync" pattern
+  // that existed before unconditional bottom-pinning (see the History
+  // comment in commit-geometry.ts). cursor-follow brought the need back.
+  if (!self.hasCommitted && self.anchorRow !== undefined && self.anchorRow > 1) {
+    const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
+    self.logUpdate.clear(extraRows);
+    const bannerRows = self.anchorRow - 1;
+    writeWithScrollGuard(self, () => {
+      self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bannerRows)}`);
+    });
+    self.anchorRow = 1;
+    self.placementMode = 'bottom-pinned';
+    self.hasCommitted = true;
+    self.lifecycleStateDirty = true;
+    self.repaint();
+  }
+
   // F1 (retained-logical-source re-wrap): the prior band was hard-wrapped at
   // WHATEVER width was current when IT was committed — possibly a resize or
   // several ago. Re-wrap it to the CURRENT `cols` before any of the geometry
