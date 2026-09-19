@@ -141,6 +141,7 @@ describe('runShellTask – nonzero exit', () => {
 
 describe('runShellTask – timeout', () => {
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -154,8 +155,6 @@ describe('runShellTask – timeout', () => {
       'cron',
       { now: Date.now.bind(Date), writeTelemetry: col.writeTelemetry },
     );
-
-    vi.unstubAllEnvs();
 
     expect(result.status).toBe('error');
     // The errorMessage contains a timeout indication — either "killed (timeout)"
