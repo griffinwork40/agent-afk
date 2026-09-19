@@ -151,7 +151,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   if (!self.hasCommitted && self.anchorRow !== undefined && self.anchorRow > 1) {
     const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
     self.logUpdate.clear(extraRows);
-    const bannerRows = self.anchorRow - 1;
+    const bannerRows = Math.min(self.anchorRow - 1, rows - 1);
     writeWithScrollGuard(self, () => {
       self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bannerRows)}`);
     });
