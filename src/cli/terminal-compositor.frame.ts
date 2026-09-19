@@ -262,7 +262,22 @@ export function repaint(self: FrameHost): void {
   // a multi-line frame (dropdown open) extends downward toward absoluteBottom.
   // Once physicalRows exceeds the gap, the frame naturally reaches
   // absoluteBottom and the two modes converge.
-  const physicalRows = frameLines.length;
+  // Invariant (wrap-aware frame height): physicalRows must reflect the
+  // POST-wrap row count — not just frameLines.length (the logical count).
+  // CupFrameRenderer hard-wraps at stdout.columns, so a single logical input
+  // line wider than the terminal occupies 2+ physical rows. Using the logical
+  // count in cursor-follow mode under-counts targetBottomRow by the extra
+  // wrapped rows, causing the frame to overlap the DECSTBM reserved footer
+  // band (LoopStageBar). Each spinner-tick repaint then writes the frame at
+  // the wrong position, and the footer bar's "· idle" CUP-paint lands inside
+  // the frame region — producing a cascade of duplicate idle lines that push
+  // content into scrollback. measure() returns the physical (post-wrap) line
+  // count; when unavailable, fall back to the logical count (safe for stubs
+  // and tests that don't wrap).
+  const logicalRows = frameLines.length;
+  const physicalRows = self.logUpdate.measure
+    ? self.logUpdate.measure(frame, absoluteBottom).lineCount
+    : logicalRows;
   const targetBottomRow =
     self.placementMode === 'cursor-follow' && self.anchorRow !== undefined
       ? Math.min(absoluteBottom, (self.anchorRow - 1) + physicalRows)
