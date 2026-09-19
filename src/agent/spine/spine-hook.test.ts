@@ -42,6 +42,25 @@ vi.mock('./spine-store.js', () => ({
   serializeSpine: vi.fn().mockReturnValue(''),
 }));
 
+// ── Mock node:fs to capture pending-log writes without touching real disk ─────
+// The passthrough preserves real behaviour for tests that do not care about
+// fs; the appendFileSync capture is used only in the pending-log describe block.
+
+const _capturedAppendCalls: Array<{ path: string; data: string }> = [];
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    appendFileSync: vi.fn(
+      (path: import('node:fs').PathOrFileDescriptor, data: string | Uint8Array): void => {
+        _capturedAppendCalls.push({ path: String(path), data: String(data) });
+      },
+    ),
+    mkdirSync: vi.fn(),
+  };
+});
+
 // ── Import after mocks ────────────────────────────────────────────────────────
 
 import { createSpineSessionEndHook } from './spine-hook.js';
@@ -716,5 +735,229 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     expect(mockEntry.description).toMatch(/\(partially weakened /);
     expect(mockEntry.description).not.toContain(yesterday);
     expect(writeSpine).toHaveBeenCalled();
+  });
+});
+
+// ── Pending-log write assertions (strengthens-unresolved / weakens-unresolved) ─
+
+// These tests verify that hallucinated IDs cause a write to spine-pending.jsonl
+// with the correct `type` field. appendFileSync is mocked at module level above;
+// _capturedAppendCalls accumulates every call made during a test.
+
+describe('createSpineSessionEndHook — pending-log writes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    // Clear the capture array for each test.
+    _capturedAppendCalls.length = 0;
+  });
+
+  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
+    const { execFileSync } = await import('node:child_process');
+    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+      if (argsArr.includes('rev-parse')) return '/fake/repo';
+      if (argsArr.includes('diff')) return diffContent;
+      return '';
+    });
+  }
+
+  it('strengthens-unresolved: logs to pending.jsonl with type="strengthens-unresolved"', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-999',
+          existingDescription: 'Does not exist',
+          description: 'Confirms non-existent pattern',
+          rationale: 'Hallucinated',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(undefined);
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook({ event: 'SessionEnd', sessionId: 'test-session-id' });
+
+    // writeSpine must NOT be called for a hallucinated ID
+    expect(writeSpine).not.toHaveBeenCalled();
+
+    // At least one _capturedAppendCalls entry must include a JSON line with the expected type
+    const parsed = _capturedAppendCalls
+      .map((c) => c.data)
+      .flatMap((l) => l.split('\n'))
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .filter((x): x is Record<string, unknown> => x !== null);
+
+    const pending = parsed.find((e) => e['type'] === 'strengthens-unresolved');
+    expect(pending).toBeDefined();
+    expect(pending?.['sessionId']).toBe('test-session-id');
+    expect(typeof pending?.['ts']).toBe('string');
+  });
+
+  it('weakens-unresolved: logs to pending.jsonl with type="weakens-unresolved"', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'INV-888',
+          existingDescription: 'Also does not exist',
+          description: 'Weakens nothing real',
+          rationale: 'Hallucinated ID',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(undefined);
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook({ event: 'SessionEnd', sessionId: 'test-session-id' });
+
+    // writeSpine must NOT be called for a hallucinated ID
+    expect(writeSpine).not.toHaveBeenCalled();
+
+    const parsed = _capturedAppendCalls
+      .map((c) => c.data)
+      .flatMap((l) => l.split('\n'))
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .filter((x): x is Record<string, unknown> => x !== null);
+
+    const pending = parsed.find((e) => e['type'] === 'weakens-unresolved');
+    expect(pending).toBeDefined();
+    expect(pending?.['sessionId']).toBe('test-session-id');
+    expect(typeof pending?.['ts']).toBe('string');
+  });
+
+  it('weakens with valid ID: logs with type="weakens" (not "weakens-unresolved")', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'INV-001',
+          existingDescription: 'Real entry',
+          description: 'One module bypasses env.ts for legacy reasons',
+          rationale: 'legacy-compat.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: 'Real entry',
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook({ event: 'SessionEnd', sessionId: 'test-session-id' });
+
+    // writeSpine MUST be called (valid entry was mutated)
+    expect(writeSpine).toHaveBeenCalled();
+
+    const parsed = _capturedAppendCalls
+      .map((c) => c.data)
+      .flatMap((l) => l.split('\n'))
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .filter((x): x is Record<string, unknown> => x !== null);
+
+    const pending = parsed.find((e) => e['type'] === 'weakens');
+    expect(pending).toBeDefined();
+    // Must NOT be the unresolved variant
+    expect(parsed.find((e) => e['type'] === 'weakens-unresolved')).toBeUndefined();
+  });
+
+  it('contradicts: logs to pending.jsonl with type="contradicts"', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'contradicts',
+          existingId: 'INV-001',
+          existingDescription: 'All env vars go through env.ts',
+          description: 'This module reads process.env directly',
+          rationale: 'legacy.ts:42',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const { writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook({ event: 'SessionEnd', sessionId: 'test-session-id' });
+
+    // SPINE.md must not be mutated for contradictions
+    expect(writeSpine).not.toHaveBeenCalled();
+
+    const parsed = _capturedAppendCalls
+      .map((c) => c.data)
+      .flatMap((l) => l.split('\n'))
+      .filter(Boolean)
+      .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+      .filter((x): x is Record<string, unknown> => x !== null);
+
+    const pending = parsed.find((e) => e['type'] === 'contradicts');
+    expect(pending).toBeDefined();
+    expect(pending?.['sessionId']).toBe('test-session-id');
+    expect(typeof pending?.['ts']).toBe('string');
   });
 });
