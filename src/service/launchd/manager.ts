@@ -30,6 +30,7 @@ import type {
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, plistPath, serviceLogPath } from './paths.js';
 import { installService, readPlistFile, uninstallService, upgradeService } from './install.js';
 import { serviceStatus } from './status.js';
+import { env } from '../../config/env.js';
 
 export const launchdManager: ServiceManager = {
   backend: 'launchd',
@@ -137,7 +138,7 @@ export const launchdManager: ServiceManager = {
     // failed upgrade is visible in logs even when the restart itself succeeds.
     // Uses process.stderr to avoid cluttering CLI stdout; callers that want
     // quiet output (tests, CI) set stdio:'ignore' on the outer execFileSync.
-    if (process.env['AFK_DEBUG']) {
+    if (env.AFK_DEBUG) {
       process.stderr.write(
         `[afk:service] restart upgradeService kind=${upgradeResult.kind} elapsed=${upgradeElapsedMs}ms\n`,
       );
