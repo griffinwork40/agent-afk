@@ -122,7 +122,7 @@ function subagentNodeStatus(status: string): SpineNode['status'] {
 }
 
 /** Build a SpineNode for a tool-call item. */
-function makeToolNode(tool: ToolCallItem): SpineNode {
+function makeToolNode(tool: ToolCallItem, seq: number): SpineNode {
   const status = toolNodeStatus(tool.status);
   return {
     id: tool.id,
@@ -135,11 +135,12 @@ function makeToolNode(tool: ToolCallItem): SpineNode {
     children: [],
     isActive: status === 'running',
     sourceId: tool.toolUseId,
+    seq,
   };
 }
 
 /** Build a SpineNode for a subagent item. */
-function makeAgentNode(sub: SubagentItem): SpineNode {
+function makeAgentNode(sub: SubagentItem, seq: number): SpineNode {
   const status = subagentNodeStatus(sub.status);
   return {
     id: sub.id,
@@ -156,6 +157,7 @@ function makeAgentNode(sub: SubagentItem): SpineNode {
     children: [],
     isActive: status === 'running',
     sourceId: sub.subagentId,
+    seq,
   };
 }
 
@@ -220,10 +222,10 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
   const toolClaimedByAgent = new Set<string>();
 
   for (const t of toolItems) {
-    nodeByToolId.set(t.id, makeToolNode(t));
+    nodeByToolId.set(t.id, makeToolNode(t, inputPosition.get(t.id) ?? 0));
   }
   for (const s of subagentItems) {
-    nodeBySubId.set(s.subagentId, makeAgentNode(s));
+    nodeBySubId.set(s.subagentId, makeAgentNode(s, inputPosition.get(s.id) ?? 0));
   }
 
   // --- Pass 3: link subagents to parent tool or parent subagent ---
@@ -312,8 +314,10 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
     }
   }
 
-  // Sort roots by input position to preserve SSE arrival order.
-  roots.sort((a, b) => (inputPosition.get(a.id) ?? 0) - (inputPosition.get(b.id) ?? 0));
+  // Sort roots by SSE arrival index (set at construction time) so agents and
+  // tools that interleave chronologically render in arrival order rather than
+  // grouped by kind.
+  roots.sort((a, b) => a.seq - b.seq);
 
   return roots;
 }

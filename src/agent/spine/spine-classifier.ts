@@ -144,7 +144,7 @@ export async function classifySeedMaterial(
 
   const userMessage = [
     '<seed-material>',
-    escapeCodeFence(truncated),
+    escapeDataBlock(truncated),
     '</seed-material>',
     '',
     'Classify the architectural signals in this seed material. Return ONLY the JSON array.',
@@ -167,26 +167,37 @@ export async function classifySeedMaterial(
 // ---------------------------------------------------------------------------
 
 /**
- * Escape triple-backtick sequences so a diff containing ``` cannot break out
- * of the enclosing code fence in the prompt (prompt injection guard).
+ * Escape prompt-injection vectors in untrusted data block content.
+ *
+ * Two threats are neutralised:
+ * 1. Triple-backtick sequences — a diff containing ``` would break out of the
+ *    enclosing code fence and could terminate/reopen markdown blocks.
+ * 2. XML closing-tag sequences (`</`) — a diff or spine file containing the
+ *    literal string `</git-diff>` or `</spine-content>` would terminate the
+ *    XML data block early, letting content after the fake tag be interpreted
+ *    as model instructions rather than data.
+ *
+ * Both are escaped so they are visually equivalent but structurally inert.
  */
-function escapeCodeFence(text: string): string {
-  return text.replace(/```/g, '` ` `');
+export function escapeDataBlock(text: string): string {
+  return text.replace(/```/g, '` ` `').replace(/</g, '&lt;');
 }
 
 function buildUserMessage(diff: string, spineContent: string): string {
   const spineSection = spineContent.trim()
-    ? `## Current SPINE.md\n\n${spineContent}`
-    : '## Current SPINE.md\n\n_(No SPINE.md exists yet — this may be the first session)_';
+    ? ['<spine-content>', escapeDataBlock(spineContent), '</spine-content>'].join('\n')
+    : '<spine-content>\n_(No SPINE.md exists yet — this may be the first session)_\n</spine-content>';
 
   return [
     '## Git Diff (this session)',
     '',
     '<git-diff>',
     '```diff',
-    escapeCodeFence(diff),
+    escapeDataBlock(diff),
     '```',
     '</git-diff>',
+    '',
+    '## Current SPINE.md',
     '',
     spineSection,
     '',

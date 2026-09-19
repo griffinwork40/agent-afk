@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.222.1] - 2026-09-19
+
+### Fixed
+- add trust-boundary guards to classifier prompt (#1678) (#1811) (048ac326)
+
+## [5.222.0] - 2026-09-19
+
+### Added
+- load shiki grammars on-demand per code block (#1644) (f0ff4c48)
+
+### Changed
+- add regression test for path-traversal filename filter (#1790) (#1800) (e9f17bcb)
+- fix five minor completeness gaps from site audit (#1728) (#1799) (094ec7a5)
+- add shell-task.ts test coverage (#1797) (4b678d8a)
+- use getTerminalHeight() in preview-cap sites for consistency (#1780) (#1796) (3c3b2f53)
+- fix TurnRunnerDeps docstring inaccuracy and hoist coreExecDeps (#1761) (#1795) (388713ac)
+- assert sideband event in takePendingPlanExitSeed success path (#1792) (#1794) (f2803e21)
+- merge duplicate JSDoc on placementMode in terminal-compositor (#1781) (#1793) (c26bfad1)
+
 ## [5.221.6] - 2026-09-18
 
 ### Fixed

@@ -53,4 +53,10 @@ export interface SpineNode {
    * Used as the linkage key between parent tools and child agents.
    */
   sourceId?: string;
+  /**
+   * SSE arrival index — position of this node's source item in the original
+   * TranscriptItem array. Set at construction time and used to sort root-level
+   * nodes into chronological arrival order after all passes complete.
+   */
+  seq: number;
 }
