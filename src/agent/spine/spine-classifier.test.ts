@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseClassifierOutput } from './spine-classifier.js';
+import { parseClassifierOutput, escapeDataBlock } from './spine-classifier.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +38,41 @@ const VALID_STRENGTHENS = JSON.stringify([
     rationale: 'See src/config/env.ts',
   },
 ]);
+
+// ---------------------------------------------------------------------------
+// escapeDataBlock — prompt injection guard
+// ---------------------------------------------------------------------------
+
+describe('escapeDataBlock', () => {
+  it('escapes triple-backtick sequences', () => {
+    expect(escapeDataBlock('```')).toBe('` ` `');
+    expect(escapeDataBlock('here\n```\nend')).toBe('here\n` ` `\nend');
+  });
+
+  it('escapes XML closing-tag opener (</) to prevent early block termination', () => {
+    expect(escapeDataBlock('</git-diff>')).toBe('&lt;/git-diff>');
+    expect(escapeDataBlock('</spine-content>')).toBe('&lt;/spine-content>');
+  });
+
+  it('escapes all < characters, not just </', () => {
+    // A bare < could open a tag too; escaping all < is the safe superset.
+    expect(escapeDataBlock('<tag>')).toBe('&lt;tag>');
+  });
+
+  it('handles text with both backticks and XML tags', () => {
+    const input = '```\n</git-diff>\n```';
+    const output = escapeDataBlock(input);
+    expect(output).not.toContain('```');
+    expect(output).not.toContain('</git-diff>');
+    expect(output).toContain('` ` `');
+    expect(output).toContain('&lt;/git-diff>');
+  });
+
+  it('passes through text with no injection vectors unchanged (modulo < chars)', () => {
+    const clean = 'const x = 1;\nfunction foo() {}';
+    expect(escapeDataBlock(clean)).toBe(clean);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // JSON extraction strategies
