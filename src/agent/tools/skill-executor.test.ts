@@ -20,7 +20,7 @@ vi.mock('../auth/credential-resolver.js', () => ({
 }));
 
 import { SkillExecutor } from './skill-executor.js';
-import { registerSkill, _resetRegistry } from '../../skills/index.js';
+import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import { SubagentManager } from '../subagent.js';
 import * as SubagentExecutorModule from './subagent-executor.js';
 import * as promptLoader from '../../skills/_lib/prompt-loader.js';

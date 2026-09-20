@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { _resetRegistry, registerSkill } from '../../skills/index.js';
+import { _resetRegistry, registerSkill } from '../../skills/skill-registry.js';
 import { resetRegistry } from './registry.js';
 import { initialSkillsCmd } from './plugin-skills.js';
 import type { SlashContext } from './types.js';

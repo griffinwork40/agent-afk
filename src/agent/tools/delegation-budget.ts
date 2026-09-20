@@ -2,7 +2,7 @@
  * Tree-wide delegation budget for subagent spawning.
  *
  * Tracks three orthogonal limits across a single session tree:
- *   1. **maxChildrenPerAgent** — how many children a single agent may spawn.
+ *   1. **maxConcurrentChildrenPerAgent** — how many children a single agent may have running concurrently.
  *   2. **maxConcurrentAgents** — tree-wide ceiling on simultaneously-live agents.
  *   3. **maxTotalAgents** — tree-wide lifetime ceiling on total agents spawned.
  *
@@ -13,8 +13,8 @@
  *
  * Invariant: `concurrent` never exceeds `total`. `recordSpawn` increments
  * both atomically; the {@link SpawnReceipt} it returns has two callbacks:
- * `release()` decrements only `concurrent` (normal completion), and
- * `rollback()` undoes all three counters (fork failure before child ran).
+ * `release()` decrements `concurrent` and `concurrentChildrenByAgent` (normal completion),
+ * and `rollback()` undoes all three counters (fork failure before child ran).
  * Both are idempotent — double-calls are safe.
  *
  * @module agent/tools/delegation-budget
@@ -25,8 +25,8 @@ import { env } from '../../config/env.js';
 // ─── Configuration ──────────────────────────────────────────────────────────
 
 export interface DelegationBudgetConfig {
-  /** Max children a single agent (identified by sessionId) may spawn (lifetime, not concurrent). */
-  maxChildrenPerAgent?: number;
+  /** Max children a single agent (identified by sessionId) may have running concurrently. */
+  maxConcurrentChildrenPerAgent?: number;
   /** Max agents running simultaneously across the entire tree. */
   maxConcurrentAgents?: number;
   /** Max agents ever spawned across the entire tree (lifetime). */
@@ -37,14 +37,14 @@ export interface DelegationBudgetConfig {
  * Upper bounds accepted from environment variables. Prevents a typo
  * (`4000` for `40`) from creating an unbounded swarm.
  */
-const CEILING_CHILDREN_PER_AGENT = 20;
+const CEILING_CONCURRENT_CHILDREN_PER_AGENT = 20;
 const CEILING_CONCURRENT_AGENTS = 64;
 const CEILING_TOTAL_AGENTS = 200;
 
 // ─── Refusal reasons ────────────────────────────────────────────────────────
 
 export type BudgetRefusalReason =
-  | 'max_children_per_agent'
+  | 'max_concurrent_children_per_agent'
   | 'max_concurrent_agents'
   | 'max_total_agents';
 
@@ -77,8 +77,8 @@ function resolvePositiveInt(
  */
 export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefined {
   const maxChildren = resolvePositiveInt(
-    env.AFK_MAX_CHILDREN_PER_AGENT,
-    CEILING_CHILDREN_PER_AGENT,
+    env.AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT,
+    CEILING_CONCURRENT_CHILDREN_PER_AGENT,
   );
   const maxConcurrent = resolvePositiveInt(
     env.AFK_MAX_CONCURRENT_AGENTS,
@@ -92,7 +92,7 @@ export function resolveDelegationBudgetConfig(): DelegationBudgetConfig | undefi
     return undefined;
   }
   return {
-    ...(maxChildren !== undefined ? { maxChildrenPerAgent: maxChildren } : {}),
+    ...(maxChildren !== undefined ? { maxConcurrentChildrenPerAgent: maxChildren } : {}),
     ...(maxConcurrent !== undefined ? { maxConcurrentAgents: maxConcurrent } : {}),
     ...(maxTotal !== undefined ? { maxTotalAgents: maxTotal } : {}),
   };
@@ -109,18 +109,18 @@ export interface DelegationBudgetSnapshot {
 /** Return type of {@link DelegationBudget.recordSpawn}. */
 export interface SpawnReceipt {
   /**
-   * Decrements only the `concurrent` counter. Call when the child finishes
-   * normally — `total` and `childrenByAgent` intentionally persist so the
-   * lifetime caps (`maxTotalAgents`, `maxChildrenPerAgent`) remain accurate.
+   * Decrements `concurrent` and `concurrentChildrenByAgent`. Call when the
+   * child finishes normally — `total` intentionally persists so the lifetime
+   * cap (`maxTotalAgents`) remains accurate.
    * Idempotent: double-calls are safe.
    */
   release: () => void;
   /**
-   * Undoes ALL three counters (`concurrent`, `total`, `childrenByAgent`).
+   * Undoes ALL three counters (`concurrent`, `total`, `concurrentChildrenByAgent`).
    * Call when a fork attempt fails BEFORE the child ever ran — i.e. when
    * `forkSubagent` throws or the handle is cancelled before any work started.
    * Without rollback, a fork failure permanently consumes budget slots,
-   * eventually exhausting `maxTotalAgents` or `maxChildrenPerAgent`.
+   * eventually exhausting `maxTotalAgents` or `maxConcurrentChildrenPerAgent`.
    * Idempotent: double-calls are safe.
    */
   rollback: () => void;
@@ -129,7 +129,7 @@ export interface SpawnReceipt {
 export class DelegationBudget {
   private concurrent = 0;
   private total = 0;
-  private readonly childrenByAgent = new Map<string, number>();
+  private readonly concurrentChildrenByAgent = new Map<string, number>();
 
   constructor(private readonly config: DelegationBudgetConfig) {}
 
@@ -139,17 +139,17 @@ export class DelegationBudget {
    * Pure query — does not mutate counters. Call before `recordSpawn`.
    */
   canSpawn(parentId: string): BudgetCheckResult {
-    const { maxChildrenPerAgent, maxConcurrentAgents, maxTotalAgents } = this.config;
+    const { maxConcurrentChildrenPerAgent, maxConcurrentAgents, maxTotalAgents } = this.config;
 
-    if (maxChildrenPerAgent !== undefined) {
-      const children = this.childrenByAgent.get(parentId) ?? 0;
-      if (children >= maxChildrenPerAgent) {
+    if (maxConcurrentChildrenPerAgent !== undefined) {
+      const children = this.concurrentChildrenByAgent.get(parentId) ?? 0;
+      if (children >= maxConcurrentChildrenPerAgent) {
         return {
           allowed: false,
-          reason: 'max_children_per_agent',
+          reason: 'max_concurrent_children_per_agent',
           detail:
-            `Agent ${parentId} already spawned ${children} children ` +
-            `(max ${maxChildrenPerAgent}).`,
+            `Agent ${parentId} has ${children} children running ` +
+            `(max ${maxConcurrentChildrenPerAgent}).`,
         };
       }
     }
@@ -181,9 +181,9 @@ export class DelegationBudget {
    * Record a new agent spawn. Returns a {@link SpawnReceipt} with two
    * idempotent callbacks:
    *
-   * - `release()` — decrements only `concurrent`. Use when the child finishes
-   *   normally. `total` and `childrenByAgent` are intentionally kept so the
-   *   lifetime caps remain accurate.
+   * - `release()` — decrements `concurrent` and `concurrentChildrenByAgent`.
+   *   Use when the child finishes normally. `total` is intentionally kept so
+   *   the lifetime cap (`maxTotalAgents`) remains accurate.
    * - `rollback()` — undoes ALL three counters. Use when the fork fails before
    *   the child ever ran (e.g. `forkSubagent` throws, handle cancelled pre-run).
    *   Without rollback, a fork failure permanently consumes budget.
@@ -194,9 +194,9 @@ export class DelegationBudget {
   recordSpawn(parentId: string): SpawnReceipt {
     this.concurrent++;
     this.total++;
-    this.childrenByAgent.set(
+    this.concurrentChildrenByAgent.set(
       parentId,
-      (this.childrenByAgent.get(parentId) ?? 0) + 1,
+      (this.concurrentChildrenByAgent.get(parentId) ?? 0) + 1,
     );
 
     let released = false;
@@ -206,6 +206,13 @@ export class DelegationBudget {
       if (!released && !rolledBack) {
         released = true;
         this.concurrent = Math.max(0, this.concurrent - 1);
+        const prev = this.concurrentChildrenByAgent.get(parentId) ?? 0;
+        const next = prev - 1;
+        if (next <= 0) {
+          this.concurrentChildrenByAgent.delete(parentId);
+        } else {
+          this.concurrentChildrenByAgent.set(parentId, next);
+        }
       }
     };
 
@@ -214,12 +221,12 @@ export class DelegationBudget {
         rolledBack = true;
         this.concurrent = Math.max(0, this.concurrent - 1);
         this.total = Math.max(0, this.total - 1);
-        const prev = this.childrenByAgent.get(parentId) ?? 0;
+        const prev = this.concurrentChildrenByAgent.get(parentId) ?? 0;
         const next = prev - 1;
         if (next <= 0) {
-          this.childrenByAgent.delete(parentId);
+          this.concurrentChildrenByAgent.delete(parentId);
         } else {
-          this.childrenByAgent.set(parentId, next);
+          this.concurrentChildrenByAgent.set(parentId, next);
         }
       }
     };
@@ -247,10 +254,11 @@ export class DelegationBudget {
 export function buildBudgetRefusalMessage(check: BudgetCheckResult): string {
   if (check.allowed) return '';
   const hint =
-    'Work inline instead of delegating, or wait for a running agent to finish.';
+    'Work inline instead of delegating, or wait for a running child to finish.';
   switch (check.reason) {
-    case 'max_children_per_agent':
-      return `Delegation budget exceeded: ${check.detail} ${hint}`;
+    case 'max_concurrent_children_per_agent':
+      return `Delegation budget exceeded: ${check.detail} ` +
+        'Wait for a running child of this agent to finish, or work inline.';
     case 'max_concurrent_agents':
       return `Delegation budget exceeded: ${check.detail} ${hint}`;
     case 'max_total_agents':

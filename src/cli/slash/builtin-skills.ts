@@ -13,7 +13,7 @@
  * `registerBuiltinSkillCommands()` reads it.
  */
 
-import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../skills/index.js';
+import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../skills/skill-registry.js';
 // Barrel import triggers self-registration side-effects for built-in skills.
 import { scanAndRegisterUserSkills, scanSkillsFromDir } from '../../skills/all.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';

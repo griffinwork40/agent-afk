@@ -39,7 +39,7 @@ import { OpenAICompatibleProvider } from './index.js';
 import { AnthropicDirectProvider } from '../anthropic-direct/index.js';
 import type { OpenAIChunk } from './translate.js';
 import type { ResponsesStreamEvent } from './responses-translate.js';
-import { registerSkill, _resetRegistry } from '../../../skills/index.js';
+import { registerSkill, _resetRegistry } from '../../../skills/skill-registry.js';
 import { SkillExecutor } from '../../tools/skill-executor.js';
 import { SubagentManager } from '../../subagent.js';
 import * as promptLoader from '../../../skills/_lib/prompt-loader.js';

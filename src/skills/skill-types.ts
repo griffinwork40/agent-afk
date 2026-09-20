@@ -1,0 +1,229 @@
+/**
+ * Shared type definitions for the skill registry.
+ *
+ * Extracted from skill-registry.ts so the types can be imported without
+ * pulling in the singleton registry Map.
+ */
+
+import type { AgentModelInput, IAgentSession } from '../agent/types.js';
+import type { TraceSink } from '../agent/trace/index.js';
+import type { ReadScopeInputs } from '../agent/subagent-read-scope.js';
+
+/**
+ * Execution context handed to inline-registry skill handlers by the
+ * SkillExecutor. Carries credentials and default-model hints so handlers can
+ * fork sub-agents with the same auth the parent session uses.
+ *
+ * Optional in the handler signature — existing handlers that ignore it keep
+ * working. Handlers that fork sub-agents should forward `apiKey` to
+ * `new SubagentManager({ apiKey })` to avoid the "anthropic-direct provider
+ * requires config.apiKey" error when AFK auth comes from a non-env source
+ * (e.g. macOS keychain OAuth).
+ */
+export interface SkillExecutionContext {
+  /** API key or OAuth token resolved by the parent session. */
+  apiKey?: string;
+  /** Default model for the parent session (advisory). */
+  defaultModel?: AgentModelInput;
+  /** Default model for forked sub-agents (advisory). */
+  defaultSubagentModel: AgentModelInput;
+  /**
+   * The tool-use ID of the `skill` ToolCall that invoked this handler. When
+   * present, inline-handler implementations SHOULD forward it as
+   * `parentId: callId` on every `manager.forkSubagent(...)` call they make,
+   * so the stream-renderer can nest the forked subagent's synthetic
+   * `Agent(<label>)` entry under the skill's tool-lane entry instead of
+   * orphaning it at root.
+   *
+   * Without this, regular subagents forked from an inline skill handler land
+   * at the lane root the moment they emit their first event (because
+   * `meta.parentId` falls back to the parent's raw session UUID, which the
+   * renderer's Path 3 cannot resolve to a tool-lane entry — see
+   * stream-renderer.ts:262-280). The Agent header looks fine in the LIVE
+   * overlay because `agentContext` propagation hides the orphan, but on Done
+   * the scrollback block lands at root indent — the visible artifact.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions
+   * or test stubs may not provide it). In `undefined` mode the historical
+   * behavior is preserved (`parentId` defaults to `parent.sessionId` inside
+   * `SubagentManager.forkSubagent`).
+   */
+  callId?: string;
+  /**
+   * Dispatch another skill by name from inside a handler. Resolves through
+   * the same registry → plugin-body lookup the `skill` tool uses, so plugin
+   * skills (e.g. `shadow-verify`) are reachable from built-in TS handlers.
+   *
+   * Returns the skill's text output on success. Throws an `Error` whose
+   * message is the dispatch error or the skill's `isError: true` content —
+   * callers can catch and degrade gracefully.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions
+   * or test stubs may not provide it). Nesting depth is enforced by the
+   * underlying SkillExecutor; dispatch failures from a depth refusal surface
+   * as throws.
+   */
+  dispatchSkill?: (name: string, args?: string) => Promise<string>;
+  /**
+   * The parent session's witness trace writer, when one is open. Inline
+   * handlers that fork sub-agents via their OWN `new SubagentManager(...)`
+   * MUST forward this so the forked sub-agents inherit the writer and their
+   * tool activity — including `canUseTool` permission-denials, emitted as
+   * `hook_decision` block + `tool_call` (failureClass: 'permission-denied')
+   * events — lands in the parent's `trace.jsonl`. Without it the child
+   * dispatcher's `traceWriter` is undefined and every `emitHookDecision` /
+   * `emitToolCall` no-ops, so the denials a restrictive allowlist produces are
+   * visible only in the live TUI and are lost from the durable witness record
+   * (and therefore from the run receipt's refusal tally).
+   *
+   * Optional: callers must handle `undefined` (tracing disabled via
+   * `AFK_TRACE_DISABLED=1`, or older SkillExecutor versions / test stubs that
+   * do not provide it). In that case forking proceeds untraced, as before.
+   */
+  traceWriter?: TraceSink;
+  /**
+   * Reads the parent session's read scope ({@link ReadScopeInputs}) at
+   * dispatch time (wired to the root
+   * {@link SubagentManager.getReadScopeInputs}). Inline handlers that fork
+   * sub-agents via their OWN `new SubagentManager(...)` (e.g. `/mint` phases,
+   * `/audit-fit`) MUST use this to seed each manager's `parentReadRoots` via
+   * {@link resolveChildManagerReadRoots}, so the forked sub-agent inherits the
+   * parent session's full read scope — the same `child ⊇ parent` invariant the
+   * `agent` tool enforces (#544), extended to inline-skill dispatch (#547).
+   * Without it, an inline fork derives read scope from its cwd alone and
+   * silently narrows whenever the parent session is read-open or
+   * `/allow-dir`-widened beyond `[cwd, mainRoot]`.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions or
+   * test stubs). In that case forking falls back to cwd-only derivation, as
+   * before.
+   */
+  getReadScopeInputs?: () => ReadScopeInputs;
+  /**
+   * The session's shared workspace store. Inline handlers that fork sub-agents
+   * via their OWN `new SubagentManager(...)` (`/mint` phases, `/audit-fit`,
+   * user skills) MUST forward it, or their forks lose the workspace READ
+   * channel: `SubagentManager` is what carries the store into
+   * `assembleChildConfig` → `injectWorkspacePreamble`
+   * (agent/subagent/fork-child-config.ts:107), which queries entries relevant
+   * to the child's task and injects them into its system prompt.
+   *
+   * The WRITE channel is independent and already wired for every child (the
+   * provider registers `workspace_publish` against the shared store via
+   * `createChildProviderFactory`), so omitting this does NOT produce an error —
+   * it produces a fork that can publish findings but cannot see the ones its
+   * siblings already published. That asymmetry is exactly the silent failure
+   * this field exists to close, which is why every inline forking handler
+   * should thread it even though nothing breaks loudly without it.
+   *
+   * Optional: callers must handle `undefined` (older SkillExecutor versions,
+   * test stubs, or a surface with no workspace). Then the fork's manager has no
+   * store and no preamble is injected — the pre-workspace behavior, unchanged.
+   */
+  workspaceStore?: import('../agent/workspace/index.js').WorkspaceStore;
+}
+
+export interface SkillMetadata {
+  name: string;
+  description: string;
+  handler: (
+    input: unknown,
+    parentSession?: IAgentSession,
+    ctx?: SkillExecutionContext,
+  ) => Promise<unknown>;
+  /** Short hint shown alongside the skill name in the manifest, e.g. "<plan>". */
+  argumentHint?: string;
+  /** When the model should reach for this skill — surfaced in the skill manifest. */
+  whenToUse?: string;
+  /** Per-skill model override (advisory; honored where supported). */
+  model?: string;
+  /**
+   * Execution context (default `'inline'`):
+   * - `'inline'` — call the handler directly in-process (TS orchestrators).
+   * - `'fork'` — route through a subagent fork using the skill's
+   *   `prompts/system.md` (delegation; isolated child context).
+   * - `'load'` — load `prompts/system.md` (or {@link loadBody}, when set) into
+   *   the CURRENT session as the tool result; the calling agent executes it
+   *   with its existing tools (progressive disclosure; no fork). See
+   *   docs/skill-load-mode.md.
+   */
+  context?: 'inline' | 'fork' | 'load';
+  /**
+   * In-context body for `context: 'load'` skills whose body does NOT live at
+   * the built-in `src/skills/<name>/prompts/system.md` convention — i.e.
+   * disk-scanned user/project skills, whose body is the SKILL.md content.
+   *
+   * When set, {@link SkillExecutor.executeLoadedRegistrySkill} returns this
+   * string (after `$ARGUMENT(S)` substitution) instead of calling
+   * `loadSkillPrompts(name)`. Built-in load skills leave it unset and keep
+   * resolving their body from the prompts/ directory. `${SKILL_ROOT}` /
+   * `$SKILL_ROOT` placeholders MUST already be expanded by the registrant,
+   * because load mode runs in the current agent (no subagent env injection).
+   */
+  loadBody?: string;
+  /** Where the skill came from. Absent or 'builtin' = vendored TS skill; 'user' = scanned from ~/.afk/skills/; 'project' = scanned from <cwd>/.afk/skills/; `imported:<binary>` = live-read from a trusted source binary's skills dir (e.g. `imported:claude-code`) via `importFrom`. Plugin skills don't enter this registry. */
+  origin?: 'builtin' | 'user' | 'project' | `imported:${string}`;
+  /** Long-form CLI flags this skill accepts (e.g. ['--auto', '--ship']). Surfaces in tab completion and `/help`. */
+  flags?: readonly string[];
+  /**
+   * Read-only enforcement flag (default absent → read-write). When `true`, a
+   * forked subagent for this skill (`context: 'fork'`) is built with the
+   * RECON tool allowlist (no `write_file`/`edit_file`) and a mutating-bash
+   * guard. A skill is ALSO treated read-only when its name is in
+   * `DEFAULT_READ_ONLY_SKILLS` (nesting.ts) regardless of this flag — keying
+   * on name protects users running any copy of the SKILL.md.
+   */
+  readOnly?: boolean;
+  /**
+   * Public/internal tier gate.
+   *
+   * Invariant: skills tagged 'internal' are filtered from end-user surfaces
+   * (slash-command list, `--help`, tab-complete, system-prompt skill manifest)
+   * unless the runtime tier is unlocked via `AFK_INTERNAL=1`. Internal-tagged
+   * skills remain dispatchable via `getSkill()` from internal code paths even
+   * when filtered — the gate is on surfacing, not on the registry itself.
+   *
+   * Absent or 'public' = visible to everyone (default). 'internal' = hidden
+   * unless the maintainer opts in. Use 'internal' for maintainer-loop skills
+   * (forge, audit-fit), scaffolding templates (example-template), and any
+   * skill whose normal operation depends on private plugin infrastructure
+   * the end user does not have installed.
+   */
+  audience?: 'public' | 'internal';
+  /**
+   * Job-to-be-done category for grouping in the `/skills` listing.
+   *
+   * Authored at the source (in SKILL.md frontmatter or registerSkill calls),
+   * never inferred at render time. Skills without a category render under
+   * "More skills" in the listing.
+   *
+   * Valid values (render order preserved):
+   *   'Build & ship' | 'Debug & fix' | 'Understand & explore' |
+   *   'Refactor & simplify' | 'Review & verify' | 'Setup & ops' |
+   *   'Author & meta'
+   */
+  category?: SkillCategory;
+}
+
+/**
+ * Canonical category vocabulary for the `/skills` job-to-be-done grouping.
+ *
+ * The order here is the render order in the listing — built-in skills follow
+ * this order; un-categorised skills fall into "More skills" at the end.
+ * No inference at render time; categories must be authored.
+ */
+export const SKILL_CATEGORIES = [
+  'Build & ship',
+  'Debug & fix',
+  'Understand & explore',
+  'Refactor & simplify',
+  'Review & verify',
+  'Setup & ops',
+  'Author & meta',
+] as const;
+
+/** Union type of the valid authored categories. */
+export type SkillCategory = (typeof SKILL_CATEGORIES)[number];
+
+/** Bucket label for skills with no authored category. */
+export const UNCATEGORIZED_LABEL = 'More skills';

@@ -31,7 +31,7 @@ vi.mock('./slash/registry.js', () => ({
   // Other exports the module is allowed to import; not used by loading-tips.
   aliasEntries: vi.fn(() => []),
 }));
-vi.mock('../skills/index.js', () => ({
+vi.mock('../skills/skill-registry.js', () => ({
   listSkills: vi.fn(() => []),
   getSkill: vi.fn(),
   // isSkillVisible is used by harvestSkillTips; provide real implementation.
@@ -42,7 +42,7 @@ vi.mock('../skills/index.js', () => ({
 }));
 
 import { list as listSlashCommands } from './slash/registry.js';
-import { listSkills, getSkill } from '../skills/index.js';
+import { listSkills, getSkill } from '../skills/skill-registry.js';
 
 const mockedList = listSlashCommands as unknown as ReturnType<typeof vi.fn>;
 const mockedListSkills = listSkills as unknown as ReturnType<typeof vi.fn>;

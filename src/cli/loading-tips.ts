@@ -29,7 +29,7 @@
  */
 
 import { list as listSlashCommands } from './slash/registry.js';
-import { listSkills, getSkill, isSkillVisible } from '../skills/index.js';
+import { listSkills, getSkill, isSkillVisible } from '../skills/skill-registry.js';
 import { env } from '../config/env.js';
 
 export interface LoadingTip {

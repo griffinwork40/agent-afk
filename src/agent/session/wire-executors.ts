@@ -206,7 +206,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
 
   // Delegation budget: tree-wide spawn limits. Resolved once at the root and
   // shared by reference through every executor and child config. Opt-in: when
-  // no AFK_MAX_CHILDREN_PER_AGENT / AFK_MAX_CONCURRENT_AGENTS / AFK_MAX_TOTAL_AGENTS
+  // no AFK_MAX_CONCURRENT_CHILDREN_PER_AGENT / AFK_MAX_CONCURRENT_AGENTS / AFK_MAX_TOTAL_AGENTS
   // env vars are set, this is undefined and budget checks are skipped.
   const budgetConfig = resolveDelegationBudgetConfig();
   const delegationBudget = budgetConfig !== undefined ? new DelegationBudget(budgetConfig) : undefined;

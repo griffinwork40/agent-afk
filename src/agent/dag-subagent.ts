@@ -111,7 +111,7 @@ export interface SubagentDAGOptions {
    * checks `canSpawn` before forking and calls `recordSpawn` on success so
    * all DAG nodes are counted against the tree-wide concurrent/total limits.
    * Without this, a 20-node DAG would fork 20 agents with zero budget
-   * accounting. The `parentId` used for `maxChildrenPerAgent` tracking is the
+   * accounting. The `parentId` used for `maxConcurrentChildrenPerAgent` tracking is the
    * parent session's `sessionId`.
    */
   delegationBudget?: DelegationBudget;

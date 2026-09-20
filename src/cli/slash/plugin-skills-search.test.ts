@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { searchSkills, type SearchableSkill } from './plugin-skills/search.js';
-import { _resetRegistry, registerSkill } from '../../skills/index.js';
+import { _resetRegistry, registerSkill } from '../../skills/skill-registry.js';
 import { resetRegistry } from './registry.js';
 import { initialSkillsCmd, makeDynamicSkillsCmd } from './plugin-skills/listing.js';
 import { stripAnsi } from '../display.js';

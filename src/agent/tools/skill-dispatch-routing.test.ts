@@ -41,7 +41,7 @@ import {
 import { buildMessages } from '../providers/openai-compatible/messages.js';
 import type { OpenAIChunk } from '../providers/openai-compatible/translate.js';
 import { SLASH_COMMAND_ROUTING_PROMPT, TOOL_SYSTEM_PROMPT_BASE } from './system-prompt.js';
-import { registerSkill, _resetRegistry } from '../../skills/index.js';
+import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import { SkillExecutor } from './skill-executor.js';
 import { buildChildConfig } from './subagent/child-config.js';
 

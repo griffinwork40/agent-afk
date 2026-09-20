@@ -8,7 +8,7 @@
  * Split into a sibling file so `listing.ts` stays under the 350-line cap.
  */
 
-import { getSkill, listVisibleSkills } from '../../../skills/index.js';
+import { getSkill, listVisibleSkills } from '../../../skills/skill-registry.js';
 import { palette } from '../../palette.js';
 import { wrapToWidth } from '../../wrap.js';
 import { getTerminalWidth } from '../../terminal-size.js';

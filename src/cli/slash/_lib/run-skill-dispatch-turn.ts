@@ -32,7 +32,7 @@
  */
 
 import type { SlashContext, ToolEvent } from '../types.js';
-import type { SkillMetadata } from '../../../skills/index.js';
+import type { SkillMetadata } from '../../../skills/skill-registry.js';
 import type { ResponseMetadata } from '../../../agent/types/message-types.js';
 import type { ImageAttachment } from '../../input/attachments.js';
 import { createSkillRenderer } from './create-skill-renderer.js';

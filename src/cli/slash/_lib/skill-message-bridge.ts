@@ -10,7 +10,7 @@
  */
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import type { SkillMetadata } from '../../../skills/index.js';
+import type { SkillMetadata } from '../../../skills/skill-registry.js';
 import type { ImageAttachment } from '../../input/attachments.js';
 import { formatCommandBreadcrumb } from './command-tags.js';
 import { appendImageBlocks } from '../../../agent/content/image-blocks.js';

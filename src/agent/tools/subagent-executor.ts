@@ -530,7 +530,7 @@ export class SubagentExecutor implements SubagentControl {
           const message = errorMessage(err);
           // Item 2: rollback ALL budget counters on worktree-creation failure
           // (the child never ran). Without rollback, the failure permanently
-          // inflates total and childrenByAgent, exhausting lifetime caps.
+          // inflates total and concurrentChildrenByAgent, exhausting lifetime caps.
           budgetReceipt?.rollback();
           budgetReceipt = undefined;
           return {
@@ -627,7 +627,7 @@ export class SubagentExecutor implements SubagentControl {
         await handle.cancel();
         // Item 2: rollback ALL counters — the handle was forked but the child
         // never ran (cancelled between retry attempts). Rollback undoes total
-        // and childrenByAgent in addition to concurrent.
+        // and concurrentChildrenByAgent in addition to concurrent.
         budgetReceipt?.rollback();
         budgetReceipt = undefined;
         // Background: unlock + tear down the isolated worktree that will never
@@ -641,7 +641,7 @@ export class SubagentExecutor implements SubagentControl {
     } catch (err) {
       const message = errorMessage(err);
       // Item 2: fork failed — rollback ALL budget counters (concurrent + total +
-      // childrenByAgent) because the child never ran.
+      // concurrentChildrenByAgent) because the child never ran.
       budgetReceipt?.rollback();
       budgetReceipt = undefined;
       // Wave manifest: unit failed because fork threw before returning a handle.
@@ -699,7 +699,7 @@ export class SubagentExecutor implements SubagentControl {
           : undefined,
         // Item 2: use release() not rollback() — the fork succeeded, so only
         // concurrent should decrement when the background job settles; total
-        // and childrenByAgent correctly reflect a real spawn.
+        // and concurrentChildrenByAgent correctly reflect a real spawn.
         budgetRelease: budgetReceipt?.release,
         onCleanup: isolationTeardown
           ? async () => {
@@ -731,7 +731,7 @@ export class SubagentExecutor implements SubagentControl {
       } catch (err) {
         // Item 5: attachment resolution aborted — release the budget slot before
         // tearing down the handle. The fork succeeded (child existed) so use
-        // release() not rollback() — total and childrenByAgent correctly reflect
+        // release() not rollback() — total and concurrentChildrenByAgent correctly reflect
         // a real spawn even though it never ran a prompt.
         budgetReceipt?.release();
         budgetReceipt = undefined;
