@@ -13,7 +13,7 @@ import { pathToFileURL } from 'url';
 import { loadPluginEntrypoints, _resetLoadedEntrypoints } from './load-entrypoints.js';
 import type { PluginApi } from './load-entrypoints.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
-import { registerSkill, getSkill, listSkills, _resetRegistry } from '../../skills/index.js';
+import { registerSkill, getSkill, listSkills, _resetRegistry } from '../../skills/skill-registry.js';
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { SubagentManager } from '../subagent.js';
 import { describeFailure } from '../subagent/result.js';

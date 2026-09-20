@@ -22,7 +22,7 @@
  * @module agent/tools/skill-executor
  */
 
-import { getSkill } from '../../skills/index.js';
+import { getSkill } from '../../skills/skill-registry.js';
 import type { IAgentSession } from '../types.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { collectSkillEntries, discoverPluginSkillBodies, type PluginSkillBody } from './skill-bridge.js';
@@ -270,7 +270,7 @@ export class SkillExecutor {
       handler: (
         input: unknown,
         parentSession?: IAgentSession,
-        ctx?: import('../../skills/index.js').SkillExecutionContext,
+        ctx?: import('../../skills/skill-registry.js').SkillExecutionContext,
       ) => Promise<unknown>;
       name: string;
       context?: 'inline' | 'fork' | 'load';

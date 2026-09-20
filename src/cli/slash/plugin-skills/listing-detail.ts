@@ -6,7 +6,7 @@
  * "when to use", flags, source badge, and shadowed alternatives.
  */
 
-import { getSkill, isSkillVisible, listVisibleSkills, type SkillMetadata } from '../../../skills/index.js';
+import { getSkill, isSkillVisible, listVisibleSkills, type SkillMetadata } from '../../../skills/skill-registry.js';
 import { palette } from '../../palette.js';
 import { wrapToWidth } from '../../wrap.js';
 import { getTerminalWidth } from '../../terminal-size.js';

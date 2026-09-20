@@ -26,7 +26,7 @@ import {
   discoverPluginAgents,
   scanAllPluginRoots,
 } from './skill-bridge.js';
-import { registerSkill, _resetRegistry } from '../../skills/index.js';
+import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import { _resetPluginScanCache } from '../plugins-scanner.js';
 import { getPluginsDir } from '../../paths.js';
 import type { RegisteredAgent } from '../agents/types.js';

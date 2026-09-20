@@ -44,7 +44,7 @@ import type { SdkPluginConfig } from '../types/sdk-types.js';
  * drift from their source modules.
  */
 export type PluginApi = Pick<
-  typeof import('../../skills/index.js'),
+  typeof import('../../skills/skill-registry.js'),
   'registerSkill' | 'listSkills' | 'getSkill'
 > &
   Pick<typeof import('../../skills/_lib/prompt-loader.js'), 'loadSkillPrompts'> &

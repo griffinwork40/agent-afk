@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillExecutor } from './skill-executor.js';
-import { registerSkill, _resetRegistry } from '../../skills/index.js';
+import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import { SubagentManager } from '../subagent.js';
 import * as promptLoader from '../../skills/_lib/prompt-loader.js';
 import * as routingTelemetry from '../routing-telemetry.js';

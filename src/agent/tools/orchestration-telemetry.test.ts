@@ -555,7 +555,7 @@ describe('skill.dispatched / skill.completed telemetry (inline registry path)', 
     model?: string;
   }): Promise<void> {
     // Use dynamic import so the registry module is fresh per describe block.
-    const { registerSkill, _resetRegistry } = await import('../../skills/index.js');
+    const { registerSkill, _resetRegistry } = await import('../../skills/skill-registry.js');
     _resetRegistry();
     registerSkill({
       name: opts.skillName,
@@ -674,7 +674,7 @@ describe('skill.dispatched / skill.completed telemetry (inline registry path)', 
 
   it('does not emit skill.dispatched/completed when the skill is unknown', async () => {
     // Don't register anything — fall through to the not-found branch.
-    const { _resetRegistry } = await import('../../skills/index.js');
+    const { _resetRegistry } = await import('../../skills/skill-registry.js');
     _resetRegistry();
     const executor = new SkillExecutor({
       parentSession: {

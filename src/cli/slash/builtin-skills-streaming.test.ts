@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { SkillMetadata } from '../../skills/index.js';
+import type { SkillMetadata } from '../../skills/skill-registry.js';
 import { registerAll } from './index.js';
 import { resetRegistry } from './registry.js';
 import type { SlashContext, SessionStats } from './types.js';

@@ -75,8 +75,8 @@ export {
   registerSkill,
   listSkills,
   getSkill,
-} from './skills/index.js';
-export type { SkillExecutionContext, SkillMetadata } from './skills/index.js';
+} from './skills/skill-registry.js';
+export type { SkillExecutionContext, SkillMetadata } from './skills/skill-registry.js';
 export { loadSkillPrompts } from './skills/_lib/prompt-loader.js';
 // PluginApi: the host runtime API injected into a code-backed plugin's
 // default-export entrypoint. A plugin types its entrypoint as

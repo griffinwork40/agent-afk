@@ -44,7 +44,7 @@ vi.mock('../cli/slash/preflight/index.js', () => ({
   getSkillPreflightDir: (...args: unknown[]) => mockGetSkillPreflightDir(...args),
 }));
 
-vi.mock('../skills/index.js', () => ({
+vi.mock('../skills/skill-registry.js', () => ({
   getSkill: (...args: unknown[]) => mockGetSkill(...args),
 }));
 

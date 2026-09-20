@@ -9,7 +9,7 @@
 
 import type { AgentSession } from '../../../agent/session.js';
 import type { ProviderCommandInfo } from '../../../agent/provider.js';
-import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../../skills/index.js';
+import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../../skills/skill-registry.js';
 import { palette } from '../../palette.js';
 import { registerPluginAgents } from '../plugin-agents.js';
 import { registerOrReplace } from '../registry.js';

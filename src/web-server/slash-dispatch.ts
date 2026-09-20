@@ -186,7 +186,7 @@ async function buildSkillPayload(
   ] = await Promise.all([
     import('../cli/slash/_lib/skill-message-bridge.js'),
     import('../cli/slash/preflight/index.js'),
-    import('../skills/index.js'),
+    import('../skills/skill-registry.js'),
   ]);
 
   // Run preflight if registered (e.g. review-pr gathers diff context).

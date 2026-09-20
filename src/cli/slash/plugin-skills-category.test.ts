@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { _resetRegistry, registerSkill, SKILL_CATEGORIES, UNCATEGORIZED_LABEL, type SkillCategory } from '../../skills/index.js';
+import { _resetRegistry, registerSkill, SKILL_CATEGORIES, UNCATEGORIZED_LABEL, type SkillCategory } from '../../skills/skill-registry.js';
 import { resetRegistry } from './registry.js';
 import { initialSkillsCmd } from './plugin-skills.js';
 import { makeDynamicSkillsCmd } from './plugin-skills/listing.js';

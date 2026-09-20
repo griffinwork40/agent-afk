@@ -17,7 +17,7 @@ import '../../skills/all.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { listSkills, getSkill, registerSkill, isSkillVisible, evictSkillsByOrigin } from '../../skills/index.js';
+import { listSkills, getSkill, registerSkill, isSkillVisible, evictSkillsByOrigin } from '../../skills/skill-registry.js';
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
