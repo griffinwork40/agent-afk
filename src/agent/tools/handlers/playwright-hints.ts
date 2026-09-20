@@ -29,7 +29,6 @@ export {
   resetPlaywrightInstallCommandCache,
 } from '../../../browser/playwright-missing.js';
 import { errorMessage } from '../../../utils/errors.js';
-export type { PlaywrightHintOptions } from '../../../browser/playwright-missing.js';
 
 /**
  * Classify a thrown browser error as a navigation/action timeout, for the

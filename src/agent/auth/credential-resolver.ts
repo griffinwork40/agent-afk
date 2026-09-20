@@ -116,14 +116,6 @@ export function loadXaiApiKey(): string | undefined {
 }
 
 /**
- * @deprecated Use {@link loadXaiApiKey}. Kept as a named alias so older call
- * sites do not silently reintroduce OAuth-token injection.
- */
-export function loadXaiCredential(): string | undefined {
-  return loadXaiApiKey();
-}
-
-/**
  * Resolve a provider-appropriate credential for the given model string.
  *
  * Routing:

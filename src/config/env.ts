@@ -133,15 +133,6 @@ export const ENV_REGISTRY = [
     category: 'model',
   },
   {
-    name: 'AFK_DIAGNOSE_BASELINE',
-    description: 'Kill switch for /diagnose reproducer baseline execution. When set to \'0\', the /diagnose skill skips executing the detected reproducer command for a ground-truth baseline; default enabled (runs). Set to \'0\' to disable.',
-    type: 'boolean',
-    required: false,
-    default: '1',
-    example: '0',
-    category: 'debug',
-  },
-  {
     name: 'AFK_DISABLE_PROMPT_CACHE',
     description: 'Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled.',
     type: 'boolean',
