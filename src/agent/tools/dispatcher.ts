@@ -32,17 +32,11 @@ import { PathGrantManager, type GrantSnapshot } from './grant-manager.js';
 import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
 
 import type { TraceSink } from '../trace/index.js';
-import { defaultConcurrencyClassifier, partitionIntoBatches } from './dispatch-batching.js';
+import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
-import {
-  runConcurrentBatch,
-  runSequentialBatch,
-  runParallelGates,
-  stampBatchMetadata,
-} from './dispatcher.batch-process.js';
-import type { IndexedCall, BatchExecDeps } from './dispatcher.batch-process.js';
+import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
   resetDenialBreaker as _resetDenialBreaker,
@@ -704,136 +698,24 @@ export class SessionToolDispatcher implements ToolDispatcher {
     return coreResult;
   }
 
-  /**
-   * Execute a batch of tool calls with parallel dispatch for concurrency-safe
-   * tools. Unsafe tools run sequentially. Results are returned in the same
-   * order as the input `calls` array regardless of completion order.
-   *
-   * Hook ordering: PreToolUse fires for every call BEFORE execution starts.
-   * For concurrency-safe calls (agent, skill, compose, reads), gates run in
-   * parallel since their hooks are independent; for unsafe calls (bash,
-   * write_file), gates run sequentially to preserve interactive-prompt
-   * ordering. Blocked calls get an immediate error result and are excluded
-   * from execution. PostToolUse fires per-tool after completion.
-   *
-   * Implementation: the two execution branches (concurrent wave-admission and
-   * sequential loop) are extracted into {@link runConcurrentBatch} and
-   * {@link runSequentialBatch} in `dispatcher.batch-process.ts` to reduce
-   * nesting depth. This method retains the phase-1 gate loop, batch partitioning,
-   * batch-stamp pass, and the reset-on-success denial-breaker reset.
-   *
-   * `onActivity` is the live in-flight channel (issue #516). It fires from
-   * inside the concurrency pool's worker body on every start and every settle,
-   * carrying the ids ACTUALLY running at that moment — so a caller can badge a
-   * genuine parallel wave while it is still in flight. It is never called with
-   * a predicted or queued set: the single-call fast path above returns before
-   * the pool is reached (a lone call is not a parallel wave), and the
-   * sequential branch never reports (one call runs at a time by definition).
-   */
+  // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
+  // the reset-on-success denial-breaker reset were extracted to
+  // dispatcher.execute-batch.ts to bring dispatcher.ts below the 350-code-line
+  // ceiling. The class delegates via executeBatchImpl imported from that module,
+  // threaded through an ExecuteBatchDeps bundle wired here.
   async executeBatch(calls: ToolCall[], onActivity?: ToolActivityReporter): Promise<ToolResult[]> {
-    if (calls.length === 0) return [];
-    if (calls.length === 1) return [await this.execute(calls[0]!)];
-
-    const results: ToolResult[] = new Array(calls.length);
-    const blocked = new Set<number>();
-
-    // Phase 1: PreToolUse + permission gates for all calls.
-    // Blocked calls get error results immediately and skip execution.
-    //
-    // Concurrency-safe calls run their gates in parallel: their hooks are
-    // independent (path-approval auto-denies forks without prompting, so
-    // no human interaction serializes them), and the per-call state they
-    // read (permissions, read-only-bash mode) is immutable within a turn.
-    // The repeat-circuit-breaker is sequential-sensitive, but for parallel
-    // calls the "consecutive" ordering is arbitrary (the model emitted
-    // them in one turn), and Phase 2's wave-admission loop already
-    // re-checks the repeat-failure guard before execution begins.
-    //
-    // Unsafe calls still run sequentially: their hooks MAY prompt (the
-    // path-approval hook on an interactive surface), so ordering matters.
-    const safeIndices: number[] = [];
-    const unsafeIndices: number[] = [];
-    for (let i = 0; i < calls.length; i++) {
-      const call = calls[i]!;
-      if (call.signal.aborted) {
-        results[i] = { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
-        blocked.add(i);
-        continue;
-      }
-      if (this.classifier(call.name, call.input)) {
-        safeIndices.push(i);
-      } else {
-        unsafeIndices.push(i);
-      }
-    }
-
-    // Gate concurrency-safe calls in parallel.
-    await runParallelGates(
-      safeIndices, calls, results, blocked,
-      (call) => this.runPreDispatchGates(call),
-    );
-
-    // Gate unsafe calls sequentially (may prompt on interactive surfaces).
-    for (const i of unsafeIndices) {
-      const gateResult = await this.runPreDispatchGates(calls[i]!);
-      if (gateResult) {
-        results[i] = gateResult;
-        blocked.add(i);
-      }
-    }
-
-    // Phase 2: partition non-blocked calls into batches and execute.
-    const executableCalls: IndexedCall[] = calls
-      .map((call, i) => ({ call, originalIndex: i }))
-      .filter((_, i) => !blocked.has(i));
-
-    if (executableCalls.length === 0) return results;
-
-    const batches = partitionIntoBatches(
-      executableCalls.map((e) => e.call),
-      this.classifier,
-    );
-
-    // Dependency bundle threaded into the extracted batch helpers.
-    // Per-call abort check, not batch-level: each ToolCall carries its own
-    // `signal` and they are not type-constrained to be identical across a
-    // batch. Checking only `calls[0]!.signal` was correct by coincidence
-    // because the provider loop currently assigns the same per-turn signal
-    // to every call, but a future refactor to per-tool signals would
-    // silently misbehave in both directions — falsely aborting fresh calls
-    // when call[0] is stale, and falsely dispatching aborted calls when
-    // call[0] is fresh. Both helpers perform per-call abort checks.
-    const batchDeps: BatchExecDeps = {
+    return executeBatchImpl(calls, {
+      execute: (call) => this.execute(call),
+      classifier: this.classifier,
+      runPreDispatchGates: (call) => this.runPreDispatchGates(call),
+      resetDenialBreaker: () => this.resetDenialBreaker(),
       repeatFailureGuard: this.repeatFailureGuard,
       repeatBreakerExemptTools: REPEAT_BREAKER_EXEMPT_TOOLS,
       executeCore: (call) => this.executeCore(call),
       subagentExecutor: this.subagentExecutor,
       sessionId: this.sessionId,
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
-      onActivity,
-    };
-
-    for (const batch of batches) {
-      if (batch.isConcurrencySafe) {
-        await runConcurrentBatch(batch, executableCalls, results, batchDeps);
-      } else {
-        await runSequentialBatch(batch, executableCalls, results, batchDeps);
-      }
-
-      // Stamp batch membership onto each result. See stampBatchMetadata in
-      // dispatcher.batch-process.ts for full rationale and field semantics.
-      stampBatchMetadata(batch, executableCalls, results);
-    }
-
-    // Reset-on-success (#546): if any call in this batch executed successfully,
-    // the fork made progress, so the denial breaker's consecutive-denial count
-    // restarts. Blocked/denied calls carry isError:true and never reset. See
-    // recordForkReadDenial.
-    if (results.some((r) => r !== undefined && r.isError !== true)) {
-      this.resetDenialBreaker();
-    }
-
-    return results;
+    }, onActivity);
   }
 
   /**
