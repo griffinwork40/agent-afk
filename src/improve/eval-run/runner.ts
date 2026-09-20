@@ -47,7 +47,7 @@
  */
 
 import { randomBytes } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
   EvalRunIndexEventSchema,
@@ -68,6 +68,7 @@ import {
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
 import { atomicWriteFile } from '../../utils/envFile.js';
+import { appendJsonlIndex, formatYyyymmdd } from '../_lib/writer-utils.js';
 import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import type { IdContext } from '../eval-gen/writer.js';
 import { makeCheck, resolveContract, snapshot, supportedContractPatterns } from './contracts.js';
@@ -99,13 +100,6 @@ export function generateEvalRunId(cardSlug: string, ctx: IdContext = {}): string
     throw new Error(`generateEvalRunId: randomSuffix must be 6 lowercase hex chars (got '${suffix}')`);
   }
   return `${cardSlug}-run-${yyyymmdd}-${suffix}`;
-}
-
-function formatYyyymmdd(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -559,16 +553,9 @@ function readEvalRunIfExists(path: string): EvalRun | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Index append + atomic writes (matching eval-gen writer conventions)
+// Index append
 // ---------------------------------------------------------------------------
 
 function appendIndex(event: EvalRunIndexEvent): void {
-  const validated = EvalRunIndexEventSchema.parse(event);
-  const dir = getEvalRunsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  try {
-    writeFileSync(getEvalRunsIndexPath(), JSON.stringify(validated) + '\n', { flag: 'a' });
-  } catch {
-    // Best-effort, matching the card / proposal / eval-case writers.
-  }
+  appendJsonlIndex(EvalRunIndexEventSchema, getEvalRunsDir(), getEvalRunsIndexPath(), event);
 }

@@ -55,6 +55,7 @@
 
 import type { DetectorResult, FailureEvidence, Severity } from '../../schemas.js';
 import type { SessionRead } from '../reader.js';
+import { clampExcerpt, MAX_EVIDENCE_PER_CARD } from './_lib.js';
 
 /** Default minimum sessions sharing a reason before a card fires. */
 export const DEFAULT_CLOSURE_ANOMALY_MIN_OCCURRENCES = 1;
@@ -167,9 +168,6 @@ function distinctSessionIds(sightings: ClosureSighting[]): string[] {
   return [...new Set(sightings.map((s) => s.sessionId))];
 }
 
-/** Hard cap on evidence rows per card. Same convention as repeated-tool-use. */
-const MAX_EVIDENCE_PER_CARD = 8;
-
 /**
  * Contract: `sessionIds` is the deduped id list — one entry per witness trace
  * file (see {@link distinctSessionIds}) — and drives the SESSION-scoped
@@ -281,11 +279,6 @@ export function makeSlug(reason: string): string {
 // ---------------------------------------------------------------------------
 // Local helpers
 // ---------------------------------------------------------------------------
-
-function clampExcerpt(rawLine: string): string {
-  if (rawLine.length <= 2000) return rawLine;
-  return rawLine.slice(0, 1997) + '...';
-}
 
 function formatUsd(n: number): string {
   return `$${n.toFixed(4)}`;
