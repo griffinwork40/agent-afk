@@ -115,6 +115,24 @@ describe('multiline idle input does not duplicate the stage rail', () => {
     expect(topRow1, 'topRow must be stable across repaints (no drift)').toBe(topRow2);
     expect(topRow2, 'topRow must be stable across repaints (no drift)').toBe(topRow3);
 
+    // Value-direction assertion: when the input wraps to 2+ physical rows in
+    // cursor-follow mode, the frame grows downward from the anchor, so the
+    // frame top must sit AT OR ABOVE the anchor row. Pre-fix, physicalRows
+    // was always 1 (logical line count), so targetBottomRow = anchorRow and
+    // the renderer placed the (under-sized) frame top AT anchorRow. Post-fix,
+    // physicalRows ≥ 2 and targetBottomRow ≥ anchorRow + 1, so the renderer
+    // places the frame top BELOW anchorRow — still ≤ anchorRow is wrong; the
+    // correct invariant is topRow ≤ anchorRow (frame top is at or above the
+    // anchor). A misconfigured measure() stub that returns lineCount=1
+    // regardless of wrapping would produce topRow = anchorRow (= 3), which
+    // would still satisfy this assertion — but a stub returning lineCount=0
+    // or lineCount=99 would not, so this pins the direction.
+    const anchorRow = (c as unknown as { anchorRow: number }).anchorRow;
+    expect(
+      topRow1,
+      'frame top must be at or above anchorRow when input wraps (value-direction)',
+    ).toBeLessThanOrEqual(anchorRow);
+
     statusLine.stop(); c.disarm();
   }, 15_000);
 });
