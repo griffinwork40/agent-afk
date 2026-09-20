@@ -41,7 +41,11 @@ import {
   runPreDispatchGates as _runPreDispatchGates,
   resetDenialBreaker as _resetDenialBreaker,
 } from './dispatcher.pre-dispatch-gates.js';
-import type { PreDispatchGateMutableState, PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
+import type {
+  PreDispatchGateMutableState,
+  PreDispatchGateDeps,
+  RunPreDispatchGatesOpts,
+} from './dispatcher.pre-dispatch-gates.js';
 import {
   executeCore as _executeCore,
   isRegisteredTool as _isRegisteredTool,
@@ -663,12 +667,16 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // to dispatcher.pre-dispatch-gates.ts to bring dispatcher.ts below the
   // 350-code-line ceiling. The class delegates via `_runPreDispatchGates` and
   // `_resetDenialBreaker` imported from that module, threaded through `gateDeps()`.
-  private async runPreDispatchGates(call: ToolCall): Promise<ToolResult | null> {
+  private async runPreDispatchGates(
+    call: ToolCall,
+    opts?: RunPreDispatchGatesOpts,
+  ): Promise<ToolResult | null> {
     return _runPreDispatchGates(
       call,
       this.gateDeps(),
       REPEAT_BREAKER_EXEMPT_TOOLS,
       REPEAT_CIRCUIT_BREAKER_THRESHOLD,
+      opts,
     );
   }
 
@@ -707,7 +715,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     return executeBatchImpl(calls, {
       execute: (call) => this.execute(call),
       classifier: this.classifier,
-      runPreDispatchGates: (call) => this.runPreDispatchGates(call),
+      runPreDispatchGates: (call, opts) => this.runPreDispatchGates(call, opts),
       resetDenialBreaker: () => this.resetDenialBreaker(),
       repeatFailureGuard: this.repeatFailureGuard,
       repeatBreakerExemptTools: REPEAT_BREAKER_EXEMPT_TOOLS,
@@ -715,6 +723,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       subagentExecutor: this.subagentExecutor,
       sessionId: this.sessionId,
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
+      gateDeps: () => this.gateDeps(),
     }, onActivity);
   }
 

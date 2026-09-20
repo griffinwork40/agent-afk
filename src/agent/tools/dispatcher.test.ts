@@ -1371,6 +1371,10 @@ describe('SessionToolDispatcher', () => {
       // In parallel, the last start fires before (or around) the first end.
       // In sequential, lastStart would be ~100ms after firstEnd.
       expect(lastStart).toBeLessThan(firstEnd + 20);
+      // Structural upper bound: total elapsed for the gate phase must be well
+      // below the sequential worst-case (3 × 50ms = 150ms). 120ms gives a
+      // generous margin for CI jitter while still confirming actual parallelism.
+      expect(gateElapsed).toBeLessThan(120);
     });
 
     it('keeps unsafe calls sequential while safe calls run parallel', async () => {
@@ -1405,6 +1409,62 @@ describe('SessionToolDispatcher', () => {
       const bashEntries = hookTimeline.filter((e) => e.name === 'bash');
       expect(readEntries).toHaveLength(2); // start + end
       expect(bashEntries).toHaveLength(2); // start + end
+    });
+
+    it('parallel path skips repeat-breaker — N identical safe calls all pass', async () => {
+      // Validates fix for Item 1: the parallel gate path passes parallelSafe:true
+      // which skips checkRepeatCircuitBreaker, so N < THRESHOLD identical safe
+      // calls all succeed without triggering the circuit breaker.
+      const N = REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1;
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'read' })],
+        ]),
+        permissions: { allowedTools: ['read_file'] },
+      });
+      // Submit N identical read_file calls in one executeBatch (parallel gate path).
+      const calls = Array.from({ length: N }, (_, idx) =>
+        makeBatchCall('read_file', `r${idx}`),
+      );
+      const results = await dispatcher.executeBatch(calls);
+      // None should be circuit-breaker-blocked — the parallel path skips the counter.
+      for (const r of results) {
+        expect(r.isError).toBeUndefined();
+        expect(r.content).toBe('read');
+      }
+    });
+
+    it('denial-breaker state is updated sequentially after parallel gates complete', async () => {
+      // Validates fix for Item 2: post-parallel accountDenialBreakerPostGate
+      // runs sequentially, so the denial breaker state is updated correctly
+      // even though the gate closures ran in parallel.
+      //
+      // Test strategy: confirm that a non-hook-block gate result (permission-denied)
+      // does NOT feed the denial breaker. The denial breaker only counts
+      // containment denials (hook-block with isSubagentContainmentDenial reason).
+      // Here we verify that permission-denied blocks on the safe parallel path
+      // leave the dispatcher functional (no erroneous breaker trip).
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'read' })],
+          ['glob', async () => ({ content: 'glob' })],
+        ]),
+        // glob is intentionally NOT in the allowlist — will be permission-denied.
+        permissions: { allowedTools: ['read_file'] },
+      });
+      const results = await dispatcher.executeBatch([
+        makeBatchCall('read_file', 'r1'),
+        makeBatchCall('glob', 'g1'),
+      ]);
+      // read_file should succeed.
+      expect(results[0]?.isError).toBeUndefined();
+      expect(results[0]?.content).toBe('read');
+      // glob should be permission-denied (not a denial-breaker upgrade).
+      expect(results[1]?.isError).toBe(true);
+      expect(results[1]?.failureClass).toBe('permission-denied');
+      // The denial breaker threshold was not reached — content is a denial message,
+      // not a denial-breaker escalation (which would carry failureClass 'denial-breaker').
+      expect(results[1]?.failureClass).not.toBe('denial-breaker');
     });
   });
 

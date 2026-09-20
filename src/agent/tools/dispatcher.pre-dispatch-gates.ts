@@ -402,6 +402,50 @@ export function resetDenialBreaker(state: PreDispatchGateMutableState): void {
 }
 
 /**
+ * Post-parallel denial-breaker accounting for blocked safe calls.
+ *
+ * When `runPreDispatchGates` runs with `parallelSafe: true`, it skips the
+ * `recordForkReadDenial` read-modify-write to avoid a race. This function
+ * re-runs that accounting sequentially after `runParallelGates` returns, so
+ * the denial breaker still fires when the threshold is reached — just counted
+ * AFTER the parallel wave settles rather than inside it.
+ *
+ * Callers: {@link executeBatchImpl} iterates the `blocked` set for safe
+ * indices and calls this once per blocked safe call whose gate result
+ * indicates a hook-block denial.
+ *
+ * Returns the (potentially upgraded) `ToolResult`: at the threshold it
+ * replaces the original block with a `denial-breaker` error, identical to
+ * what `recordForkReadDenial` would have returned in the sequential path.
+ */
+export function accountDenialBreakerPostGate(
+  call: ToolCall,
+  blockReason: string | undefined,
+  blockResult: ToolResult,
+  deps: PreDispatchGateDeps,
+): ToolResult {
+  return recordForkReadDenial(call, blockReason, blockResult, deps);
+}
+
+/**
+ * Options for {@link runPreDispatchGates}.
+ */
+export interface RunPreDispatchGatesOpts {
+  /**
+   * When true, skip the `checkRepeatCircuitBreaker` and `recordForkReadDenial`
+   * read-modify-write counter updates. Set by {@link executeBatchImpl} for the
+   * parallel gate path (concurrency-safe calls) so simultaneous gate closures
+   * do not race on `state.repeatBreaker` or `state.denialBreaker`.
+   *
+   * Invariant: only the parallel-gate path in executeBatch sets this to true.
+   * The sequential paths — the unsafe-call loop and the single `execute()` —
+   * always use the default (false), so counter accounting stays sequential and
+   * correct for those callers.
+   */
+  parallelSafe?: boolean;
+}
+
+/**
  * Shared 7-step pre-dispatch gate chain used by both {@link execute} and
  * {@link executeBatch}'s phase-1 admission loop: PreToolUse hook, static
  * allowlist, in-process `canUseTool` callback, read-only-bash gate, repeat
@@ -421,6 +465,7 @@ export async function runPreDispatchGates(
   deps: PreDispatchGateDeps,
   repeatBreakerExemptTools: ReadonlySet<string>,
   repeatCircuitBreakerThreshold: number,
+  opts?: RunPreDispatchGatesOpts,
 ): Promise<ToolResult | null> {
   // 1. PreToolUse hook — can block. Routed through dispatchPreToolUse
   // so the witness-layer hook_decision event lands automatically.
@@ -452,19 +497,20 @@ export async function runPreDispatchGates(
       });
     } catch (err) {
       if (err instanceof HookBlockedError) {
-        return recordForkReadDenial(
-          call,
-          err.reason,
-          {
-            content:
-              `Tool "${call.name}" blocked by PreToolUse hook` +
-              `${err.reason ? `: ${err.reason}` : ''}` +
-              `${err.injectContext ? `\n\n${err.injectContext}` : ''}`,
-            isError: true,
-            failureClass: 'hook-block',
-          },
-          deps,
-        );
+        const blockResult: ToolResult = {
+          content:
+            `Tool "${call.name}" blocked by PreToolUse hook` +
+            `${err.reason ? `: ${err.reason}` : ''}` +
+            `${err.injectContext ? `\n\n${err.injectContext}` : ''}`,
+          isError: true,
+          failureClass: 'hook-block',
+        };
+        // Skip the read-modify-write on state.denialBreaker when called from
+        // the parallel-gate path — concurrent closures would race on the shared
+        // counter. The caller (executeBatchImpl) handles denial accounting
+        // sequentially after runParallelGates returns.
+        if (opts?.parallelSafe) return blockResult;
+        return recordForkReadDenial(call, err.reason, blockResult, deps);
       }
       throw err;
     }
@@ -492,13 +538,18 @@ export async function runPreDispatchGates(
 
   // 2c. Repeat-loop circuit breaker. Short-circuits no-progress loops where
   // the model calls the same tool with byte-identical input N times in a row.
-  const repeatBlock = checkRepeatCircuitBreaker(
-    call,
-    repeatBreakerExemptTools,
-    deps.state,
-    repeatCircuitBreakerThreshold,
-  );
-  if (repeatBlock) return repeatBlock;
+  // Skipped on the parallel-gate path (parallelSafe) to avoid a race on
+  // state.repeatBreaker — concurrent closures cannot safely share a
+  // read-modify-write counter. The sequential paths still run this gate.
+  if (!opts?.parallelSafe) {
+    const repeatBlock = checkRepeatCircuitBreaker(
+      call,
+      repeatBreakerExemptTools,
+      deps.state,
+      repeatCircuitBreakerThreshold,
+    );
+    if (repeatBlock) return repeatBlock;
+  }
 
   // 2c-bis. Enforcing repeat-FAILURE guard (#723). Unlike the advisory
   // breaker above, this one stops execution: a call that has already failed

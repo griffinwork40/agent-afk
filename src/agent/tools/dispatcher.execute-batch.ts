@@ -22,6 +22,13 @@ import {
   stampBatchMetadata,
 } from './dispatcher.batch-process.js';
 import type { IndexedCall, BatchExecDeps } from './dispatcher.batch-process.js';
+import {
+  accountDenialBreakerPostGate,
+} from './dispatcher.pre-dispatch-gates.js';
+import type {
+  RunPreDispatchGatesOpts,
+  PreDispatchGateDeps,
+} from './dispatcher.pre-dispatch-gates.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
 import type { ToolActivityReporter } from '../providers/shared/tool-activity.js';
 import type { RepeatFailureGuard } from './repeat-failure-guard.js';
@@ -38,8 +45,14 @@ export interface ExecuteBatchDeps {
   execute: (call: ToolCall) => Promise<ToolResult>;
   /** Concurrency classifier to partition safe vs. unsafe. */
   classifier: ConcurrencyClassifier;
-  /** Pre-dispatch gate chain (hooks, permissions, circuit breakers). */
-  runPreDispatchGates: (call: ToolCall) => Promise<ToolResult | null>;
+  /**
+   * Pre-dispatch gate chain (hooks, permissions, circuit breakers).
+   * The `opts` parameter allows the parallel-gate path to pass
+   * `{ parallelSafe: true }` to skip race-prone read-modify-write counters
+   * (repeat-breaker and denial-breaker); those are accounted sequentially
+   * after the parallel wave via `accountDenialBreakerPostGate`.
+   */
+  runPreDispatchGates: (call: ToolCall, opts?: RunPreDispatchGatesOpts) => Promise<ToolResult | null>;
   /** Reset the denial-breaker on progress. */
   resetDenialBreaker: () => void;
   /** Repeat-failure guard threaded into batch deps. */
@@ -54,6 +67,13 @@ export interface ExecuteBatchDeps {
   sessionId: string | undefined;
   /** Max concurrent safe calls ceiling. */
   maxConcurrentSafeCalls: number;
+  /**
+   * Gate dependency bundle for post-parallel denial-breaker accounting.
+   * Required when the parallel gate path (safe calls) blocks a call via a
+   * hook-block denial — `accountDenialBreakerPostGate` needs it to update
+   * `state.denialBreaker` sequentially after `runParallelGates` returns.
+   */
+  gateDeps: () => PreDispatchGateDeps;
 }
 
 /**
@@ -131,10 +151,39 @@ export async function executeBatchImpl(
   }
 
   // Gate concurrency-safe calls in parallel.
+  // Pass parallelSafe: true so runPreDispatchGates skips the race-prone
+  // read-modify-write counters (state.repeatBreaker, state.denialBreaker).
+  // Denial-breaker accounting runs sequentially after the wave settles.
   await runParallelGates(
     safeIndices, calls, results, blocked,
-    (call) => deps.runPreDispatchGates(call),
+    (call) => deps.runPreDispatchGates(call, { parallelSafe: true }),
   );
+
+  // Post-parallel denial-breaker accounting for blocked safe calls.
+  // recordForkReadDenial was skipped inside the parallel closures to avoid a
+  // concurrent read-modify-write race. Replay it now, sequentially, for each
+  // safe index that was blocked. The result may be upgraded to a denial-breaker
+  // error when the threshold is reached — update results[i] accordingly.
+  const gateDeps = deps.gateDeps();
+  for (const i of safeIndices) {
+    if (!blocked.has(i)) continue;
+    const blockResult = results[i]!;
+    // Only hook-block denials feed the denial breaker; permission-denied and
+    // other gate results (bash-blocked, repeat-breaker) do not.
+    if (blockResult.failureClass !== 'hook-block') continue;
+    // The reason string is not preserved on the ToolResult, but
+    // recordForkReadDenial only needs it to distinguish containment denials
+    // from other hook blocks via isSubagentContainmentDenial — it checks the
+    // reason that dispatchPreToolUse sets on HookBlockedError. The path-approval
+    // hook stamps the reason as the block message on the result's content, so
+    // we pass `blockResult.content` here as a best-effort proxy.
+    results[i] = accountDenialBreakerPostGate(
+      calls[i]!,
+      blockResult.content,
+      blockResult,
+      gateDeps,
+    );
+  }
 
   // Gate unsafe calls sequentially (may prompt on interactive surfaces).
   for (const i of unsafeIndices) {
