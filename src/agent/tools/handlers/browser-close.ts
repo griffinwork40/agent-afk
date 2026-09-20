@@ -11,11 +11,9 @@
  */
 
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
-import type { BrowserHandlerOptions } from './browser-open.js';
-import { env } from '../../../config/env.js';
+import type { BrowserHandlerOptions } from './browser-provider.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
-
-import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
+import { acquireBrowserProvider } from './browser-provider.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
@@ -27,36 +25,9 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       return { content: `browser_close aborted: ${msg}`, isError: true };
     }
 
-    const sessionId = env.AFK_SESSION_ID ?? 'default';
-    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-      return {
-        content: `Invalid AFK_SESSION_ID: must match /^[a-zA-Z0-9_-]+$/, got: ${JSON.stringify(sessionId)}`,
-        isError: true,
-      };
-    }
-
-    let provider: import('../../../browser/provider.js').BrowserProvider;
-    let routingBackend: string | undefined;
-    let routingReason: string | undefined;
-    try {
-      if (opts.getBrowserProvider) {
-        provider = await opts.getBrowserProvider();
-      } else {
-        const { getBrowserProvider, getLastRoutingDecision } = await import('../../../browser/registry.js');
-        provider = await getBrowserProvider();
-        const decision = getLastRoutingDecision();
-        if (decision) {
-          routingBackend = decision.backend;
-          routingReason = decision.reason;
-        }
-      }
-    } catch (err) {
-      const msg = errorMessage(err);
-      if (isPlaywrightMissing(msg)) {
-        return { content: playwrightMissingHint(msg), isError: true };
-      }
-      return { content: `browser_close failed to get provider: ${msg}`, isError: true };
-    }
+    const acquired = await acquireBrowserProvider('browser_close', opts);
+    if (!acquired.ok) return acquired;
+    const { sessionId, provider, routingBackend, routingReason } = acquired;
 
     const t0 = Date.now();
     try {
