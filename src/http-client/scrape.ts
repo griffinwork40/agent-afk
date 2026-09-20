@@ -26,6 +26,7 @@ import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.
 import { assertEgressAllowed, guardedFetch, EgressBlockedError } from './egress-guard.js';
 import type { EgressGuardOptions } from './egress-guard.js';
 import { debugLog } from '../utils/debug.js';
+import { errorMessage } from '../utils/errors.js';
 
 /** Content-types we treat as HTML (run the extraction pipeline). */
 const HTMLISH_RE = /(text\/html|application\/xhtml\+xml)/i;
@@ -278,7 +279,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // content, degrade gracefully to it. If a missing-Playwright error is the
     // only signal AND we have nothing, re-throw it so the handler can hint.
     if (fetched === null) {
-      const rMsg = renderErr instanceof Error ? renderErr.message : String(renderErr);
+      const rMsg = errorMessage(renderErr);
       const fMsg =
         fetchErr instanceof Error ? fetchErr.message : `HTTP ${fetchStatus ?? 'error'}`;
       const err = new Error(

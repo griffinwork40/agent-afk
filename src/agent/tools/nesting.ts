@@ -438,6 +438,8 @@ export function createChildSkillExecutorFactory(
   // cwd / traceWriter / defaultSubagentModel propagation leaks documented above.
   // Trailing optional so legacy positional callers stay valid.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget threaded from root. Trailing optional.
+  delegationBudget?: import('./delegation-budget.js').DelegationBudget,
 ): (
   depth: number,
   maxDepth: number,
@@ -536,6 +538,7 @@ export function createChildSkillExecutorFactory(
       // executor's own fork managers seed the sibling-findings preamble. Mirrors
       // the traceWriter / cwd propagation above; see this factory's parameter.
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+      ...(delegationBudget !== undefined ? { delegationBudget } : {}),
       // Fix A (#skill-recursion): execution guard fires when grandchild calls same skill.
       ...(skillDispatchName !== undefined ? { skillDispatchName } : {}),
     });

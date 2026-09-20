@@ -29,6 +29,7 @@ import {
   unitPath,
 } from './paths.js';
 import { renderPathUnit, renderRestartUnit, renderServiceUnit } from './unit.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Internal install opts — adds a test seam over the neutral options. */
 export interface SystemdInstallOptions extends ServiceInstallOptions {
@@ -52,7 +53,7 @@ function systemctlUser(args: string[]): void {
 function errorDetail(err: unknown): string {
   const stderr = (err as { stderr?: Buffer | string }).stderr;
   const text = stderr ? stderr.toString().trim() : '';
-  return text || (err as Error).message;
+  return text || errorMessage(err);
 }
 
 /**
@@ -108,7 +109,7 @@ function atomicWrite(path: string, content: string): string | undefined {
   try {
     writeFileSync(tmpPath, content, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
   } catch (err) {
-    return `Failed to write unit (tmp ${tmpPath}): ${(err as Error).message}`;
+    return `Failed to write unit (tmp ${tmpPath}): ${errorMessage(err)}`;
   }
   try {
     renameSync(tmpPath, path);
@@ -118,7 +119,7 @@ function atomicWrite(path: string, content: string): string | undefined {
     } catch {
       // Ignore — the rename error is the actionable one.
     }
-    return `Failed to install unit (rename ${tmpPath} → ${path}): ${(err as Error).message}`;
+    return `Failed to install unit (rename ${tmpPath} → ${path}): ${errorMessage(err)}`;
   }
   return undefined;
 }
@@ -160,7 +161,7 @@ export function installSystemdService(name: ServiceName, opts: SystemdInstallOpt
   try {
     args = resolveProgramArguments(name, opts._entrypointExistsCheck);
   } catch (err) {
-    return { kind: 'failed', reason: (err as Error).message };
+    return { kind: 'failed', reason: errorMessage(err) };
   }
   const watchPaths = opts.noWatch ? undefined : resolveWatchPaths(name, opts._entrypointExistsCheck);
   const logFile = serviceLogPath(name);
@@ -326,7 +327,7 @@ export function uninstallSystemdService(name: ServiceName): ServiceUninstallOutc
     if (hadPathUnit) rmSync(pPath, { force: true });
     if (hadRestartUnit) rmSync(rPath, { force: true });
   } catch (err) {
-    return { kind: 'failed', reason: `Failed to remove unit: ${(err as Error).message}` };
+    return { kind: 'failed', reason: `Failed to remove unit: ${errorMessage(err)}` };
   }
 
   // Best-effort reload so systemd forgets the removed unit immediately.

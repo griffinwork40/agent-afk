@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/index.mjs';
-import type { SkillMetadata } from '../../../skills/index.js';
+import type { SkillMetadata } from '../../../skills/skill-registry.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
 
 function getTextBlock(block: ContentBlockParam | undefined): { type: 'text'; text: string } {

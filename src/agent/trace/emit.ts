@@ -43,148 +43,63 @@ import type {
   SubagentLifecyclePayload,
   ToolCallPayload,
   TraceSink,
+  TraceEventInput,
 } from './index.js';
 
-export async function emitToolCall(
+/**
+ * Generic emit helper — handles the common pattern of every trace emit
+ * function: no-op when writer is absent, write the event, swallow errors
+ * with `reportArtifactFailure` on first failure per writer.
+ *
+ * The `K` parameter is inferred from the `kind` literal, which lets
+ * TypeScript narrow the payload type automatically through the
+ * {@link TraceEventInput} discriminated union.
+ */
+async function emitTrace<K extends TraceEventInput['kind']>(
   writer: TraceSink | undefined,
-  payload: ToolCallPayload,
+  kind: K,
+  payload: Extract<TraceEventInput, { kind: K }>['payload'],
 ): Promise<void> {
   if (!writer) return;
   try {
-    await writer.write({ kind: 'tool_call', payload });
+    await writer.write({ kind, payload } as TraceEventInput);
   } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'tool_call', err);
+    reportArtifactFailure('trace.emit', writer, kind, err);
   }
 }
 
-export async function emitHookDecision(
-  writer: TraceSink | undefined,
-  payload: HookDecisionPayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'hook_decision', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'hook_decision', err);
-  }
-}
+export const emitToolCall = (w: TraceSink | undefined, p: ToolCallPayload) =>
+  emitTrace(w, 'tool_call', p);
 
-export async function emitSubagentLifecycle(
-  writer: TraceSink | undefined,
-  payload: SubagentLifecyclePayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'subagent_lifecycle', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'subagent_lifecycle', err);
-  }
-}
+export const emitHookDecision = (w: TraceSink | undefined, p: HookDecisionPayload) =>
+  emitTrace(w, 'hook_decision', p);
 
-export async function emitBackgroundAgent(
-  writer: TraceSink | undefined,
-  payload: BackgroundAgentPayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'background_agent', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'background_agent', err);
-  }
-}
+export const emitSubagentLifecycle = (w: TraceSink | undefined, p: SubagentLifecyclePayload) =>
+  emitTrace(w, 'subagent_lifecycle', p);
 
-export async function emitBudget(
-  writer: TraceSink | undefined,
-  payload: BudgetPayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'budget', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'budget', err);
-  }
-}
+export const emitBackgroundAgent = (w: TraceSink | undefined, p: BackgroundAgentPayload) =>
+  emitTrace(w, 'background_agent', p);
 
-export async function emitAbort(
-  writer: TraceSink | undefined,
-  payload: AbortPayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'abort', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'abort', err);
-  }
-}
+export const emitBudget = (w: TraceSink | undefined, p: BudgetPayload) =>
+  emitTrace(w, 'budget', p);
 
-export async function emitCompaction(
-  writer: TraceSink | undefined,
-  payload: CompactionPayloadInput,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'compaction', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'compaction', err);
-  }
-}
+export const emitAbort = (w: TraceSink | undefined, p: AbortPayload) =>
+  emitTrace(w, 'abort', p);
 
-export async function emitClosure(
-  writer: TraceSink | undefined,
-  payload: ClosurePayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'closure', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'closure', err);
-  }
-}
+export const emitCompaction = (w: TraceSink | undefined, p: CompactionPayloadInput) =>
+  emitTrace(w, 'compaction', p);
 
-export async function emitClaim(
-  writer: TraceSink | undefined,
-  payload: ClaimPayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'claim', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'claim', err);
-  }
-}
+export const emitClosure = (w: TraceSink | undefined, p: ClosurePayload) =>
+  emitTrace(w, 'closure', p);
 
-export async function emitBrowserEvent(
-  writer: TraceSink | undefined,
-  payload: BrowserEventPayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'browser_event', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'browser_event', err);
-  }
-}
+export const emitClaim = (w: TraceSink | undefined, p: ClaimPayload) =>
+  emitTrace(w, 'claim', p);
 
-export async function emitQueuedUserMessage(
-  writer: TraceSink | undefined,
-  payload: QueuedUserMessagePayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'queued_user_message', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'queued_user_message', err);
-  }
-}
+export const emitBrowserEvent = (w: TraceSink | undefined, p: BrowserEventPayload) =>
+  emitTrace(w, 'browser_event', p);
 
-export async function emitSessionPhase(
-  writer: TraceSink | undefined,
-  payload: SessionPhasePayload,
-): Promise<void> {
-  if (!writer) return;
-  try {
-    await writer.write({ kind: 'session_phase', payload });
-  } catch (err) {
-    reportArtifactFailure('trace.emit', writer, 'session_phase', err);
-  }
-}
+export const emitQueuedUserMessage = (w: TraceSink | undefined, p: QueuedUserMessagePayload) =>
+  emitTrace(w, 'queued_user_message', p);
+
+export const emitSessionPhase = (w: TraceSink | undefined, p: SessionPhasePayload) =>
+  emitTrace(w, 'session_phase', p);

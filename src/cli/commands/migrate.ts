@@ -29,6 +29,7 @@ import {
   type DetectedSource,
   type ImportSourceBinary,
 } from '../../config/import-sources.js';
+import { errorMessage } from '../../utils/errors.js';
 
 interface MigrateOptions {
   from?: string;
@@ -116,7 +117,7 @@ export function registerMigrateCommand(program: Command): void {
       try {
         writeImportFrom(configPath, importBlock);
       } catch (err) {
-        console.error(palette.error(`Failed to write ${configPath}: ${err instanceof Error ? err.message : String(err)}`));
+        console.error(palette.error(`Failed to write ${configPath}: ${errorMessage(err)}`));
         process.exit(1);
       }
 

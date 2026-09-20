@@ -33,6 +33,7 @@ import { env, isExplicitlyEnabled } from '../../config/env.js';
 import { getSubagentOutputsDir } from '../../paths.js';
 import type { OutputEvent } from '../types/session-types.js';
 import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
+import { escapeShellString } from '../../utils/shell-escape.js';
 import { redactInlineSecrets } from './prompt-dump.js';
 import { truncateToBytes } from './subagent-prompt-capture.js';
 
@@ -85,7 +86,7 @@ function safeSlug(value: string): string {
 
 /** Escape a YAML scalar conservatively — quote and escape embedded quotes. */
 function yamlString(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${escapeShellString(value)}"`;
 }
 
 /**

@@ -29,6 +29,7 @@ import type { FarmRunRecord, FarmBranchRecord } from '../../skills/score/farm-ru
 import type { SubagentDAGNode } from '../../agent/dag-subagent.js';
 import type { FarmManifest, CreatedBranch } from '../../agent/worktree.js';
 import type { DAGRunResult } from '../../agent/dag.js';
+import { errorMessage } from '../../utils/errors.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -321,7 +322,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
       taskSlug,
     });
   } catch (err) {
-    console.error(palette.error(`Farm creation failed: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(palette.error(`Farm creation failed: ${errorMessage(err)}`));
     process.exit(1);
   }
 
@@ -395,7 +396,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
     // abortController.abort() cleanup is never reached, leaking the
     // AbortController. throw unwinds through finally first, then propagates
     // to the Commander action handler which sets the exit code.
-    console.error(palette.error(`Farm dispatch failed: ${err instanceof Error ? err.message : String(err)}`));
+    console.error(palette.error(`Farm dispatch failed: ${errorMessage(err)}`));
     throw err;
   } finally {
     abortController.abort(); // ensure cleanup — runs on both success and throw
@@ -455,7 +456,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
         // Score persistence failure is non-fatal — the in-memory score still
         // ranks the branch for printSummary. Surface for visibility.
         console.error(
-          palette.warning(`[branch-${r.index}] score.json write failed: ${err instanceof Error ? err.message : String(err)}`),
+          palette.warning(`[branch-${r.index}] score.json write failed: ${errorMessage(err)}`),
         );
       }
     }
@@ -483,7 +484,7 @@ export async function runFarm(opts: RunFarmOptions): Promise<void> {
           await setFarmMemoryFactIdFn(manifest.taskSlug, factId);
         } catch (err) {
           // Best-effort: manifest is not the source of truth for factId; log and continue.
-          console.error(palette.warning(`[memory] setFarmMemoryFactId failed: ${(err as Error).message}`));
+          console.error(palette.warning(`[memory] setFarmMemoryFactId failed: ${errorMessage(err)}`));
         }
       }
     }

@@ -58,6 +58,7 @@
  */
 
 import { debugLog } from './debug.js';
+import { errorMessage } from './errors.js';
 
 /**
  * Cap on the string-keyed latch. Sized well above the number of distinct
@@ -78,11 +79,6 @@ let reportedByInstance = new WeakMap<object, Set<string>>();
 
 /** Latch of `subsystem\0dedupKey` pairs for STRING keys. Bounded, FIFO. */
 const reportedOnce = new Map<string, true>();
-
-function stringifyError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 /**
  * Record a (subsystem, dedupKey) pair as surfaced.
@@ -144,7 +140,7 @@ export function reportArtifactFailure(
   err: unknown,
 ): void {
   try {
-    const message = `[afk] ${subsystem} artifact write failed (${context}): ${stringifyError(err)}`;
+    const message = `[afk] ${subsystem} artifact write failed (${context}): ${errorMessage(err)}`;
     if (!latchFirstSeen(subsystem, dedupKey)) {
       debugLog(message);
       return;

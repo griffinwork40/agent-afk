@@ -18,15 +18,16 @@
 
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserObservation } from '../../../browser/types.js';
-import { env } from '../../../config/env.js';
 import { abortFailureClass } from '../../abort-reason.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 
-import {
-  browserTimeoutFailureClass,
-  isPlaywrightMissing,
-  playwrightMissingHint,
-} from './playwright-hints.js';
+import { browserTimeoutFailureClass } from './playwright-hints.js';
+import { acquireBrowserProvider } from './browser-provider.js';
+import { errorMessage } from '../../../utils/errors.js';
+import type { BrowserHandlerOptions } from './browser-provider.js';
+// Re-export so existing importers (browser-observe, browser-act, browser-screenshot)
+// continue to resolve `BrowserHandlerOptions` from this module without changes.
+export type { BrowserHandlerOptions } from './browser-provider.js';
 
 type WaitForOption = 'load' | 'domcontentloaded' | 'networkidle';
 
@@ -88,14 +89,6 @@ function parseInput(raw: unknown): ParsedOpenInput | { error: string } {
   return { url: parsedUrl.toString(), waitFor, screenshot, timeoutMs };
 }
 
-export interface BrowserHandlerOptions {
-  /**
-   * Inject a getBrowserProvider function for tests without launching a real
-   * browser. Defaults to the real registry import.
-   */
-  getBrowserProvider?: () => Promise<import('../../../browser/provider.js').BrowserProvider>;
-}
-
 export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
   return async (input, signal, context?: ToolHandlerContext) => {
     // Pre-aborted short-circuit.
@@ -110,36 +103,9 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       return { content: parsed.error, isError: true };
     }
 
-    const sessionId = env.AFK_SESSION_ID ?? 'default';
-    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-      return {
-        content: `Invalid AFK_SESSION_ID: must match /^[a-zA-Z0-9_-]+$/, got: ${JSON.stringify(sessionId)}`,
-        isError: true,
-      };
-    }
-
-    let provider: import('../../../browser/provider.js').BrowserProvider;
-    let routingBackend: string | undefined;
-    let routingReason: string | undefined;
-    try {
-      if (opts.getBrowserProvider) {
-        provider = await opts.getBrowserProvider();
-      } else {
-        const { getBrowserProvider, getLastRoutingDecision } = await import('../../../browser/registry.js');
-        provider = await getBrowserProvider();
-        const decision = getLastRoutingDecision();
-        if (decision) {
-          routingBackend = decision.backend;
-          routingReason = decision.reason;
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (isPlaywrightMissing(msg)) {
-        return { content: playwrightMissingHint(msg), isError: true };
-      }
-      return { content: `browser_open failed to get provider: ${msg}`, isError: true };
-    }
+    const acquired = await acquireBrowserProvider('browser_open', opts);
+    if (!acquired.ok) return acquired;
+    const { sessionId, provider, routingBackend, routingReason } = acquired;
 
     const t0 = Date.now();
     try {
@@ -189,7 +155,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       return { content: JSON.stringify(obs, null, 2) };
     } catch (err) {
       const durationMs = Date.now() - t0;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_open',
         toolUseId: context?.toolUseId ?? '',

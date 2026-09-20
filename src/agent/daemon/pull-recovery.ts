@@ -1,5 +1,6 @@
 import { recoverPendingHandoffs } from './handoff-wiring.js';
 import { recoverExpiredLeases } from './queue-store.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export function recoverDaemonQueues(queueDir: string): void {
   // On startup, recover any leases that expired while the daemon was down.
@@ -17,7 +18,7 @@ export function recoverDaemonQueues(queueDir: string): void {
     }
   } catch (err) {
     // Recovery is best-effort — a failure must not prevent the pull loop from starting.
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     // eslint-disable-next-line no-console
     console.error(`[daemon] lease-recovery: failed to recover expired leases: ${msg}`);
   }
@@ -31,7 +32,7 @@ export function recoverDaemonQueues(queueDir: string): void {
       }
     })
     .catch((err: unknown) => {
-      const hMsg = err instanceof Error ? err.message : String(err);
+      const hMsg = errorMessage(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] handoff-recovery: recovery failed: ${hMsg}`);
     });

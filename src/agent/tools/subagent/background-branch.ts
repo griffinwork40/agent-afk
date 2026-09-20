@@ -18,6 +18,7 @@ import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
 import { teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -31,11 +32,28 @@ export interface RunBackgroundBranchArgs {
   /** Optional: `IAgentSession.sessionId` is `string | undefined`; forwarded as-is into the registry record (preserves the pre-extraction contract). */
   parentSessionId: string | undefined;
   /**
-   * Callback fired when the background job settles (done or failed).
-   * Captured at dispatch time so it is immune to `notifyWaveEnd()` clearing
-   * `currentWaveId` before the job finishes (#1083).
+   * Wave-manifest settlement callback — fired when the background job settles
+   * with an `isError` boolean so the manifest unit transitions to
+   * 'done'/'failed'. Captured at dispatch time so it is immune to
+   * `notifyWaveEnd()` clearing `currentWaveId` before the job finishes (#1083).
+   *
+   * Kept separate from `budgetRelease` because the two callbacks have different
+   * types: wave-manifest needs `isError`, budget-release is `() => void`. Wiring
+   * them through one closure that captures both is the ordering-fragile pattern
+   * Item 1 fixes — `budgetRelease` must reach the registry via
+   * `register({ onSettled })`, not via the `registry.on('settled')` event which
+   * fires after registration and is therefore subject to a race.
    */
   onSettled?: (isError: boolean) => void;
+  /**
+   * Delegation-budget release callback. Passed directly to
+   * `registry.register({ onSettled: budgetRelease })` so the registry invokes
+   * it in `markTerminal()` after cleanup — guaranteeing the slot is held until
+   * the job actually settles regardless of when the registry fires its
+   * 'settled' event. Distinct from `onSettled` (wave-manifest) because the
+   * registry's `RegisterArgs.onSettled` is `() => void`.
+   */
+  budgetRelease?: () => void;
   /**
    * Optional post-terminal cleanup. Forwarded to the registry so markTerminal()
    * runs it after handle.teardown(). Used by isolation:"worktree" to unlock +
@@ -65,12 +83,12 @@ export interface RunBackgroundBranchArgs {
  * installs the SubagentManager root abort wiring independently.
  */
 export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promise<ToolResult> {
-  const { handle, registry, prompt, model, parentSessionId, onSettled, onCleanup, isolationTeardown } = args;
+  const { handle, registry, prompt, model, parentSessionId, onSettled, budgetRelease, onCleanup, isolationTeardown } = args;
   if (!registry) {
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
     await handle.teardown().catch((e: unknown) =>
-      debugLog('subagent-executor: handle teardown failed: ' + (e instanceof Error ? e.message : String(e))),
+      debugLog('subagent-executor: handle teardown failed: ' + (errorMessage(e))),
     );
     // Unlock + tear down the isolated worktree — no registry means no
     // markTerminal and no onCleanup, so this is the only cleanup path.
@@ -78,6 +96,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       await teardownBackgroundWorktree(isolationTeardown).catch((e: unknown) =>
         debugLog(`[isolation] background worktree teardown failed (no registry): ${String(e)}`));
     }
+    budgetRelease?.();
     onSettled?.(true);
     return {
       content:
@@ -88,6 +107,11 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
   }
   let job: ReturnType<typeof registry.register>;
   try {
+    // Item 1 fix: wire budgetRelease through register({ onSettled: budgetRelease })
+    // so the registry's markTerminal() invokes it AFTER cleanup, regardless of
+    // when the 'settled' event fires. Wiring through the event listener would
+    // create a TOCTOU window: if the registry fires 'settled' before the listener
+    // is attached (possible when the job settles synchronously), the slot leaks.
     job = registry.register({
       handle,
       prompt,
@@ -95,12 +119,13 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
       provenance: 'model',
       parentSessionId,
       onCleanup,
+      ...(budgetRelease !== undefined ? { onSettled: budgetRelease } : {}),
     });
   } catch (e) {
     if (e instanceof BackgroundJobCapError) {
       // Cap exceeded — tear down the orphaned handle so the fork isn't leaked.
       await handle.teardown().catch((te: unknown) =>
-        debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),
+        debugLog('subagent-executor: handle teardown failed after cap error: ' + (errorMessage(te))),
       );
       // Unlock + tear down the isolated worktree — cap rejection means no
       // registry entry, so markTerminal/onCleanup will never fire.
@@ -108,6 +133,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
         await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>
           debugLog(`[isolation] background worktree teardown failed (cap error): ${String(te)}`));
       }
+      budgetRelease?.();
       onSettled?.(true);
       return {
         content: e.message,
@@ -117,18 +143,24 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     // Any other registration failure: clean up the orphaned handle + worktree
     // before rethrowing. Without this, a locked worktree leaks permanently.
     await handle.teardown().catch((te: unknown) =>
-      debugLog('subagent-executor: handle teardown failed after register error: ' + (te instanceof Error ? te.message : String(te))),
+      debugLog('subagent-executor: handle teardown failed after register error: ' + (errorMessage(te))),
     );
     if (isolationTeardown) {
       await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>
         debugLog(`[isolation] background worktree teardown failed (register error): ${String(te)}`));
     }
+    budgetRelease?.();
+    onSettled?.(true);
     throw e;
   }
   // Wire manifest settlement (#1083): when the background job finishes,
   // fire the captured onSettled callback so the wave manifest transitions
   // from 'running' to 'done'/'failed'. The waveId is captured at the call
   // site (subagent-executor.ts) before notifyWaveEnd() can clear it.
+  // NOTE: budgetRelease is NOT included here — it is wired through
+  // register({ onSettled: budgetRelease }) above (Item 1 fix). This event
+  // listener is solely for the wave-manifest settlement concern, which needs
+  // the isError boolean unavailable from the registry's () => void slot.
   if (onSettled) {
     const settledJobId = job.jobId;
     const handler = (settled: BackgroundJob): void => {

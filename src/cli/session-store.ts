@@ -21,6 +21,7 @@ import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
 import type { SessionStats, TurnRecord } from './slash/types.js';
 import type { AgentModelInput } from '../agent/types.js';
 import type { TraceActor } from '../agent/session/session-identity.js';
+import { errorMessage } from '../utils/errors.js';
 import {
   asHandleId,
   type SessionBinding,
@@ -231,7 +232,7 @@ export function loadSession(idOrPath: string): StoredSession | undefined {
   } catch (err) {
     // Path escaped the session store (traversal probe) — leave an audit trail
     // instead of silently returning undefined.
-    console.warn(`loadSession: rejected unsafe session id ${JSON.stringify(idOrPath)}: ${(err as Error).message}`);
+    console.warn(`loadSession: rejected unsafe session id ${JSON.stringify(idOrPath)}: ${errorMessage(err)}`);
     return undefined;
   }
   if (!existsSync(path)) return undefined;
@@ -239,7 +240,7 @@ export function loadSession(idOrPath: string): StoredSession | undefined {
     const raw = readFileSync(path, 'utf-8');
     return JSON.parse(raw) as StoredSession;
   } catch (err) {
-    console.warn(`loadSession: failed to read/parse ${path}: ${(err as Error).message}`);
+    console.warn(`loadSession: failed to read/parse ${path}: ${errorMessage(err)}`);
     return undefined;
   }
 }

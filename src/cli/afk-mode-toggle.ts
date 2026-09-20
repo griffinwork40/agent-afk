@@ -32,6 +32,7 @@ import { makeLedgerChannelHandler, makeAbortWatcher, type AbortWatcherHandle } f
 import { setPresenceAfk } from '../agent/awareness/presence.js';
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
+import { errorMessage } from '../utils/errors.js';
 
 // Module-level abort-watcher handle. One REPL = one AFK session at a time, so
 // a single handle is sufficient. Cleared on /afk off or when a new /afk on
@@ -144,7 +145,7 @@ export async function toggleAfkMode(
     }
   } catch (err) {
     ctx.out.error(
-      `Could not toggle AFK mode: ${err instanceof Error ? err.message : String(err)}`,
+      `Could not toggle AFK mode: ${errorMessage(err)}`,
     );
   }
 }

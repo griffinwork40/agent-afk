@@ -20,6 +20,7 @@ import { CronScheduler, type SchedulerOptions, type TelemetryRecord } from './da
 import type { ScheduledTask, TriggerMode } from './daemon/triggers.js';
 import { getDaemonStateDir } from '../paths.js';
 import { listenWithRecovery, closeServer } from './daemon.listen.js';
+import { errorMessage } from '../utils/errors.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -282,7 +283,7 @@ function readBody(req: IncomingMessage): Promise<string> {
  */
 function handleRequest(req: IncomingMessage, res: ServerResponse, scheduler: CronScheduler): void {
   void handleRequestAsync(req, res, scheduler).catch((err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
     }
@@ -357,7 +358,7 @@ async function handleRequestAsync(
     try {
       scheduler.register(task);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       const status = msg.includes('already registered') ? 409 : 400;
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: msg }));

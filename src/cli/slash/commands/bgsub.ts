@@ -33,6 +33,7 @@ import { BgJobLogReader } from '../../../agent/bg-job-log.js';
 import { annotateIfIncomplete, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { formatDiskEvent } from '../../output-event-format.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 let registryRef: BackgroundAgentRegistry | undefined;
 let summarizerRef: BackgroundSummarizer | undefined;
@@ -232,7 +233,7 @@ export const bgsubJoinCmd: SlashCommand = {
         // join() throws only on unknown jobId; the get() check above guards
         // that, but keep the catch so a future contract change does not crash
         // the REPL. Print the error and fall through to the snapshot path.
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         ctx.out.error(`/bgsub:join failed: ${message}`);
       }
 

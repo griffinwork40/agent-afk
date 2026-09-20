@@ -67,6 +67,7 @@ import {
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
 import { atomicWriteFile } from '../../utils/envFile.js';
+import { appendJsonlIndex, formatYyyymmdd } from '../_lib/writer-utils.js';
 import { describeEvalRunCoverage } from './eval-run-coverage.js';
 import { EvalGenError, sha256Bytes, sliceTracePrefix } from './replay-fixture.js';
 
@@ -99,13 +100,6 @@ export function generateEvalCaseId(cardSlug: string, ctx: IdContext = {}): strin
     );
   }
   return `${cardSlug}-eval-${yyyymmdd}-${suffix}`;
-}
-
-function formatYyyymmdd(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -499,15 +493,7 @@ function readEvalCaseIfExists(path: string): EvalCase | undefined {
 // ---------------------------------------------------------------------------
 
 function appendIndex(event: EvalCaseIndexEvent): void {
-  const validated = EvalCaseIndexEventSchema.parse(event);
-  const path = getEvalCasesIndexPath();
-  const dir = getEvalCasesDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  try {
-    writeFileSync(path, JSON.stringify(validated) + '\n', { flag: 'a' });
-  } catch {
-    // Best-effort, matching card-writer / proposal writer.
-  }
+  appendJsonlIndex(EvalCaseIndexEventSchema, getEvalCasesDir(), getEvalCasesIndexPath(), event);
 }
 
 // ---------------------------------------------------------------------------

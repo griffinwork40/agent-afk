@@ -18,7 +18,7 @@ import {
 } from '../../slash/plugin-skills.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
-import { AbortError, HookBlockedError } from '../../../utils/errors.js';
+import { AbortError, HookBlockedError, errorMessage } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 
 import type { TranscriptHandle } from './transcript.js';
@@ -510,7 +510,7 @@ export async function runInputLoop(
                 if (isDebugEnabled()) {
                   ctx.replRenderer.writeLine(
                     palette.warning(`⚠ preflight(${bare}) failed: `) +
-                      (err instanceof Error ? err.message : String(err)),
+                      (errorMessage(err)),
                   );
                 }
               },
@@ -669,7 +669,7 @@ export async function runInputLoop(
                 ctx.replRenderer.writeLine(
                   palette.warning('⚠ ') +
                     'session autosave failed — this conversation may not be resumable: ' +
-                    (err instanceof Error ? err.message : String(err)),
+                    (errorMessage(err)),
                 );
               }
             }

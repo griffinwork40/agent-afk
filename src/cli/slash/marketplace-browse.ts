@@ -45,6 +45,7 @@ import {
 import { readIndex } from '../../agent/plugins/index-store.js';
 import { register } from './registry.js';
 import type { SlashCommand, SlashContext, SlashResult } from './types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 const SUBCOMMANDS = ['install', 'install-plugin', 'plugins', 'remove', 'update', 'list', 'add'] as const;
 
@@ -363,5 +364,5 @@ function parseFlags(args: string[]): { ref?: string; force?: boolean } {
 }
 
 function errorMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return errorMessage(err);
 }

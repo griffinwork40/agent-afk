@@ -384,6 +384,22 @@
       "category": "model"
     },
     {
+      "name": "AFK_MAX_CHILDREN_PER_AGENT",
+      "description": "Maximum number of child agents a single agent may spawn over its lifetime (per-agent child limit, not concurrent). Part of the delegation budget: guards against a single agent fanning out too many children. Accepted range 1-20; unset or unparseable means no per-agent child limit. Works alongside AFK_MAX_CONCURRENT_AGENTS and AFK_MAX_TOTAL_AGENTS.",
+      "type": "number",
+      "required": false,
+      "example": "4",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MAX_CONCURRENT_AGENTS",
+      "description": "Maximum number of simultaneously-running agents across the entire session tree. Part of the delegation budget: prevents rate-limit (429) cascades from too many parallel children. Accepted range 1-64; unset or unparseable means no concurrent limit. Works alongside AFK_MAX_CHILDREN_PER_AGENT and AFK_MAX_TOTAL_AGENTS.",
+      "type": "number",
+      "required": false,
+      "example": "16",
+      "category": "model"
+    },
+    {
       "name": "AFK_MAX_CONCURRENT_BACKGROUND_JOBS",
       "description": "Maximum background subagent jobs running simultaneously in one registry. Default 10; accepted range 1-64; out-of-range or unparseable input falls back to the default.",
       "type": "number",
@@ -443,6 +459,14 @@
       "required": false,
       "default": "0",
       "example": "150",
+      "category": "model"
+    },
+    {
+      "name": "AFK_MAX_TOTAL_AGENTS",
+      "description": "Maximum total agents spawned across the entire session tree (lifetime, not concurrent). Part of the delegation budget: absolute ceiling preventing runaway recursive delegation. Accepted range 1-200; unset or unparseable means no total limit. Works alongside AFK_MAX_CHILDREN_PER_AGENT and AFK_MAX_CONCURRENT_AGENTS.",
+      "type": "number",
+      "required": false,
+      "example": "48",
       "category": "model"
     },
     {

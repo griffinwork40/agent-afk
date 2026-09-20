@@ -11,6 +11,75 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.223.1] - 2026-09-20
+
+### Changed
+- rename skills/index.ts to skill-registry.ts, extract types (#1862) (#1890) (ca4b9b64)
+
+## [5.223.0] - 2026-09-20
+
+### Added
+- add tree-wide delegation budget (maxChildren/concurrent/total agents) (#1894) (d936c080)
+
+## [5.222.18] - 2026-09-20
+
+### Changed
+- bump @types/node from 26.5.1 to 26.6.1 in /website (#1869) (39a8ca8a)
+- extract resolveBrowserProvider from browser handlers (#1832) (#1888) (73c6656c)
+
+## [5.222.17] - 2026-09-20
+
+### Changed
+- add unit tests for builtin-task.ts (#1897) (7e4b92c5)
+- add unit tests for errorMessage() utility (#1884) (#1889) (3cfbee1c)
+- split auto-compact.ts mixed concerns (#1863) (#1891) (f2d91c87)
+- replace remaining errorMessage() inline ternary (#1885) (#1887) (7a28daed)
+- remove dead toolClaimedByAgent Set (#1892) (72824ccc)
+- extract improve pipeline shared utils (#1858) (#1893) (68fea350)
+
+## [5.222.16] - 2026-09-20
+
+### Changed
+- add errorMessage() utility, replace 65 inline casts (#1837) (#1883) (140a2faf)
+
+## [5.222.15] - 2026-09-20
+
+### Changed
+- collapse createHookRegistry indirection chain (#1855) (#1873) (10398d96)
+
+## [5.222.14] - 2026-09-20
+
+### Changed
+- collapse trace emit 12-way repetition into generic (#1840) (#1878) (12cd680d)
+- extract browser handler provider acquisition (#1853) (#1882) (ebef899b)
+- remove deprecated cli/keychain.ts shim (#1857) (#1871) (5345fb90)
+
+## [5.222.13] - 2026-09-20
+
+### Fixed
+- remove CompletedCache double-write in forkSubagent (#1841) (#1876) (aa691277)
+- add reflection cue to end-of-turn protocol (#1846) (73b4cb02)
+
+### Changed
+- consolidate Tier-1 duplicate code (8 items) (#1845) (97e9baf5)
+
+## [5.222.12] - 2026-09-20
+
+### Changed
+- bump the fumadocs group across 1 directory with 3 updates (#1868) (fcc7c9ca)
+- extract mint phase fork helper (#1852) (#1881) (a55ae542)
+- bump next from 16.3.4 to 16.3.5 in /website (#1870) (52cdd37f)
+
+## [5.222.11] - 2026-09-20
+
+### Changed
+- consolidate double measure() call in cursor-follow repaint (#1842) (#1877) (b037e62d)
+
+## [5.222.10] - 2026-09-20
+
+### Fixed
+- use shared parseRetryAfterMs in openai tracing-fetch (fixes retry-after-ms) (#1867) (f925fc03)
+
 ## [5.222.9] - 2026-09-20
 
 ### Fixed

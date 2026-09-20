@@ -12,6 +12,7 @@ import { promises as fs } from 'fs';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Validates input and reads a file.
@@ -65,7 +66,7 @@ const readFileImpl = async (
   try {
     filePath = resolveAndContain(rawFilePath, context, 'read', cwd);
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   try {

@@ -15,6 +15,7 @@ import { aggregateTraces, zeroTraceAggregates } from './traces.js';
 import { aggregateDaemonTelemetry, zeroDaemonAggregates } from './daemon.js';
 import { aggregateRoutingDecisions, zeroRoutingAggregates } from './routing.js';
 import type { InsightsOptions, InsightAggregates } from '../types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export {
   aggregateSessions,
@@ -42,7 +43,7 @@ function safeAggregate<T>(source: string, compute: () => T, fallback: () => T): 
   try {
     return compute();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     process.stderr.write(`[insights] ${source} aggregator failed, using zero-aggregate: ${message}\n`);
     return fallback();
   }

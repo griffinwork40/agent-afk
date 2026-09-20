@@ -1,3 +1,4 @@
+import { errorMessage } from './errors.js';
 /**
  * Surface-agnostic error classifiers.
  *
@@ -20,7 +21,7 @@
  * Check if error is a rate-limit error (HTTP 429-shaped, or message says so).
  */
 export function isRateLimitError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return (
     message.toLowerCase().includes('rate limit') ||
     message.toLowerCase().includes('too many requests')
@@ -33,7 +34,7 @@ export function isRateLimitError(error: unknown): boolean {
  * messages emitted by `fetch`, `undici`, and `node:http`.
  */
 export function isNetworkError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   return (
     message.toLowerCase().includes('network') ||
     message.toLowerCase().includes('connect') ||

@@ -24,6 +24,7 @@
 
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../agent/auth/keychain.js';
 import type { SlashCommand } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export const reauthCmd: SlashCommand = {
   name: '/reauth',
@@ -59,7 +60,7 @@ export const reauthCmd: SlashCommand = {
     try {
       result = await ctx.session.current.reauth();
     } catch (err) {
-      ctx.out.error(`Client refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Client refresh failed: ${errorMessage(err)}`);
       ctx.out.warn('Run `claude login` in a terminal to re-authenticate.');
       return 'continue';
     }

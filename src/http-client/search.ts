@@ -15,6 +15,7 @@
 
 import type { FetchFn, SearchBackend, SearchResult } from './types.js';
 import { sanitizeForDisplay } from '../utils/terminal-sanitize.js';
+import { errorMessage } from '../utils/errors.js';
 
 const EXA_ENDPOINT = 'https://api.exa.ai/search';
 /** Exa's free/basic plans cap `numResults` at 10. */
@@ -87,7 +88,7 @@ export function createExaSearchBackend(opts: ExaBackendOptions): SearchBackend {
         json = (await res.json()) as ExaResponse;
       } catch (err) {
         throw new Error(
-          `Exa Search response was not JSON: ${err instanceof Error ? err.message : String(err)}`,
+          `Exa Search response was not JSON: ${errorMessage(err)}`,
         );
       }
 

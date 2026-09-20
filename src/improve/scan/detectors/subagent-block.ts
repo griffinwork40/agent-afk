@@ -48,12 +48,12 @@
 import { createHash } from 'crypto';
 import type { DetectorResult, FailureEvidence, Severity } from '../../schemas.js';
 import type { SessionRead } from '../reader.js';
+import { clampExcerpt, MAX_EVIDENCE_PER_CARD } from './_lib.js';
 
 /** Default minimum block occurrences sharing a reason before a card fires. */
 export const DEFAULT_SUBAGENT_BLOCK_MIN_OCCURRENCES = 2;
 
 const FINGERPRINT_ALGORITHM = 'v1-hook-reason-tuple';
-const MAX_EVIDENCE_PER_CARD = 8;
 
 export interface SubagentBlockOptions {
   minOccurrences?: number;
@@ -224,7 +224,4 @@ function buildAnnotation(s: BlockSighting): string {
   return parts.join(' · ');
 }
 
-function clampExcerpt(rawLine: string): string {
-  if (rawLine.length <= 2000) return rawLine;
-  return rawLine.slice(0, 1997) + '...';
-}
+

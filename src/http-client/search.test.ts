@@ -13,6 +13,7 @@ import {
   resolveSearchBackend,
   formatSearchResults,
 } from './search.js';
+import { errorMessage } from '../utils/errors.js';
 
 function exaOk(results: Array<{ title?: string | null; url?: string; highlights?: string[] }>): Response {
   return {
@@ -129,7 +130,7 @@ describe('createExaSearchBackend — result mapping', () => {
     try {
       await backend.search('q', { limit: 10, timeoutMs: 5000, signal: signal() });
     } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
+      message = errorMessage(err);
     }
 
     expect(message).toContain('Exa Search HTTP 500 Error: badred body');

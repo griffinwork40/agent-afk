@@ -33,6 +33,7 @@
 import { readFileSync, statSync } from 'fs';
 import { env } from '../../config/env.js';
 import type { AgentConfig } from '../types/config-types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Hard cap on the primer CONTENT embedded into the system prompt (~1.7k tokens
@@ -113,7 +114,7 @@ export function loadCompanionPrimer(): string | null {
     const content = readFileSync(path, 'utf-8');
     return content.trim().length > 0 ? content : null;
   } catch (err) {
-    debugPrimer(`failed to load ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    debugPrimer(`failed to load ${path}: ${errorMessage(err)}`);
     return null;
   }
 }

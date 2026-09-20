@@ -18,6 +18,7 @@ import { runSweep } from '../../agent/worktree/worktree-sweep.js';
 import type { SweepOptions } from '../../agent/worktree/worktree-sweep.js';
 import { loadConfig } from '../config.js';
 import type { ExecFileFn } from '../../agent/worktree/worktree-sweep.js';
+import { errorMessage } from '../../utils/errors.js';
 
 const execFile = promisify(execFileCallback) as ExecFileFn;
 
@@ -85,7 +86,7 @@ export function registerWorktreeCommand(program: Command): void {
           dryRun: true,
         });
       } catch (err) {
-        handleCommandError(new Error(`Sweep failed: ${(err as Error).message}`));
+        handleCommandError(new Error(`Sweep failed: ${errorMessage(err)}`));
       }
 
       const header = [
@@ -188,7 +189,7 @@ export function registerWorktreeCommand(program: Command): void {
       try {
         result = await runSweep(sweepOptions);
       } catch (err) {
-        handleCommandError(new Error(`Sweep failed: ${(err as Error).message}`));
+        handleCommandError(new Error(`Sweep failed: ${errorMessage(err)}`));
       }
 
       if (result.dryRun) {

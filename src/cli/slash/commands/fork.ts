@@ -21,6 +21,7 @@ import { formatResumeCommand } from '../../resume-command.js';
 import { copyToClipboard } from '../../clipboard.js';
 import { trySpawnTab, type SpawnOutcome, type TerminalKind } from '../../terminal-spawn/index.js';
 import type { SlashCommand } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const TERMINAL_LABELS: Record<TerminalKind, string> = {
   'tmux': 'tmux',
@@ -81,7 +82,7 @@ export const forkCmd: SlashCommand = {
     try {
       ({ id, path } = forkStoredSession(ctx.stats));
     } catch (err) {
-      ctx.out.error(`Could not fork: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Could not fork: ${errorMessage(err)}`);
       return 'continue';
     }
 

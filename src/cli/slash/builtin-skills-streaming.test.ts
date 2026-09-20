@@ -11,11 +11,12 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { SkillMetadata } from '../../skills/index.js';
+import type { SkillMetadata } from '../../skills/skill-registry.js';
 import { registerAll } from './index.js';
 import { resetRegistry } from './registry.js';
 import type { SlashContext, SessionStats } from './types.js';
 import { getCurrentSink } from '../../agent/_lib/skill-sink-channel.js';
+import { errorMessage } from '../../utils/errors.js';
 
 function makeStats(): SessionStats {
   return {
@@ -137,7 +138,7 @@ describe('builtin-skills streaming integration', () => {
       await runWithSink(renderer.sink, () =>
         testSkill.handler(undefined, ctx.session.current),
       ).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         ctx.out.error(`test-error failed: ${message}`);
       });
     } finally {

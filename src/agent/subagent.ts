@@ -496,14 +496,6 @@ export class SubagentManager {
             ...(handle._currentTrace.turnCount > 0 ? { turnCount: handle._currentTrace.turnCount } : {}),
             ...(handle._lastStopReason !== undefined ? { stopReason: handle._lastStopReason } : {}),
           });
-          // Populate the completed cache BEFORE removing from active so that
-          // the memory-first /tasks:view path can access the handle after
-          // teardown. The result is a minimal stub — consumers only use
-          // `handle` from the entry (see completed.get(id)?.handle).
-          this.completed.add(id, handle as SubagentHandle, {
-            id,
-            status: terminalStatus,
-          });
           this.active.delete(id);
           this.abortGraph.dispose(id);
           void logWriter?.close();

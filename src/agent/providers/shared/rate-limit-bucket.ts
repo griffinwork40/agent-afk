@@ -21,6 +21,7 @@
  */
 
 import { env } from '../../../config/env.js';
+import { sleep } from './sleep-with-abort.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -55,9 +56,6 @@ export interface RateLimitSnapshot {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-}
 
 function staggerJitterMs(): number {
   const raw = env.AFK_RATE_LIMIT_STAGGER_MAX_MS;

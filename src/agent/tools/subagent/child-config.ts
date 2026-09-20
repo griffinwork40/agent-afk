@@ -106,7 +106,7 @@ export interface BuildChildConfigArgs {
    * (`injectWorkspacePreamble`), and (2) the recursive child executor's ctx, so
    * the chain holds to maxDepth. See SubagentExecutorContext.workspaceStore.
    */
-  workspaceStore?: import('../../workspace/index.js').WorkspaceStore;
+  workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
   /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
@@ -427,6 +427,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // Forward the trace writer + workspace store for the same reason — the
       // child executor's own childManager (depth-3+) needs both. See BuildChildConfigArgs.
       ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+      ...(args.delegationBudget !== undefined ? { delegationBudget: args.delegationBudget } : {}),
       // Propagate read-only constraints so depth ≥ 2 forks (this depth-1
       // child calling the `agent` tool) keep the same tool allowlist and
       // bash gate that the originating read-only skill imposed.

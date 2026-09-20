@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SessionToolDispatcher } from './dispatcher.js';
 import { builtinToolSchemas } from './schemas.js';
 import type { ToolCall, ToolHandler } from './types.js';
-import { createHookRegistryImpl } from '../hook-registry.js';
+import { createHookRegistry } from '../hook-registry.js';
 import type { HookRegistry } from '../hooks.js';
 import {
   DENIAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -130,7 +130,7 @@ function blockingHook(
   blockTools: ReadonlySet<string>,
   reason = `Sub-agent path access denied: outside the session's granted read roots`,
 ): HookRegistry {
-  const registry = createHookRegistryImpl();
+  const registry = createHookRegistry();
   registry.register('PreToolUse', async (ctx) => {
     if (ctx.event === 'PreToolUse' && blockTools.has(ctx.toolName)) {
       return { decision: 'block' as const, reason };

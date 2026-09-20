@@ -17,7 +17,7 @@
  * @module agent/hook-registry
  */
 
-import { AbortError, HookBlockedError } from '../utils/errors.js';
+import { AbortError, HookBlockedError, errorMessage } from '../utils/errors.js';
 import type {
   HarnessHookEvent,
   HookContext,
@@ -197,7 +197,7 @@ class HookRegistryImpl implements HookRegistry {
         throw new HookBlockedError(
           `hook handler threw during ${context.event}`,
           context.event,
-          err instanceof Error ? err.message : String(err),
+          errorMessage(err),
           { cause: err },
         );
       }
@@ -250,6 +250,6 @@ function assertNotAborted(signal: AbortSignal | undefined, event: string): void 
   }
 }
 
-export function createHookRegistryImpl(): HookRegistry {
+export function createHookRegistry(): HookRegistry {
   return new HookRegistryImpl();
 }

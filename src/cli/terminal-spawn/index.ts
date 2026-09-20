@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { detectTerminal, type SpawnCapability, type TerminalKind } from './detect.js';
 import { planSpawn, resolveResumeInvocation } from './spawners.js';
 import type { AgentModelInput } from '../../agent/types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 const SPAWN_TIMEOUT_MS = 5000;
 
@@ -83,7 +84,7 @@ export function trySpawnTab(opts: TrySpawnOptions): SpawnOutcome {
       spawned: false,
       kind,
       capability: plan.capability,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: errorMessage(err),
     };
   }
 }

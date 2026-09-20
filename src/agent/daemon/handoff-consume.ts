@@ -21,6 +21,7 @@ import { mkdirSync } from 'node:fs';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 import type { HandoffRecord } from './handoff-store.js';
 import { enqueue } from './queue-store.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // buildHandoffResumeCommand
@@ -238,12 +239,12 @@ export async function processAnsweredHandoffs(
         await unlink(claimed);
         cleaned += 1;
       } catch (cleanErr) {
-        const msg = cleanErr instanceof Error ? cleanErr.message : String(cleanErr);
+        const msg = errorMessage(cleanErr);
         // eslint-disable-next-line no-console
         console.error(`[daemon] handoff-consume: cleanup failed for ${summary.taskId}: ${msg}`);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] handoff-consume: failed to process handoff ${summary.taskId}: ${msg}`);
     }

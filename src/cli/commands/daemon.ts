@@ -1,10 +1,8 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
-import path from 'path';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { palette } from '../palette.js';
 import { handleCommandError } from '../errors/index.js';
-import os from 'os';
 import { startDaemon } from '../../agent/daemon.js';
 import { getQueueDir } from '../../paths.js';
 import { pushIfConfigured } from '../../telegram/push.js';
@@ -26,11 +24,12 @@ import {
 import { loadConfig } from '../config.js';
 import type { ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
-import { parseThinking, parseEffort, getApiKey, getModel, getThinking, getEffort } from '../shared-helpers.js';
+import { parseThinking, parseEffort, getApiKey, getModel, getThinking, getEffort, activateDumpPrompt } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
+import { errorMessage } from '../../utils/errors.js';
 export type { BuildDaemonSessionFactoryOpts } from './daemon-session-factory.js';
 export { buildDaemonSessionFactory } from './daemon-session-factory.js';
 
@@ -250,12 +249,7 @@ export function registerDaemonCommand(program: Command): void {
         }
       }
 
-      if (options.dumpPrompt !== undefined && options.dumpPrompt !== false) {
-        const val = options.dumpPrompt === true
-          ? path.join(os.homedir(), '.afk', 'logs', `prompt-dump-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-          : (options.dumpPrompt as string);
-        process.env['AFK_DUMP_PROMPT'] = val;
-      }
+      activateDumpPrompt(options.dumpPrompt);
 
       // Crash-notification rate guard: at most one push per 60s, regardless
       // of how many uncaught errors fire (prevents crash-loop self-DOS that
@@ -271,7 +265,7 @@ export function registerDaemonCommand(program: Command): void {
         void pushIfConfigured(
           `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
         ).catch((pushErr: unknown) => {
-          console.error('[daemon] crash notification push failed:', pushErr instanceof Error ? pushErr.message : String(pushErr));
+          console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
         });
       };
       process.on('uncaughtException', (err) => {

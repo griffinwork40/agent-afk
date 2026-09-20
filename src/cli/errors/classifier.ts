@@ -16,12 +16,7 @@
  * @module cli/errors/classifier
  */
 
-import {
-  BudgetExceededError,
-  UnsupportedProviderConfigError,
-  HookBlockedError,
-  TimeoutError,
-} from '../../utils/errors.js';
+import { BudgetExceededError, HookBlockedError, TimeoutError, UnsupportedProviderConfigError, errorMessage } from '../../utils/errors.js';
 import { isRateLimitError, isNetworkError } from '../../utils/error-classifiers.js';
 
 type ErrorKind =
@@ -96,7 +91,7 @@ export function classifyError(err: unknown): ClassifiedError {
 
   // From here on, work with the error as an object (may not be an Error instance)
   const errObj = err as Record<string, unknown>;
-  const message = err instanceof Error ? err.message : String(err);
+  const message = errorMessage(err);
   const lowerMsg = message.toLowerCase();
 
   // 5. HTTP 401 / AuthenticationError
@@ -162,7 +157,7 @@ export function classifyError(err: unknown): ClassifiedError {
   }
 
   // 9. Fallback — unknown
-  const unknownMsg = err instanceof Error ? err.message : String(err);
+  const unknownMsg = errorMessage(err);
   return {
     kind: 'unknown',
     userMessage: unknownMsg || 'An unexpected error occurred.',

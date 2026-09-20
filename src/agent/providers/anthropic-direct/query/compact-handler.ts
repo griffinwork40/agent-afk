@@ -44,7 +44,8 @@ import {
   microcompactToolResults,
 } from '../compact.js';
 import {
-  DEFAULT_COMPACT_SHRINK_THRESHOLD,
+  readKeepLastN,
+  readShrinkFraction,
   resolveMicrocompactOptions,
 } from '../../shared/compaction.js';
 import {
@@ -59,8 +60,8 @@ import type { SessionState } from './session-state.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { RetryLayer } from './retry-layer.js';
 import { env } from '../../../../config/env.js';
+import { errorMessage } from '../../../../utils/errors.js';
 
-const DEFAULT_COMPACT_KEEP_LAST_TURNS = 2;
 const DEFAULT_COMPACT_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_COMPACT_MAX_TOKENS = 1024;
 
@@ -183,7 +184,7 @@ export async function compactHistory(
         messagesAfter: messagesBefore,
       };
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return {
       compacted: false,
       reason: 'summarization-failed: ' + msg,
@@ -243,29 +244,6 @@ export async function compactHistory(
     messagesAfter,
     tokensSavedEstimate,
   };
-}
-
-function readKeepLastN(): number {
-  const raw = env.AFK_COMPACT_KEEP_LAST_TURNS;
-  if (raw !== undefined && raw.length > 0) {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return DEFAULT_COMPACT_KEEP_LAST_TURNS;
-}
-
-/**
- * Fullness fraction at/above which the keep-window may shrink so a
- * short-but-full session can still be compacted. `AFK_COMPACT_SHRINK_FRACTION`
- * overrides it; values outside (0, 1) exclusive fall back to the default.
- */
-function readShrinkFraction(): number {
-  const raw = env.AFK_COMPACT_SHRINK_FRACTION;
-  if (raw !== undefined && raw.length > 0) {
-    const n = Number.parseFloat(raw);
-    if (Number.isFinite(n) && n > 0 && n < 1) return n;
-  }
-  return DEFAULT_COMPACT_SHRINK_THRESHOLD;
 }
 
 /**

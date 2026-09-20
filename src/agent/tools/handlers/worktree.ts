@@ -25,6 +25,7 @@ import {
   resolveAnchorBaseRef,
   type RepoContext,
 } from './worktree-managed.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Injectable deps for tests. */
 export interface WorktreeHandlerDeps {
@@ -166,7 +167,7 @@ export function createWorktreeHandler(
       ctx = await resolveRepoContext(execFile, anchor);
     } catch (err) {
       return {
-        content: `Cannot resolve git repo root from ${anchor}: ${err instanceof Error ? err.message : String(err)}`,
+        content: `Cannot resolve git repo root from ${anchor}: ${errorMessage(err)}`,
         isError: true,
       };
     }
@@ -333,7 +334,7 @@ export function createWorktreeHandler(
       }
     } catch (err) {
       return {
-        content: `worktree ${action} failed: ${err instanceof Error ? err.message : String(err)}`,
+        content: `worktree ${action} failed: ${errorMessage(err)}`,
         isError: true,
       };
     }

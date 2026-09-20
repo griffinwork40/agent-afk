@@ -27,6 +27,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   MIN_POLL_INTERVAL_MS,
 } from './wait-for-poller.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Input shape
@@ -175,7 +176,7 @@ export const waitForHandler: ToolHandler = async (
     parsed = parseInput(input, context);
   } catch (err) {
     return {
-      content: err instanceof Error ? err.message : String(err),
+      content: errorMessage(err),
       isError: true,
     };
   }

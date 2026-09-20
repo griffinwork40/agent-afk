@@ -20,7 +20,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { InMemoryTraceWriter } from './writer.js';
-import { createHookRegistryImpl } from '../hook-registry.js';
+import { createHookRegistry } from '../hook-registry.js';
 import {
   dispatchPostToolUse,
   dispatchPreToolUse,
@@ -41,7 +41,7 @@ import type { ToolHandler } from '../tools/types.js';
 
 describe('hook_decision — emitted from dispatch helpers', () => {
   function makeRegistry(): HookRegistry {
-    return createHookRegistryImpl();
+    return createHookRegistry();
   }
 
   it('PreToolUse approve records decision=undefined', async () => {
@@ -212,7 +212,7 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
 
   it('emits hook_decision for PreToolUse and PostToolUse around dispatch', async () => {
     const writer = new InMemoryTraceWriter();
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     const handlers = new Map<string, ToolHandler>();
     handlers.set('fake_tool', async () => ({ content: 'result', isError: false }));
     const dispatcher = new SessionToolDispatcher({
@@ -239,7 +239,7 @@ describe('tool_call — emitted from SessionToolDispatcher', () => {
 
   it('blocked PreToolUse records the block AND short-circuits the dispatch', async () => {
     const writer = new InMemoryTraceWriter();
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('PreToolUse', async () => ({
       decision: 'block',
       reason: 'denied',

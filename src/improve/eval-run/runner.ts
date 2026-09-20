@@ -47,7 +47,7 @@
  */
 
 import { randomBytes } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
   EvalRunIndexEventSchema,
@@ -68,6 +68,7 @@ import {
 } from '../paths.js';
 import { getAfkHome } from '../../paths.js';
 import { atomicWriteFile } from '../../utils/envFile.js';
+import { appendJsonlIndex, formatYyyymmdd } from '../_lib/writer-utils.js';
 import { sha256Bytes } from '../eval-gen/replay-fixture.js';
 import type { IdContext } from '../eval-gen/writer.js';
 import { makeCheck, resolveContract, snapshot, supportedContractPatterns } from './contracts.js';
@@ -77,6 +78,7 @@ import {
   type LoopDriver,
 } from './replay.js';
 import { checkDetectorVersion } from './runner.staleness.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Runner identity stamped into every result. */
 export const EVAL_RUN_RUNNER_VERSION = 'eval-run@v1';
@@ -98,13 +100,6 @@ export function generateEvalRunId(cardSlug: string, ctx: IdContext = {}): string
     throw new Error(`generateEvalRunId: randomSuffix must be 6 lowercase hex chars (got '${suffix}')`);
   }
   return `${cardSlug}-run-${yyyymmdd}-${suffix}`;
-}
-
-function formatYyyymmdd(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,7 +181,7 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
       evidence.push(...probe.evidence);
     } catch (err) {
       contractThrew = true;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       notes.push({
         at: nowIso,
         text: `Contract '${contract.id}' threw during execution: ${snapshot(message)}`,
@@ -212,7 +207,7 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
     } catch (err) {
       // A replay throw is an execution error, same precedence as a contract throw.
       contractThrew = true;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       notes.push({
         at: nowIso,
         text: `Fixture-replay for '${evalCase.assertion.patternId}' threw during execution: ${snapshot(message)}`,
@@ -331,7 +326,7 @@ function checkFixtureIntegrity(evalCase: EvalCase, ctx: RunEvalCaseContext): Fix
   try {
     bytes = readFileSync(abs);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return {
       check: makeCheck({
         name,
@@ -558,16 +553,9 @@ function readEvalRunIfExists(path: string): EvalRun | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Index append + atomic writes (matching eval-gen writer conventions)
+// Index append
 // ---------------------------------------------------------------------------
 
 function appendIndex(event: EvalRunIndexEvent): void {
-  const validated = EvalRunIndexEventSchema.parse(event);
-  const dir = getEvalRunsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  try {
-    writeFileSync(getEvalRunsIndexPath(), JSON.stringify(validated) + '\n', { flag: 'a' });
-  } catch {
-    // Best-effort, matching the card / proposal / eval-case writers.
-  }
+  appendJsonlIndex(EvalRunIndexEventSchema, getEvalRunsDir(), getEvalRunsIndexPath(), event);
 }

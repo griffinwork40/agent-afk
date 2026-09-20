@@ -32,6 +32,7 @@ import {
 } from '../tools/nesting.js';
 import { loadAgentRegistry } from '../agents/index.js';
 import { discoverPluginAgents } from '../tools/skill-bridge.js';
+import { resolveDelegationBudgetConfig, DelegationBudget } from '../tools/delegation-budget.js';
 import type { SubagentExecutorContext } from '../tools/subagent-executor.js';
 import type { BackgroundAgentRegistry } from '../background-registry.js';
 import type { TraceSink } from '../trace/writer.js';
@@ -203,6 +204,14 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   // different caps if the process environment changes during the session.
   const maxDepth = resolveMaxNestingDepth();
 
+  // Delegation budget: tree-wide spawn limits. Resolved once at the root and
+  // shared by reference through every executor and child config. Opt-in: when
+  // no AFK_MAX_CHILDREN_PER_AGENT / AFK_MAX_CONCURRENT_AGENTS / AFK_MAX_TOTAL_AGENTS
+  // env vars are set, this is undefined and budget checks are skipped.
+  const budgetConfig = resolveDelegationBudgetConfig();
+  const delegationBudget = budgetConfig !== undefined ? new DelegationBudget(budgetConfig) : undefined;
+  const budgetOpt = delegationBudget !== undefined ? { delegationBudget } : {};
+
   // 1. The single root manager. Every executor below reads through this
   //    instance; a second manager would fork children outside the abort graph
   //    and outside the parent's read scope.
@@ -264,6 +273,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // Workspace READ channel at every nesting depth — a skill dispatched BY a
     // skill otherwise gets a store-less executor and its forks lose the preamble.
     opts.workspaceStore,
+    delegationBudget,
   );
 
   // 5. `agent` tool.
@@ -296,6 +306,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // covers depth 1; this covers the nested managers buildChildConfig creates,
     // exactly as traceOpt does. See SubagentExecutorContext.workspaceStore.
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+    ...budgetOpt,
   });
 
   // 6. `skill` tool.
@@ -325,6 +336,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     // inline handler (`/mint` phases, `/audit-fit`) builds its own manager, so
     // the store has to reach it as data on SkillExecutionContext.
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+    ...budgetOpt,
   });
 
   // 7. `compose` tool. Nodes receive the raw base prompt so they stay task
@@ -345,6 +357,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     maxDepth,
     ...traceOpt,
     ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
+    ...budgetOpt,
   });
 
   return { rootManager, subagentExecutor, skillExecutor, composeExecutor };

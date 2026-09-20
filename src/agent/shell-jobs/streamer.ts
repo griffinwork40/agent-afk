@@ -27,6 +27,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * ANSI / VT escape sequence regex — strips:
@@ -265,7 +266,7 @@ export function startShell(opts: StartShellOptions): ShellHandle {
       ...(opts.env !== undefined ? { env: { ...process.env, ...opts.env } } : {}),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return {
       pid: undefined,
       kill: () => {},

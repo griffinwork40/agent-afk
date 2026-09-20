@@ -16,6 +16,7 @@ import type { CommandEntry } from '../cli/input/slash-match.js';
 import { SECURITY_HEADERS } from './static-assets.js';
 import type { WebElicitationBridge } from './elicitation-web.js';
 import type { CreateSessionRequest, OwnedSessionInfo } from './session-owner.js';
+import { errorMessage } from '../utils/errors.js';
 
 export { SECURITY_HEADERS };
 
@@ -198,7 +199,7 @@ export async function handleCommands(res: ServerResponse): Promise<void> {
     try {
       await commandUniverseInitialization;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       console.error(`[web] failed to initialize slash-command universe: ${message}`);
       sendJson(res, 503, {
         error: 'command_universe_unavailable',
@@ -440,7 +441,7 @@ export async function handleCreateSession(
   } catch (error) {
     sendJson(res, 500, {
       error: 'session_start_failed',
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     });
   }
 }
@@ -470,7 +471,7 @@ export async function handleInterrupt(
   } catch (error) {
     sendJson(res, 500, {
       error: 'interrupt_failed',
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMessage(error),
     });
   }
 }

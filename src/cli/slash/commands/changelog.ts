@@ -18,6 +18,7 @@ import {
 import { divider } from '../../render/divider.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export const changelogCmd: SlashCommand = {
   name: '/changelog',
@@ -32,7 +33,7 @@ export const changelogCmd: SlashCommand = {
     try {
       commits = parseCommits(repoRoot);
     } catch (err) {
-      ctx.out.error(`Failed to read git log: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Failed to read git log: ${errorMessage(err)}`);
       return 'continue';
     }
 
@@ -87,7 +88,7 @@ export const changelogCmd: SlashCommand = {
       ctx.out.success('Wrote entries to CHANGELOG.md [Unreleased] section.');
       ctx.out.line(palette.dim('  Review with: git diff CHANGELOG.md'));
     } catch (err) {
-      ctx.out.error(`Failed to update CHANGELOG.md: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Failed to update CHANGELOG.md: ${errorMessage(err)}`);
     }
 
     return 'continue';

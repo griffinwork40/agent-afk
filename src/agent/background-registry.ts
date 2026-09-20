@@ -60,6 +60,7 @@ import { boundedStopReason } from './tools/subagent/failure-payload.js';
 import { sweepOldBgJobs } from './background-registry.sweep.js';
 import { BackgroundJobCapError, resolveBackgroundJobCap } from './background-registry.cap.js';
 import { appendTranscriptTail } from './background-registry.transcript.js';
+import { recordTouchedFile } from './background-registry.touched-files.js';
 import type { BackgroundJob, BackgroundJobProvenance, BackgroundJobStatus } from './background-registry.types.js';
 
 export { BackgroundJobCapError } from './background-registry.cap.js';
@@ -104,6 +105,8 @@ interface InternalJob extends BackgroundJob {
   parentSessionId?: string | undefined;
   /** Post-terminal cleanup callback, forwarded from RegisterArgs. */
   onCleanup?: () => Promise<void>;
+  /** Post-settlement synchronous callback, forwarded from RegisterArgs. */
+  onSettled?: () => void;
 }
 
 /** Default TTL for evicting terminal jobs from the registry map. */
@@ -146,6 +149,15 @@ export interface RegisterArgs {
    * Used by isolation:"worktree" to unlock + tear down the child's worktree.
    */
   onCleanup?: () => Promise<void>;
+  /**
+   * Optional synchronous callback invoked on every terminal transition
+   * (completed/failed/cancelled) after all cleanup finishes. Used by
+   * `runForegroundWithPromotion` to release the delegation-budget concurrent
+   * slot for a promoted foreground subagent — the slot must stay held until
+   * the job actually settles, not when the foreground tool call returns.
+   * Item 4 fix: keeps promoted agents counted until registry settlement.
+   */
+  onSettled?: () => void;
 }
 
 export interface BackgroundRegistryEvents {
@@ -246,7 +258,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
           !event.chunk.pending &&
           (event.chunk.toolName === 'edit_file' || event.chunk.toolName === 'write_file')
         ) {
-          this.recordTouchedFile(jobId, event.chunk.toolInputRaw ?? event.chunk.toolInput);
+          recordTouchedFile(job.touchedFiles, event.chunk.toolInputRaw ?? event.chunk.toolInput);
         }
       },
     );
@@ -351,6 +363,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       touchedFiles: [],
       parentSessionId: args.parentSessionId,
       onCleanup: args.onCleanup,
+      onSettled: args.onSettled,
     };
     this.jobs.set(jobId, job);
 
@@ -558,36 +571,6 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   // Internals
   // -------------------------------------------------------------------------
 
-  /**
-   * Parse a tool input JSON string and, if it contains a non-empty
-   * `file_path` field, append it to the job's `touchedFiles` list
-   * (deduplicating via simple last-seen filter). Silent no-op on parse errors
-   * or unknown jobIds.
-   *
-   * Called from the `onProgress` handler in `register()` for every non-pending
-   * `tool_use_detail` chunk whose `toolName` is `edit_file` or `write_file`.
-   */
-  private recordTouchedFile(jobId: string, toolInputJson: string): void {
-    const job = this.jobs.get(jobId);
-    if (!job) return;
-    try {
-      const parsed: unknown = JSON.parse(toolInputJson);
-      if (
-        parsed !== null &&
-        typeof parsed === 'object' &&
-        'file_path' in parsed &&
-        typeof (parsed as Record<string, unknown>)['file_path'] === 'string'
-      ) {
-        const fp = (parsed as Record<string, unknown>)['file_path'] as string;
-        if (fp && !job.touchedFiles.includes(fp)) {
-          job.touchedFiles.push(fp);
-        }
-      }
-    } catch {
-      // Malformed JSON — skip silently; this is a best-effort diagnostics feature.
-    }
-  }
-
   private nextJobId(): string {
     this.counter += 1;
     return `bg-${Date.now().toString(36)}-${this.counter}`;
@@ -788,6 +771,17 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         await job.onCleanup();
       } catch (err) {
         debugLog(`markTerminal: onCleanup failed for job ${jobId}: ${String(err)}`);
+      }
+    }
+
+    // Item 4: release delegation-budget slot for promoted foreground subagents.
+    // Fires synchronously after cleanup so the slot stays charged until the job
+    // actually settles — not when the foreground tool call returned.
+    if (job.onSettled) {
+      try {
+        job.onSettled();
+      } catch (err) {
+        debugLog(`markTerminal: onSettled failed for job ${jobId}: ${String(err)}`);
       }
     }
   }

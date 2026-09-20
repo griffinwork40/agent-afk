@@ -14,6 +14,7 @@ import { promises as fs } from 'fs';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -284,7 +285,7 @@ async function jsonQueryImpl(
   try {
     filePath = resolveAndContain(rawPath, context, 'read', cwd);
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   // ---- Query parsing -------------------------------------------------------
@@ -294,7 +295,7 @@ async function jsonQueryImpl(
     queryToken = parseQuery(rawQuery);
   } catch (err) {
     return {
-      content: `Invalid query: ${err instanceof Error ? err.message : String(err)}`,
+      content: `Invalid query: ${errorMessage(err)}`,
       isError: true,
     };
   }
@@ -317,7 +318,7 @@ async function jsonQueryImpl(
     const known = fsErrorToToolResult(err, filePath, 'File');
     if (known) return known;
     return {
-      content: `Error reading file: ${err instanceof Error ? err.message : String(err)}`,
+      content: `Error reading file: ${errorMessage(err)}`,
       isError: true,
     };
   }
@@ -350,7 +351,7 @@ async function jsonQueryImpl(
     results = evalQuery(queryToken, parsed);
   } catch (err) {
     return {
-      content: `Query error: ${err instanceof Error ? err.message : String(err)}`,
+      content: `Query error: ${errorMessage(err)}`,
       isError: true,
     };
   }

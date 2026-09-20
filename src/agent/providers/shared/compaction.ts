@@ -34,7 +34,9 @@
  * @module agent/providers/shared/compaction
  */
 
+import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * System instruction for the summarization call. Crafted to preserve what a
@@ -108,6 +110,36 @@ export const DEFAULT_COMPACT_TIMEOUT_MS = 60_000;
  * `AFK_COMPACT_SHRINK_FRACTION`.
  */
 export const DEFAULT_COMPACT_SHRINK_THRESHOLD = 0.7;
+
+/** Default number of trailing fresh-user turns kept uncompacted. */
+export const DEFAULT_COMPACT_KEEP_LAST_TURNS = 2;
+
+/**
+ * How many trailing fresh user turns to keep uncompacted.
+ * `AFK_COMPACT_KEEP_LAST_TURNS` overrides the default.
+ */
+export function readKeepLastN(): number {
+  const raw = env.AFK_COMPACT_KEEP_LAST_TURNS;
+  if (raw !== undefined && raw.length > 0) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return DEFAULT_COMPACT_KEEP_LAST_TURNS;
+}
+
+/**
+ * Fullness fraction at/above which the keep-window may shrink so a
+ * short-but-full session can still be compacted. `AFK_COMPACT_SHRINK_FRACTION`
+ * overrides it; values outside (0, 1) exclusive fall back to the default.
+ */
+export function readShrinkFraction(): number {
+  const raw = env.AFK_COMPACT_SHRINK_FRACTION;
+  if (raw !== undefined && raw.length > 0) {
+    const n = Number.parseFloat(raw);
+    if (Number.isFinite(n) && n > 0 && n < 1) return n;
+  }
+  return DEFAULT_COMPACT_SHRINK_THRESHOLD;
+}
 
 /**
  * Default byte threshold (content length) at/above which a `tool_result` block
@@ -561,7 +593,7 @@ export async function runCompactionCore<M>(
     if (isAborted()) {
       return { compacted: false, reason: 'aborted', ...unchanged };
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return { compacted: false, reason: 'summarization-failed: ' + msg, ...unchanged };
   }
 

@@ -25,6 +25,7 @@
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
 import type { PermissionMode } from '../agent/types/sdk-types.js';
+import { errorMessage } from '../utils/errors.js';
 
 let hasShownFirstUseTip = false;
 
@@ -79,7 +80,7 @@ export async function togglePlanMode(
     }
   } catch (err) {
     ctx.out.error(
-      `Could not toggle plan mode: ${err instanceof Error ? err.message : String(err)}`,
+      `Could not toggle plan mode: ${errorMessage(err)}`,
     );
   }
 }

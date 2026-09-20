@@ -192,6 +192,7 @@ export function buildForkedChildConfig(
     // Without this the fork-skill path broke the chain one depth earlier than
     // the agent-tool path (child-config.ts), which threads it at :424.
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
+    ...(ctx.delegationBudget !== undefined ? { delegationBudget: ctx.delegationBudget } : {}),
     // Invariant: background dispatch requires the registry to be present
     // in every SubagentExecutor in the chain — root → skill-forked child →
     // skill-forked grandchild. Without forwarding, a plugin skill's

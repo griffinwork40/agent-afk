@@ -124,4 +124,38 @@ describe('makeOpenAITracingFetch', () => {
     });
     await expect(wrapped('u')).resolves.toMatchObject({ status: 503 });
   });
+
+  // -------------------------------------------------------------------------
+  // retry-after-ms header tests (the bug fix: issue #1851)
+  // The OpenAI API uses 'retry-after-ms' (milliseconds) as a higher-priority
+  // hint before the standard 'retry-after' (seconds). The local parseRetryAfterMs
+  // was missing this check; now we use the shared implementation.
+  // -------------------------------------------------------------------------
+
+  it('honors retry-after-ms header on 429 for gate.freeze', async () => {
+    const gate = { acquirePermit: vi.fn(async () => {}), freeze: vi.fn() };
+    const base = mockFetch(429, { 'retry-after-ms': '1500' });
+    const wrapped = makeOpenAITracingFetch(base, undefined, undefined, gate);
+    await wrapped('u');
+    expect(gate.freeze).toHaveBeenCalledWith(1500);
+  });
+
+  it('honors retry-after-ms header on 429 for onThrottle payload', async () => {
+    const seen: Array<{ status: number; retryAfterMs?: number }> = [];
+    const base = mockFetch(429, { 'retry-after-ms': '1500' });
+    const wrapped = makeOpenAITracingFetch(base, (info) => seen.push(info));
+    await wrapped('u');
+    expect(seen).toEqual([{ status: 429, retryAfterMs: 1500 }]);
+  });
+
+  it('prefers retry-after-ms over retry-after when both present', async () => {
+    const gate = { acquirePermit: vi.fn(async () => {}), freeze: vi.fn() };
+    const seen: Array<{ status: number; retryAfterMs?: number }> = [];
+    // retry-after-ms=2000ms, retry-after=10s — ms header must win
+    const base = mockFetch(429, { 'retry-after-ms': '2000', 'retry-after': '10' });
+    const wrapped = makeOpenAITracingFetch(base, (info) => seen.push(info), undefined, gate);
+    await wrapped('u');
+    expect(gate.freeze).toHaveBeenCalledWith(2000);
+    expect(seen).toEqual([{ status: 429, retryAfterMs: 2000 }]);
+  });
 });

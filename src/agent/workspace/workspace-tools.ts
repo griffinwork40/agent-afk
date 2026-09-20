@@ -16,6 +16,7 @@
 import type { AnthropicToolDef, ToolHandler } from '../tools/types.js';
 import type { WorkspaceEntry, WorkspacePublishInput, WorkspaceRelationType } from './workspace-store.js';
 import { WorkspaceStore } from './workspace-store.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Tool names wired on every surface that registers a workspace store.
@@ -216,7 +217,7 @@ export function createWorkspaceHandlers(
       const id = store.publish(entry);
       return { content: JSON.stringify({ published: true, id }) };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return { content: `workspace_publish error: ${message}`, isError: true };
     }
   };
@@ -233,7 +234,7 @@ export function createWorkspaceHandlers(
       }
       return { content: JSON.stringify({ entries: entries.map(formatEntry), count: entries.length }) };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return { content: `workspace_query error: ${message}`, isError: true };
     }
   };

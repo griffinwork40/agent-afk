@@ -25,6 +25,7 @@ import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
+import { errorMessage } from '../src/utils/errors.js';
 
 // ─── AFK_HOME resolution ─────────────────────────────────────────────────────
 // Mirrors getAfkHome() in src/paths.ts. Resolved inline (not imported) so this
@@ -145,7 +146,7 @@ function discoverTraceFiles(opts: Options): string[] {
   try {
     dirs = readdirSync(WITNESS_ROOT);
   } catch (err) {
-    fail(`cannot read witness root ${WITNESS_ROOT}: ${(err as Error).message}`);
+    fail(`cannot read witness root ${WITNESS_ROOT}: ${errorMessage(err)}`);
   }
   if (opts.session !== undefined) {
     const prefix = opts.session;
@@ -403,7 +404,7 @@ async function main(): Promise<void> {
     try {
       await scanFile(file, opts.sinceMs, stats, totals);
     } catch (err) {
-      process.stderr.write(`count-tool-calls: skipping ${file}: ${(err as Error).message}\n`);
+      process.stderr.write(`count-tool-calls: skipping ${file}: ${errorMessage(err)}\n`);
     }
   }
 

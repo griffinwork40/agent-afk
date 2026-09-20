@@ -216,6 +216,8 @@ export interface SkillExecutorContext {
    * carry no preamble, as before.
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore;
+  /** Tree-wide delegation budget. Opt-in: undefined when no budget env vars set. */
+  delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
 }
 
 export interface SkillInput {

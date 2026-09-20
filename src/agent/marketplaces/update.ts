@@ -28,6 +28,7 @@ import {
   type MarketplaceManifest,
 } from './manifest.js';
 import { isLocalPluginSource, resolvePluginSourceDir } from './resolve.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface UpdateMarketplaceOptions {
   ref?: string;
@@ -195,7 +196,7 @@ export async function updateAllMarketplaces(
     try {
       results.push(await updateMarketplace(name, {}, deps));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       results.push({ name, status: 'missing-dir', dir: msg });
     }
   }

@@ -18,6 +18,7 @@ import type { InlineKeyboardMarkup } from 'telegraf/types';
 import { resolveConfiguredNotifyTargets } from './notify-routing.js';
 import { splitLongMessage, markdownToTelegramHtml } from './formatter.js';
 import { env } from '../config/env.js';
+import { errorMessage } from '../utils/errors.js';
 
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
 
@@ -108,7 +109,7 @@ export async function push(options: PushOptions): Promise<PushResult> {
     return {
       ok: false,
       status: 0,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: errorMessage(err),
     };
   } finally {
     clearTimeout(timeoutId);

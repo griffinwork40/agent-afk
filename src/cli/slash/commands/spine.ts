@@ -25,6 +25,7 @@ import {
 import type { SpineDocument } from '../../../agent/spine/index.js';
 import { getAfkStateDir } from '../../../paths.js';
 import type { SlashCommand } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -248,7 +249,7 @@ async function handleInit(
     }
   } catch (err) {
     // No API key or network error — fall back to empty skeleton
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     ctx.out.warn(`Classifier failed (${msg}). Writing empty skeleton.`);
     doc = makeEmptyDoc();
   }

@@ -37,6 +37,7 @@ import { loadCredential } from '../cli/config.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
 import { startStatsTicker } from './stats-ticker.js';
+import { errorMessage } from '../utils/errors.js';
 
 export async function main(): Promise<void> {
   // Version the daemon is running as, captured once. Compared against the
@@ -50,7 +51,7 @@ export async function main(): Promise<void> {
   try {
     config = loadConfig();
   } catch (error) {
-    console.error('❌ Configuration error:', (error as Error).message);
+    console.error('❌ Configuration error:', errorMessage(error));
     process.exit(1);
   }
 

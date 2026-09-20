@@ -11,7 +11,7 @@ import { withTypingIndicator } from '../typing-indicator.js';
 // to undefined and turn `instanceof StreamTimeoutError` into a TypeError.
 import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, errorMessage } from '../../utils/errors.js';
 import { type TelegramRoute, routeFromCtx, routeKey } from '../route.js';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
@@ -423,7 +423,7 @@ export class MessageHandler {
       // Redact any embedded bot token before logging: getFileLink() returns URLs of the form
       // https://api.telegram.org/file/bot<TOKEN>/<path>, and HTTP client errors frequently
       // embed the request URL in their message string.
-      const rawErrStr = error instanceof Error ? error.message : String(error);
+      const rawErrStr = errorMessage(error);
       const sanitizedErr = rawErrStr.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
       this.log('Photo handling error:', sanitizedErr);
       // Note: 'session is busy' is no longer handled here — that race is covered
@@ -495,7 +495,7 @@ export class MessageHandler {
       }
       await this.processOne(route, ctx, contentBlocks);
     } catch (err) {
-      const raw = err instanceof Error ? err.message : String(err);
+      const raw = errorMessage(err);
       this.log('Document handling error:', raw.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/'));
       await ctx.reply('❌ An error occurred processing your document. Please try again.');
     } finally {

@@ -20,6 +20,7 @@ import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { resolveSubagentTimeoutMs } from './subagent/constants.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
 import { realpathSafe } from './tools/handlers/_cwd-utils.js';
+import type { DelegationBudget, SpawnReceipt } from './tools/delegation-budget.js';
 
 export interface SubagentDAGNode {
   id: string;
@@ -105,6 +106,15 @@ export interface SubagentDAGOptions {
    * surfaced with the timeout message + any partial findings.
    */
   nodeTimeoutMs?: number;
+  /**
+   * Item 2: optional tree-wide delegation budget. When set, each DAG node
+   * checks `canSpawn` before forking and calls `recordSpawn` on success so
+   * all DAG nodes are counted against the tree-wide concurrent/total limits.
+   * Without this, a 20-node DAG would fork 20 agents with zero budget
+   * accounting. The `parentId` used for `maxChildrenPerAgent` tracking is the
+   * parent session's `sessionId`.
+   */
+  delegationBudget?: DelegationBudget;
 }
 
 /**
@@ -145,7 +155,7 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
 }
 
 export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRunResult> {
-  const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs } = options;
+  const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs, delegationBudget } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
 
   // Soft deadline for every node in this DAG (see the arming comment in the
@@ -173,50 +183,76 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       // ungatedSensitiveRoot.
       validateDagNodeRoots(spec);
 
-      const handle = await manager.forkSubagent({
-        parent: { sessionId: parentSession.sessionId },
-        config: {
-          model: spec.model ?? 'sonnet',
-          systemPrompt: spec.systemPrompt,
-          ...(spec.canUseTool !== undefined ? { canUseTool: spec.canUseTool } : {}),
-          ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
-          ...(spec.readRoots !== undefined ? { readRoots: spec.readRoots } : {}),
-          ...(spec.writeRoots !== undefined ? { writeRoots: spec.writeRoots } : {}),
-          ...(spec.apiKey !== undefined ? { apiKey: spec.apiKey } : {}),
-          ...(spec.maxToolUseIterations !== undefined
-            ? { maxToolUseIterations: spec.maxToolUseIterations }
-            : {}),
-          // Workspace provider: when present, the compose executor has built a
-          // workspace-aware provider via buildComposeNodeProvider so that this
-          // node can call workspace_publish / workspace_query. Without it the
-          // node's AgentSession falls back to bare resolveProvider which never
-          // carries workspaceStore, silently stripping both tools from the schema.
-          ...(spec.provider !== undefined ? { provider: spec.provider } : {}),
-          // Invariant: a DAG node has a SECOND wall-clock enforcer that does not
-          // route through `agent/timeout.ts` — runDAG arms its own per-node
-          // `setTimeout` (dag.ts) and cascades expiry into `handle.cancel()`
-          // below. That path has the identical gap the fork budget had: it kills
-          // a slow-but-working child with everything it learned unsynthesized.
-          // Arm the soft deadline from the node budget so the node winds down at
-          // a round boundary first. `resolveSoftDeadlineMs` returns 0 (off) for
-          // an absent or too-short node budget, so unbounded nodes and short ones
-          // keep prior behaviour exactly; when it is off here, `forkSubagent`
-          // still derives one from the fork's own timeout. Whichever budget is
-          // SMALLER binds, so take the min: deriving from the node timeout alone
-          // would arm a deadline later than the fork budget that will actually
-          // fire.
-          ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}),
-        },
-        idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
-        ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),
-        // Render hints: lift label + parent anchor through to the CLI so the
-        // tool-lane can render `Agent(<label>)` entries nested under the
-        // dispatching tool's entry (e.g. `compose`). agentType is required
-        // on ForkSubagentOptions — fall back to idPrefix when the caller did
-        // not supply an explicit display label.
-        agentType: spec.agentType ?? spec.idPrefix ?? `dag-${spec.id}`,
-        ...(spec.parentId !== undefined ? { parentId: spec.parentId } : {}),
-      });
+      // Item 2: per-node delegation budget check + charge. The single canSpawn
+      // call in compose-executor was never followed by recordSpawn, so a 20-node
+      // DAG counted as zero spawns. Checking here ensures every forked node is
+      // counted and released. parentId is the parent session's sessionId so the
+      // per-agent child count tracks against the root (compose nodes share one
+      // parent session, mirroring the agent-tool path).
+      let dagNodeBudgetReceipt: SpawnReceipt | undefined;
+      if (delegationBudget) {
+        const budgetCheck = delegationBudget.canSpawn(parentSession.sessionId ?? '');
+        if (!budgetCheck.allowed) {
+          throw new Error(
+            `DAG node "${spec.id}" blocked by delegation budget: ${budgetCheck.detail ?? budgetCheck.reason ?? 'budget exceeded'}`,
+          );
+        }
+        dagNodeBudgetReceipt = delegationBudget.recordSpawn(parentSession.sessionId ?? '');
+      }
+
+      let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
+      try {
+        handle = await manager.forkSubagent({
+          parent: { sessionId: parentSession.sessionId },
+          config: {
+            model: spec.model ?? 'sonnet',
+            systemPrompt: spec.systemPrompt,
+            ...(spec.canUseTool !== undefined ? { canUseTool: spec.canUseTool } : {}),
+            ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
+            ...(spec.readRoots !== undefined ? { readRoots: spec.readRoots } : {}),
+            ...(spec.writeRoots !== undefined ? { writeRoots: spec.writeRoots } : {}),
+            ...(spec.apiKey !== undefined ? { apiKey: spec.apiKey } : {}),
+            ...(spec.maxToolUseIterations !== undefined
+              ? { maxToolUseIterations: spec.maxToolUseIterations }
+              : {}),
+            // Workspace provider: when present, the compose executor has built a
+            // workspace-aware provider via buildComposeNodeProvider so that this
+            // node can call workspace_publish / workspace_query. Without it the
+            // node's AgentSession falls back to bare resolveProvider which never
+            // carries workspaceStore, silently stripping both tools from the schema.
+            ...(spec.provider !== undefined ? { provider: spec.provider } : {}),
+            // Invariant: a DAG node has a SECOND wall-clock enforcer that does not
+            // route through `agent/timeout.ts` — runDAG arms its own per-node
+            // `setTimeout` (dag.ts) and cascades expiry into `handle.cancel()`
+            // below. That path has the identical gap the fork budget had: it kills
+            // a slow-but-working child with everything it learned unsynthesized.
+            // Arm the soft deadline from the node budget so the node winds down at
+            // a round boundary first. `resolveSoftDeadlineMs` returns 0 (off) for
+            // an absent or too-short node budget, so unbounded nodes and short ones
+            // keep prior behaviour exactly; when it is off here, `forkSubagent`
+            // still derives one from the fork's own timeout. Whichever budget is
+            // SMALLER binds, so take the min: deriving from the node timeout alone
+            // would arm a deadline later than the fork budget that will actually
+            // fire.
+            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}),
+          },
+          idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
+          ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),
+          // Render hints: lift label + parent anchor through to the CLI so the
+          // tool-lane can render `Agent(<label>)` entries nested under the
+          // dispatching tool's entry (e.g. `compose`). agentType is required
+          // on ForkSubagentOptions — fall back to idPrefix when the caller did
+          // not supply an explicit display label.
+          agentType: spec.agentType ?? spec.idPrefix ?? `dag-${spec.id}`,
+          ...(spec.parentId !== undefined ? { parentId: spec.parentId } : {}),
+        });
+      } catch (forkErr) {
+        // Item 2: rollback ALL budget counters on fork failure — the child
+        // never ran, so total and childrenByAgent must not reflect this spawn.
+        dagNodeBudgetReceipt?.rollback();
+        dagNodeBudgetReceipt = undefined;
+        throw forkErr;
+      }
 
       // Forward DAG-level node abort (e.g. nodeTimeoutMs, fail-fast cascade,
       // parent compose-call abort) into the subagent handle. Without this,
@@ -272,6 +308,10 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       } finally {
         nodeSignal.removeEventListener('abort', onNodeAbort);
         await handle.teardown().catch(() => undefined);
+        // Item 2: release the concurrent slot now that the node has settled.
+        // The fork succeeded, so use release() — total and childrenByAgent
+        // correctly reflect a real spawn even if the run aborted mid-flight.
+        dagNodeBudgetReceipt?.release();
       }
     },
   }));

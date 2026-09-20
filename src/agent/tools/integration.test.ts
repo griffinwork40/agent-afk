@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionToolDispatcher } from './dispatcher.js';
 import { createBuiltinHandlers } from './handlers/index.js';
 import { builtinToolSchemas } from './schemas.js';
-import { createHookRegistryImpl } from '../hook-registry.js';
+import { createHookRegistry } from '../hook-registry.js';
 import type { ToolCall } from './types.js';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -122,7 +122,7 @@ describe('tool system integration', () => {
   });
 
   it('PreToolUse hook blocks tool execution', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('PreToolUse', async () => ({
       decision: 'block' as const,
       reason: 'security policy',
@@ -145,7 +145,7 @@ describe('tool system integration', () => {
     const filePath = join(tmpDir, 'observed.txt');
     await fs.writeFile(filePath, 'secret content\n');
 
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     const postSpy = vi.fn(async () => ({}));
     registry.register('PostToolUse', postSpy);
 

@@ -20,6 +20,7 @@ import { probeNonRebuildableIgnoredFiles } from './worktree-ignored-probe.js';
 import { readRootSweepCount, recordRootSweep, SOFT_LAUNCH_RUNS } from './worktree-sweep-valve.js';
 import { classifyOrphanDir } from './worktree-orphan-guard.js';
 import { reconsiderLockedWorktree } from './worktree-sweep.reconsider.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -615,7 +616,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
             result.removed.push(orphanPath);
           } catch (err) {
             result.warnings.push(
-              `[ERROR] Failed to remove orphaned dir ${orphanPath}: ${err instanceof Error ? err.message : String(err)}`,
+              `[ERROR] Failed to remove orphaned dir ${orphanPath}: ${errorMessage(err)}`,
             );
           }
         }
@@ -886,7 +887,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         // 'active' → no-op
       } catch (err) {
         result.warnings.push(
-          `[ERROR] Failed to process ${entry.path} (${verdict}): ${err instanceof Error ? err.message : String(err)}`,
+          `[ERROR] Failed to process ${entry.path} (${verdict}): ${errorMessage(err)}`,
         );
       }
     }
@@ -896,7 +897,7 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         await execFile('git', ['-C', repoRoot, 'worktree', 'prune']);
       } catch (err) {
         result.warnings.push(
-          `[ERROR] git worktree prune failed: ${err instanceof Error ? err.message : String(err)}`,
+          `[ERROR] git worktree prune failed: ${errorMessage(err)}`,
         );
       }
     }

@@ -38,6 +38,7 @@ import {
 import { EgressBlockedError } from '../../../http-client/egress-guard.js';
 import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
 import { redactSecrets } from '../../redact-secrets.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 type FetchFn = typeof fetch;
 
@@ -299,7 +300,7 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
           return { content: `web_request blocked: ${err.message}`, isError: true };
         }
         const name = err instanceof Error && err.name === 'DomainPolicyError' ? 'blocked' : 'network error';
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         return { content: `web_request ${name}: ${msg}`, isError: true };
       }
 

@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
-import type { SkillMetadata } from '../../skills/index.js';
+import type { SkillMetadata } from '../../skills/skill-registry.js';
 import type { SlashContext, SessionStats } from './types.js';
 import type { OutputEvent } from '../../agent/types.js';
 

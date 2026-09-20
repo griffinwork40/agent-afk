@@ -35,6 +35,7 @@ import { pushIfConfigured } from '../../telegram/push.js';
 import type { Telegraf } from 'telegraf';
 import { sendHandoffQuestion, clearPendingTextHandoff } from '../../telegram/handoff-answer.js';
 import { buildHandoffCallback } from '../../telegram/handoff-callback-data.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -139,7 +140,7 @@ export function makeDaemonElicitationHandler(
       // eslint-disable-next-line no-console
       console.error(
         `[handoff-wiring] failed to write handoff for task ${opts.taskId}:`,
-        err instanceof Error ? err.message : String(err),
+        errorMessage(err),
       );
       return { action: 'decline' };
     }
@@ -155,7 +156,7 @@ export function makeDaemonElicitationHandler(
       // eslint-disable-next-line no-console
       console.error(
         `[handoff-wiring] failed to set lease state for task ${opts.taskId}:`,
-        err instanceof Error ? err.message : String(err),
+        errorMessage(err),
       );
     }
 

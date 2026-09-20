@@ -9,30 +9,20 @@
  */
 
 import { SubagentManager, SUBAGENT_BACKGROUND_TIMEOUT_MS } from '../subagent.js';
-import { computeInheritedReadRoots, type ReadScopeInputs } from '../subagent-read-scope.js';
-import { BackgroundAgentRegistry } from '../background-registry.js';
-import type { ModelProvider } from '../provider.js';
-import type { AgentModelInput, IAgentSession } from '../types.js';
-import type { AgentConfig } from '../types/config-types.js';
-import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
-import {
-  resolveMaxNestingDepth,
-  type ChildProviderFactoryArgs,
-} from './nesting.js';
-import { buildAgentToolDef } from '../agents/index.js';
-import type { AgentRegistry, RegisteredAgent } from '../agents/index.js';
-import type { SkillExecutor } from './skill-executor.js';
-import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
-import type { Surface } from '../awareness/types.js';
+import { computeInheritedReadRoots } from '../subagent-read-scope.js';
 import type { TraceSink } from '../trace/index.js';
+import type { AnthropicToolDef, ToolCall, ToolResult } from './types.js';
+import { resolveMaxNestingDepth } from './nesting.js';
+import { buildAgentToolDef } from '../agents/index.js';
+import type { RegisteredAgent } from '../agents/index.js';
+import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
-import { runForegroundWithPromotion, type PromotionTrigger, type PromotedSubagentInfo } from './subagent/foreground-promotion.js';
-import type { QueuedNoteClaim } from './subagent/queued-note.js';
+import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
 import { runWithStreamCutRetry, type StreamCutProbe } from '../subagent/stream-cut-retry.js';
@@ -41,267 +31,26 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { appendImageBlocks } from '../content/image-blocks.js';
 import { supportsVision } from '../model-capabilities.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
-import { inboundAttachmentRegistry, type InboundAttachmentReader } from '../content/attachment-registry.js';
+import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
+import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
 import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
+import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
 import {
   buildWaveUnit,
   createManifest,
   updateWaveUnit,
 } from '../manifest/write.js';
 import { env } from '../../config/env.js';
+import { errorMessage } from '../../utils/errors.js';
+import type { SubagentExecutorContext, SubagentControl } from './subagent-executor/types.js';
+import type { QueuedNoteClaim, PromotedSubagentInfo } from './subagent-executor/types.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
-
-export interface SubagentExecutorContext {
-  subagentManager: SubagentManager;
-  parentSession: Pick<IAgentSession, 'sessionId' | 'getInputStreamRef' | 'abortSignal'> &
-    // Optional: when the parent exposes its hook registry, forked children
-    // dispatch SubagentStart/Stop (incl. the shadow-verify nudge) against it
-    // and inherit it. Nested stub parents omit it, so depth-2+ forks stay
-    // unhooked (no nudges injected into intermediate subagents).
-    Partial<Pick<IAgentSession, 'hookRegistry'>>;
-  /**
-   * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
-   * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
-   * workers that must not inherit routing directives. See ComposeExecutorContext.
-   */
-  defaultConfig: Pick<AgentConfig, 'apiKey' | 'systemPrompt' | 'baseUrl' | 'openaiBaseUrl' | 'xaiBaseUrl' | 'skillDispatchName'>;
-  /**
-   * User-facing surface of the session that owns this executor (cli/telegram/
-   * daemon). Set at top-level wiring sites; inherited by nested child executors.
-   * Recorded as `origin` on the routing-decision rows this executor emits.
-   * Optional/back-compat: when unset, rows omit `origin`/`actor`. The `actor`
-   * role itself is derived from {@link SubagentExecutorContext.depth}, not from
-   * a separate field.
-   */
-  surface?: Surface;
-  /**
-   * Per-model credential resolver. When provided, the executor calls this
-   * with the child's effective model string to resolve the appropriate API
-   * key at fork time — rather than forwarding the parent's pre-captured
-   * `defaultConfig.apiKey` verbatim.
-   *
-   * This fixes the "Anthropic child starves when parent is OpenAI-routed"
-   * bug: `getApiKey()` captures a single credential keyed to the *main*
-   * model at bootstrap. When the main model is OpenAI-routed, that credential
-   * is an OpenAI key (or undefined), but child subagents default to `'sonnet'`
-   * (Anthropic-routed) and need a keychain/env Anthropic credential instead.
-   *
-   * The resolver must implement the cross-provider credential anti-leak
-   * invariant: Anthropic credentials must never reach OpenAI-routed
-   * children (commits 263e25e2 / d17fb890 / dc58d5e0). The canonical
-   * implementation is `getApiKeyForModel` from `src/cli/shared-helpers.ts`,
-   * which gates on `providerForModel(model)` and routes to the correct
-   * credential chain. The existing `childIsOpenAI ? undefined : apiKey`
-   * guard below is ALSO preserved as a defense-in-depth layer.
-   *
-   * Optional for backward compat: when absent, the executor falls back to
-   * `defaultConfig.apiKey` (the pre-6xx behavior).
-   */
-  resolveApiKeyForModel?: (model: string) => string | undefined;
-  /**
-   * Default model when a dispatched `agent` tool call omits `model`. Sourced
-   * from `AFK_DEFAULT_SUBAGENT_MODEL`; falls back to `'sonnet'` when unset.
-   * Intentionally decoupled from the parent session — a high-tier parent
-   * (e.g. opus) should not silently dispatch high-tier subagents.
-   */
-  defaultSubagentModel: AgentModelInput;
-  childProviderFactory?: (args: ChildProviderFactoryArgs) => ModelProvider;
-  childSkillExecutorFactory?: (
-    depth: number,
-    maxDepth: number,
-    signal: AbortSignal,
-    inheritedCwd?: string,
-    inheritedReadScope?: ReadScopeInputs,
-    skillDispatchName?: string,
-  ) => SkillExecutor;
-  /**
-   * Nesting depth this executor sits at. **Required** — pass explicit `0`
-   * at top-level wiring sites (CLI, telegram, threads) and `parent.depth + 1`
-   * when constructing a child executor.
-   *
-   * Contract: an undefined value used to silently coerce to `0`, which
-   * conflated "top-level wiring (intended)" with "misconfigured construction
-   * (bug)". Making it required surfaces the second case as a TypeScript
-   * compile error so the awareness layer's "depth for a top-level session is
-   * null" snapshot rule (see {@link RuntimeSelf.depth}) is not undermined by
-   * a silent fallback inside the fork-depth math at execute() below.
-   *
-   * The snapshot's `depth: null` reporting for top-level sessions is sourced
-   * from `AgentConfig.depth === undefined`, not from this field — they are
-   * intentionally decoupled: the runtime internally treats top-level as
-   * depth 0 for nesting math, while the model-facing snapshot reports null.
-   */
-  depth: number;
-  maxDepth?: number;
-  /**
-   * Optional registry for background-mode dispatches. When undefined, an
-   * `agent` tool call with `mode: 'background'` falls back to a synthesized
-   * error rather than silently downgrading to foreground — the operator
-   * needs to see that background dispatch is not configured in this surface
-   * (e.g. one-shot CLI, daemon turn).
-   */
-  backgroundRegistry?: BackgroundAgentRegistry;
-  /**
-   * Worktree cwd inherited from the parent session. Forwarded to the
-   * per-depth child {@link SubagentManager} and to the recursive child
-   * {@link SubagentExecutor} so depth ≥ 2 forks (a depth-1 subagent calling
-   * the `agent` tool) keep operating in the worktree instead of falling
-   * back to the Node host's `process.cwd()`.
-   *
-   * Invariant: depth-1 forks already inherit cwd because the parent's root
-   * SubagentManager was constructed with it (see bootstrap.ts:158,
-   * chat.ts:376). The bug this field fixes is silent at depth ≥ 2 — the
-   * child manager constructed below was not receiving cwd, so its forks'
-   * bash/grep/read_file fell back to the host repo. Same shape as the
-   * SkillExecutorContext.cwd fix; see skill-executor.ts.
-   *
-   * Optional: surfaces without a worktree (telegram, threads without an
-   * explicit cwd) leave this unset and the legacy `process.cwd()` fallback
-   * applies.
-   */
-  cwd?: string;
-  /**
-   * Witness-layer trace writer inherited from the owning surface. Forwarded
-   * into the per-call child {@link SubagentManager} built by
-   * `buildChildConfig` so depth ≥ 2 `agent` forks (a depth-1 subagent calling
-   * the `agent` tool) emit `subagent_lifecycle` events into the same trace
-   * file as the root session. Depth-1 forks are covered separately by the
-   * root manager's own manager-level writer (bootstrap/chat/telegram wiring);
-   * this field closes the same gap for the nested managers, mirroring how
-   * `cwd` chains through every depth.
-   *
-   * `workspaceStore` (declared on the same line below) is the exact parallel for
-   * the workspace READ channel: forwarded into the same per-call child manager so
-   * depth ≥ 2 `agent` forks receive the sibling-findings preamble
-   * `injectWorkspacePreamble` builds from it. Depth-1 forks are likewise covered
-   * by the root manager's own store (wire-executors.ts). Without it the READ
-   * channel stopped at depth 1 while the WRITE channel (the provider's
-   * `workspace_publish` handler) reached every depth — so a grandchild could
-   * publish into a store whose contents it was never shown.
-   *
-   * The two share one declaration line because this file is grandfathered in
-   * .filesize-baseline.json, whose ratchet permits only shrinkage.
-   */
-  traceWriter?: TraceSink; workspaceStore?: import('../workspace/index.js').WorkspaceStore;
-  /**
-   * Tool allowlist to propagate to grandchild providers when this executor
-   * is itself a read-only skill's child. Forwarded into `childProviderFactory`
-   * so the read-only constraint survives `agent` fan-out (depth ≥ 2).
-   * When undefined, `childProviderFactory` defaults to `CHILD_ALLOWED_TOOLS`.
-   */
-  allowedTools?: string[];
-  /**
-   * When true, the mutating-bash gate is forwarded to grandchild providers.
-   * Set together with `allowedTools` for read-only skill fan-out propagation.
-   */
-  readOnlyBash?: boolean;
-  /**
-   * Nested-dispatch allowlist for the agent that OWNS this executor. Set when
-   * the dispatching agent declared a scoped `Agent(x)` grant (e.g.
-   * research-agent's `Agent(git-investigator)`, surfaced by resolve.ts as
-   * `nestedAgentTypes`). When present, {@link SubagentExecutor.execute} rejects
-   * any `agent_type` not in the list — and any bare/no-type dispatch — before a
-   * fork happens. An EMPTY array `[]` is a deny-all (from an `Agent()` grant):
-   * the check is on presence, not length, so `[]` matches nothing and rejects
-   * every dispatch. `undefined` = no restriction (top-level executors, or an
-   * inherit-all / bare-`Agent` agent).
-   *
-   * Why this is the safety boundary: a dispatched child's own grandchild
-   * executor inherits the parent CAGE ({@link allowedTools}), NOT the child's
-   * definition (see the childExecutor wiring below). At top level that cage is
-   * unrestricted, so a read-only agent granted the `agent` tool could otherwise
-   * spawn an unrestricted `general-purpose` (or bare) grandchild with full
-   * bash/write. This allowlist scopes the child to exactly the leaf agents its
-   * definition named — each of which is self-caged by its own definition.
-   */
-  nestedAgentAllowlist?: readonly string[];
-  /**
-   * Session-wide named-agent registry (see `agent/agents/`). When present,
-   * the `agent` tool accepts an `agent_type` (alias `subagent_type`) input
-   * that dispatches the named definition: its body becomes the child's
-   * system prompt, its resolved tool allowlist is mechanically enforced at
-   * the child provider's permission gate, and its `model`/`maxTurns` act as
-   * defaults under explicit per-call values. Threaded by reference through
-   * nested executors so depth ≥ 2 dispatches resolve the same registry.
-   * When absent, `agent_type` inputs fail with an "available: (none)" error
-   * and the legacy dispatch path is byte-identical.
-   */
-  agentRegistry?: AgentRegistry;
-  /** Read-only session attachment lookup; paths are loaded only at dispatch. */
-  inboundAttachmentRegistry?: InboundAttachmentReader;
-  /**
-   * The dispatching session's own model. Used to resolve a named agent's
-   * `model: inherit` (and the omitted-model default for NAMED dispatches,
-   * Claude Code parity). Distinct from `defaultSubagentModel`, which is the
-   * cost-policy default for UNNAMED dispatches and stays authoritative for
-   * them. When unset, `inherit` falls back to the policy default chain.
-   */
-  parentModel?: AgentModelInput;
-}
-
+export type { SubagentExecutorContext, SubagentControl } from './subagent-executor/types.js';
 export type { PromotedSubagentInfo } from './subagent/foreground-promotion.js';
-
-/**
- * Narrow control seam exposed to the keyboard / REPL layer for user-triggered
- * promotion of a running foreground subagent to a detached background job
- * (Ctrl+B). Deliberately minimal — one query + one command — so the keyboard
- * never reaches into `SubagentHandle`, the manager's active map, or abort
- * internals. The composition root (bootstrap) injects the executor as a
- * `SubagentControl` into the turn handler's handles bag; the keyboard layer
- * depends only on this interface.
- *
- * Invariant: the only sanctioned cross-layer dependency from `src/cli/**`
- * onto subagent control is this interface. See the architectural boundary
- * test that forbids `src/cli/**` from importing `SubagentHandleImpl`, reading
- * `.active`, or calling `.promote(`.
- */
-export interface SubagentControl {
-  /**
-   * True iff at least one foreground subagent dispatched by this executor is
-   * currently running AND can be promoted (a `BackgroundAgentRegistry` is
-   * wired). The keyboard uses this to decide whether Ctrl+B promotes the
-   * in-flight subagent(s) or falls back to whole-turn backgrounding.
-   */
-  hasPromotableForeground(): boolean;
-  /**
-   * Promote every in-flight foreground subagent to a detached background job.
-   * Resolves once each promotion has been handed to the registry. Entries that
-   * could not be promoted (the subagent completed in the same tick, or the
-   * background-job cap was hit) are omitted from the returned array.
-   *
-   * `queuedNote` optionally carries the REPL user's typed-ahead messages so they
-   * reach the parent's still-running turn on the same keypress that backgrounded
-   * the subagent (riding the synthetic promotion `tool_result`). The ticket is
-   * shared across every trigger, so the note is folded in at most once. The
-   * caller MUST re-read `queuedNote.claimed` after this resolves and keep its
-   * message queued when it is still `false` — an unclaimed note means nothing
-   * was promoted and the text has nowhere to ride.
-   */
-  promoteActiveForeground(queuedNote?: QueuedNoteClaim): Promise<PromotedSubagentInfo[]>;
-  /**
-   * True iff at least one foreground subagent dispatched by this executor is
-   * currently in flight. Unlike {@link hasPromotableForeground} this does NOT
-   * require a `BackgroundAgentRegistry` — cancellation is always available. The
-   * keyboard layer reads this to decide whether a soft-stop (ESC / first Ctrl+C)
-   * must cancel in-flight subagents to unblock a turn suspended on a subagent
-   * `await`.
-   */
-  hasActiveForeground(): boolean;
-  /**
-   * Cancel every in-flight foreground subagent dispatched by this executor.
-   * Each cancellation resolves the subagent's suspended `runToResult` (as a
-   * failed result carrying any streamed partial output), which lets the parent
-   * turn's tool-use loop unblock and observe the pending soft-stop so the turn
-   * ends cleanly instead of hanging for the subagent's entire lifetime (up to
-   * the 2h usage-limit cap). Returns the number of subagents cancelled; a no-op
-   * returning 0 when none are in flight.
-   */
-  cancelActiveForeground(): Promise<number>;
-}
 
 export class SubagentExecutor implements SubagentControl {
   // Current worktree cwd. Seeded from ctx.cwd; updated by setCwd when the
@@ -513,30 +262,8 @@ export class SubagentExecutor implements SubagentControl {
    * progress sink). Background `startedAt` is converted from epoch-ms to
    * ISO 8601 to match the rest of the snapshot's timestamp convention.
    */
-  getSubagentsLite(): {
-    active: Array<{
-      id: string;
-      status: 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-    }>;
-    backgroundJobs: Array<{
-      jobId: string;
-      status: 'running' | 'completed' | 'failed' | 'cancelled';
-      startedAt: string;
-      label: string | null;
-    }>;
-  } {
-    const active = this.ctx.subagentManager
-      .list()
-      .map((h) => ({ id: h.id, status: h.status }));
-    const backgroundJobs = this.ctx.backgroundRegistry
-      ? this.ctx.backgroundRegistry.list().map((j) => ({
-          jobId: j.jobId,
-          status: j.status,
-          startedAt: new Date(j.startedAt).toISOString(),
-          label: j.label.length > 0 ? j.label : null,
-        }))
-      : [];
-    return { active, backgroundJobs };
+  getSubagentsLite(): ReturnType<typeof buildSubagentsLite> {
+    return buildSubagentsLite(this.ctx.subagentManager, this.ctx.backgroundRegistry);
   }
 
   /**
@@ -600,7 +327,7 @@ export class SubagentExecutor implements SubagentControl {
     try {
       parsed = parseAgentInput(call.input);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return {
         content: `Agent tool input validation failed: ${message}`,
         isError: true,
@@ -699,6 +426,23 @@ export class SubagentExecutor implements SubagentControl {
       };
     }
 
+    // Delegation budget: per-agent child cap, tree-wide concurrent/total caps.
+    // Item 1: record the spawn atomically with the admission check — BEFORE the
+    // first await — so concurrent parallel `agent` calls cannot all pass canSpawn
+    // before any reaches recordSpawn. The SpawnReceipt is stored below; call
+    // receipt.rollback() on fork failure (undoes all counters) and receipt.release()
+    // on normal completion (decrements only concurrent).
+    let budgetReceipt: SpawnReceipt | undefined;
+    if (this.ctx.delegationBudget) {
+      const check = this.ctx.delegationBudget.canSpawn(this.ctx.parentSession.sessionId ?? '');
+      if (!check.allowed) {
+        void appendRoutingDecision({ ...identity, event: 'delegation.skipped', parent_session_id: this.ctx.parentSession.sessionId, reason: check.reason ?? 'budget', depth, ...(parsed.agent_type !== undefined ? { requested_name: parsed.agent_type } : {}) }).catch(() => {});
+        return { content: buildBudgetRefusalMessage(check), isError: true };
+      }
+      // Admitted: charge the slot now, synchronously, before any await.
+      budgetReceipt = this.ctx.delegationBudget.recordSpawn(this.ctx.parentSession.sessionId ?? '');
+    }
+
     // Transitive read-scope propagation (see ../subagent-read-scope): compute
     // THIS child's inherited read roots from the manager that will fork it, so
     // the nested manager the child builds for its OWN grandchildren starts from
@@ -748,6 +492,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
       ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}), ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
+      ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 
@@ -782,7 +527,12 @@ export class SubagentExecutor implements SubagentControl {
           // Fail loud: never silently fall back to the shared tree — that
           // reintroduces the cross-contamination bug isolation exists to
           // prevent (parallel siblings clobbering each other's edits/tests).
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
+          // Item 2: rollback ALL budget counters on worktree-creation failure
+          // (the child never ran). Without rollback, the failure permanently
+          // inflates total and childrenByAgent, exhausting lifetime caps.
+          budgetReceipt?.rollback();
+          budgetReceipt = undefined;
           return {
             content:
               `Failed to create isolated worktree for the subagent: ${message}. ` +
@@ -875,6 +625,11 @@ export class SubagentExecutor implements SubagentControl {
         // reach. Safe on a never-run handle: inFlight is null, so cancel()
         // skips session.interrupt().
         await handle.cancel();
+        // Item 2: rollback ALL counters — the handle was forked but the child
+        // never ran (cancelled between retry attempts). Rollback undoes total
+        // and childrenByAgent in addition to concurrent.
+        budgetReceipt?.rollback();
+        budgetReceipt = undefined;
         // Background: unlock + tear down the isolated worktree that will never
         // be registered (no registry entry → no markTerminal → no onCleanup).
         if (isolationTeardown && parsed.mode === 'background') {
@@ -884,7 +639,11 @@ export class SubagentExecutor implements SubagentControl {
         return { content: 'Agent tool call aborted', isError: true };
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
+      // Item 2: fork failed — rollback ALL budget counters (concurrent + total +
+      // childrenByAgent) because the child never ran.
+      budgetReceipt?.rollback();
+      budgetReceipt = undefined;
       // Wave manifest: unit failed because fork threw before returning a handle.
       this.updateCurrentWaveUnit(call.id, 'failed', message);
       void emitTelemetry({
@@ -930,9 +689,18 @@ export class SubagentExecutor implements SubagentControl {
         parentSessionId: this.ctx.parentSession.sessionId,
         // Intentional: updateWaveUnit (not updateCurrentWaveUnit) — the wave
         // may have ended before a background job settles (#1083).
+        // Item 1 fix: onSettled handles ONLY the wave-manifest concern (needs
+        // isError). budgetRelease is passed separately and wired through
+        // register({ onSettled: budgetRelease }) in background-branch.ts so
+        // the registry's markTerminal() fires it after cleanup — immune to the
+        // registry 'settled' event ordering race.
         onSettled: capturedWaveId !== undefined
-          ? (isError) => updateWaveUnit(capturedWaveId, capturedCallId, isError ? 'failed' : 'done')
+          ? (isError) => { updateWaveUnit(capturedWaveId, capturedCallId, isError ? 'failed' : 'done'); }
           : undefined,
+        // Item 2: use release() not rollback() — the fork succeeded, so only
+        // concurrent should decrement when the background job settles; total
+        // and childrenByAgent correctly reflect a real spawn.
+        budgetRelease: budgetReceipt?.release,
         onCleanup: isolationTeardown
           ? async () => {
               const result = await teardownBackgroundWorktree(isolationTeardown);
@@ -961,9 +729,15 @@ export class SubagentExecutor implements SubagentControl {
           registry: this.ctx.inboundAttachmentRegistry ?? inboundAttachmentRegistry,
         });
       } catch (err) {
+        // Item 5: attachment resolution aborted — release the budget slot before
+        // tearing down the handle. The fork succeeded (child existed) so use
+        // release() not rollback() — total and childrenByAgent correctly reflect
+        // a real spawn even though it never ran a prompt.
+        budgetReceipt?.release();
+        budgetReceipt = undefined;
         await handle.teardown().catch(() => undefined);
         return {
-          content: `Agent tool attachment resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+          content: `Agent tool attachment resolution failed: ${errorMessage(err)}`,
           isError: true,
         };
       }
@@ -976,6 +750,15 @@ export class SubagentExecutor implements SubagentControl {
     // (Ctrl+B), shape success/failure, and clean up in a finally. The
     // executor's two in-flight maps are handed in so the SubagentControl seam
     // (promote/cancel) still observes and mutates the same live entries.
+    //
+    // Item 4: budgetRelease (receipt.release) is threaded into
+    // runForegroundWithPromotion so that on promotion, adoptRunning passes it
+    // as onSettled to the registry. A `promotionTookBudget` ref is flipped
+    // synchronously when adoption succeeds, so the post-call release below is
+    // skipped only on that path. The fork succeeded so always use release(),
+    // never rollback() — the child ran (or at least existed).
+    const budgetRelease = budgetReceipt?.release;
+    const promotionTookBudget = { value: false };
     const result = await runForegroundWithPromotion({
       handle,
       signal: call.signal,
@@ -993,7 +776,11 @@ export class SubagentExecutor implements SubagentControl {
       promotionTriggers: this.promotionTriggers,
       activeForegroundHandles: this.activeForegroundHandles,
       ...(isolationTeardown !== undefined ? { isolationTeardown } : {}),
+      ...(budgetRelease !== undefined ? { budgetRelease, promotionTookBudget } : {}),
     });
+    // Budget: foreground child finished — release the slot, unless the
+    // promotion path deferred it to the registry's onSettled hook (Item 4).
+    if (!promotionTookBudget.value) budgetRelease?.();
     const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
     if (warn && !result.isError) result.content = warn + result.content;
     // Wave manifest: update unit to 'done' or 'failed' after the foreground run.

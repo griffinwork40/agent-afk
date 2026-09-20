@@ -27,6 +27,7 @@ import { isValidModelArg } from '../../../agent/session/model-validate.js';
 import { runPicker } from '../../render/picker.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const costCmd: SlashCommand = {
   name: '/cost',
@@ -292,7 +293,7 @@ async function switchModel(ctx: SlashContext, target: string): Promise<void> {
     ctx.ui.repaintStatusLine();
     ctx.out.success(`Model switched to ${palette.brand(target)}`);
   } catch (err) {
-    ctx.out.error(`Failed to switch model: ${err instanceof Error ? err.message : String(err)}`);
+    ctx.out.error(`Failed to switch model: ${errorMessage(err)}`);
   }
 }
 
@@ -370,7 +371,7 @@ const toolsCmd: SlashCommand = {
       }
       ctx.out.line();
     } catch (err) {
-      ctx.out.error(`Could not read session tools: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Could not read session tools: ${errorMessage(err)}`);
     }
     return 'continue';
   },
@@ -413,7 +414,7 @@ const mcpCmd: SlashCommand = {
         ctx.out.line();
       } catch (err) {
         ctx.out.error(
-          `Could not read OAuth state: ${err instanceof Error ? err.message : String(err)}`,
+          `Could not read OAuth state: ${errorMessage(err)}`,
         );
       }
       return 'continue';
@@ -455,7 +456,7 @@ const mcpCmd: SlashCommand = {
         );
       } catch (err) {
         ctx.out.error(
-          `OAuth completion failed for "${serverName}": ${err instanceof Error ? err.message : String(err)}`,
+          `OAuth completion failed for "${serverName}": ${errorMessage(err)}`,
         );
       }
       return 'continue';
@@ -494,7 +495,7 @@ const mcpCmd: SlashCommand = {
         ctx.out.line();
       }
     } catch (err) {
-      ctx.out.error(`Could not read MCP servers: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Could not read MCP servers: ${errorMessage(err)}`);
     }
     return 'continue';
   },
@@ -527,7 +528,7 @@ const debugCmd: SlashCommand = {
       ctx.out.line(renderDebugBanner(meta));
       ctx.out.line();
     } catch (err) {
-      ctx.out.error(`Could not read session metadata: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`Could not read session metadata: ${errorMessage(err)}`);
     }
     return 'continue';
   },

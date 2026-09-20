@@ -31,6 +31,7 @@ import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, plistPath, serviceLogPath } 
 import { installService, readPlistFile, uninstallService, upgradeService } from './install.js';
 import { serviceStatus } from './status.js';
 import { env } from '../../config/env.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export const launchdManager: ServiceManager = {
   backend: 'launchd',
@@ -165,7 +166,7 @@ export const launchdManager: ServiceManager = {
         });
         return { kind: 'restarted', label };
       } catch (e) {
-        return { kind: 'failed', reason: (e as Error).message };
+        return { kind: 'failed', reason: errorMessage(e) };
       }
     }
 
@@ -191,7 +192,7 @@ export const launchdManager: ServiceManager = {
         ...(upgradeNotes.length > 0 ? { notes: upgradeNotes } : {}),
       };
     } catch (e) {
-      return { kind: 'failed', reason: (e as Error).message };
+      return { kind: 'failed', reason: errorMessage(e) };
     }
   },
 

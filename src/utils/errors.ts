@@ -1,3 +1,12 @@
+/**
+ * Extracts a human-readable message from an unknown caught value.
+ * Use in `catch (err)` blocks instead of the inline ternary
+ * `err instanceof Error ? err.message : String(err)`.
+ */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export class AbortError extends Error {
   constructor(message?: string) {
     super(message);

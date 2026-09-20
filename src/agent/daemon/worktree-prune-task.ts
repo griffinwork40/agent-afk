@@ -10,6 +10,7 @@ import { sweepRootSet } from '../worktree/worktree-root-registry.js';
 import { summarizeRootFailures } from './root-failure-summary.js';
 import { countPrunable, formatWorktreePruneSummary } from './worktree-prune-summary.js';
 import { debugLog } from '../../utils/debug.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Wall-clock ceiling on a single `git` invocation inside the sweep.
@@ -198,5 +199,5 @@ function summarizePruneResults(
 }
 
 function redactPruneError(err: unknown): string {
-  return redactInlineSecrets(err instanceof Error ? err.message : String(err));
+  return redactInlineSecrets(errorMessage(err));
 }

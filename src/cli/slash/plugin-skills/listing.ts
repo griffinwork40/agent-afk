@@ -10,7 +10,7 @@
  * in `search-render.ts` — both are split siblings kept under 350 lines.
  */
 
-import { getSkill, listVisibleSkills, SKILL_CATEGORIES, UNCATEGORIZED_LABEL } from '../../../skills/index.js';
+import { getSkill, listVisibleSkills, SKILL_CATEGORIES, UNCATEGORIZED_LABEL } from '../../../skills/skill-registry.js';
 import { palette } from '../../palette.js';
 import { divider } from '../../render.js';
 import { wrapToWidth } from '../../wrap.js';

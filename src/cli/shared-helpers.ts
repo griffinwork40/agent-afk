@@ -1,3 +1,5 @@
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { providerForModel, type ProviderRouteHints } from '../agent/providers/index.js';
 import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../agent/types.js';
 import { loadOpenAICredential, resolveCredentialForModel } from '../agent/auth/credential-resolver.js';
@@ -305,4 +307,43 @@ export function isGrantManager(p: unknown): p is GrantManager {
     typeof obj['revokeRoot'] === 'function' &&
     typeof obj['getGrants'] === 'function'
   );
+}
+
+/**
+ * Activate the `--dump-prompt` feature by writing `AFK_DUMP_PROMPT` to
+ * `process.env`. When `dumpPrompt` is `true`, a timestamped default path under
+ * `~/.afk/logs/` is generated; a string value is used verbatim.
+ *
+ * When `provider` is set and is not `anthropic` / `anthropic-direct`, a
+ * warning is emitted to stderr because `dumpIfEnabled` is only wired into
+ * `AnthropicDirectProvider`.
+ *
+ * No-op when `dumpPrompt` is `undefined` or `false`.
+ */
+export function activateDumpPrompt(
+  dumpPrompt: string | boolean | undefined,
+  provider?: string,
+): void {
+  if (dumpPrompt === undefined || dumpPrompt === false) return;
+  const val: string =
+    dumpPrompt === true
+      ? path.join(
+          os.homedir(),
+          '.afk',
+          'logs',
+          `prompt-dump-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+        )
+      : String(dumpPrompt);
+  process.env['AFK_DUMP_PROMPT'] = val;
+  // Provider coverage warning: dumpIfEnabled is only wired into AnthropicDirectProvider.
+  // openai-compatible and other non-Anthropic providers will not produce a dump file.
+  if (
+    provider !== undefined &&
+    provider !== 'anthropic' &&
+    provider !== 'anthropic-direct'
+  ) {
+    console.error(
+      `[--dump-prompt] WARNING: active provider (${provider}) does not support prompt dumping. No file will be written.`,
+    );
+  }
 }

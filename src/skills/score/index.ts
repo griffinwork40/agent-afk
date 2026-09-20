@@ -34,6 +34,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
+import { errorMessage } from '../../utils/errors.js';
 
 export const SCORE_SCHEMA_VERSION = 1 as const;
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -261,7 +262,7 @@ async function runWithTimeout(
       resolve({
         exitCode: null,
         durationMs: now() - start,
-        stderr: err instanceof Error ? err.message : String(err),
+        stderr: errorMessage(err),
         timedOut: false,
         crashed: true,
       });

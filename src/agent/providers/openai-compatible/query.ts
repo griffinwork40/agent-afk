@@ -94,7 +94,7 @@ import {
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { HookBlockedError, DenialCircuitBreakerError } from '../../../utils/errors.js';
+import { DenialCircuitBreakerError, HookBlockedError, errorMessage } from '../../../utils/errors.js';
 import {
   COMPACT_SYSTEM_PROMPT,
   wrapTranscriptForSummary,
@@ -1211,7 +1211,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
           metadata: {
             wire: 'responses',
             reason: 'responses-compaction-unavailable',
-            error: err instanceof Error ? err.message : String(err),
+            error: errorMessage(err),
             ...(status !== undefined ? { status } : {}),
           },
         });

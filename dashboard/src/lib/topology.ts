@@ -219,7 +219,6 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
   // --- Pass 2: build SpineNodes ---
   const nodeByToolId = new Map<string, SpineNode>();
   const nodeBySubId = new Map<string, SpineNode>();
-  const toolClaimedByAgent = new Set<string>();
 
   for (const t of toolItems) {
     nodeByToolId.set(t.id, makeToolNode(t, inputPosition.get(t.id) ?? 0));
@@ -244,7 +243,6 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
         if (parentToolNode) {
           parentToolNode.kind = 'agent';
           parentToolNode.children.push(agentNode);
-          toolClaimedByAgent.add(parentTool.id);
           continue;
         }
       }
@@ -283,7 +281,6 @@ export function buildSpineTree(items: TranscriptItem[]): SpineNode[] {
         if (parentToolNode) {
           parentToolNode.kind = 'agent';
           parentToolNode.children.push(agentNode);
-          toolClaimedByAgent.add(parentTool.id);
           placed = true;
         }
       }

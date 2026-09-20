@@ -12,6 +12,7 @@
 import { rankBranches } from './index.js';
 import { buildFarmDigestKeyboard } from './digest-keyboard.js';
 import { type FarmRunRecord, type FarmBranchRecord } from './farm-run-record.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // Re-export so existing callers (and the test file) can keep importing types
 // from this module. Canonical source is `./farm-run-record.ts`.
@@ -151,7 +152,7 @@ export async function sendFarmDigest(
   } catch (err) {
     return {
       sent: false,
-      reason: err instanceof Error ? err.message : String(err),
+      reason: errorMessage(err),
     };
   }
 }

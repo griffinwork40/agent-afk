@@ -28,6 +28,7 @@ import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
 import type { ExecFileFn, SweepOptions } from '../../../agent/worktree/worktree-sweep.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult, Writer } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const execFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
 
@@ -204,7 +205,7 @@ async function handleList(ctx: SlashContext, args: string): Promise<SlashResult>
   try {
     repoRoot = await resolveRepoRoot();
   } catch (err) {
-    ctx.out.error(`Not in a git repository: ${(err as Error).message}`);
+    ctx.out.error(`Not in a git repository: ${errorMessage(err)}`);
     return 'continue';
   }
 
@@ -218,7 +219,7 @@ async function handleList(ctx: SlashContext, args: string): Promise<SlashResult>
     };
     result = await runSweep(options);
   } catch (err) {
-    ctx.out.error(`Sweep failed: ${(err as Error).message}`);
+    ctx.out.error(`Sweep failed: ${errorMessage(err)}`);
     return 'continue';
   }
 
@@ -242,7 +243,7 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
   try {
     repoRoot = await resolveRepoRoot();
   } catch (err) {
-    ctx.out.error(`Not in a git repository: ${(err as Error).message}`);
+    ctx.out.error(`Not in a git repository: ${errorMessage(err)}`);
     return 'continue';
   }
 
@@ -260,7 +261,7 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
     };
     result = await runSweep(options);
   } catch (err) {
-    ctx.out.error(`Sweep failed: ${(err as Error).message}`);
+    ctx.out.error(`Sweep failed: ${errorMessage(err)}`);
     return 'continue';
   }
 

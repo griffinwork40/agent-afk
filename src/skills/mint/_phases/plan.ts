@@ -3,10 +3,8 @@
  * Forks a subagent to create a detailed implementation plan.
  */
 
-import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
-import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import { forkMintPhase } from './_fork-phase.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
@@ -41,44 +39,22 @@ export async function runPlanPhase(
     throw new Error('mint skill missing plan.md prompt');
   }
 
-  // Propagate parent worktree to subagent — see spec.ts for rationale.
-  const manager = new SubagentManager({
-    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
-    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
-    ...(traceWriter !== undefined ? { traceWriter } : {}),
-    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
-  });
-  const planHandle = await manager.forkSubagent({
-    parent: { sessionId: parentSessionId },
-    config: {
-      model: defaultSubagentModel,
-      systemPrompt: planPrompt,
-      apiKey: resolveCredentialForModel(defaultSubagentModel),
-    },
-    idPrefix: 'mint-plan',
-    agentType: 'mint-plan',
-    phaseRole: 'read-only',
-    ...(skillCallId ? { parentId: skillCallId } : {}),
-  });
-
   const planInput =
     `Specification:\n${spec}\n\nResearch findings:\n${research}\n\n` +
     `Create a detailed implementation plan based on the spec and research.`;
 
-  const planResult = await planHandle.runToResult(planInput);
-
-  if (planResult.status !== 'succeeded' || !planResult.message) {
-    throw new Error(`plan phase failed: ${describeFailure(planResult)}`);
-  }
-  // A `succeeded` result can still be an incomplete partial — the tool-use cap
-  // fired or the stream closed without a terminal message. Its `.message.content`
-  // is a truncated placeholder, not the real plan; the phase output feeds the
-  // next phase programmatically, so hard-fail rather than forward a partial.
-  if (isIncompleteStopReason(planResult.stopReason)) {
-    throw new Error(
-      `plan phase returned an incomplete result (stopReason=${planResult.stopReason})`,
-    );
-  }
-
-  return planResult.message.content;
+  return forkMintPhase({
+    phaseName: 'plan',
+    phaseId: 'mint-plan',
+    systemPrompt: planPrompt,
+    inputMessage: planInput,
+    phaseRole: 'read-only',
+    parentSessionId,
+    parentCwd,
+    skillCallId,
+    model: defaultSubagentModel,
+    parentReadRoots,
+    traceWriter,
+    workspaceStore,
+  });
 }

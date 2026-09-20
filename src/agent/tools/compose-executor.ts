@@ -38,6 +38,7 @@ import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import { getSessionsDir } from '../../paths.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface ComposeExecutorContext {
   // NOTE: compose nodes are NOT wired for the parent-registry fallback. The
@@ -148,6 +149,8 @@ export interface ComposeExecutorContext {
   getReadScopeInputs?: () => ReadScopeInputs;
   /** Shared workspace store so compose DAG nodes can publish/receive findings. */
   workspaceStore?: WorkspaceStore;
+  /** Tree-wide delegation budget. Opt-in: undefined when no budget env vars set. */
+  delegationBudget?: import('./delegation-budget.js').DelegationBudget;
   /**
    * Callback wired to the per-call compose {@link SubagentManager} so every
    * successfully-completed DAG node's token usage and USD cost rolls up into
@@ -593,7 +596,7 @@ export class ComposeExecutor {
     try {
       ({ parsed, warnings: parseWarnings } = parseComposeInput(call.input));
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return {
         content: `Compose tool input validation failed: ${message}`,
         isError: true,
@@ -635,6 +638,12 @@ export class ComposeExecutor {
         isError: true,
       };
     }
+
+    // Delegation budget: per-node accounting is handled in runSubagentDAG
+    // (dag-subagent.ts) via the delegationBudget option threaded below. The
+    // single canSpawn check here was removed (Item 2) because it was never
+    // paired with recordSpawn — a 20-node DAG would have passed the gate once
+    // but recorded zero spawns. Per-node checks in dag-subagent supersede it.
 
     // Contract: the per-node tool budget is enforced BY THE PROVIDER LOOP, not
     // by this executor. `max_tool_rounds_per_node` is forwarded to each node's
@@ -850,6 +859,8 @@ export class ComposeExecutor {
         edges: parsed.edges ?? [],
         failFast: parsed.fail_fast,
         nodeTimeoutMs: parsed.node_timeout_ms,
+        // Item 2: thread the budget so every DAG node is counted individually.
+        ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
       });
 
       void appendRoutingDecision({
@@ -906,7 +917,7 @@ export class ComposeExecutor {
       const hasFailures = result.failed.length > 0;
       return { content, isError: hasFailures };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       void appendRoutingDecision({
         ...identity,
         event: 'compose.failed',

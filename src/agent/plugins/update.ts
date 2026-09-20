@@ -31,6 +31,7 @@ import {
   updateMarketplace,
   type UpdateMarketplaceDeps,
 } from '../marketplaces/update.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface UpdateOptions {
   /** Pin to an explicit ref instead of picking the latest tag. */
@@ -260,7 +261,7 @@ export async function updateAll(
     try {
       results.push(await updatePlugin(name, {}, deps));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       results.push({ name, status: 'missing-dir', dir: msg });
     }
   }
@@ -277,7 +278,7 @@ export async function updateAll(
     try {
       mpOutcome = await updateMarketplace(mpName, {}, mpDeps);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       for (const name of pluginNames) {
         results.push({ name, status: 'missing-dir', dir: msg });
       }

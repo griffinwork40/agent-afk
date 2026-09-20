@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface MarketplacePluginEntry {
   /** Plugin name as it appears in `afk plugin install <mp>:<plugin>`. */
@@ -157,5 +158,5 @@ function validate(raw: unknown, path: string): MarketplaceManifest {
 }
 
 function errorMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return errorMessage(err);
 }

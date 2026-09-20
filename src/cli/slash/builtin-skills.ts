@@ -13,7 +13,7 @@
  * `registerBuiltinSkillCommands()` reads it.
  */
 
-import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../skills/index.js';
+import { listSkills, getSkill, isSkillVisible, type SkillMetadata } from '../../skills/skill-registry.js';
 // Barrel import triggers self-registration side-effects for built-in skills.
 import { scanAndRegisterUserSkills, scanSkillsFromDir } from '../../skills/all.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
@@ -24,6 +24,7 @@ import { runPreflight, getSkillPreflightDir, initBuiltinPreflights, type SkillIn
 import type { SlashCommand, SlashContext, SlashResult } from './types.js';
 import type { ImageAttachment } from '../input/attachments.js';
 import { env } from '../../config/env.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Map a SkillMetadata origin → SkillInvocation source. */
 function originToSource(origin: SkillMetadata['origin']): SkillInvocation['source'] {
@@ -92,7 +93,7 @@ export function makeImmediateHandler(skill: SkillMetadata): SlashCommand {
               { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
               (err) => {
                 if (env.AFK_SKILL_STREAM_VERBOSE === '1') {
-                  ctx.out.warn(`preflight(${skill.name}) failed: ${err instanceof Error ? err.message : String(err)}`);
+                  ctx.out.warn(`preflight(${skill.name}) failed: ${errorMessage(err)}`);
                 }
               },
             );
@@ -102,7 +103,7 @@ export function makeImmediateHandler(skill: SkillMetadata): SlashCommand {
       } catch (err) {
         ctx.out.line();
         ctx.out.error(
-          `${skill.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+          `${skill.name} failed: ${errorMessage(err)}`,
         );
       }
       return 'continue';

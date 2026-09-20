@@ -20,6 +20,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSyn
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getAfkStateDir, getLogsDir } from '../paths.js';
+import { sleep } from '../agent/providers/shared/sleep-with-abort.js';
+import { errorMessage } from '../utils/errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -168,7 +170,7 @@ export async function start(): Promise<StartResult | StartFailure> {
     } catch (error) {
       return {
         kind: 'spawn-failed',
-        message: `Failed to spawn bot: ${(error as Error).message}`,
+        message: `Failed to spawn bot: ${errorMessage(error)}`,
       };
     }
 
@@ -184,7 +186,7 @@ export async function start(): Promise<StartResult | StartFailure> {
 
     // Settle window: if the bot's auth/env validation fails it exits within
     // ~100ms. Give it 1.5s, then check the PID is still alive.
-    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+    await sleep(1500);
 
     if (isRunning(pidFile) === null) {
       return {
@@ -220,7 +222,7 @@ export async function stop(): Promise<StopResult> {
 
   // Up to 5s graceful window.
   for (let i = 0; i < 50; i++) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await sleep(100);
     if (isRunning(pidFile) === null) {
       return { kind: 'stopped', pid };
     }

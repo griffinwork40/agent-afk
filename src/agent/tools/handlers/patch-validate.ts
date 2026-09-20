@@ -19,6 +19,7 @@ import { readFile } from 'fs/promises';
 import type { ToolHandlerContext } from '../types.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -109,7 +110,7 @@ export async function validatePatchChanges(
       errors.push({
         path: rawPath,
         error: 'path_containment',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: errorMessage(err),
       });
       continue; // Cannot proceed without a valid resolved path.
     }
@@ -121,7 +122,7 @@ export async function validatePatchChanges(
       errors.push({
         path: rawPath,
         error: 'write_denied',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: errorMessage(err),
       });
       continue; // Cannot validate further for a denied path (matches path_containment pattern).
     }
@@ -158,7 +159,7 @@ export async function validatePatchChanges(
         errors.push({
           path: rawPath,
           error: 'file_read_failed',
-          detail: err instanceof Error ? err.message : String(err),
+          detail: errorMessage(err),
         });
         continue;
       }

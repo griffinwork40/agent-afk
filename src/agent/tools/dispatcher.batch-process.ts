@@ -18,6 +18,7 @@
 import { abortFailureClass } from '../abort-reason.js';
 import { settleWithConcurrencyLimit } from '../concurrency-pool.js';
 import { debugLog } from '../../utils/debug.js';
+import { errorMessage } from '../../utils/errors.js';
 import {
   REPEAT_FAILURE_REFUSAL_THRESHOLD,
   repeatFailureFingerprint,
@@ -219,7 +220,7 @@ export function reconcileOutcomes(
       results[outcome.value.originalIndex] = outcome.value.result;
     } else {
       const msg =
-        outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        errorMessage(outcome.reason);
       const batchIdx = wave[settled.indexOf(outcome)]!;
       results[executableCalls[batchIdx]!.originalIndex] = {
         content: `Tool execution error: ${msg}`,

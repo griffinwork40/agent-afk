@@ -50,6 +50,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, isAbsolute } from 'path';
 import { randomUUID } from 'node:crypto';
 import { getPermissionsStorePath } from '../paths.js';
+import { errorMessage } from '../utils/errors.js';
 
 export type GrantMode = 'read' | 'write';
 export type GrantDecision = 'allow' | 'deny';
@@ -156,7 +157,7 @@ export function loadPermissionsFile(
     // eslint-disable-next-line no-console
     console.warn(
       `[permissions] could not parse ${filePath} — treating as empty (persisted grants reset): ` +
-        (err instanceof Error ? err.message : String(err)),
+        (errorMessage(err)),
     );
     return EMPTY;
   }

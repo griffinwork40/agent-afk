@@ -17,6 +17,7 @@ import { promises as fs } from 'fs';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Maximum entries returned before truncation. Matches glob's 500-entry cap
@@ -66,7 +67,7 @@ const listDirectoryImpl = async (
   try {
     resolvedPath = resolveAndContain(rawPath, context, 'read', cwd);
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   try {

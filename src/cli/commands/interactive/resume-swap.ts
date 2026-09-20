@@ -10,6 +10,7 @@ import type { GitStatusSampler } from '../../git-status-sampler.js';
 import type { StatusLine } from '../../status-line.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { AgentSession } from '../../../agent/session.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Redact credential-shaped substrings from an error message before logging.
@@ -25,7 +26,7 @@ function redactMessage(msg: string): string {
 }
 
 function warnVia(completionWriter: CompletionWriter, label: string, err: unknown): void {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = errorMessage(err);
   completionWriter.fn(palette.warning(`⚠ [resume-swap] ${label}: ${redactMessage(raw)}`));
 }
 
@@ -117,7 +118,7 @@ export async function performResumeSwap(
     // Redact credentials before surfacing to the user — reason is printed by
     // src/cli/slash/commands/resume.ts via ctx.out.warn and SDK errors may
     // include Bearer/Authorization headers.
-    const raw = err instanceof Error ? err.message : String(err);
+    const raw = errorMessage(err);
     return {
       ok: false,
       reason: `buildSession failed: ${redactMessage(raw)}`,
@@ -137,7 +138,7 @@ export async function performResumeSwap(
       // Redact at capture — `reason` is both printed via completionWriter
       // and returned to the slash-command surface for `ctx.out.warn`. SDK
       // 401/403 errors during init may echo Bearer tokens.
-      initFailReason = redactMessage(err instanceof Error ? err.message : String(err));
+      initFailReason = redactMessage(errorMessage(err));
       return false;
     },
   );

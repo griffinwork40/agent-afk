@@ -14,6 +14,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { computeLineDiff } from '../../../utils/diff.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Input shape for the edit_file tool (validated at runtime).
@@ -106,7 +107,7 @@ const editFileImpl = async (
   try {
     file_path = resolveAndContain(rawFilePath, context, 'write', cwd);
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   try {
@@ -191,7 +192,7 @@ const editFileImpl = async (
       ...(diff ? { render: { diff } } : {}),
     };
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorMsg = errorMessage(err);
     return {
       content: `Error: ${errorMsg}`,
       isError: true,

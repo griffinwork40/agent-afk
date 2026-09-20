@@ -34,6 +34,7 @@ import type { SubagentExecutor } from '../agent/tools/subagent-executor.js';
 import type { ComposeExecutor } from '../agent/tools/compose-executor.js';
 import type { SkillExecutor } from '../agent/tools/skill-executor.js';
 import type { ToolPermissionConfig } from '../agent/tools/permissions.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * The provider stores permissions and executors as private fields so that
@@ -191,7 +192,7 @@ describe('parseProvider — openai-compatible wiring (slice 4)', () => {
       parseProvider('bogus');
       expect.fail('expected throw');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       expect(msg).toMatch(/openai/);
       expect(msg).toMatch(/openai-compatible/);
     }

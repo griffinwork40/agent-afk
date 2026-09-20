@@ -21,6 +21,7 @@
 
 import { EventEmitter } from 'node:events';
 import { startShell, type ShellHandle, type ShellResult, type StartShellOptions } from './streamer.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export type ShellJobStatus = 'running' | 'completed' | 'failed' | 'killed';
 
@@ -122,7 +123,7 @@ export class ShellJobRegistry extends EventEmitter<ShellJobRegistryEvents> {
         // eslint-disable-next-line no-console
         console.warn(
           `[shell-jobs] listener for 'complete' threw on ${id}: ${
-            err instanceof Error ? err.message : String(err)
+            errorMessage(err)
           }`,
         );
       }

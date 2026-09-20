@@ -15,6 +15,7 @@ import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { computeLineDiff, type DiffPayload } from '../../../utils/diff.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Input shape for the write_file tool (validated at runtime).
@@ -77,7 +78,7 @@ const writeFileImpl = async (
   try {
     file_path = resolveAndContain(rawFilePath, context, 'write', cwd);
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   try {

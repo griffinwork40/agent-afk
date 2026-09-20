@@ -18,6 +18,7 @@ import { registerPluginAgents } from '../plugin-agents.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import { registerPluginSkills } from './dispatch.js';
 import { state } from './state.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Build the dim "source breakdown" segment for the reload summary, e.g.
@@ -137,7 +138,7 @@ export const reloadPluginsCmd: SlashCommand = {
       // Contract: fail-soft — reloadPlugins() is a best-effort SDK flush;
       // the user sees the warning and the re-registration below still runs
       // against the current (possibly stale) SDK state rather than aborting.
-      ctx.out.warn(`Plugin reload failed: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.warn(`Plugin reload failed: ${errorMessage(err)}`);
     }
     // Refresh skills + agents in parallel — neither depends on the other.
     const [skillCount, agentCount] = await Promise.all([

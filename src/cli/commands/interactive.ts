@@ -1,14 +1,14 @@
 import { Command } from 'commander';
 import { env } from '../../config/env.js';
 import ora from 'ora';
-import * as os from 'node:os';
+
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { welcomeBanner, divider } from '../render.js';
 import { formatDuration } from '../format-utils.js';
 import { costTokenParts } from '../render/session-summary.js';
 import { registerCleanup, runCleanupFunctions } from '../../utils/cleanupRegistry.js';
-import { getModel } from '../shared-helpers.js';
+import { getModel, activateDumpPrompt } from '../shared-helpers.js';
 import { palette } from '../palette.js';
 import { setTerminalTitleIfEnabled, formatTerminalTitle } from '../_lib/capture-mode.js';
 import { saveSession } from '../session-store.js';
@@ -39,6 +39,7 @@ import {
   resolveWorktreeExitPolicy,
 } from './interactive/worktree-disposition.js';
 import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
@@ -271,17 +272,7 @@ export function registerInteractiveCommand(program: Command): void {
       }
 
       // --- prompt-dump activation ---
-      if (options.dumpPrompt !== undefined) {
-        const val: string = options.dumpPrompt === true
-          ? path.join(os.homedir(), '.afk', 'logs', `prompt-dump-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
-          : String(options.dumpPrompt);
-        process.env['AFK_DUMP_PROMPT'] = val;
-        // Provider coverage warning: dumpIfEnabled is only wired into AnthropicDirectProvider.
-        // openai-compatible and other non-Anthropic providers will not produce a dump file.
-        if (options.provider !== undefined && options.provider !== 'anthropic' && options.provider !== 'anthropic-direct') {
-          console.error(`[--dump-prompt] WARNING: active provider (${options.provider}) does not support prompt dumping. No file will be written.`);
-        }
-      }
+      activateDumpPrompt(options.dumpPrompt, options.provider);
 
 
       const spinner = ora({ text: 'Initializing interactive session...', ...REPL_SPINNER_OPTIONS }).start();
@@ -325,7 +316,7 @@ export function registerInteractiveCommand(program: Command): void {
           }
         } catch (err) {
           spinner.fail('Session not found');
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           process.stderr.write(
             `Error: ${msg}\n` +
               `Run \`afk i\` then \`/resume\` to list saved sessions.\n`,

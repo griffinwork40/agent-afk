@@ -22,6 +22,7 @@ import { divider } from '../render/divider.js';
 import { palette } from '../palette.js';
 import { registerOrReplace, register } from './registry.js';
 import type { SlashCommand } from './types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 interface DiscoveredAgent {
   name: string;
@@ -92,7 +93,7 @@ export async function registerPluginAgents(
     // eslint-disable-next-line no-console
     console.error(
       palette.dim('  ⚠ Plugin-agent discovery failed: ') +
-        (err instanceof Error ? err.message : String(err)),
+        (errorMessage(err)),
     );
     return null;
   }
