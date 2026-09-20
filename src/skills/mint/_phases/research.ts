@@ -3,10 +3,8 @@
  * Forks a subagent to gather codebase and architectural context.
  */
 
-import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
-import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import { forkMintPhase } from './_fork-phase.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
@@ -43,42 +41,18 @@ export async function runResearchPhase(
     throw new Error('mint skill missing research.md prompt');
   }
 
-  // Propagate parent worktree to subagent — see spec.ts for rationale.
-  const manager = new SubagentManager({
-    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
-    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
-    ...(traceWriter !== undefined ? { traceWriter } : {}),
-    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
-  });
-  const researchHandle = await manager.forkSubagent({
-    parent: { sessionId: parentSessionId },
-    config: {
-      model: defaultSubagentModel,
-      systemPrompt: researchPrompt,
-      apiKey: resolveCredentialForModel(defaultSubagentModel),
-    },
-    idPrefix: 'mint-research',
-    agentType: 'mint-research',
+  return forkMintPhase({
+    phaseName: 'research',
+    phaseId: 'mint-research',
+    systemPrompt: researchPrompt,
+    inputMessage: `Gather context and research for this specification:\n\n${spec}`,
     phaseRole: 'read-only',
-    ...(skillCallId ? { parentId: skillCallId } : {}),
+    parentSessionId,
+    parentCwd,
+    skillCallId,
+    model: defaultSubagentModel,
+    parentReadRoots,
+    traceWriter,
+    workspaceStore,
   });
-
-  const researchResult = await researchHandle.runToResult(
-    `Gather context and research for this specification:\n\n${spec}`,
-  );
-
-  if (researchResult.status !== 'succeeded' || !researchResult.message) {
-    throw new Error(`research phase failed: ${describeFailure(researchResult)}`);
-  }
-  // A `succeeded` result can still be an incomplete partial — the tool-use cap
-  // fired or the stream closed without a terminal message. Its `.message.content`
-  // is a truncated placeholder, not real research; the phase output feeds the
-  // next phase programmatically, so hard-fail rather than forward a partial.
-  if (isIncompleteStopReason(researchResult.stopReason)) {
-    throw new Error(
-      `research phase returned an incomplete result (stopReason=${researchResult.stopReason})`,
-    );
-  }
-
-  return researchResult.message.content;
 }

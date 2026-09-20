@@ -675,8 +675,18 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // the warnings were never actually lost and this fix is unnecessary.
       absent: ['PRECLEAR_LINE_0', 'PRECLEAR_LINE_29'],
       // The fix: both drained warnings are readable in the live buffer after
-      // the clear, and survive the compositor arming + first commit over them.
-      inViewport: ['SHADOWWARN', 'MCPWARN'],
+      // the clear and survive the compositor arming + first commit over them.
+      //
+      // After #1823 (scroll banner to scrollback on first commit) the
+      // compositor's commitAbove pre-commit regime sync intentionally scrolls
+      // anchorRow-1 rows into scrollback on the FIRST commit, so the banner
+      // (and the warnings that follow it) land in scrollback rather than the
+      // viewport. The invariant being tested is that the warnings SURVIVED the
+      // \x1b[3J erase and are present in the live buffer — scrollback is the
+      // correct location for content that the pre-commit regime sync scrolled
+      // there. A regression that truly erased the warnings would fail the
+      // exactlyOnce and order assertions below.
+      inScrollback: ['SHADOWWARN', 'MCPWARN'],
       // Exactly once — a drain that re-printed on every repaint would spam.
       exactlyOnce: ['SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
       // Warnings sit above the first turn's output, below the banner.

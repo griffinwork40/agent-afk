@@ -11,6 +11,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.222.12] - 2026-09-20
+
+### Changed
+- bump the fumadocs group across 1 directory with 3 updates (#1868) (fcc7c9ca)
+- extract mint phase fork helper (#1852) (#1881) (a55ae542)
+- bump next from 16.3.4 to 16.3.5 in /website (#1870) (52cdd37f)
+
+## [5.222.11] - 2026-09-20
+
+### Changed
+- consolidate double measure() call in cursor-follow repaint (#1842) (#1877) (b037e62d)
+
+## [5.222.10] - 2026-09-20
+
+### Fixed
+- use shared parseRetryAfterMs in openai tracing-fetch (fixes retry-after-ms) (#1867) (f925fc03)
+
+## [5.222.9] - 2026-09-20
+
+### Fixed
+- preserve identifier names in published bundles (#1844) (423f984d)
+
+### Changed
+- update boot-warning-survives-clear to inScrollback after #1823 banner-scroll (#1866) (dc4284a9)
+
 ## [5.222.8] - 2026-09-19
 
 ### Fixed

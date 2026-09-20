@@ -274,6 +274,12 @@ export function repaint(self: FrameHost): void {
   // content into scrollback. measure() returns the physical (post-wrap) line
   // count; when unavailable, fall back to the logical count (safe for stubs
   // and tests that don't wrap).
+  //
+  // Consolidation: lineCount is targetBottomRow-independent (it depends only
+  // on content and terminal width), so we call measure() once with any valid
+  // targetBottomRow to get lineCount, compute the real targetBottomRow from
+  // it, then derive desiredTopRow arithmetically — avoiding a second full
+  // wrap pass.
   const logicalRows = frameLines.length;
   const physicalRows = self.logUpdate.measure
     ? self.logUpdate.measure(frame, absoluteBottom).lineCount
@@ -298,11 +304,11 @@ export function repaint(self: FrameHost): void {
   // committed-band eviction/re-pin off the LOGICAL line count
   // (frameLines.length) under-counts in that case and re-pins the band INSIDE
   // the physical frame footprint, where the next render's erase pass clobbers
-  // it (review #592). measure() returns the physical top render() will use; it
-  // equals the logical count whenever nothing wraps. Stubs without measure()
-  // fall back to the logical count.
+  // it (review #592). desiredTopRow is derived from the same physicalRows
+  // (lineCount) already computed above — equivalent to measure().topRow but
+  // without a second wrap pass. Stubs without measure() fall back to logical.
   const desiredTopRow = self.logUpdate.measure
-    ? self.logUpdate.measure(frame, targetBottomRow).topRow
+    ? Math.max(1, targetBottomRow - physicalRows + 1)
     : Math.max(1, targetBottomRow - frameLines.length + 1);
   // Record the real (unpadded) frame top for commitAbove's routing. This is the
   // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
