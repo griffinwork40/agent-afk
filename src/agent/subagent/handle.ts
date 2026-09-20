@@ -10,7 +10,7 @@
 import type { ZodType } from 'zod';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { AbortGraph } from '../abort-graph.js';
-import { TimeoutError } from '../../utils/errors.js';
+import { TimeoutError, errorMessage } from '../../utils/errors.js';
 import type { HookRegistry } from '../hooks.js';
 import { withTimeout } from '../timeout.js';
 import type { IAgentSession, Message } from '../types.js';
@@ -436,7 +436,7 @@ export class SubagentHandleImpl<T> implements SubagentHandle<T> {
             transition: 'failed',
             subagentId: this.id,
             errorClass: surfacedErr instanceof Error ? surfacedErr.constructor.name : 'Unknown',
-            errorMessage: surfacedErr instanceof Error ? surfacedErr.message : String(surfacedErr),
+            errorMessage: errorMessage(surfacedErr),
             partialOutputBytes: Buffer.byteLength(this._lastStreamedContent, 'utf8'),
             // Classify our OWN wall-clock budget expiry as a timeout failure.
             // `timeoutReason` is set (see the origin-guarded detection above)

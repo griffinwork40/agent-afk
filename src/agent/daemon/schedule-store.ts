@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface ScheduledTaskConfig {
   /** Slug ID, e.g. "nightly-forge". Auto-generated from `name` via `slugify`. */
@@ -77,7 +78,7 @@ export function loadSchedules(path?: string): ScheduledTaskConfig[] {
     const raw = readFileSync(storePath, 'utf-8');
     return JSON.parse(raw) as ScheduledTaskConfig[];
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     // eslint-disable-next-line no-console
     console.error(`[schedule-store] failed to parse ${storePath}: ${msg}`);
     return [];

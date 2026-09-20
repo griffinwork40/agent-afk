@@ -39,6 +39,7 @@ import type {
   SpineClassifierItem,
   SpineRelationItem,
 } from './spine-classifier.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -202,7 +203,7 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           JSON.stringify({
             type: 'hook-error',
             sessionId,
-            error: err instanceof Error ? err.message : String(err),
+            error: errorMessage(err),
             ts: new Date().toISOString(),
           }) + '\n',
           'utf-8',

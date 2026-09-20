@@ -36,6 +36,7 @@ import type { SkillExecutorContext, SkillExecutorInternals, SkillInput } from '.
 import { isGateSkill, sessionIdentity, truncateTelemetryString } from './skill-executor/telemetry.js';
 import { executeLoadedPluginSkill, executeLoadedRegistrySkill } from './skill-executor/load-mode.js';
 import { executeForkedRegistrySkill, executePluginSkill } from './skill-executor/fork-dispatch.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export type { SkillExecutorContext } from './skill-executor/types.js';
 
@@ -154,7 +155,7 @@ export class SkillExecutor {
     try {
       parsed = parseSkillInput(call.input);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return {
         content: `Skill tool input validation failed: ${message}`,
         isError: true,
@@ -379,11 +380,9 @@ export class SkillExecutor {
       // Emit completion telemetry. Mirrors subagent-executor's privacy
       // contract: content_chars on success, truncated error_message on
       // failure — never the result body or the full error.
-      const errorMessage =
+      const errorMsg =
         handlerError !== undefined
-          ? handlerError instanceof Error
-            ? handlerError.message
-            : String(handlerError)
+          ? errorMessage(handlerError)
           : undefined;
       const contentChars =
         handlerError === undefined
@@ -402,14 +401,14 @@ export class SkillExecutor {
         duration_ms: durationMs,
         depth,
         ...(contentChars !== undefined ? { content_chars: contentChars } : {}),
-        ...(errorMessage !== undefined
-          ? { error_message: truncateTelemetryString(errorMessage) }
+        ...(errorMsg !== undefined
+          ? { error_message: truncateTelemetryString(errorMsg) }
           : {}),
         ...(skill.model !== undefined ? { model: skill.model } : {}),
       }).catch(() => {});
     }
     if (handlerError !== undefined) {
-      const message = handlerError instanceof Error ? handlerError.message : String(handlerError);
+      const message = errorMessage(handlerError);
       return { content: `Skill execution error: ${message}`, isError: true };
     }
     const content = typeof result === 'string'

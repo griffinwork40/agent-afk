@@ -33,6 +33,7 @@ import {
   type DiscoveredSkill,
   type PluginCollision,
 } from './state.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const CORE_COMMANDS = new Set(['/exit', '/quit', '/clear', '/compact', '/help']);
 
@@ -160,7 +161,7 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
               { cwd: ctx.stats.cwd ?? process.cwd(), artifactDir },
               (err) => {
                 if (env.AFK_SKILL_STREAM_VERBOSE === '1') {
-                  ctx.out.warn(`preflight(${bareSkillName}) failed: ${err instanceof Error ? err.message : String(err)}`);
+                  ctx.out.warn(`preflight(${bareSkillName}) failed: ${errorMessage(err)}`);
                 }
               },
             );
@@ -182,7 +183,7 @@ export function makeForwardHandler(skill: DiscoveredSkill, flags?: readonly stri
       } catch (err) {
         ctx.out.line();
         ctx.out.error(
-          `${skill.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+          `${skill.name} failed: ${errorMessage(err)}`,
         );
       }
       return 'continue';
@@ -211,7 +212,7 @@ export async function registerPluginSkills(
     // eslint-disable-next-line no-console
     console.error(
       palette.dim('  ⚠ Plugin-skill discovery failed: ') +
-        (err instanceof Error ? err.message : String(err)),
+        (errorMessage(err)),
     );
     return null;
   }

@@ -38,6 +38,7 @@ import type { ToolHandler, ToolHandlerContext } from './types.js';
 import type { TraceSink } from '../trace/index.js';
 import type { GrantManager } from '../../cli/slash/commands/allow-dir.js';
 import type { PreDispatchGateDeps } from './dispatcher.pre-dispatch-gates.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Dependency surface
@@ -273,7 +274,7 @@ export async function executeCompose(call: ToolCall, deps: CoreExecDeps): Promis
   try {
     return await deps.composeExecutor.execute(call);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { content: `Compose tool error: ${message}`, isError: true };
   }
 }
@@ -315,7 +316,7 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
       result = await deps.skillExecutor.execute(call);
     } catch (err) {
       skillThrew = true;
-      skillErrMsg = err instanceof Error ? err.message : String(err);
+      skillErrMsg = errorMessage(err);
       result = { content: `Skill tool error: ${skillErrMsg}`, isError: true };
     }
     if (skillThrew) {
@@ -348,7 +349,7 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
     result = await handler(call.input, call.signal, deps.callHandlerContext(call));
   } catch (err) {
     handlerThrew = true;
-    handlerErrMsg = err instanceof Error ? err.message : String(err);
+    handlerErrMsg = errorMessage(err);
     result = { content: `Tool execution error: ${handlerErrMsg}`, isError: true };
   }
 

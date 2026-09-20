@@ -21,6 +21,7 @@ import type { BrowserHandlerOptions } from './browser-open.js';
 import type { Target } from '../../../browser/types.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 import { acquireBrowserProvider } from './browser-provider.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const VALID_TARGET_KINDS = ['semantic', 'element_id', 'selector'] as const;
 
@@ -170,7 +171,7 @@ export function createBrowserScreenshotHandler(opts: BrowserHandlerOptions = {})
       };
     } catch (err) {
       const durationMs = Date.now() - t0;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_screenshot',
         toolUseId: context?.toolUseId ?? '',

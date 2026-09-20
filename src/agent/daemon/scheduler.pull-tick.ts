@@ -19,6 +19,7 @@ import { completeTask } from './lease-store.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { ScheduledTask } from './triggers.js';
 import type { TelemetryRecord, TelemetryTrigger, TaskCompletionDetails } from './scheduler.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ─── Context interface ────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ export function sweepAnsweredHandoffs(queueDir: string): void {
       }
     })
     .catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] handoff-consume: sweep failed: ${msg}`);
     });
@@ -112,7 +113,7 @@ export async function executePullTick(ctx: PullTickContext): Promise<void> {
     // the poll loop still survives (mirrors writeTelemetry's logging path).
     // Redact error-derived text before logging, matching the runOnce
     // telemetry path (a synthetic task's command may carry an inline secret).
-    const msg = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+    const msg = redactInlineSecrets(errorMessage(err));
     // eslint-disable-next-line no-console
     console.error(`[daemon] pull tick failed: ${msg}`);
   } finally {
@@ -165,13 +166,13 @@ export function fireOnTaskComplete(
     const result = cb(record, effectiveDetails);
     if (result instanceof Promise) {
       void result.catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         // eslint-disable-next-line no-console
         console.error(`[daemon] onTaskComplete callback failed: ${msg}`);
       });
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     // eslint-disable-next-line no-console
     console.error(`[daemon] onTaskComplete callback failed: ${msg}`);
   }

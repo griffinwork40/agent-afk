@@ -49,6 +49,7 @@ import type { McpServerConfig } from './types.js';
 import { createTransport } from './transport.js';
 import { KeychainOAuthProvider } from './oauth.js';
 import type { McpServerLayer } from './env-containment.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Client identity advertised in the MCP handshake. */
 const CLIENT_INFO = {
@@ -362,7 +363,7 @@ export class McpClient {
       );
       result = raw as CallToolResult;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       return {
         content: `MCP tool "${this.serverName}.${toolName}" failed: ${msg}`,
         isError: true,

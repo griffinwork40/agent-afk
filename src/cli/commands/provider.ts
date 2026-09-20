@@ -29,6 +29,7 @@ import {
   runXaiLogout,
 } from './provider-xai-login.js';
 import { getSlotBindings, slotForInput } from '../../agent/session/model-slots.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Build the human-readable result of `afk provider auth diagnose` (OpenAI).
@@ -213,7 +214,7 @@ export function registerProviderCommand(program: Command): void {
         console.error(palette.error(`✗ ${result.message}`));
         process.exit(1);
       } catch (e) {
-        console.error(palette.error(`✗ ${e instanceof Error ? e.message : String(e)}`));
+        console.error(palette.error(`✗ ${errorMessage(e)}`));
         process.exit(1);
       }
     });

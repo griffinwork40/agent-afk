@@ -38,6 +38,7 @@ import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
 import { getSessionsDir } from '../../paths.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface ComposeExecutorContext {
   // NOTE: compose nodes are NOT wired for the parent-registry fallback. The
@@ -593,7 +594,7 @@ export class ComposeExecutor {
     try {
       ({ parsed, warnings: parseWarnings } = parseComposeInput(call.input));
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return {
         content: `Compose tool input validation failed: ${message}`,
         isError: true,
@@ -906,7 +907,7 @@ export class ComposeExecutor {
       const hasFailures = result.failed.length > 0;
       return { content, isError: hasFailures };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       void appendRoutingDecision({
         ...identity,
         event: 'compose.failed',

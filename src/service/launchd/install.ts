@@ -4,6 +4,7 @@ import { homedir } from 'os';
 import { dirname } from 'path';
 import { guiDomain, LAUNCHCTL_TIMEOUT_MS, labelFor, launchAgentsDir, plistPath, serviceLogPath, type ServiceName } from './paths.js';
 import { type PlistOptions, renderPlist, resolveServicePath, resolveWatchPaths, resolveProgramArguments } from './plist.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Extract `EnvironmentVariables` key→value pairs from a plist string.
@@ -95,7 +96,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
   try {
     args = resolveProgramArguments(name, opts._entrypointExistsCheck);
   } catch (err) {
-    return { kind: 'failed', reason: (err as Error).message };
+    return { kind: 'failed', reason: errorMessage(err) };
   }
   const watchPaths = opts.noWatch ? undefined : resolveWatchPaths(name, opts._entrypointExistsCheck);
   const logFile = serviceLogPath(name);
@@ -135,7 +136,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
     // doesn't permanently break subsequent installs. We swallow the
     // unlink error: if it fails, the user gets a clearer message on the
     // next install attempt naming the stale tmp path.
-    return { kind: 'failed', reason: `Failed to write plist (tmp ${tmpPath}): ${(err as Error).message}` };
+    return { kind: 'failed', reason: `Failed to write plist (tmp ${tmpPath}): ${errorMessage(err)}` };
   }
   try {
     renameSync(tmpPath, path);
@@ -145,7 +146,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
     } catch {
       // Ignore — the rename error message below is the actionable one.
     }
-    return { kind: 'failed', reason: `Failed to install plist (rename ${tmpPath} → ${path}): ${(err as Error).message}` };
+    return { kind: 'failed', reason: `Failed to install plist (rename ${tmpPath} → ${path}): ${errorMessage(err)}` };
   }
 
   if (opts.skipBootstrap) {
@@ -163,7 +164,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
       timeout: LAUNCHCTL_TIMEOUT_MS,
     });
   } catch (err) {
-    const msg = (err as Error).message;
+    const msg = errorMessage(err);
 
     // M-7: EALREADY (exit status 37) means the service was already loaded
     // by launchd — common after a crash-recovery where launchd auto-
@@ -193,7 +194,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
         // Capture but don't fail here — bootout often fails with
         // "service not loaded" which is benign. We hold the message in
         // case the retry bootstrap also fails.
-        bootoutStderr = (bootoutErr as Error).message;
+        bootoutStderr = errorMessage(bootoutErr);
       }
       try {
         execFileSync('launchctl', ['bootstrap', guiDomain(), path], {
@@ -201,7 +202,7 @@ export function installService(name: ServiceName, opts: InstallOptions = {}): In
           timeout: LAUNCHCTL_TIMEOUT_MS,
         });
       } catch (retryErr) {
-        const retryMsg = (retryErr as Error).message;
+        const retryMsg = errorMessage(retryErr);
         const detail = bootoutStderr
           ? `${retryMsg} (prior bootout: ${bootoutStderr})`
           : retryMsg;
@@ -247,7 +248,7 @@ export function uninstallService(name: ServiceName, opts: { skipBootout?: boolea
   try {
     rmSync(path, { force: true });
   } catch (err) {
-    return { kind: 'failed', reason: `Failed to remove plist: ${(err as Error).message}` };
+    return { kind: 'failed', reason: `Failed to remove plist: ${errorMessage(err)}` };
   }
   return { kind: 'uninstalled', plistPath: path };
 }
@@ -273,7 +274,7 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
   try {
     args = resolveProgramArguments(name, opts._entrypointExistsCheck);
   } catch (err) {
-    return { kind: 'failed', reason: (err as Error).message };
+    return { kind: 'failed', reason: errorMessage(err) };
   }
   const watchPaths = opts.noWatch ? undefined : resolveWatchPaths(name, opts._entrypointExistsCheck);
   const logFile = serviceLogPath(name);
@@ -283,7 +284,7 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
   try {
     current = readFileSync(path, 'utf-8');
   } catch (err) {
-    return { kind: 'failed', reason: `Failed to read current plist: ${(err as Error).message}` };
+    return { kind: 'failed', reason: `Failed to read current plist: ${errorMessage(err)}` };
   }
   // #1717: preserve installed env vars when opts.environment is not supplied.
   const preservedEnv: Record<string, string> = opts.environment === undefined
@@ -322,17 +323,17 @@ export function upgradeService(name: ServiceName, opts: InstallOptions = {}): Up
       try {
         writeFileSync(tmpPath, desired, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
       } catch (retryErr) {
-        return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${(retryErr as Error).message}` };
+        return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${errorMessage(retryErr)}` };
       }
     } else {
-      return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${(firstErr as Error).message}` };
+      return { kind: 'failed', reason: `Failed to write upgraded plist (tmp ${tmpPath}): ${errorMessage(firstErr)}` };
     }
   }
   try {
     renameSync(tmpPath, path);
   } catch (err) {
     try { unlinkSync(tmpPath); } catch { /* ignore */ }
-    return { kind: 'failed', reason: `Failed to install upgraded plist (rename ${tmpPath} -> ${path}): ${(err as Error).message}` };
+    return { kind: 'failed', reason: `Failed to install upgraded plist (rename ${tmpPath} -> ${path}): ${errorMessage(err)}` };
   }
 
   return { kind: 'upgraded', plistPath: path, label: labelFor(name) };

@@ -27,6 +27,7 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { resolveCliPermissionMode } from '../config.js';
 import { promptSecret } from '../../utils/prompt-secret.js';
 import { classifyEnvKey } from '../../config/settable-keys.js';
+import { errorMessage } from '../../utils/errors.js';
 import {
   setConfigValue,
   unsetConfigValue,
@@ -160,7 +161,7 @@ export function registerConfigCommand(program: Command): void {
           console.log(JSON.stringify(all, null, 2));
         }
       } catch (err) {
-        fail((err as Error).message);
+        fail(errorMessage(err));
       }
     });
 
@@ -174,7 +175,7 @@ export function registerConfigCommand(program: Command): void {
         if (opts.json) console.log(JSON.stringify({ ok: true, ...r }));
         else console.log(palette.success(`✓ ${r.path} = ${JSON.stringify(r.value)} → ${r.persistedTo}\n  ${RESTART_NOTE}.`));
       } catch (err) {
-        fail((err as Error).message);
+        fail(errorMessage(err));
       }
     });
 
@@ -188,7 +189,7 @@ export function registerConfigCommand(program: Command): void {
         if (opts.json) console.log(JSON.stringify({ ok: true, ...r }));
         else console.log(r.removed ? palette.success(`✓ removed ${r.path} → ${r.persistedTo}`) : palette.meta(`(${r.path} was not set)`));
       } catch (err) {
-        fail((err as Error).message);
+        fail(errorMessage(err));
       }
     });
 
@@ -212,7 +213,7 @@ export function registerConfigCommand(program: Command): void {
           else for (const e of list) console.log(`${e.key} [${e.class}]: ${e.persisted ?? palette.meta('(unset)')}`);
         }
       } catch (err) {
-        fail((err as Error).message);
+        fail(errorMessage(err));
       }
     });
 
@@ -240,7 +241,7 @@ export function registerConfigCommand(program: Command): void {
         if (opts.json) console.log(JSON.stringify({ ok: true, ...r }));
         else console.log(palette.success(`✓ ${r.key} = ${r.display} → ${r.persistedTo}\n  ${RESTART_NOTE}.`));
       } catch (err) {
-        fail((err as Error).message);
+        fail(errorMessage(err));
       }
     });
 
@@ -254,7 +255,7 @@ export function registerConfigCommand(program: Command): void {
         if (opts.json) console.log(JSON.stringify({ ok: true, ...r }));
         else console.log(r.removed ? palette.success(`✓ removed ${r.key} → ${r.persistedTo}`) : palette.meta(`(${r.key} was not set)`));
       } catch (err) {
-        fail((err as Error).message);
+        fail(errorMessage(err));
       }
     });
 }

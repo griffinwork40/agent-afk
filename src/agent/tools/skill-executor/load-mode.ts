@@ -19,6 +19,7 @@ import { appendRoutingDecision } from '../../routing-telemetry.js';
 import { isGateSkill, sessionIdentity } from './telemetry.js';
 import type { SkillExecutorInternals } from './types.js';
 import { substituteSkillArgs } from './arg-substitution.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Frame a skill body for in-context ("load") execution and return it as the
@@ -125,7 +126,7 @@ export function executeLoadedRegistrySkill(
       }
       body = system;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return { content: `Failed to load skill prompts: ${message}`, isError: true };
     }
   }

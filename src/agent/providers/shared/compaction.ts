@@ -36,6 +36,7 @@
 
 import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * System instruction for the summarization call. Crafted to preserve what a
@@ -592,7 +593,7 @@ export async function runCompactionCore<M>(
     if (isAborted()) {
       return { compacted: false, reason: 'aborted', ...unchanged };
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return { compacted: false, reason: 'summarization-failed: ' + msg, ...unchanged };
   }
 

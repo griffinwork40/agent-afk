@@ -1,5 +1,6 @@
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { ToolCall, ToolResult } from './types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export function isSubagentProviderTool(name: string): boolean {
   return name === 'agent' || name === 'cancel_background_job' || name === 'send_message_to_agent';
@@ -30,7 +31,7 @@ export async function executeSubagentProviderTool(
         : await executor.cancelBackgroundJob(call);
     return { result };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return {
       result: {
         content: `${call.name === 'agent' ? 'Agent' : call.name === 'send_message_to_agent' ? 'Steering' : 'Background cancellation'} tool error: ${message}`,

@@ -10,6 +10,7 @@
 
 import { MemoryStore } from '../../agent/memory/memory-store.js';
 import { type FarmRunRecord, type FarmBranchRecord } from './farm-run-record.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // Re-export so existing callers (and the test file) can keep importing types
 // from this module. Canonical source is `./farm-run-record.ts`.
@@ -89,7 +90,7 @@ export function writeFarmFact(
     // rather than letting the error propagate up through farm completion.
     store = opts?._store ?? new MemoryStore();
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = errorMessage(err);
     return { skipped: true, reason };
   }
 
@@ -102,7 +103,7 @@ export function writeFarmFact(
     });
     return { factId };
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = errorMessage(err);
     return { skipped: true, reason };
   }
 }
@@ -132,7 +133,7 @@ export function writeFarmDecisionFact(
   try {
     store = opts?._store ?? new MemoryStore();
   } catch (err) {
-    return { skipped: true, reason: err instanceof Error ? err.message : String(err) };
+    return { skipped: true, reason: errorMessage(err) };
   }
   try {
     const content: FarmDecisionFactContent = {
@@ -149,7 +150,7 @@ export function writeFarmDecisionFact(
     });
     return { factId };
   } catch (err) {
-    return { skipped: true, reason: err instanceof Error ? err.message : String(err) };
+    return { skipped: true, reason: errorMessage(err) };
   }
 }
 

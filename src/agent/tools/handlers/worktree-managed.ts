@@ -24,6 +24,7 @@ import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
 import { hasNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Default git runner. Exported so callers without their own can reuse it. */
 export const defaultExecFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
@@ -304,7 +305,7 @@ export async function createIsolatedWorktree(args: {
   try {
     info = await create();
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     if (!LOCK_CONTENTION.test(message)) throw err; // non-lock → propagate, no retry
     await new Promise((r) => setTimeout(r, 100)); // brief backoff, then retry once
     info = await create();

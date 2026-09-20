@@ -22,6 +22,7 @@
  */
 
 import { accessSync, constants } from 'node:fs';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Return a distinguishing, actionable message when `rgPath` does not exist
@@ -37,7 +38,7 @@ export function describeRgUnavailable(rgPath: string): string | undefined {
     accessSync(rgPath, constants.X_OK);
     return undefined;
   } catch (err) {
-    const underlying = err instanceof Error ? err.message : String(err);
+    const underlying = errorMessage(err);
     return (
       `ripgrep binary is missing or not executable: ${rgPath} ` +
       `(the @vscode/ripgrep platform optional-dependency for ` +

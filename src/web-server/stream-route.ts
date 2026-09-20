@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readLedger, tailLedger } from '../agent/session-ledger.js';
 import { formatSseFrame, SSE_END_FRAME } from './sse-protocol.js';
 import { header, requireValidSessionId, SECURITY_HEADERS } from './routes.js';
+import { errorMessage } from '../utils/errors.js';
 
 /** Heartbeat cadence; keeps intermediaries from idling out a quiet stream. */
 const HEARTBEAT_MS = 15_000;
@@ -137,7 +138,7 @@ export async function handleStream(
     if (!closed) {
       res.write(
         formatSseFrame({
-          data: { error: err instanceof Error ? err.message : String(err) },
+          data: { error: errorMessage(err) },
         }),
       );
     }

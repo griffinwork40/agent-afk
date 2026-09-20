@@ -23,6 +23,7 @@ import {
   toolImageFollowupMessage,
   toolResultsToMessages,
 } from '../loop.js';
+import { errorMessage } from '../../../../utils/errors.js';
 
 export interface DispatchAndAppendInput {
   state: StreamState;
@@ -188,7 +189,7 @@ export async function* dispatchAndAppendToolCalls({
           try {
             dispatcherResults.push(await toolDispatcher.execute(call));
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = errorMessage(err);
             dispatcherResults.push({
               content: `Tool execution threw: ${message}`,
               isError: true,
@@ -197,7 +198,7 @@ export async function* dispatchAndAppendToolCalls({
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       dispatcherResults = calls.map(() => ({
         content: `Tool batch execution failed: ${message}`,
         isError: true,

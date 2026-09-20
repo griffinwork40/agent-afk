@@ -14,6 +14,7 @@ import { dirname, join, isAbsolute, resolve } from 'path';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { DiffPayload, DiffHunk } from '../../../utils/diff.js';
 import type { PatchFileChange, ValidationError } from './patch-validate.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -239,7 +240,7 @@ export async function applyPatch(
       writeErrors.push({
         path: plan.resolvedPath,
         error: 'temp_write_failed',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: errorMessage(err),
       });
     }
   }
@@ -282,7 +283,7 @@ export async function applyPatch(
       renameErrors.push({
         path: tf.targetPath,
         error: 'rename_failed',
-        detail: err instanceof Error ? err.message : String(err),
+        detail: errorMessage(err),
       });
     }
   }

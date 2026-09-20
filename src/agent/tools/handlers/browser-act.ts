@@ -27,6 +27,7 @@ import { emitBrowserEvent } from '../../trace/emit.js';
 import type { BrowserEventTarget } from '../../trace/types.js';
 import { browserTimeoutFailureClass } from './playwright-hints.js';
 import { acquireBrowserProvider } from './browser-provider.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const VALID_ACTIONS: readonly ActAction[] = [
   'click', 'fill', 'press', 'select', 'hover', 'scroll_to', 'wait_for',
@@ -250,7 +251,7 @@ export function createBrowserActHandler(opts: BrowserHandlerOptions = {}): ToolH
       return { content: JSON.stringify(result, null, 2) };
     } catch (err) {
       const durationMs = Date.now() - t0;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_act',
         action: parsed.action,

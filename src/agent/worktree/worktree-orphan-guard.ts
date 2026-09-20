@@ -28,6 +28,7 @@ import { readdir, stat } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { join } from 'node:path';
 import { classifyIgnoredEntry } from './worktree-ignored-patterns.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Contract: `classifyIgnoredEntry` is the shared policy and it defaults an
@@ -138,7 +139,7 @@ export async function classifyOrphanDir(
       return {
         remove: false,
         because: 'scan-failed',
-        detail: `${dir.rel === '' ? orphanPath : dir.rel}: ${err instanceof Error ? err.message : String(err)}`,
+        detail: `${dir.rel === '' ? orphanPath : dir.rel}: ${errorMessage(err)}`,
       };
     }
 

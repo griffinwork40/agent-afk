@@ -60,6 +60,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { debugLog } from '../../utils/debug.js';
+import { errorMessage } from '../../utils/errors.js';
 
 const execFilePromise = promisify(execFileCb);
 
@@ -150,7 +151,7 @@ export async function resolveWorktreeMainRoot(
       debugLog(
         `[worktree-read-root] git rev-parse failed for cwd=${cwd}; recovered main ` +
           `root lexically as ${lexical} (afk worktree layout) — ` +
-          `${err instanceof Error ? err.message : String(err)}`,
+          `${errorMessage(err)}`,
       );
       return lexical;
     }
@@ -160,7 +161,7 @@ export async function resolveWorktreeMainRoot(
     // unexpectedly loses main-repo read access is undiagnosable (#441).
     debugLog(
       `[worktree-read-root] git rev-parse failed for cwd=${cwd}; child confined ` +
-        `to worktree only — ${err instanceof Error ? err.message : String(err)}`,
+        `to worktree only — ${errorMessage(err)}`,
     );
     return undefined;
   }

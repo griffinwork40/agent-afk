@@ -33,6 +33,7 @@ import { capSubagentResult } from './foreground-promotion.result-cap.js';
 import { teardownIsolatedWorktree, describePreserveReason } from '../handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree, unlockWorktreeForPromotion } from '../handlers/worktree-managed.background.js';
 import { withProvenanceHeader } from './foreground-promotion.provenance.js';
+import { errorMessage } from '../../../utils/errors.js';
 export { withProvenanceHeader };
 
 /** Identity of a subagent that was promoted from foreground to background. */
@@ -279,7 +280,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
           // "not promoted" and await the run normally below.
           debugLog(
             'subagent-executor: promotion failed, staying foreground: ' +
-              (e instanceof Error ? e.message : String(e)),
+              (errorMessage(e)),
           );
           // If the worktree was locked (before adoptRunning threw), unlock it
           // now. The foreground finally will handle full teardown; a locked
@@ -358,7 +359,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       return toolResult;
     }
 
-    const errorMessage =
+    const errorMsg =
       result.error?.message ?? 'Subagent failed with no output';
     const failedTrace = result.trace;
     void emitTelemetry({
@@ -369,7 +370,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
       parent_session_id: parentSessionId,
       status: result.status,
       duration_ms: Date.now() - startedAt,
-      error_message: truncate(errorMessage),
+      error_message: truncate(errorMsg),
       schema_error: result.schemaError
         ? truncate(result.schemaError.message)
         : undefined,
@@ -391,7 +392,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     // a flattened "Subagent failed: ..." line.
     const payload = buildFailurePayload({
       status: result.status,
-      errorMessage,
+      errorMessage: errorMsg,
       schemaErrorMessage: result.schemaError?.message,
       partialOutput: result.partialOutput,
       subagentId: handle.id,
@@ -415,7 +416,7 @@ export async function runForegroundWithPromotion(args: RunForegroundArgs): Promi
     // as a rejection rather than a `failed` status) should still emit
     // telemetry before propagating. The outer call chain treats a thrown
     // execute() as an error path; we preserve that by re-throwing.
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     void emitTelemetry({
       ...identity,
       event: 'subagent.failed',

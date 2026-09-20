@@ -39,6 +39,7 @@ import {
   resolveWorktreeExitPolicy,
 } from './interactive/worktree-disposition.js';
 import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
@@ -315,7 +316,7 @@ export function registerInteractiveCommand(program: Command): void {
           }
         } catch (err) {
           spinner.fail('Session not found');
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           process.stderr.write(
             `Error: ${msg}\n` +
               `Run \`afk i\` then \`/resume\` to list saved sessions.\n`,

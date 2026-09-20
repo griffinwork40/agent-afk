@@ -28,6 +28,7 @@ import { describeRgUnavailable } from './_rg-availability.js';
 import { MODEL_CAP_BYTES } from './_output-cap.js';
 import { classifyRgExit2, type GrepSettleResult } from './_rg-exit2.js';
 import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streaming-cap.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Optional overrides for {@link createGrepHandler}. */
 export interface GrepHandlerOptions {
@@ -135,7 +136,7 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
   try {
     ({ rgPath } = await import('@vscode/ripgrep'));
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = errorMessage(err);
     return {
       content: `Failed to execute grep: ripgrep is unavailable — ${detail}`,
       isError: true,

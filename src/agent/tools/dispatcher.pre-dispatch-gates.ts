@@ -23,7 +23,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
-import { HookBlockedError } from '../../utils/errors.js';
+import { HookBlockedError, errorMessage } from '../../utils/errors.js';
 import { checkToolPermission, type ToolPermissionConfig } from './permissions.js';
 import { classifyBashCommand } from './readonly-bash.js';
 import { repeatCallFingerprint } from './repeat-circuit-breaker.js';
@@ -225,7 +225,7 @@ async function runCanUseTool(
     // Fail closed: a throwing policy denies the call rather than crashing the
     // turn. The message names the cause so the denial is never silent.
     const reason = `Tool "${call.name}" denied by canUseTool (threw): ${
-      err instanceof Error ? err.message : String(err)
+      errorMessage(err)
     }`;
     await emitPreToolUseBlock(call.name, reason, deps);
     return { content: reason, isError: true, failureClass: 'permission-denied' };

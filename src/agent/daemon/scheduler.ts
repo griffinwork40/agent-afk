@@ -49,6 +49,7 @@ import {
   type PullTickContext,
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
+import { errorMessage } from '../../utils/errors.js';
 
 
 export interface SchedulerOptions {
@@ -403,7 +404,7 @@ export class CronScheduler {
         ...baseRecord,
         durationMs: this.now() - startTimeMs,
         status: 'error',
-        errorMessage: redactInlineSecrets(err instanceof Error ? err.message : String(err)),
+        errorMessage: redactInlineSecrets(errorMessage(err)),
       };
       this.writeTelemetry(record, task);
       return record;
@@ -475,7 +476,7 @@ export class CronScheduler {
       fireOnTaskComplete(record, opts, task, details);
     } catch (err) {
       // Telemetry failure must not crash the daemon. Log to stderr and move on.
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] telemetry write failed: ${msg}`);
     }

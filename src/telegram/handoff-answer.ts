@@ -39,6 +39,7 @@ import {
 } from './handoff-callback-data.js';
 import { escapeHtml } from './formatter.js';
 import { escapeRegExp } from '../utils/regexp.js';
+import { errorMessage } from '../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -198,7 +199,7 @@ export async function sendHandoffQuestion(opts: SendHandoffOpts): Promise<SendHa
     // eslint-disable-next-line no-console
     console.error(
       `[handoff-answer] failed to send question for task ${record.taskId}:`,
-      err instanceof Error ? err.message : String(err),
+      errorMessage(err),
     );
     return { ok: false };
   }

@@ -26,6 +26,7 @@ import { resolveConfigProvenance, shadowNote } from '../../config/provenance.js'
 import { applyConfigLive, type LiveApplyHandle } from '../../config/live-apply.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { SlashCommand, SlashContext, Writer } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * The running session's live-apply capability, in the shape `live-apply.ts`
@@ -204,7 +205,7 @@ async function handleConfigSet(ctx: SlashContext, rest: string): Promise<'contin
     // (Computed once: a user-file write cannot change env/project shadowing.)
     if (shadow) ctx.out.warn(shadow);
   } catch (err) {
-    ctx.out.error(err instanceof Error ? err.message : String(err));
+    ctx.out.error(errorMessage(err));
   }
   return 'continue';
 }
@@ -257,7 +258,7 @@ const configCmd: SlashCommand = {
       await runConfigMenu(overlaysFromCompositor(compositor), defaultIo(liveHandle(ctx)));
     } catch (err) {
       ctx.out.error(
-        `Could not open the settings menu: ${err instanceof Error ? err.message : String(err)}`,
+        `Could not open the settings menu: ${errorMessage(err)}`,
       );
       ctx.out.line(palette.dim('  Showing the read-only view instead:'));
       renderConfigView(ctx.out);
@@ -285,7 +286,7 @@ const doctorCmd: SlashCommand = {
     try {
       checks = await runDoctorChecks();
     } catch (err) {
-      out.error(`Health check failed: ${err instanceof Error ? err.message : String(err)}`);
+      out.error(`Health check failed: ${errorMessage(err)}`);
       return 'continue';
     }
 

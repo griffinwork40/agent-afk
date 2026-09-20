@@ -16,6 +16,7 @@ import {
   currentStdinClaimHolder,
   withStdinClaim,
 } from './stdin-claim.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ─── Test isolation ───────────────────────────────────────────────────────────
 
@@ -127,7 +128,7 @@ describe('conflict error message', () => {
     try {
       acquireStdinClaim('beta');
     } catch (e) {
-      caughtMsg = e instanceof Error ? e.message : String(e);
+      caughtMsg = errorMessage(e);
     }
     expect(caughtMsg).toContain('alpha');
     expect(caughtMsg).toContain('beta');

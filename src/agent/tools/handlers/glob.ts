@@ -17,6 +17,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { isReadDenied } from './read-denylist.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Directory basenames pruned from recursion by default: VCS metadata and
@@ -233,7 +234,7 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   try {
     basePath = resolveAndContain(rawPath, context, 'read');
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   try {

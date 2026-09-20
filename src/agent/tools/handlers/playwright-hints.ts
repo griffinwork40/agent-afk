@@ -28,6 +28,7 @@ export {
   hasPlaywrightInstallHint,
   resetPlaywrightInstallCommandCache,
 } from '../../../browser/playwright-missing.js';
+import { errorMessage } from '../../../utils/errors.js';
 export type { PlaywrightHintOptions } from '../../../browser/playwright-missing.js';
 
 /**
@@ -42,6 +43,6 @@ export type { PlaywrightHintOptions } from '../../../browser/playwright-missing.
  */
 export function browserTimeoutFailureClass(err: unknown): ToolFailureClass | undefined {
   if (err instanceof Error && err.name === 'TimeoutError') return 'timeout';
-  const msg = err instanceof Error ? err.message : String(err);
+  const msg = errorMessage(err);
   return /Timeout\s+\d+\s*ms exceeded/i.test(msg) ? 'timeout' : undefined;
 }

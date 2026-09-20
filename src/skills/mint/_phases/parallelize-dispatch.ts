@@ -22,6 +22,7 @@ import { resolveCredentialForModel } from '../../../agent/auth/credential-resolv
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export type ParallelizeDispatchResult =
   | { kind: 'skipped'; reason: 'too-few-files' | 'skill-body-missing' }
@@ -109,7 +110,7 @@ export async function runParallelizeDispatch(
     if (registryHit) {
       return {
         kind: 'failed',
-        error: `parallelize skill handler threw: ${err instanceof Error ? err.message : String(err)}`,
+        error: `parallelize skill handler threw: ${errorMessage(err)}`,
       };
     }
     // Not in registry — fall through to plugin/bundled body dispatch.
@@ -193,7 +194,7 @@ export async function runParallelizeDispatch(
       await manager.teardownAll();
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { kind: 'failed', error: `parallelize dispatch threw: ${message}` };
   }
 }

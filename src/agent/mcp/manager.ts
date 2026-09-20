@@ -31,6 +31,7 @@ import type { McpClientState, McpServerConfig } from './types.js';
 import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import type { McpServerLayer } from './env-containment.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Per-server runtime record. Holds the live client, the list of tools the
@@ -209,7 +210,7 @@ export class McpManager {
       // returns, so by the time a notification arrives the ref is live.
       client.onToolListChanged = () => {
         void managerBox.manager?.refreshServer(serverName).catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           console.warn(`[mcp:${serverName}] refreshServer failed: ${msg}`);
         });
       };
@@ -253,7 +254,7 @@ export class McpManager {
             );
             return;
           }
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           record.state.status = 'error';
           record.state.error = truncate(msg, 200);
           if (config.alwaysLoad === true) {
@@ -460,7 +461,7 @@ export class McpManager {
     // Step 3: disconnect the stale client (it never reached `connected` state
     // so this is a best-effort cleanup of the pending transport).
     await rec.client.disconnect().catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.warn(`[mcp:${serverName}] completeAuth disconnect warning: ${msg}`);
     });
 
@@ -473,7 +474,7 @@ export class McpManager {
     };
     freshClient.onToolListChanged = () => {
       void this.refreshServer(serverName).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         console.warn(`[mcp:${serverName}] refreshServer failed: ${msg}`);
       });
     };
@@ -493,7 +494,7 @@ export class McpManager {
         `[mcp:${serverName}] OAuth complete — connected (${info}) — ${tools.length} tool(s)`,
       );
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       rec.state.status = 'error';
       rec.state.error = truncate(msg, 200);
       throw new Error(`McpManager.completeAuth("${serverName}"): reconnect failed: ${msg}`);
@@ -540,7 +541,7 @@ export class McpManager {
       if (!rec.client) continue;
       tasks.push(
         rec.client.disconnect().catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = errorMessage(err);
           console.warn(`[mcp:${serverName}] disconnect error: ${msg}`);
         }),
       );

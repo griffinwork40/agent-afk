@@ -22,6 +22,7 @@ import type {
 import type { TranslateCtx, TranslateOutput, TurnResult } from './types.js';
 import { env } from '../../../config/env.js';
 import { incompleteStreamError, isStreamComplete } from './stream-completeness.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Per-block accumulator. The block kind dictates which fields are populated
@@ -325,7 +326,7 @@ export async function* translateMessageStream(
     }
     if (traceEnabled) console.log('[translate] SDK iteration ended naturally, stopped=', stopped);
   } catch (err) {
-    if (traceEnabled) console.log('[translate] SDK iteration threw:', (err as Error).message);
+    if (traceEnabled) console.log('[translate] SDK iteration threw:', errorMessage(err));
     const error = err instanceof Error ? err : new Error(String(err));
     yield { kind: 'event', event: { type: 'error', error } };
     return;

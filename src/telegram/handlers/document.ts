@@ -14,6 +14,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { senderPrefix } from '../sender-attribution.js';
 import { replyContextPrefix, type RepliedMessage } from '../reply-context.js';
 import { forwardProvenancePrefix } from '../forward-provenance.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // History: extracted from message.ts in PR #687 (document handler).
 // message.ts was already at its baselined ceiling, so all document
@@ -200,7 +201,7 @@ export async function handleDocumentMessage(
     }
     bytes = readResult.bytes;
   } catch (err) {
-    const raw = err instanceof Error ? err.message : String(err);
+    const raw = errorMessage(err);
     log('Document handling download error:', sanitizeBotToken(raw));
     await ctx.reply("❌ Couldn't download the document. Please try resending.");
     return null;

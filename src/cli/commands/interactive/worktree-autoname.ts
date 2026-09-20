@@ -32,6 +32,7 @@ import { randomBytes } from 'node:crypto';
 import { oneShotCompletion } from '../../../agent/providers/anthropic-direct/oneshot.js';
 import { resolveBranchPrefix, type DeferredWorktree } from './worktree.js';
 import type { AgentSession } from '../../../agent/session/agent-session.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * System prompt for the slug-generation call. Locked-down format so we can
@@ -166,7 +167,7 @@ export async function generateSlugFromPrompt(
   } catch (err) {
     // Network, auth, timeout, or abort — surface the message and fall through
     // to null. No retry. Detail is bounded to keep log lines tractable.
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = errorMessage(err);
     opts.onSkip?.('slug-generator-error', detail.slice(0, 200));
     return null;
   } finally {
@@ -438,7 +439,7 @@ export async function runFirstTurnAutoname(
       // session). Don't give up — fall through to the timestamp fallback so
       // the session still gets an isolated worktree.
       fallbackReason = 'create-failed';
-      fallbackDetail = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      fallbackDetail = (errorMessage(err)).slice(0, 200);
     }
   }
 
@@ -459,7 +460,7 @@ export async function runFirstTurnAutoname(
     // Even the timestamp fallback failed — the repo is in a state where no
     // worktree can be created (disk full, permissions). The "not a git repo"
     // case was already caught fail-fast in setupWorktreeDeferred at startup.
-    return { status: 'failed', reason: err instanceof Error ? err.message : String(err) };
+    return { status: 'failed', reason: errorMessage(err) };
   }
 }
 

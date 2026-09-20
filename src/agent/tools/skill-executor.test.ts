@@ -33,6 +33,7 @@ import { registerTrustedSkillName, clearTrustedSkillNamesForTesting } from '../_
 import type { TrustedSkillResult } from '../trusted-skill-result.js';
 import { buildSkillManifest, type PluginSkillBody } from './skill-bridge.js';
 import { RECON_ALLOWED_TOOLS } from './nesting.js';
+import { errorMessage } from '../../utils/errors.js';
 
 const abortSignal = new AbortController().signal;
 
@@ -2615,7 +2616,7 @@ describe('SkillExecutor', () => {
             await ctx?.dispatchSkill?.('does-not-exist');
             return 'unreachable';
           } catch (err) {
-            return err instanceof Error ? err.message : String(err);
+            return errorMessage(err);
           }
         },
       });

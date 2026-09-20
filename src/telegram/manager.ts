@@ -21,6 +21,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getAfkStateDir, getLogsDir } from '../paths.js';
 import { sleep } from '../agent/providers/shared/sleep-with-abort.js';
+import { errorMessage } from '../utils/errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -169,7 +170,7 @@ export async function start(): Promise<StartResult | StartFailure> {
     } catch (error) {
       return {
         kind: 'spawn-failed',
-        message: `Failed to spawn bot: ${(error as Error).message}`,
+        message: `Failed to spawn bot: ${errorMessage(error)}`,
       };
     }
 

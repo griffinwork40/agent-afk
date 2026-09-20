@@ -45,6 +45,7 @@ import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import { parseAgentMarkdown } from './parser.js';
 import { builtinAgents } from './builtins.js';
 import type { AgentRegistry, AgentSource, RegisteredAgent } from './types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Maximum recursion depth for agent-directory scans (defense against cycles). */
 const MAX_SCAN_DEPTH = 5;
@@ -177,7 +178,7 @@ function scanScope(
     try {
       content = readFileSync(filePath, 'utf8');
     } catch (err) {
-      const safeError = sanitizeForDisplay(err instanceof Error ? err.message : String(err));
+      const safeError = sanitizeForDisplay(errorMessage(err));
       warn(`[afk] agents: cannot read ${sanitizeForDisplay(filePath)}: ${safeError}`);
       continue;
     }

@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { FarmManifest, CreatedBranch } from '../../agent/worktree.js';
 import type { DAGRunResult } from '../../agent/dag.js';
 import { runFarm, FarmIsolationViolation } from './farm.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -96,7 +97,7 @@ async function runFarmCatch(opts: Parameters<typeof runFarm>[0]): Promise<void> 
     await runFarm(defaulted);
   } catch (err) {
     // process.exit throws in tests — swallow it
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     if (!msg.startsWith('process.exit(')) throw err;
   }
 }

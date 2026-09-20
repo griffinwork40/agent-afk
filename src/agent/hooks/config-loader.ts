@@ -41,6 +41,7 @@ import { getAfkHome, getJsonConfigPath, getSettingsPath, getProjectSettingsPath,
 import { scanLocalPlugins } from '../plugins-scanner.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Raw shapes (as they appear on disk)
@@ -219,7 +220,7 @@ export function loadHooksConfigFile(
   try {
     parsed = JSON.parse(readFileSync(path, 'utf-8'));
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     warnings.push(`hooks config at ${path}: parse error — ${msg}`);
     return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, sources, warnings };
   }

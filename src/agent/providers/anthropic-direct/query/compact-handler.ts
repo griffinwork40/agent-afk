@@ -60,6 +60,7 @@ import type { SessionState } from './session-state.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import type { RetryLayer } from './retry-layer.js';
 import { env } from '../../../../config/env.js';
+import { errorMessage } from '../../../../utils/errors.js';
 
 const DEFAULT_COMPACT_MODEL = 'claude-haiku-4-5-20251001';
 const DEFAULT_COMPACT_MAX_TOKENS = 1024;
@@ -183,7 +184,7 @@ export async function compactHistory(
         messagesAfter: messagesBefore,
       };
     }
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return {
       compacted: false,
       reason: 'summarization-failed: ' + msg,

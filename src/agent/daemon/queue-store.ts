@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { getQueueDir } from '../../paths.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { leaseTask as _leaseTask, recoverExpiredLeases } from './lease-store.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export { recoverExpiredLeases };
 
@@ -261,7 +262,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
   const reason =
     err instanceof SyntaxError
       ? 'SyntaxError: invalid JSON'
-      : redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      : redactInlineSecrets(errorMessage(err));
   const poisonDir = join(queueDir, POISON_SUBDIR);
   const src = join(queueDir, filename);
   try {
@@ -286,7 +287,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
   } catch (moveErr) {
     // Last resort: if we cannot move it aside, unlink so the queue unblocks
     // rather than deadlocking on every subsequent tick.
-    const moveReason = redactInlineSecrets(moveErr instanceof Error ? moveErr.message : String(moveErr));
+    const moveReason = redactInlineSecrets(errorMessage(moveErr));
     // eslint-disable-next-line no-console
     console.error(
       `[daemon] pull-queue: failed to quarantine malformed entry ${redactedFilename}; removing to unblock queue (${moveReason})`,
@@ -305,7 +306,7 @@ function quarantinePoisonEntry(queueDir: string, filename: string, err: unknown)
       stuckEntryEncounters.set(stuckKey, count);
       if (count === 1 || count % STUCK_LOG_INTERVAL === 0) {
         const unlinkReason = redactInlineSecrets(
-          unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr),
+          errorMessage(unlinkErr),
         );
         // eslint-disable-next-line no-console
         console.error(
@@ -358,7 +359,7 @@ export function listPending(queueDir: string = getQueueDir()): QueuedTask[] {
       const reason =
         err instanceof SyntaxError
           ? 'SyntaxError: invalid JSON'
-          : redactInlineSecrets(err instanceof Error ? err.message : String(err));
+          : redactInlineSecrets(errorMessage(err));
       // eslint-disable-next-line no-console
       console.error(
         `[daemon] pull-queue: skipping unreadable entry ${redactedFilename} in listPending (${reason})`,
@@ -453,7 +454,7 @@ export function clearPending(queueDir: string = getQueueDir()): number {
       removed += 1;
     } catch (err) {
       const redactedFilename = redactInlineSecrets(filename);
-      const reason = redactInlineSecrets(err instanceof Error ? err.message : String(err));
+      const reason = redactInlineSecrets(errorMessage(err));
       // eslint-disable-next-line no-console
       console.error(
         `[daemon] pull-queue: failed to remove entry ${redactedFilename} in clearPending (${reason})`,

@@ -19,6 +19,7 @@ import { capToMeasure } from '../../render/measure.js';
 import { toolCard } from '../../render/tool-card.js';
 import { divider } from '../../render/divider.js';
 import type { Message } from '../../../agent/types/message-types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -214,7 +215,7 @@ export function renderMessagesView(
       sections.push(renderMessage(msg));
       sections.push('');
     } catch (err) {
-      const label = err instanceof Error ? err.message : String(err);
+      const label = errorMessage(err);
       sections.push(palette.dim(`  [render error: ${label}]`), '');
     }
   }

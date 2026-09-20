@@ -42,6 +42,7 @@ import {
   isPlaywrightMissing,
   playwrightInstallCommand,
 } from './playwright-hints.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
 // would throw before reaching this handler because tsconfig targets >=20.
@@ -249,7 +250,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             return { content: `web_scrape blocked: ${err.message}`, isError: true };
           }
           return {
-            content: `web_scrape network error: ${err instanceof Error ? err.message : String(err)}`,
+            content: `web_scrape network error: ${errorMessage(err)}`,
             isError: true,
           };
         }
@@ -265,7 +266,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           body = await res.text();
         } catch (err) {
           return {
-            content: `web_scrape read error: ${err instanceof Error ? err.message : String(err)}`,
+            content: `web_scrape read error: ${errorMessage(err)}`,
             isError: true,
           };
         }
@@ -301,7 +302,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           if (err instanceof EgressBlockedError) {
             return { content: `web_scrape blocked: ${err.message}`, isError: true };
           }
-          const base = err instanceof Error ? err.message : String(err);
+          const base = errorMessage(err);
           // A chromium-missing LAUNCH failure is already decorated by
           // BrowserLauncher, so `base` may carry the remediation. Only add it
           // here for the cases the launcher never sees — chiefly a missing
@@ -334,7 +335,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
       } catch (err) {
         if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
         return {
-          content: `web_scrape search error (${backend.name}): ${err instanceof Error ? err.message : String(err)}`,
+          content: `web_scrape search error (${backend.name}): ${errorMessage(err)}`,
           isError: true,
         };
       }

@@ -27,6 +27,7 @@ import { copyToClipboard } from '../../../cli/clipboard.js';
 import { redactSecrets } from '../../redact-secrets.js';
 import { elicitationRouter } from '../../elicitation-router.js';
 import type { ToolHandler } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,7 +120,7 @@ export function createClipboardWriteHandler(
     try {
       succeeded = writeFn(text);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       return { content: `Clipboard write threw an error: ${msg}`, isError: true };
     }
     if (!succeeded) {

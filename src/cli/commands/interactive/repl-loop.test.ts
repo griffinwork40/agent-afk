@@ -52,7 +52,7 @@ async function dispatchFirstTurnHook(
       // eslint-disable-next-line no-console
       console.warn(
         '⚠ first-turn hook failed: ' +
-          (err instanceof Error ? err.message : String(err)),
+          (errorMessage(err)),
       );
     }
   }
@@ -294,6 +294,7 @@ describe('runReplLoop — seedBuffer auto-submit fast-path', () => {
  */
 
 import { vi as vi2 } from 'vitest';
+import { errorMessage } from '../../../utils/errors.js';
 
 // Inline implementations of the functions from the production block —
 // tested in isolation without importing the full REPL machinery.

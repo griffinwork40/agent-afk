@@ -66,6 +66,7 @@ import {
 import { appendGrant } from '../../permissions-store.js';
 import { buildForkPathDenialReason } from './fork-denial-remedy.js';
 import type { HookContext, HookDecision, HookHandler } from '../../hooks.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Tools subject to per-call path approval. Bash is gated separately. */
 const TYPED_FILE_TOOLS = new Set([
@@ -716,7 +717,7 @@ async function promptForApproval(args: {
         // eslint-disable-next-line no-console
         console.error(
           `path-approval: failed to persist grant for ${resolvedPath}:`,
-          err instanceof Error ? err.message : String(err),
+          errorMessage(err),
         );
       }
       return {};

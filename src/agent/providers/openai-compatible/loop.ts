@@ -22,6 +22,7 @@ import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import type { ToolCall, ToolResult } from '../anthropic-direct/types.js';
 import type { AccumulatedToolCall } from './translate.js';
 import type { OpenAIContentPart, OpenAIMessage } from './messages.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * OpenAI function-tool shape. We keep this structurally typed (not pulled
@@ -67,7 +68,7 @@ export function accumulatedToolCallsToToolCalls(
       try {
         input = JSON.parse(c.argumentsRaw);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         parseErrors.set(c.id, `Failed to parse tool arguments as JSON: ${msg}`);
         input = {};
       }

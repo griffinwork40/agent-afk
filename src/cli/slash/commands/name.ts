@@ -16,6 +16,7 @@ import { saveSession } from '../../session-store.js';
 import { slugifySessionName } from '../../session-name.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import type { SlashCommand } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export const nameCmd: SlashCommand = {
   name: '/name',
@@ -52,7 +53,7 @@ export const nameCmd: SlashCommand = {
         ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}`));
         ctx.out.line(palette.dim(`  Resume:  ${formatResumeCommand(slug, ctx.stats.model)}`));
       } catch (err) {
-        ctx.out.error(`Named "${slug}" but save failed: ${err instanceof Error ? err.message : String(err)}`);
+        ctx.out.error(`Named "${slug}" but save failed: ${errorMessage(err)}`);
       }
     } else {
       ctx.out.success(palette.success('Named') + palette.dim(`  ${slug}  (saves on first turn)`));

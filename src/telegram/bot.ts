@@ -32,6 +32,7 @@ import { SessionLedgerWriter } from '../agent/session-ledger.js';
 import { splitLongMessage } from './formatter.js';
 import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * Bot configuration options
@@ -271,7 +272,7 @@ export class TelegramBot {
         // an error string, and this last-resort catch would otherwise leak the
         // live token to the log. Same pattern handlePhoto's own catch applies
         // (#603 Item 2). Stringify safely first: `err` may be a non-Error.
-        const rawErrStr = err instanceof Error ? err.message : String(err);
+        const rawErrStr = errorMessage(err);
         const sanitizedErr = rawErrStr.replace(/\/bot[^/]+\//g, '/bot[REDACTED]/');
         this.log('Detached update handler error:', sanitizedErr);
       });

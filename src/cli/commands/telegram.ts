@@ -28,6 +28,7 @@ import {
 import { upsertEnvVar } from '../auth-wizard.js';
 import { getEnvConfigPath } from '../../paths.js';
 import { palette } from '../palette.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export function registerTelegramCommand(program: Command): void {
   const telegram = program
@@ -41,7 +42,7 @@ export function registerTelegramCommand(program: Command): void {
       try {
         await runTelegramSetup();
       } catch (error) {
-        console.error(palette.error(`Setup failed: ${(error as Error).message}`));
+        console.error(palette.error(`Setup failed: ${errorMessage(error)}`));
         process.exit(1);
       }
     });

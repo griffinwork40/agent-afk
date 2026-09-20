@@ -25,6 +25,7 @@ import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import { relayWhilePending } from '../../shared/event-relay.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
+import { errorMessage } from '../../../../utils/errors.js';
 
 /**
  * Dispatch result.
@@ -139,7 +140,7 @@ export async function* dispatchToolCalls(
         });
       } catch (err) {
         return calls.map(() => ({
-          content: `Tool batch execution failed: ${err instanceof Error ? err.message : String(err)}`,
+          content: `Tool batch execution failed: ${errorMessage(err)}`,
           isError: true as const,
         }));
       }
@@ -158,7 +159,7 @@ export async function* dispatchToolCalls(
       try {
         results.push(await input.toolDispatcher.execute(call));
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = errorMessage(err);
         results.push({ content: `Tool execution threw: ${message}`, isError: true });
       }
     }

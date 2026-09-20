@@ -19,6 +19,7 @@ import { createInflateRaw } from 'zlib';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Max decompressed bytes before we stop reading (4 MB). */
 const MAX_DECOMPRESSED_BYTES = 4 * 1024 * 1024;
@@ -280,7 +281,7 @@ const extractDocumentImpl = async (
   try {
     filePath = resolveAndContain(rawPath, context, 'read', cwd);
   } catch (err) {
-    return { content: err instanceof Error ? err.message : String(err), isError: true };
+    return { content: errorMessage(err), isError: true };
   }
 
   const ext = extname(filePath).toLowerCase();

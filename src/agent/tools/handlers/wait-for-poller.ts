@@ -10,6 +10,7 @@
 
 import { sleepWithAbort } from '../../providers/shared/sleep-with-abort.js';
 import type { WaitResult } from './wait-for-conditions.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
 export const MAX_TIMEOUT_MS = 600_000;
@@ -126,7 +127,7 @@ export async function pollUntil(
         // returned a result this round).
         continue;
       }
-      const error = err instanceof Error ? err.message : String(err);
+      const error = errorMessage(err);
       return {
         status: 'failed',
         elapsed_ms: Date.now() - (deadline - timeout_ms),

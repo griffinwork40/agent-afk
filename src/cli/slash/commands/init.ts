@@ -14,6 +14,7 @@ import { createSkillRenderer } from '../_lib/create-skill-renderer.js';
 import { createConsoleWriter } from '../writer.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import type { SlashCommand } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 const INIT_PROMPT = `You are initializing this project for use with AFK (an AI agent CLI).
 
@@ -122,7 +123,7 @@ These existing agent-instruction sources were found: ${list}. Read each and inco
       });
     } catch (err) {
       ctx.out.line();
-      ctx.out.error(`init failed: ${err instanceof Error ? err.message : String(err)}`);
+      ctx.out.error(`init failed: ${errorMessage(err)}`);
     } finally {
       await renderer.dispose();
     }

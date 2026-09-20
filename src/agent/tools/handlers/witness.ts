@@ -14,6 +14,7 @@
 
 import type { ToolHandler } from '../types.js';
 import { readSessionTrace, searchAcrossSessions } from './witness.query.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,7 +56,7 @@ export const readWitnessHandler: ToolHandler = async (input) => {
     });
     return { content: JSON.stringify(result) };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return { content: `read_witness failed: ${msg}`, isError: true };
   }
 };
@@ -90,7 +91,7 @@ export const searchWitnessHandler: ToolHandler = async (input) => {
     });
     return { content: JSON.stringify(result) };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return { content: `search_witness failed: ${msg}`, isError: true };
   }
 };

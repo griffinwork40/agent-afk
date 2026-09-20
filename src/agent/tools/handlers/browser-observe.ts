@@ -17,6 +17,7 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { BrowserHandlerOptions } from './browser-open.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 import { acquireBrowserProvider } from './browser-provider.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 interface ParsedObserveInput {
   screenshot?: boolean;
@@ -105,7 +106,7 @@ export function createBrowserObserveHandler(opts: BrowserHandlerOptions = {}): T
       return { content: JSON.stringify(obs, null, 2) };
     } catch (err) {
       const durationMs = Date.now() - t0;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_observe',
         toolUseId: context?.toolUseId ?? '',

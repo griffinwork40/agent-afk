@@ -60,6 +60,7 @@ import {
 } from '../config/provenance.js';
 import { createProvenanceCache, type ProvenanceCache } from '../config/provenance-cache.js';
 import { applyConfigLive, type LiveApplyHandle, type LiveApplyOutcome } from '../config/live-apply.js';
+import { errorMessage } from '../../utils/errors.js';
 
 // ── Injected effects (for testability) ───────────────────────────────────────
 
@@ -221,7 +222,7 @@ async function editKey(ov: MenuOverlays, io: MenuIo, spec: ConfigKeySpec): Promi
     }
     if (shadow) ov.emit(`${palette.warning('  ⚠')} ${palette.dim(shadow)}`);
   } catch (err) {
-    ov.emit(`${palette.error('  ✗')} ${palette.error(err instanceof Error ? err.message : String(err))}`);
+    ov.emit(`${palette.error('  ✗')} ${palette.error(errorMessage(err))}`);
   }
 }
 

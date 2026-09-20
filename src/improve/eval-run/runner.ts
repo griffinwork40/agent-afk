@@ -77,6 +77,7 @@ import {
   type LoopDriver,
 } from './replay.js';
 import { checkDetectorVersion } from './runner.staleness.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Runner identity stamped into every result. */
 export const EVAL_RUN_RUNNER_VERSION = 'eval-run@v1';
@@ -186,7 +187,7 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
       evidence.push(...probe.evidence);
     } catch (err) {
       contractThrew = true;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       notes.push({
         at: nowIso,
         text: `Contract '${contract.id}' threw during execution: ${snapshot(message)}`,
@@ -212,7 +213,7 @@ export async function runEvalCase(evalCase: EvalCase, ctx: RunEvalCaseContext): 
     } catch (err) {
       // A replay throw is an execution error, same precedence as a contract throw.
       contractThrew = true;
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       notes.push({
         at: nowIso,
         text: `Fixture-replay for '${evalCase.assertion.patternId}' threw during execution: ${snapshot(message)}`,
@@ -331,7 +332,7 @@ function checkFixtureIntegrity(evalCase: EvalCase, ctx: RunEvalCaseContext): Fix
   try {
     bytes = readFileSync(abs);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return {
       check: makeCheck({
         name,

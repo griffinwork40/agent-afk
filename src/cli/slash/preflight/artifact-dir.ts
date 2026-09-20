@@ -21,6 +21,7 @@ import { join, resolve, sep } from 'path';
 import { randomBytes } from 'crypto';
 import { getAfkStateDir } from '../../../paths.js';
 import { debugLog } from '../../../utils/debug.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * F04: Tighter session-ID allowlist — only UUID/hex characters and hyphens,
@@ -77,7 +78,7 @@ export function pruneStaleDirs(root: string, ttlMs: number): void {
       // swallowing — helps operators diagnose permission or fs issues.
       debugLog(
         `[afk preflight] warn: pruneStaleDirs failed to remove "${full}": ` +
-        (err instanceof Error ? err.message : String(err)),
+        (errorMessage(err)),
       );
     }
   }

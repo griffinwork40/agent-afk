@@ -24,6 +24,7 @@ import type { SessionStateManager } from './session-state.js';
 import type { PlanExitBridge } from './plan-exit-bridge.js';
 import { resolveModelId } from './model-resolution.js';
 import { updatePresenceCwd } from '../awareness/presence.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Context bag threaded into the config-mutation functions. */
 export interface ConfigDeps {
@@ -96,7 +97,7 @@ export async function takePendingPlanExitSeed(
     await setPermissionMode(seed.mode, deps);
   } catch (err) {
     debugLog(
-      `⚠️ AgentSession: deferred plan-exit mode flip to '${seed.mode}' rejected; dropping implement-seed (staying in plan mode): ${err instanceof Error ? err.message : String(err)}`,
+      `⚠️ AgentSession: deferred plan-exit mode flip to '${seed.mode}' rejected; dropping implement-seed (staying in plan mode): ${errorMessage(err)}`,
     );
     return undefined;
   }

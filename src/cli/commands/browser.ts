@@ -39,6 +39,7 @@ import { handleCommandError } from '../errors/index.js';
 import { decoratePlaywrightLaunchError } from '../../browser/playwright-missing.js';
 import { getMcpConfigPath, type McpConfigFile } from '../../agent/mcp/config-loader.js';
 import type { McpServerConfig } from '../../agent/mcp/types.js';
+import { errorMessage } from '../../utils/errors.js';
 import {
   assertSafeBrowserProfile,
   getBrowserProfileStateDir,
@@ -94,7 +95,7 @@ export function readMcpConfigFile(path: string): McpConfigFile {
   try {
     raw = readFileSync(path, 'utf-8');
   } catch (err) {
-    throw new Error(`Failed to read MCP config at ${path}: ${(err as Error).message}`);
+    throw new Error(`Failed to read MCP config at ${path}: ${errorMessage(err)}`);
   }
 
   let parsed: unknown;

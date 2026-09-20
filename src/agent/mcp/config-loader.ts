@@ -35,6 +35,7 @@ import { getAfkConfigDir, getPluginsDir } from '../../paths.js';
 import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import type { McpServerConfig } from './types.js';
 import type { McpServerLayer } from './env-containment.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Shape of `~/.afk/config/mcp.json`. */
 export interface McpConfigFile {
@@ -273,7 +274,7 @@ export function loadMcpConfigFile(path: string): LoadedMcpConfig {
   try {
     parsed = JSON.parse(readFileSync(path, 'utf-8'));
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     warnings.push(`mcp.json at ${path}: parse error — ${msg}`);
     return { mcpServers: {}, sources: [path], warnings, serverLayers: {}, userAllowSecretEnv: {} };
   }

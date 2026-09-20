@@ -22,6 +22,7 @@ import type {
   MemoryUpdateTarget,
   MemorySearchResult,
 } from './types.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * memory_search: Query the cross-session fact archive. Returns facts + procedures
@@ -231,7 +232,7 @@ export function createMemoryHandlers(
       });
       return { content: JSON.stringify(projectSearchResults(results, evidenceGateEnabled())) };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return { content: `memory_search error: ${message}`, isError: true };
     }
   };
@@ -382,7 +383,7 @@ export function createMemoryHandlers(
         isError: true,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return { content: `memory_update error: ${message}`, isError: true };
     }
   };
@@ -393,7 +394,7 @@ export function createMemoryHandlers(
       store.writeProcedure(parsed.name, parsed.content, sessionId);
       return { content: JSON.stringify({ name: parsed.name, written: true }) };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return { content: `procedure_write error: ${message}`, isError: true };
     }
   };

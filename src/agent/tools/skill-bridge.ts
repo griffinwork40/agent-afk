@@ -52,6 +52,7 @@ import {
   resolveImportedRoots,
   readSourceEnabledState,
 } from '../../config/import-sources.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export interface SkillManifestEntry {
   name: string;
@@ -415,7 +416,7 @@ export function discoverPluginAgents(
       try {
         content = readFileSync(filePath, 'utf8');
       } catch (err) {
-        const safeError = sanitizeForDisplay(err instanceof Error ? err.message : String(err));
+        const safeError = sanitizeForDisplay(errorMessage(err));
         warn(`[afk] agents: cannot read ${safePath}: ${safeError}`);
         continue; // unreadable file — contained, skip
       }

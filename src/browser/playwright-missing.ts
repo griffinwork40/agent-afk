@@ -24,6 +24,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * Substrings in a thrown error message that indicate the Playwright package —
@@ -242,7 +243,7 @@ export function decoratePlaywrightLaunchError(
 ): unknown {
   if (!isPlaywrightMissing(err)) return err;
 
-  const base = err instanceof Error ? err.message : String(err);
+  const base = errorMessage(err);
   return new Error(`${base}\n\n${playwrightMissingHint(err, { headless, latched })}`, {
     cause: err,
   });

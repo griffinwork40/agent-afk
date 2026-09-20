@@ -31,6 +31,7 @@
 import { toggleAfkMode } from './afk-mode-toggle.js';
 import { palette } from './palette.js';
 import type { SlashContext } from './slash/types.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * The Shift+Tab ring. `autonomous` (AFK) is intentionally excluded — see the
@@ -99,7 +100,7 @@ export async function cyclePermissionMode(ctx: SlashContext): Promise<void> {
     emitCycleCopy(ctx, next);
   } catch (err) {
     ctx.out.error(
-      `Could not switch permission mode: ${err instanceof Error ? err.message : String(err)}`,
+      `Could not switch permission mode: ${errorMessage(err)}`,
     );
   }
 }

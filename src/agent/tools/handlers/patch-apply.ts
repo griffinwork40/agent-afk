@@ -17,6 +17,7 @@ import { resolve } from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { validatePatchChanges, type PatchFileChange } from './patch-validate.js';
 import { applyPatch } from './patch-apply-engine.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 // ---------------------------------------------------------------------------
 // Input parsing
@@ -131,7 +132,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
       parsed = parsePatchApplyInput(input);
     } catch (err) {
       return {
-        content: err instanceof Error ? err.message : String(err),
+        content: errorMessage(err),
         isError: true,
       };
     }

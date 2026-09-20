@@ -8,6 +8,7 @@
 
 import type { InteractiveCtx } from './shared.js';
 import { palette } from '../../palette.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Run the session's first-turn hook if one is registered and this is the
@@ -26,7 +27,7 @@ export async function runFirstTurnHookIfNeeded(ctx: InteractiveCtx, text: string
     } catch (err) {
       ctx.completionWriter.fn(
         palette.warning('⚠ ') + 'first-turn hook failed: ' +
-          (err instanceof Error ? err.message : String(err)),
+          (errorMessage(err)),
       );
     }
   }

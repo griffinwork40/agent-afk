@@ -1,3 +1,4 @@
+import { errorMessage } from '../../utils/errors.js';
 /**
  * One-shot operator diagnostic for a malformed `AFK_HOME` / `AFK_STATE_DIR`.
  *
@@ -48,7 +49,7 @@ const warnedReasons = new Set<string>();
  * @param err The error thrown by `getAfkHome()` / `getAfkStateDir()`.
  */
 export function warnAfkHomeRejectedOnce(err: unknown): void {
-  const reason = err instanceof Error ? err.message : String(err);
+  const reason = errorMessage(err);
   if (warnedReasons.has(reason)) return;
   warnedReasons.add(reason);
   console.warn(

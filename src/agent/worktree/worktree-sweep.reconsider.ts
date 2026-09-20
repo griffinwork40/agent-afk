@@ -17,6 +17,7 @@
  */
 
 import type { ExecFileFn } from './worktree-sweep.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /** Subset of WorktreeMeta fields relevant to reconsideration. */
 export interface ReconsiderMeta {
@@ -113,7 +114,7 @@ export async function reconsiderLockedWorktree(
       await execFile('git', ['-C', args.repoRoot, 'worktree', 'unlock', worktreePath]);
       return { unlocked: true, reason: 'commits-ahead: all commits now pushed' };
     } catch (err) {
-      return { unlocked: false, reason: `unlock failed: ${err instanceof Error ? err.message : String(err)}` };
+      return { unlocked: false, reason: `unlock failed: ${errorMessage(err)}` };
     }
   }
 
@@ -124,7 +125,7 @@ export async function reconsiderLockedWorktree(
       await execFile('git', ['-C', args.repoRoot, 'worktree', 'unlock', worktreePath]);
       return { unlocked: true, reason: 'dirty: working tree is now clean' };
     } catch (err) {
-      return { unlocked: false, reason: `unlock failed: ${err instanceof Error ? err.message : String(err)}` };
+      return { unlocked: false, reason: `unlock failed: ${errorMessage(err)}` };
     }
   }
 

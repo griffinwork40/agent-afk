@@ -51,6 +51,7 @@ import {
   updateWaveUnit,
 } from '../manifest/write.js';
 import { env } from '../../config/env.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export { DEFAULT_MAX_NESTING_DEPTH, type ChildProviderFactoryArgs } from './nesting.js';
 export type { AgentExecutionMode };
@@ -600,7 +601,7 @@ export class SubagentExecutor implements SubagentControl {
     try {
       parsed = parseAgentInput(call.input);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       return {
         content: `Agent tool input validation failed: ${message}`,
         isError: true,
@@ -782,7 +783,7 @@ export class SubagentExecutor implements SubagentControl {
           // Fail loud: never silently fall back to the shared tree — that
           // reintroduces the cross-contamination bug isolation exists to
           // prevent (parallel siblings clobbering each other's edits/tests).
-          const message = err instanceof Error ? err.message : String(err);
+          const message = errorMessage(err);
           return {
             content:
               `Failed to create isolated worktree for the subagent: ${message}. ` +
@@ -884,7 +885,7 @@ export class SubagentExecutor implements SubagentControl {
         return { content: 'Agent tool call aborted', isError: true };
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       // Wave manifest: unit failed because fork threw before returning a handle.
       this.updateCurrentWaveUnit(call.id, 'failed', message);
       void emitTelemetry({
@@ -963,7 +964,7 @@ export class SubagentExecutor implements SubagentControl {
       } catch (err) {
         await handle.teardown().catch(() => undefined);
         return {
-          content: `Agent tool attachment resolution failed: ${err instanceof Error ? err.message : String(err)}`,
+          content: `Agent tool attachment resolution failed: ${errorMessage(err)}`,
           isError: true,
         };
       }

@@ -21,6 +21,7 @@ import type {
 import { SYSTEMCTL_TIMEOUT_MS, serviceLogPath, systemdLabel, unitFileName, unitPath } from './paths.js';
 import { installSystemdService, readUnitFile, uninstallSystemdService } from './install.js';
 import { systemdStatus } from './status.js';
+import { errorMessage } from '../../utils/errors.js';
 
 export const systemdManager: ServiceManager = {
   backend: 'systemd',
@@ -59,7 +60,7 @@ export const systemdManager: ServiceManager = {
       return { kind: 'restarted', label: systemdLabel(name) };
     } catch (e) {
       const stderr = (e as { stderr?: Buffer | string }).stderr;
-      const reason = stderr ? stderr.toString().trim() || (e as Error).message : (e as Error).message;
+      const reason = stderr ? stderr.toString().trim() || errorMessage(e) : errorMessage(e);
       return { kind: 'failed', reason };
     }
   },

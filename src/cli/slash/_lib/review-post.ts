@@ -30,6 +30,7 @@ import {
   resolveCurrentBranchPr,
 } from '../../../agent/gh.js';
 import { pushIfConfigured } from '../../../telegram/push.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export type PostTarget = 'github' | 'telegram';
 
@@ -276,7 +277,7 @@ async function publishGithub(
     out.success(`/review posted to GitHub PR #${pr}${url ? ` — ${url}` : ''}`);
   } catch (err) {
     out.warn(
-      `/review --post github failed: ${err instanceof Error ? err.message : String(err)} ` +
+      `/review --post github failed: ${errorMessage(err)} ` +
         '(the review output above is unaffected).',
     );
   }
@@ -312,7 +313,7 @@ async function publishTelegram(out: Writer, review: string, d: ReviewPostDeps): 
     }
   } catch (err) {
     out.warn(
-      `/review --post telegram failed: ${err instanceof Error ? err.message : String(err)} ` +
+      `/review --post telegram failed: ${errorMessage(err)} ` +
         '(the review output above is unaffected).',
     );
   }

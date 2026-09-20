@@ -22,6 +22,7 @@
  */
 
 import type { ToolHandler, ToolResult } from '../types.js';
+import { errorMessage } from '../../../utils/errors.js';
 import {
   setEnvVar,
   unsetEnvVar,
@@ -74,7 +75,7 @@ export const configGetHandler: ToolHandler = async (input) => {
     }
     return { content: JSON.stringify(listConfig(), null, 2) };
   } catch (err) {
-    return errResult(`config_get: ${(err as Error).message}`);
+    return errResult(`config_get: ${errorMessage(err)}`);
   }
 };
 
@@ -131,6 +132,6 @@ export const configSetHandler: ToolHandler = async (input) => {
     // Engine errors (SecretWriteRefused, HumanOnlyKeyRefused, UnknownKeyError,
     // ConfigValidationError, MalformedConfigError) carry agent-actionable
     // guidance in their message — surface it verbatim.
-    return errResult(`config_set: ${(err as Error).message}`);
+    return errResult(`config_set: ${errorMessage(err)}`);
   }
 };

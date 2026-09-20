@@ -14,6 +14,7 @@ import { guardedFetch } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /** Union of all condition shapes. */
 export type WaitCondition =
@@ -76,7 +77,7 @@ export async function evaluateUrl(
   try {
     response = await guardedFetch(globalThis.fetch, cond.url, { method, signal });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     // EgressBlockedError surfaces as "SSRF blocked:" to preserve the existing
     // detail prefix callers may match on.
     const detail = msg.startsWith('refusing to') ? `SSRF blocked: ${msg}` : `fetch error: ${msg}`;
@@ -131,7 +132,7 @@ export async function evaluateFile(cond: FileCondition, signal?: AbortSignal): P
       : undefined;
     safePath = resolveAndContain(cond.path, ctx, 'read');
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     return { met: false, detail: `path rejected: ${msg}`, data: { blocked: true } };
   }
 
@@ -150,7 +151,7 @@ export async function evaluateFile(cond: FileCondition, signal?: AbortSignal): P
       // the poll deadline, not left hanging past the overall timeout.
       content = await fs.readFile(safePath, { encoding: 'utf8', signal });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       return { met: false, detail: `read error: ${msg}`, data: stat };
     }
     if (!content.includes(cond.content_contains)) {

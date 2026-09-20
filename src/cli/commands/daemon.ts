@@ -29,6 +29,7 @@ import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-stor
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
+import { errorMessage } from '../../utils/errors.js';
 export type { BuildDaemonSessionFactoryOpts } from './daemon-session-factory.js';
 export { buildDaemonSessionFactory } from './daemon-session-factory.js';
 
@@ -264,7 +265,7 @@ export function registerDaemonCommand(program: Command): void {
         void pushIfConfigured(
           `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
         ).catch((pushErr: unknown) => {
-          console.error('[daemon] crash notification push failed:', pushErr instanceof Error ? pushErr.message : String(pushErr));
+          console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
         });
       };
       process.on('uncaughtException', (err) => {

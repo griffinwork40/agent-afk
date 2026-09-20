@@ -23,6 +23,7 @@ import { emitBrowserEvent } from '../../trace/emit.js';
 
 import { browserTimeoutFailureClass } from './playwright-hints.js';
 import { acquireBrowserProvider } from './browser-provider.js';
+import { errorMessage } from '../../../utils/errors.js';
 import type { BrowserHandlerOptions } from './browser-provider.js';
 // Re-export so existing importers (browser-observe, browser-act, browser-screenshot)
 // continue to resolve `BrowserHandlerOptions` from this module without changes.
@@ -154,7 +155,7 @@ export function createBrowserOpenHandler(opts: BrowserHandlerOptions = {}): Tool
       return { content: JSON.stringify(obs, null, 2) };
     } catch (err) {
       const durationMs = Date.now() - t0;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_open',
         toolUseId: context?.toolUseId ?? '',

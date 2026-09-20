@@ -13,7 +13,7 @@
  * @module agent/session/session-reset
  */
 
-import { AbortError } from '../../utils/errors.js';
+import { AbortError, errorMessage } from '../../utils/errors.js';
 import { RESET_DRAIN_TIMEOUT_MS } from '../timeout.js';
 import type { AgentConfig, SessionState } from '../types.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
@@ -101,7 +101,7 @@ export async function resetSession(deps: ResetDeps): Promise<void> {
   } catch (err) {
     deps.setState('closed');
     throw new Error(
-      `Session reset failed during lifecycle rebuild: ${err instanceof Error ? err.message : String(err)}`,
+      `Session reset failed during lifecycle rebuild: ${errorMessage(err)}`,
       { cause: err },
     );
   }

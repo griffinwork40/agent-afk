@@ -28,6 +28,7 @@ import { buildForkedChildConfig } from './fork-child-config.js';
 import { renderForkOutcome } from './fork-result.js';
 import { substituteSkillArgs } from './load-mode.js';
 import type { SkillExecutorInternals } from './types.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 /**
  * Build the per-call `SubagentManager` that forks a skill sub-agent. The two
@@ -118,7 +119,7 @@ export async function executeForkedRegistrySkill(
       };
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { content: `Failed to load skill prompts: ${message}`, isError: true };
   }
 
@@ -390,7 +391,7 @@ export async function runForkedSkillToResult(
     toolResult = renderForkOutcome(result, noOutputError);
     return toolResult;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     return { content: `${errorPrefix}: ${message}`, isError: true };
   } finally {
     // Order: per-handle teardown (seals child trace) → child manager (any

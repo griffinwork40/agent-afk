@@ -18,6 +18,7 @@ import type { SubagentManager } from '../../subagent.js';
 import { debugLog } from '../../../utils/debug.js';
 import type { ToolResult } from '../types.js';
 import { teardownBackgroundWorktree } from '../handlers/worktree-managed.background.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 type ForkedHandle = Awaited<ReturnType<SubagentManager['forkSubagent']>>;
 
@@ -70,7 +71,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     // Tear down the orphaned handle so the fork isn't leaked.
     // teardown() is the safe no-op when the handle hasn't started.
     await handle.teardown().catch((e: unknown) =>
-      debugLog('subagent-executor: handle teardown failed: ' + (e instanceof Error ? e.message : String(e))),
+      debugLog('subagent-executor: handle teardown failed: ' + (errorMessage(e))),
     );
     // Unlock + tear down the isolated worktree — no registry means no
     // markTerminal and no onCleanup, so this is the only cleanup path.
@@ -100,7 +101,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     if (e instanceof BackgroundJobCapError) {
       // Cap exceeded — tear down the orphaned handle so the fork isn't leaked.
       await handle.teardown().catch((te: unknown) =>
-        debugLog('subagent-executor: handle teardown failed after cap error: ' + (te instanceof Error ? te.message : String(te))),
+        debugLog('subagent-executor: handle teardown failed after cap error: ' + (errorMessage(te))),
       );
       // Unlock + tear down the isolated worktree — cap rejection means no
       // registry entry, so markTerminal/onCleanup will never fire.
@@ -117,7 +118,7 @@ export async function runBackgroundBranch(args: RunBackgroundBranchArgs): Promis
     // Any other registration failure: clean up the orphaned handle + worktree
     // before rethrowing. Without this, a locked worktree leaks permanently.
     await handle.teardown().catch((te: unknown) =>
-      debugLog('subagent-executor: handle teardown failed after register error: ' + (te instanceof Error ? te.message : String(te))),
+      debugLog('subagent-executor: handle teardown failed after register error: ' + (errorMessage(te))),
     );
     if (isolationTeardown) {
       await teardownBackgroundWorktree(isolationTeardown).catch((te: unknown) =>

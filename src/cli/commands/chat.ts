@@ -41,6 +41,7 @@ import { jsonDateReplacer } from '../json-date-replacer.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
 import { emitSessionPhase } from '../../agent/trace/emit.js';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
+import { errorMessage } from '../../utils/errors.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -667,7 +668,7 @@ export function registerChatCommand(program: Command): void {
             });
           } catch (err) {
             process.stderr.write(
-              `[--post] publish failed: ${err instanceof Error ? err.message : String(err)}\n`,
+              `[--post] publish failed: ${errorMessage(err)}\n`,
             );
           }
         };

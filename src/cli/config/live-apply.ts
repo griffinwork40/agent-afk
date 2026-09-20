@@ -23,6 +23,7 @@
  */
 
 import { applyTheme, parseThemeMode, resolveTheme } from '../theme.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * The capabilities a surface must supply for live application. Structural, not a
@@ -94,6 +95,6 @@ export async function applyConfigLive(
   try {
     return await applier(rawValue, handle);
   } catch (err) {
-    return { applied: false, reason: err instanceof Error ? err.message : String(err) };
+    return { applied: false, reason: errorMessage(err) };
   }
 }

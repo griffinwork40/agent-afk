@@ -16,6 +16,7 @@ import { env } from '../../../config/env.js';
 import { emitBrowserEvent } from '../../trace/emit.js';
 
 import { isPlaywrightMissing, playwrightMissingHint } from './playwright-hints.js';
+import { errorMessage } from '../../../utils/errors.js';
 
 export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): ToolHandler {
   return async (_input, signal, context?: ToolHandlerContext) => {
@@ -50,7 +51,7 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
         }
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       if (isPlaywrightMissing(msg)) {
         return { content: playwrightMissingHint(msg), isError: true };
       }
@@ -74,7 +75,7 @@ export function createBrowserCloseHandler(opts: BrowserHandlerOptions = {}): Too
       return { content: 'Browser session closed.' };
     } catch (err) {
       const durationMs = Date.now() - t0;
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       void emitBrowserEvent(context?.traceWriter, {
         tool: 'browser_close',
         toolUseId: context?.toolUseId ?? '',

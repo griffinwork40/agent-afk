@@ -35,6 +35,7 @@ export {
   isSensitiveLeaf,
   type IgnoredEntryClass,
 } from './worktree-ignored-patterns.js';
+import { errorMessage } from '../../utils/errors.js';
 
 /**
  * Invariant: `core.quotePath=false` is not optional. With git's default, a
@@ -155,7 +156,7 @@ async function readIgnoredEntries(
         .filter((entry) => entry !== ''),
     };
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+    const detail = errorMessage(err);
     return { failure: scopePath === undefined ? detail : `expanding ${scopePath}: ${detail}` };
   }
 }

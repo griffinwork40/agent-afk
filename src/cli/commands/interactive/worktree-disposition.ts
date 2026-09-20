@@ -1,3 +1,4 @@
+import { errorMessage } from '../../../utils/errors.js';
 /**
  * Contract: the lock decision is carried in the disposition itself, not
  * inferred from `'keep'`, because locking and preserving have very different
@@ -99,7 +100,7 @@ export async function resolveWorktreeDisposition(
     return picked[0] === REMOVE_OPTION ? 'remove' : 'keep-locked';
   } catch (error) {
     deps.console.warn(
-      `Could not ask how to handle the worktree (${error instanceof Error ? error.message : String(error)}); keeping it.`,
+      `Could not ask how to handle the worktree (${errorMessage(error)}); keeping it.`,
     );
     // The user was present; a widget failure is our bug, so retain durably
     // rather than letting the sweep clean up after our own crash.
