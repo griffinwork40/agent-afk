@@ -174,7 +174,6 @@ These three tune the path-approval and bash-restriction hooks — see [Permissio
 | `AFK_DEBUG` | boolean | Enable verbose debug logging across the codebase. Accepts 1 to enable. | — |
 | `AFK_DEBUG_CLIPBOARD` | boolean | Debug bracketed-paste and image-paste handling in the interactive REPL. | — |
 | `AFK_DEBUG_COMPOSITOR` | boolean | Gate compositor phase-boundary traces to stderr; any truthy value enables. | — |
-| `AFK_DIAGNOSE_BASELINE` | boolean | Kill switch for /diagnose reproducer baseline execution. When set to '0', the /diagnose skill skips executing the detected reproducer command for a ground-truth baseline; default enabled (runs). Set to '0' to disable. | `1` |
 | `AFK_DUMP_PROMPT` | string | Write the resolved system prompt to a file at startup. Accepts a path or 1 for default location. | — |
 | `AFK_RUN_RECEIPT_DISABLED` | boolean | Disable the post-session run receipt (state/receipts/&lt;label&gt;.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize). | — |
 | `AFK_SESSION_LEDGER_DISABLED` | boolean | Disable the per-session durable event ledger (state/sessions/&lt;id&gt;/events.jsonl). Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram /watch command) will report no activity for sessions started while disabled. | — |
