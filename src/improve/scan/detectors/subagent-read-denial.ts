@@ -39,12 +39,12 @@ import {
   READ_DENYLIST_ENTRY_MARKER,
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from '../../../agent/tools/handlers/read-denylist.js';
+import { clampExcerpt, MAX_EVIDENCE_PER_CARD } from './_lib.js';
 
 /** Default minimum read-denials sharing a normalized reason before a card fires. */
 export const DEFAULT_SUBAGENT_READ_DENIAL_MIN_OCCURRENCES = 2;
 
 const FINGERPRINT_ALGORITHM = 'v1-pretooluse-read-normreason';
-const MAX_EVIDENCE_PER_CARD = 8;
 
 /**
  * Read-family tool names whose PreToolUse block is a pathological read-scope
@@ -306,7 +306,4 @@ function buildAnnotation(s: DenialSighting): string {
   return parts.join(' · ');
 }
 
-function clampExcerpt(rawLine: string): string {
-  if (rawLine.length <= 2000) return rawLine;
-  return rawLine.slice(0, 1997) + '...';
-}
+

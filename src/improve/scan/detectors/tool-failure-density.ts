@@ -60,6 +60,7 @@
 import type { DetectorResult, FailureEvidence, Severity } from '../../schemas.js';
 import type { SessionRead } from '../reader.js';
 import type { ToolFailureClass } from '../../../agent/trace/types.js';
+import { clampExcerpt, MAX_EVIDENCE_PER_CARD } from './_lib.js';
 import { BENIGN_FAILURE_CLASSES } from '../../../agent/trace/types.js';
 
 /**
@@ -98,9 +99,6 @@ export const DEFAULT_TOOL_FAILURE_MIN_FAILURES = 3;
  * pattern worth surfacing.
  */
 export const DEFAULT_TOOL_FAILURE_MIN_RATE = 0.25;
-
-/** Hard cap on evidence rows per card. Same convention as the other detectors. */
-const MAX_EVIDENCE_PER_CARD = 8;
 
 export interface ToolFailureDensityOptions {
   minFailures?: number;
@@ -314,11 +312,6 @@ export function makeSlug(toolName: string): string {
 // ---------------------------------------------------------------------------
 // Local helpers
 // ---------------------------------------------------------------------------
-
-function clampExcerpt(rawLine: string): string {
-  if (rawLine.length <= 2000) return rawLine;
-  return rawLine.slice(0, 1997) + '...';
-}
 
 function round4(n: number): number {
   return Math.round(n * 10_000) / 10_000;

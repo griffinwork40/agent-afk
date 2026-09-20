@@ -33,7 +33,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  writeFileSync,
 } from 'fs';
 import { join } from 'path';
 import {
@@ -49,6 +48,7 @@ import {
   getProposalsIndexPath,
 } from '../paths.js';
 import { atomicWriteFile } from '../../utils/envFile.js';
+import { appendJsonlIndex, formatYyyymmdd } from '../_lib/writer-utils.js';
 
 export interface WriteProposalOutcome {
   proposalId: string;
@@ -109,13 +109,6 @@ export function generateProposalId(cardSlug: string, ctx: IdContext = {}): strin
     throw new Error(`generateProposalId: randomSuffix must be 6 lowercase hex chars (got '${suffix}')`);
   }
   return `${cardSlug}-${yyyymmdd}-${suffix}`;
-}
-
-function formatYyyymmdd(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,13 +274,5 @@ function readProposalIfExists(path: string): ImprovementProposal | undefined {
 // ---------------------------------------------------------------------------
 
 function appendIndex(event: ProposalIndexEvent): void {
-  const validated = ProposalIndexEventSchema.parse(event);
-  const path = getProposalsIndexPath();
-  const dir = getProposalsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  try {
-    writeFileSync(path, JSON.stringify(validated) + '\n', { flag: 'a' });
-  } catch {
-    // Best-effort, matching card-writer.
-  }
+  appendJsonlIndex(ProposalIndexEventSchema, getProposalsDir(), getProposalsIndexPath(), event);
 }

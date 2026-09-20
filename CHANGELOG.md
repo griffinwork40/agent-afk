@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.222.17] - 2026-09-20
+
+### Changed
+- add unit tests for builtin-task.ts (#1897) (7e4b92c5)
+- add unit tests for errorMessage() utility (#1884) (#1889) (3cfbee1c)
+- split auto-compact.ts mixed concerns (#1863) (#1891) (f2d91c87)
+- replace remaining errorMessage() inline ternary (#1885) (#1887) (7a28daed)
+- remove dead toolClaimedByAgent Set (#1892) (72824ccc)
+- extract improve pipeline shared utils (#1858) (#1893) (68fea350)
+
 ## [5.222.16] - 2026-09-20
 
 ### Changed

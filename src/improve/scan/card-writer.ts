@@ -40,7 +40,7 @@
  * @module improve/scan/card-writer
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
   CardIndexEventSchema,
@@ -58,6 +58,7 @@ import {
   getFailureCardsIndexPath,
 } from '../paths.js';
 import { atomicWriteFile } from '../../utils/envFile.js';
+import { appendJsonlIndex } from '../_lib/writer-utils.js';
 
 /** Outcome of a single writeCard call. */
 export interface WriteCardOutcome {
@@ -283,17 +284,7 @@ export function renderMarkdown(card: FailureCard): string {
 // ---------------------------------------------------------------------------
 
 function appendIndex(event: CardIndexEvent): void {
-  const validated = CardIndexEventSchema.parse(event);
-  const path = getFailureCardsIndexPath();
-  const dir = getFailureCardsDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  // Best-effort: a single line append. Failure here doesn't roll back the
-  // snapshot files written above.
-  try {
-    writeFileSync(path, JSON.stringify(validated) + '\n', { flag: 'a' });
-  } catch {
-    // intentionally swallowed — index is derived, snapshots are source of truth.
-  }
+  appendJsonlIndex(CardIndexEventSchema, getFailureCardsDir(), getFailureCardsIndexPath(), event);
 }
 
 // ---------------------------------------------------------------------------
