@@ -12,11 +12,6 @@ import { describe, it, expect } from 'vitest';
 import { formatStatusLine } from './status-line-format.js';
 import { displayWidth } from '../display.js';
 
-/** Strip ANSI escape sequences for plain-text assertions. */
-function strip(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*[mGKHs]/g, '').replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, '');
-}
-
 // Use the broad ANSI regex from the existing test suite for completeness.
 const ANSI_RE = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 function stripAll(s: string): string {
@@ -229,8 +224,9 @@ describe('formatStatusLine — priority-based shedding at narrow widths', () => 
     ));
     // At 35 cols, tokens (priority 4) and cost (priority 3) both shed before context bar (priority 2).
     expect(out).not.toContain('$0.05');
-    // Context bar (priority 2) or branch (priority 1) may survive depending on exact widths;
-    // the key invariant is that cost shed before the bar.
+    // Positive assertion: context bar (priority 2) survived after cost was shed.
+    expect(out).toContain('[');
+    expect(out).toContain('50%');
   });
 
   it('drops branch last among droppables (priority 1) — survives when tokens/cost shed', () => {
@@ -280,6 +276,32 @@ describe('formatStatusLine — priority-based shedding at narrow widths', () => 
     expect(out).not.toContain('tok');
   });
 
+  it('never drops cwd even when all other droppable fields are shed (never-drop invariant)', () => {
+    // cwd has no droppablePriority (undefined = never-drop). At 30 cols, every
+    // droppable field (branch p1, cost p3, tokens p4, turn p6) is shed, but the
+    // cwd leaf — the "which project am I in?" signal — must survive in the output.
+    // Width 30 is chosen because formatCwd's 40% budget (12 cols) is sufficient
+    // to render /tmp/project in full once all droppables are gone.
+    const out = stripAll(formatStatusLine(
+      {
+        model: 'sonnet',
+        cwd: '/tmp/project',
+        cost: 0.05,
+        tokens: 1200,
+        branch: 'feat/x',
+        turnCount: 7,
+      },
+      30,
+    ));
+    // All droppable fields (branch p1, cost p3, tokens p4, turn p6) are shed.
+    expect(out).not.toContain('feat/x');
+    expect(out).not.toContain('$0.05');
+    expect(out).not.toContain('tok');
+    expect(out).not.toContain('turn');
+    // cwd (never-drop) must still be visible despite all other shedding.
+    expect(out).toContain('project');
+  });
+
   it('right-truncates the result at maxW after shedding all droppables', () => {
     // A model name longer than maxW — after all droppables gone, truncation fires.
     const longModel = 'a'.repeat(40);
@@ -295,6 +317,8 @@ describe('formatStatusLine — priority-based shedding at narrow widths', () => 
     ));
     expect(out).toContain('sonnet');
     expect(out).not.toContain('turn 7');
+    // Positive assertion: cost (priority 3) survived the drop step that shed turn (priority 6).
+    expect(out).toContain('$0.01');
   });
 
   it('sheds budget indicator (priority 7) before turnCount (priority 6)', () => {
