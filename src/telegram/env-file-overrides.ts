@@ -36,8 +36,16 @@ export const TELEGRAM_FILE_AUTHORITATIVE_KEYS = [
  * `process.env`.
  */
 export function parseEnvFile(filePath: string): Map<string, string> {
-  const record = readEnvFile(filePath, { stripQuotes: true });
-  return new Map(Object.entries(record));
+  try {
+    const record = readEnvFile(filePath, { stripQuotes: true });
+    return new Map(Object.entries(record));
+  } catch {
+    // Contract: unreadable file (ESTALE, permission change, etc.) → empty map,
+    // same as missing. The old local implementation had an explicit try/catch
+    // around readFileSync; readEnvFile only guards with existsSync, so we
+    // preserve the fail-soft behavior here.
+    return new Map();
+  }
 }
 
 /**

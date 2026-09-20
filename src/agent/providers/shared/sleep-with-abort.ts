@@ -17,16 +17,18 @@
  */
 
 /**
- * Plain unconditional sleep with no abort awareness. Uses `timer.unref()` so
- * Node does not keep the event loop alive solely due to this timeout.
+ * Plain unconditional sleep with no abort awareness.
  *
- * Use this instead of `new Promise(r => setTimeout(r, ms))` so the behaviour
- * (no event-loop pin) is consistent across every call site.
+ * By default the timer is **ref'd** — the event loop stays alive until it
+ * fires, which is the correct behavior for CLI-visible sleeps (Telegram
+ * startup probes, setup-wizard pauses, rate-limit backoff).  Pass
+ * `{ unref: true }` when the timer is purely advisory and should not
+ * prevent process exit.
  */
-export function sleep(ms: number): Promise<void> {
+export function sleep(ms: number, opts?: { unref?: boolean }): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, Math.max(0, ms));
-    timer.unref();
+    if (opts?.unref) timer.unref();
   });
 }
 
