@@ -60,7 +60,7 @@
  * @module agent/hooks
  */
 
-import { createHookRegistryImpl } from './hook-registry.js';
+export { createHookRegistry } from './hook-registry.js';
 import type { SubagentTrace } from './subagent/result.js';
 import type { GrantManager } from '../cli/slash/commands/allow-dir.js';
 
@@ -428,9 +428,7 @@ export interface HookRegistry {
   count(event: HarnessHookEvent): number;
 }
 
-export function createHookRegistry(): HookRegistry {
-  return createHookRegistryImpl();
-}
+
 
 /**
  * Resolve the hook registry a provider threads into its per-query dispatcher.

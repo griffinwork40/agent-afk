@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createHookRegistryImpl } from '../hook-registry.js';
+import { createHookRegistry } from '../hook-registry.js';
 import { dispatchPreToolUse } from '../subagent-hooks.js';
 import { HookBlockedError } from '../../utils/errors.js';
 import type { HookDecision } from '../hooks.js';
@@ -20,7 +20,7 @@ const preCtx = {
 
 describe('PreToolUse injectContext — block path', () => {
   it('HookBlockedError carries injectContext when handler blocks with it', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('PreToolUse', async () => ({
       decision: 'block' as const,
       reason: 'destructive command',
@@ -40,7 +40,7 @@ describe('PreToolUse injectContext — block path', () => {
   });
 
   it('HookBlockedError has no injectContext when handler blocks without it', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('PreToolUse', async () => ({
       decision: 'block' as const,
       reason: 'not allowed',
@@ -58,7 +58,7 @@ describe('PreToolUse injectContext — block path', () => {
   });
 
   it('dispatchPreToolUse returns HookDecision on approve', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('PreToolUse', async () => ({
       decision: 'approve' as const,
     }));
@@ -73,7 +73,7 @@ describe('PreToolUse injectContext — block path', () => {
   });
 
   it('dispatchPreToolUse re-throws HookBlockedError on block', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('PreToolUse', async () => ({
       decision: 'block' as const,
       reason: 'blocked',

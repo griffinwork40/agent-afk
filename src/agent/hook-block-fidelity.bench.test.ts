@@ -163,13 +163,13 @@ describe.skipIf(process.platform === 'win32')(
       // verification data to a JSON file.
       const verifyPath = join(rootDir, 'explicit-block-verify.json');
       writeFileSync(scriptPath, [
-        `import { createHookRegistryImpl } from ${JSON.stringify(hookRegistrySrc)};`,
+        `import { createHookRegistry } from ${JSON.stringify(hookRegistrySrc)};`,
         `import { dispatchPreToolUse } from ${JSON.stringify(subagentHooksSrc)};`,
         `import { NdjsonTraceWriter } from ${JSON.stringify(writerSrc)};`,
         `import { writeFileSync } from 'fs';`,
         ``,
         `async function main() {`,
-        `  const registry = createHookRegistryImpl();`,
+        `  const registry = createHookRegistry();`,
         `  const traceDir = ${JSON.stringify(traceDir)};`,
         `  const w = new NdjsonTraceWriter({ traceDir });`,
         ``,
@@ -248,13 +248,13 @@ describe.skipIf(process.platform === 'win32')(
 
       const verifyPath = join(rootDir, 'fail-safe-verify.json');
       writeFileSync(scriptPath, [
-        `import { createHookRegistryImpl } from ${JSON.stringify(hookRegistrySrc)};`,
+        `import { createHookRegistry } from ${JSON.stringify(hookRegistrySrc)};`,
         `import { dispatchPreToolUse } from ${JSON.stringify(subagentHooksSrc)};`,
         `import { NdjsonTraceWriter } from ${JSON.stringify(writerSrc)};`,
         `import { writeFileSync } from 'fs';`,
         ``,
         `async function main() {`,
-        `  const registry = createHookRegistryImpl();`,
+        `  const registry = createHookRegistry();`,
         `  const traceDir = ${JSON.stringify(traceDir)};`,
         `  const w = new NdjsonTraceWriter({ traceDir });`,
         ``,
@@ -327,13 +327,13 @@ describe.skipIf(process.platform === 'win32')(
 
       const verifyPath = join(rootDir, 'allow-path-verify.json');
       writeFileSync(scriptPath, [
-        `import { createHookRegistryImpl } from ${JSON.stringify(hookRegistrySrc)};`,
+        `import { createHookRegistry } from ${JSON.stringify(hookRegistrySrc)};`,
         `import { dispatchPreToolUse } from ${JSON.stringify(subagentHooksSrc)};`,
         `import { NdjsonTraceWriter } from ${JSON.stringify(writerSrc)};`,
         `import { writeFileSync } from 'fs';`,
         ``,
         `async function main() {`,
-        `  const registry = createHookRegistryImpl();`,
+        `  const registry = createHookRegistry();`,
         `  const traceDir = ${JSON.stringify(traceDir)};`,
         `  const w = new NdjsonTraceWriter({ traceDir });`,
         ``,
@@ -401,13 +401,13 @@ describe.skipIf(process.platform === 'win32')(
 
       const verifyPath = join(rootDir, 'multi-handler-verify.json');
       writeFileSync(scriptPath, [
-        `import { createHookRegistryImpl } from ${JSON.stringify(hookRegistrySrc)};`,
+        `import { createHookRegistry } from ${JSON.stringify(hookRegistrySrc)};`,
         `import { dispatchPreToolUse } from ${JSON.stringify(subagentHooksSrc)};`,
         `import { NdjsonTraceWriter } from ${JSON.stringify(writerSrc)};`,
         `import { writeFileSync } from 'fs';`,
         ``,
         `async function main() {`,
-        `  const registry = createHookRegistryImpl();`,
+        `  const registry = createHookRegistry();`,
         `  const traceDir = ${JSON.stringify(traceDir)};`,
         `  const w = new NdjsonTraceWriter({ traceDir });`,
         ``,

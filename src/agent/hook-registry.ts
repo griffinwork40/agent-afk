@@ -250,6 +250,6 @@ function assertNotAborted(signal: AbortSignal | undefined, event: string): void 
   }
 }
 
-export function createHookRegistryImpl(): HookRegistry {
+export function createHookRegistry(): HookRegistry {
   return new HookRegistryImpl();
 }

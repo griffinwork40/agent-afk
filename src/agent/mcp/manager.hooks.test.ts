@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { SessionToolDispatcher } from '../tools/dispatcher.js';
-import { createHookRegistryImpl } from '../hook-registry.js';
+import { createHookRegistry } from '../hook-registry.js';
 import { McpManager } from './manager.js';
 import type { ToolCall } from '../tools/types.js';
 
@@ -49,7 +49,7 @@ describe('MCP tool dispatch — hook integration', () => {
       // PreToolUse + PostToolUse listeners.
       const pre = vi.fn();
       const post = vi.fn();
-      const hookRegistry = createHookRegistryImpl();
+      const hookRegistry = createHookRegistry();
       hookRegistry.register('PreToolUse', async (ctx) => {
         if (ctx.event === 'PreToolUse') pre(ctx.toolName);
         return {};
@@ -97,7 +97,7 @@ describe('MCP tool dispatch — hook integration', () => {
 
       const handlers = manager.getMcpHandlers();
       const schemas = manager.getMcpTools();
-      const hookRegistry = createHookRegistryImpl();
+      const hookRegistry = createHookRegistry();
       hookRegistry.register('PreToolUse', async (ctx) => {
         if (ctx.event === 'PreToolUse' && ctx.toolName === 'mcp__srv__boom') {
           return { decision: 'block', reason: 'no boom for you' };

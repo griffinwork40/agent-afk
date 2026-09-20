@@ -8,24 +8,24 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createHookRegistryImpl, HookHandlerTimeoutError, HOOK_HANDLER_TIMEOUT_MS } from './hook-registry.js';
+import { createHookRegistry, HookHandlerTimeoutError, HOOK_HANDLER_TIMEOUT_MS } from './hook-registry.js';
 
 describe('HookRegistryImpl.dispatch — basic', () => {
   it('returns empty decision when no handlers are registered', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
     expect(decision).toEqual({});
   });
 
   it('returns the handler decision on normal resolution', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({ injectContext: 'hello' }));
     const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
     expect(decision.injectContext).toBe('hello');
   });
 
   it('throws HookBlockedError when handler returns block decision', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStart', async () => ({ decision: 'block', reason: 'policy' }));
     await expect(registry.dispatch({ event: 'SubagentStart', subagentId: 'x' })).rejects.toThrow(
       /block/i,
@@ -33,14 +33,14 @@ describe('HookRegistryImpl.dispatch — basic', () => {
   });
 
   it('count() reflects registration', () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     expect(registry.count('SubagentStop')).toBe(0);
     registry.register('SubagentStop', async () => ({}));
     expect(registry.count('SubagentStop')).toBe(1);
   });
 
   it('unregister removes the handler', () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     const remove = registry.register('SubagentStop', async () => ({}));
     remove();
     expect(registry.count('SubagentStop')).toBe(0);
@@ -61,7 +61,7 @@ describe('[R3] dispatchSubagentStop — per-handler timeout', () => {
     // must complete in bounded time; a never-resolving SubagentStop handler must
     // not block BackgroundAgentRegistry.cancelAll() forever.
     const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-    const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+    const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
     const registry = makeRegistry();
     // Register a handler that never resolves — simulates a hook hitting a slow
@@ -93,7 +93,7 @@ describe('[R3] dispatchSubagentStop — per-handler timeout', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-    const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+    const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
     const registry = makeRegistry();
     registry.register('SubagentStop', () => new Promise<never>(() => {}));
@@ -118,7 +118,7 @@ describe('[R3] dispatchSubagentStop — per-handler timeout', () => {
 
   it('does not time out a handler that resolves within the window', async () => {
     const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-    const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+    const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
     const registry = makeRegistry();
     // Resolves quickly (before the 30s timeout).
@@ -158,7 +158,7 @@ describe('[R3 follow-up] dispatchSubagentStop — aggregate timeout', () => {
 
   it('bounds total dispatch time even when multiple handlers hang sequentially', async () => {
     const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-    const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+    const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
     const registry = makeRegistry();
     // Register THREE never-resolving handlers. With per-handler-only bounds,
@@ -203,7 +203,7 @@ describe('[R3 follow-up] dispatchSubagentStop — production-visible timeout war
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-    const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+    const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
     const registry = makeRegistry();
     registry.register('SubagentStop', () => new Promise<never>(() => {}));
@@ -257,7 +257,7 @@ describe('[R3 follow-up] dispatch() default handlerTimeoutMs', () => {
   });
 
   it('applies HOOK_HANDLER_TIMEOUT_MS when the caller omits handlerTimeoutMs', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', () => new Promise<never>(() => {}));
 
     // Call dispatch() WITHOUT passing handlerTimeoutMs — must still be bounded.
@@ -272,7 +272,7 @@ describe('[R3 follow-up] dispatch() default handlerTimeoutMs', () => {
   });
 
   it('supports Infinity to opt out of the per-handler bound (test/edge-case escape hatch)', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({ injectContext: 'unbounded' }));
 
     const decision = await registry.dispatch(
@@ -317,7 +317,7 @@ describe('[R3 follow-up] HookHandlerTimeoutError discriminator', () => {
 describe('[R3 follow-up] dispatchSubagentStop — abort mid-dispatch', () => {
   it('returns {} when the signal is already aborted before dispatch', async () => {
     const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-    const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+    const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
     const registry = makeRegistry();
     let handlerRan = false;
@@ -344,7 +344,7 @@ describe('[R3 follow-up] dispatchSubagentStop — abort mid-dispatch', () => {
     vi.useFakeTimers();
     try {
       const { dispatchSubagentStop } = await import('./subagent-hooks.js');
-      const { createHookRegistryImpl: makeRegistry } = await import('./hook-registry.js');
+      const { createHookRegistry: makeRegistry } = await import('./hook-registry.js');
 
       const registry = makeRegistry();
       // Handler waits long enough that we can abort mid-flight.
@@ -392,7 +392,7 @@ describe('[R3 follow-up] dispatchSubagentStop — abort mid-dispatch', () => {
 // last-wins. Blocking handlers still short-circuit before any accumulation.
 describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   it('concatenates injectContext from two non-blocking handlers in registration order', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({ injectContext: 'first note' }));
     registry.register('SubagentStop', async () => ({ injectContext: 'second note' }));
 
@@ -401,7 +401,7 @@ describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   });
 
   it('concatenates injectContext from three non-blocking handlers in registration order', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({ injectContext: 'alpha' }));
     registry.register('SubagentStop', async () => ({ injectContext: 'beta' }));
     registry.register('SubagentStop', async () => ({ injectContext: 'gamma' }));
@@ -411,7 +411,7 @@ describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   });
 
   it('returns the single handler value unchanged when only one handler provides injectContext', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({ injectContext: 'only note' }));
 
     const decision = await registry.dispatch({ event: 'SubagentStop', subagentId: 'x' });
@@ -419,7 +419,7 @@ describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   });
 
   it('skips handlers that return no injectContext — no leading/trailing newlines', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({}));
     registry.register('SubagentStop', async () => ({ injectContext: 'middle note' }));
     registry.register('SubagentStop', async () => ({}));
@@ -432,7 +432,7 @@ describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   });
 
   it('produces no injectContext when no handler returns one', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({}));
     registry.register('SubagentStop', async () => ({}));
 
@@ -441,7 +441,7 @@ describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   });
 
   it('blocking handler short-circuits before accumulation — later injectContext not reached', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     const later = vi.fn(async () => ({ injectContext: 'should-not-appear' }));
     registry.register('SubagentStop', async () => ({ decision: 'block', reason: 'policy' }));
     registry.register('SubagentStop', later);
@@ -451,7 +451,7 @@ describe('HookRegistryImpl.dispatch — injectContext merge policy', () => {
   });
 
   it('preserves last-handler-wins for non-injectContext fields while merging injectContext', async () => {
-    const registry = createHookRegistryImpl();
+    const registry = createHookRegistry();
     registry.register('SubagentStop', async () => ({
       injectContext: 'first',
       reason: 'reason-a',

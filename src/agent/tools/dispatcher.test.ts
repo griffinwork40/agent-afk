@@ -9,7 +9,7 @@ import { builtinToolSchemas } from './schemas.js';
 import type { ToolCall } from './types.js';
 import type { ToolHandler } from './types.js';
 import type { CanUseTool } from '../types/sdk-types.js';
-import { createHookRegistryImpl } from '../hook-registry.js';
+import { createHookRegistry } from '../hook-registry.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { REPEAT_FAILURE_REFUSAL_THRESHOLD } from './repeat-failure-guard.js';
 
@@ -92,7 +92,7 @@ describe('SessionToolDispatcher', () => {
 
     it('injects sessionGrantManager onto the PreToolUse context', async () => {
       let captured: unknown = 'unset';
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PreToolUse', (ctx) => {
         if (ctx.event === 'PreToolUse') captured = ctx.grantManager;
         return {};
@@ -104,7 +104,7 @@ describe('SessionToolDispatcher', () => {
 
     it('leaves context.grantManager undefined when no sessionGrantManager is provided', async () => {
       let captured: unknown = 'unset';
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PreToolUse', (ctx) => {
         if (ctx.event === 'PreToolUse') captured = ctx.grantManager;
         return {};
@@ -343,7 +343,7 @@ describe('SessionToolDispatcher', () => {
 
   describe('hooks', () => {
     it('PreToolUse block returns isError', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PreToolUse', async () => ({
         decision: 'block' as const,
         reason: 'not allowed',
@@ -356,7 +356,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('PreToolUse block with injectContext appends explanation to content', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PreToolUse', async () => ({
         decision: 'block' as const,
         reason: 'dangerous',
@@ -371,7 +371,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('PreToolUse approve allows execution', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PreToolUse', async () => ({
         decision: 'approve' as const,
       }));
@@ -381,7 +381,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('PostToolUse fires after execution', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUse', postSpy);
       const dispatcher = makeDispatcher({ hookRegistry: registry });
@@ -397,7 +397,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('PostToolUse error is swallowed', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PostToolUse', async () => {
         throw new Error('post hook error');
       });
@@ -408,7 +408,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('PostToolUseFailure fires with error message when handler throws', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const failureSpy = vi.fn(async () => ({}));
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUseFailure', failureSpy);
@@ -450,7 +450,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('PostToolUseFailure does not fire when handler succeeds', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const failureSpy = vi.fn(async () => ({}));
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUseFailure', failureSpy);
@@ -557,7 +557,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('fires PostToolUse hook for agent calls', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUse', postSpy);
       const executor = mockExecutor();
@@ -577,7 +577,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('forwards incomplete/incompleteReason to PostToolUse for a partial agent result', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUse', postSpy);
       // A capped/stream-cut subagent partial: the structured flags ride the
@@ -607,7 +607,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('omits incomplete/incompleteReason from PostToolUse for a clean agent result', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUse', postSpy);
       const executor = mockExecutor();
@@ -966,7 +966,7 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('blocks individual tool via PreToolUse without affecting others', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       registry.register('PreToolUse', async (ctx) => {
         if ((ctx as any).toolName === 'glob') {
           return { decision: 'block' as const, reason: 'blocked glob' };
@@ -1661,7 +1661,7 @@ describe('SessionToolDispatcher', () => {
     // current behavior so future changes do not accidentally fire or suppress
     // the hooks without a deliberate decision.
     it.skip('compose deferral: PostToolUseFailure does NOT fire inside compose, PostToolUse does NOT fire either (deferred -- see PR #282)', async () => {
-      const registry = createHookRegistryImpl();
+      const registry = createHookRegistry();
       const failureSpy = vi.fn(async () => ({}));
       const postSpy = vi.fn(async () => ({}));
       registry.register('PostToolUseFailure', failureSpy);
