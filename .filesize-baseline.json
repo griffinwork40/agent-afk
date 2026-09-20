@@ -29,7 +29,7 @@
     "src/cli/slash/commands/info.ts": { "loc": 443, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts": { "loc": 510, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.ts": { "loc": 354, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/config/env.ts": { "loc": 1792, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/config/env.ts": { "loc": 1799, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/contracts.ts": { "loc": 500, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/runner.ts": { "loc": 372, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

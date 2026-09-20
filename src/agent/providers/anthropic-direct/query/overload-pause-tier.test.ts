@@ -15,7 +15,7 @@ import type { RunTurnInput } from '../types.js';
 
 const runTurnMock = vi.hoisted(() => vi.fn());
 vi.mock('../loop.js', () => ({ runTurn: runTurnMock }));
-vi.mock('../../../../cli/keychain.js', () => ({
+vi.mock('../../../auth/keychain.js', () => ({
   loadClaudeCodeOauthToken: () => 'tok',
   parseAccountIdentifier: () => 'acct',
 }));

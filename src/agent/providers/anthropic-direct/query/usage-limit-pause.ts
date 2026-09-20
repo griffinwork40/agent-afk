@@ -11,7 +11,7 @@
 
 import type { ProviderEvent } from '../../../provider.js';
 import { classifyUsageLimitError, waitForReset, waitForHotSwap } from '../usage-limit.js';
-import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../../cli/keychain.js';
+import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import type { AnthropicClientLike, RunTurnInput } from '../types.js';
 import type { RetryTierContext, TierGenerator } from './retry-context.js';

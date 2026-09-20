@@ -52,7 +52,7 @@ import { randomUUID } from 'node:crypto';
 import type { ProviderEvent } from '../../../provider.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
-import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../../cli/keychain.js';
+import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
 import type { AnthropicClientLike, AuthMode, RunTurnInput } from '../types.js';
 import type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
 import { turnWithAuthRetry } from './auth-retry-tier.js';
