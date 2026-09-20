@@ -16,7 +16,7 @@
  * `ANTHROPIC_API_KEY`.
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { readEnvFile } from '../utils/envFile.js';
 
 /** Telegram-specific config keys that file values override shell env for. */
 export const TELEGRAM_FILE_AUTHORITATIVE_KEYS = [
@@ -36,29 +36,16 @@ export const TELEGRAM_FILE_AUTHORITATIVE_KEYS = [
  * `process.env`.
  */
 export function parseEnvFile(filePath: string): Map<string, string> {
-  const out = new Map<string, string>();
-  if (!existsSync(filePath)) return out;
   try {
-    const contents = readFileSync(filePath, 'utf-8');
-    for (const line of contents.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eq = trimmed.indexOf('=');
-      if (eq === -1) continue;
-      const key = trimmed.slice(0, eq).trim();
-      let value = trimmed.slice(eq + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      out.set(key, value);
-    }
+    const record = readEnvFile(filePath, { stripQuotes: true });
+    return new Map(Object.entries(record));
   } catch {
-    /* unreadable — treat as missing */
+    // Contract: unreadable file (ESTALE, permission change, etc.) → empty map,
+    // same as missing. The old local implementation had an explicit try/catch
+    // around readFileSync; readEnvFile only guards with existsSync, so we
+    // preserve the fail-soft behavior here.
+    return new Map();
   }
-  return out;
 }
 
 /**

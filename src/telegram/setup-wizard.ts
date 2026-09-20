@@ -18,6 +18,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { upsertEnvVar } from '../utils/envFile.js';
+import { sleep } from '../agent/providers/shared/sleep-with-abort.js';
 import { getEnvConfigPath } from '../paths.js';
 import { env } from '../config/env.js';
 import { withStdinClaim } from '../cli/input/stdin-claim.js';
@@ -209,7 +210,7 @@ export async function pollForChats(
     const chats = findChatIdInUpdates(updates);
     if (chats.length > 0) return chats;
     if (i < maxAttempts - 1) {
-      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
+      await sleep(intervalMs);
     }
   }
   return [];

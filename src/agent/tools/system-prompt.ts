@@ -125,6 +125,7 @@ Do NOT store: ephemeral task details, information derivable from code or git, sp
 - target "fact" → searchable SQLite archive. **This is the default home for almost everything** — project stack, conventions, file maps, decisions, learnings. It is unbounded and searchable. When in doubt, it's a fact.
 - target "hot" → HOT.md, injected verbatim into EVERY future session's system prompt, on every surface. Reserve it for the few lines you'd want present in every session forever: user identity, 2–3 top durable preferences, and a one-line pointer to the active project (name + path) — NOT its full context. Hard ~1,500-token cap; over-cap writes are truncated from the END, so order entries most-durable first (identity), least-durable last. If something doesn't need to be in every prompt, it's a fact, not hot.
 - Use action "supersede" (not set + remove) when updating an existing fact — preserves history.
+- Never write to hot memory during an end-of-session reflection pass — hot entries should be written only when the user explicitly states a durable preference or identity, not inferred from task outcomes.
 
 ## Procedures (procedure_write)
 Save reusable multi-step workflows the user teaches you or that you discover work well. Name in kebab-case. Searchable via memory_search.`;

@@ -38,7 +38,7 @@
 
 import { homedir, userInfo } from 'node:os';
 import { join } from 'path';
-import { getLogsDir } from '../../paths.js';
+import { SERVICE_TIMEOUT_MS, serviceLogPath as sharedServiceLogPath } from '../types.js';
 
 /** Service kinds AFK can register with launchd. */
 export type ServiceName = 'telegram' | 'daemon';
@@ -61,10 +61,8 @@ export function plistPath(name: ServiceName, home: string = homedir()): string {
   return join(launchAgentsDir(home), `${labelFor(name)}.plist`);
 }
 
-/** Per-service log file path under `~/.afk/logs/`. Mirrors stdout+stderr. */
-export function serviceLogPath(name: ServiceName): string {
-  return join(getLogsDir(), `service-${name}.log`);
-}
+/** Per-service log file path under `~/.afk/logs/`. Mirrors stdout+stderr. Re-export from shared types. */
+export const serviceLogPath = sharedServiceLogPath;
 
 /**
  * Where the user's gui session live for `launchctl` Tiger/Catalina+ syntax.
@@ -76,17 +74,9 @@ export function guiDomain(): string {
 
 /**
  * Hard cap on how long we let any `launchctl` invocation run before we
- * give up. macOS occasionally wedges launchctl during system shutdown or
- * while a security-policy daemon (e.g. ManagedClient) is updating XPC
- * bindings — without a timeout the AFK CLI hangs forever waiting for
- * status or bootstrap to complete.
- *
- * 8 seconds (P-16/17) covers bootstrap/bootout which take ~50–500 ms
- * normally, with generous head-room for a slow XPC handshake, while
- * still being well inside user-perceptible "this is broken" territory.
- * The legacy LAUNCHCTL_LIST_TIMEOUT_MS kept 5 s for the read-only path;
- * we unify on 8 s so the same constant covers all callsites.
+ * give up. Re-export from the shared `SERVICE_TIMEOUT_MS` constant in
+ * `service/types.ts`.
  */
-export const LAUNCHCTL_TIMEOUT_MS = 8_000;
+export const LAUNCHCTL_TIMEOUT_MS = SERVICE_TIMEOUT_MS;
 
 

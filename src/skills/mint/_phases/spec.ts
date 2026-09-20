@@ -3,10 +3,8 @@
  * Forks a subagent to draft a detailed specification from the idea.
  */
 
-import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
-import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import { forkMintPhase } from './_fork-phase.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
@@ -43,45 +41,18 @@ export async function runSpecPhase(
     throw new Error('mint skill missing spec.md prompt');
   }
 
-  // `cwd` propagates the parent session's worktree to the forked subagent
-  // so its bash/grep run in the right working tree. Without this, two
-  // concurrent `afk interactive -w` terminals running /mint would have
-  // their spec subagents both spawn against the host's process.cwd().
-  // `parentReadRoots` (#547) widens the READ axis to the parent session's
-  // scope; writes stay confined to cwd.
-  const manager = new SubagentManager({
-    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
-    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
-    ...(traceWriter !== undefined ? { traceWriter } : {}),
-    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
-  });
-  const specHandle = await manager.forkSubagent({
-    parent: { sessionId: parentSessionId },
-    config: {
-      model: defaultSubagentModel,
-      systemPrompt: specPrompt,
-      apiKey: resolveCredentialForModel(defaultSubagentModel),
-    },
-    idPrefix: 'mint-spec',
-    agentType: 'mint-spec',
+  return forkMintPhase({
+    phaseName: 'spec',
+    phaseId: 'mint-spec',
+    systemPrompt: specPrompt,
+    inputMessage: `Create a detailed specification for: ${idea}`,
     phaseRole: 'read-only',
-    ...(skillCallId ? { parentId: skillCallId } : {}),
+    parentSessionId,
+    parentCwd,
+    skillCallId,
+    model: defaultSubagentModel,
+    parentReadRoots,
+    traceWriter,
+    workspaceStore,
   });
-
-  const specResult = await specHandle.runToResult(`Create a detailed specification for: ${idea}`);
-
-  if (specResult.status !== 'succeeded' || !specResult.message) {
-    throw new Error(`spec phase failed: ${describeFailure(specResult)}`);
-  }
-  // A `succeeded` result can still be an incomplete partial — the tool-use cap
-  // fired or the stream closed without a terminal message. Its `.message.content`
-  // is a truncated placeholder, not the real spec; the phase output feeds the
-  // next phase programmatically, so hard-fail rather than forward a partial.
-  if (isIncompleteStopReason(specResult.stopReason)) {
-    throw new Error(
-      `spec phase returned an incomplete result (stopReason=${specResult.stopReason})`,
-    );
-  }
-
-  return specResult.message.content;
 }

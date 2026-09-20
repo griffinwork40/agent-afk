@@ -70,6 +70,7 @@ describe('interactive bootstrap status line hooks', () => {
       // Required since bootstrap.ts now calls isGrantManager — return false so
       // the pre-existing tests don't care about grant wiring.
       isGrantManager: vi.fn(() => false),
+      activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./status-line.js', () => ({
       StatusLine: vi.fn(() => statusLine),
@@ -226,6 +227,7 @@ function applyCommonMocks(): void {
     // Required since bootstrap.ts now calls isGrantManager — return false so
     // these tests don't care about grant wiring.
     isGrantManager: vi.fn(() => false),
+    activateDumpPrompt: vi.fn(),
   }));
   vi.doMock('./status-line.js', () => ({
     StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
@@ -405,6 +407,7 @@ describe('interactive command exit teardown', () => {
       getApiKey: vi.fn(() => undefined),
       getApiKeyForModel: vi.fn(() => undefined),
       explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
+      activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./session-store.js', () => ({
       saveSession: vi.fn(),
@@ -551,6 +554,7 @@ describe('interactive worktree flag', () => {
       getApiKey: vi.fn(() => undefined),
       getApiKeyForModel: vi.fn(() => undefined),
       explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
+      activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./session-store.js', () => ({
       saveSession: vi.fn(),
@@ -985,6 +989,7 @@ describe('interactive signal-handler wiring (PR #486)', () => {
       getApiKey: vi.fn(() => undefined),
       getApiKeyForModel: vi.fn(() => undefined),
       explicitProviderHints: vi.fn((p) => p ? { explicit: p } : undefined),
+      activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./session-store.js', () => ({ saveSession: vi.fn() }));
     vi.doMock('./commands/interactive/transcript.js', () => ({
@@ -1251,6 +1256,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
           typeof obj['getGrants'] === 'function'
         );
       },
+      activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./status-line.js', () => ({
       StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),

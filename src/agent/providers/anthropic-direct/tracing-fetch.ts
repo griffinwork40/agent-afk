@@ -33,28 +33,12 @@ import type { TraceSink } from '../../trace/index.js';
 import { emitSessionPhase } from '../../trace/emit.js';
 import { parseRetryAfterMs } from './usage-limit.js';
 import { estimateInputTokens } from '../shared/rate-limit-bucket.js';
+import { THROTTLE_STATUSES } from '../shared/tracing-fetch-utils.js';
+import type { ThrottleInfo, RateLimitGate } from '../shared/tracing-fetch-utils.js';
 
-/** HTTP statuses that indicate throttling / transient overload. */
-const THROTTLE_STATUSES = new Set([429, 503, 529]);
-
-/**
- * Structured throttle observation handed to the {@link makeTracingFetch}
- * `onThrottle` callback. `retryAfterMs` is the parsed `retry-after` header when
- * present; `status` is the throttled HTTP status.
- */
-export interface ThrottleInfo {
-  status: number;
-  retryAfterMs?: number;
-}
-
-/**
- * Admission gate interface. The fetch wrapper calls `acquirePermit` before
- * every outbound request and `freeze` when a 429 arrives.
- */
-export interface RateLimitGate {
-  acquirePermit(estimatedInputTokens: number, signal?: AbortSignal): Promise<void>;
-  freeze(retryAfterMs: number): void;
-}
+// Re-export shared types so existing importers of this module's public surface
+// (e.g. openai-compatible/tracing-fetch, tests) continue to compile unchanged.
+export type { ThrottleInfo, RateLimitGate };
 
 /**
  * Wrap a `fetch` implementation so throttled responses (429/503/529) emit a

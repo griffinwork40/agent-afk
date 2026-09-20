@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { env } from '../../config/env.js';
 import { getPromptsDir } from '../../paths.js';
 import { reportArtifactFailure } from '../../utils/artifact-failure-reporter.js';
+import { escapeShellString } from '../../utils/shell-escape.js';
 import { redactInlineSecrets } from './prompt-dump.js';
 
 /**
@@ -99,7 +100,7 @@ function safeSlug(value: string): string {
 
 /** Escape a YAML scalar conservatively — quote and escape embedded quotes. */
 function yamlString(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return `"${escapeShellString(value)}"`;
 }
 
 /**

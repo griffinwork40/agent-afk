@@ -18,33 +18,17 @@
  */
 
 import { estimateInputTokens } from '../shared/rate-limit-bucket.js';
-import type { ThrottleInfo } from '../anthropic-direct/tracing-fetch.js';
-
-/** HTTP statuses that indicate throttling or transient server overload. */
-const THROTTLE_STATUSES = new Set([429, 503, 529]);
+import { parseRetryAfterMs } from '../shared/retry-after.js';
+import { THROTTLE_STATUSES } from '../shared/tracing-fetch-utils.js';
+import type { ThrottleInfo, RateLimitGate } from '../shared/tracing-fetch-utils.js';
 
 /**
- * Admission gate interface. Same shape as the Anthropic gate, so the same
- * `globalRateLimitBucket` singleton satisfies both wires without a wrapper.
+ * Admission gate interface. Same shape as the shared `RateLimitGate`, so the
+ * same `globalRateLimitBucket` singleton satisfies both wires without a
+ * wrapper. Re-exported as `OpenAIRateLimitGate` for backward compatibility with
+ * any external code that imported this name.
  */
-export interface OpenAIRateLimitGate {
-  acquirePermit(estimatedInputTokens: number, signal?: AbortSignal): Promise<void>;
-  freeze(retryAfterMs: number): void;
-}
-
-/** Helper: parse `retry-after` (seconds or HTTP-date) to ms, or undefined. */
-function parseRetryAfterMs(headers: Headers): number | undefined {
-  const raw = headers.get('retry-after');
-  if (raw == null) return undefined;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n >= 0) return Math.round(n * 1_000);
-  const dateMs = Date.parse(raw);
-  if (!Number.isNaN(dateMs)) {
-    const delta = dateMs - Date.now();
-    if (delta >= 0) return delta;
-  }
-  return undefined;
-}
+export type { RateLimitGate as OpenAIRateLimitGate } from '../shared/tracing-fetch-utils.js';
 
 /**
  * Wrap a `fetch` implementation for the OpenAI-compatible provider. Returns
@@ -62,7 +46,7 @@ export function makeOpenAITracingFetch(
   baseFetch: typeof fetch = fetch,
   onThrottle?: (info: ThrottleInfo) => void,
   onRateLimit?: (headers: Headers) => void,
-  gate?: OpenAIRateLimitGate,
+  gate?: RateLimitGate,
 ): typeof fetch {
   if (!onThrottle && !onRateLimit && !gate) return baseFetch;
 
@@ -90,9 +74,11 @@ export function makeOpenAITracingFetch(
     }
 
     // Hard-freeze the bucket on 429 so concurrent waiters also back off.
+    // Uses the shared parseRetryAfterMs which checks retry-after-ms (ms) first,
+    // then retry-after (seconds), matching OpenAI's header convention.
     if (gate && res.status === 429) {
       try {
-        const retryMs = parseRetryAfterMs(res.headers);
+        const retryMs = parseRetryAfterMs({ headers: res.headers });
         gate.freeze(retryMs ?? 5_000);
       } catch {
         // ignore
@@ -102,7 +88,7 @@ export function makeOpenAITracingFetch(
     // Live throttle signal for the progress banner.
     if (onThrottle && THROTTLE_STATUSES.has(res.status)) {
       try {
-        const retryAfterMs = parseRetryAfterMs(res.headers);
+        const retryAfterMs = parseRetryAfterMs({ headers: res.headers });
         onThrottle({
           status: res.status,
           ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),

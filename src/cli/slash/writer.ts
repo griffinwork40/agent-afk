@@ -108,3 +108,20 @@ export function createConsoleWriter(sink?: WriterSink): Writer {
     error(text: string): void { writeLine(palette.error('✗ ') + text); },
   };
 }
+
+/**
+ * Writer backed by `process.stderr`. All output goes to stderr so it never
+ * corrupts a stdout NDJSON stream. Used by surfaces (e.g. `afk chat --post`)
+ * that need to surface progress or errors without mixing them with structured
+ * stdout data.
+ */
+export function createStderrWriter(): Writer {
+  return {
+    line(text = ''): void { process.stderr.write(`${text}\n`); },
+    raw(text: string): void { process.stderr.write(text); },
+    success(text: string): void { process.stderr.write(`✔ ${text}\n`); },
+    info(text: string): void { process.stderr.write(`ℹ ${text}\n`); },
+    warn(text: string): void { process.stderr.write(`⚠ ${text}\n`); },
+    error(text: string): void { process.stderr.write(`✖ ${text}\n`); },
+  };
+}

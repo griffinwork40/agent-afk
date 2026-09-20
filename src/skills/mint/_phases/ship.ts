@@ -3,14 +3,12 @@
  * Creates a summary and return result.
  */
 
-import { SubagentManager } from '../../../agent/subagent.js';
-import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
-import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
 import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
+import { forkMintPhase } from './_fork-phase.js';
+import { emitCard } from '../../_lib/emit-card.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
-import { emitCard } from '../../_lib/emit-card.js';
 import type { MintState } from '../index.js';
 
 export async function runShipPhase(
@@ -44,24 +42,6 @@ export async function runShipPhase(
 
   // Propagate parent worktree — ship subagent may run `git status`/`git
   // log` and needs to see the right working tree.
-  const manager = new SubagentManager({
-    ...(parentCwd !== undefined ? { cwd: parentCwd } : {}),
-    ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
-    ...(traceWriter !== undefined ? { traceWriter } : {}),
-    ...(workspaceStore !== undefined ? { workspaceStore } : {}),
-  });
-  const shipHandle = await manager.forkSubagent({
-    parent: { sessionId: parentSessionId },
-    config: {
-      model: defaultSubagentModel,
-      systemPrompt: shipPrompt,
-      apiKey: resolveCredentialForModel(defaultSubagentModel),
-    },
-    idPrefix: 'mint-ship',
-    agentType: 'mint-ship',
-    ...(skillCallId ? { parentId: skillCallId } : {}),
-  });
-
   const shipInput =
     `Idea: ${state.idea}\n\n` +
     `Specification:\n${state.spec}\n\n` +
@@ -71,20 +51,20 @@ export async function runShipPhase(
     `Heal iterations used: ${state.healIterations}\n\n` +
     `Create a ship-ready summary with next steps.`;
 
-  const shipResult = await shipHandle.runToResult(shipInput);
-
-  if (shipResult.status !== 'succeeded' || !shipResult.message) {
-    throw new Error(`ship phase failed: ${describeFailure(shipResult)}`);
-  }
-  // A `succeeded` result can still be an incomplete partial — the tool-use cap
-  // fired or the stream closed without a terminal message. Its `.message.content`
-  // is a truncated placeholder, not the real ship summary, so hard-fail before
-  // emitting the card or returning the partial as the phase output.
-  if (isIncompleteStopReason(shipResult.stopReason)) {
-    throw new Error(
-      `ship phase returned an incomplete result (stopReason=${shipResult.stopReason})`,
-    );
-  }
+  // No phaseRole — ship legitimately runs git commands and may emit output.
+  const summary = await forkMintPhase({
+    phaseName: 'ship',
+    phaseId: 'mint-ship',
+    systemPrompt: shipPrompt,
+    inputMessage: shipInput,
+    parentSessionId,
+    parentCwd,
+    skillCallId,
+    model: defaultSubagentModel,
+    parentReadRoots,
+    traceWriter,
+    workspaceStore,
+  });
 
   const filesChanged = state.buildResults?.filesChanged.length ?? 0;
   const healIters = state.healIterations;
@@ -99,5 +79,5 @@ export async function runShipPhase(
     ],
   });
 
-  return shipResult.message.content;
+  return summary;
 }
