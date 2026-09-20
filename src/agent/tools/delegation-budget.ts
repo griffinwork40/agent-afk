@@ -148,7 +148,7 @@ export class DelegationBudget {
           allowed: false,
           reason: 'max_concurrent_children_per_agent',
           detail:
-            `Agent ${parentId} has ${children} children running ` +
+            `This agent has ${children} children running ` +
             `(max ${maxConcurrentChildrenPerAgent}).`,
         };
       }

@@ -332,11 +332,11 @@ describe('buildBudgetRefusalMessage', () => {
     const check: BudgetCheckResult = {
       allowed: false,
       reason: 'max_concurrent_children_per_agent',
-      detail: 'Agent X has 3 children running (max 3).',
+      detail: 'This agent has 3 children running (max 3).',
     };
     const msg = buildBudgetRefusalMessage(check);
     expect(msg).toContain('Delegation budget exceeded');
-    expect(msg).toContain('Agent X');
+    expect(msg).toContain('This agent');
     expect(msg).toContain('Wait for a running child');
   });
 
