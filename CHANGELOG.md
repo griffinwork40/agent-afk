@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.222.8] - 2026-09-19
+
+### Fixed
+- use physical row count for cursor-follow targetBottomRow (#1831) (90124337)
+
 ## [5.222.7] - 2026-09-19
 
 ### Fixed
