@@ -3,6 +3,7 @@
  *
  * Extracted from `dispatcher.ts` to reduce nesting depth in the two execution
  * branches of the batch loop:
+ *  - {@link runParallelGates} — Phase 1 parallel pre-dispatch gates for safe calls.
  *  - {@link runConcurrentBatch} — `isConcurrencySafe` wave-admission loop.
  *  - {@link runSequentialBatch} — sequential (concurrency-unsafe) loop.
  *  - {@link reconcileOutcomes} — post-wave result writing from settled promises.
@@ -406,5 +407,53 @@ export async function runSequentialBatch(
     const result = await deps.executeCore(call);
     results[originalIndex] = result;
     deps.repeatFailureGuard.note(call, result);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — parallel pre-dispatch gates for concurrency-safe calls
+// ---------------------------------------------------------------------------
+
+/**
+ * Run pre-dispatch gates for concurrency-safe calls in parallel.
+ *
+ * Concurrency-safe tools (agent, skill, compose, read_file, glob, grep, etc.)
+ * have hooks that are independent: path-approval auto-denies forks without
+ * prompting, and the per-call state they read (permissions, read-only mode)
+ * is immutable within a turn. Running their gates in parallel eliminates the
+ * O(N * hookTime) serialization in Phase 1 for parallel subagent dispatches.
+ *
+ * Mutates `results[index]` and adds to `blocked` for any gated call.
+ */
+export async function runParallelGates(
+  indices: readonly number[],
+  calls: readonly ToolCall[],
+  results: ToolResult[],
+  blocked: Set<number>,
+  runGates: (call: ToolCall) => Promise<ToolResult | null>,
+): Promise<void> {
+  if (indices.length === 0) return;
+  const settled = await Promise.allSettled(
+    indices.map(async (i) => {
+      const gateResult = await runGates(calls[i]!);
+      return { index: i, gateResult };
+    }),
+  );
+  for (let s = 0; s < settled.length; s++) {
+    const outcome = settled[s]!;
+    if (outcome.status === 'fulfilled') {
+      if (outcome.value.gateResult) {
+        results[outcome.value.index] = outcome.value.gateResult;
+        blocked.add(outcome.value.index);
+      }
+    } else {
+      // Gate threw unexpectedly -- block the call.
+      const idx = indices[s]!;
+      results[idx] = {
+        content: `Pre-dispatch gate error: ${errorMessage(outcome.reason)}`,
+        isError: true,
+      };
+      blocked.add(idx);
+    }
   }
 }

@@ -39,6 +39,7 @@ import { RepeatFailureGuard } from './repeat-failure-guard.js';
 import {
   runConcurrentBatch,
   runSequentialBatch,
+  runParallelGates,
   stampBatchMetadata,
 } from './dispatcher.batch-process.js';
 import type { IndexedCall, BatchExecDeps } from './dispatcher.batch-process.js';
@@ -708,9 +709,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * tools. Unsafe tools run sequentially. Results are returned in the same
    * order as the input `calls` array regardless of completion order.
    *
-   * Hook ordering: PreToolUse fires sequentially for every call BEFORE any
-   * execution starts. Blocked calls get an immediate error result and are
-   * excluded from execution. PostToolUse fires per-tool after completion.
+   * Hook ordering: PreToolUse fires for every call BEFORE execution starts.
+   * For concurrency-safe calls (agent, skill, compose, reads), gates run in
+   * parallel since their hooks are independent; for unsafe calls (bash,
+   * write_file), gates run sequentially to preserve interactive-prompt
+   * ordering. Blocked calls get an immediate error result and are excluded
+   * from execution. PostToolUse fires per-tool after completion.
    *
    * Implementation: the two execution branches (concurrent wave-admission and
    * sequential loop) are extracted into {@link runConcurrentBatch} and
@@ -733,22 +737,48 @@ export class SessionToolDispatcher implements ToolDispatcher {
     const results: ToolResult[] = new Array(calls.length);
     const blocked = new Set<number>();
 
-    // Phase 1: sequential PreToolUse + permission for all calls.
+    // Phase 1: PreToolUse + permission gates for all calls.
     // Blocked calls get error results immediately and skip execution.
+    //
+    // Concurrency-safe calls run their gates in parallel: their hooks are
+    // independent (path-approval auto-denies forks without prompting, so
+    // no human interaction serializes them), and the per-call state they
+    // read (permissions, read-only-bash mode) is immutable within a turn.
+    // The repeat-circuit-breaker is sequential-sensitive, but for parallel
+    // calls the "consecutive" ordering is arbitrary (the model emitted
+    // them in one turn), and Phase 2's wave-admission loop already
+    // re-checks the repeat-failure guard before execution begins.
+    //
+    // Unsafe calls still run sequentially: their hooks MAY prompt (the
+    // path-approval hook on an interactive surface), so ordering matters.
+    const safeIndices: number[] = [];
+    const unsafeIndices: number[] = [];
     for (let i = 0; i < calls.length; i++) {
       const call = calls[i]!;
-
       if (call.signal.aborted) {
         results[i] = { content: 'Tool call aborted', isError: true, failureClass: abortFailureClass(call.signal) };
         blocked.add(i);
         continue;
       }
+      if (this.classifier(call.name, call.input)) {
+        safeIndices.push(i);
+      } else {
+        unsafeIndices.push(i);
+      }
+    }
 
-      const gateResult = await this.runPreDispatchGates(call);
+    // Gate concurrency-safe calls in parallel.
+    await runParallelGates(
+      safeIndices, calls, results, blocked,
+      (call) => this.runPreDispatchGates(call),
+    );
+
+    // Gate unsafe calls sequentially (may prompt on interactive surfaces).
+    for (const i of unsafeIndices) {
+      const gateResult = await this.runPreDispatchGates(calls[i]!);
       if (gateResult) {
         results[i] = gateResult;
         blocked.add(i);
-        continue;
       }
     }
 

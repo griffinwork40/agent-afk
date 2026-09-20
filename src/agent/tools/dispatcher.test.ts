@@ -1314,6 +1314,101 @@ describe('SessionToolDispatcher', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // executeBatch Phase 1 — parallel pre-dispatch gates for safe calls
+  // ---------------------------------------------------------------------------
+  describe('executeBatch Phase 1 — parallel gates for safe calls', () => {
+    const signal = new AbortController().signal;
+
+    function makeBatchCall(name: string, id?: string): ToolCall {
+      return {
+        id: id ?? `call-${name}`,
+        name,
+        input: name === 'echo' ? { message: name } : {},
+        signal,
+      };
+    }
+
+    it('runs PreToolUse hooks in parallel for concurrency-safe calls', async () => {
+      const hookTimeline: { name: string; phase: string; time: number }[] = [];
+      const origin = Date.now();
+      const registry = createHookRegistry();
+      registry.register('PreToolUse', async (ctx) => {
+        if (ctx.event !== 'PreToolUse') return {};
+        hookTimeline.push({ name: ctx.toolName, phase: 'start', time: Date.now() - origin });
+        await new Promise((r) => setTimeout(r, 50));
+        hookTimeline.push({ name: ctx.toolName, phase: 'end', time: Date.now() - origin });
+        return {};
+      });
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'read' })],
+          ['glob', async () => ({ content: 'glob' })],
+          ['grep', async () => ({ content: 'grep' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'glob', 'grep'] },
+        hookRegistry: registry,
+      });
+
+      const start = Date.now();
+      await dispatcher.executeBatch([
+        makeBatchCall('read_file', 'r1'),
+        makeBatchCall('glob', 'g1'),
+        makeBatchCall('grep', 'g2'),
+      ]);
+      const gateElapsed = Date.now() - start;
+
+      // With 3 calls each taking ~50ms hooks:
+      // Sequential would take ~150ms for gates alone.
+      // Parallel should take ~50ms for gates (then execution adds more).
+      // Allow generous margin but assert that gates overlapped.
+      const starts = hookTimeline.filter((e) => e.phase === 'start');
+      expect(starts).toHaveLength(3);
+      // All three starts should fire before any end — overlapping.
+      const allEnds = hookTimeline.filter((e) => e.phase === 'end');
+      const firstEnd = Math.min(...allEnds.map((e) => e.time));
+      const lastStart = Math.max(...starts.map((e) => e.time));
+      // In parallel, the last start fires before (or around) the first end.
+      // In sequential, lastStart would be ~100ms after firstEnd.
+      expect(lastStart).toBeLessThan(firstEnd + 20);
+    });
+
+    it('keeps unsafe calls sequential while safe calls run parallel', async () => {
+      const hookTimeline: { name: string; phase: string; time: number }[] = [];
+      const origin = Date.now();
+      const registry = createHookRegistry();
+      registry.register('PreToolUse', async (ctx) => {
+        if (ctx.event !== 'PreToolUse') return {};
+        hookTimeline.push({ name: ctx.toolName, phase: 'start', time: Date.now() - origin });
+        await new Promise((r) => setTimeout(r, 30));
+        hookTimeline.push({ name: ctx.toolName, phase: 'end', time: Date.now() - origin });
+        return {};
+      });
+
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'read' })],
+          ['bash', async () => ({ content: 'bash' })],
+        ]),
+        permissions: { allowedTools: ['read_file', 'bash'] },
+        hookRegistry: registry,
+      });
+
+      await dispatcher.executeBatch([
+        makeBatchCall('read_file', 'r1'),
+        makeBatchCall('bash', 'b1'),
+      ]);
+
+      // read_file is safe → parallel gates; bash is unsafe → sequential.
+      // Both should have their hooks run, just at different times.
+      const readEntries = hookTimeline.filter((e) => e.name === 'read_file');
+      const bashEntries = hookTimeline.filter((e) => e.name === 'bash');
+      expect(readEntries).toHaveLength(2); // start + end
+      expect(bashEntries).toHaveLength(2); // start + end
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // executeBatch onActivity — Phase 2 observed-activity reporting (issue #516 fix)
   // ---------------------------------------------------------------------------
   describe('executeBatch onActivity (Phase 2 observed-activity, issue #516 fix)', () => {
