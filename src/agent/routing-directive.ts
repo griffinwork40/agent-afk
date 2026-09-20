@@ -125,7 +125,7 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 - Where state was saved: <location>
 - What resumption requires: <prerequisites>
 
-Before emitting a terminal state, consider whether this session produced knowledge reusable across future sessions — a decision with rationale, a surprising debugging learning, a user preference or correction, or a non-obvious project convention. If so, call \`memory_update\` (target: "fact") before the terminal-state block. Do not force a write when there is nothing genuinely new — most sessions have nothing worth persisting, and that is fine.
+Before emitting a terminal state, consider whether this session produced knowledge reusable across future sessions — a decision with rationale, a surprising debugging learning, a user preference or correction, or a non-obvious project convention. If so, call \`memory_update\` (target: "fact") before the terminal-state block. Do not force a write when there is nothing genuinely new — many sessions have nothing worth persisting, and that is fine.
 
 Never end a turn mid-loop without one of these. The terminal-state heading must be the last block of the response, with no trailing prose after it.`;
 
