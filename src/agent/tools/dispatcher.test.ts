@@ -12,6 +12,7 @@ import type { CanUseTool } from '../types/sdk-types.js';
 import { createHookRegistry } from '../hook-registry.js';
 import { InMemoryTraceWriter } from '../trace/writer.js';
 import { REPEAT_FAILURE_REFUSAL_THRESHOLD } from './repeat-failure-guard.js';
+import { DENIAL_CIRCUIT_BREAKER_THRESHOLD } from './denial-circuit-breaker.js';
 
 function makeCall(overrides?: Partial<ToolCall>): ToolCall {
   return {
@@ -1412,10 +1413,11 @@ describe('SessionToolDispatcher', () => {
     });
 
     it('parallel path skips repeat-breaker — N identical safe calls all pass', async () => {
-      // Validates fix for Item 1: the parallel gate path passes parallelSafe:true
-      // which skips checkRepeatCircuitBreaker, so N < THRESHOLD identical safe
-      // calls all succeed without triggering the circuit breaker.
-      const N = REPEAT_CIRCUIT_BREAKER_THRESHOLD - 1;
+      // Validates the parallel gate path passes parallelSafe:true which skips
+      // checkRepeatCircuitBreaker. N = THRESHOLD: with the old sequential loop,
+      // the Nth call would trip the breaker; with the new parallel path it
+      // passes because the repeat-breaker counter is not incremented.
+      const N = REPEAT_CIRCUIT_BREAKER_THRESHOLD;
       const dispatcher = makeDispatcher({
         handlers: new Map([
           ['read_file', async () => ({ content: 'read' })],
@@ -1465,6 +1467,48 @@ describe('SessionToolDispatcher', () => {
       // The denial breaker threshold was not reached — content is a denial message,
       // not a denial-breaker escalation (which would carry failureClass 'denial-breaker').
       expect(results[1]?.failureClass).not.toBe('denial-breaker');
+    });
+
+    it('denial-breaker upgrade fires through the parallel gate path at threshold', async () => {
+      // Validates that the denial-breaker upgrade path (hook-block → denial-breaker)
+      // works correctly when gates run in parallel. Specifically:
+      //   - The hook blocks read_file calls with the containment denial reason.
+      //   - accountDenialBreakerPostGate runs sequentially after the parallel wave.
+      //   - At DENIAL_CIRCUIT_BREAKER_THRESHOLD consecutive denials, the last
+      //     result is upgraded from 'hook-block' to 'denial-breaker'.
+      const registry = createHookRegistry();
+      registry.register('PreToolUse', async (ctx) => {
+        if (ctx.event !== 'PreToolUse' || ctx.toolName !== 'read_file') return {};
+        return {
+          decision: 'block' as const,
+          reason: 'Sub-agent path access denied: /secret is outside the session\'s granted read roots',
+        };
+      });
+
+      // parentSessionId required: the denial breaker only fires for forked children.
+      const dispatcher = makeDispatcher({
+        handlers: new Map([
+          ['read_file', async () => ({ content: 'read' })],
+        ]),
+        permissions: { allowedTools: ['read_file'] },
+        hookRegistry: registry,
+        parentSessionId: 'parent-session-id',
+      });
+
+      // Submit exactly DENIAL_CIRCUIT_BREAKER_THRESHOLD identical read_file calls
+      // in one executeBatch so all gates run in parallel.
+      const calls = Array.from({ length: DENIAL_CIRCUIT_BREAKER_THRESHOLD }, (_, idx) =>
+        makeBatchCall('read_file', `r${idx}`),
+      );
+      const results = await dispatcher.executeBatch(calls);
+
+      // All should be errors (all hook-blocked).
+      for (const r of results) {
+        expect(r.isError).toBe(true);
+      }
+      // The last result should be upgraded to denial-breaker at the threshold.
+      const last = results[DENIAL_CIRCUIT_BREAKER_THRESHOLD - 1]!;
+      expect(last.failureClass).toBe('denial-breaker');
     });
   });
 

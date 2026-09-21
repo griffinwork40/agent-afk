@@ -51,6 +51,17 @@ export interface ToolResult {
   incompleteReason?: string;
   circuitBreaker?: boolean;
   failureClass?: ToolFailureClass;
+  /**
+   * The original `err.reason` from a `HookBlockedError`, preserved for
+   * post-parallel denial-breaker accounting. Non-model-visible metadata:
+   * never sent to the provider API. Set only on `hook-block` results
+   * produced by the parallel gate path (`parallelSafe: true`) so that
+   * `accountDenialBreakerPostGate` can inspect the original reason string
+   * without falling back to the composite `content` string.
+   *
+   * @internal
+   */
+  blockReason?: string;
   batchIndex?: number;
   batchSize?: number;
   render?: RenderHints;

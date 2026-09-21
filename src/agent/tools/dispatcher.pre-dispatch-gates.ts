@@ -441,6 +441,8 @@ export interface RunPreDispatchGatesOpts {
    * The sequential paths — the unsafe-call loop and the single `execute()` —
    * always use the default (false), so counter accounting stays sequential and
    * correct for those callers.
+   *
+   * @internal
    */
   parallelSafe?: boolean;
 }
@@ -509,7 +511,14 @@ export async function runPreDispatchGates(
         // the parallel-gate path — concurrent closures would race on the shared
         // counter. The caller (executeBatchImpl) handles denial accounting
         // sequentially after runParallelGates returns.
-        if (opts?.parallelSafe) return blockResult;
+        // Preserve err.reason as blockReason so accountDenialBreakerPostGate
+        // can pass the original reason string to isSubagentContainmentDenial
+        // rather than the composite content string (which could false-positive
+        // if injectContext also contains the containment-denial prefix).
+        if (opts?.parallelSafe) {
+          if (err.reason !== undefined) blockResult.blockReason = err.reason;
+          return blockResult;
+        }
         return recordForkReadDenial(call, err.reason, blockResult, deps);
       }
       throw err;

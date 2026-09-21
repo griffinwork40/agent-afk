@@ -48,9 +48,12 @@ export interface ExecuteBatchDeps {
   /**
    * Pre-dispatch gate chain (hooks, permissions, circuit breakers).
    * The `opts` parameter allows the parallel-gate path to pass
-   * `{ parallelSafe: true }` to skip race-prone read-modify-write counters
-   * (repeat-breaker and denial-breaker); those are accounted sequentially
-   * after the parallel wave via `accountDenialBreakerPostGate`.
+   * `{ parallelSafe: true }` to skip race-prone read-modify-write counters;
+   * the denial-breaker counter is accounted sequentially after the wave
+   * settles via `accountDenialBreakerPostGate`; the repeat-breaker is
+   * intentionally dropped (consecutive ordering is undefined for calls
+   * emitted in one model turn; Phase 2's wave-admission loop re-checks via
+   * the repeat-failure guard before execution).
    */
   runPreDispatchGates: (call: ToolCall, opts?: RunPreDispatchGatesOpts) => Promise<ToolResult | null>;
   /** Reset the denial-breaker on progress. */
@@ -171,15 +174,15 @@ export async function executeBatchImpl(
     // Only hook-block denials feed the denial breaker; permission-denied and
     // other gate results (bash-blocked, repeat-breaker) do not.
     if (blockResult.failureClass !== 'hook-block') continue;
-    // The reason string is not preserved on the ToolResult, but
-    // recordForkReadDenial only needs it to distinguish containment denials
-    // from other hook blocks via isSubagentContainmentDenial — it checks the
-    // reason that dispatchPreToolUse sets on HookBlockedError. The path-approval
-    // hook stamps the reason as the block message on the result's content, so
-    // we pass `blockResult.content` here as a best-effort proxy.
+    // Use the original err.reason preserved as blockReason when available —
+    // it is the exact string isSubagentContainmentDenial checks. Fall back
+    // to blockResult.content only when blockReason was not set (e.g. for
+    // hook blocks where err.reason was undefined), which preserves the old
+    // best-effort proxy behaviour without risk of false-positives from
+    // injectContext injecting the containment-denial prefix into content.
     results[i] = accountDenialBreakerPostGate(
       calls[i]!,
-      blockResult.content,
+      blockResult.blockReason ?? blockResult.content,
       blockResult,
       gateDeps,
     );
