@@ -111,6 +111,11 @@ export function createCanUseToolHook(options: {
   rules: ToolPermissionRules;
   /**
    * Called when a tool resolves to `ask`. If omitted, `ask` falls through as `allow`.
+   *
+   * Concurrency note: safe-classified tools run their gates in parallel
+   * (see dispatcher.execute-batch.ts), so `onAsk` may be invoked concurrently
+   * for multiple tool calls in the same batch. Implementations that hold shared
+   * mutable state (prompt queues, dedup maps, counters) must be concurrency-safe.
    */
   onAsk?: (ctx: CanUseToolContext) => Promise<PermissionDecision>;
   /**

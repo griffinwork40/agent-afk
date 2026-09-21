@@ -174,15 +174,16 @@ export async function executeBatchImpl(
     // Only hook-block denials feed the denial breaker; permission-denied and
     // other gate results (bash-blocked, repeat-breaker) do not.
     if (blockResult.failureClass !== 'hook-block') continue;
-    // Use the original err.reason preserved as blockReason when available —
-    // it is the exact string isSubagentContainmentDenial checks. Fall back
-    // to blockResult.content only when blockReason was not set (e.g. for
-    // hook blocks where err.reason was undefined), which preserves the old
-    // best-effort proxy behaviour without risk of false-positives from
-    // injectContext injecting the containment-denial prefix into content.
+    // Use the original err.reason preserved as blockReason — it is the exact
+    // string isSubagentContainmentDenial checks. When blockReason is undefined
+    // (err.reason was undefined), pass undefined rather than falling back to
+    // blockResult.content: the sequential path passes err.reason directly, and
+    // isSubagentContainmentDenial(undefined) returns false. Falling back to
+    // content would create an asymmetry because the composite content string
+    // includes injectContext, which could false-positive the sentinel check.
     results[i] = accountDenialBreakerPostGate(
       calls[i]!,
-      blockResult.blockReason ?? blockResult.content,
+      blockResult.blockReason,
       blockResult,
       gateDeps,
     );
