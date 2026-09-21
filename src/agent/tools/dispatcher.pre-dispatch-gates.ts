@@ -563,19 +563,30 @@ export async function runPreDispatchGates(
   // 2c-bis. Enforcing repeat-FAILURE guard (#723). Unlike the advisory
   // breaker above, this one stops execution: a call that has already failed
   // identically N times is refused with the prior error quoted back.
-  const failureRefusal = checkRepeatFailureGuard(
-    call,
-    repeatBreakerExemptTools,
-    deps.repeatFailureGuard,
-  );
-  if (failureRefusal) return failureRefusal;
+  // Skipped on the parallel-gate path for the same reason as checkRepeatCircuitBreaker
+  // above: consecutive ordering is undefined for parallel calls, so the
+  // read-modify-write state inside repeatFailureGuard is not safe to share
+  // across concurrent closures.
+  if (!opts?.parallelSafe) {
+    const failureRefusal = checkRepeatFailureGuard(
+      call,
+      repeatBreakerExemptTools,
+      deps.repeatFailureGuard,
+    );
+    if (failureRefusal) return failureRefusal;
+  }
 
   // 2d. OBSERVE-ONLY suspected-loop telemetry (forked children only). Records
   // the fingerprint and emits a `suspected_loop` trace signal on first
   // recurrence past threshold. Pure observability — never blocks, never
   // alters the result, never changes control flow. Runs after the repeat
   // breaker so a short-circuited call is not counted twice.
-  observeSuspectedLoop(call, deps);
+  // Skipped on the parallel-gate path: the loop detector is observe-only,
+  // so skipping it here loses no enforcing signal; the sequential path still
+  // runs it.
+  if (!opts?.parallelSafe) {
+    observeSuspectedLoop(call, deps);
+  }
 
   return null;
 }

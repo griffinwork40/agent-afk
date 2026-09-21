@@ -1357,7 +1357,7 @@ describe('SessionToolDispatcher', () => {
         makeBatchCall('glob', 'g1'),
         makeBatchCall('grep', 'g2'),
       ]);
-      const gateElapsed = Date.now() - start;
+      const totalElapsed = Date.now() - start;
 
       // With 3 calls each taking ~50ms hooks:
       // Sequential would take ~150ms for gates alone.
@@ -1372,10 +1372,10 @@ describe('SessionToolDispatcher', () => {
       // In parallel, the last start fires before (or around) the first end.
       // In sequential, lastStart would be ~100ms after firstEnd.
       expect(lastStart).toBeLessThan(firstEnd + 20);
-      // Structural upper bound: total elapsed for the gate phase must be well
+      // Structural upper bound: total elapsed time for executeBatch must be well
       // below the sequential worst-case (3 × 50ms = 150ms). 120ms gives a
       // generous margin for CI jitter while still confirming actual parallelism.
-      expect(gateElapsed).toBeLessThan(120);
+      expect(totalElapsed).toBeLessThan(120);
     });
 
     it('keeps unsafe calls sequential while safe calls run parallel', async () => {
@@ -1436,7 +1436,7 @@ describe('SessionToolDispatcher', () => {
       }
     });
 
-    it('denial-breaker state is updated sequentially after parallel gates complete', async () => {
+    it('permission-denied on parallel safe path does not feed denial breaker', async () => {
       // Validates fix for Item 2: post-parallel accountDenialBreakerPostGate
       // runs sequentially, so the denial breaker state is updated correctly
       // even though the gate closures ran in parallel.
@@ -1506,6 +1506,8 @@ describe('SessionToolDispatcher', () => {
       for (const r of results) {
         expect(r.isError).toBe(true);
       }
+      // Pre-threshold results retain hook-block failureClass.
+      expect(results[0]!.failureClass).toBe('hook-block');
       // The last result should be upgraded to denial-breaker at the threshold.
       const last = results[DENIAL_CIRCUIT_BREAKER_THRESHOLD - 1]!;
       expect(last.failureClass).toBe('denial-breaker');

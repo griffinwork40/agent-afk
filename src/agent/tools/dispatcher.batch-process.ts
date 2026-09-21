@@ -452,6 +452,7 @@ export async function runParallelGates(
       results[idx] = {
         content: `Pre-dispatch gate error: ${errorMessage(outcome.reason)}`,
         isError: true,
+        failureClass: 'permission-denied',
       };
       blocked.add(idx);
     }

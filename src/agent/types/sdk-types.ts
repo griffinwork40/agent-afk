@@ -125,6 +125,14 @@ export type PermissionResult =
       decisionClassification?: PermissionDecisionClassification;
     };
 
+/**
+ * Permission callback invoked before each tool use.
+ *
+ * Contract: implementations may be invoked **concurrently** for safe-classified
+ * tools (those that pass the parallel-gate path in the dispatcher). Implementations
+ * must therefore be concurrency-safe — in particular, interactive `onAsk` callbacks
+ * that prompt the user must not assume sequential invocation order.
+ */
 export type CanUseTool = (
   toolName: string,
   input: Record<string, unknown>,
