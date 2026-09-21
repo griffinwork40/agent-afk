@@ -277,11 +277,12 @@ describe('formatStatusLine — priority-based shedding at narrow widths', () => 
   });
 
   it('never drops cwd even when all other droppable fields are shed (never-drop invariant)', () => {
-    // cwd has no droppablePriority (undefined = never-drop). At 30 cols, every
-    // droppable field (branch p1, cost p3, tokens p4, turn p6) is shed, but the
-    // cwd leaf — the "which project am I in?" signal — must survive in the output.
-    // Width 30 is chosen because formatCwd's 40% budget (12 cols) is sufficient
-    // to render /tmp/project in full once all droppables are gone.
+    // cwd has no droppablePriority (undefined = never-drop). At 16 cols, even
+    // model + cwd exceed the width after every droppable field (branch p1,
+    // cost p3, tokens p4, turn p6) is shed, so the final truncation path must
+    // preserve a recognizable portion of cwd. If cwd were accidentally given
+    // any droppable priority (including 0), the shed loop would remove it
+    // instead and leave only the model.
     const out = stripAll(formatStatusLine(
       {
         model: 'sonnet',
@@ -291,15 +292,15 @@ describe('formatStatusLine — priority-based shedding at narrow widths', () => 
         branch: 'feat/x',
         turnCount: 7,
       },
-      30,
+      16,
     ));
     // All droppable fields (branch p1, cost p3, tokens p4, turn p6) are shed.
     expect(out).not.toContain('feat/x');
     expect(out).not.toContain('$0.05');
     expect(out).not.toContain('tok');
     expect(out).not.toContain('turn');
-    // cwd (never-drop) must still be visible despite all other shedding.
-    expect(out).toContain('project');
+    // A truncated cwd (never-drop) must still be visible despite all other shedding.
+    expect(out).toContain('tmp/');
   });
 
   it('right-truncates the result at maxW after shedding all droppables', () => {
