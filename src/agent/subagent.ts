@@ -46,6 +46,7 @@ import { CompletedCache } from './subagent/completed-cache.js';
 import { SubagentLogWriter } from './subagent/log.js';
 import { wireProgressEvents } from './subagent/fork-progress-events.js';
 import { wireWorkspaceSubscriptions } from './subagent/workspace-subscription-wiring.js';
+import { makeForkTerminalHook } from './subagent/fork-terminal-hook.js';
 
 // Re-export types for public API
 export type { SubagentStatus, SubagentResult, SubagentTrace, SubagentHandle };
@@ -466,6 +467,21 @@ export class SubagentManager {
       const logWriter = SubagentLogWriter.isEnabled() && logSessionKey
         ? new SubagentLogWriter(logSessionKey, id)
         : undefined;
+      // Forward-reference ref: assigned immediately after handle construction,
+      // before any async tick that could fire _onTerminal.
+      const handleRef: { current: SubagentHandleImpl<T> | undefined } = { current: undefined };
+      const onTerminal = makeForkTerminalHook<T>(
+        {
+          id,
+          stopOccupancyHeartbeat,
+          outputEventSink: this.outputEventSink,
+          activeMap: this.active,
+          abortGraph: this.abortGraph,
+          logWriter,
+          completedCache: this.completed,
+        },
+        handleRef,
+      );
       handle = new SubagentHandleImpl<T>(
         id,
         session,
@@ -477,40 +493,7 @@ export class SubagentManager {
         // drift. Unchanged behaviour: this still aborts a wedged child on schedule.
         effectiveTimeoutMs,
         registry,
-        () => {
-          // Runs on every terminal outcome of the child — success, failure,
-          // timeout, and abort — so it is the settle hook the heartbeat's
-          // teardown belongs on.
-          stopOccupancyHeartbeat();
-          // Emit subagent_lifecycle terminal event into the parent output stream.
-          // handle._currentStatus is already set before _onTerminal fires.
-          const rawStatus = handle._currentStatus;
-          const terminalStatus: 'succeeded' | 'failed' | 'cancelled' =
-            rawStatus === 'succeeded' || rawStatus === 'failed' || rawStatus === 'cancelled'
-              ? rawStatus : 'succeeded';
-          this.outputEventSink?.({
-            type: 'subagent_lifecycle',
-            subagentId: id,
-            status: terminalStatus,
-            ...(handle._lastDurationMs !== undefined ? { durationMs: handle._lastDurationMs } : {}),
-            ...(handle._currentTrace.turnCount > 0 ? { turnCount: handle._currentTrace.turnCount } : {}),
-            ...(handle._lastStopReason !== undefined ? { stopReason: handle._lastStopReason } : {}),
-          });
-          this.active.delete(id);
-          this.abortGraph.dispose(id);
-          void logWriter?.close();
-          // Populate the completed cache so manager.get(id) keeps working
-          // after the handle leaves the active map. All handle state fields
-          // (_currentStatus, _currentTrace, _lastStopReason) are fully set
-          // by run() before _onTerminal() fires.
-          this.completed.recordHandle(
-            id,
-            handle as SubagentHandle<unknown>,
-            handle._currentStatus,
-            handle._currentTrace,
-            handle._lastStopReason,
-          );
-        },
+        onTerminal,
         parentInputStreamRef,
         parentAbortSignal,
         // agentType: explicit override → idPrefix fallback. Lets callers
@@ -542,6 +525,7 @@ export class SubagentManager {
         // is not set. Runs concurrently with the wall-clock budget above.
         options.config.idleTimeoutMs ?? resolveSubagentIdleTimeoutMs(),
       );
+      handleRef.current = handle;
       if (logWriter) handle._logWriter = logWriter;
       bindProgressHandle(handle as SubagentHandleImpl<unknown>);
       wsSubs.bindHandle(handle as SubagentHandleImpl<unknown>);
