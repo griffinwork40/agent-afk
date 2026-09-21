@@ -220,7 +220,7 @@ export const ENV_REGISTRY = [
     required: false,
     default: '8',
     example: '4',
-    category: 'model',
+    category: 'process',
   },
   {
     name: 'AFK_MAX_CONCURRENT_SUBAGENT_CALLS',
@@ -229,7 +229,7 @@ export const ENV_REGISTRY = [
     required: false,
     default: '8',
     example: '2',
-    category: 'model',
+    category: 'process',
   },
   {
     name: 'AFK_MAX_CONCURRENT_BACKGROUND_JOBS',
@@ -238,7 +238,7 @@ export const ENV_REGISTRY = [
     required: false,
     default: '10',
     example: '5',
-    category: 'model',
+    category: 'process',
   },
   {
     name: 'AFK_MAX_NESTING_DEPTH',
