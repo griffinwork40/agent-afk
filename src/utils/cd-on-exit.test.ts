@@ -117,17 +117,19 @@ describe('cd-on-exit', () => {
     expect(readFileSync(realTarget, 'utf8')).toBe('target contents');
   });
 
-  // Windows: resolve('/x') → 'D:\x', mkdirSync('D:\') throws EPERM (cannot
-  // create root), masking the intended swallow-write-failure assertion.
-  it.skipIf(process.platform === 'win32')('recordCdIntent swallows write failures (e.g. read-only state dir)', () => {
+  it('recordCdIntent swallows write failures (e.g. read-only state dir)', () => {
     // Pre-create the state dir as a file, so mkdirSync({recursive: true})
     // on the parent succeeds but writeFileSync to last-cwd fails because
     // a path component is a file, not a directory.
     const stateDir = join(tmp, 'state');
     mkdirSync(dirname(stateDir), { recursive: true });
     writeFileSync(stateDir, 'not-a-dir', 'utf8');
+    // Use tmpdir()-relative absolute path instead of '/x' so that on Windows
+    // resolve() does not produce a drive-root path where mkdirSync throws
+    // EPERM, masking the intended swallow-write-failure assertion (#703).
+    const absoluteTarget = join(tmpdir(), 'afk-cd-swallow-test');
     // Should not throw — best-effort contract.
-    expect(() => recordCdIntent(resolve('/x'))).not.toThrow();
+    expect(() => recordCdIntent(absoluteTarget)).not.toThrow();
   });
 
   it('recordCdIntent rejects a relative path (would resolve against shell cwd)', () => {
