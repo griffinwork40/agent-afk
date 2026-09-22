@@ -6,7 +6,7 @@
  * No real compositor and no network — setModel is a spy.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Deterministic availability stub: "large"/"opus" are reported unavailable so
 // the non-TTY alias-list annotation test doesn't depend on real credentials.
@@ -18,6 +18,16 @@ vi.mock('../../../agent/auth/model-availability.js', () => ({
 // never hit the network; each /usage test sets its own resolved value.
 vi.mock('../../../agent/subscription-usage.js', () => ({
   fetchSubscriptionUsage: vi.fn(),
+}));
+
+// /history delegates to replayTurns — spy on it so tests can assert call args.
+// vi.mock factories are hoisted to the top of the file, so we use vi.hoisted()
+// to lift the stub declaration above the hoist boundary as well.
+const { mockReplayTurns } = vi.hoisted(() => ({
+  mockReplayTurns: vi.fn<typeof import('../../commands/interactive/turn-record-renderer.replay.js').replayTurns>(),
+}));
+vi.mock('../../commands/interactive/turn-record-renderer.replay.js', () => ({
+  replayTurns: mockReplayTurns,
 }));
 
 import { infoCommands } from './info.js';
@@ -308,5 +318,52 @@ describe('/usage', () => {
 
     const text = lines.join('\n');
     expect(text).toMatch(/claude login/);
+  });
+});
+
+const historyCmd = infoCommands.find((c) => c.name === '/history')!;
+
+describe('/history', () => {
+  beforeEach(() => {
+    mockReplayTurns.mockReset();
+  });
+
+  it('shows an info message when there are no turns', async () => {
+    const { ctx, lines } = makeCtx(false);
+    ctx.stats.turns = [];
+    await historyCmd.handler(ctx, '');
+    expect(lines.join('\n')).toMatch(/No conversation history yet/);
+    expect(mockReplayTurns).not.toHaveBeenCalled();
+  });
+
+  it('calls replayTurns with all turns when there are 3 turns and no arg', async () => {
+    const { ctx } = makeCtx(false);
+    const turns = [
+      { user: 'hello', assistant: 'hi' },
+      { user: 'question', assistant: 'answer' },
+      { user: 'bye', assistant: 'farewell' },
+    ] as import('../types.js').TurnRecord[];
+    ctx.stats.turns = turns;
+    await historyCmd.handler(ctx, '');
+    expect(mockReplayTurns).toHaveBeenCalledOnce();
+    const [calledRecords, , calledOpts] = mockReplayTurns.mock.calls[0]!;
+    expect(calledRecords).toBe(turns);
+    expect(calledOpts?.maxTurns).toBeUndefined();
+  });
+
+  it('passes maxTurns when a numeric argument is given (e.g. /history 2)', async () => {
+    const { ctx } = makeCtx(false);
+    const turns = [
+      { user: 'a', assistant: '1' },
+      { user: 'b', assistant: '2' },
+      { user: 'c', assistant: '3' },
+      { user: 'd', assistant: '4' },
+      { user: 'e', assistant: '5' },
+    ] as import('../types.js').TurnRecord[];
+    ctx.stats.turns = turns;
+    await historyCmd.handler(ctx, '2');
+    expect(mockReplayTurns).toHaveBeenCalledOnce();
+    const [, , calledOpts] = mockReplayTurns.mock.calls[0]!;
+    expect(calledOpts?.maxTurns).toBe(2);
   });
 });

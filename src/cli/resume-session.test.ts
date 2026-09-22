@@ -103,6 +103,35 @@ describe('resume-session', () => {
     expect(config.resumeHistory?.[0]?.assistant).toBe('hi there');
   });
 
+  it('propagates userContentBlocks and assistantContentBlocks when present', () => {
+    const stats = createSessionStats('sonnet');
+    const record = recordTurn(stats, 'hello', 'hi', { sessionId: 'sdk-blocks-resume' });
+    const userBlocks = [{ type: 'text' as const, text: 'hello' }];
+    const assistantBlocks = [{ type: 'text' as const, text: 'hi' }];
+    record.userContentBlocks = userBlocks;
+    record.assistantContentBlocks = assistantBlocks;
+    saveSession(stats, 'blocks-session');
+
+    const target = resolveResumeTarget({ resume: 'blocks-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.userContentBlocks).toEqual(userBlocks);
+    expect(config.resumeHistory?.[0]?.assistantContentBlocks).toEqual(assistantBlocks);
+  });
+
+  it('produces identical output for old TurnRecords without content blocks', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'hi', { sessionId: 'sdk-noblocks-resume' });
+    saveSession(stats, 'noblocks-session');
+
+    const target = resolveResumeTarget({ resume: 'noblocks-session' });
+    const config = resumeConfigFor(target);
+    expect(config.resumeHistory?.[0]?.userContentBlocks).toBeUndefined();
+    expect(config.resumeHistory?.[0]?.assistantContentBlocks).toBeUndefined();
+    // Text fields are unaffected
+    expect(config.resumeHistory?.[0]?.user).toBe('hello');
+    expect(config.resumeHistory?.[0]?.assistant).toBe('hi');
+  });
+
   it('null-guards turn.assistant — corrupted sidecar with null assistant yields empty string prefix', () => {
     // Simulate a corrupted sidecar where assistant is null at runtime
     const corruptedStored = {

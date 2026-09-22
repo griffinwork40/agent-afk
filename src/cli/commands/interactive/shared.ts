@@ -21,7 +21,7 @@ import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../render/context-sparkline.js';
 import { quotaWindowsFromSnapshot } from '../../quota-indicator.js';
 import { palette } from '../../palette.js';
-import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { replayTurns } from './turn-record-renderer.replay.js';
 
 /**
  * Result of a mid-session resume swap attempt.
@@ -105,139 +105,32 @@ export function resolveResumeCwd(
 }
 
 /**
- * Print a 2–3 line "where was I" cue immediately after the resume banner,
- * surfacing the LAST stored turn (user message + first sentence of the
- * assistant reply) so a human reorienting in a wiped terminal has context
- * to anchor on. Always closes with a pointer to `/history` for full
- * review — that command owns the real replay machinery.
+ * Print a full conversation replay immediately after the resume banner, so a
+ * human reorienting in a wiped terminal sees the entire prior exchange.
+ * Delegates the per-turn rendering to `replayTurns` (turn-record-renderer.replay.ts).
  *
- * Deliberately NOT a turn replay loop. A full replay would:
- *   (a) flood scrollback on long sessions (no size cap on stats.turns),
- *   (b) risk writing unsanitized ANSI/cursor-control sequences from
- *       prior tool output (ToolEvent.input/.result are raw SDK strings),
- *   (c) require correct ordering against the ReplRenderer compositor's
- *       arm/disarm lifecycle.
- * The banner sidesteps all three: bounded output, aggressive flattening,
- * and routing through the caller-supplied writer so each callsite picks
- * the right transport for its compositor state.
+ * Writer transport: caller passes `CompletionWriter` (mutable). At bootstrap
+ * the writer is `console.log` (compositor not yet armed); at mid-session
+ * /resume swap the writer is `compositor.commitAbove` (the persistent
+ * compositor is armed). Reading `.fn` lazily on each line means a swap
+ * mid-banner would still route correctly, though the banner runs synchronously
+ * so this is purely defensive.
  *
- * Writer transport: caller passes `CompletionWriter` (mutable). At
- * bootstrap the writer is `console.log` (compositor not yet armed); at
- * mid-session /resume swap the writer is `compositor.commitAbove` (the
- * persistent compositor is armed). Reading `.fn` lazily on each line
- * means a swap mid-banner would still route correctly, though the
- * banner runs synchronously so this is purely defensive.
- *
- * Best-effort: returns silently when `stats.turns` is empty (legacy
- * sidecars from before turn-record persistence, or stored sessions
- * with totalTurns > 0 but turns: []).
+ * Best-effort: returns silently when `stats.turns` is empty (legacy sidecars
+ * from before turn-record persistence, or stored sessions with totalTurns > 0
+ * but turns: []).
  */
 export function printResumeBanner(stats: SessionStats, writer: CompletionWriter): void {
   const turns = stats.turns;
   if (turns.length === 0) return;
 
-  // noUncheckedIndexedAccess: length>0 guarantees the access, but TS
-  // doesn't narrow, so guard explicitly.
-  const last = turns[turns.length - 1];
-  if (!last) return;
-
-  // Ordered pipeline (external constraint: each stage assumes its input
-  // is normalized by the prior stage):
-  //   1. flatten — collapse whitespace + strip ANSI control bytes
-  //   2. firstSentence — runs on flat text so newline-based sentence
-  //      detection is unnecessary, and version numbers / file extensions
-  //      (".ts", "v1.2") don't trip the terminator lookahead
-  //   3. truncate — hard upper bound regardless of upstream accuracy
-  const userSnippet = truncate(flatten(last.user), 80);
-  const assistantSnippet = truncate(firstSentence(flatten(last.assistant)), 120);
-
-  if (userSnippet.length > 0) {
-    writer.fn(palette.dim(`   Last: ${userSnippet}`));
-  }
-  if (assistantSnippet.length > 0) {
-    writer.fn(palette.dim(`   ↳ ${assistantSnippet}`));
-  }
-  writer.fn(palette.dim('   ↪ /history for full review'));
-}
-
-/**
- * Flatten whitespace + strip ANSI escape sequences. Both steps are
- * load-bearing:
- *
- *   - Whitespace flattening prevents stored multi-line assistant replies
- *     from spilling the banner into a wall of text. It also normalizes
- *     the input for downstream sentence detection — newline handling
- *     in `firstSentence` becomes unnecessary once flattened.
- *   - ANSI stripping defends against prior tool output (bash, etc.) that
- *     was stored verbatim with cursor-control sequences. Replaying those
- *     raw via writer.fn would corrupt terminal state — applying
- *     `palette.dim` styling AFTER stripping is safe because dim wraps
- *     the sanitized content, not raw bytes.
- *
- * Uses the canonical `stripEscapeSequences` from `utils/terminal-sanitize.ts`,
- * which strips OSC (including OSC-8 hyperlinks), DCS, PM, APC, SOS, 7-bit
- * CSI, 8-bit C1 CSI, and bare 2-byte ESC sequences as whole units.
- */
-function flatten(s: string): string {
-  // Order matters: strip ANSI first so any whitespace that surrounded a
-  // stripped escape gets collapsed by the subsequent whitespace pass.
-  // Reversing this order leaves "before \x1bM after" as "before  after"
-  // (double space) because the whitespace pass sees ESC-M as non-space
-  // and can't merge across it.
-  const stripped = stripEscapeSequences(s);
-  return stripped.replace(/\s+/g, ' ').trim();
-}
-
-/**
- * Return the first sentence of `s` (through the first `.`, `!`, or `?`
- * followed by whitespace or end-of-string), or the whole string when no
- * terminator is found.
- *
- * Two load-bearing constraints, both encoded as lookarounds:
- *
- *   - Negative lookbehind `(?<![A-Za-z]\.[A-Za-z])` — skips the
- *     terminator when it sits inside a letter-dot-letter abbreviation
- *     like `e.g.` or `i.e.`. Without this, the regex used to stop at
- *     "Use e.g." mid-prose. The pattern only matches abbreviations of
- *     the form `letter.letter` immediately before the terminator, so
- *     numeric tokens ("3.14", "v1.2") aren't shielded — they still
- *     terminate the sentence, which is the desired behavior for stored
- *     content that happens to embed version numbers.
- *
- *   - Positive lookahead `(?=\s|$)` — prevents stopping mid-token at
- *     dots inside file extensions ("middleware.ts") and abbreviations
- *     not followed by whitespace ("e.g.something").
- *
- * Caller MUST flatten first — newline handling is intentionally absent
- * because flattening eliminates them upstream.
- */
-function firstSentence(s: string): string {
-  const m = s.match(/^.*?(?<![A-Za-z]\.[A-Za-z])[.!?](?=\s|$)/);
-  return m ? m[0] : s;
-}
-
-/**
- * Hard-truncate `s` to `max` Unicode code points, replacing the tail
- * with `…` when truncation occurs. The ellipsis counts toward the max
- * so the returned string is always at most `max` code points wide.
- *
- * Iterates via `[...s]` (string iterator) rather than `s.slice(...)`
- * (UTF-16 code units) so emoji and other non-BMP characters aren't
- * split across a surrogate pair — slicing inside a surrogate pair
- * produces a malformed string with a lone surrogate, which most
- * terminals render as the replacement character (U+FFFD). The
- * iterator yields each code point as a single array element regardless
- * of UTF-16 width.
- *
- * Note: this is code-point-correct but NOT grapheme-cluster-correct.
- * Combining marks (`a\u0301` → `á`) and ZWJ emoji sequences
- * (`👨‍👩‍👧‍👦`) can still split mid-cluster. That would require
- * `Intl.Segmenter` — overkill for a bounded banner snippet.
- */
-function truncate(s: string, max: number): string {
-  const codePoints = [...s];
-  if (codePoints.length <= max) return s;
-  return codePoints.slice(0, max - 1).join('') + '…';
+  // Print a framed header, the full replay, then a closing footer. All
+  // output routes through writer.fn so the compositor transport (commitAbove
+  // at mid-session, console.log at bootstrap) is chosen by the caller — not
+  // hard-coded here. See the docblock above for the transport rationale.
+  writer.fn(palette.dim(`  ─── Resuming session (${turns.length} turn${turns.length === 1 ? '' : 's'}) ───`));
+  replayTurns(turns, writer.fn);
+  writer.fn(palette.dim('  ─── End of history ───'));
 }
 
 /**

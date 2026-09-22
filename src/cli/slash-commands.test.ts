@@ -347,7 +347,7 @@ describe('/history', () => {
   it('prints info when empty', async () => {
     const { ctx, lines } = makeCtx();
     await dispatch('/history', ctx);
-    expect(lines.join('\n')).toContain('No turns yet');
+    expect(lines.join('\n')).toContain('No conversation history yet');
   });
 
   it('lists turns with user and assistant previews', async () => {

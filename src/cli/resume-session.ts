@@ -60,6 +60,11 @@ export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Parti
             const entry: import('../agent/types.js').ResumeHistoryTurn = {
               user: turn.user,
               assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
+              // Propagate structured content blocks when available (added in v5.226).
+              // Old sidecars without these fields round-trip correctly — the field
+              // is simply absent and the provider falls back to the text-only path.
+              ...(turn.userContentBlocks ? { userContentBlocks: turn.userContentBlocks } : {}),
+              ...(turn.assistantContentBlocks ? { assistantContentBlocks: turn.assistantContentBlocks } : {}),
             };
             // Seed the last turn's token count so the context-overflow guard
             // (#1294) fires on the first resumed turn instead of being skipped.

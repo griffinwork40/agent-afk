@@ -16,10 +16,11 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { resolveEffort, resolveMaxTokens, resolveThinkingParam, resolveAnthropicTemperature } from './resolve-params.js';
+import { resolveEffort, resolveMaxTokens, resolveThinkingParam, resolveAnthropicTemperature, resumeHistoryToMessages } from './resolve-params.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
-import type { AgentConfig } from '../../types/config-types.js';
+import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { ThinkingConfig } from '../../types/sdk-types.js';
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 
 describe('resolveEffort', () => {
   // ── Auto-default to "max" on the allowlist ─────────────────────────────
@@ -304,5 +305,125 @@ describe('resolveThinkingParam', () => {
       type: 'adaptive',
     });
     expect(resolveThinkingParam({ type: 'disabled' }, 64_000)).toEqual({ type: 'disabled' });
+  });
+});
+
+describe('resumeHistoryToMessages', () => {
+  // ── Backward-compat: text-only path (pre-v5.226 sidecars) ─────────────
+
+  it('returns undefined for undefined or empty history', () => {
+    expect(resumeHistoryToMessages(undefined)).toBeUndefined();
+    expect(resumeHistoryToMessages([])).toBeUndefined();
+  });
+
+  it('produces alternating user/assistant text messages from old-sidecar turns (no contentBlocks)', () => {
+    const history: ResumeHistoryTurn[] = [
+      { user: 'q1', assistant: 'a1' },
+      { user: 'q2', assistant: 'a2' },
+    ];
+    const msgs = resumeHistoryToMessages(history);
+    expect(msgs).toEqual([
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+      { role: 'assistant', content: 'a2' },
+    ]);
+  });
+
+  it('skips empty user/assistant strings in text-only turns', () => {
+    const history: ResumeHistoryTurn[] = [{ user: 'q', assistant: '' }];
+    const msgs = resumeHistoryToMessages(history);
+    expect(msgs).toEqual([{ role: 'user', content: 'q' }]);
+  });
+
+  it('returns undefined when all turns have empty text and no content blocks', () => {
+    const history: ResumeHistoryTurn[] = [{ user: '', assistant: '' }];
+    expect(resumeHistoryToMessages(history)).toBeUndefined();
+  });
+
+  // ── Structured path: content blocks present (v5.226+ sidecars) ────────
+
+  it('uses assistantContentBlocks directly when present, preserving tool_use and thinking blocks', () => {
+    const assistantBlocks: ContentBlockParam[] = [
+      { type: 'thinking', thinking: 'my reasoning', signature: 'sig' },
+      { type: 'text', text: 'Here is the answer.' },
+      { type: 'tool_use', id: 'tu_1', name: 'bash', input: { command: 'ls' } },
+    ];
+    const userBlocks: ContentBlockParam[] = [
+      { type: 'tool_result', tool_use_id: 'tu_1', content: 'file.txt\n' },
+    ];
+    const history: ResumeHistoryTurn[] = [
+      {
+        user: 'fallback user text',
+        assistant: 'fallback assistant text',
+        assistantContentBlocks: assistantBlocks,
+        userContentBlocks: userBlocks,
+      },
+    ];
+    const msgs = resumeHistoryToMessages(history);
+    // user message should carry the structured blocks (tool_result), NOT the fallback string
+    expect(msgs![0]).toEqual({ role: 'user', content: userBlocks });
+    // assistant message should carry the full block array (thinking + text + tool_use)
+    expect(msgs![1]).toEqual({ role: 'assistant', content: assistantBlocks });
+  });
+
+  it('uses userContentBlocks independently even when assistantContentBlocks is absent', () => {
+    const userBlocks: ContentBlockParam[] = [
+      { type: 'text', text: 'structured user content' },
+    ];
+    const history: ResumeHistoryTurn[] = [
+      { user: 'fallback text', assistant: 'assistant text', userContentBlocks: userBlocks },
+    ];
+    const msgs = resumeHistoryToMessages(history);
+    expect(msgs![0]).toEqual({ role: 'user', content: userBlocks });
+    // assistant falls back to text since no assistantContentBlocks
+    expect(msgs![1]).toEqual({ role: 'assistant', content: 'assistant text' });
+  });
+
+  it('uses assistantContentBlocks independently even when userContentBlocks is absent', () => {
+    const assistantBlocks: ContentBlockParam[] = [
+      { type: 'text', text: 'structured assistant content' },
+    ];
+    const history: ResumeHistoryTurn[] = [
+      { user: 'user text', assistant: 'fallback', assistantContentBlocks: assistantBlocks },
+    ];
+    const msgs = resumeHistoryToMessages(history);
+    // user falls back to text
+    expect(msgs![0]).toEqual({ role: 'user', content: 'user text' });
+    expect(msgs![1]).toEqual({ role: 'assistant', content: assistantBlocks });
+  });
+
+  it('falls back to text when contentBlocks arrays are empty', () => {
+    const history: ResumeHistoryTurn[] = [
+      {
+        user: 'text user',
+        assistant: 'text assistant',
+        userContentBlocks: [],
+        assistantContentBlocks: [],
+      },
+    ];
+    const msgs = resumeHistoryToMessages(history);
+    expect(msgs).toEqual([
+      { role: 'user', content: 'text user' },
+      { role: 'assistant', content: 'text assistant' },
+    ]);
+  });
+
+  it('mixes structured and text-only turns across multi-turn history', () => {
+    const assistantBlocks: ContentBlockParam[] = [{ type: 'text', text: 'structured' }];
+    const history: ResumeHistoryTurn[] = [
+      { user: 'old q', assistant: 'old a' },          // text-only (old sidecar)
+      {
+        user: 'new q',
+        assistant: 'new a',
+        assistantContentBlocks: assistantBlocks,
+      },
+    ];
+    const msgs = resumeHistoryToMessages(history);
+    expect(msgs).toHaveLength(4);
+    expect(msgs![0]).toEqual({ role: 'user', content: 'old q' });
+    expect(msgs![1]).toEqual({ role: 'assistant', content: 'old a' });
+    expect(msgs![2]).toEqual({ role: 'user', content: 'new q' });
+    expect(msgs![3]).toEqual({ role: 'assistant', content: assistantBlocks });
   });
 });

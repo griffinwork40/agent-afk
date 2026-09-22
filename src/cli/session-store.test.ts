@@ -123,6 +123,32 @@ describe('session-store', () => {
     expect(sdkSessionIdFor('missing')).toBeUndefined();
   });
 
+  it('round-trips content blocks through save/load', () => {
+    const stats = createSessionStats('sonnet');
+    const userBlocks = [{ type: 'text' as const, text: 'what is 2+2?' }];
+    const assistantBlocks = [{ type: 'text' as const, text: '4' }];
+    const record = recordTurn(stats, 'what is 2+2?', '4', { sessionId: 'sdk-blocks' });
+    // Simulate Wave B capture by stamping the record directly (Wave B2 save path)
+    record.userContentBlocks = userBlocks;
+    record.assistantContentBlocks = assistantBlocks;
+
+    const path = saveSession(stats, 'block-test');
+    const loaded = loadSession(path);
+    expect(loaded).toBeDefined();
+    expect(loaded!.turns[0]!.userContentBlocks).toEqual(userBlocks);
+    expect(loaded!.turns[0]!.assistantContentBlocks).toEqual(assistantBlocks);
+  });
+
+  it('backward-compatible: turns without content blocks load without error', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'hi', { sessionId: 'sdk-noblock' });
+    const path = saveSession(stats, 'noblock-test');
+    const loaded = loadSession(path);
+    expect(loaded).toBeDefined();
+    expect(loaded!.turns[0]!.userContentBlocks).toBeUndefined();
+    expect(loaded!.turns[0]!.assistantContentBlocks).toBeUndefined();
+  });
+
   it('round-trips tool events through save/load', () => {
     const stats = createSessionStats('sonnet');
     const tools = [

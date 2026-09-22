@@ -173,6 +173,37 @@ describe('buildMessages', () => {
     ]);
   });
 
+  // OpenAI provider intentionally uses the text-only path for resume history
+  // even when structured content blocks are present on the turn. Converting
+  // Anthropic blocks (tool_use, tool_result, thinking) to OpenAI's wire format
+  // is non-trivial; structured replay is deferred (see messages.ts comment).
+  it('uses text-only fallback for turns that carry userContentBlocks / assistantContentBlocks', () => {
+    const m = buildMessages({
+      config: baseConfig({ systemPrompt: 'sys' }),
+      resumeHistory: [
+        {
+          user: 'text user',
+          assistant: 'text assistant',
+          userContentBlocks: [
+            { type: 'tool_result', tool_use_id: 'tu_1', content: 'result' } as never,
+          ],
+          assistantContentBlocks: [
+            { type: 'tool_use', id: 'tu_1', name: 'bash', input: {} } as never,
+            { type: 'text', text: 'done' } as never,
+          ],
+        },
+      ],
+      currentUserText: 'continue',
+    });
+    // Must use plain text, not the block arrays
+    expect(m).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'text user' },
+      { role: 'assistant', content: 'text assistant' },
+      { role: 'user', content: 'continue' },
+    ]);
+  });
+
   it('appends priorTurns after history but before current user turn', () => {
     const m = buildMessages({
       config: baseConfig(),

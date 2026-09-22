@@ -25,6 +25,7 @@ import {
 } from '../../../agent/session/model-slots.js';
 import { isValidModelArg } from '../../../agent/session/model-validate.js';
 import { runPicker } from '../../render/picker.js';
+import { replayTurns } from '../../commands/interactive/turn-record-renderer.replay.js';
 import type { SlashCommand, SlashContext } from '../types.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import { errorMessage } from '../../../utils/errors.js';
@@ -243,24 +244,19 @@ const tokensCmd: SlashCommand = {
 
 const historyCmd: SlashCommand = {
   name: '/history',
-  summary: 'Show conversation history',
-  async handler(ctx) {
+  usage: '/history [N]',
+  summary: 'Show conversation history (full replay; optionally limit to last N turns)',
+  hint: 'When you want to review recent conversation turns with full content. Pass a number to limit output: `/history 10` shows the last 10 turns.',
+  async handler(ctx, args) {
     const { stats, out } = ctx;
     if (stats.turns.length === 0) {
-      out.info('No turns yet in this session.');
+      out.info('No conversation history yet.');
       return 'continue';
     }
-    out.line();
-    out.line(palette.bold(`Session history  (${stats.turns.length} turn${stats.turns.length === 1 ? '' : 's'})`));
-    out.line(divider());
-    stats.turns.forEach((turn, i) => {
-      const idx = palette.meta(`#${i + 1}`);
-      const userPreview = turn.user.length > 100 ? turn.user.slice(0, 97) + '...' : turn.user;
-      const asstPreview = turn.assistant.length > 100 ? turn.assistant.slice(0, 97) + '...' : turn.assistant;
-      out.line(`  ${idx}  ${palette.user('▶')} ${userPreview}`);
-      out.line(`      ${palette.brand('◆')} ${palette.dim(asstPreview)}`);
-    });
-    out.line();
+    // Parse an optional numeric argument: `/history 20` shows last 20 turns.
+    const parsed = parseInt((args ?? '').trim(), 10);
+    const maxTurns = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+    replayTurns(stats.turns, (line) => out.line(line), { maxTurns });
     return 'continue';
   },
 };

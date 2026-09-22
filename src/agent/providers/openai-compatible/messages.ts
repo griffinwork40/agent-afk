@@ -263,6 +263,15 @@ export function buildMessages(args: {
 
   if (args.resumeHistory) {
     for (const turn of args.resumeHistory) {
+      // OpenAI provider uses the text-only path for resume history regardless of
+      // whether `userContentBlocks` / `assistantContentBlocks` are present on
+      // the turn. A full structured replay would require converting Anthropic
+      // content blocks to OpenAI's wire format — `tool_use` → `tool_calls` on
+      // the assistant message, `tool_result` → separate `tool` role messages,
+      // and stripping `thinking` blocks (unsupported by the Chat Completions
+      // API). That mapping is non-trivial and the text fallback is sufficient
+      // for the resume use-case (the model sees a concise summary rather than
+      // the raw tool ping-pong). Structured replay for this provider is deferred.
       if (turn.user) messages.push({ role: 'user', content: turn.user });
       if (turn.assistant) messages.push({ role: 'assistant', content: turn.assistant });
     }

@@ -42,6 +42,10 @@ export interface ResumeHistoryTurn {
    * Optional for backward compat — absent on history entries that predate the fix.
    */
   inputTokens?: number;
+  /** Structured content blocks from the API response. Optional; absent in pre-v5.226 sidecars. */
+  userContentBlocks?: import('@anthropic-ai/sdk/resources').ContentBlockParam[];
+  /** Structured content blocks from the API response. Optional; absent in pre-v5.226 sidecars. */
+  assistantContentBlocks?: import('@anthropic-ai/sdk/resources').ContentBlockParam[];
 }
 
 /**

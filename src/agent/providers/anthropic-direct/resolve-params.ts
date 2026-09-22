@@ -11,7 +11,7 @@
  * @module agent/providers/anthropic-direct/resolve-params
  */
 
-import type { MessageParam, ThinkingConfigParam } from '@anthropic-ai/sdk/resources';
+import type { ContentBlockParam, MessageParam, ThinkingConfigParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { EffortLevel, ThinkingConfig } from '../../types/sdk-types.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
@@ -122,14 +122,36 @@ export function resolveMaxTokens(config: AgentConfig, model: string): number {
   return ceiling;
 }
 
+/**
+ * Rebuild a `MessageParam[]` from persisted `ResumeHistoryTurn` records.
+ *
+ * Two paths:
+ *   - **Structured path** (new sidecars, v5.226+): when `assistantContentBlocks`
+ *     or `userContentBlocks` is present on the turn, the full typed block array
+ *     is used as the message `content`. This preserves `tool_use`, `thinking`,
+ *     `tool_result`, and `text` blocks so a resumed session can satisfy the
+ *     Anthropic API's structural constraints (e.g. every `tool_use` block on an
+ *     assistant turn must be paired with a `tool_result` in the following user
+ *     turn). Blocks are used as-is — no `summarizeToolEvents` append is needed
+ *     because the structured blocks already contain the tool information.
+ *   - **Text fallback** (pre-v5.226 sidecars): turns with no content-block
+ *     fields fall back to the legacy `{ role, content: string }` path so
+ *     backward compatibility is preserved across upgrades.
+ */
 export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined): MessageParam[] | undefined {
   if (!history || history.length === 0) return undefined;
   const messages: MessageParam[] = [];
   for (const turn of history) {
-    if (turn.user.length > 0) {
+    // User turn —— prefer structured blocks when present, else text fallback.
+    if (turn.userContentBlocks && turn.userContentBlocks.length > 0) {
+      messages.push({ role: 'user', content: turn.userContentBlocks as ContentBlockParam[] });
+    } else if (turn.user.length > 0) {
       messages.push({ role: 'user', content: turn.user });
     }
-    if (turn.assistant.length > 0) {
+    // Assistant turn —— prefer structured blocks when present, else text fallback.
+    if (turn.assistantContentBlocks && turn.assistantContentBlocks.length > 0) {
+      messages.push({ role: 'assistant', content: turn.assistantContentBlocks as ContentBlockParam[] });
+    } else if (turn.assistant.length > 0) {
       messages.push({ role: 'assistant', content: turn.assistant });
     }
   }
