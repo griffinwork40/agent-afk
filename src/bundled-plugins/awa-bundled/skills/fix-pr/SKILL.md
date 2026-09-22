@@ -74,7 +74,7 @@ This phase validates each spec item independently before any writes begin. The g
 
 **Fast-path:** if the numbered spec contains exactly 1 item, skip this phase entirely -- dispatch directly to Phase 3 with the raw spec item. The parallel wave's value is proportional to item count; for a single item the overhead exceeds the benefit.
 
-**For 2+ spec items:** dispatch N read-only sub-agents in parallel via the `agent` tool (one call per spec item in the same tool-use turn -- pure fan-out). `compose` now supports `agent_type`, `cwd`, `readRoots`, and `writeRoots` per node (so the read-only and worktree-scoping guarantees are NOT silently lost when using compose), but the `agent` fan-out is preferred here: it gives simpler rate-limiting control (see the rate note below) and each probe is truly independent with no DAG dependencies to model. If DAG dependency tracking between probes matters for a future extension, compose is a valid alternative -- just wire `agent_type: "research-agent"` and `cwd: <worktree path>` on each node. Each probe:
+**For 2+ spec items:** dispatch N read-only sub-agents in parallel via the `agent` tool (one call per spec item in the same tool-use turn -- pure fan-out). Do NOT use `compose` for this wave: compose passes `agent_type` as a display label only -- it does NOT resolve named agents through the agent registry, so tool-surface restrictions (e.g. research-agent's read-only enforcement) are silently lost. Until compose wires registry resolution (see #2000), only the `agent` tool enforces named-agent permissions. Each probe:
 
 - **agent_type:** `research-agent` (mechanically read-only -- cannot write files, run bash, or commit).
 - **cwd:** `<worktree path>` (so file reads target the PR branch, not the main working tree).
