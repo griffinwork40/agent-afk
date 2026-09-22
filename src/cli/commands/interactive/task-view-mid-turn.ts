@@ -208,12 +208,48 @@ export async function launchMidTurnTaskView(
   stdout.write(clamp(palette.dim('  Type a message + Enter to send, Esc to return')) + '\n');
   renderPrompt();
 
+  // Contract: content chunks are streaming token deltas (a few words each).
+  // Writing each chunk as its own line produces the one-word-per-line wrapping
+  // bug. Instead, buffer content into the current line and flush only when:
+  //   (a) the chunk contains a newline (model intended a line break), or
+  //   (b) a non-content event arrives (tool_use_detail, error, message).
+  // The buffer is also flushed on stream end and on Esc exit.
+  let lineBuf = '';
+
+  const flushLineBuf = (): void => {
+    if (!lineBuf) return;
+    stdout.write(`\r\x1b[K${clamp(lineBuf)}\n`);
+    lineBuf = '';
+    renderPrompt();
+  };
+
   try {
     for await (const event of handle.session.getOutputStream() as AsyncIterable<OutputEvent>) {
       if (signal.aborted) break;
+
+      // Content chunks: accumulate into lineBuf, flushing on embedded newlines.
+      if (event.type === 'chunk' && event.chunk.type === 'content') {
+        const raw = stripEscapeSequences(event.chunk.content);
+        const segments = raw.split('\n');
+        for (let i = 0; i < segments.length; i++) {
+          lineBuf += segments[i]!;
+          // Flush on every embedded newline (all segments except the last).
+          if (i < segments.length - 1) flushLineBuf();
+        }
+        // Live preview: show the in-progress line on the prompt row so the
+        // user sees text accumulate in real time (overwritten by renderPrompt
+        // or the next flushLineBuf). \r\x1b[K clears the prompt line first.
+        if (lineBuf) {
+          stdout.write(`\r\x1b[K${clamp(lineBuf)}`);
+        }
+        continue;
+      }
+
+      // Non-content event: flush any buffered content first, then emit the
+      // event on its own line (tool badges, errors are discrete lines).
+      flushLineBuf();
       const text = formatOutputEvent(event);
       if (text !== null) {
-        // Clear the input prompt line, write output, re-render prompt.
         stdout.write(`\r\x1b[K${clamp(text)}\n`);
         renderPrompt();
       }
@@ -221,6 +257,8 @@ export async function launchMidTurnTaskView(
   } catch {
     // Abort or stream error — exit cleanly.
   } finally {
+    // Flush any trailing content that didn't end with a newline.
+    flushLineBuf();
     process.stdin.removeListener('data', onData);
 
     if (!signal.aborted) {

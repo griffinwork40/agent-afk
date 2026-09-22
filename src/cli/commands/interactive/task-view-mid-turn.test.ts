@@ -254,6 +254,167 @@ describe('launchMidTurnTaskView width clamping', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Content chunk buffering (streaming word-wrap fix)
+// ---------------------------------------------------------------------------
+
+describe('content chunk buffering', () => {
+  it('joins streaming content chunks into continuous lines instead of one-word-per-line', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 80,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    // Capture the stdin 'data' listener so we can send Esc after the stream.
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    // Simulate streaming token deltas: the model sends a few words per chunk.
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: "I'll start" } };
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: ' by running' } };
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: ' a ground-state' } };
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: ' reconnaissance' } };
+        // A newline in the stream triggers a line break.
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: '\nSecond line here' } };
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+
+    const fakeManager = {
+      list: () => [{ id: 'sub-buf1', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    // Send Esc after the stream finishes so launchMidTurnTaskView exits.
+    void streamDone.then(() => {
+      setTimeout(() => {
+        if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+      }, 10);
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    const allOutput = written.join('');
+
+    // The full sentence should appear as one flushed line, not split per chunk.
+    expect(allOutput).toContain("I'll start by running a ground-state reconnaissance");
+    // The second line (after the embedded newline) should also be present.
+    expect(allOutput).toContain('Second line here');
+
+    // Critically: the words should NOT each be on separate lines.
+    const lines = allOutput.split('\n');
+    const singleWordLines = lines.filter(l => {
+      const stripped = l.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '').trim();
+      return stripped === "I'll start" || stripped === 'by running' || stripped === 'a ground-state';
+    });
+    expect(singleWordLines).toHaveLength(0);
+  });
+
+  it('flushes buffered content before non-content events', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 80,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Some text here' } };
+        // A tool_use_detail event should cause the buffered content to flush first.
+        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolName: 'bash', content: '' } };
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+
+    const fakeManager = {
+      list: () => [{ id: 'sub-buf2', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      setTimeout(() => {
+        if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+      }, 10);
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    const allOutput = written.join('');
+    // The buffered content line should appear before the tool badge.
+    const contentIdx = allOutput.indexOf('Some text here');
+    const toolIdx = allOutput.indexOf('[tool: bash]');
+    expect(contentIdx).toBeGreaterThan(-1);
+    expect(toolIdx).toBeGreaterThan(-1);
+    expect(contentIdx).toBeLessThan(toolIdx);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // renderPrompt suffix viewport (issue #1477)
 // ---------------------------------------------------------------------------
 
