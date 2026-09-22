@@ -422,10 +422,9 @@ describe('buildSpineTree', () => {
 
     const roots = buildSpineTree([agentTool, child] as TranscriptItem[]);
 
-    // No duplicate raw tool node at root level (i.e., no root with 0 children
-    // whose id matches the tool node).
-    const emptyToolRoots = roots.filter((n) => n.id === agentTool.id && n.children.length === 0);
-    expect(emptyToolRoots).toHaveLength(0);
+    // Claimed tool appears exactly once as a root (promoted with its child, not duplicated).
+    const toolRoots = roots.filter((n) => n.id === agentTool.id);
+    expect(toolRoots).toHaveLength(1);
   });
 
   it('handles multiple agent tools each claiming a different subagent', () => {
