@@ -20,39 +20,15 @@ import { loadConfig } from '../config.js';
 import type { ExecFileFn } from '../../agent/worktree/worktree-sweep.js';
 import { errorMessage } from '../../utils/errors.js';
 import { resolveRepoRoot } from '../../utils/git.js';
+import {
+  formatAge,
+  parseScope,
+  verdictWouldPrune,
+  buildVerdictTallyString,
+} from '../../agent/worktree/display.js';
+import type { Scope } from '../../agent/worktree/display.js';
 
 const execFile = promisify(execFileCallback) as ExecFileFn;
-
-
-function verdictWouldPrune(v: string): string {
-  // 'stale-clean' is preserved + warned by the sweep engine (commits ahead
-  // of base), so it renders as 'warn' alongside 'stale-dirty'.
-  if (['empty', 'orphaned-dir', 'orphaned-registration', 'dead-owner'].includes(v)) {
-    return palette.error('yes');
-  }
-  if (v === 'stale-dirty' || v === 'stale-clean') return palette.warning('warn');
-  return palette.success('no');
-}
-
-const VALID_SCOPES = ['interactive', 'diagnose', 'all'] as const;
-type Scope = (typeof VALID_SCOPES)[number];
-
-function parseScope(raw: string): Scope {
-  if ((VALID_SCOPES as readonly string[]).includes(raw)) return raw as Scope;
-  throw new Error(
-    `Invalid --scope value: '${raw}'. Allowed: ${VALID_SCOPES.join(' | ')}.`,
-  );
-}
-
-function formatAgeDays(ageMs: number): string {
-  if (ageMs <= 0) return '-';
-  const days = ageMs / 86_400_000;
-  if (days < 1) {
-    const hours = Math.max(1, Math.round(ageMs / 3_600_000));
-    return `${hours}h`;
-  }
-  return `${Math.round(days)}d`;
-}
 
 export function registerWorktreeCommand(program: Command): void {
   const worktree = program
@@ -96,7 +72,7 @@ export function registerWorktreeCommand(program: Command): void {
         const row = [
           c.path.slice(-44).padEnd(45),
           c.owner.padEnd(12),
-          formatAgeDays(c.ageMs).padEnd(6),
+          formatAge(c.ageMs).padEnd(6),
           c.verdict.padEnd(22),
           verdictWouldPrune(c.verdict),
         ].join(' | ');
@@ -193,18 +169,11 @@ export function registerWorktreeCommand(program: Command): void {
       // registration candidates aren't in `removed` (git worktree prune is
       // a separate batch call), so the old `candidates - removed - warned`
       // formula inflated the Skipped count.
-      const verdictTally: Record<string, number> = {};
-      for (const c of result.candidates) {
-        verdictTally[c.verdict] = (verdictTally[c.verdict] ?? 0) + 1;
-      }
       const warnCount = result.warnings.filter((w) => w.startsWith('[WARN]')).length;
       const errorCount = result.warnings.filter((w) => w.startsWith('[ERROR]')).length;
-      const tallyParts = Object.entries(verdictTally)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([v, n]) => `${v}=${n}`);
+      const tallyStr = buildVerdictTallyString(result.candidates);
       console.log(
-        `Removed: ${result.removed.length}, Warned: ${warnCount}, Errors: ${errorCount}` +
-          (tallyParts.length > 0 ? `  [${tallyParts.join(' ')}]` : ''),
+        `Removed: ${result.removed.length}, Warned: ${warnCount}, Errors: ${errorCount}${tallyStr}`,
       );
 
       for (const c of result.candidates) {

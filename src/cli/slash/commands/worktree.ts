@@ -26,47 +26,21 @@ import { promisify } from 'node:util';
 
 import { runSweep } from '../../../agent/worktree/worktree-sweep.js';
 import type { ExecFileFn, SweepOptions } from '../../../agent/worktree/worktree-sweep.js';
+import {
+  VALID_SCOPES,
+  PRUNABLE_VERDICTS,
+  formatAge,
+  verdictColor,
+  verdictWouldPrune,
+  buildVerdictTallyString,
+} from '../../../agent/worktree/display.js';
+import type { Scope } from '../../../agent/worktree/display.js';
 import { palette } from '../../palette.js';
 import type { SlashCommand, SlashContext, SlashResult, Writer } from '../types.js';
 import { errorMessage } from '../../../utils/errors.js';
 import { resolveRepoRoot } from '../../../utils/git.js';
 
 const execFile: ExecFileFn = promisify(execFileCallback) as ExecFileFn;
-
-const VALID_SCOPES = ['interactive', 'diagnose', 'all'] as const;
-type Scope = (typeof VALID_SCOPES)[number];
-
-// 'stale-clean' is intentionally absent: the sweep engine preserves + warns
-// on stale-clean (commits ahead of base) rather than removing.
-const PRUNABLE_VERDICTS = new Set([
-  'empty',
-  'orphaned-dir',
-  'orphaned-registration',
-  'dead-owner',
-]);
-
-const WARNING_VERDICTS = new Set([
-  'stale-clean',
-  'stale-dirty',
-]);
-
-
-function formatAge(ageMs: number): string {
-  if (ageMs <= 0) return '-';
-  const days = ageMs / 86_400_000;
-  if (days < 1) {
-    const hours = Math.max(1, Math.round(ageMs / 3_600_000));
-    return `${hours}h`;
-  }
-  return `${Math.round(days)}d`;
-}
-
-function verdictColor(verdict: string, text: string): string {
-  if (PRUNABLE_VERDICTS.has(verdict)) return palette.error(text);
-  if (WARNING_VERDICTS.has(verdict)) return palette.warning(text);
-  if (verdict === 'locked') return palette.dim(text);
-  return palette.dim(text);
-}
 
 interface ParsedArgs {
   scope: Scope;
@@ -164,11 +138,7 @@ async function renderList(
     const owner = c.owner.padEnd(12);
     const age = formatAge(c.ageMs).padEnd(5);
     const verdict = c.verdict.padEnd(22);
-    const wouldPrune = PRUNABLE_VERDICTS.has(c.verdict)
-      ? palette.error('yes')
-      : WARNING_VERDICTS.has(c.verdict)
-        ? palette.warning('warn')
-        : palette.dim('no');
+    const wouldPrune = verdictWouldPrune(c.verdict);
     const verdictColored = verdictColor(c.verdict, verdict);
     out.line(`${marker}${pathDisplay}  ${owner}  ${age}  ${verdictColored}  ${wouldPrune}`);
   }
@@ -259,29 +229,21 @@ async function handlePrune(ctx: SlashContext, args: string): Promise<SlashResult
     return 'continue';
   }
 
-  const verdictTally: Record<string, number> = {};
-  for (const c of result.candidates) {
-    verdictTally[c.verdict] = (verdictTally[c.verdict] ?? 0) + 1;
-  }
-  const tallyParts = Object.entries(verdictTally)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([v, n]) => `${v}=${n}`);
+  const tallyStr = buildVerdictTallyString(result.candidates);
 
   if (result.dryRun) {
     const prunableCount = result.candidates.filter((c) => PRUNABLE_VERDICTS.has(c.verdict)).length;
     ctx.out.line();
     ctx.out.line(
       palette.warning('🔍 Dry-run — pass --apply to actually remove.') +
-        ` Would prune ${prunableCount} worktree(s).` +
-        (tallyParts.length > 0 ? `  [${tallyParts.join(' ')}]` : ''),
+        ` Would prune ${prunableCount} worktree(s).${tallyStr}`,
     );
   } else {
     const warnCount = result.warnings.filter((w) => w.startsWith('[WARN]')).length;
     const errorCount = result.warnings.filter((w) => w.startsWith('[ERROR]')).length;
     ctx.out.line();
     ctx.out.success(
-      `Removed ${result.removed.length}, warned ${warnCount}, errors ${errorCount}` +
-        (tallyParts.length > 0 ? `  [${tallyParts.join(' ')}]` : ''),
+      `Removed ${result.removed.length}, warned ${warnCount}, errors ${errorCount}${tallyStr}`,
     );
   }
 
