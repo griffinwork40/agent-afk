@@ -123,44 +123,6 @@ export function resolveMaxTokens(config: AgentConfig, model: string): number {
 }
 
 /**
- * Verify that every `tool_use` block in an assistant turn's content has a
- * matching `tool_result` block (by `tool_use_id`) in the surrounding user
- * content blocks.
- *
- * The Anthropic Messages API requires every `tool_use` in an assistant turn to
- * be paired with a `tool_result` in an adjacent user turn. An unmatched
- * `tool_use` causes HTTP 400 — this occurs when the sidecar captured only the
- * assistant blocks for an interrupted turn (partial write) and the corresponding
- * `tool_result` blocks were never persisted.
- *
- * Sidecars may store the tool_result in the SAME turn's `userContentBlocks`
- * (emitted as the preceding user message) or in the NEXT turn's
- * `userContentBlocks` (emitted as the following user message), depending on
- * how the exchange was chunked. Both positions are checked.
- *
- * Returns `true` when every `tool_use` id is covered; `false` otherwise.
- */
-function hasValidToolUsePairing(
-  assistantBlocks: ContentBlockParam[],
-  currentUserBlocks: ContentBlockParam[] | undefined,
-  nextUserBlocks: ContentBlockParam[] | undefined,
-): boolean {
-  const toolUseIds = assistantBlocks
-    .filter((b): b is Extract<ContentBlockParam, { type: 'tool_use' }> => b.type === 'tool_use')
-    .map((b) => b.id);
-  if (toolUseIds.length === 0) return true; // no tool_use blocks — pairing is trivially satisfied
-  // Collect tool_result ids from both the current turn and the next turn.
-  const allCandidates = [...(currentUserBlocks ?? []), ...(nextUserBlocks ?? [])];
-  if (allCandidates.length === 0) return false;
-  const resultIds = new Set(
-    allCandidates
-      .filter((b): b is Extract<ContentBlockParam, { type: 'tool_result' }> => b.type === 'tool_result')
-      .map((b) => b.tool_use_id),
-  );
-  return toolUseIds.every((id) => resultIds.has(id));
-}
-
-/**
  * Rebuild a `MessageParam[]` from persisted `ResumeHistoryTurn` records.
  *
  * Two paths:
@@ -175,42 +137,20 @@ function hasValidToolUsePairing(
  *   - **Text fallback** (pre-v5.226 sidecars): turns with no content-block
  *     fields fall back to the legacy `{ role, content: string }` path so
  *     backward compatibility is preserved across upgrades.
- *
- * Pairing guard: before pushing a structured assistant turn, every `tool_use`
- * block must have a matching `tool_result` id in the next turn's
- * `userContentBlocks`. An unmatched `tool_use` causes HTTP 400 from the
- * Anthropic Messages API (e.g. interrupted turn with partial sidecar write).
- * On failure the turn falls back to the text path for both the assistant and
- * user messages.
  */
 export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined): MessageParam[] | undefined {
   if (!history || history.length === 0) return undefined;
   const messages: MessageParam[] = [];
-  for (let i = 0; i < history.length; i++) {
-    const turn = history[i]!;
-    const nextTurn: ResumeHistoryTurn | undefined = history[i + 1];
-
-    // Determine whether the structured assistant path is safe to use.
-    // The pairing guard: if the assistant blocks contain tool_use entries,
-    // every id must have a matching tool_result in either the current turn's
-    // userContentBlocks (preceding user message) or the next turn's
-    // userContentBlocks (following user message). Falls back to text on failure
-    // to prevent HTTP 400 from the Anthropic Messages API.
-    const assistantBlocks = turn.assistantContentBlocks;
-    const useStructuredAssistant =
-      assistantBlocks &&
-      assistantBlocks.length > 0 &&
-      hasValidToolUsePairing(assistantBlocks, turn.userContentBlocks, nextTurn?.userContentBlocks);
-
+  for (const turn of history) {
     // User turn —— prefer structured blocks when present, else text fallback.
     if (turn.userContentBlocks && turn.userContentBlocks.length > 0) {
       messages.push({ role: 'user', content: turn.userContentBlocks as ContentBlockParam[] });
     } else if (turn.user.length > 0) {
       messages.push({ role: 'user', content: turn.user });
     }
-    // Assistant turn —— use structured blocks only when pairing is valid, else text fallback.
-    if (useStructuredAssistant) {
-      messages.push({ role: 'assistant', content: assistantBlocks as ContentBlockParam[] });
+    // Assistant turn —— prefer structured blocks when present, else text fallback.
+    if (turn.assistantContentBlocks && turn.assistantContentBlocks.length > 0) {
+      messages.push({ role: 'assistant', content: turn.assistantContentBlocks as ContentBlockParam[] });
     } else if (turn.assistant.length > 0) {
       messages.push({ role: 'assistant', content: turn.assistant });
     }
