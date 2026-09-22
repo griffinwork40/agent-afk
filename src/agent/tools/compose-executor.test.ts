@@ -1211,6 +1211,74 @@ describe('ComposeExecutor', () => {
     });
   });
 
+  describe('wave manifest cwd recording', () => {
+    // Regression guard for the effectiveCwd path in compose-executor.ts (~line 766):
+    // the manifest buildWaveUnit call must use the per-node cwd when provided, and
+    // fall back to the parent session cwd otherwise. Without this, crash-recovery
+    // records the wrong working directory for nodes that supply their own cwd.
+    it('records per-node cwd in the wave manifest when set', async () => {
+      mockRunSubagentDAG.mockResolvedValue({
+        outputs: { a: 'ok', b: 'ok' },
+        failed: [],
+        skipped: [],
+      });
+
+      const executor = new ComposeExecutor(makeContext({ cwd: '/parent/worktree' }));
+      await executor.execute(makeCall({
+        nodes: [
+          { id: 'a', prompt: 'task a', cwd: '/repo/packages/web' },
+          { id: 'b', prompt: 'task b' },
+        ],
+      }));
+
+      // Manifest is created only for ≥2 nodes at depth 0 (the default).
+      expect(mockCreateManifest).toHaveBeenCalledOnce();
+
+      // buildWaveUnit is called once per node; order matches the nodes array.
+      expect(mockBuildWaveUnit).toHaveBeenCalledTimes(2);
+      const [callA, callB] = mockBuildWaveUnit.mock.calls as [
+        Parameters<typeof mockBuildWaveUnit>[0][],
+        Parameters<typeof mockBuildWaveUnit>[0][],
+      ];
+      // Node A: per-node cwd wins over the parent session cwd.
+      expect(callA[0].cwd).toBe('/repo/packages/web');
+      // Node B: no per-node cwd — falls back to the parent session cwd.
+      expect(callB[0].cwd).toBe('/parent/worktree');
+    });
+
+    it('records parent session cwd for all nodes when no per-node cwd is set', async () => {
+      mockRunSubagentDAG.mockResolvedValue({
+        outputs: { a: 'ok', b: 'ok' },
+        failed: [],
+        skipped: [],
+      });
+
+      const executor = new ComposeExecutor(makeContext({ cwd: '/parent/worktree' }));
+      await executor.execute(makeCall({
+        nodes: [
+          { id: 'a', prompt: 'task a' },
+          { id: 'b', prompt: 'task b' },
+        ],
+      }));
+
+      expect(mockBuildWaveUnit).toHaveBeenCalledTimes(2);
+      for (const [opts] of mockBuildWaveUnit.mock.calls as [Parameters<typeof mockBuildWaveUnit>[0]][]) {
+        expect(opts.cwd).toBe('/parent/worktree');
+      }
+    });
+
+    it('does not create a manifest for a single-node compose (solo dispatch skips manifest)', async () => {
+      mockRunSubagentDAG.mockResolvedValue({ outputs: { a: 'ok' }, failed: [], skipped: [] });
+
+      const executor = new ComposeExecutor(makeContext({ cwd: '/parent/worktree' }));
+      await executor.execute(makeCall({
+        nodes: [{ id: 'a', prompt: 'task a', cwd: '/repo/packages/web' }],
+      }));
+
+      expect(mockCreateManifest).not.toHaveBeenCalled();
+    });
+  });
+
   describe('witness trace threading', () => {
     // Regression: compose DAG nodes never set config.traceWriter, so without
     // manager-level threading their subagent_lifecycle events silently
