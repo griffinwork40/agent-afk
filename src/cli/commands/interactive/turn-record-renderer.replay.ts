@@ -156,6 +156,8 @@ export function replayTurns(
       const summary = summarizeToolEvents(turn.toolEvents);
       if (summary.length > 0) {
         // summarizeToolEvents returns a string starting with \n — strip it.
+        // Sanitize: tool names/inputs from the sidecar may contain terminal
+        // control sequences (CSI/OSC) that would corrupt the display.
         const trimmed = stripEscapeSequences(summary.replace(/^\n/, ''));
         writer(palette.dim(`  ${trimmed}`));
       }
