@@ -474,7 +474,9 @@ export class SubagentManager {
         {
           id,
           stopOccupancyHeartbeat,
-          outputEventSink: this.outputEventSink,
+          // Resolve at termination time so setOutputEventSink() retains its
+          // documented late-binding/replacement semantics for in-flight forks.
+          getOutputEventSink: () => this.outputEventSink,
           activeMap: this.active,
           abortGraph: this.abortGraph,
           logWriter,

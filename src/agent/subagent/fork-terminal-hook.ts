@@ -1,5 +1,5 @@
 /**
- * Factory for the idempotent `_onTerminal` callback attached to every forked
+ * Factory for the per-run idempotent `_onTerminal` callback attached to every forked
  * subagent handle.
  *
  * The callback runs on every terminal outcome (success, failure, timeout,
@@ -22,7 +22,7 @@ import type { SubagentTrace, SubagentStatus } from './result.js';
 export interface ForkTerminalDeps {
   id: string;
   stopOccupancyHeartbeat: () => void;
-  outputEventSink: ((event: OutputEvent) => void) | undefined;
+  getOutputEventSink: () => ((event: OutputEvent) => void) | undefined;
   activeMap: Map<string, unknown>;
   abortGraph: AbortGraph;
   logWriter: { close(): void } | undefined;
@@ -38,7 +38,9 @@ export interface ForkTerminalDeps {
 }
 
 /**
- * Create an idempotent `_onTerminal` callback for a forked subagent handle.
+ * Create a per-run idempotent `_onTerminal` callback for a forked subagent
+ * handle. A handle may be run more than once, so deduplication is keyed by the
+ * trace object created for each run rather than by the lifetime of the handle.
  *
  * Pass a `{ current }` ref whose `.current` is assigned the handle immediately
  * after `SubagentHandleImpl` is constructed — before the first async tick that
@@ -48,21 +50,22 @@ export function makeForkTerminalHook<T>(
   deps: ForkTerminalDeps,
   ref: { current: SubagentHandleImpl<T> | undefined },
 ): () => void {
-  let fired = false;
+  const completedRuns = new WeakSet<SubagentTrace>();
   return () => {
-    if (fired) return;
-    fired = true;
+    const handle = ref.current!;
+    const trace = handle._currentTrace;
+    if (completedRuns.has(trace)) return;
+    completedRuns.add(trace);
 
     deps.stopOccupancyHeartbeat();
 
     // handle._currentStatus is already set before _onTerminal fires.
-    const handle = ref.current!;
     const rawStatus = handle._currentStatus;
     const terminalStatus: 'succeeded' | 'failed' | 'cancelled' =
       rawStatus === 'succeeded' || rawStatus === 'failed' || rawStatus === 'cancelled'
         ? rawStatus
         : 'succeeded';
-    deps.outputEventSink?.({
+    deps.getOutputEventSink()?.({
       type: 'subagent_lifecycle',
       subagentId: deps.id,
       status: terminalStatus,
