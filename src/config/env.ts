@@ -1954,8 +1954,43 @@ export type EnvObject = { readonly [K in (typeof ENV_REGISTRY)[number]['name']]:
  *   That's it — no manual getter needed.
  */
 const _envBase = {} as EnvObject;
+const _seenEnvNames = new Set<string>();
 for (const _entry of ENV_REGISTRY) {
   const _name = _entry.name; // close over name for the getter
+  // Invariant: three cross-cutting rules that hold for every iteration of this
+  // loop. Violating any of them silently corrupts the runtime env object in
+  // ways that are very hard to debug — no TypeScript error fires, no test
+  // catches it without a targeted assertion, and the damage only surfaces at
+  // call-site reads (wrong value, leaked credential, broken predicate).
+  //
+  // 1. UNIQUENESS — configurable:true means a second defineProperty call for
+  //    the same name SILENTLY REPLACES the first getter. If two registry entries
+  //    share a name the earlier one disappears with no error. The _seenEnvNames
+  //    Set below turns that silent replacement into a loud module-load Error so
+  //    a duplicate is caught at import time in every test and prod run, not
+  //    discovered later when a call site returns the wrong value.
+  //
+  // 2. SECRET → NON-ENUMERABLE coupling — entry.secret === true MUST produce
+  //    enumerable:false. If the expression is wrong (e.g. inverted), secret vars
+  //    appear in Object.keys(env), JSON.stringify(env), and for..in env, leaking
+  //    API keys into logs, debug dumps, and serialized config snapshots. The
+  //    current expression is !('secret' in _entry && _entry.secret), which is
+  //    false (non-enumerable) for secret entries and true (enumerable) for all
+  //    others. Never simplify this to a boolean cast without re-verifying the
+  //    polarity — the semantics are: secret=true → hidden from enumeration.
+  //
+  // 3. isPlainOutputRequested() coupling — the exported isPlainOutputRequested()
+  //    function reads env.AFK_PLAIN_OUTPUT by name. If AFK_PLAIN_OUTPUT is ever
+  //    renamed in ENV_REGISTRY without updating that function's string literal,
+  //    the function silently returns false for every call site (TTY sessions that
+  //    set AFK_PLAIN_OUTPUT=1 never enter plain-output mode). The three render
+  //    sites that gate on it (repl-renderer.ts, input-surface.ts,
+  //    stream-renderer.ts) all fail open (normal overlay mode) with no error.
+  //    Keep the name 'AFK_PLAIN_OUTPUT' in sync with the function literal.
+  if (_seenEnvNames.has(_name)) {
+    throw new Error(`env.ts: duplicate ENV_REGISTRY entry for '${_name}' — configurable:true would silently replace the first getter`);
+  }
+  _seenEnvNames.add(_name);
   Object.defineProperty(_envBase, _name, {
     // process.env reads stay in src/config/env.ts per audit-env-access.ts constraint.
     get(): string | undefined { return process.env[_name]; },

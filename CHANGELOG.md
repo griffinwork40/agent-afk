@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.224.5] - 2026-09-22
+
+### Changed
+- add env registry uniqueness guard and invariant docs (#1930) (814d13e3)
+
 ## [5.224.4] - 2026-09-22
 
 ### Fixed
