@@ -331,6 +331,63 @@ describe('replayTurns — writer isolation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// UTF-16 surrogate safety
+// ---------------------------------------------------------------------------
+
+describe('replayTurns — surrogate-safe truncation', () => {
+  it('does not split UTF-16 surrogate pairs at the truncation boundary', () => {
+    // Build input where the truncation cut lands inside an emoji surrogate pair
+    const longText = 'a'.repeat(1499) + '🎉🎉🎉';
+    const { writer, lines } = makeCollector();
+    replayTurns([makeTurn({ assistant: longText })], writer);
+    const text = flat(lines);
+    // Should not contain the replacement character that lone surrogates produce
+    expect(text).not.toContain('\uFFFD');
+    // The output should contain at least one complete emoji (the code-point-aware
+    // slice should include the emoji that starts at position 1499)
+    expect(text).toContain('🎉');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Degenerate turns
+// ---------------------------------------------------------------------------
+
+describe('replayTurns — degenerate turns', () => {
+  it('skips a turn where both user and assistant are empty after normalization', () => {
+    const { writer, lines } = makeCollector();
+    replayTurns([
+      makeTurn({ user: '', assistant: '' }),
+      makeTurn({ user: 'real', assistant: 'content' }),
+    ], writer);
+    const text = flat(lines);
+    // The empty turn should NOT produce a separator, user header, or assistant header
+    // But the second real turn should render normally
+    expect(text).toContain('real');
+    expect(text).toContain('content');
+    // Count separators — should be 1 (for the real turn), not 2
+    const separators = lines.filter(l => strip(l).includes('─────'));
+    expect(separators).toHaveLength(1);
+  });
+
+  it('does not skip a turn where only the user is empty', () => {
+    const { writer, lines } = makeCollector();
+    replayTurns([makeTurn({ user: '', assistant: 'has content' })], writer);
+    const text = flat(lines);
+    expect(text).toContain('has content');
+    expect(text).toContain('(empty)');
+  });
+
+  it('does not skip a turn where only the assistant is empty', () => {
+    const { writer, lines } = makeCollector();
+    replayTurns([makeTurn({ user: 'has content', assistant: '' })], writer);
+    const text = flat(lines);
+    expect(text).toContain('has content');
+    expect(text).toContain('(empty)');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Stats footer
 // ---------------------------------------------------------------------------
 

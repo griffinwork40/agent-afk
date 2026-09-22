@@ -19,7 +19,7 @@
 
 import { palette } from '../../palette.js';
 import { summarizeToolEvents } from '../../summarize-tool-events.js';
-import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { sanitizeForDisplay, stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import type { TurnRecord } from '../../slash/types.js';
 
 // ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ export function replayTurns(
       // sequences from tool output embedded in prior responses.
       const stripped = stripEscapeSequences(assistantRaw);
       if (stripped.length > ASSISTANT_TRUNCATE_CHARS) {
-        const shown = stripped.slice(0, ASSISTANT_TRUNCATE_SHOW);
+        const shown = [...stripped].slice(0, ASSISTANT_TRUNCATE_SHOW).join('');
         emitIndented(shown, writer);
         writer(palette.dim(`    ... (truncated, ${stripped.length} chars total)`));
       } else {
@@ -158,7 +158,7 @@ export function replayTurns(
         // summarizeToolEvents returns a string starting with \n — strip it.
         // Sanitize: tool names/inputs from the sidecar may contain terminal
         // control sequences (CSI/OSC) that would corrupt the display.
-        const trimmed = stripEscapeSequences(summary.replace(/^\n/, ''));
+        const trimmed = sanitizeForDisplay(summary.replace(/^\n/, ''));
         writer(palette.dim(`  ${trimmed}`));
       }
     }
