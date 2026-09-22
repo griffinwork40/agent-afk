@@ -44,12 +44,16 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        // Static JS/CSS assets — short-lived cache with SWR
-        source: '/:path*.(css|js|mjs)',
+        // Next.js content-hashes every file under /_next/static/ at build time,
+        // so these assets are safe to cache for a full year (immutable).
+        // The old catch-all `/:path*.(css|js|mjs)` pattern also matched
+        // non-hashed files (e.g. /globals.css served directly), which are NOT
+        // safe to cache indefinitely — so we scope strictly to /_next/static/.
+        source: '/_next/static/:path*',
         headers: [
           {
             key: 'Cache-Control',
-            value: 'public, max-age=300, stale-while-revalidate=86400',
+            value: 'public, max-age=31536000, immutable',
           },
         ],
       },
