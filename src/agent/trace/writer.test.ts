@@ -267,14 +267,16 @@ describe('NdjsonTraceWriter', () => {
     await expect(readFile(writer.getTracePath(), 'utf8')).rejects.toThrow();
   });
 
-  it.skipIf(process.platform === 'win32')('process-exit backstop seals a real crashed subprocess (end-to-end wiring)', async () => {
-    // Spawns a subprocess via node_modules/.bin/tsx (a POSIX shell script) — POSIX-only (#703)
+  it('process-exit backstop seals a real crashed subprocess (end-to-end wiring)', async () => {
     const { spawnSync } = await import('node:child_process');
     const { fileURLToPath } = await import('node:url');
     const { writeFile: writeFileAsync } = await import('node:fs/promises');
     const here = dirname(fileURLToPath(import.meta.url));
     const writerSrc = join(here, 'writer.ts');
-    const tsxBin = join(here, '..', '..', '..', 'node_modules', '.bin', 'tsx');
+    // Use the .cmd wrapper on Windows; the POSIX shim is a shell script that
+    // cannot be spawned directly without `shell: true` on win32. (#1942)
+    const tsxBin = process.platform === 'win32' ? 'tsx.cmd' : 'tsx';
+    const tsxBinPath = join(here, '..', '..', '..', 'node_modules', '.bin', tsxBin);
 
     // Child: open a writer, write one event (flushed), then throw uncaught.
     // The throw must escape with no handler so Node fires 'exit' and the
@@ -292,10 +294,12 @@ describe('NdjsonTraceWriter', () => {
     );
 
     const childTraceDir = join(traceDir, 'child-trace');
-    const res = spawnSync(tsxBin, [childPath], {
+    const res = spawnSync(tsxBinPath, [childPath], {
       env: { ...process.env, CHILD_TRACE_DIR: childTraceDir },
       encoding: 'utf8',
       timeout: 30_000,
+      // On Windows, .cmd files must be invoked through the shell.
+      shell: process.platform === 'win32',
     });
     expect(res.status).toBe(1); // crashed (uncaught exception)
 
