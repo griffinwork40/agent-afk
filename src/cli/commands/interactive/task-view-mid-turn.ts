@@ -217,7 +217,10 @@ export async function launchMidTurnTaskView(
   let lineBuf = '';
 
   // Invariant: lineBuf never contains \n -- segments are split before accumulation.
-  const flushLineBuf = (): void => {
+  // `force` emits a blank line even when lineBuf is empty -- used for model-
+  // intended newlines so consecutive \n produce visible paragraph breaks.
+  const flushLineBuf = (force = false): void => {
+    if (!lineBuf && !force) return;
     stdout.write(`\r\x1b[K${lineBuf}\n`);
     lineBuf = '';
     renderPrompt();
@@ -234,7 +237,8 @@ export async function launchMidTurnTaskView(
         for (let i = 0; i < segments.length; i++) {
           lineBuf += segments[i]!;
           // Flush on every embedded newline (all segments except the last).
-          if (i < segments.length - 1) flushLineBuf();
+          // force=true preserves blank lines from consecutive \n.
+          if (i < segments.length - 1) flushLineBuf(true);
         }
         // Live preview: show the in-progress line on the prompt row so the
         // user sees text accumulate in real time (overwritten by renderPrompt
@@ -248,8 +252,11 @@ export async function launchMidTurnTaskView(
       // stream_retry: the model is re-streaming from scratch — discard the
       // stale in-progress buffer WITHOUT flushing so the old content is not
       // committed to the terminal. Matches the pattern in turn-handler.ts:455.
+      // Erase the stale live-preview text and restore the input prompt.
       if (event.type === 'stream_retry') {
         lineBuf = '';
+        stdout.write('\r\x1b[K');
+        renderPrompt();
         continue;
       }
 

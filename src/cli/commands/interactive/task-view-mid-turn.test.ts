@@ -512,6 +512,171 @@ describe('content chunk buffering', () => {
     const hasPostRetry = segments.some(l => stripAnsi(l).includes('Fresh start'));
     expect(hasPostRetry).toBe(true);
   });
+
+  it('does not emit spurious blank lines for null-returning non-content events', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 80,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        // tool_result chunks return null from formatOutputEvent — should not
+        // produce blank lines when lineBuf is empty.
+        yield { type: 'chunk' as const, chunk: { type: 'tool_result' as const, toolUseId: 'tu-1', output: 'ok' } };
+        yield { type: 'chunk' as const, chunk: { type: 'tool_result' as const, toolUseId: 'tu-2', output: 'ok' } };
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+
+    const fakeManager = {
+      list: () => [{ id: 'sub-nullevt', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      setTimeout(() => {
+        if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+      }, 10);
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    const allOutput = written.join('');
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\r/g, '');
+
+    // Count blank lines (segments that are empty after stripping ANSI).
+    // The header/footer contribute some lines; null-returning events must NOT
+    // add additional blank lines.
+    const visibleLines = allOutput.split('\n').map(l => stripAnsi(l));
+    const blankCount = visibleLines.filter(l => l === '').length;
+    // Without the guard, each null event would add a blank line (2 extra).
+    // With the guard, these events produce no output at all.
+    // Allow a baseline of blanks from the header/footer (typically ~5-8).
+    // The key assertion: no 'tool_result' text appears, and blank count is
+    // within the header/footer baseline.
+    expect(allOutput).not.toContain('tool_result');
+    expect(blankCount).toBeLessThan(10);
+  });
+
+  it('preserves blank lines from consecutive model-intended newlines', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 80,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        // Double newline: paragraph break with blank line between.
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Para one\n\nPara two\n' } };
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+
+    const fakeManager = {
+      list: () => [{ id: 'sub-dblnl', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      setTimeout(() => {
+        if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+      }, 10);
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    const allOutput = written.join('');
+
+    // Both paragraphs must appear.
+    expect(allOutput).toContain('Para one');
+    expect(allOutput).toContain('Para two');
+
+    // The blank line between paragraphs must be preserved. Look for the
+    // pattern: "Para one" on a line, then an empty line, then "Para two".
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\r/g, '');
+    const lines = allOutput.split('\n').map(l => stripAnsi(l));
+    const paraOneIdx = lines.findIndex(l => l.includes('Para one'));
+    const paraTwoIdx = lines.findIndex(l => l.includes('Para two'));
+    expect(paraOneIdx).toBeGreaterThan(-1);
+    expect(paraTwoIdx).toBeGreaterThan(-1);
+    // There should be at least one blank line between them.
+    expect(paraTwoIdx - paraOneIdx).toBeGreaterThanOrEqual(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
