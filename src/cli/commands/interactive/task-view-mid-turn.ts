@@ -216,9 +216,9 @@ export async function launchMidTurnTaskView(
   // The buffer is also flushed on stream end and on Esc exit.
   let lineBuf = '';
 
+  // Invariant: lineBuf never contains \n -- segments are split before accumulation.
   const flushLineBuf = (): void => {
-    if (!lineBuf) return;
-    stdout.write(`\r\x1b[K${clamp(lineBuf)}\n`);
+    stdout.write(`\r\x1b[K${lineBuf}\n`);
     lineBuf = '';
     renderPrompt();
   };
@@ -242,6 +242,14 @@ export async function launchMidTurnTaskView(
         if (lineBuf) {
           stdout.write(`\r\x1b[K${clamp(lineBuf)}`);
         }
+        continue;
+      }
+
+      // stream_retry: the model is re-streaming from scratch — discard the
+      // stale in-progress buffer WITHOUT flushing so the old content is not
+      // committed to the terminal. Matches the pattern in turn-handler.ts:455.
+      if (event.type === 'stream_retry') {
+        lineBuf = '';
         continue;
       }
 

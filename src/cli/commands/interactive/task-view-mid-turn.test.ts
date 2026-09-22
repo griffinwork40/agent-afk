@@ -326,6 +326,8 @@ describe('content chunk buffering', () => {
       compositor: fakeCompositor as never,
     });
 
+    vi.restoreAllMocks();
+
     const allOutput = written.join('');
 
     // The full sentence should appear as one flushed line, not split per chunk.
@@ -370,7 +372,7 @@ describe('content chunk buffering', () => {
       getOutputStream: async function* () {
         yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Some text here' } };
         // A tool_use_detail event should cause the buffered content to flush first.
-        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolName: 'bash', content: '' } };
+        yield { type: 'chunk' as const, chunk: { type: 'tool_use_detail' as const, toolUseId: 'tu-1', toolName: 'bash', toolInput: '{}' } };
         resolveStream();
       },
     };
@@ -404,6 +406,8 @@ describe('content chunk buffering', () => {
       compositor: fakeCompositor as never,
     });
 
+    vi.restoreAllMocks();
+
     const allOutput = written.join('');
     // The buffered content line should appear before the tool badge.
     const contentIdx = allOutput.indexOf('Some text here');
@@ -411,6 +415,102 @@ describe('content chunk buffering', () => {
     expect(contentIdx).toBeGreaterThan(-1);
     expect(toolIdx).toBeGreaterThan(-1);
     expect(contentIdx).toBeLessThan(toolIdx);
+  });
+
+  it('resets lineBuf on stream_retry without flushing pre-retry content', async () => {
+    const { launchMidTurnTaskView } = await import('./task-view-mid-turn.js');
+
+    const written: string[] = [];
+    const fakeStdout = {
+      columns: 80,
+      write: (s: string) => { written.push(s); return true; },
+    };
+
+    let capturedDataListener: ((data: Buffer) => void) | null = null;
+    const origOn = process.stdin.on.bind(process.stdin);
+    const origRemoveListener = process.stdin.removeListener.bind(process.stdin);
+    vi.spyOn(process.stdin, 'on').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'data') capturedDataListener = listener as (d: Buffer) => void;
+      return origOn(event as never, listener as never);
+    });
+    vi.spyOn(process.stdin, 'removeListener').mockImplementation((event: string, listener: (...args: unknown[]) => void) => {
+      return origRemoveListener(event as never, listener as never);
+    });
+
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((r) => { resolveStream = r; });
+
+    const fakeSession = {
+      getHistory: () => [],
+      getOutputStream: async function* () {
+        // Pre-retry content accumulates in lineBuf (no newline yet).
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Hello world' } };
+        // stream_retry: model re-streams from scratch — buffer must be discarded.
+        yield { type: 'stream_retry' as const };
+        // Post-retry content starts fresh.
+        yield { type: 'chunk' as const, chunk: { type: 'content' as const, content: 'Fresh start\n' } };
+        resolveStream();
+      },
+    };
+
+    const fakeHandle = {
+      status: 'running' as const,
+      session: fakeSession,
+      sendMessage: vi.fn(),
+    };
+
+    const fakeManager = {
+      list: () => [{ id: 'sub-retry', status: 'running' as const }],
+      get: (_id: string) => fakeHandle as never,
+    };
+
+    const fakeCompositor = {
+      stdout: fakeStdout as never,
+      suspendInput: vi.fn(),
+      resumeInput: vi.fn(),
+      repaint: vi.fn(),
+    };
+
+    void streamDone.then(() => {
+      setTimeout(() => {
+        if (capturedDataListener) capturedDataListener(Buffer.from('\x1b'));
+      }, 10);
+    });
+
+    await launchMidTurnTaskView({
+      manager: fakeManager as never,
+      compositor: fakeCompositor as never,
+    });
+
+    vi.restoreAllMocks();
+
+    const allOutput = written.join('');
+
+    const stripAnsi = (s: string): string =>
+      s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\r/g, '');
+
+    // A flushed line is one that was explicitly committed with a trailing \n.
+    // The live preview of "Hello world" has NO trailing \n — it is written as
+    // `\r\x1b[K${lineBuf}` (no newline). When the buffer is reset on
+    // stream_retry, the next write overwrites that preview row. We detect a
+    // standalone flush of "Hello world" by looking for the pattern
+    // `\r\x1b[K<content>\n` — i.e. a line that ended with \n without the
+    // post-retry text appearing on the same terminal row.
+    //
+    // Split on \n first, then check each segment: a segment is a "flushed" line
+    // only if it does NOT also contain the post-retry text (which would mean
+    // the pre-retry preview and the post-retry flush are on the same segment).
+    const segments = allOutput.split('\n');
+    const hasPreRetryAsStandaloneFlushed = segments.some(seg => {
+      const vis = stripAnsi(seg);
+      return vis.includes('Hello world') && !vis.includes('Fresh start');
+    });
+    // Pre-retry text must NOT appear as a standalone flushed line.
+    expect(hasPreRetryAsStandaloneFlushed).toBe(false);
+
+    // Post-retry text MUST appear as a flushed line.
+    const hasPostRetry = segments.some(l => stripAnsi(l).includes('Fresh start'));
+    expect(hasPostRetry).toBe(true);
   });
 });
 
