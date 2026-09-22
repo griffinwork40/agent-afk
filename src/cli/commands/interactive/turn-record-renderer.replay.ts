@@ -156,7 +156,7 @@ export function replayTurns(
       const summary = summarizeToolEvents(turn.toolEvents);
       if (summary.length > 0) {
         // summarizeToolEvents returns a string starting with \n — strip it.
-        const trimmed = summary.replace(/^\n/, '');
+        const trimmed = stripEscapeSequences(summary.replace(/^\n/, ''));
         writer(palette.dim(`  ${trimmed}`));
       }
     }

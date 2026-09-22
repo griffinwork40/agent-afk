@@ -103,12 +103,12 @@ Subagents return compressed findings, not raw exploration. A good subagent reply
 
 Every dispatched child (via `agent`, `compose`, or `skill` fork) runs under these constraints:
 
-- **Tool-round budget.** Default: 50 rounds per child. Named types differ: `general-purpose` = 150, read-only types = 50. A round with N parallel tool calls costs 1 round. On cap, the child gets one tools-stripped wind-down round to synthesize partial findings -- it is not killed. Set `max_tool_use_iterations` (agent) or `max_tool_rounds_per_node` (compose) explicitly for implementation-heavy children (80-120 rounds) rather than relying on the default 50.
+- **Tool-round budget.** Default: 50 rounds per child. Named types differ: `general-purpose` = 150, read-only types = 50. Unnamed `agent` dispatches with no explicit limit are uncapped (0 = unlimited) until the wall-clock timeout. A round with N parallel tool calls costs 1 round. On cap, the child gets one tools-stripped wind-down round to synthesize partial findings -- it is not killed. Set `max_tool_use_iterations` (agent) or `max_tool_rounds_per_node` (compose) explicitly for implementation-heavy children (80-120 rounds) rather than relying on the default.
 - **Foreground concurrency.** Up to 8 children execute simultaneously per fan-out site (compose layer or wave). Additional children queue until a slot opens. This is per-site, not tree-wide -- a child that itself fans out gets its own pool of 8.
 - **Wall-clock.** Foreground children: 45-minute hard abort. Background children: 60 minutes. A soft deadline at ~85% of the hard budget triggers the same tools-stripped wind-down as the round cap, so the child can synthesize before being killed.
 - **Idle watchdog.** If a child produces no observable output for 8 minutes (provider stall, hung stream), it is aborted. Active tool calls reset the timer.
 - **Elicitations.** All forked children (foreground and background) auto-decline `ask_question` calls. A child that needs user input must return the question to its parent.
-- **Compose fail-fast.** `fail_fast: true` (default) aborts all siblings in the same layer and skips all downstream nodes when any node fails. Set `fail_fast: false` for best-effort parallel probes where partial results from surviving nodes are still valuable.
+- **Compose fail-fast.** `fail_fast: true` (default) sends an abort signal to in-flight siblings, prevents queued siblings beyond the concurrency cap from starting, and skips all downstream nodes when any node fails. Already-running siblings may complete before the layer settles. Set `fail_fast: false` for best-effort parallel probes where partial results from surviving nodes are still valuable.
 
 ### Background vs. foreground
 

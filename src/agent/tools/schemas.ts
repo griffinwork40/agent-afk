@@ -495,7 +495,7 @@ export const agentTool: AnthropicToolDef = {
           "Maximum tool-use rounds within the subagent's single turn — the anti-hang ceiling on a tool-call loop. " +
           'Default 0 = unlimited. Set a positive integer to bound a runaway loop. On cap, the subagent gets one final tools-stripped round to summarize (no silent mid-loop stop). ' +
           'A named agent may set its own default via `maxToolUseIterations` frontmatter (explicit value here wins). Honored uniformly by both providers.\n\n' +
-          'Budget guidance: unnamed subagents default to 50 rounds; `general-purpose` defaults to 150; read-only types default to 50. A round with N parallel tool calls costs 1, not N. Sizing:\n' +
+          'Budget guidance: unnamed subagents are uncapped by default; `general-purpose` defaults to 150; read-only types default to 50. A round with N parallel tool calls costs 1, not N. Sizing:\n' +
           '- Narrow lookup/research: 15-30.\n- Implementation (multi-file edits + test + PR): 80-120 — the default 50 is too tight.\n' +
           '- Deep investigation/debugging: 100-150.\nSet this explicitly for implementation-heavy children rather than relying on the default.',
       },
