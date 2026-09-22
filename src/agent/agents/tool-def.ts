@@ -32,7 +32,14 @@ export function buildAgentToolDef(registry: AgentRegistry | undefined): Anthropi
   if (registry === undefined || registry.size === 0) return agentTool;
 
   const listing = [...registry.values()]
-    .map((agent) => `- ${agent.name}: ${oneLine(agent.definition.description)}`)
+    .map((agent) => {
+      const def = agent.definition;
+      const meta: string[] = [];
+      if (def.maxToolUseIterations) meta.push(`budget: ${def.maxToolUseIterations} rounds`);
+      if (def.model) meta.push(`model: ${def.model}`);
+      const suffix = meta.length > 0 ? ` (${meta.join(', ')})` : '';
+      return `- ${agent.name}${suffix}: ${oneLine(agent.definition.description)}`;
+    })
     .join('\n');
 
   return {
@@ -51,9 +58,9 @@ export function buildAgentToolDef(registry: AgentRegistry | undefined): Anthropi
           description:
             'Named agent type to dispatch — one of the "Available agent types" listed in this ' +
             "tool's description. The type supplies the child's system prompt, tool allowlist " +
-            '(mechanically enforced), and default model/turn budget. Explicit `model`/`max_turns` ' +
-            'on this call override the type\'s defaults. Unknown types fail with the available ' +
-            'list. Alias: `subagent_type`.',
+            '(mechanically enforced), and default model/tool-round budget. Explicit `model`, ' +
+            '`max_turns`, and `max_tool_use_iterations` on this call override the type\'s ' +
+            'defaults. Unknown types fail with the available list. Alias: `subagent_type`.',
         },
       },
     },

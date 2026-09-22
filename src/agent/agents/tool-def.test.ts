@@ -32,8 +32,8 @@ describe('buildAgentToolDef', () => {
     expect(def.name).toBe('agent');
     expect(def.input_schema.properties).toHaveProperty('agent_type');
     expect(def.description).toContain('Available agent types');
-    expect(def.description).toContain('- research-agent: research-agent does things');
-    expect(def.description).toContain('- Explore: Explore does things');
+    expect(def.description).toContain('research-agent: research-agent does things');
+    expect(def.description).toContain('Explore: Explore does things');
     // required fields unchanged — agent_type stays optional
     expect(def.input_schema.required).toEqual(['prompt']);
   });
@@ -42,11 +42,13 @@ describe('buildAgentToolDef', () => {
     const def = buildAgentToolDef(builtinAgents());
     const listingLine = def.description
       ?.split('\n')
-      .find((line) => line.startsWith('- research-agent:'));
+      .find((line) => line.includes('research-agent') && line.startsWith('- '));
 
     expect(listingLine).toContain(
       'CANNOT write files, edit code, run bash, commit, or push — read-only enforced.',
     );
+    // The listing includes budget metadata for named agents with explicit budgets
+    expect(listingLine).toContain('budget: 50 rounds');
   });
 
   it('does not mutate the static agentTool', () => {
