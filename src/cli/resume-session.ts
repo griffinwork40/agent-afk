@@ -59,7 +59,16 @@ export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Parti
           resumeHistory: target.stored.turns.map((turn, idx, arr) => {
             const entry: import('../agent/types.js').ResumeHistoryTurn = {
               user: turn.user,
-              assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
+              // Only append the tool-event summary to the text field when structured
+              // content blocks are absent. When assistantContentBlocks is present,
+              // resumeHistoryToMessages prefers those blocks and ignores the text
+              // field entirely — appending here would create a duplicate if a future
+              // migration strips blocks but retains text.
+              assistant:
+                (turn.assistant ?? '') +
+                (turn.assistantContentBlocks && turn.assistantContentBlocks.length > 0
+                  ? ''
+                  : summarizeToolEvents(turn.toolEvents)),
               // Propagate structured content blocks when available (added in v5.226).
               // Old sidecars without these fields round-trip correctly — the field
               // is simply absent and the provider falls back to the text-only path.

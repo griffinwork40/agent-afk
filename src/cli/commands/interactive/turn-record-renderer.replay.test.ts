@@ -354,3 +354,41 @@ describe('replayTurns — stats footer', () => {
     expect(flat(lines)).not.toContain('0.0s');
   });
 });
+
+// ---------------------------------------------------------------------------
+// ANSI injection via ToolEvent.input (regression test)
+// ---------------------------------------------------------------------------
+
+describe('replayTurns — ANSI injection via ToolEvent.input', () => {
+  it('strips ANSI escape sequences from tool event input and emits the plain text', () => {
+    const { writer, lines } = makeCollector();
+    replayTurns(
+      [
+        makeTurn({
+          toolEvents: [
+            { toolName: 'bash', toolUseId: 'tu-1', input: '\x1b[31mred\x1b[0m', isError: false },
+          ],
+        }),
+      ],
+      writer,
+    );
+    const raw = lines.join('\n');
+    // The visible word must be present.
+    expect(raw).toContain('red');
+    // Raw ANSI CSI sequences must NOT appear in writer output.
+    // eslint-disable-next-line no-control-regex
+    expect(raw).not.toContain('\x1b[31m');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Degenerate turn skip (both user and assistant empty)
+// ---------------------------------------------------------------------------
+
+describe('replayTurns — degenerate turn skip', () => {
+  it('emits nothing when both user and assistant are empty strings', () => {
+    const { writer, lines } = makeCollector();
+    replayTurns([makeTurn({ user: '', assistant: '' })], writer);
+    expect(lines.length).toBe(0);
+  });
+});
