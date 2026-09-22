@@ -77,8 +77,12 @@ const PINNED_HASHES = {
   // Hash re-bumped: resolve review — Phase 2.5 switched from compose to parallel agent calls
   //   (compose nodes lack agent_type/cwd), Phase 3.5 unverified-invariant cap path tightened
   //   (no longer commits unconditionally with unverified invariants).
+  // Hash re-bumped: doc-only fix — removed stale claim that compose cannot carry agent_type
+  //   or per-node cwd (both were added in commits bcbadf1c and 7e926de0). Phase 2.5 still
+  //   recommends the `agent` fan-out (simpler rate-limit control, no DAG needed), but now
+  //   correctly notes compose is a valid alternative when DAG tracking is wanted.
   'fix-pr':
-    '3eacfbf593256786755b633fbab2f9a4c97eea6eb0669747b1ea44af533c7bdc',
+    '26b49482e1c749e56e4219fece30abfbe59dc4ca5822fe0c8e9b55867140d6aa',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,
