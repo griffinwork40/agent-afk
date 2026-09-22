@@ -150,20 +150,20 @@ export function getConcurrencyStatuses(warn = true): ConcurrencyStatus[] {
   return definitions.map((definition) => getConcurrencyStatus(definition, warn));
 }
 
-function resolve(key: ConcurrencyEnvKey): number {
+function resolve(key: ConcurrencyEnvKey, warn = true): number {
   const definition = definitions.find((candidate) => candidate.key === key);
   if (!definition) throw new Error(`Unknown concurrency setting: ${key}`);
-  return getConcurrencyStatus(definition).effectiveValue;
+  return getConcurrencyStatus(definition, warn).effectiveValue;
 }
 
-export function resolveMaxConcurrentSafeToolCalls(): number {
-  return resolve('AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS');
+export function resolveMaxConcurrentSafeToolCalls(warn = true): number {
+  return resolve('AFK_MAX_CONCURRENT_SAFE_TOOL_CALLS', warn);
 }
 
-export function resolveMaxConcurrentSubagentCalls(): number {
-  return resolve('AFK_MAX_CONCURRENT_SUBAGENT_CALLS');
+export function resolveMaxConcurrentSubagentCalls(warn = true): number {
+  return resolve('AFK_MAX_CONCURRENT_SUBAGENT_CALLS', warn);
 }
 
-export function resolveMaxConcurrentBackgroundJobs(): number {
-  return resolve('AFK_MAX_CONCURRENT_BACKGROUND_JOBS');
+export function resolveMaxConcurrentBackgroundJobs(warn = true): number {
+  return resolve('AFK_MAX_CONCURRENT_BACKGROUND_JOBS', warn);
 }

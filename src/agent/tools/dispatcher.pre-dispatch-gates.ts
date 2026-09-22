@@ -401,6 +401,7 @@ export function resetDenialBreaker(state: PreDispatchGateMutableState): void {
   state.denialBreaker = null;
 }
 
+/** @internal */
 /**
  * Post-parallel denial-breaker accounting for blocked safe calls.
  *

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { grepHandler, createGrepHandler } from './grep.js';
 import type { ToolHandlerContext } from '../types.js';
@@ -707,13 +707,19 @@ describe('grepHandler cwd containment', () => {
     return new AbortController().signal;
   }
 
-  it.skipIf(process.platform === 'win32')('rejects absolute path outside context.cwd', async () => {
-    // `/etc` is a POSIX absolute path — POSIX-only (#703)
-    const context: ToolHandlerContext = { cwd: tempDir };
-    // parseGrepInput throws for containment violations — grepHandler propagates the throw
-    await expect(
-      grepHandler({ pattern: 'root', path: '/etc' }, createSignal(), context),
-    ).rejects.toThrow(/outside the allowed/);
+  it('rejects absolute path outside context.cwd', async () => {
+    // Use a sibling temp dir that is guaranteed to be outside tempDir on all
+    // platforms — avoids a POSIX-only path like `/etc` (#703).
+    const outsideDir = mkdtempSync(join(tmpdir(), 'grep-outside-'));
+    try {
+      const context: ToolHandlerContext = { cwd: tempDir };
+      // parseGrepInput throws for containment violations — grepHandler propagates the throw
+      await expect(
+        grepHandler({ pattern: 'root', path: resolve(outsideDir) }, createSignal(), context),
+      ).rejects.toThrow(/outside the allowed/);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 
   it('resolves relative path against context.cwd', async () => {

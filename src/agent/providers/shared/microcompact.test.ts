@@ -302,4 +302,52 @@ describe('delegation-aware microcompaction', () => {
     expect(DEFAULT_MICROCOMPACT_DELEGATION_BYTES).toBe(16384);
     expect(DEFAULT_MICROCOMPACT_DELEGATION_BYTES).toBe(DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES * 8);
   });
+
+  it('keepLast > 0 protects the tail across a mixed ordinary + delegation set', () => {
+    // 5 results: 3 ordinary, 2 delegation. keepLast=2 protects the two most
+    // recent (a delegation then an ordinary). The 3 older results are candidates
+    // for clearing, but only those above their respective thresholds clear.
+    //   index 0: ordinary 4KB > 2KB threshold → clears
+    //   index 1: delegation 4KB < 16KB threshold → skipped (below delegation threshold)
+    //   index 2: ordinary 4KB > 2KB threshold → clears
+    //   index 3: delegation (protected by keepLast=2)
+    //   index 4: ordinary   (protected by keepLast=2)
+    const msgs: FakeMsg[] = [
+      mkResult(4000, 'bash'),    // index 0 — ordinary, candidate
+      mkResult(4000, 'agent'),   // index 1 — delegation, below delegation threshold → skipped
+      mkResult(4000, 'bash'),    // index 2 — ordinary, candidate
+      mkResult(4000, 'agent'),   // index 3 — protected (keepLast tail)
+      mkResult(4000, 'bash'),    // index 4 — protected (keepLast tail)
+    ];
+    const r = microcompactToolResults(msgs, fakeOps, {
+      thresholdBytes: 2048,
+      delegationThresholdBytes: 16384,
+      keepLast: 2,
+    });
+    // Only the two ordinary candidates (indices 0, 2) clear; delegation at 1 is spared.
+    expect(r.blocksCleared).toBe(2);
+    expect(isMicrocompactPlaceholder(msgs[0]!.content)).toBe(true);
+    expect(isMicrocompactPlaceholder(msgs[1]!.content)).toBe(false); // delegation, below threshold
+    expect(isMicrocompactPlaceholder(msgs[2]!.content)).toBe(true);
+    expect(isMicrocompactPlaceholder(msgs[3]!.content)).toBe(false); // keepLast-protected
+    expect(isMicrocompactPlaceholder(msgs[4]!.content)).toBe(false); // keepLast-protected
+  });
+
+  it('keepLast > 0 protects a large delegation result in the tail', () => {
+    // keepLast=1 protects the last result. Even when the last result is a huge
+    // delegation result that would normally exceed the delegation threshold,
+    // keepLast protection takes precedence over threshold clearing.
+    const msgs: FakeMsg[] = [
+      mkResult(20000, 'agent'), // index 0 — delegation, exceeds 16KB → clears
+      mkResult(20000, 'agent'), // index 1 — delegation, exceeds 16KB, protected by keepLast=1
+    ];
+    const r = microcompactToolResults(msgs, fakeOps, {
+      thresholdBytes: 2048,
+      delegationThresholdBytes: 16384,
+      keepLast: 1,
+    });
+    expect(r.blocksCleared).toBe(1);
+    expect(isMicrocompactPlaceholder(msgs[0]!.content)).toBe(true);
+    expect(isMicrocompactPlaceholder(msgs[1]!.content)).toBe(false); // tail protected
+  });
 });

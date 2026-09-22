@@ -68,6 +68,17 @@ import type { HookContext } from '../hooks.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/** Shared helper: set up execFileSync so both rev-parse and diff return useful values. */
+async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
+  const { execFileSync } = await import('node:child_process');
+  vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
+    const argsArr = args as string[];
+    if (argsArr.includes('rev-parse')) return '/fake/repo';
+    if (argsArr.includes('diff')) return diffContent;
+    return '';
+  });
+}
+
 function makeSessionEndContext(
   overrides: Partial<{
     sessionId: string;
@@ -172,18 +183,8 @@ describe('createSpineSessionEndHook — label branches', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
   });
-
-  /** Helper: set up execFileSync so both rev-parse and diff return useful values. */
-  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
-    const { execFileSync } = await import('node:child_process');
-    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr.includes('rev-parse')) return '/fake/repo';
-      if (argsArr.includes('diff')) return diffContent;
-      return '';
-    });
-  }
 
   it('new-addition: calls addEntry and writeSpine', async () => {
     await setupDiffMock();
@@ -429,17 +430,8 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
   });
-
-  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
-    const { execFileSync } = await import('node:child_process');
-    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr.includes('rev-parse')) return '/fake/repo';
-      if (argsArr.includes('diff')) return diffContent;
-      return '';
-    });
-  }
 
   function makeStrengthensMock(existingDescription: string) {
     return {
@@ -590,17 +582,8 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
   });
-
-  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
-    const { execFileSync } = await import('node:child_process');
-    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr.includes('rev-parse')) return '/fake/repo';
-      if (argsArr.includes('diff')) return diffContent;
-      return '';
-    });
-  }
 
   function makeWeakensMock(existingDescription: string) {
     return {
@@ -751,16 +734,6 @@ describe('createSpineSessionEndHook — pending-log writes', () => {
     // Clear the capture array for each test.
     _capturedAppendCalls.length = 0;
   });
-
-  async function setupDiffMock(diffContent = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;') {
-    const { execFileSync } = await import('node:child_process');
-    vi.mocked(execFileSync).mockImplementation((_cmd, args) => {
-      const argsArr = args as string[];
-      if (argsArr.includes('rev-parse')) return '/fake/repo';
-      if (argsArr.includes('diff')) return diffContent;
-      return '';
-    });
-  }
 
   it('strengthens-unresolved: logs to pending.jsonl with type="strengthens-unresolved"', async () => {
     await setupDiffMock();

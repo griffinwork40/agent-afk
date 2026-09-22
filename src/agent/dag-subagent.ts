@@ -248,7 +248,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         });
       } catch (forkErr) {
         // Item 2: rollback ALL budget counters on fork failure — the child
-        // never ran, so total and childrenByAgent must not reflect this spawn.
+        // never ran, so total and concurrentChildrenByAgent must not reflect this spawn.
         dagNodeBudgetReceipt?.rollback();
         dagNodeBudgetReceipt = undefined;
         throw forkErr;
@@ -309,7 +309,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         nodeSignal.removeEventListener('abort', onNodeAbort);
         await handle.teardown().catch(() => undefined);
         // Item 2: release the concurrent slot now that the node has settled.
-        // The fork succeeded, so use release() — total and childrenByAgent
+        // The fork succeeded, so use release() — total and concurrentChildrenByAgent
         // correctly reflect a real spawn even if the run aborted mid-flight.
         dagNodeBudgetReceipt?.release();
       }

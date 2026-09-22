@@ -31,7 +31,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const isWin32 = process.platform === 'win32';
 import { _resetFsCaseCacheForTests } from '../fs-case.js';
 import { mkdirSync, rmSync, symlinkSync, existsSync, writeFileSync } from 'fs';
-import { basename, dirname, join, resolve } from 'path';
+import { basename, delimiter, dirname, join, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import {
   isReadDenied,
@@ -614,8 +614,16 @@ describe('parseReadDenylistEntries — the single parser both surfaces share', (
   // Invariant: bash-restriction-hook.ts imports THIS function instead of
   // re-implementing the parse. The duplicate it used to keep is how the tilde
   // bug reached both surfaces at once (PR #734 review, MAJOR 1).
-  it.skipIf(process.platform === 'win32')('splits on colons, trims, drops empties, and absolutizes', () => {
-    expect(parseReadDenylistEntries('  /a/b : :/c/d  ')).toEqual(['/a/b', '/c/d']);
+  it('splits on the platform list separator, trims, drops empties, and absolutizes', () => {
+    // Use platform-appropriate paths and path.delimiter (';' on Windows, ':' on POSIX)
+    // so this test runs on all platforms (#703).
+    const tmp = tmpdir();
+    // Build two absolute paths guaranteed to exist on the current platform.
+    const pathA = join(tmp, 'denylist-a');
+    const pathB = join(tmp, 'denylist-b');
+    const sep = delimiter; // ':' on POSIX, ';' on Windows
+    const raw = `  ${pathA} ${sep}${sep}${pathB}  `;
+    expect(parseReadDenylistEntries(raw)).toEqual([pathA, pathB]);
     expect(parseReadDenylistEntries(undefined)).toEqual([]);
     expect(parseReadDenylistEntries('')).toEqual([]);
   });

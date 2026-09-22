@@ -157,6 +157,127 @@ describe('anthropic microcompactToolResults', () => {
     expect(useBlock.id).toBe('t1');
   });
 
+  describe('keepLast > 0 with delegation tools — id-correlation integration', () => {
+    // These tests exercise the real anthropicMicrocompactOps.listToolResults id-correlation
+    // path with genuine MessageParam arrays: an assistant message carries tool_use blocks
+    // (with `id` + `name`), and the following user message carries tool_result blocks
+    // (with `tool_use_id`). The implementation correlates tool_result → tool_use via
+    // `toolNameById` to set `toolName` on each ToolResultRef so delegation-threshold
+    // selection works correctly.
+
+    it('id-correlation: delegation tool protected by keepLast even when huge', () => {
+      // assistant declares one agent call and one bash call; user provides results.
+      // keepLast=1 protects the last tool_result (agent/20KB); only bash/20KB clears.
+      const msgs: MessageParam[] = [
+        { role: 'user', content: 'run two things' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'tu1', name: 'bash', input: { command: 'ls' } },
+            { type: 'tool_use', id: 'tu2', name: 'agent', input: { prompt: 'analyze' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'tu1', content: 'b'.repeat(20000) },
+            { type: 'tool_result', tool_use_id: 'tu2', content: 'a'.repeat(20000) },
+          ],
+        },
+      ];
+      // keepLast=1 protects the last result (agent/20KB at index 1 in the content array).
+      // bash/20KB at index 0 exceeds the ordinary 2KB threshold → clears.
+      // agent/20KB at index 1 exceeds the 16KB delegation threshold, but is protected.
+      const r = microcompactToolResults(msgs, { thresholdBytes: 2048, delegationThresholdBytes: 16384, keepLast: 1 });
+      expect(r.blocksCleared).toBe(1);
+      const userContent = msgs[2]!.content as Array<{ type: string; content?: unknown; tool_use_id: string }>;
+      expect(isMicrocompactPlaceholder(userContent[0]!.content as string)).toBe(true);   // bash cleared
+      expect(isMicrocompactPlaceholder(userContent[1]!.content as string)).toBe(false);  // agent protected
+    });
+
+    it('id-correlation: delegation result under its threshold is spared; ordinary above ordinary threshold clears', () => {
+      // Same structure: agent result is 4KB (below 16KB delegation threshold) so it
+      // survives even without keepLast protection. bash result 4KB > 2KB → clears.
+      const msgs: MessageParam[] = [
+        { role: 'user', content: 'go' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'u1', name: 'agent', input: {} },
+            { type: 'tool_use', id: 'u2', name: 'bash', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'u1', content: 'x'.repeat(4000) },
+            { type: 'tool_result', tool_use_id: 'u2', content: 'y'.repeat(4000) },
+          ],
+        },
+      ];
+      const r = microcompactToolResults(msgs, { thresholdBytes: 2048, delegationThresholdBytes: 16384, keepLast: 0 });
+      expect(r.blocksCleared).toBe(1);
+      const content = msgs[2]!.content as Array<{ type: string; content?: unknown; tool_use_id: string }>;
+      // agent result (4KB < 16KB delegation threshold) → NOT cleared
+      expect(isMicrocompactPlaceholder(content[0]!.content as string)).toBe(false);
+      // bash result (4KB > 2KB ordinary threshold) → cleared
+      expect(isMicrocompactPlaceholder(content[1]!.content as string)).toBe(true);
+    });
+
+    it('id-correlation: all delegation tools (agent/compose/skill) resolved correctly', () => {
+      // Three delegation tools in one round; all results are 4KB (below 16KB threshold).
+      // None should clear regardless of keepLast=0, because their threshold protects them.
+      const msgs: MessageParam[] = [
+        { role: 'user', content: 'dispatch three' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'da', name: 'agent', input: {} },
+            { type: 'tool_use', id: 'dc', name: 'compose', input: {} },
+            { type: 'tool_use', id: 'ds', name: 'skill', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'da', content: 'a'.repeat(4000) },
+            { type: 'tool_result', tool_use_id: 'dc', content: 'c'.repeat(4000) },
+            { type: 'tool_result', tool_use_id: 'ds', content: 's'.repeat(4000) },
+          ],
+        },
+      ];
+      const r = microcompactToolResults(msgs, { thresholdBytes: 2048, delegationThresholdBytes: 16384, keepLast: 0 });
+      // All three 4KB results are below the 16KB delegation threshold → nothing clears.
+      expect(r.blocksCleared).toBe(0);
+      expect(r.bytesReclaimed).toBe(0);
+      const content = msgs[2]!.content as Array<{ content?: unknown }>;
+      for (const block of content) {
+        expect(isMicrocompactPlaceholder(block.content as string)).toBe(false);
+      }
+    });
+
+    it('id-correlation: missing tool_use counterpart treats result as ordinary (toolName absent)', () => {
+      // If a tool_result references an id that has no matching tool_use in the history,
+      // toolName is undefined and the ordinary threshold applies (not the delegation one).
+      // This is the "defensive" case named in the ToolResultRef docs.
+      const msgs: MessageParam[] = [
+        {
+          role: 'user',
+          content: [
+            // tool_result with an id that has no matching tool_use anywhere in msgs
+            { type: 'tool_result', tool_use_id: 'orphan-id', content: 'z'.repeat(4000) },
+          ],
+        },
+      ];
+      // With a very high delegation threshold, an orphaned result should still clear
+      // because it falls back to the ordinary threshold.
+      const r = microcompactToolResults(msgs, { thresholdBytes: 2048, delegationThresholdBytes: 999999, keepLast: 0 });
+      expect(r.blocksCleared).toBe(1);
+      const content = msgs[0]!.content as Array<{ content?: unknown }>;
+      expect(isMicrocompactPlaceholder(content[0]!.content as string)).toBe(true);
+    });
+  });
+
   describe('THE KEY CASE — single-turn-but-full session', () => {
     // A single fresh user turn (index 0), then one long tool-use/result exchange
     // in the SAME turn window. findCompactionBoundary keeps the last N=2 fresh
