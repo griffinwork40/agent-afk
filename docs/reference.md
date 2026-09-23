@@ -131,6 +131,33 @@ Implementation: `src/cli/slash/index.ts` (`registerAll()`), individual command m
 
 **xAI / Grok** — `grok-*` models route to the first-class `xai` provider. Authenticate with `XAI_API_KEY` (metered) or SuperGrok / SuperGrok Heavy / X Premium+ OAuth via `afk provider auth xai login`. See [`docs/xai-provider.md`](xai-provider.md).
 
+**Yolo-Auto (hosted OpenAI-compatible)** — a flat-rate OpenAI-compatible API
+(`https://yolo-auto.com/v1`) with two stable model aliases, `yolo` and
+`yolo-small`; the full model list for a key is discoverable at
+`GET /v1/models`. Keys are `yolo_...`, free to create at
+[yolo-auto.com](https://yolo-auto.com) ([docs](https://yolo-auto.com/docs)).
+Bind a model slot to it — the per-slot `baseUrl` routes a bare id like `yolo`
+to the `openai-compatible` provider:
+
+```bash
+# Per-tier binding (YOLO_AUTO_API_KEY is a convention for your yolo_... key).
+AFK_MODEL_LARGE='yolo' \
+AFK_MODEL_LARGE_BASE_URL='https://yolo-auto.com/v1' \
+AFK_MODEL_LARGE_API_KEY="$YOLO_AUTO_API_KEY" afk i
+
+# Or point the whole session's OpenAI-compatible endpoint at it.
+export AFK_OPENAI_BASE_URL='https://yolo-auto.com/v1'
+export OPENAI_API_KEY="$YOLO_AUTO_API_KEY"
+afk chat -m yolo "hello"
+```
+
+Chat Completions only — leave `AFK_OPENAI_USE_RESPONSES` unset (the endpoint
+does not serve the Responses API). Equivalent `afk.config.json` slot:
+
+```jsonc
+{ "models": { "large": { "id": "yolo", "baseUrl": "https://yolo-auto.com/v1", "apiKey": "yolo_…" } } }
+```
+
 ## Plugins & marketplaces
 
 The `/plugin` slash command (and marketplace-based install) is a Claude Code CLI feature, not an Agent SDK feature — see [anthropics/claude-code#15071](https://github.com/anthropics/claude-code/issues/15071). Inside an `agent-afk` session those commands don't exist, and marketplace installs run from Claude Code still land in `~/.claude/plugins/`. AFK ships its own `afk plugin` subcommand that keeps everything under `~/.afk/plugins/`:
