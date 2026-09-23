@@ -67,7 +67,12 @@ export function registerLoginCommand(program: Command): void {
       // existing credentials. A user who already ran `claude login` (keychain
       // OAuth) or has ANTHROPIC_API_KEY set should not be prompted to paste a
       // key they don't need.
-      if (!token && !opts.force) {
+      //
+      // Invariant: only check for anthropic-direct. xAI and other providers
+      // have their own credential families -- an Anthropic key in the keychain
+      // is irrelevant when the resolved provider is xAI, and falsely reporting
+      // "already authenticated" would send the user into a chat that fails.
+      if (!token && !opts.force && provider === 'anthropic-direct') {
         // Refresh any near-expiry keychain token before checking (same as the
         // first-run detector in src/cli/index.ts).
         await preloadClaudeKeychainOAuth(provider);
