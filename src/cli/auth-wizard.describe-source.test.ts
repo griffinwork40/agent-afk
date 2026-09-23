@@ -13,13 +13,13 @@ vi.mock('../agent/auth/keychain.js', () => ({
 }));
 
 vi.mock('../agent/auth/credential-resolver.js', () => ({
-  loadAnthropicCredential: vi.fn(() => undefined as string | undefined),
+  hasProcessLocalRefreshedToken: vi.fn(() => false),
 }));
 
 import { describeCredentialSource } from './auth-wizard.describe-source.js';
 import { env } from '../config/env.js';
 import { loadClaudeCodeOauthToken } from '../agent/auth/keychain.js';
-import { loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
+import { hasProcessLocalRefreshedToken } from '../agent/auth/credential-resolver.js';
 
 describe('describeCredentialSource', () => {
   beforeEach(() => {
@@ -53,12 +53,11 @@ describe('describeCredentialSource', () => {
     expect(describeCredentialSource()).toBe('Claude Code login (keychain)');
   });
 
-  it('returns Claude Code login source when tier-3 process-local refreshed token is active', () => {
-    // Tiers 1-3 env/keychain checks return nothing, but loadAnthropicCredential
-    // (which covers all 4 tiers including the process-local refreshed token)
-    // returns a value, so we label it as keychain-derived.
-    vi.mocked(loadAnthropicCredential).mockReturnValue('sk-ant-oat01-refreshed');
-    expect(describeCredentialSource()).toBe('Claude Code login (keychain)');
+  it('returns session-refresh label when tier-3 process-local refreshed token is active', () => {
+    // env vars unset, keychain returns nothing, but a token was refreshed
+    // in-process and write-back to the credential store failed.
+    vi.mocked(hasProcessLocalRefreshedToken).mockReturnValue(true);
+    expect(describeCredentialSource()).toBe('Claude Code login (session refresh)');
   });
 
   it('returns generic fallback when no credential source is found', () => {

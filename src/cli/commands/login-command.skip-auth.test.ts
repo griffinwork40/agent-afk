@@ -4,8 +4,9 @@
  * Covers:
  *   1. Early-exit when `loadAnthropicCredential` returns a credential
  *      (no --force, no token).
- *   2. `--force` flag bypasses the credential check and calls `runAuthWizard`.
- *   3. Token argument bypasses the credential check and calls `runAuthWizard`.
+ *   2. No credential found -- falls through to `runAuthWizard` (first-time user).
+ *   3. `--force` flag bypasses the credential check and calls `runAuthWizard`.
+ *   4. Token argument bypasses the credential check and calls `runAuthWizard`.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -76,6 +77,27 @@ describe('registerLoginCommand skip-auth branch', () => {
     expect(runAuthWizard).not.toHaveBeenCalled();
     // Should have printed the "already authenticated" message
     expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Already authenticated'),
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it('calls runAuthWizard when no credential is found (first-time user)', async () => {
+    // Default mock returns undefined -- no existing credential.
+    vi.mocked(loadAnthropicCredential).mockReturnValue(undefined);
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const program = makeProgram();
+    await program.parseAsync(['node', 'afk', 'login']);
+
+    // The keychain-refresh guard runs before the credential check.
+    expect(preloadClaudeKeychainOAuth).toHaveBeenCalledWith('anthropic-direct');
+    // No credential found -- must fall through to runAuthWizard.
+    expect(runAuthWizard).toHaveBeenCalledWith(undefined);
+    // Must NOT have printed the "already authenticated" early-exit message.
+    expect(consoleSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('Already authenticated'),
     );
 

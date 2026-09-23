@@ -11,24 +11,22 @@
 
 import { env } from '../config/env.js';
 import { loadClaudeCodeOauthToken } from '../agent/auth/keychain.js';
-import { loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
+import { hasProcessLocalRefreshedToken } from '../agent/auth/credential-resolver.js';
 
 /**
  * Describe which Anthropic credential source is active, in the same
  * precedence order as `loadAnthropicCredential`:
  *   1. ANTHROPIC_API_KEY env
  *   2. CLAUDE_CODE_OAUTH_TOKEN env
- *   3. Process-local refreshed token (indistinguishable from keychain here)
+ *   3. Process-local refreshed token (keychain refresh succeeded but write-back failed)
  *   4. macOS Keychain / ~/.claude/.credentials.json (Claude Code login)
  */
 export function describeCredentialSource(): string {
   if (env.ANTHROPIC_API_KEY) return 'ANTHROPIC_API_KEY';
   if (env.CLAUDE_CODE_OAUTH_TOKEN) return 'CLAUDE_CODE_OAUTH_TOKEN';
-  // Tiers 3+4 are both "Claude Code login" from the user's perspective.
   if (loadClaudeCodeOauthToken()) return 'Claude Code login (keychain)';
-  // Tier 3 (process-local refreshed token) is not directly checkable from here,
-  // but loadAnthropicCredential covers all 4 tiers. If it resolves, the source
-  // is a keychain-derived credential (tier 3 or 4 under a different read path).
-  if (loadAnthropicCredential()) return 'Claude Code login (keychain)';
+  // Tier 3: token was refreshed this process but write-back to the persistent
+  // store failed -- the token is NOT in the keychain, so label it distinctly.
+  if (hasProcessLocalRefreshedToken()) return 'Claude Code login (session refresh)';
   return 'existing credential';
 }
