@@ -1,6 +1,6 @@
 # SDK Dependency Snapshot
 
-Generated: 2026-05-25T05:50:50.808Z
+Generated: 2026-09-23T00:54:23.081Z
 
 ## Versions
 
@@ -8,37 +8,57 @@ Generated: 2026-05-25T05:50:50.808Z
 
 ## Summary
 
-- **14** files import tracked Anthropic packages
+- **34** files import tracked Anthropic packages
 - **1** runtime symbols, **0** type-only symbols
 
 ## `@anthropic-ai/sdk`
 
-- 14 files, 1 runtime symbols, 0 type-only symbols
+- 34 files, 1 runtime symbols, 0 type-only symbols
 
 ### Symbols
 
 | Symbol | Kind | Files | Call sites |
 |---|---|---:|---:|
-| `default as Anthropic` | runtime | 14 | 4 |
+| `default as Anthropic` | runtime | 34 | 2 |
 
 ### Files
 
 | File | Symbols |
 |---|---|
 | `src/agent/providers/anthropic-direct.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/afk-mode-gate-wiring.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/compact.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/concurrent-session-isolation.test.ts` | `default as Anthropic` |
-| `src/agent/providers/anthropic-direct/index.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/context-limit-1m.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/date-rollover-system-payload.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/exit-plan-mode-live-tools.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/extended-cache-ttl-beta.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/interrupt-resume.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/local-mode-oauth.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/mcp-permission-refresh.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/oneshot.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/oneshot.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/output-cap-wiring.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/plan-mode-gate-wiring.test.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/plan-mode-system-payload.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/provider-options.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/provider-query-setup.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/query-auth-retry.test.ts` | `default as Anthropic` |
-| `src/agent/providers/anthropic-direct/query.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query-options.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query-wiring.characterization.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query/client-setup.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query/client-setup.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query/overload-pause-tier.test.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/query/retry-context.ts` | `default as Anthropic` |
 | `src/agent/providers/anthropic-direct/query/retry-layer.ts` | `default as Anthropic` |
+| `src/agent/providers/anthropic-direct/read-only-memory.test.ts` | `default as Anthropic` |
 | `src/agent/session/agent-session.test.ts` | `default as Anthropic` |
+| `src/agent/session/provider-switch.test.ts` | `default as Anthropic` |
+| `src/agent/session/set-system-prompt.test.ts` | `default as Anthropic` |
+| `src/agent/subagent-dispatcher-readroot.e2e.test.ts` | `default as Anthropic` |
+| `src/agent/tools/skill-dispatch-routing.test.ts` | `default as Anthropic` |
 | `src/agent/trace/compaction.test.ts` | `default as Anthropic` |
-| `src/cli/interactive.ts` | `default as Anthropic` |
 
 ---
 

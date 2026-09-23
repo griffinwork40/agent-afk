@@ -137,6 +137,11 @@ export function resolveMaxTokens(config: AgentConfig, model: string): number {
  * replay attacker-controlled `tool_use` blocks (with arbitrary `name`/`input`)
  * into a resumed session. The allowlist check is the last defence before the
  * API call and must stay conservative.
+ *
+ * Keep in sync with ContentBlockParam union from @anthropic-ai/sdk.
+ * When the SDK adds new discriminants, add them here -- unknown types
+ * are silently filtered on resume (safe-fail, not safe-pass).
+ * See: .sdk-dependency.lock.json for SDK import tracking.
  */
 const ALLOWED_CONTENT_BLOCK_TYPES = new Set<string>([
   'text',
