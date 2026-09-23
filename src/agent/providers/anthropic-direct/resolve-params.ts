@@ -195,6 +195,13 @@ export function filterContentBlocks(raw: unknown[] | undefined): ContentBlockPar
  * `nextUserBlocks`; returns `true` trivially when there are no `tool_use`
  * blocks; returns `false` otherwise.
  *
+ * **Staging note (INV-048):** This function is intentionally exported but has
+ * no production caller yet — it is staged for the orphan-repair path. When
+ * wiring it into orphan-repair callers, pass **only** `nextUserBlocks` (the
+ * turn immediately following the assistant turn). The function signature
+ * enforces this, but callers must not re-introduce a dual-search by accident
+ * (i.e., do not also pass or search `currentUserBlocks`).
+ *
  * Exported for unit testing.
  */
 export function hasValidToolUsePairing(

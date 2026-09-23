@@ -692,9 +692,10 @@ describe('hasValidToolUsePairing (#2004 — only nextUserBlocks, not currentUser
     // tool_use blocks — producing a false positive. The narrowed function must
     // return false here because nextUserBlocks has no matching result.
     const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1')];
-    // The tool_result is in currentUserBlocks (preceding user turn) — NOT nextUserBlocks.
-    // We simulate the caller passing only nextUserBlocks to the function; the
-    // preceding-turn blocks are intentionally withheld (never passed in).
+    // The function signature only accepts `nextUserBlocks` — `currentUserBlocks`
+    // is never a parameter. This test verifies that an empty next-turn yields
+    // `false`, which is the structural guarantee preventing the false-positive
+    // that a dual-search function would allow.
     const nextUserBlocks: ContentBlockParam[] = []; // no result in the next turn
     expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(false);
   });
