@@ -11,6 +11,7 @@
 
 import { env } from '../config/env.js';
 import { loadClaudeCodeOauthToken } from '../agent/auth/keychain.js';
+import { loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 
 /**
  * Describe which Anthropic credential source is active, in the same
@@ -25,5 +26,9 @@ export function describeCredentialSource(): string {
   if (env.CLAUDE_CODE_OAUTH_TOKEN) return 'CLAUDE_CODE_OAUTH_TOKEN';
   // Tiers 3+4 are both "Claude Code login" from the user's perspective.
   if (loadClaudeCodeOauthToken()) return 'Claude Code login (keychain)';
+  // Tier 3 (process-local refreshed token) is not directly checkable from here,
+  // but loadAnthropicCredential covers all 4 tiers. If it resolves, the source
+  // is a keychain-derived credential (tier 3 or 4 under a different read path).
+  if (loadAnthropicCredential()) return 'Claude Code login (keychain)';
   return 'existing credential';
 }
