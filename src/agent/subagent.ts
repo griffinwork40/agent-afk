@@ -28,6 +28,8 @@ import { AgentSession } from './session.js';
 import type { AgentConfig } from './types.js';
 import type { SubagentProgressSink, OutputEvent } from './types/session-types.js';
 import { dispatchSubagentStart } from './subagent-hooks.js';
+import { cleanupPreConstructionFailure } from './subagent/fork-pre-construction-cleanup.js';
+import { buildOnTerminal } from './subagent/on-terminal.js';
 import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
@@ -360,10 +362,25 @@ export class SubagentManager {
     // External constraint: AbortGraph nodes registered before child construction
     // must be released if construction fails — otherwise graph accumulates orphan
     // nodes across forge/farm runs that retry on misconfigured models.
-    // The try/catch below disposes the node on any synchronous construction error.
+    //
+    // Invariant: the try/catch below covers EVERY statement between register()
+    // and active.set() — including resolveReadScope (async, can throw on
+    // subprocess/fs error), assembleChildConfig (sync, can throw on corrupt
+    // workspaceStore), and the occupancy heartbeat setup. A throw in ANY of
+    // these must dispose the graph node and disarm the heartbeat. Prior to this
+    // fix the try block started at AgentSession construction, leaving five
+    // statements (resolveReadScope through wireWorkspaceSubscriptions) outside
+    // the guard — a throw there leaked the graph node permanently.
     this.abortGraph.register(id, childController);
     this.abortGraph.linkChild(this.rootId, id);
 
+    let stopOccupancyHeartbeat: () => void = () => {};
+    let childConfig: AgentConfig;
+    let session: AgentSession;
+    let handle: SubagentHandleImpl<T>;
+    let effectiveAgentType: string | undefined;
+    let effectiveResolvedAgentType: string | undefined;
+    try {
     // Read-scope inheritance (#416/#441 successor — see ./subagent-read-scope
     // and ./subagent/resolve-fork-scope). Invariants (Gap A/B/C, farm-pin,
     // unconfined-parent) are documented and enforced inside that helper.
@@ -384,7 +401,7 @@ export class SubagentManager {
     // output cap, credential gating, anti-hang constraints, scope inheritance,
     // phase-role enforcement) live in assembleChildConfig with their Invariant:/
     // External constraint: comments. See ./subagent/fork-child-config.ts.
-    const childConfig: AgentConfig = assembleChildConfig({
+    childConfig = assembleChildConfig({
       options,
       id,
       resume,
@@ -421,7 +438,6 @@ export class SubagentManager {
     // construction throw) already has the inverse in hand and cannot orphan the
     // timer. The timer is unref()'d, so even a leaked one cannot hold the
     // process open.
-    let stopOccupancyHeartbeat: () => void = () => {};
     if (childConfig.cwd !== undefined) {
       void touchWorktreeOccupancy(childConfig.cwd);
       stopOccupancyHeartbeat = startWorktreeOccupancyHeartbeat(childConfig.cwd);
@@ -432,18 +448,6 @@ export class SubagentManager {
 
     // Workspace subscriptions (Pillar 3): two-phase init mirrors progress events.
     const wsSubs = wireWorkspaceSubscriptions(this.workspaceStore, id, effectiveTraceWriter, childConfig.provider as never);
-
-    // Ordering constraint: the heartbeat armed above is disarmed by the settle
-    // callback installed on the handle built below, so the guarded span has to
-    // run from construction all the way through `active.set`. A throw anywhere
-    // in between — the parent-stream read, the sink resolve, the handle
-    // constructor — would otherwise return with the interval live and no handle
-    // in existence to ever cancel it, and the tree would never be reaped again.
-    let session: AgentSession;
-    let handle: SubagentHandleImpl<T>;
-    let effectiveAgentType: string | undefined;
-    let effectiveResolvedAgentType: string | undefined;
-    try {
       session = new AgentSession(childConfig);
       const parentInputStreamRef = options.parent.getInputStreamRef?.();
       const parentAbortSignal = options.parent.abortSignal;
@@ -477,40 +481,18 @@ export class SubagentManager {
         // drift. Unchanged behaviour: this still aborts a wedged child on schedule.
         effectiveTimeoutMs,
         registry,
-        () => {
-          // Runs on every terminal outcome of the child — success, failure,
-          // timeout, and abort — so it is the settle hook the heartbeat's
-          // teardown belongs on.
-          stopOccupancyHeartbeat();
-          // Emit subagent_lifecycle terminal event into the parent output stream.
-          // handle._currentStatus is already set before _onTerminal fires.
-          const rawStatus = handle._currentStatus;
-          const terminalStatus: 'succeeded' | 'failed' | 'cancelled' =
-            rawStatus === 'succeeded' || rawStatus === 'failed' || rawStatus === 'cancelled'
-              ? rawStatus : 'succeeded';
-          this.outputEventSink?.({
-            type: 'subagent_lifecycle',
-            subagentId: id,
-            status: terminalStatus,
-            ...(handle._lastDurationMs !== undefined ? { durationMs: handle._lastDurationMs } : {}),
-            ...(handle._currentTrace.turnCount > 0 ? { turnCount: handle._currentTrace.turnCount } : {}),
-            ...(handle._lastStopReason !== undefined ? { stopReason: handle._lastStopReason } : {}),
-          });
-          this.active.delete(id);
-          this.abortGraph.dispose(id);
-          void logWriter?.close();
-          // Populate the completed cache so manager.get(id) keeps working
-          // after the handle leaves the active map. All handle state fields
-          // (_currentStatus, _currentTrace, _lastStopReason) are fully set
-          // by run() before _onTerminal() fires.
-          this.completed.recordHandle(
-            id,
-            handle as SubagentHandle<unknown>,
-            handle._currentStatus,
-            handle._currentTrace,
-            handle._lastStopReason,
-          );
-        },
+        // _onTerminal: idempotent settle callback. See on-terminal.ts for the
+        // cancel/run race rationale and the full lifecycle it covers. The lazy
+        // `getHandle` indirection lets the closure capture `handle` after it is
+        // assigned below (handle is declared before the try but assigned inside it).
+        buildOnTerminal({
+          id, stopOccupancyHeartbeat,
+          outputEventSink: this.outputEventSink,
+          activeMap: this.active as Map<string, unknown>,
+          abortGraph: this.abortGraph,
+          logWriter: logWriter ?? undefined,
+          completedCache: this.completed,
+        }, () => handle),
         parentInputStreamRef,
         parentAbortSignal,
         // agentType: explicit override → idPrefix fallback. Lets callers
@@ -547,13 +529,13 @@ export class SubagentManager {
       wsSubs.bindHandle(handle as SubagentHandleImpl<unknown>);
       this.active.set(id, handle as SubagentHandleImpl<unknown>);
     } catch (err) {
-      // Construction or manager-wiring failed (invalid model, sync init
-      // failure, a throwing parent-stream/sink read). Release the graph node
-      // registered above so an orphan cannot accumulate across retry loops
-      // (forge/farm), and disarm the occupancy heartbeat — there is no child
-      // left to protect, and a live timer here would pin the worktree forever.
-      stopOccupancyHeartbeat();
-      this.abortGraph.dispose(id);
+      // Construction or pre-construction setup failed. Clean up the abort-graph
+      // node + heartbeat + fire best-effort SubagentStop (SubagentStart already
+      // fired above). See fork-pre-construction-cleanup.ts for the full rationale.
+      cleanupPreConstructionFailure({
+        id, abortGraph: this.abortGraph, stopOccupancyHeartbeat,
+        registry, traceWriter: effectiveTraceWriter,
+      });
       throw err;
     }
 
