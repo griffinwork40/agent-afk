@@ -23,7 +23,7 @@ Open source. Runs locally. Works with any model provider, including local models
 
 ```bash
 npm install -g agent-afk    # Node ≥ 22 required
-afk login                   # connect your Anthropic key (or set ANTHROPIC_API_KEY)
+afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation
 ```
@@ -32,7 +32,7 @@ That's it. You're in.
 
 **Try without installing:** `npx agent-afk chat "hello"` runs a one-shot turn with zero global install.
 
-**Already using Claude Code or Codex?** Run `afk migrate` -- it imports your existing plugins, skills, and MCP servers. It doesn't copy files; it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
+**Already using Claude Code or Codex?** `afk login` will detect your existing credentials automatically. Run `afk migrate` to import your plugins, skills, and MCP servers too -- it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
 
 > 📖 **Full documentation at [docs.agentafk.com](https://docs.agentafk.com)** -- quickstart, configuration, model setup, surfaces, skills, and SDK reference.
 
