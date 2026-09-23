@@ -15,6 +15,8 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_MICROCOMPACT_KEEP_LAST,
   DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES,
+  DEFAULT_MICROCOMPACT_DELEGATION_BYTES,
+  DELEGATION_TOOL_NAMES,
   MICROCOMPACT_PLACEHOLDER_SENTINEL,
   buildMicrocompactPlaceholder,
   byteLengthOf,
@@ -29,6 +31,8 @@ import {
 interface FakeMsg {
   kind: 'text' | 'tool_result';
   content: string;
+  /** Optional tool name for delegation-aware tests. */
+  toolName?: string;
 }
 
 /**
@@ -44,6 +48,7 @@ const fakeOps: MicrocompactOps<FakeMsg> = {
       refs.push({
         byteLength: byteLengthOf(msg.content),
         isPlaceholder: isMicrocompactPlaceholder(msg.content),
+        toolName: msg.toolName,
         clear(placeholder: string): void {
           msg.content = placeholder;
         },
@@ -215,5 +220,87 @@ describe('resolveMicrocompactOptions', () => {
   it('accepts a valid keepLast including 0 (protect nothing)', () => {
     expect(resolveMicrocompactOptions(undefined, '0').keepLast).toBe(0);
     expect(resolveMicrocompactOptions(undefined, '2').keepLast).toBe(2);
+  });
+
+  it('resolves delegation threshold from third arg', () => {
+    expect(resolveMicrocompactOptions(undefined, undefined, '32768').delegationThresholdBytes).toBe(32768);
+    expect(resolveMicrocompactOptions(undefined, undefined, undefined).delegationThresholdBytes).toBe(DEFAULT_MICROCOMPACT_DELEGATION_BYTES);
+    expect(resolveMicrocompactOptions(undefined, undefined, '').delegationThresholdBytes).toBe(DEFAULT_MICROCOMPACT_DELEGATION_BYTES);
+    expect(resolveMicrocompactOptions(undefined, undefined, 'bad').delegationThresholdBytes).toBe(DEFAULT_MICROCOMPACT_DELEGATION_BYTES);
+  });
+});
+
+describe('delegation-aware microcompaction', () => {
+  // Helper: build a tool_result message with a given size, optionally tagged
+  // as produced by a delegation tool (agent/compose/skill).
+  function mkResult(bytes: number, toolName?: string): FakeMsg {
+    return { kind: 'tool_result', content: 'x'.repeat(bytes), toolName };
+  }
+
+  it('clears a large ordinary tool result but spares an equally-large agent result at the default threshold', () => {
+    // Both results are 4KB -- above the ordinary threshold (2KB) but below
+    // the delegation threshold (16KB).
+    const msgs: FakeMsg[] = [
+      mkResult(4000, 'bash'),           // ordinary -- should be cleared
+      mkResult(4000, 'agent'),          // delegation -- should be spared
+      { kind: 'text', content: 'hi' },  // padding to avoid keepLast
+    ];
+    const r = microcompactToolResults(msgs, fakeOps, {
+      thresholdBytes: 2048,
+      delegationThresholdBytes: DEFAULT_MICROCOMPACT_DELEGATION_BYTES,
+      keepLast: 0,
+    });
+    expect(r.blocksCleared).toBe(1);
+    expect(isMicrocompactPlaceholder(msgs[0]!.content)).toBe(true);
+    expect(isMicrocompactPlaceholder(msgs[1]!.content)).toBe(false);
+  });
+
+  it('clears a delegation result when it exceeds the delegation threshold', () => {
+    const msgs: FakeMsg[] = [
+      mkResult(20000, 'agent'), // above 16KB delegation threshold
+    ];
+    const r = microcompactToolResults(msgs, fakeOps, {
+      thresholdBytes: 2048,
+      delegationThresholdBytes: 16384,
+      keepLast: 0,
+    });
+    expect(r.blocksCleared).toBe(1);
+    expect(isMicrocompactPlaceholder(msgs[0]!.content)).toBe(true);
+  });
+
+  it('applies delegation threshold to compose and skill tools', () => {
+    for (const tool of ['compose', 'skill']) {
+      const msgs: FakeMsg[] = [mkResult(4000, tool)];
+      const r = microcompactToolResults(msgs, fakeOps, {
+        thresholdBytes: 2048,
+        delegationThresholdBytes: 16384,
+        keepLast: 0,
+      });
+      expect(r.blocksCleared).toBe(0);
+      expect(isMicrocompactPlaceholder(msgs[0]!.content)).toBe(false);
+    }
+  });
+
+  it('treats results without toolName as ordinary (uses the lower threshold)', () => {
+    const msgs: FakeMsg[] = [mkResult(4000)]; // no toolName
+    const r = microcompactToolResults(msgs, fakeOps, {
+      thresholdBytes: 2048,
+      delegationThresholdBytes: 16384,
+      keepLast: 0,
+    });
+    expect(r.blocksCleared).toBe(1);
+    expect(isMicrocompactPlaceholder(msgs[0]!.content)).toBe(true);
+  });
+
+  it('DELEGATION_TOOL_NAMES contains exactly agent, compose, skill', () => {
+    expect(DELEGATION_TOOL_NAMES.has('agent')).toBe(true);
+    expect(DELEGATION_TOOL_NAMES.has('compose')).toBe(true);
+    expect(DELEGATION_TOOL_NAMES.has('skill')).toBe(true);
+    expect(DELEGATION_TOOL_NAMES.size).toBe(3);
+  });
+
+  it('DEFAULT_MICROCOMPACT_DELEGATION_BYTES is 8x the ordinary default', () => {
+    expect(DEFAULT_MICROCOMPACT_DELEGATION_BYTES).toBe(16384);
+    expect(DEFAULT_MICROCOMPACT_DELEGATION_BYTES).toBe(DEFAULT_MICROCOMPACT_TOOL_RESULT_BYTES * 8);
   });
 });
