@@ -12,38 +12,22 @@
  * @module utils/envFile
  */
 
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'fs';
-import { dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { escapeRegExp } from './regexp.js';
+import { atomicWriteFile as _atomicWriteFile } from './atomic-write.js';
 
 /**
- * Write `contents` to `filePath` atomically: write a sibling temp file, then
- * `rename` it over the target. `rename` is atomic on a single filesystem, so a
- * crash mid-write can never leave a half-written `.env` (which would drop or
- * corrupt secrets and config). The temp file inherits the same restrictive
- * `mode` so the secret is never briefly world-readable.
- *
- * Invariant: temp and target must share a directory (same filesystem) for the
- * rename to be atomic — we derive the temp path from `filePath` to guarantee it.
+ * Backward-compatible wrapper around the shared `atomicWriteFile` from
+ * `utils/atomic-write.ts`, preserving the legacy positional `mode` signature
+ * used by every existing caller in `src/config/`, `src/improve/`, etc.
  *
  * Exported so the config-mutation engine can reuse one atomic-write
  * implementation for both afk.env and afk.config.json.
+ *
+ * Contract: `mode` defaults to `0o600` when omitted (same as before).
  */
 export function atomicWriteFile(filePath: string, contents: string, mode = 0o600): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    writeFileSync(tmp, contents, { mode });
-    renameSync(tmp, filePath);
-  } catch (err) {
-    // Best-effort cleanup of the temp file on failure; ignore unlink errors.
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      /* ignore */
-    }
-    throw err;
-  }
+  _atomicWriteFile(filePath, contents, { mode });
 }
 
 /**

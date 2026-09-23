@@ -46,9 +46,9 @@
  * @module agent/permissions-store
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
-import { dirname, isAbsolute } from 'path';
-import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { isAbsolute } from 'path';
+import { atomicWriteFile } from '../utils/atomic-write.js';
 import { getPermissionsStorePath } from '../paths.js';
 import { errorMessage } from '../utils/errors.js';
 
@@ -287,19 +287,10 @@ export function seedPersistedGrants(
 }
 
 /**
- * Atomic write: temp-file + rename. Mirrors the pattern used elsewhere in
- * agent-afk for config files (`~/.afk/config/afk.config.json` etc.) so
- * concurrent reads never see a half-written JSON document.
+ * Atomic write: temp-file + rename. Delegates to the shared utility in
+ * `utils/atomic-write.ts`; retained as a named local function so call-sites
+ * stay unchanged and the `PermissionsFile` serialisation is co-located.
  */
 function writeAtomic(filePath: string, contents: PermissionsFile): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  // randomUUID (not Date.now()) keeps the temp name collision-free even when
-  // two persist writes land in the same process-millisecond — Date.now() has
-  // ms granularity, so concurrent writes could share a temp name and lose a
-  // grant to last-write-wins.
-  const tmp = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
-  writeFileSync(tmp, JSON.stringify(contents, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
-  // fs.renameSync is atomic within a single filesystem on POSIX + NTFS;
-  // sufficient for our user-scope config file.
-  renameSync(tmp, filePath);
+  atomicWriteFile(filePath, JSON.stringify(contents, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
 }

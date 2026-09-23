@@ -19,9 +19,9 @@
  * @module agent/daemon/handoff-store
  */
 
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { assertSafeJobId, getHandoffsDir } from '../../paths.js';
 
 // ---------------------------------------------------------------------------
@@ -131,16 +131,7 @@ function lockPath(dir: string, taskId: string): string {
 
 /** Atomically write JSON to dest via a tmp file in the same directory (owner-only: 0o600). */
 async function atomicWriteJson(dest: string, data: unknown): Promise<void> {
-  const dir = join(dest, '..');
-  const tmp = join(dir, `.tmp-${randomBytes(4).toString('hex')}.json`);
-  try {
-    await writeFile(tmp, JSON.stringify(data), { encoding: 'utf-8', mode: 0o600 });
-    await rename(tmp, dest);
-  } catch (err) {
-    // Best-effort cleanup of the temp file on failure.
-    try { await rm(tmp, { force: true }); } catch { /* ignore */ }
-    throw err;
-  }
+  await atomicWriteFileAsync(dest, JSON.stringify(data), { encoding: 'utf-8', mode: 0o600, mkdirp: false });
 }
 
 // ---------------------------------------------------------------------------

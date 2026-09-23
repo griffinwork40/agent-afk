@@ -24,10 +24,9 @@ import {
   readFileSync,
   renameSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 import { getQueueDir } from '../../paths.js';
 import { env } from '../../config/env.js';
 import { type QueuedTask } from './queue-store.js';
@@ -86,16 +85,7 @@ function deadLetterPath(queueDir: string, taskId: string): string {
 
 /** Atomically write JSON to dest via a tmp file in the same directory. */
 function atomicWriteJson(dest: string, data: unknown): void {
-  const dir = join(dest, '..');
-  mkdirSync(dir, { recursive: true });
-  const tmp = join(dir, `.tmp-${randomBytes(4).toString('hex')}.json`);
-  try {
-    writeFileSync(tmp, JSON.stringify(data), 'utf-8');
-    renameSync(tmp, dest);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* ignore */ }
-    throw err;
-  }
+  atomicWriteFile(dest, JSON.stringify(data), { encoding: 'utf-8' });
 }
 
 // ---------------------------------------------------------------------------
