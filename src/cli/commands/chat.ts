@@ -20,7 +20,8 @@ import { costTokenParts } from '../render/session-summary.js';
 import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints, activateDumpPrompt } from '../shared-helpers.js';
 import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
 import { loadConfig } from '../config.js';
-import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
+import { applyTheme, resolveTheme, resolveThemeMode } from '../theme.js';
+import { applySharedChatOptions } from './shared-command-options.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
 import { renderMarkdownToTerminal } from '../formatter.js';
 import { formatSubagentCompletion } from './interactive/progress-banner.js';
@@ -125,46 +126,24 @@ function writeAndDrain(stream: NodeJS.WritableStream, chunk: string): Promise<vo
 }
 
 export function registerChatCommand(program: Command): void {
-  program
-    .command('chat')
-    .description('Send a message to the agent')
-    // Message is optional: omit when piping via stdin (or pass `-` explicitly).
-    .argument('[message]', 'Message to send; use `-` or omit to read from stdin')
-    .option(
-      '-m, --model <model>',
-      'Model to use. Short aliases: opus|opus_1m|sonnet|sonnet_1m|haiku. ' +
-        'Any other value (e.g. `auto` for cursor-api-proxy, or a full `claude-*` ID) passes through to the SDK/proxy untouched.',
-      getModel(),
-    )
-    // NOTE: this flag is currently inert — use `--format stream-json` for a
-    // streaming output path. `--stream` is reserved for future token-by-token
-    // terminal rendering; do not rely on it for structured output.
+  // Build the command with shared options, then append chat-specific flags.
+  // NOTE: --stream is currently inert — use --format stream-json for headless
+  // streaming. Reserved for future token-by-token terminal rendering.
+  applySharedChatOptions(
+    program
+      .command('chat')
+      .description('Send a message to the agent')
+      // Message is optional: omit when piping via stdin (or pass `-` explicitly).
+      .argument('[message]', 'Message to send; use `-` or omit to read from stdin'),
+    { maxTurnsDefault: '10' },
+  )
     .option('-s, --stream', '[no-op] reserved; use --format stream-json for headless streaming', false)
     .option('-f, --format <format>', 'Output format (text|json|stream-json)', 'text')
-    .option('--max-turns <number>', 'Maximum conversation turns', '10')
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'", 'enabled:max')
-    .option('--effort <level>', "Effort level: low|medium|high|xhigh|max")
-    .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json.', parseThemeFlag)
     .option('--max-budget-usd <usd>', 'Hard session cost ceiling in USD. Env: AFK_MAX_BUDGET_USD')
     .option('--task-budget <tokens>', 'Soft per-task token budget. Env: AFK_TASK_BUDGET')
-    .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
-    .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible|xai|xai-oauth. Default: auto-selected by model")
-    .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
-    .option(
-      '-w, --worktree [branch]',
-      'Create a git worktree for an isolated one-shot. Optional value sets the branch name; otherwise auto-named. On clean exit (no uncommitted changes) the worktree and branch are auto-removed; on dirty exit the worktree is preserved. Mirrors `afk interactive -w`.',
-    )
-    .option(
-      '--worktree-base <ref>',
-      'Base git ref for the worktree created by --worktree. Default: the remote\'s default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE.',
-    )
-    .option('--mcp-config <path>', 'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.')
-    .option('--resume <id>', 'Resume a persisted session by id')
-    .option('--continue', 'Continue the most recent persisted session in cwd')
     .option('--session-id <uuid>', 'Assign a specific UUID to this session (creates new; errors if already exists)')
     .option('--post <targets>', 'Headless publish of the final assistant message: github, telegram, or github,telegram')
     .option('--post-pr <ref>', 'PR number, URL, or branch for --post github (defaults to the current-branch PR)')
-    .option('--dangerously-skip-permissions', 'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation (permissionMode=bypassPermissions). Disable persistently with `afk config set permissionMode default`. Does not affect ask_question.')
     .action(async (rawMessage: string | undefined, options: {
       model: AgentModelInput;
       stream: boolean;

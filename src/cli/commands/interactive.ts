@@ -8,7 +8,8 @@ import { welcomeBanner, divider } from '../render.js';
 import { formatDuration } from '../format-utils.js';
 import { costTokenParts } from '../render/session-summary.js';
 import { registerCleanup, runCleanupFunctions } from '../../utils/cleanupRegistry.js';
-import { getModel, activateDumpPrompt } from '../shared-helpers.js';
+import { activateDumpPrompt } from '../shared-helpers.js';
+import { applySharedChatOptions } from './shared-command-options.js';
 import { palette } from '../palette.js';
 import { setTerminalTitleIfEnabled, formatTerminalTitle } from '../_lib/capture-mode.js';
 import { saveSession } from '../session-store.js';
@@ -27,7 +28,7 @@ import { getApiKey } from '../shared-helpers.js';
 import { loadConfig, type CliConfig } from '../config.js';
 import { resolveResumeTarget } from '../resume-session.js';
 import type { CliOptions, InteractiveCtx, ThinkingUiMode } from './interactive/shared.js';
-import { applyTheme, resolveTheme, resolveThemeMode, parseThemeFlag } from '../theme.js';
+import { applyTheme, resolveTheme, resolveThemeMode } from '../theme.js';
 import { REPL_SPINNER_OPTIONS, printResumeBanner } from './interactive/shared.js';
 import { handleCommandError } from '../errors/index.js';
 import { type UpdateInfo, printUpdateBanner } from '../update-checker.js';
@@ -193,33 +194,33 @@ export function startupHintLine(): string {
 }
 
 export function registerInteractiveCommand(program: Command): void {
-  const interactiveCmd = program
-    .command('interactive', { isDefault: true })
-    .description('Start interactive chat session')
-    .argument(
-      '[input...]',
-      'Optional first message — or a /slash-command — auto-submitted as the opening turn. ' +
-        'E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL.',
-    )
-    .option(
-      '-m, --model <model>',
-      'Model to use. Short aliases: opus|opus_1m|sonnet|sonnet_1m|haiku. ' +
-        'Any other value (e.g. `auto` for cursor-api-proxy, or a full `claude-*` ID) passes through to the SDK/proxy untouched.',
-      getModel(),
-    )
-    .option('--max-turns <number>', 'Maximum conversation turns', '100')
-    .option('--thinking <mode>', "Thinking mode: 'adaptive' | 'disabled' | 'max' | 'enabled:<N>'", 'enabled:max')
+  // Build the command with shared options, then append interactive-only flags.
+  const interactiveCmd = applySharedChatOptions(
+    program
+      .command('interactive', { isDefault: true })
+      .description('Start interactive chat session')
+      .argument(
+        '[input...]',
+        'Optional first message — or a /slash-command — auto-submitted as the opening turn. ' +
+          'E.g. `afk "what does this project do"` or `afk /review`. A bare `afk` starts an empty REPL.',
+      ),
+    {
+      maxTurnsDefault: '100',
+      themeDescriptionSuffix: 'Toggle live with /theme.',
+      worktreeDescription:
+        'Create a git worktree for an isolated session. Optional value sets the branch name; ' +
+        'otherwise auto-named. On clean interactive exit, choose whether to keep or delete it; ' +
+        'dirty worktrees are always preserved.',
+      worktreeBaseDescriptionSuffix:
+        ', or interactive.worktreeBase in afk.config.json.',
+      dangerouslySkipPermissionsDescription:
+        'Force bypass mode (already the default for new installs): skip path-approval prompts; ' +
+        'read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); ' +
+        'disable persistently with `afk config set permissionMode default`. Does not affect ask_question.',
+    },
+  )
     .option('--thinking-ui <mode>', 'Thinking display mode: summary|live|digest|off. Default live. Also: AFK_THINKING_UI env, or interactive.thinkingUi in afk.config.json.', parseThinkingUiMode)
-    .option('--theme <mode>', 'TUI color palette: dark|light|umber|auto. Default dark. umber matches the Umber terminal (dark-only). Also: AFK_THEME env, or theme in afk.config.json. Toggle live with /theme.', parseThemeFlag)
-    .option('--effort <level>', 'Effort level: low|medium|high|xhigh|max')
-    .option('--max-output-tokens <n|max>', "Per-response output cap ('max' = model ceiling). Env: AFK_MAX_OUTPUT_TOKENS")
-    .option('--resume <id>', 'Resume a persisted SDK session by id')
-    .option('--continue', 'Continue the most recent persisted session in cwd')
     .option('--debug', 'Show SDK init metadata on startup; enables /debug command', false)
-    .option(
-      '-w, --worktree [branch]',
-      'Create a git worktree for an isolated session. Optional value sets the branch name; otherwise auto-named. On clean interactive exit, choose whether to keep or delete it; dirty worktrees are always preserved.',
-    )
     .option(
       '--worktree-on-exit <ask|keep|remove>',
       'Clean-worktree quit policy. Default: ask on TTY, remove otherwise. Also: AFK_WORKTREE_ON_EXIT, or interactive.worktreeOnExit in afk.config.json.',
@@ -229,19 +230,8 @@ export function registerInteractiveCommand(program: Command): void {
       'Disable mid-session rename of auto-named worktrees from the first user message via haiku. Default on. Also: AFK_WORKTREE_AUTONAME=0, or interactive.worktreeAutoname:false in afk.config.json.',
     )
     .option(
-      '--worktree-base <ref>',
-      'Base git ref for the worktree created by --worktree. Default: the remote\'s default branch (origin/main), fetched fresh. Pass HEAD to base on your local checkout instead. Also: AFK_WORKTREE_BASE, or interactive.worktreeBase in afk.config.json.',
-    )
-    .option(
       '--no-shell-passthrough',
       'Disable the ! shell-passthrough feature. When set, inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Also: AFK_SHELL_PASSTHROUGH set to 0, false, off, or no.',
-    )
-    .option('--provider <name>', "Provider to use: anthropic|anthropic-direct|openai|openai-compatible|xai|xai-oauth. Default: auto-selected by model")
-    .option('--dump-prompt [path]', 'Dump resolved SDK prompt+options+provenance to file (default: ~/.afk/logs/prompt-dump-<ISO>.json) or "stderr"')
-    .option('--dangerously-skip-permissions', 'Force bypass mode (already the default for new installs): skip path-approval prompts; read/write ANY path with no confirmation. Toggle live with Shift+Tab (permission-mode cycle); disable persistently with `afk config set permissionMode default`. Does not affect ask_question.')
-    .option(
-      '--mcp-config <path>',
-      'Path to an additional MCP config file (highest priority — merges over ~/.afk/config/mcp.json, project-local .mcp.json, and plugin-contributed configs). File format identical to mcp.json.',
     )
     .option(
       '--plain',
