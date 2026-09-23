@@ -66,11 +66,11 @@ import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep
 import { sweepSessionSidecars, SESSION_SIDECAR_SWEEP_START_DELAY_MS } from '../session-sidecar-sweep.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SubagentOutputRecorder } from './subagent-output-capture.js';
-import { buildProviderLifecycle, runInitialization } from './provider-lifecycle.js';
+import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
 import { resetSession } from './session-reset.js';
-import * as pt from './provider-passthrough.js';
+import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 
@@ -281,16 +281,18 @@ export class AgentSession implements IAgentSession {
       getLedgerMetadata: () => this.stateManager.getSessionMetadata(),
     });
 
-    this.initPromise = runInitialization(
+    const initializer = new ProviderInitializer(
       this.config,
-      () => this.providerIterator,
       this.abortController.signal,
-      this.stateManager,
       this.accounting,
       this.shutdown,
       this._hookRegistry,
       (text) => this.queueFrameworkContext(text),
+    );
+    this.initPromise = initializer.run(
+      () => this.providerIterator,
       () => this.runner.buildTransformDeps(),
+      this.stateManager,
     );
   }
 
@@ -414,18 +416,18 @@ export class AgentSession implements IAgentSession {
   getSessionMetadata(): SessionMetadata { return this.stateManager.getSessionMetadata(); }
   getQuery(): ProviderQuery { return this.providerQuery; }
 
-  supportedCommands(): Promise<ProviderCommandInfo[]> { return pt.supportedCommands(this.makePassthroughDeps()); }
-  supportedModels(): Promise<ModelInfo[]> { return pt.supportedModels(this.makePassthroughDeps()); }
-  supportedAgents(): Promise<AgentInfo[]> { return pt.supportedAgents(this.makePassthroughDeps()); }
-  getContextUsage(): Promise<SDKControlGetContextUsageResponse> { return pt.getContextUsage(this.makePassthroughDeps()); }
-  mcpServerStatus(): Promise<McpServerStatus[]> { return pt.mcpServerStatus(this.makePassthroughDeps()); }
-  accountInfo(): Promise<AccountInfo> { return pt.accountInfo(this.makePassthroughDeps()); }
-  rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<RewindFilesResult> { return pt.rewindFiles(userMessageId, options, this.makePassthroughDeps()); }
-  compact(): Promise<ProviderCompactResult> { return pt.compact(this.makePassthroughDeps()); }
-  listRewindTargets(): RewindTarget[] { return pt.listRewindTargets(this.makePassthroughDeps()); }
-  rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult> { return pt.rewindConversation(turnIndex, this.makePassthroughDeps()); }
+  supportedCommands(): Promise<ProviderCommandInfo[]> { return this.providerQuery.supportedCommands(); }
+  supportedModels(): Promise<ModelInfo[]> { return this.providerQuery.supportedModels() as Promise<ModelInfo[]>; }
+  supportedAgents(): Promise<AgentInfo[]> { return this.providerQuery.supportedAgents() as Promise<AgentInfo[]>; }
+  getContextUsage(): Promise<SDKControlGetContextUsageResponse> { return this.providerQuery.getContextUsage() as Promise<SDKControlGetContextUsageResponse>; }
+  mcpServerStatus(): Promise<McpServerStatus[]> { return this.providerQuery.mcpServerStatus() as Promise<McpServerStatus[]>; }
+  accountInfo(): Promise<AccountInfo> { return this.providerQuery.accountInfo(); }
+  rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<RewindFilesResult> { return this.providerQuery.rewindFiles(userMessageId, options); }
+  compact(): Promise<ProviderCompactResult> { return compact.compactSession(this.makeCompactDeps()); }
+  listRewindTargets(): RewindTarget[] { return compact.listRewindTargets(this.makeCompactDeps()); }
+  rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult> { return compact.rewindConversation(turnIndex, this.makeCompactDeps()); }
 
-  private makePassthroughDeps() {
+  private makeCompactDeps() {
     return {
       getState: () => this.currentState,
       setState: (s: SessionState) => { this.currentState = s; },
