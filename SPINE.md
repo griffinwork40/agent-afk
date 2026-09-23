@@ -5,7 +5,7 @@
 
 ## Invariants
 
-- **INV-001** (2026-09-17, spine-init): Long comment blocks (≥15 lines) must open with `// Invariant:`, `// Contract:`, or `// History:` (reinforced 2026-09-18)
+- **INV-001** (2026-09-17, spine-init): Long comment blocks (≥15 lines) must open with `// Invariant:`, `// Contract:`, or `// History:` (reinforced 2026-09-21)
 - **INV-002** (2026-09-17, spine-init): Every DECSTBM emit must be bracketed by `\x1b[s`/`\x1b[u` save/restore or carry a comment explaining why cursor-home is 
 - **INV-003** (2026-09-17, spine-init): Before first `log-update.render()` of a session, cursor must be at the target row (typically `stdout.rows - 1`)
 - **INV-004** (2026-09-17, spine-init): Lifecycle flag must be set synchronously before any `await` that could trigger interval timer or resize handler re-entry
@@ -27,6 +27,12 @@
 - **INV-020** (2026-09-18, 3c2d6194-0ab7-4c30-a9e2-56e9d477ae2d): Handler exception caught in hook dispatch must wrap in HookBlockedError (fail-safe, not fail-open)
 - **INV-021** (2026-09-18, 3c2d6194-0ab7-4c30-a9e2-56e9d477ae2d): Hook handler return { decision: 'block' } must short-circuit the handler chain immediately
 - **INV-022** (2026-09-18, f1884bb2-c075-46d5-b0ea-f61d48342e64): Overlay content must not exceed viewport height; cap after word-wrap to prevent ghost-row duplicates in scrollback
+- **INV-023** (2026-09-20, 14f28f71-2484-4a6d-8051-8de4fab6d70f): Try/catch guard must span ALL statements from subagent register to active.set, including async operations. (reinforced 2
+- **INV-024** (2026-09-20, 14f28f71-2484-4a6d-8051-8de4fab6d70f): Occupancy heartbeat teardown must live on the settle callback of the subagent handle. (reinforced 2026-09-21)
+- **INV-025** (2026-09-20, 77b0e613-0c77-42fa-99fd-847c5d7ed4a0): Pre-construction failure cleanup must fire SubagentStop events for symmetry with SubagentStart. (reinforced 2026-09-21)
+- **INV-026** (2026-09-20, 74b26044-ff88-4e7e-8155-90d0118e5cac): On-terminal settle callback must remain idempotent to survive cancel/run race conditions. (reinforced 2026-09-21)
+- **INV-027** (2026-09-20, 74b26044-ff88-4e7e-8155-90d0118e5cac): Delegation tool results (agent/compose/skill) must use higher clearance threshold (8x ordinary) in microcompaction. (rei
+- **INV-028** (2026-09-20, 0486d84e-a6d2-4677-b999-6aa6ba976fc1): Atomic file write must be centralized in utils/atomic-write.ts; all file persistence routes through this module. (reinfo
 
 
 ## Explicitly Rejected Patterns
