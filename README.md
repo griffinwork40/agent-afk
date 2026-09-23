@@ -19,23 +19,22 @@ Open source. Runs locally. Works with any model provider, including local models
 
 > ⭐ **Like the idea of an agent you can walk away from? [Star the repo](https://github.com/griffinwork40/agent-afk/stargazers)** -- it's the fastest way to help other people find it.
 
-## Install
+## Quick Start
 
 ```bash
-npm install -g agent-afk
+npm install -g agent-afk    # Node ≥ 22 required
+afk login                   # connect your Anthropic key (or set ANTHROPIC_API_KEY)
+afk doctor                  # verify everything works
+afk chat "hello"             # first real conversation
 ```
 
-Requires Node ≥ 22.
+That's it. You're in.
 
-Smoke test:
+**Try without installing:** `npx agent-afk chat "hello"` runs a one-shot turn with zero global install.
 
-```bash
-afk --version    # confirm the install (works before login)
-afk doctor       # environment self-check
-afk chat "hello"
-```
+**Already using Claude Code or Codex?** Run `afk migrate` -- it imports your existing plugins, skills, and MCP servers. It doesn't copy files; it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
 
-**Already using Claude Code or Codex?** Run `afk migrate` — it imports your existing plugins, skills, and MCP servers. It doesn't copy files; it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
+> 📖 **Full documentation at [docs.agentafk.com](https://docs.agentafk.com)** -- quickstart, configuration, model setup, surfaces, skills, and SDK reference.
 
 ## What you can do with it
 
@@ -231,7 +230,7 @@ With containment on (`default`), a file tool (read/write/edit/list/glob/grep) ta
 
 ## Troubleshooting
 
-**`invalid x-api-key` / `ANTHROPIC_API_KEY not found`** — run `afk doctor`. Confirm the key is set in your shell or in `~/.afk/config/afk.env`.
+**`invalid x-api-key` / `ANTHROPIC_API_KEY not found`** — run `afk login` to authenticate interactively, or set the key manually: `export ANTHROPIC_API_KEY=sk-ant-...` (or add it to `~/.afk/config/afk.env`). Run `afk doctor` to confirm.
 
 **`Cannot send message: session is closed`** — the session timed out or was closed. Start a new one (`afk i` or a fresh `afk chat`).
 
