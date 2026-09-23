@@ -476,6 +476,7 @@ export const agentTool: AnthropicToolDef = {
       attachments: {
         type: 'array',
         items: { type: 'string' },
+        maxItems: 8,
         description:
           'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. ' +
           'Bytes are resolved by the runtime — NEVER paste base64 into the tool call.',
@@ -650,7 +651,7 @@ export const composeTool: AnthropicToolDef = {
             max_tool_rounds: { type: 'number', description: 'Per-node tool-round budget (1–1000). Overrides compose-level max_tool_rounds_per_node.' },
             max_turns: { type: 'number', description: 'Per-node turn budget. Positive integer.' },
             agent_type: { type: 'string', description: 'Named agent type for this node (e.g. "research-agent"). The compose executor resolves the agent definition from the registry and applies its system prompt, tool allowlist, and model defaults — identical to the `agent` tool\'s agent_type resolution. Fails with a clear error naming available types when the type is unknown.' },
-            attachments: { type: 'array', items: { type: 'string' }, description: 'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. Bytes are resolved by the runtime — NEVER paste base64 into the tool call.' },
+            attachments: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. Bytes are resolved by the runtime — NEVER paste base64 into the tool call.' },
           }, required: ['id', 'prompt'], additionalProperties: false,
         },
         description: 'Subagent tasks to execute.',
