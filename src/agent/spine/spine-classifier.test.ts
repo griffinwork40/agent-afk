@@ -264,8 +264,8 @@ describe('parseClassifierOutput — field sanitization', () => {
     }
   });
 
-  it('truncates description to MAX_DESCRIPTION_LEN (120 chars)', () => {
-    const longDesc = 'A'.repeat(200);
+  it('truncates description to MAX_DESCRIPTION_LEN (300 chars)', () => {
+    const longDesc = 'A'.repeat(400);
     const raw = JSON.stringify([
       { label: 'new-addition', prefix: 'INV', description: longDesc, rationale: 'why' },
     ]);
@@ -273,7 +273,7 @@ describe('parseClassifierOutput — field sanitization', () => {
     expect(result.items).toHaveLength(1);
     const item = result.items[0];
     if (item.label === 'new-addition') {
-      expect(item.description.length).toBeLessThanOrEqual(120);
+      expect(item.description.length).toBeLessThanOrEqual(300);
     }
   });
 

@@ -10,6 +10,7 @@ import os from 'os';
 import path from 'path';
 import { createHash, randomBytes } from 'crypto';
 import { editFileHandler } from './edit-file.js';
+import { createPatchApplyHandler } from './patch-apply.js';
 
 /** Compute SHA-256 hex digest for test assertions. */
 function sha256Hex(content: string): string {
@@ -604,24 +605,59 @@ describe('editFileHandler cwd containment', () => {
       expect(await readTempFile(filePath)).toBe('current content\n');
     });
 
-    it('rejects when expected_hash has wrong format', async () => {
-      const filePath = await createTempFile('hash-bad-format.txt', 'some content\n');
+    it('rejects when expected_hash has wrong format (non-sha256 prefix)', async () => {
+      // Format validation now runs in parseEditFileInput (before file I/O),
+      // so an invalid format throws rather than returning isError.
       const signal = new AbortController().signal;
 
-      const result = await editFileHandler(
-        {
-          file_path: filePath,
-          old_string: 'some',
-          new_string: 'other',
-          expected_hash: 'md5:abc123',
-        },
-        signal,
-      );
+      await expect(
+        editFileHandler(
+          {
+            file_path: '/tmp/irrelevant.txt',
+            old_string: 'some',
+            new_string: 'other',
+            expected_hash: 'md5:abc123',
+          },
+          signal,
+        ),
+      ).rejects.toThrow(/invalid format/);
+    });
 
-      expect(result.isError).toBe(true);
-      expect(result.content).toMatch(/must start with "sha256:"/);
-      // File must not have been modified.
-      expect(await readTempFile(filePath)).toBe('some content\n');
+    it('rejects degenerate "sha256:" (prefix only, empty hex portion)', async () => {
+      // "sha256:" passes the old startsWith check but fails the new regex
+      // /^sha256:[0-9a-f]{64}$/ — the hex portion is empty (0 chars, not 64).
+      // Must be rejected at parse time (throws) before any file I/O occurs.
+      const signal = new AbortController().signal;
+
+      await expect(
+        editFileHandler(
+          {
+            file_path: '/tmp/irrelevant.txt',
+            old_string: 'some',
+            new_string: 'other',
+            expected_hash: 'sha256:',
+          },
+          signal,
+        ),
+      ).rejects.toThrow(/invalid format/);
+    });
+
+    it('rejects "sha256:" with a hex string shorter than 64 chars', async () => {
+      // Partial hex (e.g. 40 chars / MD5-length) also fails the format check.
+      const shortHex = 'a'.repeat(40);
+      const signal = new AbortController().signal;
+
+      await expect(
+        editFileHandler(
+          {
+            file_path: '/tmp/irrelevant.txt',
+            old_string: 'some',
+            new_string: 'other',
+            expected_hash: `sha256:${shortHex}`,
+          },
+          signal,
+        ),
+      ).rejects.toThrow(/invalid format/);
     });
 
     it('proceeds without hash check when expected_hash is omitted', async () => {
@@ -642,4 +678,61 @@ describe('editFileHandler cwd containment', () => {
       expect(await readTempFile(filePath)).toBe('changed\n');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Cross-tool integration: patch_apply then edit_file with stale hash (#2035)
+  // -------------------------------------------------------------------------
+
+  describe('cross-tool integration: patch_apply followed by edit_file with stale hash', () => {
+    it('edit_file with pre-patch expected_hash returns isError=true and leaves file at post-patch state', async () => {
+      // Scenario from #2028: patch_apply modifies a file, then edit_file is
+      // called with an expected_hash computed from the pre-patch content. The
+      // hash gate must catch the stale context and reject the edit without
+      // touching the file.
+      const initialContent = 'line one\nline two\nline three\n';
+      const filePath = await createTempFile('cross-tool-integration.txt', initialContent);
+
+      // Capture the pre-patch hash (this is the "stale" hash the caller will supply).
+      const prePatchHash = `sha256:${sha256Hex(initialContent)}`;
+
+      // Step 1: patch_apply modifies the file.
+      const patchHandler = createPatchApplyHandler(tempDir);
+      const patchResult = await patchHandler(
+        {
+          changes: [
+            {
+              path: filePath,
+              edits: [{ old: 'line two', new: 'LINE TWO (patched)' }],
+            },
+          ],
+        },
+        new AbortController().signal,
+        { resolveBase: tempDir, writeRoots: [tempDir], readRoots: [tempDir] },
+      );
+
+      // Confirm patch succeeded and file is now at post-patch state.
+      expect(patchResult.isError).toBeFalsy();
+      const postPatchContent = await readTempFile(filePath);
+      expect(postPatchContent).toBe('line one\nLINE TWO (patched)\nline three\n');
+
+      // Step 2: edit_file with the stale pre-patch hash must be rejected.
+      const editResult = await editFileHandler(
+        {
+          file_path: filePath,
+          old_string: 'line two',
+          new_string: 'line two (edited)',
+          expected_hash: prePatchHash,
+        },
+        new AbortController().signal,
+      );
+
+      expect(editResult.isError).toBe(true);
+      expect(editResult.content).toMatch(/content hash mismatch/);
+
+      // File must remain at post-patch state — the stale edit must not have landed.
+      const finalContent = await readTempFile(filePath);
+      expect(finalContent).toBe('line one\nLINE TWO (patched)\nline three\n');
+    });
+  });
 });
+

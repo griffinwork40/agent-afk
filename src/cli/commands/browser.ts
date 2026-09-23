@@ -30,7 +30,7 @@
 
 import { Command } from 'commander';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { createInterface } from 'node:readline';
 import { atomicWriteFile } from '../../utils/atomic-write.js';
@@ -125,9 +125,14 @@ export function readMcpConfigFile(path: string): McpConfigFile {
 /**
  * Atomically persist mcp.json (temp-file + POSIX rename) so a crash mid-write
  * never leaves a truncated config. Mirrors the pattern in schedule-store.ts.
+ *
+ * New configs use 0o644 (not the atomicWriteFile default of 0o600) because
+ * external MCP tooling may need to read them. Rewrites preserve the existing
+ * mode because operators may deliberately restrict configs containing secrets.
  */
 export function writeMcpConfigFileAtomic(path: string, cfg: McpConfigFile): void {
-  atomicWriteFile(path, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
+  const mode = existsSync(path) ? statSync(path).mode & 0o777 : 0o644;
+  atomicWriteFile(path, `${JSON.stringify(cfg, null, 2)}\n`, { mode });
 }
 
 /**

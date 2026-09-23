@@ -126,9 +126,10 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
             // that date-rollover and truncation do not accumulate duplicates.
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (reinforced ${isoDate})`;
-            const newDescription = (
-              existing.description.replace(/ \(reinforced \d{4}-\d{2}-\d{2}\)?$/, '') + suffix
-            ).slice(0, MAX_DESCRIPTION_LEN);
+            const baseDescription = existing.description
+              .replace(/ \(reinforced \d{4}-\d{2}-\d{2}\)?$/, '')
+              .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
+            const newDescription = baseDescription + suffix;
             if (newDescription !== existing.description) {
               existing.description = newDescription;
               dirty = true;
@@ -154,9 +155,10 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
             // Strip any pre-existing annotation (including truncated ones) before
             // appending the new one — same date-rollover / truncation guard as
             // the strengthens branch above.
-            const newDescription = (
-              existing.description.replace(/ \(partially weakened \d{4}-\d{2}-\d{2}\)?$/, '') + suffix
-            ).slice(0, MAX_DESCRIPTION_LEN);
+            const baseDescription = existing.description
+              .replace(/ \(partially weakened \d{4}-\d{2}-\d{2}\)?$/, '')
+              .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
+            const newDescription = baseDescription + suffix;
             if (newDescription !== existing.description) {
               existing.description = newDescription;
               dirty = true;

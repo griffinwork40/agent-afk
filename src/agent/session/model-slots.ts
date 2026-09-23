@@ -114,6 +114,8 @@ export const CLAUDE_SONNET_ID = 'claude-sonnet-4-6';
 // revert this one line (and the matching model-limits.ts / resolve-params.ts /
 // pricing entries).
 export const CLAUDE_OPUS_ID = 'claude-opus-5';
+/** Claude Opus 5.5 wire id (released 2026-09-22). */
+export const CLAUDE_OPUS_55_ID = 'claude-opus-5-5';
 /** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
 /**
@@ -165,6 +167,7 @@ export const AUTO_SENTINEL = 'auto';
 export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   opus: CLAUDE_OPUS_ID,
   opus_1m: CLAUDE_OPUS_ID,
+  'opus-5.5': CLAUDE_OPUS_55_ID,
   sonnet: CLAUDE_SONNET_ID,
   sonnet_1m: CLAUDE_SONNET_ID,
   haiku: CLAUDE_HAIKU_ID,

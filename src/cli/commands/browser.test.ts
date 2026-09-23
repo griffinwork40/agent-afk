@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -58,6 +58,20 @@ describe('readMcpConfigFile / writeMcpConfigFileAtomic', () => {
     // Trailing newline for POSIX-friendliness, valid JSON otherwise.
     expect(readFileSync(path, 'utf-8').endsWith('\n')).toBe(true);
     expect(readMcpConfigFile(path)).toEqual(cfg);
+  });
+
+  it.skipIf(process.platform === 'win32')('creates a new config with mode 0o644', () => {
+    writeMcpConfigFileAtomic(path, { mcpServers: {} });
+    expect(statSync(path).mode & 0o777).toBe(0o644);
+  });
+
+  it.skipIf(process.platform === 'win32')('preserves a restrictive mode when rewriting a config', () => {
+    writeFileSync(path, JSON.stringify({ mcpServers: {} }), 'utf-8');
+    chmodSync(path, 0o600);
+
+    writeMcpConfigFileAtomic(path, { mcpServers: {} });
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it('preserves existing servers when adding chrome-devtools', () => {

@@ -15,7 +15,7 @@ Return ONLY a valid JSON array with no prose before or after it:
   {
     "label": "new-addition",
     "prefix": "INV",
-    "description": "One-line description of the invariant (≤120 chars)",
+    "description": "One-line description of the invariant (≤300 chars, include source file:line refs)",
     "rationale": "Why this warrants a permanent spine entry (1-2 sentences)"
   }
 ]
@@ -25,7 +25,7 @@ Return ONLY a valid JSON array with no prose before or after it:
 
 All items use `label: "new-addition"` (init only creates new entries):
 - `prefix`: One of "INV" (invariants/hard contracts), "REJ" (explicitly rejected patterns), "TST" (taste/style calls where alternatives exist)
-- `description`: The proposed entry text — concise, imperative, ≤120 chars
+- `description`: The proposed entry text — concise, imperative, ≤300 chars. Include source file path and line numbers when referencing specific code
 - `rationale`: Why this is durable enough for the spine
 
 ## Discipline

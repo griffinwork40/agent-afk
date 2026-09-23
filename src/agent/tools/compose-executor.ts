@@ -817,12 +817,26 @@ export class ComposeExecutor {
             // Per-node cwd overrides the parent session's cwd for the manifest,
             // so crash-recovery records the correct working directory per node.
             const effectiveCwd = n.cwd ?? this.currentCwd;
+            // Named-agent model default: same precedence logic as dagNodes
+            // above (call-site > definition > compose default). Required so
+            // crash-recovery manifests record the same effective model that
+            // the DAG node would actually use.
+            const manifestNamedAgent = n.agent_type !== undefined
+              ? this.ctx.agentRegistry?.get(n.agent_type)
+              : undefined;
+            const rawManifestDefModel = manifestNamedAgent?.definition.model;
+            const manifestDefinitionModel = rawManifestDefModel === 'inherit'
+              ? this.ctx.defaultModel
+              : rawManifestDefModel;
             return buildWaveUnit({
               id: n.id,
               prompt: n.prompt,
               cwd: effectiveCwd,
-              model: resolveChildModel({ callSiteModel: n.model,
-                defaultSubagentModel: this.ctx.defaultSubagentModel, defaultModel: this.ctx.defaultModel }),
+              model: resolveChildModel({
+                callSiteModel: n.model ?? manifestDefinitionModel,
+                defaultSubagentModel: this.ctx.defaultSubagentModel,
+                defaultModel: this.ctx.defaultModel,
+              }),
             });
           });
           // Build upstream-id map from edges: for each node, list its upstream deps.

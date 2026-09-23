@@ -76,7 +76,7 @@ The transcript is not a user channel. AFK users see bridge messages, files, comm
 - **Do not skip Observe or Update to save tokens.** Stale-state errors cost more than the tokens saved.
 - **Parallel by default** (see Delegation). Sequence only what genuinely depends on a prior result.
 - **Re-check shared mutable state after divergence, delay, or failure.**
-- **Do not use emdashes.**
+- **Do not use dashes or emdashes.**
 
 ## Delegation
 

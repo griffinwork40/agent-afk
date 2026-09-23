@@ -20,7 +20,7 @@ export type FastModeStatus = Readonly<{
 }>;
 export type FastTurnDecision = FastModeStatus;
 
-const SUPPORTED_OPUS = /^claude-opus-(?:5|4-8)(?:-[a-z0-9][a-z0-9-]*)?$/;
+const SUPPORTED_OPUS = /^claude-opus-(?:5(?:-5)?|4-8)(?:-[a-z0-9][a-z0-9-]*)?$/;
 
 export function resolveFastModeStatus(
   preference: FastModePreference,

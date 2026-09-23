@@ -88,6 +88,15 @@ export function _resetRefreshedClaudeCodeOauthToken(): void {
 }
 
 /**
+ * Returns true when a token was refreshed during this process but its
+ * write-back to the persistent credential store failed.  Used by
+ * `describeCredentialSource` to give tier-3 a distinct label.
+ */
+export function hasProcessLocalRefreshedToken(): boolean {
+  return refreshedClaudeCodeOauthToken !== undefined;
+}
+
+/**
  * Get a Codex-compatible (OpenAI) API key from the environment, if present.
  * Precedence: `OPENAI_API_KEY` → `CODEX_API_KEY`.
  *

@@ -81,12 +81,8 @@ const PINNED_HASHES = {
   //   or per-node cwd (both were added in commits bcbadf1c and 7e926de0). Phase 2.5 still
   //   recommends the `agent` fan-out (simpler rate-limit control, no DAG needed), but now
   //   correctly notes compose is a valid alternative when DAG tracking is wanted.
-  // Hash re-bumped: reverted misleading safety claim — compose passes agent_type as a
-  //   display label only; it does NOT resolve named agents through the registry, so
-  //   tool-surface restrictions (research-agent read-only) are silently lost. Restored
-  //   the compose prohibition until #2000 wires registry resolution.
   'fix-pr':
-    '4d4122c32bfecbf2deb28f4388e7787c94853f30e1fae6bde3a3da47c58d0734',
+    '26b49482e1c749e56e4219fece30abfbe59dc4ca5822fe0c8e9b55867140d6aa',
   // gather + parallelize carry a bundled-only `context: load` frontmatter line
   // (2026-06 skill-execution-mode work). `context` is an agent-afk-specific
   // field; Claude Code upstream skills are natively inline/progressive-disclosure,

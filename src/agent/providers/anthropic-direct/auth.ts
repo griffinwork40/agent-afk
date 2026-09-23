@@ -45,16 +45,22 @@ export const OAUTH_BETA_HEADER =
  */
 export const EFFORT_BETA_HEADER = 'effort-2025-11-24';
 
-/** `User-Agent` value the cli sends; servers gate fast-mode features on this string. */
-export const CLI_USER_AGENT = 'claude-cli/1.0.0 (external, cli)';
+/**
+ * `User-Agent` value the CLI sends. The Anthropic API gates certain model
+ * features (e.g. Claude Opus 5.5 on the Fast tier) behind a minimum Claude
+ * Code CLI version — this value must track the current `@anthropic-ai/claude-code`
+ * npm release. Updated to 2.1.280 (the version that unlocks Opus 5.5 access).
+ */
+export const CLI_USER_AGENT = 'claude-cli/2.1.280 (external, cli)';
 
 /**
  * Billing-header text block embedded into the system prompt for OAuth mode.
- * `cch=00000` is a placeholder — the server tolerates any value (only gates
- * fast-mode features).
+ * `cc_version` must match the Claude Code CLI version in {@link CLI_USER_AGENT}
+ * so the API sees consistent version signals. `cch=00000` is a placeholder —
+ * the server tolerates any value (only gates fast-mode features).
  */
 export const BILLING_HEADER_TEXT =
-  'x-anthropic-billing-header: cc_version=1.0.0.test; cc_entrypoint=cli; cch=00000;';
+  'x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=cli; cch=00000;';
 
 /** Shape-sniff a token to pick the auth mode. */
 export function detectAuthMode(token: string): AuthMode {

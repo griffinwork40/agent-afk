@@ -70,6 +70,11 @@ function parseEditFileInput(input: unknown): {
     if (typeof editInput.expected_hash !== 'string') {
       throw new Error('expected_hash must be a string');
     }
+    if (!/^sha256:[0-9a-f]{64}$/.test(editInput.expected_hash)) {
+      throw new Error(
+        `expected_hash has invalid format: "${editInput.expected_hash}". Must match sha256:<64 hex chars>.`,
+      );
+    }
     expected_hash = editInput.expected_hash;
   }
 
@@ -140,19 +145,13 @@ const editFileImpl = async (
     const content = await readFile(file_path, 'utf-8');
 
     // Content-hash staleness gate: when the caller supplies expected_hash
-    // (format "sha256:<hex>"), verify the on-disk content matches before
-    // proceeding. This catches stale-context overwrites where a prior
-    // patch_apply modified the file but the caller's old_string comes from
-    // pre-patch context. Mirrors the same gate in patch-validate.ts:179-200.
+    // (format "sha256:<64 hex chars>", already validated in parseEditFileInput),
+    // verify the on-disk content matches before proceeding. This catches
+    // stale-context overwrites where a prior patch_apply modified the file but
+    // the caller's old_string comes from pre-patch context. Mirrors the same
+    // gate in patch-validate.ts:179-200.
     if (expected_hash !== undefined) {
-      const prefix = 'sha256:';
-      if (!expected_hash.startsWith(prefix)) {
-        return {
-          content: `edit_file rejected: expected_hash must start with "sha256:". Got: "${expected_hash}"`,
-          isError: true,
-        };
-      }
-      const expectedHex = expected_hash.slice(prefix.length);
+      const expectedHex = expected_hash.slice('sha256:'.length);
       const actualHex = sha256Hex(content);
       if (actualHex !== expectedHex) {
         return {

@@ -38,8 +38,8 @@ describe('deriveCallCostUsd', () => {
   });
 
   it('computes a correct estimate for sonnet: 1000 in, 500 out', () => {
-    // claude-sonnet-5: $3.00/MTok input, $15.00/MTok output
-    const expected = (1000 / 1_000_000) * 3.0 + (500 / 1_000_000) * 15.0;
+    // claude-sonnet-5: $2.00/MTok input, $10.00/MTok output
+    const expected = (1000 / 1_000_000) * 2.0 + (500 / 1_000_000) * 10.0;
     const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 500, 0, 0);
     expect(cost).toBeCloseTo(expected, 8);
   });
@@ -48,9 +48,9 @@ describe('deriveCallCostUsd', () => {
     // `input_tokens` is already cache-exclusive per the Messages API docs, so
     // plain input is the full 1000 — NOT 1000-200. This assertion previously
     // encoded the double-subtraction bug (expected 800) and so kept it alive.
-    const plain = (1000 / 1_000_000) * 3.0;
-    const cacheRead = (200 / 1_000_000) * 0.30;
-    const output = (100 / 1_000_000) * 15.0;
+    const plain = (1000 / 1_000_000) * 2.0;
+    const cacheRead = (200 / 1_000_000) * 0.20;
+    const output = (100 / 1_000_000) * 10.0;
     const expected = plain + cacheRead + output;
     const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 100, 200, 0);
     expect(cost).toBeCloseTo(expected, 8);
@@ -58,10 +58,10 @@ describe('deriveCallCostUsd', () => {
 
   it('accounts for cache-creation tokens at a premium rate', () => {
     // Plain input is the full 1000 (cache-exclusive); cache-write 300 at the
-    // 5m rate of 3.75/MTok, which is the default when no TTL split is given.
-    const plain = (1000 / 1_000_000) * 3.0;
-    const cacheWrite = (300 / 1_000_000) * 3.75;
-    const output = (50 / 1_000_000) * 15.0;
+    // 5m rate of 2.50/MTok, which is the default when no TTL split is given.
+    const plain = (1000 / 1_000_000) * 2.0;
+    const cacheWrite = (300 / 1_000_000) * 2.50;
+    const output = (50 / 1_000_000) * 10.0;
     const expected = plain + cacheWrite + output;
     const cost = deriveCallCostUsd('claude-sonnet-5', 1000, 50, 0, 300);
     expect(cost).toBeCloseTo(expected, 8);
@@ -195,7 +195,7 @@ describe('toProviderUsage — cache-write TTL attribution', () => {
       cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1_000_000 },
     } as Partial<Usage>);
     const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
-    expect(out.totalCostUsd).toBeCloseTo(6.0, 8); // 1h rate, not 3.75
+    expect(out.totalCostUsd).toBeCloseTo(4.0, 8); // 1h rate, not 2.50
   });
 
   it('falls back to the configured TTL when cache_creation is absent', () => {
@@ -208,7 +208,7 @@ describe('toProviderUsage — cache-write TTL attribution', () => {
       cache_creation_input_tokens: 1_000_000,
     });
     const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
-    expect(out.totalCostUsd).toBeCloseTo(6.0, 8);
+    expect(out.totalCostUsd).toBeCloseTo(4.0, 8);
   });
 
   it('uses the 5m rate when the configured TTL is 5m and no breakdown exists', () => {
@@ -219,7 +219,7 @@ describe('toProviderUsage — cache-write TTL attribution', () => {
       cache_creation_input_tokens: 1_000_000,
     });
     const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
-    expect(out.totalCostUsd).toBeCloseTo(3.75, 8);
+    expect(out.totalCostUsd).toBeCloseTo(2.50, 8);
   });
 
   it('bills a breakdown residual (issue #912): total exceeds ephemeral5m + ephemeral1h', () => {
@@ -236,7 +236,7 @@ describe('toProviderUsage — cache-write TTL attribution', () => {
       },
     } as Partial<Usage>);
     const out = toProviderUsage(usage, 'end_turn', 'claude-sonnet-5');
-    const expected = (500_000 / 1e6) * 3.75 + (200_000 / 1e6) * 6.0 + (300_000 / 1e6) * 6.0;
+    const expected = (500_000 / 1e6) * 2.50 + (200_000 / 1e6) * 4.0 + (300_000 / 1e6) * 4.0;
     expect(out.totalCostUsd).toBeCloseTo(expected, 8);
   });
 });

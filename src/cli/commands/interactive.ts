@@ -3,17 +3,12 @@ import { env } from '../../config/env.js';
 import ora from 'ora';
 
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { welcomeBanner, divider } from '../render.js';
-import { formatDuration } from '../format-utils.js';
-import { costTokenParts } from '../render/session-summary.js';
+import { welcomeBanner } from '../render.js';
 import { registerCleanup, runCleanupFunctions } from '../../utils/cleanupRegistry.js';
 import { activateDumpPrompt } from '../shared-helpers.js';
 import { applySharedChatOptions } from './shared-command-options.js';
 import { palette } from '../palette.js';
 import { setTerminalTitleIfEnabled, formatTerminalTitle } from '../_lib/capture-mode.js';
-import { saveSession } from '../session-store.js';
-import { formatResumeCommand } from '../resume-command.js';
 import { formatCwd } from '../format-cwd.js';
 import { bootstrapSession } from './interactive/bootstrap.js';
 import { drainBootWarnings } from './interactive/boot-warnings.js';
@@ -23,18 +18,17 @@ import { initTranscript } from './interactive/transcript.js';
 import { runReplLoop, type TurnState } from './interactive/repl-loop.js';
 import { setupWorktree, setupWorktreeDeferred, type WorktreeHandle, type DeferredWorktree } from './interactive/worktree.js';
 import { bootPruneWorktrees } from './interactive/boot-prune.js';
-import { runFirstTurnAutoname, type SkipReason } from './interactive/worktree-autoname.js';
+import { runFirstTurnAutoname } from './interactive/worktree-autoname.js';
 import { getApiKey } from '../shared-helpers.js';
-import { loadConfig, type CliConfig } from '../config.js';
+import { loadConfig } from '../config.js';
 import { resolveResumeTarget } from '../resume-session.js';
-import type { CliOptions, InteractiveCtx, ThinkingUiMode } from './interactive/shared.js';
+import type { CliOptions, InteractiveCtx } from './interactive/shared.js';
 import { applyTheme, resolveTheme, resolveThemeMode } from '../theme.js';
 import { REPL_SPINNER_OPTIONS, printResumeBanner } from './interactive/shared.js';
 import { handleCommandError } from '../errors/index.js';
 import { type UpdateInfo, printUpdateBanner } from '../update-checker.js';
 import { getVersion } from '../version.js';
 import { runPicker } from '../render/picker.js';
-import { launchInterruptPicker } from './interactive/interrupt-picker.js';
 import {
   resolveWorktreeDisposition,
   resolveWorktreeExitPolicy,
@@ -42,155 +36,44 @@ import {
 import { installUnknownCommandGuard, checkBareUnknownCommand } from './interactive/unknown-command-guard.js';
 import { errorMessage } from '../../utils/errors.js';
 
+// Lifecycle-phase siblings
+import {
+  setInteractiveUpdateNotices as _setInteractiveUpdateNotices,
+  getAndClearUpdateNotices,
+  parseThinkingUiMode,
+  resolveThinkingUi,
+  isAutonameEnabled,
+  startupHintLine,
+  formatAutonameSkipReason,
+} from './interactive/interactive.session-init.js';
+import {
+  installSignalHandlers,
+  printExitSummary,
+  snapshotGitStateForCancelAll,
+  makeSessionSaver,
+} from './interactive/interactive.cleanup.js';
+import { measurePreArmAnchorRow } from './interactive/interactive.pty-setup.js';
+
 export { formatToolResultLine } from './interactive/tool-lane.js';
 
-/**
- * Pending notices to re-emit after the interactive screen clear.
- *
- * The screen-clear escape sequence (`\x1b[3J\x1b[2J\x1b[H`) at the start of
- * interactive mode wipes everything written before `program.parse()` — including
- * the update-available banner and the "Updated to vX" pending-update message
- * that `index.ts` writes before the parse call. Index.ts calls
- * `setInteractiveUpdateNotices` to stash those notices so the interactive
- * action can re-emit them after the clear, where they will survive.
- */
-interface UpdateNotices {
-  updateInfo: UpdateInfo | null;
-  pendingMessage: string | null;
-}
-
-let _pendingUpdateNotices: UpdateNotices | null = null;
+// Re-export pure helpers that callers of interactive.ts may use.
+export { formatAutonameSkipReason, isAutonameEnabled, resolveThinkingUi, startupHintLine };
 
 /**
  * Called by `index.ts` before `program.parse()` to stash any update notices
  * that need to survive the interactive screen clear.
+ *
+ * The screen-clear escape sequence at the start of interactive mode wipes
+ * everything written before `program.parse()` — including the update-available
+ * banner and the "Updated to vX" message that `index.ts` writes before the
+ * parse call. Index.ts calls this to stash those notices so the interactive
+ * action can re-emit them after the clear, where they will survive.
  */
 export function setInteractiveUpdateNotices(
   updateInfo: UpdateInfo | null,
   pendingMessage: string | null,
 ): void {
-  _pendingUpdateNotices = { updateInfo, pendingMessage };
-}
-
-function parseThinkingUiMode(raw: string): ThinkingUiMode {
-  if (raw === 'summary' || raw === 'live' || raw === 'digest' || raw === 'off') {
-    return raw;
-  }
-  throw new Error(`Invalid --thinking-ui value: ${raw}. Expected summary|live|digest|off`);
-}
-
-
-
-/**
- * Resolve the worktree-autoname enable flag with precedence:
- *   1. `--no-worktree-autoname` CLI flag → false (commander sets
- *      `options.worktreeAutoname = false`)
- *   2. `AFK_WORKTREE_AUTONAME` env: `'0'` / `'false'` → false, else true
- *      when explicitly set
- *   3. `interactive.worktreeAutoname` from `afk.config.json`
- *   4. Default: true
- *
- * The CLI flag is the hard override — passing `--no-worktree-autoname`
- * shuts naming off regardless of env or config.
- */
-/**
- * Render the human-readable text for a born-named timestamp-fallback reason.
- *
- * The tags split into two UX classes:
- *
- *  - `empty-message` / `slash-command` — the first turn carried no naming
- *    signal (whitespace, native-handled slash that fell through, or a
- *    plugin-forwarded slash). Return `undefined` to suppress the dim note
- *    in those benign cases.
- *  - `slug-generator-error` / `invalid-slug-output` / `create-failed` /
- *    `unknown` — the haiku call, its output, or the named `git worktree add`
- *    misbehaved. Surface the reason so the operator knows the feature ran and
- *    fell back to the timestamp name (vs. the feature being off).
- *
- * Exported for unit tests.
- */
-export function formatAutonameSkipReason(
-  reason: SkipReason | 'create-failed' | 'unknown',
-  detail: string | undefined,
-): string | undefined {
-  switch (reason) {
-    case 'empty-message':
-    case 'slash-command':
-      return undefined;
-    case 'slug-generator-error':
-      return detail ? `slug generation failed: ${detail}` : 'slug generation failed';
-    case 'invalid-slug-output':
-      return detail
-        ? `model returned invalid slug: ${JSON.stringify(detail)}`
-        : 'model returned invalid slug';
-    case 'create-failed':
-      return detail ? `named worktree create failed: ${detail}` : 'named worktree create failed';
-    case 'unknown':
-    default:
-      return 'unknown reason';
-  }
-}
-
-export function isAutonameEnabled(options: CliOptions, config: CliConfig): boolean {
-  if (options.worktreeAutoname === false) return false;
-  const envRaw = env.AFK_WORKTREE_AUTONAME;
-  if (envRaw !== undefined) {
-    const lowered = envRaw.toLowerCase();
-    if (lowered === '0' || lowered === 'false' || lowered === 'off' || lowered === 'no') {
-      return false;
-    }
-    return true;
-  }
-  if (typeof config.interactive?.worktreeAutoname === 'boolean') {
-    return config.interactive.worktreeAutoname;
-  }
-  return true;
-}
-
-/**
- * Resolve the REPL thinking-display mode with precedence:
- *   1. `--thinking-ui <mode>` CLI flag (already validated by parseThinkingUiMode)
- *   2. `AFK_THINKING_UI` env (validated here; invalid values ignored, not fatal)
- *   3. `interactive.thinkingUi` from `afk.config.json`
- *   4. Default: `'live'`
- *
- * Display-only — the mode changes how extended-thinking blocks render in the
- * REPL, never whether thinking runs. Mirrors `isAutonameEnabled`'s
- * flag > env > config > default shape so a user can set a persistent default
- * (env or config) that the per-launch `--thinking-ui` flag still overrides.
- */
-export function resolveThinkingUi(options: CliOptions, config: CliConfig): ThinkingUiMode {
-  if (options.thinkingUi !== undefined) return options.thinkingUi;
-  const envRaw = env.AFK_THINKING_UI;
-  if (envRaw !== undefined) {
-    const lowered = envRaw.trim().toLowerCase();
-    if (lowered === 'summary' || lowered === 'live' || lowered === 'digest' || lowered === 'off') {
-      return lowered;
-    }
-    // Invalid env value → fall through to config/default rather than throw;
-    // an env typo shouldn't hard-fail an interactive launch.
-  }
-  const fromConfig = config.interactive?.thinkingUi;
-  if (fromConfig !== undefined) return fromConfig;
-  return 'live';
-}
-
-/**
- * The hint line rendered under the welcome banner at session startup.
- *
- * Kept deliberately short and first-session-oriented: it teaches the handful
- * of controls a newcomer needs on day one (help, switching models, how to
- * interrupt a turn, how to leave). `/resume` is intentionally NOT listed here —
- * it does nothing for a brand-new user (no prior sessions exist to resume), and
- * for a user who IS resuming it is redundant with the "Resuming … · N prior
- * turns" metaLine the banner already shows. `/resume` stays fully discoverable
- * via `/help` and the `--resume` / `--continue` launch flags, so trimming it
- * from the busiest line of the startup screen costs no real capability.
- *
- * Pure + exported so the content is unit-testable without booting a session.
- */
-export function startupHintLine(): string {
-  return '/help · /model · @ for files · Shift+Tab mode · Esc to interrupt · /exit to quit';
+  _setInteractiveUpdateNotices(updateInfo, pendingMessage);
 }
 
 export function registerInteractiveCommand(program: Command): void {
@@ -235,14 +118,13 @@ export function registerInteractiveCommand(program: Command): void {
     )
     .option(
       '--plain',
-      'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer (no persistent or per-turn compositor), AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM reserved rows misbehave. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
+      'Force the session to fully behave like a non-TTY surface for rendering: append-only plain-stdout output instead of the live-overlay renderer, AND the input surface downgrades to the simple line reader — even when stdout/stdin ARE a TTY. Full opt-out escape hatch for tmux/SSH/multiplexer sessions. Also: AFK_PLAIN_OUTPUT=1. Non-TTY sessions (pipes, CI) already use this path by default.',
     )
     .action(async (input: string[], options: CliOptions) => {
       // Issue #710 mode 2: a bare unknown token with no flags (`afk skill`)
       // reaches this action because Commander's default-command swallows it
-      // silently.  Intercept here — before any side-effect — when the token is
-      // a single word close enough to a known subcommand name (Levenshtein ≤ 2)
-      // to be an obvious mis-type rather than a genuine one-word prompt.
+      // silently. Intercept here — before any side-effect — when the token is
+      // a single word close enough to a known subcommand name (Levenshtein ≤ 2).
       const bareCheck = checkBareUnknownCommand(input, program);
       if (bareCheck.isUnknown) {
         const hint = bareCheck.suggestion
@@ -254,47 +136,17 @@ export function registerInteractiveCommand(program: Command): void {
         return;
       }
 
-      if (options.debug) {
-        process.env['AFK_DEBUG'] = '1';
-      }
-      if (options.plain) {
-        process.env['AFK_PLAIN_OUTPUT'] = '1';
-      }
-
-      // --- prompt-dump activation ---
+      if (options.debug) { process.env['AFK_DEBUG'] = '1'; }
+      if (options.plain) { process.env['AFK_PLAIN_OUTPUT'] = '1'; }
       activateDumpPrompt(options.dumpPrompt, options.provider);
-
 
       const spinner = ora({ text: 'Initializing interactive session...', ...REPL_SPINNER_OPTIONS }).start();
 
-      // Validate --resume / --continue early — before any side effects
-      // (worktree setup, bootstrapSession, screen clear). Failure modes:
-      //   - `--resume <id>` with unknown id: `resolveResumeTarget` returns
-      //     a shell `{ id, resumeId }` without `stored` — we surface as a
-      //     friendly error here.
-      //   - `--continue` with no saved sessions: `resolveResumeTarget`
-      //     THROWS `'No saved sessions found for --continue. ...'` (an
-      //     asymmetric failure mode vs. --resume's shell-return). We
-      //     catch and re-surface so it doesn't bubble out of the later
-      //     `bootstrapSession` call AFTER worktree setup has already
-      //     created (and leaked) a worktree directory.
-      //   - `--resume <id> --continue` together: also throws ('Use either
-      //     ... not both'). Same catch handles it.
-      // Resolution is repeated inside `bootstrapSession`; the duplication
-      // is intentional and cheap (filesystem read) and keeps every failure
-      // path before any worktree side-effect. Mirrors the guard in
-      // chat.ts:274–279 with the addition of the catch.
-      //
-      // The bad value is run through `JSON.stringify` before stderr
-      // interpolation so any control bytes the user (or wrapper script)
-      // accidentally passed surface as visible `\u001b` escapes instead
-      // of being replayed live into their terminal.
+      // Validate --resume / --continue early — before any side effects so a
+      // bad resume id never leaks a partially-created worktree directory.
       if (options.resume || options.continue) {
         try {
-          const earlyTarget = resolveResumeTarget({
-            resume: options.resume,
-            continue: options.continue,
-          });
+          const earlyTarget = resolveResumeTarget({ resume: options.resume, continue: options.continue });
           if (earlyTarget && !earlyTarget.stored) {
             spinner.fail('Session not found');
             process.stderr.write(
@@ -306,9 +158,8 @@ export function registerInteractiveCommand(program: Command): void {
           }
         } catch (err) {
           spinner.fail('Session not found');
-          const msg = errorMessage(err);
           process.stderr.write(
-            `Error: ${msg}\n` +
+            `Error: ${errorMessage(err)}\n` +
               `Run \`afk i\` then \`/resume\` to list saved sessions.\n`,
           );
           process.exitCode = 1;
@@ -316,9 +167,6 @@ export function registerInteractiveCommand(program: Command): void {
         }
       }
 
-      // Resolve the branch-prefix override from config now so both setup
-      // and (later) the first-turn rename use the same value. Env wins
-      // over config; both yield to an explicit CLI string in `--worktree`.
       const cliConfig = loadConfig();
       const worktreeExitPolicy = resolveWorktreeExitPolicy({
         cli: options.worktreeOnExit,
@@ -327,76 +175,34 @@ export function registerInteractiveCommand(program: Command): void {
         isTTY: Boolean(process.stdout.isTTY),
         console,
       });
-      // Resolve the thinking-display mode (--thinking-ui flag > AFK_THINKING_UI
-      // env > interactive.thinkingUi config > 'live') and assign it back onto
-      // options so the downstream bootstrap seeding (stats.thinkingUi =
-      // options.thinkingUi) and the /thinking runtime toggle start from the
-      // resolved persistent default.
+      // Resolve persistent defaults (--thinking-ui flag > AFK_THINKING_UI env >
+      // config > 'live') and mutate options so bootstrap seeding picks it up.
       options.thinkingUi = resolveThinkingUi(options, cliConfig);
-      // Apply the color theme (--theme flag > AFK_THEME env > config.theme >
-      // auto-detect > dark). Refines the env/default baseline applied at
-      // startup (index.ts) now that config is loaded and the flag is parsed.
       applyTheme(resolveTheme(resolveThemeMode(options.theme, cliConfig.theme)));
-      const branchPrefixOverride =
-        env.AFK_WORKTREE_BRANCH_PREFIX ??
-        cliConfig.interactive?.worktreeBranchPrefix;
-      // Base ref for the new worktree (--worktree-base / AFK_WORKTREE_BASE /
-      // interactive.worktreeBase). CLI flag wins, then env, then config. When
-      // set to a remote ref (origin/main) the worktree is fetched + based on
-      // fresh upstream instead of the repo's current HEAD.
-      const worktreeBaseOverride =
-        options.worktreeBase ??
-        env.AFK_WORKTREE_BASE ??
-        cliConfig.interactive?.worktreeBase;
-      // Shared opts for both the deferred and eager worktree-setup paths.
-      // Built incrementally so an unset field is omitted entirely (rather than
-      // passed as `undefined`) to satisfy exactOptionalPropertyTypes.
+
+      const branchPrefixOverride = env.AFK_WORKTREE_BRANCH_PREFIX ?? cliConfig.interactive?.worktreeBranchPrefix;
+      const worktreeBaseOverride = options.worktreeBase ?? env.AFK_WORKTREE_BASE ?? cliConfig.interactive?.worktreeBase;
       const worktreeSetupOpts: { branchPrefix?: string; baseRef?: string } = {};
       if (branchPrefixOverride !== undefined) worktreeSetupOpts.branchPrefix = branchPrefixOverride;
       if (worktreeBaseOverride !== undefined) worktreeSetupOpts.baseRef = worktreeBaseOverride;
-      const worktreeSetupArg =
-        Object.keys(worktreeSetupOpts).length > 0 ? worktreeSetupOpts : undefined;
+      const worktreeSetupArg = Object.keys(worktreeSetupOpts).length > 0 ? worktreeSetupOpts : undefined;
 
-      // Boot-time worktree sweep — narrow allowlist (empty / orphaned /
-      // dead-owner), 1.5s hard budget, silent on failure. Runs BEFORE
-      // setupWorktree so the new worktree about to be created isn't
-      // sitting in a list of ghost worktrees being judged. Disabled via
-      // AFK_WORKTREE_BOOT_PRUNE=0.
-      //
-      // Constraint: this races against an open spinner. The boot pass
-      // returns within its own deadline; we don't await any longer than
-      // it permits. The spinner text isn't updated mid-pass to keep boot
-      // noise minimal — only a one-line notice after success, and only
-      // if removals happened.
-      const bootPruneDisabled = env.AFK_WORKTREE_BOOT_PRUNE === '0';
-      const bootPrune = await bootPruneWorktrees({ disabled: bootPruneDisabled });
+      // Boot-time worktree sweep before setupWorktree so the new worktree
+      // isn't judged as a ghost. 1.5s hard budget, silent on failure.
+      const bootPrune = await bootPruneWorktrees({ disabled: env.AFK_WORKTREE_BOOT_PRUNE === '0' });
 
-      // Decide eager vs. deferred (born-named) worktree creation BEFORE setup.
-      //   - Deferred: auto-named `-w` (no explicit branch) + autoname enabled +
-      //     an Anthropic credential available. The worktree is created on the
-      //     first message, with its final slug name — never `git worktree
-      //     move`d (the move-during-turn-1 race was a session-killing bug).
-      //   - Eager (everything else): explicit `--worktree <branch>`, autoname
-      //     disabled, or no credential → create at startup as before.
+      // Deferred (born-named): auto-named `-w` + autoname enabled + credential.
+      // Eager (everything else): explicit branch, autoname off, or no credential.
       const autonameAllowed = isAutonameEnabled(options, cliConfig);
       const apiToken = getApiKey();
-      const useDeferredWorktree =
-        options.worktree === true && autonameAllowed && apiToken !== undefined;
+      const useDeferredWorktree = options.worktree === true && autonameAllowed && apiToken !== undefined;
 
       let worktreeCwd: string | undefined;
-      // Set once the worktree exists: eager → at startup; deferred → by the
-      // first-turn hook. The shutdown cleanup closure reads this at invocation
-      // time, so a deferred worktree created mid-session is still cleaned up,
-      // and a never-materialized one (zero-turn exit) is correctly skipped.
       let worktreeHandle: WorktreeHandle | undefined;
       let deferredWorktree: DeferredWorktree | undefined;
       if (options.worktree !== undefined) {
         try {
           if (useDeferredWorktree) {
-            // Validate the repo root + ensure the .gitignore entry now so the
-            // "not in a git repo" failure is still caught fail-fast at startup;
-            // only the `git worktree add` is deferred. Bootstrap in the launch
-            // cwd (worktreeCwd stays undefined) until the first message.
             deferredWorktree = await setupWorktreeDeferred(worktreeSetupArg);
             spinner.text = 'Worktree will be named from your first message';
           } else {
@@ -404,26 +210,14 @@ export function registerInteractiveCommand(program: Command): void {
             worktreeCwd = worktreeHandle.path;
             spinner.text = `Worktree ready at ${worktreeHandle.path} (branch: ${worktreeHandle.branch})`;
           }
-        } catch (err) {
-          spinner.fail('Worktree setup failed');
-          handleCommandError(err);
-        }
+        } catch (err) { spinner.fail('Worktree setup failed'); handleCommandError(err); }
       }
 
-      // Surface the boot-prune notice once the spinner is finished but
-      // before the welcome banner renders, so it appears in the user's
-      // scrollback as a discrete line and not on top of any other status.
-      // Silent when nothing happened.
-      const bootPruneNotice =
-        bootPrune.ran && bootPrune.removedCount > 0
-          ? `Pruned ${bootPrune.removedCount} stale worktree(s). Run /worktree list for details.`
-          : undefined;
+      const bootPruneNotice = bootPrune.ran && bootPrune.removedCount > 0
+        ? `Pruned ${bootPrune.removedCount} stale worktree(s). Run /worktree list for details.`
+        : undefined;
 
-      // Bootstrap-warning bucket, owned HERE and passed down rather than
-      // created inside `bootstrapSession`, so it is still reachable when
-      // bootstrap throws — a thrown bootstrap returns no ctx to read it from.
-      // `ctx.bootWarnings` is this same array instance, so the success-path
-      // drain below is unaffected by the hoist.
+      // Bootstrap-warning bucket owned HERE so it's reachable even if bootstrap throws.
       const bootWarnings: string[] = [];
       let ctx: InteractiveCtx;
       try {
@@ -432,42 +226,23 @@ export function registerInteractiveCommand(program: Command): void {
           ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
         });
       } catch (err) {
-        // Constraint: this sequence is externally forced, not stylistic.
-        // `handleCommandError` is typed `never` and calls `process.exit`, so
-        // the drain cannot follow it; and ora owns the terminal line until
-        // `spinner.fail()` stops it, so the drain cannot precede that. Hence
-        // fail → drain → exit. Without the drain, a warning pushed before the
-        // throw (an MCP config warning accompanying an `alwaysLoad` server that
-        // fails to connect) dies with the process — pre-#751 it had already
-        // reached stderr, and the abort path never clears the screen.
+        // Constraint: fail → drain → exit (handleCommandError is typed `never`).
         spinner.fail('Invalid options');
         drainBootWarnings(bootWarnings);
         handleCommandError(err);
       }
 
-      // Seed the opening turn from the launch argument (`afk "prompt"` or
-      // `afk /review foo`). Variadic operands are joined so an unquoted
-      // slash-command's args survive (`/review foo` → "/review foo"); a bare
-      // `afk` yields "" and seeds nothing. The REPL loop promotes a non-empty
-      // seed into its seedBuffer fast-path (see loop-iteration.ts), so a plain
-      // prompt runs a turn and a /command routes through the slash dispatcher —
-      // identical to the user typing it as the first line.
       const seed = input.join(' ').trim();
       if (seed) ctx.initialInput = seed;
 
       // First-turn worktree hook — born-named creation. Wired only on the
-      // deferred path (set above iff auto-named `-w` + autoname enabled +
-      // credential). On the first non-slash message the REPL awaits this hook
-      // BEFORE the turn runs (see InteractiveCtx.firstTurnHook contract), so
-      // the worktree is created with its final name and the session cwd is
-      // moved into it before any tool call fires — no race, no directory move.
+      // deferred path. On the first non-slash message the REPL awaits this
+      // hook BEFORE the turn runs, so the worktree is created with its final
+      // name before any tool call fires — no race, no directory move.
       if (deferredWorktree !== undefined && apiToken !== undefined) {
         const deferred = deferredWorktree;
         const token = apiToken;
         ctx.firstTurnHook = async (firstMessage: string): Promise<void> => {
-          // Surface the ~1-2s slug haiku + `git worktree add` so the pre-turn
-          // wait doesn't read as a hang. The compositor is not armed yet (the
-          // hook is awaited before runTurn), so a plain ora spinner is safe.
           const namingSpinner = ora({ text: 'Naming & creating worktree…', ...REPL_SPINNER_OPTIONS }).start();
           const outcome = await runFirstTurnAutoname({
             deferred,
@@ -477,350 +252,99 @@ export function registerInteractiveCommand(program: Command): void {
             ...(branchPrefixOverride !== undefined ? { branchPrefix: branchPrefixOverride } : {}),
           }).finally(() => namingSpinner.stop());
           if (outcome.status === 'created' || outcome.status === 'created-fallback') {
-            // Adopt the freshly-created handle so the shutdown cleanup closure
-            // can preserve (dirty) or remove (clean / zero-turn) the worktree.
             worktreeHandle = deferred.handle();
-            // Point session stats at the worktree too, so plugin-skill
-            // preflights (which run with `cwd: stats.cwd`) and the saved-session
-            // sidecar record the worktree rather than the launch cwd.
             ctx.stats.cwd = outcome.path;
             const rel = path.relative(process.cwd(), outcome.path) || outcome.path;
-            if (outcome.status === 'created') {
-              console.log(
-                palette.dim('  ↪ worktree: ') +
-                  `${rel} ` +
-                  palette.dim(`(branch: ${outcome.branch})`),
-              );
-            } else {
-              // Slug skipped or its named create failed → timestamp name. Show
-              // why when the model/network misbehaved; stay quiet for the
-              // benign empty/slash signals.
-              const reasonText = formatAutonameSkipReason(outcome.reason, outcome.detail);
-              const note = reasonText !== undefined ? palette.dim(` — ${reasonText}`) : '';
-              console.log(
-                palette.dim('  ↪ worktree: ') +
-                  `${rel} ` +
-                  palette.dim(`(branch: ${outcome.branch})`) +
-                  note,
-              );
-            }
+            const reasonText = outcome.status === 'created-fallback'
+              ? formatAutonameSkipReason(outcome.reason, outcome.detail)
+              : undefined;
+            const note = reasonText !== undefined ? palette.dim(` — ${reasonText}`) : '';
+            console.log(
+              palette.dim('  ↪ worktree: ') + `${rel} ` +
+              palette.dim(`(branch: ${outcome.branch})`) + note,
+            );
           } else {
-            // status === 'failed' — even the timestamp fallback couldn't be
-            // created (disk full, permissions). The session has no worktree;
-            // it continues in the launch cwd, so isolation is lost. Loud.
             console.warn(
-              palette.warning('⚠ ') +
-                `Worktree creation failed: ${outcome.reason}. ` +
-                palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`),
+              palette.warning('⚠ ') + `Worktree creation failed: ${outcome.reason}. ` +
+              palette.dim(`Continuing in ${formatCwd(process.cwd(), { maxWidth: 60 })} (no isolation).`),
             );
           }
         };
       }
-      let dispositionResolution: Promise<void> | undefined;
+
       // Invariant: the picker owns raw stdin until it settles, so a signal-driven
-      // shutdown MUST be able to cancel it. Without this signal the cleanup
-      // closure's `await ctx.resolveWorktreeDisposition?.(false)` can await a
-      // promise that never resolves, and nothing bounds that wait: GRACE_MS only
-      // *starts* cleanup, and `runCleanupFunctions()` carries no deadline of its
-      // own. Aborted by handleSigterm/handleSighup below.
+      // shutdown MUST be able to cancel it via pickerAbort.
       const pickerAbort = new AbortController();
+      let dispositionResolution: Promise<void> | undefined;
       ctx.resolveWorktreeDisposition = (canPrompt: boolean): Promise<void> => {
         if (dispositionResolution !== undefined) return dispositionResolution;
         const compositor = canPrompt ? ctx.slashCtx.getCompositor?.() ?? null : null;
         dispositionResolution = resolveWorktreeDisposition({
           ...(compositor !== null
-            ? {
-                picker: (pickerOpts) =>
-                  runPicker(compositor, { ...pickerOpts, signal: pickerAbort.signal }),
-              }
+            ? { picker: (o) => runPicker(compositor, { ...o, signal: pickerAbort.signal }) }
             : {}),
           isTTY: canPrompt && Boolean(process.stdout.isTTY),
           policy: worktreeExitPolicy,
           turnCount: ctx.stats.totalTurns,
           hasWorktree: worktreeHandle !== undefined,
           console,
-        }).then((disposition) => {
-          ctx.worktreeDisposition = disposition;
-        });
+        }).then((disposition) => { ctx.worktreeDisposition = disposition; });
         return dispositionResolution;
       };
 
-      // Ordering matters: shut the SDK subprocess down BEFORE removing the
-      // worktree directory. Cleanups run via `Promise.all`, so we sequence
-      // session close → worktree cleanup inside a single registered cleanup.
+      // Ordering matters: session close → MCP disconnect → worktree cleanup.
       registerCleanup(async () => {
-        // Signal-driven shutdown cannot prompt, but explicit keep/remove policy
-        // still resolves before cleanup; the single-flight guard avoids repeats.
         await ctx.resolveWorktreeDisposition?.(false);
         ctx.teardownTrustedSkillEvents?.();
-        // Uninstall the elicitation handler so in-flight ask_question calls
-        // auto-decline rather than routing to a closed readline interface.
         elicitationRouter.uninstall();
-        // Stop the background summarizer BEFORE cancelling jobs so any
-        // in-flight Haiku calls are aborted cleanly before the registry drains.
         ctx.bgSummarizer?.stop();
-        // Mitigation #3 (issue #1514): snapshot git state BEFORE cancelAll()
-        // so the user can compare pre-cancel vs post-cancel state when a drain
-        // timeout fires mid-edit. Only runs when there are running background
-        // jobs — avoids needless git subprocess on normal clean exit.
         const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
-        if (runningJobs.length > 0) {
-          snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
-        }
-        // Cancel any still-running background subagents BEFORE closing the
-        // session: cancelAll() goes through SubagentHandle.cancel() which
-        // depends on the parent's AbortGraph wiring, which session.close()
-        // tears down. Background jobs are cancel-by-default on parent
-        // teardown — there is no detach mechanism in v1.
+        if (runningJobs.length > 0) snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
         await ctx.backgroundRegistry.cancelAll().catch(() => { /* best-effort */ });
         await ctx.session.current.close();
-        // MCP disconnect AFTER session close so the session can't issue
-        // more tool calls into a torn-down client. BEFORE worktree cleanup
-        // because some stdio MCP servers may have cwd anchored under the
-        // worktree (removing the dir while the child is still alive is a
-        // hang risk on macOS). Best-effort — disconnectAll() never throws.
-        if (ctx.mcpManager) {
-          await ctx.mcpManager.disconnectAll();
-        }
+        if (ctx.mcpManager) await ctx.mcpManager.disconnectAll();
         ctx.memoryStore.close();
         if (worktreeHandle !== undefined) {
-          await worktreeHandle.cleanup({
-            force: ctx.stats.totalTurns === 0,
-            disposition: ctx.worktreeDisposition,
-          });
+          await worktreeHandle.cleanup({ force: ctx.stats.totalTurns === 0, disposition: ctx.worktreeDisposition });
         }
       });
 
       spinner.succeed('Session ready');
-
-      // Item #1: Persist worktree context past the spinner so it survives in
-      // scrollback. spinner.succeed() replaces the text set on line ~155
-      // ("Worktree ready at …"), silently discarding it. Emit a static line
-      // immediately after so the operator can always see which branch they're on.
-      // External constraint: must come AFTER spinner.succeed so we don't race
-      // the ora line-clearing flush.
       if (worktreeHandle !== undefined) {
         console.log(
           palette.dim('  ↪ worktree: ') +
-            palette.dim(formatCwd(worktreeHandle.path, { maxWidth: 60 })) +
-            palette.dim(` (branch: ${worktreeHandle.branch})`),
+          palette.dim(formatCwd(worktreeHandle.path, { maxWidth: 60 })) +
+          palette.dim(` (branch: ${worktreeHandle.branch})`),
         );
       } else if (deferredWorktree !== undefined) {
-        // Deferred (born-named): the worktree is created from the first
-        // message. Tell the operator so the absence of a worktree line at
-        // startup isn't mistaken for `-w` having silently failed.
         console.log(palette.dim('  ↪ worktree: named & created from your first message'));
       }
 
-      // Autosaved markdown transcript. Per-turn appends happen inside
-      // runTurn via the REPL loop's onTurnComplete; `/clear` rotates to
-      // a new file via the handle; graceful exit writes an `_ended_`
-      // footer via cleanup.
       const transcript = await initTranscript(() => ctx.stats.model);
       console.log(palette.dim(`  transcript: ${transcript.path()}`));
       registerCleanup(async () => { await transcript.appendEnded(); });
 
-      // Autosave a session sidecar on graceful close so `/resume` can
-      // discover it. Guard on totalTurns > 0 to avoid cluttering the
-      // resume list with empty sessions that had no user input.
-      let sessionSavedOnExit = false;
-      const saveCurrentSession = (): string | undefined => {
-        if (ctx.stats.totalTurns === 0) return undefined;
-        const savedPath = saveSession(ctx.stats);
-        sessionSavedOnExit = true;
-        return savedPath;
-      };
+      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx);
       registerCleanup(async () => {
-        if (sessionSavedOnExit) return;
+        if (isSaved()) return;
         try { saveCurrentSession(); } catch { /* session-sidecar best-effort */ }
       });
 
-      // Ctrl+C state: first press interrupts in-flight turn, second within window exits.
       const turnState: TurnState = { turnInFlight: false, lastSigintAt: 0 };
-      // Expose in-flight state to the swap closure so it can refuse mid-turn resumes.
       ctx.getInFlight = () => turnState.turnInFlight;
-      const SIGINT_EXIT_WINDOW_MS = 1500;
-      const handleSigint = () => {
-        const now = Date.now();
-        // Priority 1 — foreground `!cmd` shell. Set by the REPL while a
-        // FG shell is in flight; the closure kills the shell's process
-        // group and clears its FG slot, returning true. We swallow the
-        // signal so the exit-cycle below doesn't also fire.
-        if (turnState.tryAbortShellForeground && turnState.tryAbortShellForeground()) {
-          turnState.lastSigintAt = now;
-          return;
-        }
-        if (turnState.turnInFlight) {
-          turnState.lastSigintAt = now;
-          const c = turnState.activeCompositor;
 
-          // Second Ctrl+C while the picker is open: abort the picker and hard-
-          // cancel immediately (safety hatch — the user must never be stuck).
-          if (turnState.interruptPickerAbort) {
-            turnState.interruptPickerAbort.abort();
-            turnState.interruptPickerAbort = null;
-            ctx.session.current?.abort('sigint');
-            ctx.rl.close();
-            return;
-          }
+      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort });
+      registerCleanup(async () => { removeListeners(); });
 
-          // First Ctrl+C + armed compositor → show the interrupt picker
-          // so the user can choose Stop (soft) vs Cancel (hard).
-          if (c && c.isArmed()) {
-            const doStop = () => {
-              if (turnState.requestSoftStop) { turnState.requestSoftStop(); }
-              else { ctx.session.current.interrupt().catch(() => { /* teardown */ }); }
-              turnState.notifyInterrupting?.(true);
-            };
-            launchInterruptPicker({
-              compositor: c,
-              turnState,
-              onStop: doStop,
-              onCancel: () => { ctx.session.current?.abort('sigint'); ctx.rl.close(); },
-            });
-            return;
-          }
-
-          // Fallback (non-TTY / compositor not armed): first Ctrl+C = soft-stop,
-          // same as ESC. Prints exit affordance so 2nd Ctrl+C is discoverable.
-          if (turnState.requestSoftStop) { turnState.requestSoftStop(); }
-          else { ctx.session.current.interrupt().catch(() => { /* swallow during teardown */ }); }
-          turnState.notifyInterrupting?.(true);
-          const msg = '\n' + palette.info('ℹ ') + 'Press Ctrl+C again to exit.';
-          if (c && c.isArmed()) { try { c.commitAbove(msg); } catch { console.log(msg); } }
-          else { console.log(msg); }
-          return;
-        }
-        if (now - turnState.lastSigintAt < SIGINT_EXIT_WINDOW_MS) {
-          // Pre-abort before rl.close() so deriveClosureReason sees 'sigint'
-          // (a non-'closed' reason) and returns 'abort' instead of 'model_end_turn'.
-          ctx.session.current?.abort('sigint');
-          ctx.rl.close();
-          return;
-        }
-        turnState.lastSigintAt = now;
-        console.log('\n' + palette.info('ℹ ') + 'Press Ctrl+C again (or /exit) to quit.');
-      };
-      process.on('SIGINT', handleSigint);
-      registerCleanup(async () => { process.removeListener('SIGINT', handleSigint); });
-
-      // SIGTERM handler: graceful shutdown on container/init-system kill so
-      // the witness layer's session_sealed + closure events still land.
-      // Without this, the session is hard-killed and the trace ends mid-
-      // stream (no terminal record), which a reader interprets as
-      // sealed-crashed. Idempotency: a second SIGTERM during teardown is
-      // a no-op (the cleanup registry clears itself on first run).
-      let sigtermInFlight = false;
-      const handleSigterm = (): void => {
-        if (sigtermInFlight) return;
-        sigtermInFlight = true;
-        // Pre-abort before rl.close() so deriveClosureReason sees 'sigterm'
-        // (a non-'closed' reason) and returns 'abort' instead of 'model_end_turn'.
-        ctx.session.current?.abort('sigterm');
-        // Ordering constraint: cancel the quit-time picker BEFORE closing
-        // readline, so it releases raw stdin and settles its promise while the
-        // terminal is still intact. Reversing this strands the awaited
-        // disposition in the cleanup closure below.
-        pickerAbort.abort();
-        // Close readline first so any in-progress prompt unwinds before
-        // we close the session and run cleanups. rl.on('close') will
-        // also fire and trigger the standard exit path; the guard above
-        // prevents double-invocation.
-        try { ctx.rl.close(); } catch { /* best-effort */ }
-        // Belt-and-suspenders: if rl.on('close') doesn't reach the exit
-        // path within a short window (e.g. when the REPL loop is awaiting
-        // a long-running turn), run cleanups directly and exit.
-        const GRACE_MS = 2000;
-        setTimeout(() => {
-          runCleanupFunctions().finally(() => process.exit(0));
-        }, GRACE_MS).unref();
-      };
-      process.on('SIGTERM', handleSigterm);
-      registerCleanup(async () => { process.removeListener('SIGTERM', handleSigterm); });
-
-      // SIGHUP handler: terminal-disconnect graceful shutdown. Fires when the
-      // controlling terminal goes away — macOS Terminal window closed, SSH
-      // dropped, tmux session killed — at which point Node's default action
-      // is immediate process termination with no cleanup. Without this
-      // handler, readline never fires 'close', `session.close()` is never
-      // called, and the trace ends mid-stream with no `closure` event.
-      // Statistically the dominant cause of unsealed traces (see witness
-      // data analysis 2026-05-25). Mirrors the SIGTERM handler shape: same
-      // guard variable, same rl.close() + 2s grace + forced exit.
-      let sighupInFlight = false;
-      const handleSighup = (): void => {
-        if (sighupInFlight) return;
-        sighupInFlight = true;
-        // Pre-abort before rl.close() so deriveClosureReason sees 'sighup'
-        // (a non-'closed' reason) and returns 'abort' instead of 'model_end_turn'.
-        ctx.session.current?.abort('sighup');
-        // Same ordering constraint as handleSigterm: picker cancel precedes
-        // readline teardown.
-        pickerAbort.abort();
-        try { ctx.rl.close(); } catch { /* best-effort */ }
-        const GRACE_MS = 2000;
-        setTimeout(() => {
-          runCleanupFunctions().finally(() => process.exit(0));
-        }, GRACE_MS).unref();
-      };
-      process.on('SIGHUP', handleSighup);
-      registerCleanup(async () => { process.removeListener('SIGHUP', handleSighup); });
-
+      // Screen clear then measure the pre-arm anchor row (newlines from
+      // banner/notices) so the persistent compositor starts below them.
       process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
-
-      // Invariant: cursor is at (1,1) after the CUP-home (`\x1b[H`) above.
-      // We need to know which row the cursor lands on AFTER the pre-arm
-      // print block (banner + update notice + boot-prune notice + blank
-      // line) so the persistent compositor can install that as its
-      // `anchorRow` — the floor below which its CUP-positioned live frame
-      // is allowed to grow without overwriting pre-arm content. Easiest
-      // accurate measurement: monkey-patch stdout/stderr `write` for the
-      // duration of these prints and count `\n` bytes that pass through.
-      // The restore in the `finally` is unconditional so a thrown banner
-      // formatter can never strand the patch on the global streams.
-      //
-      // Why both streams: `printUpdateBanner` writes to stderr and the
-      // banner writes to stdout, but both advance the same terminal cursor
-      // (they share the TTY). Counting only one stream would undershoot.
-      let preArmAnchorRow = 1; // cursor row after `\x1b[H`
-      const origStdoutWrite = process.stdout.write.bind(process.stdout);
-      const origStderrWrite = process.stderr.write.bind(process.stderr);
-      const countNewlines = (chunk: unknown): number => {
-        const s = typeof chunk === 'string'
-          ? chunk
-          : (chunk instanceof Uint8Array ? Buffer.from(chunk).toString('utf8') : String(chunk));
-        return (s.match(/\n/g)?.length ?? 0);
-      };
-      const wrapWrite = (orig: typeof process.stdout.write): typeof process.stdout.write =>
-        ((chunk: unknown, ...rest: unknown[]): boolean => {
-          preArmAnchorRow += countNewlines(chunk);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          return (orig as any)(chunk, ...rest);
-        }) as typeof process.stdout.write;
-      process.stdout.write = wrapWrite(origStdoutWrite);
-      process.stderr.write = wrapWrite(origStderrWrite);
-
-      try {
-        // Re-emit update notices that were stashed before program.parse() — the
-        // screen clear above erases anything written to stderr/stdout before this
-        // point, so index.ts cannot print these directly.
-        if (_pendingUpdateNotices !== null) {
-          const { updateInfo, pendingMessage } = _pendingUpdateNotices;
-          _pendingUpdateNotices = null;
-          if (pendingMessage !== null) {
-            process.stderr.write(pendingMessage);
-          }
-          if (updateInfo !== null) {
-            printUpdateBanner(updateInfo);
-          }
+      const { anchorRow } = await measurePreArmAnchorRow(async () => {
+        const notices = getAndClearUpdateNotices();
+        if (notices !== null) {
+          if (notices.pendingMessage !== null) process.stderr.write(notices.pendingMessage);
+          if (notices.updateInfo !== null) printUpdateBanner(notices.updateInfo);
         }
-
-        // Banner: hybrid mascot layout. The worktree row is emitted only when
-        // running in a worktree session — surfaces AFK's most distinctive
-        // feature without cluttering plain-cwd sessions. `cwd` reflects the
-        // bootstrap'd session cwd (worktree path when applicable). When
-        // /resume restored a prior session, surface the resume target +
-        // prior-turn count via metaLine (Row E of the hybrid layout).
         const resumeMeta = ctx.resumeTarget
           ? `Resuming ${ctx.resumeTarget.id} · ${ctx.stats.totalTurns} prior turn${ctx.stats.totalTurns === 1 ? '' : 's'}`
           : undefined;
@@ -833,81 +357,21 @@ export function registerInteractiveCommand(program: Command): void {
           ...(resumeMeta !== undefined ? { metaLine: resumeMeta } : {}),
           hintLine: startupHintLine(),
         }));
-        // Surface boot-time prune outcome AFTER the banner so it lives at the
-        // same scrollback rank as the status line — close enough to be seen,
-        // not noisy enough to compete with welcome chrome.
-        if (bootPruneNotice !== undefined) {
-          console.log(palette.dim(`  ${bootPruneNotice}`));
-        }
-        // When resuming, surface a brief "where was I" cue (last user message
-        // + first sentence of last assistant reply + /history pointer) so a
-        // human reorienting in the wiped terminal has anchor context. Skips
-        // silently for fresh sessions and for stored sessions with empty
-        // turns arrays. Routes through ctx.completionWriter — at this point
-        // the persistent compositor is not yet armed (runReplLoop will arm
-        // it), so writer.fn is still the default console.log. See
-        // printResumeBanner's docblock for the writer-transport rationale.
-        // Emitted inside this try so its newlines are counted into
-        // preArmAnchorRow — the compositor must arm BELOW this content.
-        if (ctx.resumeTarget) {
-          printResumeBanner(ctx.stats, ctx.completionWriter);
-        }
-        // First-run welcome banner — shown exactly once, on the user's first
-        // interactive launch (no resume, real TTY). The marker is written before
-        // printing so a crash mid-banner doesn't cause a repeat. Newlines count
-        // into preArmAnchorRow just like the main banner and boot warnings.
-        printFirstRunBanner({
-          isTTY: Boolean(process.stdout.isTTY),
-          isResume: ctx.resumeTarget !== undefined,
-        });
-        // Bootstrap warnings (#745). `bootstrapSession` above ran BEFORE the
-        // screen clear, so any producer that printed directly — the
-        // agent-registry built-in-shadow warning, MCP config warnings — had its
-        // output erased, scrollback included (`\x1b[3J` = Erase Saved Lines).
-        // Those producers now accumulate into ctx.bootWarnings and are emitted
-        // here instead: after the clear, inside the pre-arm block so the
-        // newlines count into preArmAnchorRow and the compositor arms BELOW
-        // them. Printed LAST in the block — a built-in-shadow warning means a
-        // read-only verifier agent may now be write-capable, so it sits closest
-        // to the prompt rather than buried above the banner. Shares its printer
-        // with the bootstrap-abort drain above; the buffer is emptied in place,
-        // so only whichever path ran first emits.
+        if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
+        if (ctx.resumeTarget) printResumeBanner(ctx.stats, ctx.completionWriter);
+        printFirstRunBanner({ isTTY: Boolean(process.stdout.isTTY), isResume: ctx.resumeTarget !== undefined });
         drainBootWarnings(ctx.bootWarnings);
         console.log();
-      } finally {
-        process.stdout.write = origStdoutWrite;
-        process.stderr.write = origStderrWrite;
-      }
+      });
 
-      // Thread the captured cursor row into ctx so runReplLoop can hand it
-      // to `surface.armCompositor({ anchorRow })`. We use the row AFTER all
-      // the newlines as the safe ceiling — any value below this is owned by
-      // pre-arm scrollback content (banner, notices) that the live frame
-      // must not overwrite via CUP positioning.
-      ctx.preArmAnchorRow = preArmAnchorRow;
-
-      // Terminal title (OSC 2): set the idle title once as the REPL becomes
-      // ready. Per-turn transitions to/from "· running" happen in the turn
-      // handler; this is the baseline. Emitted BEFORE statusLine.start() and
-      // BEFORE runReplLoop arms the persistent compositor, so it is a plain
-      // pre-arm raw write — no live frame to disturb. TTY + AFK_TERM_TITLE
-      // gated inside the helper; a no-op on non-TTY / opt-out.
+      ctx.preArmAnchorRow = anchorRow;
       setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
-
       ctx.statusLine.start();
       ctx.slashCtx.ui.repaintStatusLine();
 
       ctx.rl.on('close', async () => {
         ctx.statusLine.stop();
-        // Terminal title (OSC 2): reset to empty on clean exit so the tab
-        // label reverts to the terminal's default. This handler is the clean-
-        // exit path (Ctrl+D / EOF / rl.close from /exit); by the time it runs
-        // runReplLoop's finally has already disposed the persistent compositor
-        // (repl-loop.ts), so raw stdout is safe. No-op when AFK_TERM_TITLE=0 or
-        // non-TTY. The empty title ('' → ESC ] 2 ; BEL) is the documented reset.
         setTerminalTitleIfEnabled(process.stdout, '');
-        // printExitSummary is synchronous (execFileSync for git stat) so
-        // order is guaranteed without an await on this particular call.
         printExitSummary(ctx, worktreeHandle, saveCurrentSession);
         console.log(palette.info('ℹ ') + 'Goodbye!');
         await runCleanupFunctions();
@@ -917,140 +381,7 @@ export function registerInteractiveCommand(program: Command): void {
       await runReplLoop(ctx, transcript, turnState, handleSigint);
     });
 
-  // Issue #710 mode 1: name the unrecognized COMMAND, not its trailing flag,
-  // when a mistyped subcommand (e.g. `afk config_set env X --unset`) falls
-  // through to this default command. See unknown-command-guard.ts for the
-  // full mechanism and the documented residual gap (mode 2).
+  // Issue #710 mode 1: name the unrecognized COMMAND when a mistyped subcommand
+  // falls through to this default command.
   installUnknownCommandGuard(interactiveCmd, program);
-}
-
-/**
- * Expanded session-close summary (Item #8).
- *
- * Replaces the old printExitSummary + printResumeHint pair with a single
- * async function that emits up to 4 lines:
- *
- *   Line 1: N turns · Xs · $Y.YY · Ztokens
- *   Line 2: model: <model> · worktree: <name or 'none'>
- *   Line 3: edits: <git diff --shortstat> or 'no files changed'
- *             (omitted if not in a git repo; Promise.race with 2s timeout)
- *   Line 4: Continue with: afk --resume <id> -m <model>
- *
- * All lines are indented 2 spaces and dimmed. Line 4 uses palette.brand for
- * the command itself so the operator can copy-paste it clearly.
- *
- * External constraint: git diff --shortstat runs via execFileSync with a 2s
- * timeout so a huge repo or slow NFS mount can never delay process exit. Any
- * error (non-git-repo, git not on PATH, timeout) silently skips the line.
- */
-function printExitSummary(
-  ctx: InteractiveCtx,
-  worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined,
-  saveCurrentSession: () => string | undefined,
-): void {
-  if (ctx.stats.totalTurns === 0) return;
-
-  // Invariant (TUI rhythm contract): the last turn's footer (line ~520
-  // of turn-handler.ts) already emitted its trailing blank, so the
-  // divider lands one blank below the footer naturally. A leading `\n`
-  // here would double-up. See docs/tui-rhythm.md.
-  console.log(divider('Session Summary'));
-
-  // Line 1: turns · duration · cost · tokens
-  const parts = [
-    `${ctx.stats.totalTurns} turn${ctx.stats.totalTurns === 1 ? '' : 's'}`,
-    formatDuration(Date.now() - ctx.stats.sessionStartTime),
-  ];
-  parts.push(...costTokenParts({ costUsd: ctx.stats.totalCostUsd, tokens: ctx.stats.totalTokens }));
-  console.log(palette.dim('  ' + parts.join(' · ')));
-
-  // Line 2: model · worktree name (or 'none')
-  const worktreeName = worktreeHandle ? path.basename(worktreeHandle.path) : 'none';
-  console.log(palette.dim(`  model: ${ctx.stats.model} · worktree: ${worktreeName}`));
-
-  // Line 3: git diff --shortstat (best-effort, synchronous with 2s timeout).
-  // External constraint: execFileSync with a timeout kills the child process
-  // if git hangs (e.g. on a slow NFS mount). Any error (non-git-repo, git
-  // not on PATH, timeout, or HEAD not existing on initial worktree) silently
-  // skips the line so process exit is never blocked.
-  try {
-    const cwd = ctx.stats.cwd ?? process.cwd();
-    const stdout = execFileSync('git', ['diff', '--shortstat', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 2000,
-    });
-    const stat = stdout.trim();
-    console.log(palette.dim(`  edits: ${stat || 'no files changed'}`));
-  } catch {
-    // Not a git repo, git not on PATH, timed out, or HEAD doesn't exist —
-    // skip the line entirely rather than showing a confusing error.
-  }
-
-  // Line 4: resume hint (absorbs former printResumeHint)
-  let resumeTarget = ctx.stats.sessionId;
-  try {
-    const savedPath = saveCurrentSession();
-    if (!resumeTarget && savedPath) {
-      resumeTarget = path.basename(savedPath, '.json');
-    }
-  } catch {
-    // The command can still be useful when the SDK/session id is known and
-    // the cleanup autosave failed for an unrelated filesystem reason.
-  }
-  if (resumeTarget) {
-    console.log(
-      palette.dim('  Continue with: ') +
-        palette.brand(formatResumeCommand(resumeTarget, ctx.stats.model)),
-    );
-  }
-
-  console.log();
-}
-
-/**
- * Mitigation #3 (issue #1514): snapshot git state before `cancelAll()` so
- * the operator has a before-picture to compare against after the drain
- * timeout fires. Runs `git diff --stat` and `git status --short` with a
- * 2-second timeout each. Best-effort — any error (non-git repo, git not on
- * PATH, timeout) is silently swallowed so session teardown is never delayed.
- *
- * Output goes to stderr so it doesn't corrupt any piped stdout stream and
- * is clearly distinguished from normal session output.
- */
-function snapshotGitStateForCancelAll(cwd: string): void {
-  try {
-    const stat = execFileSync('git', ['diff', '--stat', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 2000,
-    }).trim();
-    const status = execFileSync('git', ['status', '--short'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 2000,
-    }).trim();
-    const lines: string[] = [
-      '[afk] pre-cancelAll git snapshot (compare after session to detect half-applied edits):',
-    ];
-    lines.push('  git diff --stat HEAD:');
-    if (stat) {
-      for (const line of stat.split('\n')) {
-        lines.push(`    ${line}`);
-      }
-    } else {
-      lines.push('    (no uncommitted changes)');
-    }
-    lines.push('  git status --short:');
-    if (status) {
-      for (const line of status.split('\n')) {
-        lines.push(`    ${line}`);
-      }
-    } else {
-      lines.push('    (working tree clean)');
-    }
-    process.stderr.write(lines.join('\n') + '\n');
-  } catch {
-    // Not a git repo, git not on PATH, timed out — skip silently.
-  }
 }

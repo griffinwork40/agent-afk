@@ -289,7 +289,7 @@ function extractJsonArray(text: string): string | null {
 }
 
 /** Maximum allowed length for description fields written into SPINE.md. */
-export const MAX_DESCRIPTION_LEN = 120;
+export const MAX_DESCRIPTION_LEN = 300;
 /** Generous cap for rationale/existingDescription — not written as entry lines. */
 const MAX_RATIONALE_LEN = 500;
 
@@ -299,7 +299,15 @@ const MAX_RATIONALE_LEN = 500;
  * then trim and truncate to `maxLen`.
  */
 function sanitizeField(value: string, maxLen: number): string {
-  return value.replace(/[\r\n]+/g, ' ').trim().slice(0, maxLen);
+  const cleaned = value.replace(/[\r\n]+/g, ' ').trim();
+  if (cleaned.length > maxLen) {
+    console.warn(
+      `[spine] sanitizeField: description truncated from ${cleaned.length} to ${maxLen} chars. ` +
+      `Consider raising MAX_DESCRIPTION_LEN or shortening the description. ` +
+      `Truncated tail: "${cleaned.slice(maxLen, maxLen + 40)}…"`
+    );
+  }
+  return cleaned.slice(0, maxLen);
 }
 
 function validateItem(item: unknown): SpineClassifierItem | null {

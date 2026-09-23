@@ -190,7 +190,9 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
     // any further edits.
     const modifiedPaths = applyResult.files_changed.map((f) => f.path);
     const rereadWarning =
-      applyResult.status === 'applied' && modifiedPaths.length > 0
+      (applyResult.status === 'applied' ||
+        (applyResult.status === 'partial_failure' && modifiedPaths.length > 0)) &&
+      modifiedPaths.length > 0
         ? `IMPORTANT: ${modifiedPaths.length} file(s) were written to disk. Your in-context copy of ${modifiedPaths.length === 1 ? 'this file is' : 'these files are'} now stale. You MUST call read_file on each modified path before any subsequent edit_file call — otherwise edit_file may match against pre-patch content and silently revert these changes. Modified paths: ${modifiedPaths.join(', ')}`
         : undefined;
 
