@@ -2,8 +2,11 @@
  * Shared display formatters and types for the `worktree` CLI command and the
  * `/worktree` slash command.
  *
- * Keep this module free of CLI / slash-command imports — it is a pure utility
- * layer that both surfaces can import without introducing a circular dependency.
+ * This module imports `palette` from `../../cli/palette.js` as an intentional,
+ * acknowledged exception to the "no CLI imports" guideline. `palette` is a
+ * leaf ANSI formatter with zero dependencies back through `agent/`, so there
+ * is no circular-dependency risk. All other CLI / slash-command imports remain
+ * prohibited.
  *
  * @module agent/worktree/display
  */
@@ -89,7 +92,7 @@ export function verdictColor(verdict: string, text: string): string {
 export function verdictWouldPrune(verdict: string): string {
   if (PRUNABLE_VERDICTS.has(verdict)) return palette.error('yes');
   if (WARNING_VERDICTS.has(verdict)) return palette.warning('warn');
-  return palette.success('no');
+  return palette.dim('no');
 }
 
 // ---------------------------------------------------------------------------
