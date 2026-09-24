@@ -102,6 +102,31 @@ describe('buildSubagentsLite', () => {
     expect(result.backgroundJobs[0]!.recentActivity).toBeUndefined();
   });
 
+  it('omits recentActivity when both parentSessionId and callerSessionId are undefined (double-undefined guard)', () => {
+    // Both sides are `string | undefined`. If the `callerSessionId &&` guard
+    // were ever relaxed, `undefined === undefined` would be true and an
+    // identity-less caller would match identity-less jobs. This test pins the
+    // current safe behaviour so the regression is caught immediately.
+    const job = makeJob({ parentSessionId: undefined, status: 'running' });
+    const registry = fakeRegistry([job], { 'bg-test-1': 'some output' });
+    const result = buildSubagentsLite(fakeManager(), registry, undefined);
+    expect(result.backgroundJobs[0]!.recentActivity).toBeUndefined();
+  });
+
+  it('omits recentActivity for user-provenance (promoted) jobs (structural gate)', () => {
+    // User-promoted (Ctrl+B) jobs have provenance === 'user'. The gate now
+    // explicitly checks `j.provenance === 'model'`, so exclusion is structural
+    // rather than incidental (they happen to have an empty transcript).
+    const job = makeJob({
+      parentSessionId: 'session-abc',
+      status: 'running',
+      provenance: 'user',
+    });
+    const registry = fakeRegistry([job], { 'bg-test-1': 'promoted output' });
+    const result = buildSubagentsLite(fakeManager(), registry, 'session-abc');
+    expect(result.backgroundJobs[0]!.recentActivity).toBeUndefined();
+  });
+
   it('omits recentActivity when transcript is empty', () => {
     const job = makeJob({ parentSessionId: 'session-abc', status: 'running' });
     const registry = fakeRegistry([job], { 'bg-test-1': '' });
@@ -120,7 +145,7 @@ describe('buildSubagentsLite', () => {
   // recentActivity — truncation
   // -------------------------------------------------------------------------
 
-  it('truncates recentActivity to last 2048 bytes', () => {
+  it('truncates recentActivity to last 2048 chars', () => {
     const long = 'x'.repeat(4000);
     const job = makeJob({ parentSessionId: 'session-abc', status: 'running' });
     const registry = fakeRegistry([job], { 'bg-test-1': long });
@@ -130,12 +155,23 @@ describe('buildSubagentsLite', () => {
     expect(result.backgroundJobs[0]!.recentActivity).toBe(long.slice(long.length - 2048));
   });
 
-  it('does not truncate recentActivity when under 2048 bytes', () => {
+  it('does not truncate recentActivity when under 2048 chars', () => {
     const short = 'Reading src/agent/session.ts and analyzing the control flow...';
     const job = makeJob({ parentSessionId: 'session-abc', status: 'running' });
     const registry = fakeRegistry([job], { 'bg-test-1': short });
     const result = buildSubagentsLite(fakeManager(), registry, 'session-abc');
     expect(result.backgroundJobs[0]!.recentActivity).toBe(short);
+  });
+
+  it('does not truncate recentActivity at exactly 2048 chars (boundary — uses >, not >=)', () => {
+    // The truncation guard is `tail.length > MAX_ACTIVITY_SNAPSHOT_CHARS`.
+    // A string of exactly 2048 chars must be returned verbatim.
+    const exact = 'a'.repeat(2048);
+    const job = makeJob({ parentSessionId: 'session-abc', status: 'running' });
+    const registry = fakeRegistry([job], { 'bg-test-1': exact });
+    const result = buildSubagentsLite(fakeManager(), registry, 'session-abc');
+    expect(result.backgroundJobs[0]!.recentActivity).toHaveLength(2048);
+    expect(result.backgroundJobs[0]!.recentActivity).toBe(exact);
   });
 
   // -------------------------------------------------------------------------
