@@ -2,6 +2,7 @@ import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence } from './markdown-stream-format.js';
+import { contentMargin } from './render/measure.js';
 import {
   type InputBufferState,
   type LogUpdateFunction,
@@ -160,7 +161,14 @@ export class StreamingMarkdownRenderer {
     // scrollback — one paragraph + one separator row. See
     // docs/tui-rhythm.md for the full contract.
     if (this.compositor) {
-      this.compositor.commitAbove(trimmed + '\n\n');
+      // Content centering (AFK_CENTER_CONTENT): prepend left margin to each
+      // physical line of the committed prose block so it aligns with the
+      // centered tool-lane output and input line.
+      const pad = contentMargin();
+      const padded = pad
+        ? trimmed.split('\n').map(l => l === '' ? l : pad + l).join('\n')
+        : trimmed;
+      this.compositor.commitAbove(padded + '\n\n');
     }
 
     this.committed = accumulateCommitted(this.committed, trimmed);
@@ -203,7 +211,12 @@ export class StreamingMarkdownRenderer {
       ? calculateContentWidth(this.indent.length)
       : calculateProseContentWidth(this.indent.length);
     const formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
-    return applyIndent(formatted, this.indent);
+    // Content centering (AFK_CENTER_CONTENT): prepend left margin to the
+    // live pending overlay so in-flight prose aligns with centered content.
+    const pad = contentMargin();
+    const indented = applyIndent(formatted, this.indent);
+    if (!pad) return indented;
+    return indented.split('\n').map(l => l === '' ? l : pad + l).join('\n');
   }
 
   /**

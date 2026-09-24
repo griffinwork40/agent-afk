@@ -131,7 +131,10 @@ export function capToProseMeasure(width: number): number {
  * Omit to let the function read it fresh.
  */
 export function contentMargin(termWidth?: number): string {
-  if (!env.AFK_CENTER_CONTENT) return '';
+  const raw = env.AFK_CENTER_CONTENT;
+  if (!raw) return '';
+  const v = raw.trim().toLowerCase();
+  if (v !== '1' && v !== 'true') return '';
   const tw = termWidth ?? getTerminalWidth();
   const measure = capToMeasure(tw);
   const marginCols = Math.max(0, Math.floor((tw - measure) / 2));
