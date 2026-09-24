@@ -53,7 +53,7 @@ export async function runShellTask(
 ): Promise<TelemetryRecord> {
   const triggeredAt = new Date(options.now());
   const startTimeMs = options.now();
-  const timeoutMs = parseInt(env.AFK_DAEMON_SHELL_TIMEOUT_MS ?? '', 10) || 300_000;
+  const timeoutMs = parseInt(env.AFK_DAEMON_SHELL_TIMEOUT_MS ?? '', 10) || 2_700_000;
   const baseRecord: Pick<
     TelemetryRecord,
     'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt'
