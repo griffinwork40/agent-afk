@@ -30,6 +30,7 @@
 import type { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import type { SessionStats } from './slash/types.js';
 import { formatHealthRail, type HealthRailFields } from './health-rail.format.js';
+import { contentMargin } from './render/measure.js';
 import { ResizeBus } from './terminal-size.js';
 import { isPlainOutputRequested } from '../config/env.js';
 import { contextLimitFor } from './model-limits.js';
@@ -219,10 +220,13 @@ export class HealthRail {
           contextRatio: 0,
         };
 
+    // Content centering (AFK_CENTER_CONTENT): prepend left margin so the
+    // health rail floats at the same horizontal position as other content.
+    const pad = contentMargin();
     this.stream.write('\x1b[s');
     this.stream.write(`\x1b[${paintRow};1H`);
     this.stream.write('\x1b[2K');
-    this.stream.write(formatHealthRail(fields, maxW));
+    this.stream.write(pad + formatHealthRail(fields, Math.max(4, maxW - pad.length)));
     this.stream.write('\x1b[u');
   }
 
