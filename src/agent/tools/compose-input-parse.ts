@@ -322,12 +322,19 @@ export function parseComposeInput(input: unknown): ParseResult {
       if (atts.length > 0) nodeAttachments = atts;
     }
 
-    let nodeIsolation: 'none' | 'worktree' | undefined;
+    let nodeIsolation: 'worktree' | undefined;
     if (n['isolation'] !== undefined) {
       if (n['isolation'] !== 'none' && n['isolation'] !== 'worktree') {
         throw new Error(`Node "${id}" isolation must be "none" or "worktree" (got ${JSON.stringify(n['isolation'])})`);
       }
-      nodeIsolation = n['isolation'];
+      // Normalize "none" to undefined — consistent with the agent-tool parser
+      // which also maps isolation:"none" → undefined so callers reading the
+      // parsed output never see the explicit "none" form.
+      if (n['isolation'] === 'none') {
+        nodeIsolation = undefined;
+      } else {
+        nodeIsolation = n['isolation'];
+      }
       // isolation:"worktree" is mutually exclusive with cwd — the worktree
       // path IS the node's cwd. Allowing both would ambiguously combine an
       // explicit cwd pin with worktree creation, making the effective cwd
