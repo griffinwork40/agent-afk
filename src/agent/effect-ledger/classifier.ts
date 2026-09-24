@@ -28,6 +28,8 @@
 const ALWAYS_EXTERNAL_TOOLS = new Set<string>([
   // Outbound Telegram message
   'send_telegram',
+  // Image generation — paid OpenAI API call, irreversible external effect.
+  'image_generate',
   // MCP write tools match the `mcp__*` prefix pattern — see classifyToolCall.
 ]);
 
