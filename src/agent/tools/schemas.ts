@@ -431,6 +431,57 @@ export const webRequestTool: AnthropicToolDef = {
   },
 };
 
+export const imageGenerateTool: AnthropicToolDef = {
+  name: 'image_generate',
+  category: 'web',
+  concurrencySafe: false,
+  riskClass: 'caution',
+  description:
+    'Generate an image from a text prompt using the OpenAI Images API (GPT Image models). ' +
+    'The generated image is saved to disk and the file path is returned. ' +
+    'Requires AFK_IMAGE_API_KEY to be set (intentionally separate from OPENAI_API_KEY to prevent cross-billing). ' +
+    'Each generation costs real money via the OpenAI API.\n\n' +
+    'The image is NOT returned inline in the tool result to avoid consuming ~300K-500K context tokens per image. ' +
+    'To inspect the generated image, read the file at the returned path in a follow-up turn.\n\n' +
+    'Safety: blocked in daemon/cron sessions unless AFK_IMAGE_ALLOW_DAEMON=1. ' +
+    'Per-session generation cap controlled by AFK_IMAGE_SESSION_LIMIT (default 10). ' +
+    'Every call is recorded in the effect ledger for audit.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      prompt: {
+        type: 'string',
+        description: 'Text description of the image to generate. Be specific about style, composition, colors, and details.',
+      },
+      model: {
+        type: 'string',
+        enum: ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'],
+        description: 'Image model to use. gpt-image-1 (default) has strong text rendering; gpt-image-2 is flagship; gpt-image-1-mini is cheapest.',
+      },
+      size: {
+        type: 'string',
+        enum: ['1024x1024', '1024x1536', '1536x1024', 'auto'],
+        description: 'Image dimensions. Default: 1024x1024. Use 1024x1536 for portrait, 1536x1024 for landscape.',
+      },
+      quality: {
+        type: 'string',
+        enum: ['low', 'medium', 'high', 'auto'],
+        description: 'Generation quality. Higher quality costs more. Default: auto.',
+      },
+      output_format: {
+        type: 'string',
+        enum: ['png', 'webp', 'jpeg'],
+        description: 'Output image format. Default: png.',
+      },
+      output_path: {
+        type: 'string',
+        description: 'Optional file path to save the image to. When omitted, saves to <cwd>/.afk/generated-images/<id>.<format>.',
+      },
+    },
+    required: ['prompt'],
+  },
+};
+
 export const agentTool: AnthropicToolDef = {
   name: 'agent',
   category: 'subagent',
@@ -1360,6 +1411,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   sendTelegramTool,
   webScrapeTool,
   webRequestTool,
+  imageGenerateTool,
   createScheduleTool,
   updateScheduleTool,
   listSchedulesTool,

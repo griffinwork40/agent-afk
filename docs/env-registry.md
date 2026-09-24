@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**189 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**192 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -74,6 +74,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_IMAGE_API_KEY` | string |  |  |  | OpenAI API key for the image_generate tool. Intentionally separate from OPENAI_API_KEY (which funds chat completions) to prevent accidental cross-billing. Get a key from https://platform.openai.com/api-keys. |
 | `AFK_LOCAL_API_KEY` | string |  | `local` | `local` | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. |
 | `ANTHROPIC_API_KEY` | string |  |  |  | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | string |  |  |  | Claude Code OAuth token. Tier-2 credential — used when ANTHROPIC_API_KEY is unset; falls back to keychain. |
@@ -238,6 +239,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_EVAL_STALENESS_DAYS` | number |  | `7` | `14` | Number of days without a completed eval-run before the ground-state pre-flight surfaces a staleness warning. The guard reads the most recent timestamp from the eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and emits a warning finding when the gap exceeds this threshold. Default: 7. Set to 0 to disable the guard. |
 | `AFK_GOBLIN_MASCOT` | boolean |  |  | `1` | Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in. |
 | `AFK_GOBLIN_SPINNER` | boolean |  |  | `0` | Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner. |
+| `AFK_IMAGE_ALLOW_DAEMON` | string |  |  |  | Set to "1" to allow image_generate in daemon/cron sessions. Blocked by default to prevent unattended API spend. |
+| `AFK_IMAGE_SESSION_LIMIT` | string |  |  |  | Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10. |
 | `AFK_LEASE_TTL_MS` | number |  |  | `600000` | Lease TTL in milliseconds for durable task execution (issue #1411). A leased task whose lease expires before it completes is recovered and re-enqueued (or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes). |
 | `AFK_MEMORY_EVIDENCE_GATE` | boolean |  | `1` | `0` | Evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an evidence citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. On by default. Set to 0 to disable. |
 | `AFK_NOTIFY` | boolean |  |  | `1` | Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only. |

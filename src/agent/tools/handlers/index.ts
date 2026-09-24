@@ -19,6 +19,7 @@ import { listDirectoryHandler, createListDirectoryHandler } from './list-directo
 import { sendTelegramHandler } from './send-telegram.js';
 import { webScrapeHandler } from './web-scrape.js';
 import { webRequestHandler } from './web-request.js';
+import { imageGenerateHandler } from './image-generate.js';
 import {
   createScheduleHandler,
   updateScheduleHandler,
@@ -103,6 +104,7 @@ export function createBuiltinHandlers(
     ['send_telegram', sendTelegramHandler],
     ['web_scrape', webScrapeHandler],
     ['web_request', webRequestHandler],
+    ['image_generate', imageGenerateHandler],
     ['create_schedule', createScheduleHandler],
     ['update_schedule', updateScheduleHandler],
     ['list_schedules', listSchedulesHandler],
@@ -142,6 +144,7 @@ export {
   sendTelegramHandler,
   webScrapeHandler,
   webRequestHandler,
+  imageGenerateHandler,
   createScheduleHandler,
   updateScheduleHandler,
   listSchedulesHandler,
