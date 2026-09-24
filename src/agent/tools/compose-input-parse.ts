@@ -328,6 +328,11 @@ export function parseComposeInput(input: unknown): ParseResult {
         throw new Error(`Node "${id}" isolation must be "none" or "worktree" (got ${JSON.stringify(n['isolation'])})`);
       }
       nodeIsolation = n['isolation'];
+      // Normalize "none" to undefined so the output is consistent with the
+      // agent-tool parser, which also uses undefined to mean "no isolation".
+      // Emitting { isolation: 'none' } is a minor interface inconsistency that
+      // downstream consumers (dag-subagent.ts) must guard against unnecessarily.
+      if (nodeIsolation === 'none') nodeIsolation = undefined;
       // isolation:"worktree" is mutually exclusive with cwd — the worktree
       // path IS the node's cwd. Allowing both would ambiguously combine an
       // explicit cwd pin with worktree creation, making the effective cwd

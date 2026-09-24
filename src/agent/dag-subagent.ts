@@ -26,6 +26,7 @@ import type { ImageBlockAttachment } from './content/image-blocks.js';
 import { appendImageBlocks } from './content/image-blocks.js';
 import { createIsolatedWorktree } from './tools/handlers/worktree-managed.js';
 import { teardownBackgroundWorktree } from './tools/handlers/worktree-managed.background.js';
+import { debugLog } from '../utils/debug.js';
 
 export interface SubagentDAGNode {
   id: string;
@@ -245,8 +246,11 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
 export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRunResult> {
   const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs, delegationBudget, anchorCwd } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
-  // Monotonic counter for collision-free isolated-worktree slugs across all
-  // DAG nodes in this invocation. Mirrors the isolationCounter in SubagentExecutor.
+  // Supplementary counter for isolated-worktree slugs across all DAG nodes in
+  // this invocation. The 6-char random suffix provides the collision resistance;
+  // this counter is NOT a uniqueness guarantee under parallel async execution
+  // (concurrent run() bodies increment it non-atomically). It is kept as a
+  // readable ordering hint only. Mirrors the isolationCounter in SubagentExecutor.
   let dagIsolationCounter = 0;
 
   // Soft deadline for every node in this DAG (see the arming comment in the
@@ -378,7 +382,9 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         dagNodeBudgetReceipt = undefined;
         // Tear down any isolated worktree that was created but never used.
         if (isolationTeardown) {
-          await teardownBackgroundWorktree(isolationTeardown).catch(() => undefined);
+          await teardownBackgroundWorktree(isolationTeardown).catch((err) => {
+            debugLog(`[dag-subagent] teardown failed for worktree ${isolationTeardown!.worktreePath} (fork-error path): ${String(err)}`);
+          });
         }
         throw forkErr;
       }
@@ -476,7 +482,9 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         // so work is never silently discarded. Mirrors the foreground teardown
         // path in subagent-executor.ts (the DAG path is always foreground).
         if (isolationTeardown) {
-          await teardownBackgroundWorktree(isolationTeardown).catch(() => undefined);
+          await teardownBackgroundWorktree(isolationTeardown).catch((err) => {
+            debugLog(`[dag-subagent] teardown failed for worktree ${isolationTeardown!.worktreePath} (finally path): ${String(err)}`);
+          });
         }
       }
     },
