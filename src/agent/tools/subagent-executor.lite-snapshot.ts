@@ -22,29 +22,60 @@ export interface SubagentsLite {
     status: 'running' | 'completed' | 'failed' | 'cancelled';
     startedAt: string;
     label: string | null;
+    /**
+     * Rolling tail of the child's output text (~4 KB cap). Only populated for
+     * jobs owned by the calling session (parentSessionId match). Absent for
+     * user-promoted jobs (Ctrl+B) whose transcript was not captured, and for
+     * jobs owned by a different session.
+     */
+    recentActivity?: string;
   }>;
 }
+
+/** Maximum bytes of transcript tail surfaced in the lite snapshot. */
+const MAX_ACTIVITY_SNAPSHOT_BYTES = 2048;
 
 /**
  * Build a lite snapshot of active subagents and background jobs. Pulls fresh
  * from the manager + registry on every call so live counts are visible.
  * Background `startedAt` is converted from epoch-ms to ISO 8601 to match the
  * rest of the snapshot's timestamp convention.
+ *
+ * When `callerSessionId` is provided, running jobs owned by that session
+ * include a `recentActivity` field with the last ~2 KB of output text.
  */
 export function buildSubagentsLite(
   subagentManager: SubagentManager,
   backgroundRegistry: BackgroundAgentRegistry | undefined,
+  callerSessionId?: string,
 ): SubagentsLite {
   const active = subagentManager
     .list()
     .map((h) => ({ id: h.id, status: h.status }));
   const backgroundJobs = backgroundRegistry
-    ? backgroundRegistry.list().map((j) => ({
-        jobId: j.jobId,
-        status: j.status,
-        startedAt: new Date(j.startedAt).toISOString(),
-        label: j.label.length > 0 ? j.label : null,
-      }))
+    ? backgroundRegistry.list().map((j) => {
+        const base = {
+          jobId: j.jobId,
+          status: j.status,
+          startedAt: new Date(j.startedAt).toISOString(),
+          label: j.label.length > 0 ? j.label : null,
+        };
+        // Only surface transcript for the caller's own running jobs.
+        if (
+          callerSessionId &&
+          j.parentSessionId === callerSessionId &&
+          j.status === 'running'
+        ) {
+          const tail = backgroundRegistry.getTranscript(j.jobId);
+          if (tail && tail.length > 0) {
+            const trimmed = tail.length > MAX_ACTIVITY_SNAPSHOT_BYTES
+              ? tail.slice(tail.length - MAX_ACTIVITY_SNAPSHOT_BYTES)
+              : tail;
+            return { ...base, recentActivity: trimmed };
+          }
+        }
+        return base;
+      })
     : [];
   return { active, backgroundJobs };
 }

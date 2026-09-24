@@ -263,7 +263,11 @@ export class SubagentExecutor implements SubagentControl {
    * ISO 8601 to match the rest of the snapshot's timestamp convention.
    */
   getSubagentsLite(): ReturnType<typeof buildSubagentsLite> {
-    return buildSubagentsLite(this.ctx.subagentManager, this.ctx.backgroundRegistry);
+    return buildSubagentsLite(
+      this.ctx.subagentManager,
+      this.ctx.backgroundRegistry,
+      this.ctx.parentSession.sessionId,
+    );
   }
 
   /**
