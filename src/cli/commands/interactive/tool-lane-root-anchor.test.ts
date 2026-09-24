@@ -4,9 +4,9 @@
  * their own col-0 ◉ turn-root marker in the LIVE OVERLAY.
  *
  * The reported bug (screenshot shape): a subagent block renders with a `│`
- * spine at col 0 and connectors at col 2; three main-session `read_file` calls
+ * spine at col 0 and connectors at col 3; three main-session `read_file` calls
  * dispatched afterward rendered at a bare 2-space lead, placing their `●` glyph
- * at col 2 — directly under the subagent's connector column with NOTHING in
+ * at col 3 — directly under the subagent's connector column with NOTHING in
  * col 0. The eye read them as severed / orphaned nodes that "fell out" of the
  * subagent tree.
  *

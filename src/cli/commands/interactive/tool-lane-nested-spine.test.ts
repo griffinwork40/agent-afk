@@ -8,7 +8,7 @@
  *   ◉ skill
  *   │ ├─ Agent(A)         ← A is NOT the skill's last child (Z follows)
  *   │ │ ╰─ Agent(B)       ← B is A's only/last child
- *   │ │ │ ╰─ Read         ← B's child: A's column (col 2) MUST stay │ here
+ *   │ │ │ ╰─ Read         ← B's child: A's column (col 3) MUST stay │ here
  *   │ ╰─ Agent(Z)
  *
  * Pre-fix bug: the recursion threaded the CHILD's `isLast` into the ancestor

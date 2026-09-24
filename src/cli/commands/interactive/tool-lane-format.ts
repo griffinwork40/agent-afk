@@ -273,12 +273,16 @@ export function batchBadge(chunk: ToolResultChunk | undefined): string {
  * Live activity badge for an in-flight tool row (Phase 2, issue #516).
  *
  * Rendered while the dispatcher reports this call as one of N genuinely
- * running in parallel. Shows `[×N]` (dim) next to the spinner so the operator
- * sees real concurrency RIGHT NOW, ahead of Phase 1's post-completion `∥i/N`
- * badge on each settled row.
+ * running in parallel. Shows `∥N` in `palette.brand` (warm orange) next to
+ * the spinner so the operator sees real concurrency RIGHT NOW.
+ *
+ * Both the live badge (`  ∥N`, two leading spaces) and the post-completion
+ * badge (`∥i/N`) use the `∥` (PARALLEL TO) glyph for vocabulary consistency:
+ * `∥` = parallel, always. The visual discriminator is the prefix spacing and
+ * color, not the glyph itself.
  *
  * Invariant: `activeTools` is a dispatcher-observed snapshot, so this function
- * is purely a projection of it — it never widens or ages the set. `[×N]`
+ * is purely a projection of it — it never widens or ages the set. `∥N`
  * therefore always equals the number of handlers actually executing, and a
  * queued or already-settled call cannot be badged.
  *
@@ -286,11 +290,7 @@ export function batchBadge(chunk: ToolResultChunk | undefined): string {
  *  - No parallel wave is active (`activeTools` is null).
  *  - The `toolUseId` is not currently running.
  *  - `activeCount ≤ 1` (defensive — notifyToolActivity nulls the state instead,
- *    so a lone straggler never renders `[×1]`).
- *
- * The badge intentionally uses `×` (MULTIPLICATION SIGN) to distinguish
- * "currently running N-parallel" from the post-completion `∥i/N` (PARALLEL TO)
- * badge — they carry complementary information (live vs. committed).
+ *    so a lone straggler never renders `∥1`).
  */
 export function activeToolBadge(
   toolUseId: string,

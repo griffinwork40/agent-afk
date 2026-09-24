@@ -27,6 +27,7 @@
 
 import { isPlainOutputRequested } from '../../../config/env.js';
 import { boundLineToTerminal } from '../../render/bounded-line.js';
+import { contentMargin } from '../../render/measure.js';
 
 interface CompositorRef {
   isArmed(): boolean;
@@ -98,7 +99,14 @@ export function createReplRenderer(
       // with its indent hanging rather than auto-wrapped by the terminal to
       // column 0. The armed path above needs no bounding: commitAbove wraps
       // at the live width and reflows the retained band on resize.
-      const bounded = boundLineToTerminal(text, stdout);
+      // Content centering (AFK_CENTER_CONTENT): prepend the left margin so
+      // between-turn output (bg-job notices, shell passthrough, init meta)
+      // aligns with the centered mid-turn content.
+      const pad = contentMargin();
+      const padded = pad
+        ? text.split('\n').map(l => l === '' ? l : pad + l).join('\n')
+        : text;
+      const bounded = boundLineToTerminal(padded, stdout);
       if (guard) {
         guard.withFullScrollRegion(() => {
           stdout.write(bounded + '\n');

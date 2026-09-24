@@ -62,7 +62,7 @@ export class ToolLane {
    *
    * Set by {@link notifyToolActivity} when a `tool-activity` event arrives.
    * `toolUseIds` is the set of calls the dispatcher reports as RUNNING right
-   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `[×N]`
+   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `∥N`
    * badge on each in-flight row whose `toolUseId` is a member.
    *
    * Invariant: this is replaced wholesale on every update and cleared when the
@@ -499,7 +499,7 @@ export class ToolLane {
     // — each anchors a col-0 ◉ turn-root marker and a descendant spine drawn at
     // col 0 by renderOverlayChildren) with flat-leaf roots, the flat roots must
     // ALSO anchor their own col-0 ◉. A flat leaf's bare 3-space lead places its
-    // `●` glyph at col 2 (the NESTING block's depth-1 connector column) with a
+    // `●` glyph at col 3 (the NESTING block's depth-1 connector column) with a
     // BLANK col 0 — so a main-session read_file dispatched after a subagent
     // renders directly below a `│` spine with nothing in col 0, reading as a
     // severed / orphaned node that "fell out" of the subagent tree. Anchoring
@@ -645,7 +645,7 @@ export class ToolLane {
         }
         // Mirror the thinkingTail handling of the other two NESTING branches
         // (and the childless-leaf branch below): spine glyph (g.spine, │) at
-        // col 0, ⌇ continuation glyph at col 2, so in-flight narration aligns
+        // col 0, ⌇ continuation glyph at col 3, so in-flight narration aligns
         // under the head row instead of leading with bare whitespace.
         if (entry.thinkingTail) {
           lines.push(clamp(palette.dim(g.spine) + palette.thinking('⌇  ' + sanitizeLabel(entry.thinkingTail))));

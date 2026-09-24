@@ -1164,7 +1164,7 @@ describe('Bug #4 — progress event must not overwrite increment-only toolUses c
 describe('Bug #5 — agentResultSummary must use └ tree connector and appear after overflow', () => {
   // Invariant: spine topology contract for agentResultSummary
   //   Column pins (matches the PR #535 thinking-tail invariant at line ~1926):
-  //     col 0 = `│` (parent's live spine), col 2 = connector glyph (`├` non-last,
+  //     col 0 = `│` (parent's live spine), col 3 = connector glyph (`├` non-last,
   //     `╰` last), col 5 = content. Drift at any column = regression.
   //   Ordering:
   //     overflow ellipsis is a sibling row, agentResultSummary is the LAST
@@ -2380,7 +2380,7 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
   //   header row  = (live-ancestor spine slots) + '◉ ' + agent.prefix
   //   child row   = (live-ancestor spine slots) + '│ ' + connector + child.prefix
   //
-  // Where each slot is 2 cells: `'│ '` for a live external ancestor
+  // Where each slot is 3 cells: `'│  '` for a live external ancestor
   // (extraDepth > 0), `'◉ '` for the turn-root marker, `'│ '` for the
   // Agent's own spine column under which children render. Pre-spine,
   // the encoding was `'  '.repeat(extraDepth + 1) + prefix` — pure
