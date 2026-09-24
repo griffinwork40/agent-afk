@@ -5,7 +5,7 @@ import { extractLatestThinkingClause } from '../../_lib/stream-renderer-subagent
 import { truncateDisplayWidth } from '../../display.js';
 import { formatDuration, formatTokens, formatToolCallStat } from '../../format-utils.js';
 import { palette } from '../../palette.js';
-import { capToMeasure } from '../../render/measure.js';
+import { capToMeasure, contentMargin } from '../../render/measure.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { styleForToolName } from '../../tool-category.js';
 import { shortenPaths } from './tool-lane-format-args.js';
@@ -170,13 +170,16 @@ export function formatProgressBanner(
         return detailRaw ? shortenPaths(sanitizeLabel(detailRaw)) : '';
       })();
 
+  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
+  // progress banner aligns with centered scrollback and tool-lane content.
+  const pad = contentMargin();
   if (detail) {
     return [
-      clampToTerminal(palette.dim(`  ${glyph} ${cleanDescription}`), columns),
-      clampToTerminal(palette.dim(`    ${detail}${statsStr}`), columns),
+      clampToTerminal(pad + palette.dim(`  ${glyph} ${cleanDescription}`), columns),
+      clampToTerminal(pad + palette.dim(`    ${detail}${statsStr}`), columns),
     ];
   }
-  return [clampToTerminal(palette.dim(`  ${glyph} ${cleanDescription}${statsStr}`), columns)];
+  return [clampToTerminal(pad + palette.dim(`  ${glyph} ${cleanDescription}${statsStr}`), columns)];
 }
 
 /**

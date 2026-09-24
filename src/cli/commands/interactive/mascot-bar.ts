@@ -34,6 +34,7 @@ import {
   renderMiniMascotLines,
 } from '../../mascot-mini.js';
 import { detectGoblinMascot } from '../../_lib/capture-mode.js';
+import { contentMargin } from '../../render/measure.js';
 import type { LoopStage } from './loop-stage.js';
 
 /** Rows the band occupies while the mascot is visible. */
@@ -250,13 +251,16 @@ export class MascotBar {
     }
     if (desired === 0) return;
 
+    // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
+    // mascot sprite aligns with centered scrollback and overlay content.
+    const pad = contentMargin();
     this.stream.write('\x1b[s');
     for (let i = 0; i < desired; i++) {
       const row = startRow + i;
       if (row < 1 || row > totalRows) continue;
       this.stream.write(`\x1b[${row};1H`);
       this.stream.write('\x1b[2K');
-      this.stream.write(GUTTER + (lines[i] ?? ''));
+      this.stream.write(pad + GUTTER + (lines[i] ?? ''));
     }
     this.stream.write('\x1b[u');
     this.lastStartRow = startRow;
