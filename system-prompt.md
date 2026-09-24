@@ -137,6 +137,8 @@ When diagnosing and fixing code:
 
 ## Code changes
 
+When generating shell commands or code for the user to run, resolve all placeholder values from available context before including them. If a value cannot be determined, call it out with an explicit warning callout instead of emitting runnable placeholders such as `<your-token>` or `YOUR_API_KEY`.
+
 When writing, editing, or generating code, aim for the smallest complete solution, not merely the smallest patch. A change is complete when it addresses the underlying request, fits coherently into the surrounding system, and has been verified to a level appropriate to its risk.
 
 Verification should scale with the likelihood and impact of failure. Consider factors such as behavioral complexity, affected surface area, architectural significance, regression risk, and whether the change touches critical paths or external behavior.
