@@ -31,6 +31,7 @@ import { palette } from '../../palette.js';
 import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { getTerminalWidth, ResizeBus } from '../../terminal-size.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
+import { contentMargin } from '../../render/measure.js';
 
 /**
  * Compact glyph + tone for a terminal kind on the ledger rail.
@@ -153,10 +154,13 @@ export function createVerdictLedger(opts: VerdictLedgerOptions = {}): VerdictLed
     if (newRowCount === 0) return;
 
     const row = paintRow(totalRows);
+    // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
+    // verdict ledger rail aligns with centered scrollback and overlay content.
+    const pad = contentMargin();
     stream!.write('\x1b[s');
     stream!.write(`\x1b[${row};1H`);
     stream!.write('\x1b[2K');
-    stream!.write(line!);
+    stream!.write(pad + line!);
     stream!.write('\x1b[u');
   }
 

@@ -1,4 +1,5 @@
 import { displayWidth, truncateDisplayWidth } from '../display.js';
+import { contentMargin } from './measure.js';
 import { getTerminalWidth } from '../terminal-size.js';
 import { palette } from '../palette.js';
 import { formatElapsed } from './utils.js';
@@ -93,10 +94,13 @@ export function subagentStatusStack(
   const visible = entries.slice(0, hasOverflow ? maxLines - 1 : maxLines);
   const overflow = entries.length - visible.length;
 
-  const lines = visible.map((e) => subagentStatusBar(e));
+  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
+  // subagent status lines align with centered scrollback and overlay content.
+  const pad = contentMargin();
+  const lines = visible.map((e) => pad + subagentStatusBar(e));
 
   if (overflow > 0) {
-    lines.push(palette.dim(`  … +${overflow} more running`));
+    lines.push(pad + palette.dim(`  … +${overflow} more running`));
   }
 
   return lines.join('\n');

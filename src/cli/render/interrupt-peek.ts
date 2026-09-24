@@ -1,5 +1,6 @@
 import { truncateDisplayWidth } from '../display.js';
 import { palette } from '../palette.js';
+import { contentMargin } from './measure.js';
 
 // ─── InterruptPeek ───────────────────────────────────────────────────────────
 
@@ -57,6 +58,9 @@ function formatElapsed(ms: number): string {
  * Designed for the OverlayComposer `interrupt` slot.
  */
 export function interruptPeek(spec: InterruptPeekSpec): string {
+  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
+  // interrupt panel aligns with centered scrollback and overlay content.
+  const pad = contentMargin();
   const indent = '  ';
   const width = spec.width ?? 80;
   // Account for the 2-character indent when computing the usable content width.
@@ -67,7 +71,7 @@ export function interruptPeek(spec: InterruptPeekSpec): string {
   const statusText =
     spec.status === 'interrupting' ? 'interrupting…' : 'interrupted';
   lines.push(
-    indent + truncateDisplayWidth(palette.warning(`⚠ ${statusText}`), contentWidth),
+    pad + indent + truncateDisplayWidth(palette.warning(`⚠ ${statusText}`), contentWidth),
   );
 
   // ── Line 2 (optional): subagent context ──
@@ -78,14 +82,14 @@ export function interruptPeek(spec: InterruptPeekSpec): string {
       elapsed != null ? ` (${formatElapsed(elapsed)})` : '';
     const contextText = `▸ ${name} — ${activity}${elapsedPart}`;
     lines.push(
-      indent + truncateDisplayWidth(palette.meta(contextText), contentWidth),
+      pad + indent + truncateDisplayWidth(palette.meta(contextText), contentWidth),
     );
   }
 
   // ── Line 3: hint ──
   const hintText = spec.hint ?? 'Ctrl+C again to exit';
   lines.push(
-    indent + truncateDisplayWidth(palette.dim(hintText), contentWidth),
+    pad + indent + truncateDisplayWidth(palette.dim(hintText), contentWidth),
   );
 
   return lines.join('\n');
