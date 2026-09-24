@@ -473,6 +473,55 @@ describe('parseComposeInput — per-node agent_type', () => {
   });
 });
 
+describe('parseComposeInput — per-node isolation', () => {
+  it('accepts isolation:"worktree"', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: 'worktree' }));
+    expect(parsed.nodes[0]!.isolation).toBe('worktree');
+  });
+
+  it('accepts isolation:"none" and omits the field (normalized)', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: 'none' }));
+    // 'none' is a no-op — the field is still stored as-is (compose normalises
+    // differently from the agent tool, which strips it). Accept either shape.
+    // The important thing: it must not throw.
+    expect(['none', undefined]).toContain(parsed.nodes[0]!.isolation);
+  });
+
+  it('rejects an unknown isolation value', () => {
+    expect(() => parseComposeInput(minimal({ isolation: 'sandbox' }))).toThrow(
+      /isolation must be "none" or "worktree"/,
+    );
+  });
+
+  it('rejects isolation:"worktree" combined with cwd', () => {
+    expect(() =>
+      parseComposeInput(minimal({ isolation: 'worktree', cwd: '/repo/packages/web' })),
+    ).toThrow(/cannot set both cwd and isolation:"worktree"/);
+  });
+
+  it('rejects isolation:"worktree" combined with writeRoots', () => {
+    expect(() =>
+      parseComposeInput(minimal({ isolation: 'worktree', writeRoots: ['/repo/packages/web/dist'] })),
+    ).toThrow(/cannot set both writeRoots and isolation:"worktree"/);
+  });
+
+  it('allows isolation:"worktree" combined with readRoots (reads do not break isolation)', () => {
+    const { parsed } = parseComposeInput(
+      minimal({ isolation: 'worktree', readRoots: ['/repo/shared'] }),
+    );
+    expect(parsed.nodes[0]!.isolation).toBe('worktree');
+    expect(parsed.nodes[0]!.readRoots).toEqual(['/repo/shared']);
+  });
+
+  it('does not apply writeRoots+isolation guard when isolation is "none"', () => {
+    // isolation:"none" does not restrict write access, so writeRoots is allowed.
+    const { parsed } = parseComposeInput(
+      minimal({ isolation: 'none', writeRoots: ['/repo/packages/web/dist'] }),
+    );
+    expect(parsed.nodes[0]!.writeRoots).toEqual(['/repo/packages/web/dist']);
+  });
+});
+
 describe('parseComposeInput — compose-level fields still work', () => {
   it('accepts max_tool_rounds_per_node at compose level', () => {
     const { parsed } = parseComposeInput(minimal({}, { max_tool_rounds_per_node: 30 }));

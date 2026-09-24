@@ -162,8 +162,6 @@ function parseNodePaths(n: Record<string, unknown>, id: string): {
   }
 
   const readRoots = parseRootArray(n, id, 'readRoots');
-  // Contract: writeRoots is mutually exclusive with isolation:"worktree"
-  // when that lands on compose nodes (#1939). The guard belongs here.
   const writeRoots = parseRootArray(n, id, 'writeRoots');
 
   return { cwd, readRoots, writeRoots };
@@ -339,6 +337,13 @@ export function parseComposeInput(input: unknown): ParseResult {
           `Node "${id}" cannot set both cwd and isolation:"worktree". ` +
           `The worktree path IS the node's cwd — omit cwd to use isolation, ` +
           `or omit isolation to pin a specific cwd.`,
+        );
+      }
+      if (nodeIsolation === 'worktree' && writeRoots !== undefined) {
+        throw new Error(
+          `Node "${id}" cannot set both writeRoots and isolation:"worktree". ` +
+          `Isolation confines writes to the worktree; explicit writeRoots would ` +
+          `punch holes in that boundary.`,
         );
       }
     }
