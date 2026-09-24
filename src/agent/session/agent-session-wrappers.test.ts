@@ -28,7 +28,7 @@ interface StubQuery extends ProviderQuery {
   };
 }
 
-const AGENTS_STUB = [{ agentType: 'research-agent', source: 'plugin', tokens: 100 }];
+const AGENTS_STUB = [{ name: 'research-agent', description: 'A research agent' }];
 const CONTEXT_STUB = {
   tools: [{ name: 'Bash', tokens: 1200 }],
   agents: [],
