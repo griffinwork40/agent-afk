@@ -7,6 +7,7 @@ import { statusBadge } from '../../render/status-badge.js';
 import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
 import { humanVerbForTool } from '../../tool-category.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
+import { colorizePreviewLine } from './tool-lane-format-colorize.js';
 
 // Re-export the split modules' public surface so external callers keep
 // importing the whole tool-lane formatting API from './tool-lane-format.js'.
@@ -26,6 +27,7 @@ export {
   diffsDisabled,
   formatPreviewDiffBlock,
 } from './tool-lane-format-diff.js';
+export { colorizePreviewLine } from './tool-lane-format-colorize.js';
 
 /**
  * Invariant: the glyphs MUST be resolved inside the function body, not
@@ -199,7 +201,13 @@ export function formatOutcome(
     // sit visually under the `⎿` connector rendered by formatToolResultLine.
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
       const tailLines = chunk.tailPreview
-        .map(l => palette.dim('    ' + sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l)))
+        .map(l => {
+          const sanitized = sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l);
+          // Try to colorize recognizable patterns (git stat, test
+          // results, tsc errors) before falling back to default dim.
+          return colorizePreviewLine(sanitized)
+            ?? palette.dim('    ' + sanitized);
+        })
         .join('\n');
       return headline + '\n' + tailLines;
     }
