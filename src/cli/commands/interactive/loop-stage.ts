@@ -47,6 +47,7 @@ import type { OutputEvent } from '../../../agent/types.js';
 import { ResizeBus } from '../../terminal-size.js';
 import { palette } from '../../palette.js';
 import { isPlainOutputRequested } from '../../../config/env.js';
+import { contentMargin } from '../../render/measure.js';
 
 export type LoopStage = 'observing' | 'modeling' | 'choosing' | 'acting' | 'updating';
 
@@ -194,7 +195,7 @@ export function formatStageRail(
     const cell = `${glyph} ${label}`;
     return isActive ? fmt.accent(fmt.bold(cell)) : fmt.dim(cell);
   });
-  return cells.join(fmt.dim(' · '));
+  return cells.join('  ');
 }
 
 // ─── Reserved-footer bar ────────────────────────────────────────────────────
@@ -303,8 +304,10 @@ export class LoopStageBar {
     this.stream.write('\x1b[s');
     this.stream.write(`\x1b[${paintRow};1H`);
     this.stream.write('\x1b[2K');
+    // Content centering (AFK_CENTER_CONTENT): prepend left margin so the
+    // OODA stage rail floats at the same horizontal position as other content.
     this.stream.write(
-      '  ' +
+      contentMargin() + '  ' +
         formatStageRail(stage, {
           dim: palette.dim,
           accent: palette.brand,

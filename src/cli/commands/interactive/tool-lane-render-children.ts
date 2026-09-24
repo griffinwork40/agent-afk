@@ -117,9 +117,9 @@ function renderOverlayChildren(
   parentIsLast?: boolean,
 ): void {
   // Plain (no-ANSI) indent: lead + ancestor slots + active spine column.
-  // `.length` measures display cells correctly (composed of 2-cell units).
+  // `.length` measures display cells correctly (composed of 3-cell units).
   const indent = buildIndent(ancestorIsLast, g);
-  const indentColored = colorizeIndent(indent, g);
+  const indentColored = colorizeIndent(indent, g, ancestorIsLast.length);
 
   // Last block wins: render any text children AFTER tool children (typically
   // at most one). Don't count text children against the tool overflow budget.
@@ -148,7 +148,7 @@ function renderOverlayChildren(
     const isLast = rawConnector === g.lastConnector;
 
     if (item.kind === 'overflow') {
-      lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.text), cols));
+      lines.push(clampLineToTerminal(indentColored + connector + palette.dim('··· ') + palette.chrome('+' + item.count) + (item.text ? palette.dim('  ' + item.text) : ''), cols));
     } else if (item.kind === 'group') {
       lines.push(clampLineToTerminal(indentColored + connector + formatGroupedSibling(item), cols));
     } else if (item.kind === 'resultSummary') {
@@ -230,8 +230,8 @@ function renderOverlayChildren(
           // `parentSlot` value above. Using the current frame's `indentColored`
           // ([...ancestorIsLast]) was one slot too shallow. `clampLineToTerminal`
           // → `truncateDisplayWidth` is ANSI-aware.
-          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g);
-          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇  ' + sanitizeLabel(child.thinkingTail)), cols));
+          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length);
+          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
         }
       } else if (NESTING_TOOLS.has(child.toolName) && child.headerEmitted) {
         // Invariant: committed labels live in scrollback; live overlay must
@@ -327,8 +327,8 @@ function renderOverlayChildren(
   // Guard: only apply the `[...ancestorIsLast, true]` extension when tool
   // siblings were actually rendered — the appended `true` models a `╰─`
   // connector that was emitted. When no tool siblings rendered, no connector
-  // was emitted and the extension would add a phantom `spineClosed` slot (2
-  // cells), indenting text children 2 characters too wide.
+  // was emitted and the extension would add a phantom `spineClosed` slot (3
+  // cells), indenting text children 3 characters too wide.
   //
   // Clamp each emitted line: `renderTextChildLines` wraps with
   // `wrapToWidth(hard:false)`, which leaves unbroken tokens wider than
@@ -384,7 +384,7 @@ function renderFlushChildren(
   parentIsLast?: boolean,
 ): string[] {
   const indent = buildIndent(ancestorIsLast, g);
-  const indentColored = colorizeIndent(indent, g);
+  const indentColored = colorizeIndent(indent, g, ancestorIsLast.length);
   const lines: string[] = [];
 
   const textChildren = children.filter((c): c is TextEntry => c.kind === 'text');
@@ -405,7 +405,7 @@ function renderFlushChildren(
     const isLast = rawConnector === g.lastConnector;
 
     if (item.kind === 'overflow') {
-      lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.text), cols));
+      lines.push(clampLineToTerminal(indentColored + connector + palette.dim('··· ') + palette.chrome('+' + item.count) + (item.text ? palette.dim('  ' + item.text) : ''), cols));
     } else if (item.kind === 'resultSummary') {
       // LAST connector from assignConnectors — not a hardcoded '⎿' (that was Bug #5).
       // `.summary` is PRE-STYLED by summaryWithBatchBadge (dim base + self-dim
@@ -485,8 +485,8 @@ function renderFlushChildren(
   // Guard: only apply the `[...ancestorIsLast, true]` extension when tool
   // siblings were actually rendered — the appended `true` models a `╰─`
   // connector that was emitted. When no tool siblings rendered, no connector
-  // was emitted and the extension would add a phantom `spineClosed` slot (2
-  // cells), indenting text children 2 characters too wide.
+  // was emitted and the extension would add a phantom `spineClosed` slot (3
+  // cells), indenting text children 3 characters too wide.
   //
   // Clamp each emitted line: see the matching note at the overlay path
   // textChildren loop above for the wrapToWidth(hard:false) overflow

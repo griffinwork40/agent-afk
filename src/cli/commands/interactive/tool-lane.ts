@@ -14,7 +14,7 @@ import {
   buildChildMap,
   getGlyphs, toolLaneWidth,
   freshToolEntry,
-  pushOutcomeLines,
+  pushOutcomeLines, joinOverlayLines, applyFlushMargin,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -523,11 +523,11 @@ export class ToolLane {
       // their indented child block. Other tools render a flat line with result
       // (if any) or a dim "in-progress" marker.
       //
-      // Turn-root marker: dispatch heads use `◉ ` (or `o ` in ASCII) at col 0
-      // instead of the bare `'  '` lead. The spine column drawn by
+      // Turn-root marker: dispatch heads use `◉  ` (or `o  ` in ASCII) at col 0
+      // instead of the bare `'   '` lead. The spine column drawn by
       // renderOverlayChildren below sits underneath at col 0, so the marker
       // visually anchors the topology spine for this subagent block.
-      // Width invariant: `g.turnRoot` is 2 cells (same as the prior lead),
+      // Width invariant: `g.turnRoot` is 3 cells (same as the prior lead),
       // so child columns line up unchanged.
       if (NESTING_TOOLS.has(entry.toolName) && children && children.length > 0) {
         // Invariant: committed labels live in scrollback; live overlay may
@@ -551,7 +551,7 @@ export class ToolLane {
         // appear to float disconnected.
         //
         // At root depth the anchor is `palette.dim(g.turnRoot)` alone
-        // (`dim('◉ ')` / `dim('o ')`) — same 2-cell width as the live
+        // (`dim('◉  ')` / `dim('o  ')`) — same 3-cell width as the live
         // header's marker, anchoring the spine column for child rows
         // below. No label, no ↳ glyph: the eye reads the row as pure
         // geometry, not as a "ghost" copy of the scrollback header.
@@ -585,14 +585,14 @@ export class ToolLane {
         // terminal hard-wraps to col 0 with no gutter, orphaning a flush-left
         // continuation between siblings (see clampLineToTerminal docstring).
         //
-        // Invariant: prefix is `dim(g.spine) + '⌇  '` (5 cells) — col 0
-        // carries the Agent's live spine; the `⌇` glyph sits at col 2
+        // Invariant: prefix is `dim(g.spine) + '⌇  '` (6 cells) — col 0
+        // carries the Agent's live spine; the `⌇` glyph sits at col 3
         // (parallel to `├` / `╰` connector positions in child rows above);
-        // two trailing pad cells (cols 3–4) land tail content at col 5,
+        // two trailing pad cells (cols 4–5) land tail content at col 6,
         // aligned with the content column of the Agent's tool children
-        // (`│ ╰─ <content>` also places content at col 5). Pre-fix layout
-        // was `dim(g.spine) + g.spineClosed + '⌇ '` (6 cells), which
-        // landed content at col 6 — one column right of children. The
+        // (`│  ╰─ <content>` also places content at col 6). Pre-fix layout
+        // was `dim(g.spine) + g.spineClosed + '⌇ '` (7 cells), which
+        // landed content at col 7 — one column right of children. The
         // visual drift was inherited from PR #470's "match the old
         // 4-space prefix" goal; the spine survived but the column
         // alignment didn't. Mirrors the depth-N tail at
@@ -691,8 +691,8 @@ export class ToolLane {
             // under the " …" line — exactly the position the eventual first
             // child will occupy, so adding/removing the tail doesn't make the
             // overlay jump. Prefix shape mirrors the NESTING_TOOLS branch:
-            // `dim(g.spine) + '⌇  '` (5 cells) — col 0 = live spine, col 2 =
-            // `⌇` (connector slot), cols 3–4 = pad, content at col 5. See
+            // `dim(g.spine) + '⌇  '` (6 cells) — col 0 = live spine, col 3 =
+            // `⌇` (connector slot), cols 4–5 = pad, content at col 6. See
             // the Invariant note at the NESTING_TOOLS branch above for the
             // column-alignment rationale.
             lines.push(clamp(palette.dim(g.spine) + palette.thinking('⌇  ' + sanitizeLabel(entry.thinkingTail))));
@@ -719,7 +719,7 @@ export class ToolLane {
       lines.push(clamp('   ' + palette.dim(`… +${hiddenDoneCount} done`)));
     }
 
-    return lines.join('\n');
+    return joinOverlayLines(lines); // centering margin applied inside (see tool-lane-flush-margin.ts)
   }
 
   /**
@@ -920,7 +920,7 @@ export class ToolLane {
     // render, `formatAgentChildren` returns []; the joined empty string is
     // skipped so we don't push a blank line to scrollback.
     const blockLines = childBlock === '' ? [] : [childBlock];
-    return [...ancestorLines, ...blockLines];
+    return applyFlushMargin([...ancestorLines, ...blockLines]);
   }
 
   /**
@@ -1028,7 +1028,7 @@ export class ToolLane {
     }
     this.order = this.order.filter((id) => !collected.has(id));
 
-    return lines;
+    return applyFlushMargin(lines);
   }
 
   flush(homeDir?: string): string[] {
@@ -1090,8 +1090,9 @@ export class ToolLane {
     this.entries.clear();
     this.order = [];
     this.agentIdStack = [];
-    return lines;
+    return applyFlushMargin(lines);
   }
+
 
 }
 

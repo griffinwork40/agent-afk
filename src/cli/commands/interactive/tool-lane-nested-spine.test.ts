@@ -143,16 +143,17 @@ describe('multi-line outcome spine continuity (hiddenLineCount + tailPreview)', 
     expect(hiddenRow, `no hidden-lines row found\n${rows.join('\n')}`).toBeDefined();
 
     // The root skill anchors at col 0 with ◉. A is NOT last (A2 follows),
-    // so root's spine (col 0) must be '│'. A's spine (col 2) must also be '│'
-    // since bash1 is not last (bash2 follows).
+    // so root's spine (col 0) must be '│'. A's spine (col 3) must also be '│'
+    // since bash1 is not last (bash2 follows). (Spine is 3 cells wide, so A's
+    // column lives at col 3, not col 2.)
     expect(hiddenRow![0], `root spine severed on hidden-lines row\n${rows.join('\n')}`).toBe('│');
-    expect(hiddenRow![2], `A spine severed on hidden-lines row\n${rows.join('\n')}`).toBe('│');
+    expect(hiddenRow![3], `A spine severed on hidden-lines row\n${rows.join('\n')}`).toBe('│');
 
     // Tail preview lines must also carry spine glyphs
     const tailRow = rows.find((l) => l.includes('line 152'));
     expect(tailRow, `no tail-preview row found\n${rows.join('\n')}`).toBeDefined();
     expect(tailRow![0], `root spine severed on tail-preview row\n${rows.join('\n')}`).toBe('│');
-    expect(tailRow![2], `A spine severed on tail-preview row\n${rows.join('\n')}`).toBe('│');
+    expect(tailRow![3], `A spine severed on tail-preview row\n${rows.join('\n')}`).toBe('│');
   });
 
   it('flush: continuation lines carry spine glyphs in scrollback', () => {

@@ -123,6 +123,12 @@ const darkPaletteDef = {
   diffRemove: chalk.red,
   /** Diff hunk header — dim grey, used for `@@ -a,b +c,d @@` lines. Structural scaffolding, not user-side, so it lives in the meta family. */
   diffHunk: chalk.blackBright,
+  /** Depth-0 spine tone — `│` column at the outermost nesting level. Equivalent to dim on a dark background. */
+  spineTone0: chalk.hex('#6E7681'),
+  /** Depth-1 spine tone — `│` column one step deeper; one luminance step darker than depth 0. */
+  spineTone1: chalk.hex('#4A5058'),
+  /** Depth-2+ spine tone (floor) — `│` column at depth 2 and beyond; minimum legible tone. */
+  spineTone2: chalk.hex('#30363D'),
 };
 
 /**
@@ -199,6 +205,12 @@ const lightPaletteDef: ThemePalette = {
   diffRemove: chalk.hex('#C62828'),
   /** Mid grey — diff hunk headers on white. */
   diffHunk: chalk.hex('#6B7280'),
+  /** Depth-0 spine tone — slightly lighter grey, legible on white. */
+  spineTone0: chalk.hex('#8B949E'),
+  /** Depth-1 spine tone — mid grey, one step darker than depth 0. */
+  spineTone1: chalk.hex('#6E7481'),
+  /** Depth-2+ spine tone (floor) — darkest legible grey on white backgrounds. */
+  spineTone2: chalk.hex('#57606A'),
 };
 
 /**
@@ -285,6 +297,12 @@ const umberPaletteDef: ThemePalette = {
   diffRemove: chalk.hex('#EF7F74'),
   /** ansi8 bright black — diff hunk headers (mirrors `meta`, as the dark theme does). */
   diffHunk: chalk.hex('#AAA19B'),
+  /** Depth-0 spine tone — warm neutral, Umber's ansi7 white one step below `chrome`. */
+  spineTone0: chalk.hex('#AAA19B'),
+  /** Depth-1 spine tone — mid warm grey, between `meta` and the darkest tone. */
+  spineTone1: chalk.hex('#776E68'),
+  /** Depth-2+ spine tone (floor) — deep warm grey, minimum legible tone on Umber's `#19120D` background. */
+  spineTone2: chalk.hex('#4E4844'),
 };
 
 /** Canonical dark tones (named export for `theme.ts` + tests). */

@@ -47,7 +47,7 @@ import { renderFlushChildren } from './tool-lane-render-children.js';
  */
 function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
   return agent.agentResultSummary
-    ? palette.dim(agent.agentResultSummary) + batchBadge(agent.result)
+    ? agent.agentResultSummary + batchBadge(agent.result)
     : agent.agentResultSummary;
 }
 
@@ -56,8 +56,8 @@ function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
  * block.
  *
  * `extraDepth` shifts the entire block right by N additional spine columns
- * (2 cells per level — the same width as a depth-1 spine slot). Default 0
- * = root-level Agent rendering (one `◉ ` marker at col 0). Callers pass
+ * (3 cells per level — the same width as a depth-1 spine slot). Default 0
+ * = root-level Agent rendering (one `◉  ` marker at col 0). Callers pass
  * `extraDepth > 0` when the Agent sits under a still-in-flight ancestor
  * (e.g. a `skill` parent that hasn't yet completed) so the committed
  * scrollback block visually aligns with the live overlay's nesting instead
@@ -99,17 +99,17 @@ function formatAgentSummary(
   // Invariant: the HEAD row keeps every ancestor column OPEN; only DESCENDANT
   // rows close a last-child ancestor's column.
   //
-  // The Agent's head row gets the `◉ ` marker (2 cells, same width as a spine
-  // slot). `ancestorPrefix` draws one OPEN `g.spine` (`│ `) per live ancestor
+  // The Agent's head row gets the `◉  ` marker (3 cells, same width as a spine
+  // slot). `ancestorPrefix` draws one OPEN `g.spine` (`│  `) per live ancestor
   // — UNCONDITIONALLY, regardless of last-ness — so the head row's incoming
   // spine stays connected to its still-in-flight parent above (PR #642
   // floating-spine invariant: a committed ancestor header must never float
   // disconnected from its children). This matches the live overlay, where an
-  // agent's OWN row is `│ ╰─ …` (parent column open via the active spine).
+  // agent's OWN row is `│  ╰─ …` (parent column open via the active spine).
   //
   // DESCENDANT rows, by contrast, must CLOSE the column of any ancestor that
   // is currently the last sibling at its level — the overlay draws `╰─` there
-  // and closes the column to `g.spineClosed` (`  `) below it. `ancestorIsLast`
+  // and closes the column to `g.spineClosed` (`   `) below it. `ancestorIsLast`
   // (resolved by the caller at commit time via `ToolLane.ancestorIsLastOf`)
   // carries that per-column last-ness into `renderFlushChildren`. Pre-fix this
   // was an all-`false` vector (open `│` everywhere), so committed descendant
@@ -189,9 +189,9 @@ function formatAgentSummary(
  * head row to `getTerminalWidth()`, so a row that overflows is elided
  * identically no matter which path committed it.
  *
- * Width invariant matches formatAgentSummary: `g.spine` is 2 cells,
- * `g.turnRoot` is 2 cells, so the total head-row indent is
- * `2 * (ancestorIsLast.length + 1)` cells before `agent.prefix` — exactly the
+ * Width invariant matches formatAgentSummary: `g.spine` is 3 cells,
+ * `g.turnRoot` is 3 cells, so the total head-row indent is
+ * `3 * (ancestorIsLast.length + 1)` cells before `agent.prefix` — exactly the
  * same column position renderFlushChildren expects for its child rows.
  *
  * `ancestorIsLast` mirrors the same parameter contract as
@@ -234,8 +234,8 @@ function formatAgentChildren(
 ): string[] {
   // Mirror formatAgentSummary's DESCENDANT-row encoding: thread the per-column
   // last-ness vector into renderFlushChildren so each ancestor column draws an
-  // open `g.spine` (`│ `) when that ancestor is NOT its level's last sibling,
-  // and a closed `g.spineClosed` (`  `) when it IS — matching the live overlay
+  // open `g.spine` (`│  `) when that ancestor is NOT its level's last sibling,
+  // and a closed `g.spineClosed` (`   `) when it IS — matching the live overlay
   // (which closes a `╰─`'d ancestor's column below it). Pre-fix this was an
   // all-`false` vector (open `│` everywhere), diverging from the overlay on
   // committed scrollback descendant rows (the severed-spine seam). The header

@@ -108,8 +108,8 @@ describe('commitAbove spine seam: committed descendant rows match the overlay (s
     //     skill later emits more waves (the prior ancestorIsLastOf approach).
     expect(readRow!.startsWith('│'), `Read row missing open │ at col-0 (seam — band/overlay diverged):\n${dump}`).toBe(true);
     expect(globRow!.startsWith('│'), `Glob row missing open │ at col-0 (seam — band/overlay diverged):\n${dump}`).toBe(true);
-    // The agent's own spine column is also present (two spine cols total: `│ │ `).
-    expect(/^│ │ /.test(readRow!), `Read row must start with │ │  (ancestor + agent spine):\n${dump}`).toBe(true);
+    // The agent's own spine column is also present (two spine cols total: `│  │  `).
+    expect(/^│  │  /.test(readRow!), `Read row must start with │  │  (ancestor + agent spine):\n${dump}`).toBe(true);
 
     // (2) FLOATING-SPINE INVARIANT (PR #642): the Agent HEADER keeps its incoming
     //     spine OPEN at col-0 (`│ ◉ …`) so it stays connected to the live skill.

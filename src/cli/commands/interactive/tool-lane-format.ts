@@ -125,6 +125,15 @@ export function formatOutcome(
   const resultColor = chunk.isError
     ? (isBenignFailure(chunk.failureClass) ? palette.warning : palette.error)
     : palette.dim;
+
+  // C-4: Error gutter on continuation lines. U+258C LEFT HALF BLOCK (▌) is
+  // 1 display column; `▌` + 3 spaces = 4 cols total, matching the prior
+  // 4-space indent — net column cost: 0. Color mirrors the outcome tone so a
+  // benign refusal shows a warning-tone gutter rather than a red one.
+  const gutterChar = chunk.isError
+    ? (isBenignFailure(chunk.failureClass) ? palette.warning('▌') : palette.error('▌'))
+    : '';
+  const contPrefix = chunk.isError ? gutterChar + '   ' : '    ';
   const effectiveHomeDir = homeDir ?? env.HOME ?? '___NOHOME___';
   const exitSuffix = chunk.exitCode !== undefined && chunk.exitCode !== 0
     ? resultColor(` · exit ${chunk.exitCode}`)
@@ -193,20 +202,24 @@ export function formatOutcome(
     }
 
     if (chunk.hiddenLineCount !== undefined && chunk.hiddenLineCount > 0) {
-      headline += '\n' + palette.dim(`    ${chunk.hiddenLineCount} earlier lines hidden`);
+      headline += '\n' + contPrefix + palette.dim(`${chunk.hiddenLineCount} earlier lines hidden`);
     }
 
     // Append actual tail lines when available. Each line is sanitized (same
-    // sanitizer as the single-line preview path) and indented with `    ` to
-    // sit visually under the `⎿` connector rendered by formatToolResultLine.
+    // sanitizer as the single-line preview path) and indented with `contPrefix`
+    // (4 cols: error gutter + 3 spaces, or 4 plain spaces for success) to sit
+    // visually under the `⎿` connector rendered by formatToolResultLine.
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
       const tailLines = chunk.tailPreview
         .map(l => {
           const sanitized = sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l);
           // Try to colorize recognizable patterns (git stat, test
           // results, tsc errors) before falling back to default dim.
+          // colorizePreviewLine returns the full line with 4-space indent;
+          // the fallback uses contPrefix (error gutter + 3 spaces, or 4
+          // plain spaces for success) to match the headline gutter tone.
           return colorizePreviewLine(sanitized)
-            ?? palette.dim('    ' + sanitized);
+            ?? contPrefix + palette.dim(sanitized);
         })
         .join('\n');
       return headline + '\n' + tailLines;
@@ -286,7 +299,7 @@ export function activeToolBadge(
   if (!activeTools || activeTools.toolUseIds.size <= 1 || !activeTools.toolUseIds.has(toolUseId)) {
     return '';
   }
-  return palette.dim(` [×${activeTools.toolUseIds.size}]`);
+  return palette.brand(`  ∥${activeTools.toolUseIds.size}`);
 }
 
 /**

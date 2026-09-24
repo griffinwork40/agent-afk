@@ -98,11 +98,11 @@ describe('activeToolBadge — live in-flight parallel-wave indicator (Phase 2, i
     toolUseIds: new Set(ids),
   });
 
-  it('renders [×N] for a member id in an active wave', () => {
+  it('renders ∥N for a member id in an active wave', () => {
     const active = makeActive(3, 'tool-a', 'tool-b', 'tool-c');
-    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe(' [×3]');
-    expect(stripAnsi(activeToolBadge('tool-b', active))).toBe(' [×3]');
-    expect(stripAnsi(activeToolBadge('tool-c', active))).toBe(' [×3]');
+    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe('  ∥3');
+    expect(stripAnsi(activeToolBadge('tool-b', active))).toBe('  ∥3');
+    expect(stripAnsi(activeToolBadge('tool-c', active))).toBe('  ∥3');
   });
 
   it('is empty for a non-member id (not currently running)', () => {
@@ -119,11 +119,10 @@ describe('activeToolBadge — live in-flight parallel-wave indicator (Phase 2, i
     expect(activeToolBadge('tool-a', active)).toBe('');
   });
 
-  it('uses a different glyph (×) than the completed badge (∥) to distinguish live from committed', () => {
+  it('uses the ∥ glyph (same as completed badge, but with leading spaces as distinct prefix)', () => {
     const active = makeActive(2, 'tool-a', 'tool-b');
     const live = stripAnsi(activeToolBadge('tool-a', active));
-    expect(live).toContain('×');
-    expect(live).not.toContain('∥');
+    expect(live).toContain('∥');
   });
 });
 

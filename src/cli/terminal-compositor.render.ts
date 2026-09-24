@@ -14,6 +14,7 @@ import { formatDropdownRow, formatHintRow } from './input/dropdown.js';
 import { stripGhostControlChars } from './input/suggest.js';
 import { palette } from './palette.js';
 import { MAX_DROPDOWN_ROWS } from './terminal-compositor.autocomplete.js';
+import { contentMargin } from './render/measure.js';
 import type { InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { SubmissionPayload } from './terminal-compositor.types.js';
@@ -157,7 +158,9 @@ export function renderInputLine(self: RenderHost): string {
       ghostSuffix = shellGhost !== null ? palette.meta(truncated) : palette.dim(truncated);
     }
   }
-  return self.promptTextFn(self.input.buffer) + before + caret + after + ghostSuffix + suffix;
+  // Content centering (AFK_CENTER_CONTENT): prepend left margin so the input
+  // line floats at the same horizontal position as the tool-lane content.
+  return contentMargin() + self.promptTextFn(self.input.buffer) + before + caret + after + ghostSuffix + suffix;
 }
 
 /** Fixed, non-accepting shell-mode hint rendered in the ghost-text lane. */

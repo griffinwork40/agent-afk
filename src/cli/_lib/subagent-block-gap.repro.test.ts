@@ -481,7 +481,7 @@ describe('subagent block gap — production pipeline reproduction (H1/H2b/H3 dis
     const headerIdxB = find('mint-parallelize');
     let doneIdxB = -1;
     for (let i = headerIdxB + 1; i < lines.length; i++) {
-      if ((lines[i] ?? '').includes('Done (')) { doneIdxB = i; break; }
+      if ((lines[i] ?? '').includes('Done')) { doneIdxB = i; break; }
     }
 
     // H3: duplicated rows

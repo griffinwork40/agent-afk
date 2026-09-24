@@ -1420,6 +1420,20 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_CENTER_CONTENT',
+    description:
+      'When set to "1" (or any truthy value), content surfaces (tool-lane overlay, ' +
+      'scrollback blocks, input line, spinner, and OODA stage rail) are horizontally ' +
+      'centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). ' +
+      'No-op when the terminal is at or below the content measure — the common 80–100 column case. ' +
+      'Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable.',
+    type: 'boolean',
+    required: false,
+    default: '',
+    example: '1',
+    category: 'display',
+  },
+  {
     name: 'COLORFGBG',
     description:
       'Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. ' +

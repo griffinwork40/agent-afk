@@ -196,47 +196,47 @@ export type Entry = ToolEntry | TextEntry;
  *
  * Width invariants (matter for indent math; column-position bookkeeping
  * assumes they hold):
- * - `spine`, `spineClosed`, `turnRoot`, `turnRootClosed`: 2 cells
+ * - `spine`, `spineClosed`, `turnRoot`, `turnRootClosed`: 3 cells
  * - `midConnector`, `lastConnector`: 3 cells
- * - `textPrefix` (the inline `│ ` prefix on wrapped text-child lines): 2 cells
+ * - `textPrefix` (the inline `│  ` prefix on wrapped text-child lines): 3 cells
  *
  * Both sets satisfy these invariants by construction.
  */
 export interface Glyphs {
-  /** Live spine column, e.g. `'│ '`. 2 cells. */
+  /** Live spine column, e.g. `'│  '`. 3 cells. */
   spine: string;
-  /** Closed spine column (branch already terminated), e.g. `'  '`. 2 cells. */
+  /** Closed spine column (branch already terminated), e.g. `'   '`. 3 cells. */
   spineClosed: string;
-  /** Lead under a parent row that has no turn-root marker, e.g. `'  '`. 2 cells. */
+  /** Lead under a parent row that has no turn-root marker, e.g. `'   '`. 3 cells. */
   lead: string;
-  /** Turn-root marker for the head row of a subagent dispatch, e.g. `'◉ '`. 2 cells. */
+  /** Turn-root marker for the head row of a subagent dispatch, e.g. `'◉  '`. 3 cells. */
   turnRoot: string;
   /** Mid-sibling tree connector, e.g. `'├─ '`. 3 cells. */
   midConnector: string;
   /** Last-sibling tree connector, e.g. `'╰─ '`. 3 cells. */
   lastConnector: string;
-  /** Inline prefix on wrapped text-child lines, e.g. `'│ '`. 2 cells. */
+  /** Inline prefix on wrapped text-child lines, e.g. `'│  '`. 3 cells. */
   textPrefix: string;
 }
 
 export const UNICODE_GLYPHS: Readonly<Glyphs> = Object.freeze({
-  spine: '│ ',
-  spineClosed: '  ',
-  lead: '  ',
-  turnRoot: '◉ ',
+  spine: '│  ',
+  spineClosed: '   ',
+  lead: '   ',
+  turnRoot: '◉  ',
   midConnector: '├─ ',
   lastConnector: '╰─ ',
-  textPrefix: '│ ',
+  textPrefix: '│  ',
 });
 
 export const ASCII_GLYPHS: Readonly<Glyphs> = Object.freeze({
-  spine: '| ',
-  spineClosed: '  ',
-  lead: '  ',
-  turnRoot: 'o ',
+  spine: '|  ',
+  spineClosed: '   ',
+  lead: '   ',
+  turnRoot: 'o  ',
   midConnector: '+- ',
   lastConnector: '\\- ',
-  textPrefix: '| ',
+  textPrefix: '|  ',
 });
 
 /**
@@ -300,14 +300,14 @@ export function getGlyphs(): Readonly<Glyphs> {
  *   a live spine.
  *
  * No screen-left lead is included. The depth-1 spine sits at column 0
- * directly under the turn-root marker (`◉ `, 2 cells) emitted on the
+ * directly under the turn-root marker (`◉  `, 3 cells) emitted on the
  * Agent head row by the caller (`formatAgentSummary` / `getOverlay`).
  * That gives a continuous vertical column from the turn-root through
  * all descendants — the topology metaphor the spine is for.
  *
- * Total width = 2*N cells. (Pre-spine-renderer was 2*(N+1); removing the
- * lead shifts every child row left by 2 cells. The corresponding shift
- * on the Agent head row is replacing `'  '` with `'◉ '` — same 2 cells,
+ * Total width = 3*N cells. (Pre-spine-renderer was 3*(N+1); removing the
+ * lead shifts every child row left by 3 cells. The corresponding shift
+ * on the Agent head row is replacing `'   '` with `'◉  '` — same 3 cells,
  * different glyph — so the head row's content column is unchanged.)
  *
  * ancestorIsLast.length === depth - 1 (the immediate parent's last-ness
@@ -327,22 +327,52 @@ export function buildIndent(ancestorIsLast: readonly boolean[], g: Readonly<Glyp
 }
 
 /**
+ * Resolve the spine-tone chalk instance for a given depth index (0–2).
+ *
+ * Routed through the palette system so the tones respond to `applyTheme()`
+ * on a dark/light/umber swap — palette.spineTone0/1/2 carry theme-specific
+ * values defined alongside the other semantic roles in `src/cli/palette.ts`.
+ * Called at render time (not import time) so the live palette member is used.
+ *
+ * @param toneIdx - 0 (depth 0), 1 (depth 1), or 2 (depth 2+, floor).
+ */
+function spineChalk(toneIdx: 0 | 1 | 2): (typeof palette)['spineTone0'] {
+  if (toneIdx === 0) return palette.spineTone0;
+  if (toneIdx === 1) return palette.spineTone1;
+  return palette.spineTone2;
+}
+
+/**
  * Dim the `│` spine glyphs in an indent built by {@link buildIndent}.
  *
  * Per-slot dim (rather than `palette.dim(whole indent)`) so downstream
  * consumers that strip ANSI for measurement see the same plain layout
- * {@link buildIndent} produced. The leading `'  '` lead and any closed
- * `'  '` ancestor slots pass through unchanged.
+ * {@link buildIndent} produced. The leading `'   '` lead and any closed
+ * `'   '` ancestor slots pass through unchanged.
  *
- * Walks 2 cells at a time — indents built by {@link buildIndent} are
- * composed exclusively of `g.spine` and `g.spineClosed` units (both 2
+ * Walks 3 cells at a time — indents built by {@link buildIndent} are
+ * composed exclusively of `g.spine` and `g.spineClosed` units (both 3
  * cells wide; see the width invariants on {@link Glyphs}).
+ *
+ * @param plainIndent - Plain (no-ANSI) indent from {@link buildIndent}.
+ * @param g - Active glyph set (Unicode / ASCII).
+ * @param startDepth - Depth offset for the first spine slot in this indent.
+ *   Callers pass `ancestorIsLast.length` so that children deeper in the tree
+ *   automatically receive dimmer spine columns. Defaults to 0 so all
+ *   existing two-arg call sites are unaffected.
  */
-export function colorizeIndent(plainIndent: string, g: Readonly<Glyphs>): string {
+export function colorizeIndent(plainIndent: string, g: Readonly<Glyphs>, startDepth = 0): string {
   let out = '';
-  for (let i = 0; i < plainIndent.length; i += 2) {
-    const slot = plainIndent.slice(i, i + 2);
-    out += slot === g.spine ? palette.dim(slot) : slot;
+  let slot = 0;
+  for (let i = 0; i < plainIndent.length; i += g.spine.length) {
+    const chunk = plainIndent.slice(i, i + g.spine.length);
+    if (chunk === g.spine) {
+      const toneIdx = Math.min(startDepth + slot, 2) as 0 | 1 | 2;
+      out += spineChalk(toneIdx)(chunk);
+    } else {
+      out += chunk;
+    }
+    slot++;
   }
   return out;
 }
@@ -355,16 +385,16 @@ export function colorizeIndent(plainIndent: string, g: Readonly<Glyphs>): string
  *
  * `indent` is the plain (no-ANSI) indent string produced by
  * {@link buildIndent}; the function dims spine glyphs at emission and
- * uses `.length` for wrap math (plain string of 2-cell units).
+ * uses `.length` for wrap math (plain string of 3-cell units).
  */
 export function renderTextChildLines(text: string, indent: string, g: Readonly<Glyphs>): string[] {
   if (!text || !text.trim()) return [];
   const prefix = palette.dim(g.textPrefix);
-  // 2 cols for the text prefix, plus a small safety margin for ANSI widths.
+  // 3 cols for the text prefix, plus a small safety margin for ANSI widths.
   // Derived from `toolLaneWidth()` — the same row budget `clampLineToTerminal`
   // enforces on the composed line below — so the wrapped text can never
   // exceed the clamp that will later be applied to it (see `render/measure.ts`).
-  const maxWidth = Math.max(1, toolLaneWidth() - indent.length - 2 - 2);
+  const maxWidth = Math.max(1, toolLaneWidth() - indent.length - 3 - 2);
   const colored = colorizeIndent(indent, g);
   const out: string[] = [];
   for (const para of text.split('\n')) {
@@ -441,6 +471,9 @@ export {
   renderGroupedRootTools,
   formatGroupedToolResults,
 } from './tool-lane-render-grouped-root.js';
+
+// Re-export centering helpers so tool-lane.ts can import from one place
+export { applyFlushMargin, joinOverlayLines } from './tool-lane-flush-margin.js';
 
 /**
  * Build a parent→children map from the lane's entry set. Extracted from

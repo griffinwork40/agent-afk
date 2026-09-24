@@ -20,15 +20,31 @@ import { displayWidth, truncateDisplayWidth } from './display.js';
 import type { BandRowMeta } from './terminal-compositor.types.js';
 
 export const ELAPSED_GRACE_MS = 2_000;
+export const ELAPSED_AMBER_SEC = 10;
+export const ELAPSED_RED_SEC = 60;
+
+/**
+ * Returns the appropriate palette tone for an elapsed-time display.
+ * - ≥60s → palette.error (red)
+ * - ≥10s → palette.warning (amber)
+ * - <10s  → palette.dim
+ * Do NOT use green (<10s): green = success/done is a reserved semantic.
+ */
+function elapsedTone(totalSec: number): (s: string) => string {
+  if (totalSec >= ELAPSED_RED_SEC) return palette.error;
+  if (totalSec >= ELAPSED_AMBER_SEC) return palette.warning;
+  return palette.dim;
+}
 
 export function formatElapsed(startedAt: number): string {
   const elapsed = Date.now() - startedAt;
   if (elapsed < ELAPSED_GRACE_MS) return '';
   const totalSec = Math.floor(elapsed / 1000);
-  if (totalSec < 60) return palette.dim(` ${totalSec}s`);
+  const tone = elapsedTone(totalSec);
+  if (totalSec < 60) return tone(` ${totalSec}s`);
   const min = Math.floor(totalSec / 60);
   const sec = totalSec % 60;
-  return palette.dim(` ${min}m${sec.toString().padStart(2, '0')}s`);
+  return tone(` ${min}m${sec.toString().padStart(2, '0')}s`);
 }
 
 /**

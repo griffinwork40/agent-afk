@@ -202,9 +202,9 @@ export function formatCategoricalOverflow(hidden: Array<ToolEntry | GroupedSibli
       // Entries actually shown across all visible rows.
       const visibleEntries = visible.reduce((sum, l) => sum + l.entries, 0);
       const hiddenEntries = total - visibleEntries;
-      const labelStr = rendered.join(', ') +
-        (hiddenEntries > 0 ? ` (+${hiddenEntries})` : '');
-      return `… +${total} more: ${labelStr}`;
+      const labelStr = rendered.join('  ') +
+        (hiddenEntries > 0 ? `  (+${hiddenEntries})` : '');
+      return labelStr;
     }
     // Fall through to categorical if any label was empty / unwrapped /
     // failed sanitization.
@@ -213,7 +213,7 @@ export function formatCategoricalOverflow(hidden: Array<ToolEntry | GroupedSibli
   // ── Categorical path ────────────────────────────────────────────────────
   const buckets: string[] = [];
   for (const [name, n] of counts) {
-    buckets.push(`${n} ${pluralizeToolName(name, n)}`);
+    buckets.push(`${pluralizeToolName(name, n)} \u00d7${n}`);
   }
-  return `… +${total} (${buckets.join(', ')})`;
+  return buckets.join('  ');
 }

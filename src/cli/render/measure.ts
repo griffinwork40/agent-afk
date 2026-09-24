@@ -1,4 +1,5 @@
 import { env } from '../../config/env.js';
+import { getTerminalWidth } from '../terminal-size.js';
 
 /**
  * Maximum measure for CODE blocks and structured surfaces (tool-lane, thinking).
@@ -111,4 +112,28 @@ export function capToProseMeasure(width: number): number {
   const measure = resolveProseMeasure();
   if (measure === null) return width;
   return Math.min(width, measure);
+}
+
+/**
+ * Left-margin string for centering content at the active text measure.
+ *
+ * Returns '' (empty string) in all of these cases:
+ *   - AFK_CENTER_CONTENT is unset or falsy (default, opt-in feature)
+ *   - Terminal width ≤ content measure (no room to center — the common
+ *     80–100 column case; margin would be 0 anyway)
+ *
+ * When centering is active, returns `Math.floor((tw - measure) / 2)` space
+ * characters. Callers should prepend this to every content line so that the
+ * display floats horizontally centered in wide terminals.
+ *
+ * Pass `termWidth` to avoid a second `process.stdout.columns` lookup when
+ * the caller has already read the width for another purpose (e.g. clamp).
+ * Omit to let the function read it fresh.
+ */
+export function contentMargin(termWidth?: number): string {
+  if (!env.AFK_CENTER_CONTENT) return '';
+  const tw = termWidth ?? getTerminalWidth();
+  const measure = capToMeasure(tw);
+  const marginCols = Math.max(0, Math.floor((tw - measure) / 2));
+  return ' '.repeat(marginCols);
 }
