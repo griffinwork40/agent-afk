@@ -161,14 +161,7 @@ export class StreamingMarkdownRenderer {
     // scrollback — one paragraph + one separator row. See
     // docs/tui-rhythm.md for the full contract.
     if (this.compositor) {
-      // Content centering (AFK_CENTER_CONTENT): prepend left margin to each
-      // physical line of the committed prose block so it aligns with the
-      // centered tool-lane output and input line.
-      const pad = contentMargin();
-      const padded = pad
-        ? trimmed.split('\n').map(l => l === '' ? l : pad + l).join('\n')
-        : trimmed;
-      this.compositor.commitAbove(padded + '\n\n');
+      this.compositor.commitAbove(trimmed + '\n\n');
     }
 
     this.committed = accumulateCommitted(this.committed, trimmed);
@@ -211,8 +204,9 @@ export class StreamingMarkdownRenderer {
       ? calculateContentWidth(this.indent.length)
       : calculateProseContentWidth(this.indent.length);
     const formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
-    // Content centering (AFK_CENTER_CONTENT): prepend left margin to the
-    // live pending overlay so in-flight prose aligns with centered content.
+    // Content centering (AFK_CENTER_CONTENT): live pending prose is part of
+    // the overlay frame, so it receives the centering margin here (the overlay
+    // is never routed through commitAbove, which handles scrollback centering).
     const pad = contentMargin();
     const indented = applyIndent(formatted, this.indent);
     if (!pad) return indented;

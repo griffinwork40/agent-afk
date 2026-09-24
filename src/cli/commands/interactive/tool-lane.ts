@@ -14,7 +14,7 @@ import {
   buildChildMap,
   getGlyphs, toolLaneWidth,
   freshToolEntry,
-  pushOutcomeLines, joinOverlayLines, applyFlushMargin,
+  pushOutcomeLines, joinOverlayLines,
   type ToolEntry,
   type TextEntry,
   type Entry,
@@ -920,7 +920,7 @@ export class ToolLane {
     // render, `formatAgentChildren` returns []; the joined empty string is
     // skipped so we don't push a blank line to scrollback.
     const blockLines = childBlock === '' ? [] : [childBlock];
-    return applyFlushMargin([...ancestorLines, ...blockLines]);
+    return [...ancestorLines, ...blockLines];
   }
 
   /**
@@ -1028,7 +1028,7 @@ export class ToolLane {
     }
     this.order = this.order.filter((id) => !collected.has(id));
 
-    return applyFlushMargin(lines);
+    return lines;
   }
 
   flush(homeDir?: string): string[] {
@@ -1090,7 +1090,7 @@ export class ToolLane {
     this.entries.clear();
     this.order = [];
     this.agentIdStack = [];
-    return applyFlushMargin(lines);
+    return lines;
   }
 
 
