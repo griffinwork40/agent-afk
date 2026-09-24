@@ -1077,7 +1077,7 @@ export const ENV_REGISTRY = [
   },
   {
     name: 'AFK_DAEMON_SHELL_TIMEOUT_MS',
-    description: 'Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 300000 (5 minutes). The child process is killed on timeout.',
+    description: 'Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 2700000 (45 minutes), matching the agent executor budget (AFK_SUBAGENT_TIMEOUT_MS). The child process is killed on timeout; the error message names this variable so operators can distinguish a daemon shell ceiling from a network or process failure.',
     type: 'number',
     required: false,
     category: 'daemon',

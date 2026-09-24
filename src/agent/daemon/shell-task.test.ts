@@ -145,7 +145,7 @@ describe('runShellTask – timeout', () => {
     vi.restoreAllMocks();
   });
 
-  it('maps a killed/timed-out process to status:error with "killed (timeout)" message', async () => {
+  it('maps a killed/timed-out process to status:error with a message that surfaces the timeout source', async () => {
     // Set a very short timeout (100ms) via the env var so `sleep 5` is killed.
     vi.stubEnv('AFK_DAEMON_SHELL_TIMEOUT_MS', '100');
 
@@ -157,7 +157,8 @@ describe('runShellTask – timeout', () => {
     );
 
     expect(result.status).toBe('error');
-    // The errorMessage contains a timeout indication — either "killed (timeout)"
+    // The errorMessage should surface the daemon shell timeout source — either
+    // "killed by daemon shell executor after N ms (AFK_DAEMON_SHELL_TIMEOUT_MS)"
     // or a system-level ETIMEDOUT message, depending on node version.
     expect(result.errorMessage).toBeTruthy();
     const msg = result.errorMessage!.toLowerCase();
