@@ -33,6 +33,7 @@ import type { RetryLayer } from './query/retry-layer.js';
 import { contextWindowTokensUsed, guardContextOverflow } from './query/auto-compact.js';
 import type { HookRegistry } from '../../hooks.js';
 import { annotateFastError, prepareTurnRequest } from './query/turn-request.js';
+import { annotateVersionGateError } from './query/version-gate-error.js';
 import { maybeAutoCompact } from './query-turn-driver.auto-compact.js';
 
 /** Live accessors the turn driver needs from the owning query. */
@@ -256,7 +257,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
           if (!turnEmittedTerminal) yield ctx.makeInterruptedTurnEvent();
           continue;
         }
-        const e = annotateFastError(err, fastDecision?.effective === true);
+        const e = annotateVersionGateError(annotateFastError(err, fastDecision?.effective === true));
         yield { type: 'error', error: e };
         return;
       } finally {

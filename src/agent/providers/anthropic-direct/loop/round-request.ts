@@ -22,6 +22,7 @@ import type {
   WireToolDef,
 } from '../types.js';
 import { annotateFastError } from '../query/turn-request.js';
+import { annotateVersionGateError } from '../query/version-gate-error.js';
 import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
@@ -297,7 +298,7 @@ export async function* openRound({
     if (err instanceof ConnectionOverloadExhaustedError) {
       return { kind: 'overload-exhausted' };
     }
-    const e = annotateFastError(err, input.fastMode === true);
+    const e = annotateVersionGateError(annotateFastError(err, input.fastMode === true));
     if (e.message.includes('thinking')) {
       dumpThinkingDiagnostic(input.messages, e);
     }

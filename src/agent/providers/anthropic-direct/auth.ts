@@ -46,10 +46,18 @@ export const OAUTH_BETA_HEADER =
 export const EFFORT_BETA_HEADER = 'effort-2025-11-24';
 
 /**
- * `User-Agent` value the CLI sends. The Anthropic API gates certain model
- * features (e.g. Claude Opus 5.5 on the Fast tier) behind a minimum Claude
- * Code CLI version — this value must track the current `@anthropic-ai/claude-code`
- * npm release. Updated to 2.1.280 (the version that unlocks Opus 5.5 access).
+ * `User-Agent` value the CLI sends in OAuth mode. The Anthropic API can gate
+ * models or features behind a minimum Claude Code CLI version and rejects an
+ * older one with `claude_code_version_too_old`.
+ *
+ * What is actually known (#2075): builds sending `claude-cli/1.0.0` ran
+ * `claude-opus-5-5` at the standard tier without error for full sessions, so
+ * the gate did NOT block standard-tier Opus 5.5. Whether it gates Fast mode was
+ * not tested. 2.1.280 was the `latest` npm release on 2026-09-23.
+ *
+ * Bumping is manual: when the API rejects this value, the error is annotated
+ * with a fix-it message naming this constant (`query/version-gate-error.ts`).
+ * Keep the `cc_version` in {@link BILLING_HEADER_TEXT} in sync.
  */
 export const CLI_USER_AGENT = 'claude-cli/2.1.280 (external, cli)';
 

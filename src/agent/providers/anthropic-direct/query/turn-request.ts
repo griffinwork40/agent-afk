@@ -3,6 +3,7 @@ import type { FastModeController, FastTurnDecision } from '../../../fast-mode.js
 import type { AnthropicClientLike, AnthropicToolDef, RunTurnInput, ToolDispatcher } from '../types.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
+import { rewrapWithMessage } from './version-gate-error.js';
 
 export interface TurnRequestInput {
   client: AnthropicClientLike;
@@ -105,15 +106,7 @@ export function annotateFastError(error: unknown, fast: boolean): Error {
   // Already annotated (e.g. round-request annotated it, then query-runtime saw
   // the same throw): don't stack a second prefix.
   if (original.message.startsWith(FAST_ERROR_PREFIX)) return original;
-  const annotated = new Error(`${FAST_ERROR_PREFIX} ${original.message}`, { cause: original });
-  annotated.name = original.name;
-  if (original.stack !== undefined) annotated.stack = original.stack;
   // Carry every own property (status, headers, error, requestID, …) so the
   // retry/pause classifiers see the same signals they would without annotation.
-  for (const key of Object.getOwnPropertyNames(original) as Array<keyof Error>) {
-    if (key === 'message' || key === 'stack') continue;
-    const descriptor = Object.getOwnPropertyDescriptor(original, key);
-    if (descriptor !== undefined) Object.defineProperty(annotated, key, descriptor);
-  }
-  return annotated;
+  return rewrapWithMessage(original, `${FAST_ERROR_PREFIX} ${original.message}`);
 }
