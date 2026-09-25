@@ -11,6 +11,7 @@ import { palette } from './palette.js';
 const REQUIRED_ROLES = [
   'brand', 'user', 'tool', 'toolArg',
   'success', 'error', 'warning', 'plan', 'meta', 'info', 'dim', 'bold',
+  'activeAgent', 'dimCompleted',
 ] as const;
 
 describe('palette', () => {

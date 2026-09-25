@@ -120,10 +120,13 @@ function formatAgentSummary(
   //
   // Pattern card alignment: ordered-sequences governed by append-only
   // scrollback — both depth and last-ness must be resolved at commit time.
-  const ancestorPrefix = palette.dim(g.spine.repeat(ancestorIsLast.length));
+  // Committed scrollback: these are completed agents. Use dimCompleted for
+  // all structural chrome (ancestor spines, turn-root marker, stats suffix)
+  // so finished rows recede behind active overlay content.
+  const ancestorPrefix = palette.dimCompleted(g.spine.repeat(ancestorIsLast.length));
   const externalAncestors: readonly boolean[] = ancestorIsLast;
 
-  const head = palette.dim(g.turnRoot);
+  const head = palette.dimCompleted(g.turnRoot);
   // Invariant: ONE width read per render frame, shared by the head row below
   // and the recursive child frame. Two reads could straddle a resize and emit
   // a head row clamped to the old width above children clamped to the new one.
@@ -137,7 +140,7 @@ function formatAgentSummary(
   // matching how the live overlay clamps the same row.
   const agentLine = clampLineToTerminal(
     stats.length > 0
-      ? ancestorPrefix + head + agent.prefix + palette.dim(' — ' + stats.join(' · '))
+      ? ancestorPrefix + head + agent.prefix + palette.dimCompleted(' — ' + stats.join(' · '))
       : ancestorPrefix + head + agent.prefix,
     cols,
   );
@@ -209,8 +212,13 @@ function formatAgentSummary(
  */
 function formatAgentHeader(agent: ToolEntry, ancestorIsLast: readonly boolean[] = []): string {
   const g = getGlyphs();
-  const ancestorPrefix = palette.dim(g.spine.repeat(ancestorIsLast.length));
-  const head = palette.dim(g.turnRoot);
+  // Eagerly-committed ancestor header: this entry is an ancestor of a child
+  // that just completed. Its own status (active or completed) may be unknown
+  // at commit time, but the header lands in committed scrollback and will be
+  // followed by child rows — use dimCompleted for the structural chrome to
+  // keep the topology readable without competing with active overlay content.
+  const ancestorPrefix = palette.dimCompleted(g.spine.repeat(ancestorIsLast.length));
+  const head = palette.dimCompleted(g.turnRoot);
   // The terminal-width clamp is part of the shared head-row encoding — see the
   // encoding constraint above. formatAgentSummary clamps its head row, so this
   // one must too, or the same entry committed through the two paths would

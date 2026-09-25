@@ -118,7 +118,12 @@ export function renderToolLaneOverlay(
   // intentionally left at the 3-space lead — only the live overlay renders
   // flat roots as separate rows that can collide with a sibling spine.
   const hasNestingRoot = visibleRoots.some((e) => NESTING_TOOLS.has(e.toolName));
-  const flatRootLead = hasNestingRoot ? palette.dim(g.turnRoot) : '   ';
+  // flatRootLead: when NESTING roots are present, flat roots anchor with ◉ to
+  // maintain topology alignment. Completed flat roots (result set) use dimCompleted
+  // so done rows recede; active flat roots use activeAgent so the in-flight tool
+  // name is clearly readable. The lead is split below at the call sites.
+  const flatRootLeadActive = hasNestingRoot ? palette.activeAgent(g.turnRoot) : '   ';
+  const flatRootLeadDone = hasNestingRoot ? palette.dimCompleted(g.turnRoot) : '   ';
 
   for (const entry of visibleRoots) {
     const children = childMap.get(entry.toolUseId);
@@ -173,12 +178,20 @@ export function renderToolLaneOverlay(
       // overflow without explicit truncation.
       if (entry.headerEmitted) {
         // Anonymous anchor: marker only, no label body. The committed
-        // label lives in scrollback above.
-        lines.push(clamp(palette.dim(g.turnRoot)));
+        // label lives in scrollback above. Header was already committed so
+        // this is structural geometry only — dim the marker.
+        lines.push(clamp(palette.dimCompleted(g.turnRoot)));
+      } else if (entry.result) {
+        // Completed nesting root whose children are still in the lane:
+        // addResult() sets entry.result before the next overlay repaint,
+        // so a completed parent must use dimCompleted — not activeAgent —
+        // to maintain the active-vs-completed distinction.
+        lines.push(clamp(palette.dimCompleted(g.turnRoot) + entry.prefix));
       } else {
-        // Use g.turnRoot for the col-0 marker (◉ / o) so the spine column
-        // aligns with the child rows below.
-        lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix));
+        // Active (in-flight) nesting root: use activeAgent for the ◉ marker
+        // so the whole row is clearly readable. The entry.prefix (agent name
+        // + args) is already colorized by formatToolLine with color.bold(name).
+        lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix));
       }
       renderOverlayChildren(children, childMap, lines, cols, undefined, g);
       // Render the thinking-tail AFTER the children so the subagent's
@@ -238,14 +251,18 @@ export function renderToolLaneOverlay(
       // never carries a `diff` payload (diffs originate from edit/write
       // tool_diff chunks), so no diff block is rendered here.
       if (entry.result) {
+        // Completed nesting entry: dim the structural chrome — it is done.
         // pushOutcomeLines splits multi-line formatOutcome; headLine computed first so its display-width derives the outcome budget.
-        const headLine = palette.dim(g.turnRoot) + entry.prefix + palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ';
-        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dim(g.spine) + '  ', cols, batchBadge(entry.result));
+        const headLine = palette.dimCompleted(g.turnRoot) + entry.prefix + palette.dimCompleted(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ';
+        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dimCompleted(g.spine) + '  ', cols, batchBadge(entry.result));
       } else {
+        // Active (in-flight) nesting entry: use activeAgent for ◉ so the agent
+        // name row is clearly readable. The ' …' tail is structural/informational
+        // — keep it dim so it recedes behind the agent identity.
         // Live elapsed counter: computed at repaint time so the counter ticks
         // on every overlay refresh without a dedicated timer. Grace period
         // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
-        lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools)));
+        lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools)));
       }
       // Mirror the thinkingTail handling of the other two NESTING branches
       // (and the childless-leaf branch below): spine glyph (g.spine, │) at
@@ -258,19 +275,19 @@ export function renderToolLaneOverlay(
       if (entry.result) {
         // Completed flat-root: render via toolCard (collapsed) so the badge,
         // tool name, elapsed, and batch badge share the component's layout
-        // contract. The flatRootLead is prepended by the caller (this site)
+        // contract. The flatRootLeadDone is prepended by the caller (this site)
         // so the lead stays outside the component's width budget — subtract
         // its display width from the card's column budget to prevent overflow.
         // Use finishedAt (frozen at result-arrival time) so elapsed doesn't
         // drift on every repaint; fall back to Date.now() for entries that
         // pre-date the finishedAt field (should not occur in practice).
         const elapsedMs = (entry.finishedAt ?? Date.now()) - entry.startedAt;
-        const cardWidth = cols - displayWidth(flatRootLead);
+        const cardWidth = cols - displayWidth(flatRootLeadDone);
         const card = formatFlatRootCompletion(entry.toolName, entry.result, elapsedMs, batchBadge(entry.result), cardWidth);
         // Flash pulse: bold-wrap the card for 150ms after completion so the
         // glyph catches the eye in peripheral vision (issue: lane-flash).
         const flashedCard = flash?.isFlashing(entry.toolUseId) ? palette.bold(card) : card;
-        lines.push(clamp(flatRootLead + flashedCard));
+        lines.push(clamp(flatRootLeadDone + flashedCard));
         if (entry.diff && !entry.result.isError) {
           // Diff hangs under the outcome line, indented one level deeper
           // (4 spaces) so it visually attaches to this tool entry.
@@ -279,9 +296,11 @@ export function renderToolLaneOverlay(
           }
         }
       } else {
+        // Active flat-root: use flatRootLeadActive so the in-flight tool name
+        // is clearly readable. The ' …' tail is structural — keep it dim.
         // Live elapsed counter: same pattern as the NESTING branch above —
         // computed at repaint time, suppressed under ELAPSED_GRACE_MS (2s).
-        lines.push(clamp(flatRootLead + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools)));
+        lines.push(clamp(flatRootLeadActive + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools)));
         if (entry.previewDiff) {
           // Pre-execution diff preview: formatPreviewDiffBlock renders ⟳ Proposed
           // and applies the AFK_SHOW_DIFFS=0 opt-out (returns [] when disabled).
@@ -320,7 +339,8 @@ export function renderToolLaneOverlay(
   }
 
   if (hiddenDoneCount > 0) {
-    lines.push(clamp('   ' + palette.dim(`… +${hiddenDoneCount} done`)));
+    // Structural summary of elided completed roots — dimCompleted is correct here.
+    lines.push(clamp('   ' + palette.dimCompleted(`… +${hiddenDoneCount} done`)));
   }
 
   return joinOverlayLines(lines); // centering margin applied inside (see tool-lane-flush-margin.ts)

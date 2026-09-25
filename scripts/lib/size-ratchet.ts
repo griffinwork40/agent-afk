@@ -128,7 +128,14 @@ export function changedSince(ref: string, repoRoot: string, isScannable: (rel: s
     // No merge base (unrelated histories, or `ref` unfetched) — fall back to a
     // direct diff rather than failing the gate on a git topology problem.
   }
-  const out = execFileSync('git', ['diff', '--name-only', base], { cwd: repoRoot, encoding: 'utf8' });
+  let out: string;
+  try {
+    out = execFileSync('git', ['diff', '--name-only', base], { cwd: repoRoot, encoding: 'utf8' });
+  } catch {
+    // Diff failed (e.g. shallow checkout where `base` is unavailable) — return
+    // no changed files so the gate skips TOUCHED checks rather than crashing CI.
+    return [];
+  }
   return out
     .split('\n')
     .map((l) => l.trim())

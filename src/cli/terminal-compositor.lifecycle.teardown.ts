@@ -72,8 +72,16 @@ export function endTurnFlush(self: LifecycleHost): void {
   // copy would scroll into scrollback AGAIN when the next commit's
   // preserveRowsBeforeFrameRender runs.
   const paintedCount = self.committedBandPaintedRows;
-  if (paintedCount > 0 && self.committedBandBottomRow > 0) {
-    const paintedTop = self.committedBandBottomRow - paintedCount + 1;
+  if (paintedCount > 0 && self.committedBandTopRow > 0) {
+    // Erase from the ACTUAL visual top of the painted band to committedBandBottomRow.
+    // committedBandTopRow tracks the real paint start — under the short-terminal
+    // blank-gap cap (#2182) this may be ABOVE targetBottom-paintedCount+1
+    // (the uncapped position), so using committedBandTopRow avoids erasing the
+    // wrong rows when the cap shifted the band upward from its bottom-aligned
+    // position. committedBandBottomRow is the full above-frame region bottom
+    // (targetBottom = desiredTopRow-1); erasing up to it clears both the painted
+    // rows and any gap rows between the visual band bottom and the frame top.
+    const paintedTop = self.committedBandTopRow;
     let eraseOut = '\x1b[?25l';
     for (let r = Math.max(1, paintedTop); r <= self.committedBandBottomRow; r++) {
       eraseOut += eraseAndPaintRow(r); // CUP+EL, no line content, no \n
