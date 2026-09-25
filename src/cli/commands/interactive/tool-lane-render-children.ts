@@ -233,7 +233,7 @@ function renderOverlayChildren(
           // ([...ancestorIsLast]) was one slot too shallow. `clampLineToTerminal`
           // → `truncateDisplayWidth` is ANSI-aware.
           const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length);
-          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇  ' + sanitizeLabel(child.thinkingTail)), cols));
+          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
         }
       } else if (NESTING_TOOLS.has(child.toolName) && child.headerEmitted) {
         // Invariant: committed labels live in scrollback; live overlay must
@@ -307,7 +307,7 @@ function renderOverlayChildren(
           // unbounded narration; terminal hard-wrap orphans the continuation.
           // `continuationIndent` carries the topology-spine column (colored);
           // clampLineToTerminal → truncateDisplayWidth is ANSI-aware.
-          lines.push(clampLineToTerminal(continuationIndent + palette.thinking('⌇  ' + sanitizeLabel(child.thinkingTail)), cols));
+          lines.push(clampLineToTerminal(continuationIndent + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
         } else {
           lines.push(clampLineToTerminal(continuationIndent + palette.dim(inProgressVerb(child.toolName)), cols));
         }
