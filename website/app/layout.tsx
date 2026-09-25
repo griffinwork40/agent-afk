@@ -20,7 +20,7 @@ export const metadata: Metadata = {
   metadataBase: new URL('https://docs.agentafk.com'),
   title: {
     default: 'Agent AFK Docs',
-    template: '%s | Agent AFK',
+    template: '%s | Agent AFK Docs',
   },
   description: 'Documentation for Agent AFK',
   // Favicon: the same "Handoff Arc" mark used on the main site (agentafk.com).
