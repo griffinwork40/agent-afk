@@ -146,9 +146,12 @@ export function renderInputLine(self: RenderHost): string {
     // String.length (UTF-16 code units) — so CJK (2 cells / 1 unit) and emoji
     // (2 cells / surrogate pair) are budgeted by the cells they occupy.
     const cols = self.stdout.columns ?? 80;
+    const marginWidth = contentMargin(cols).length;
     const promptWidth = displayWidth(stripAnsi(self.promptTextFn(self.input.buffer)));
     const bufferWidth = displayWidth(stripAnsi(rawBefore)) + 1; // +1 for caret cell
-    const budget = Math.max(0, cols - promptWidth - bufferWidth - 1);
+    // Subtract the centering margin from the budget so the ghost suffix
+    // does not push the input line past the terminal edge and cause wrapping.
+    const budget = Math.max(0, cols - marginWidth - promptWidth - bufferWidth - 1);
     // truncateDisplayWidth truncates on grapheme boundaries (never splits a
     // surrogate pair) and counts display columns, so the input line never
     // wraps — wrapping would corrupt the DECSTBM scroll-region math. Empty
@@ -209,10 +212,11 @@ export function renderDropdownRows(self: RenderHost): string[] {
   // because the soft-wrap blank-line placeholders must accompany each
   // candidate row as a contiguous group — reversing after building
   // preserves that grouping naturally.
-  // Dropdown rows track the cursor column — the centered input line already
-  // shifts the cursor rightward. Adding contentMargin() here would double the
-  // offset, displacing the dropdown from the typed text (design doc §3.10.3,
-  // Appendix B: "renderDropdownRows() — No — tracks cursor").
+  // Content centering (AFK_CENTER_CONTENT): prepend left margin so the
+  // dropdown floats at the same horizontal position as the input line.
+  // The dropdown is rendered as frame text starting at column 0 (not
+  // cursor-relative), so it needs the same margin the input line gets.
+  const pad = contentMargin();
   const rows: string[] = [];
   for (let i = 0; i < visibleCount; i++) {
     const idx = ac.viewportStart + i;
@@ -225,7 +229,7 @@ export function renderDropdownRows(self: RenderHost): string[] {
     // UTF-16 .length under-counts wide chars and produces ghost/clip artifacts.
     const rowWidth = displayWidth(stripAnsi(rowStr));
     const softWraps = Math.max(0, Math.ceil(rowWidth / cols) - 1);
-    rows.push(rowStr);
+    rows.push(pad + rowStr);
     // Push blank placeholders so log-update's line count stays correct
     // on narrow terminals where a single candidate row wraps.
     for (let w = 0; w < softWraps; w++) rows.push('');
@@ -269,8 +273,8 @@ export function renderHintRow(self: RenderHost): string | null {
   // Reserve the slot with an empty row when the candidate has no hint
   // — formatHintRow returns null there, and a null return from this
   // function would let the row collapse out of the frame.
-  // Hint row tracks the cursor column — same as dropdown rows, no separate
-  // centering margin (design doc §3.10.3, Appendix B: "renderHintRow() — No
-  // — tracks cursor").
-  return formatHintRow(selected.hint, hintWidth) ?? '';
+  // Content centering: prepend left margin so the hint aligns with the
+  // dropdown rows and input line.
+  const hint = formatHintRow(selected.hint, hintWidth);
+  return hint !== null ? contentMargin() + hint : '';
 }
