@@ -35,24 +35,3 @@ export function joinOverlayLines(lines: string[]): string {
   return lines.join('\n');
 }
 
-/**
- * Apply the content centering margin (`AFK_CENTER_CONTENT`) to scrollback
- * lines returned by flush paths. Each element of `lines` may itself be a
- * multi-line string (e.g. from `formatAgentSummary`), so we split on `\n`,
- * prepend the margin to each physical line, and rejoin. Elements that are
- * empty strings (blank separator lines) are left untouched so the
- * scrollback rhythm (blank row between blocks) is preserved.
- *
- * No-op when `AFK_CENTER_CONTENT` is unset — `contentMargin()` returns ''.
- */
-export function applyFlushMargin(lines: string[]): string[] {
-  const pad = contentMargin();
-  if (pad.length === 0) return lines;
-  return lines.map((element) => {
-    if (element === '') return element; // preserve blank separator rows
-    return element
-      .split('\n')
-      .map((physicalLine) => (physicalLine === '' ? physicalLine : pad + physicalLine))
-      .join('\n');
-  });
-}

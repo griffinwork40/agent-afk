@@ -473,7 +473,7 @@ export {
 } from './tool-lane-render-grouped-root.js';
 
 // Re-export centering helpers so tool-lane.ts can import from one place
-export { applyFlushMargin, joinOverlayLines } from './tool-lane-flush-margin.js';
+export { joinOverlayLines } from './tool-lane-flush-margin.js';
 
 /**
  * Build a parent→children map from the lane's entry set. Extracted from
