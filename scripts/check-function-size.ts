@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Enforce a function-scoped size ceiling. Advisory (warns, never fails CI).
+ * Enforce a function-scoped size ceiling. CI-blocking (exits non-zero on violations).
  * Sibling of `scripts/check-file-size.ts`; shares its ratchet via `lib/size-ratchet.ts`.
  *
  * Invariant: no function exceeds LIMIT lines. This gate exists because the file
@@ -52,8 +52,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
 /**
- * Advisory ceiling. Extract a helper when you exceed it; the gate warns but does
- * not fail CI.
+ * Enforced ceiling. Extract a helper when you exceed it; the gate fails CI on
+ * any violation not in the grandfathered baseline.
  *
  * History: chosen from the measured distribution, not by taste. Issue #831
  * proposed "350 to match the file gate, or 200 to be stricter". Measured over
@@ -178,20 +178,21 @@ function reportAndExit(measured: Measured, violations: Violation[], baseline: Ba
     return;
   }
 
-  console.warn(`\n⚠ check-function-size: ${violations.length} violation(s) of the ${LIMIT}-line ceiling (advisory):\n`);
+  console.error(`\n✗ check-function-size: ${violations.length} violation(s) of the ${LIMIT}-line ceiling:\n`);
   for (const kind of VIOLATION_ORDER) {
     const group = violations.filter((v) => v.kind === kind);
     if (group.length === 0) continue;
-    console.warn(`  ${kind}:`);
-    for (const v of group) console.warn(`    ${formatKey(v.key, lines)}\n      ${v.detail}`);
-    console.warn('');
+    console.error(`  ${kind}:`);
+    for (const v of group) console.error(`    ${formatKey(v.key, lines)}\n      ${v.detail}`);
+    console.error('');
   }
-  console.warn('Fix:');
-  console.warn('  NEW/TOUCHED — extract a named helper for one step of the function. Prefer a helper');
-  console.warn('                that takes explicit parameters over one that closes over locals: a');
-  console.warn('                closure moves lines without reducing what you must hold in mind.');
-  console.warn('  GREW        — the function was already over the ceiling; do not add to it. Extract first.');
-  console.warn(`  RETIRED/STALE — run \`pnpm audit:funcsize:update\` to regenerate ${BASELINE_REL}.\n`);
+  console.error('Fix:');
+  console.error('  NEW/TOUCHED — extract a named helper for one step of the function. Prefer a helper');
+  console.error('                that takes explicit parameters over one that closes over locals: a');
+  console.error('                closure moves lines without reducing what you must hold in mind.');
+  console.error('  GREW        — the function was already over the ceiling; do not add to it. Extract first.');
+  console.error(`  RETIRED/STALE — run \`pnpm audit:funcsize:update\` to regenerate ${BASELINE_REL}.\n`);
+  process.exit(1);
 }
 
 function listLargest(measured: Measured, count: number): void {

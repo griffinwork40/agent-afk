@@ -186,6 +186,52 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
       const slug1 = (createIsolatedWorktree.mock.calls[1]![0] as { slugHint: string }).slugHint;
       expect(slug0).not.toBe(slug1);
     });
+
+    it('uses process.cwd() as the anchor when anchorCwd is not supplied', async () => {
+      createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
+      const handle = makeFakeHandle('ok');
+      const manager: SubagentManager = {
+        forkSubagent: vi.fn(async () => handle),
+      } as unknown as SubagentManager;
+
+      await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [makeIsoNode('A')],
+        edges: [],
+        // anchorCwd intentionally absent — should fall back to process.cwd()
+      });
+
+      expect(createIsolatedWorktree).toHaveBeenCalledTimes(1);
+      const createArg = createIsolatedWorktree.mock.calls[0]![0] as { cwd: string };
+      // The cwd passed to createIsolatedWorktree must be the real process.cwd()
+      // value, not anchorCwd (which was never supplied).
+      expect(createArg.cwd).toBe(process.cwd());
+    });
+
+    it('does NOT create a worktree when isolation is "none" (explicit no-op)', async () => {
+      const handle = makeFakeHandle('plain');
+      const manager: SubagentManager = {
+        forkSubagent: vi.fn(async () => handle),
+      } as unknown as SubagentManager;
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{
+          id: 'A',
+          systemPrompt: 's',
+          promptBuilder: () => 'p',
+          isolation: 'none',
+        }],
+        edges: [],
+        anchorCwd: '/repo',
+      });
+
+      expect(result.failed).toHaveLength(0);
+      expect(createIsolatedWorktree).not.toHaveBeenCalled();
+      expect(teardownBackgroundWorktree).not.toHaveBeenCalled();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -316,6 +362,36 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
       expect(snap.total).toBe(0);
       expect(snap.concurrent).toBe(0);
     });
+
+    it('does NOT call teardownBackgroundWorktree in the catch block when no worktree was created', async () => {
+      // isolation is absent — createIsolatedWorktree never runs, so isolationTeardown
+      // stays undefined, and the catch block must not attempt teardown.
+      const forkError = new Error('fork failed, no worktree involved');
+      const manager: SubagentManager = {
+        forkSubagent: vi.fn(async () => {
+          throw forkError;
+        }),
+      } as unknown as SubagentManager;
+
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [{
+          id: 'A',
+          systemPrompt: 's',
+          promptBuilder: () => 'p',
+          // isolation absent — no worktree is ever created
+        }],
+        edges: [],
+        anchorCwd: '/repo',
+      });
+
+      // The node fails (forkSubagent threw), but teardown must NOT be called
+      // because no worktree was created.
+      expect(result.failed).toHaveLength(1);
+      expect(createIsolatedWorktree).not.toHaveBeenCalled();
+      expect(teardownBackgroundWorktree).not.toHaveBeenCalled();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -397,6 +473,33 @@ describe('runSubagentDAG — isolation:"worktree" wiring', () => {
 
       // The node failed, but teardown still fires (finally block).
       expect(result.failed).toHaveLength(1);
+      expect(teardownBackgroundWorktree).toHaveBeenCalledTimes(1);
+    });
+
+    it('teardown errors are swallowed — a rejection from teardownBackgroundWorktree does not propagate', async () => {
+      // The finally block uses .catch(() => undefined) — a teardown rejection must
+      // never replace or mask the node's own result.
+      createIsolatedWorktree.mockResolvedValue(ISO_RESULT);
+      teardownBackgroundWorktree.mockRejectedValue(new Error('teardown exploded'));
+
+      const handle = makeFakeHandle('node-output');
+      const manager: SubagentManager = {
+        forkSubagent: vi.fn(async () => handle),
+      } as unknown as SubagentManager;
+
+      // Must not throw despite the teardown rejection.
+      const result = await runSubagentDAG({
+        manager,
+        parentSession: makeParent(),
+        nodes: [makeIsoNode('A')],
+        edges: [],
+        anchorCwd: '/repo',
+      });
+
+      // The node result survives — teardown error did not propagate.
+      expect(result.failed).toHaveLength(0);
+      expect(result.outputs['A']).toBe('node-output');
+      // Teardown was called (even though it rejected).
       expect(teardownBackgroundWorktree).toHaveBeenCalledTimes(1);
     });
 

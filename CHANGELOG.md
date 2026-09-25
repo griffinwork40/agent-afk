@@ -11,6 +11,47 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.249.0] - 2026-09-25
+
+### Added
+- split active vs. completed dimming for readable agent rows (dc2bf885)
+
+### Fixed
+- address review feedback (061847bc)
+
+### Changed
+- add .afk/generated-images/ to ignore list (70a75347)
+- Merge pull request #2172 from griffinwork40/afk/tui-contrast-split (6ef88a6f)
+- sync funcsize baseline after rebase (681dace0)
+
+## [5.248.1] - 2026-09-25
+
+### Fixed
+- restore strict assertions in 2 DAG isolation tests (8e183b1f)
+
+### Changed
+- Merge pull request #2178 from griffinwork40/afk/iso-agent-tool-1-6jr39a (6f3fb823)
+- add 4 missing DAG isolation edge-case tests (087d4762)
+
+## [5.248.0] - 2026-09-25
+
+### Added
+- surface task responsibility labels on agent rows (#2173) (2e1c4830)
+- add placeholder prevention SessionStart hook (Layer 1) (8fbb3008)
+
+### Fixed
+- gracefully handle shallow-checkout diff failure in changedSince() (a2a30fa2)
+- update SessionStart hook count assertion to 2 (placeholder-prevent built-in) (e1f1baab)
+- cap blank gap above committed band on short terminals (#2182) (a3428c82)
+
+### Changed
+- Merge pull request #2179 from griffinwork40/afk/iso-agent-tool-2-05vah6 (239cc28c)
+- update stale hash pins after rebase on main (df3d2e57)
+- sync baseline after rebase on main (createDefaultHookRegistry 240→250) (b993f072)
+- promote funcsize gate to CI-blocking (fa94f211)
+- Merge pull request #2192 from griffinwork40/afk/iso-agent-tool-1-bo5jkl (bd5898f2)
+- Merge pull request #2189 from griffinwork40/afk/iso-agent-tool-3-2a5ujd (bfa99f3f)
+
 ## [5.247.2] - 2026-09-25
 
 ### Fixed

@@ -129,6 +129,22 @@ const darkPaletteDef = {
   spineTone1: chalk.hex('#4A5058'),
   /** Depth-2+ spine tone (floor) — `│` column at depth 2 and beyond; minimum legible tone. */
   spineTone2: chalk.hex('#30363D'),
+  /**
+   * Active-agent marker — used for the `◉` turn-root marker and structural
+   * connectors on **in-flight** (not yet completed) agent rows in the live
+   * overlay. Clearly readable so the currently-running agent name stands out.
+   * Contrast with `dim`, which is reserved for completed results and structural
+   * scaffolding on committed scrollback rows.
+   */
+  activeAgent: chalk.hex('#B0B8C2'),
+  /**
+   * Dim-completed — semantic alias for `dim`, applied to completed tool results,
+   * structural connectors on committed (done) scrollback rows, and outcome
+   * preview text. Explicit name makes call-site intent clear when reading code:
+   * "this content is dimmed because it is done/structural, not because it is
+   * active but subordinate."
+   */
+  dimCompleted: chalk.dim,
 };
 
 /**
@@ -211,6 +227,10 @@ const lightPaletteDef: ThemePalette = {
   spineTone1: chalk.hex('#6E7481'),
   /** Depth-2+ spine tone (floor) — darkest legible grey on white backgrounds. */
   spineTone2: chalk.hex('#57606A'),
+  /** Active-agent marker — legible mid-grey on white backgrounds. */
+  activeAgent: chalk.hex('#5A6470'),
+  /** Dim-completed — semantic alias for dim (theme-agnostic). */
+  dimCompleted: chalk.dim,
 };
 
 /**
@@ -303,6 +323,10 @@ const umberPaletteDef: ThemePalette = {
   spineTone1: chalk.hex('#776E68'),
   /** Depth-2+ spine tone (floor) — deep warm grey, minimum legible tone on Umber's `#19120D` background. */
   spineTone2: chalk.hex('#4E4844'),
+  /** Active-agent marker — ansi7 white, visible warm neutral on Umber's dark background. */
+  activeAgent: chalk.hex('#D3CDC5'),
+  /** Dim-completed — semantic alias for dim (theme-agnostic). */
+  dimCompleted: chalk.dim,
 };
 
 /** Canonical dark tones (named export for `theme.ts` + tests). */
