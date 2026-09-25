@@ -11,6 +11,7 @@ import { splitGraphemes, stripAnsi } from '../display.js';
 import { palette } from '../palette.js';
 import { card } from '../render.js';
 import { getTerminalWidth } from '../terminal-size.js';
+import { contentMargin } from '../render/measure.js';
 
 /**
  * Render the post-submit echo of the user's input.
@@ -66,7 +67,13 @@ export function formatSubmittedEcho(opts: {
     return summary !== null ? `${base} ${summary}` : base;
   }
 
-  const cols = opts.terminalWidth ?? getTerminalWidth();
+  const rawCols = opts.terminalWidth ?? getTerminalWidth();
+  // Content centering (AFK_CENTER_CONTENT): commitAbove prepends the
+  // centering margin to every non-blank line AFTER this function returns.
+  // The echo must right-align within the remaining content band, not the
+  // full terminal width, or the margin + right-aligned padding exceeds
+  // the terminal and hard-wraps the echoed command across two lines.
+  const cols = rawCols - contentMargin(rawCols).length;
   const isMultiLine = buffer.includes('\n');
   const bufferW = stringWidth(stripAnsi(buffer));
   // "Long" = the rendered single line would not comfortably fit on one row
