@@ -17,6 +17,7 @@ import { formatThinkingParagraph } from '../commands/interactive/thinking-paragr
 import { deriveProgressActivity, formatProgressBanner } from '../commands/interactive/progress-banner.js';
 import { interruptPeek } from '../render/interrupt-peek.js';
 import { getTerminalWidth } from '../terminal-size.js';
+import { contentMargin } from '../render/measure.js';
 import { isDebugEnabled } from '../../utils/debug.js';
 import { syntheticResult, type SourceState } from './stream-renderer-source.js';
 import {
@@ -128,7 +129,11 @@ export function registerOverlaySlots(
       const paragraph = formatThinkingParagraph(ctx.thinkingLane.peekPhase(), {
         cols: getTerminalWidth(),
       });
-      return paragraph ?? '';
+      if (!paragraph) return '';
+      // Content centering: the overlay path does not go through commitAbove
+      // (which adds centering centrally), so prepend the margin here.
+      const pad = contentMargin();
+      return pad ? paragraph.split('\n').map(l => l === '' ? l : pad + l).join('\n') : paragraph;
     },
   });
 

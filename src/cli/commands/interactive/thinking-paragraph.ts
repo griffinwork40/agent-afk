@@ -29,7 +29,7 @@
 
 import wrapAnsi from 'wrap-ansi';
 import { palette } from '../../palette.js';
-import { capToMeasure, contentMargin } from '../../render/measure.js';
+import { capToMeasure } from '../../render/measure.js';
 
 const HEADER = '◆ thinking';
 const INDENT = '   ';
@@ -141,16 +141,13 @@ export function formatThinkingParagraph(
     visible = allLines.slice(-maxLines);
   }
 
-  // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
-  // thinking paragraph aligns with centered scrollback and tool-lane content.
-  const pad = contentMargin();
   const out: string[] = [];
-  out.push(pad + INDENT + palette.thinking(HEADER));
+  out.push(INDENT + palette.thinking(HEADER));
   for (const line of visible) {
-    out.push(pad + INDENT + palette.thinking(line));
+    out.push(INDENT + palette.thinking(line));
   }
   if (droppedChars > 0) {
-    out.push(pad + INDENT + palette.dim(`⋯ +${droppedChars} chars earlier`));
+    out.push(INDENT + palette.dim(`⋯ +${droppedChars} chars earlier`));
   }
   return out.join('\n');
 }

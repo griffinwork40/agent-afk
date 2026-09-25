@@ -43,6 +43,7 @@ import {
   formatRateLimitActivity,
 } from '../commands/interactive/progress-banner.js';
 import { getTerminalWidth } from '../terminal-size.js';
+import { contentMargin } from '../render/measure.js';
 import {
   emitPanel,
   finalizeOrchestrator,
@@ -535,7 +536,12 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
     const paragraph = formatThinkingParagraph(ctx.thinkingLane.peek(), {
       cols: getTerminalWidth(),
     });
-    if (paragraph) parts.push(paragraph);
+    if (paragraph) {
+      // Content centering: the overlay path does not go through commitAbove
+      // (which adds centering centrally), so prepend the margin here.
+      const pad = contentMargin();
+      parts.push(pad ? paragraph.split('\n').map(l => l === '' ? l : pad + l).join('\n') : paragraph);
+    }
   }
   if (ctx.toolLane.hasPending()) parts.push(ctx.toolLane.getOverlay());
   const bannerLines: string[] = [];
