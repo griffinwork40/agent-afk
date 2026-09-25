@@ -203,7 +203,7 @@ export function formatCategoricalOverflow(hidden: Array<ToolEntry | GroupedSibli
       const visibleEntries = visible.reduce((sum, l) => sum + l.entries, 0);
       const hiddenEntries = total - visibleEntries;
       const labelStr = rendered.join('  ') +
-        (hiddenEntries > 0 ? `  (+${hiddenEntries})` : '');
+        (hiddenEntries > 0 ? `  +${hiddenEntries}` : '');
       return labelStr;
     }
     // Fall through to categorical if any label was empty / unwrapped /

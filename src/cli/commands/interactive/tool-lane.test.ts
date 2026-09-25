@@ -1533,8 +1533,8 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // 9 children, MAX_VISIBLE=3 keeps newest pr7–pr9 visible; older pr1–pr6
-    // collapse (hidden=6). LABEL_LIST_CAP=5 → shows pr1–pr5 + (+1) for pr6.
-    expect(overlay).toMatch(/\+6  pr1  pr2  pr3  pr4  pr5  \(\+1\)/);
+    // collapse (hidden=6). LABEL_LIST_CAP=5 → shows pr1–pr5 + +1 for pr6.
+    expect(overlay).toMatch(/\+6  pr1  pr2  pr3  pr4  pr5  \+1/);
   });
 
   it('getGroupKey invariant: different Agent labels do NOT merge (existing invariant preserved)', () => {
@@ -1752,8 +1752,8 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // hidden=[Group(pr1×3), pr2, pr3, pr4, pr5, pr6] = 6 rows → +6
-    // LABEL_LIST_CAP=5 → shows 5 of those 6 rows + (+1 entry from pr6 row)
-    expect(overlay).toMatch(/\+6  pr1 ×3  pr2  pr3  pr4  pr5  \(\+1\)/);
+    // LABEL_LIST_CAP=5 → shows 5 of those 6 rows + +1 entry from pr6 row
+    expect(overlay).toMatch(/\+6  pr1 ×3  pr2  pr3  pr4  pr5  \+1/);
   });
 
   // ─── M1: terminal-injection sanitization ───────────────────────────────

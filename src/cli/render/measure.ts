@@ -136,7 +136,7 @@ export function contentMargin(termWidth?: number): string {
   const v = raw.trim().toLowerCase();
   if (v !== '1' && v !== 'true') return '';
   const tw = termWidth ?? getTerminalWidth();
-  const measure = capToMeasure(tw);
+  const measure = resolveTextMeasure() ?? tw;
   const marginCols = Math.max(0, Math.floor((tw - measure) / 2));
   return ' '.repeat(marginCols);
 }
