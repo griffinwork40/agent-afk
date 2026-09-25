@@ -352,10 +352,41 @@ describe('contentMargin', () => {
     });
   });
 
-  // Only '1' and 'true' (case-insensitive) should activate centering.
+  // '1', 'true', 'yes', 'on' (case-insensitive) activate centering
+  // — matching isExplicitlyEnabled() from env-helpers.
   it('enables centering for AFK_CENTER_CONTENT=true (wide terminal)', () => {
     withMeasureEnv(undefined, () =>
       withCenterEnv('true', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it('enables centering for AFK_CENTER_CONTENT=yes (wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('yes', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it('enables centering for AFK_CENTER_CONTENT=on (wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('on', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it('enables centering for AFK_CENTER_CONTENT=YES (uppercase, wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('YES', () =>
         withCols(200, () => {
           expect(contentMargin().length).toBeGreaterThan(0);
         }),

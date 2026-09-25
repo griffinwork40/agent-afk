@@ -29,7 +29,7 @@ export function joinOverlayLines(lines: string[]): string {
   if (pad.length > 0) {
     const tw = getTerminalWidth();
     return lines
-      .map((line) => truncateDisplayWidth(pad + line, tw))
+      .map((line) => line.length === 0 ? '' : truncateDisplayWidth(pad + line, tw))
       .join('\n');
   }
   return lines.join('\n');

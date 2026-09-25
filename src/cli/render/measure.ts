@@ -1,4 +1,5 @@
 import { env } from '../../config/env.js';
+import { isExplicitlyEnabled } from '../../config/env-helpers.js';
 import { getTerminalWidth } from '../terminal-size.js';
 
 /**
@@ -132,9 +133,7 @@ export function capToProseMeasure(width: number): number {
  */
 export function contentMargin(termWidth?: number): string {
   const raw = env.AFK_CENTER_CONTENT;
-  if (!raw) return '';
-  const v = raw.trim().toLowerCase();
-  if (v !== '1' && v !== 'true') return '';
+  if (!raw || !isExplicitlyEnabled(raw)) return '';
   const tw = termWidth ?? getTerminalWidth();
   const measure = resolveTextMeasure() ?? tw;
   const marginCols = Math.max(0, Math.floor((tw - measure) / 2));
