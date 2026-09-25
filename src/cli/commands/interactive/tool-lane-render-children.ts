@@ -9,6 +9,7 @@ import {
   formatDiffBlock,
   formatPreviewDiffBlock,
   doneGlyph,
+  childFailureBadge,
   sanitizeLabel,
   shortenPaths,
 } from './tool-lane-format.js';
@@ -197,12 +198,16 @@ function renderOverlayChildren(
         // visual row per slot (Bug B / orphan │ columns), without restating the
         // committed label. Use `indentColored` (not raw `indent`) so spine
         // columns stay dim — a non-colored row at depth N leaves a visible gap.
+        // Failure badge: mirror the root-row badge in tool-lane-overlay.ts so
+        // every NESTING ancestor that propagateChildFailure incremented shows
+        // `⚠ N`, not just the col-0 root (codex review on #2171).
+        const failureBadge = childFailureBadge(child.failedChildCount);
         if (child.headerEmitted) {
           // Anonymous anchor: connector glyph only, no label body (the labeled
           // header lives in scrollback above).
-          lines.push(clampLineToTerminal(indentColored + connector, cols));
+          lines.push(clampLineToTerminal(indentColored + connector + failureBadge, cols));
         } else {
-          lines.push(clampLineToTerminal(indentColored + connector + child.prefix, cols));
+          lines.push(clampLineToTerminal(indentColored + connector + child.prefix + failureBadge, cols));
         }
         // Recurse: as we descend, the CURRENT parent (whose children we are
         // rendering) becomes a tracked ancestor column. That column must reflect
@@ -290,7 +295,10 @@ function renderOverlayChildren(
         // Live elapsed counter appended to the prefix line (same row as the
         // connector + tool name). Computed at repaint time from child.startedAt;
         // suppressed under ELAPSED_GRACE_MS (2s) to avoid flicker on fast tools.
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' …') + formatElapsed(child.startedAt), cols));
+        // failedChildCount is only ever set on NESTING entries, so this badge
+        // is '' for leaf tools; it covers a nested dispatch head whose failed
+        // descendants were already flushed out of the lane.
+        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' …') + formatElapsed(child.startedAt) + childFailureBadge(child.failedChildCount), cols));
         if (child.previewDiff) {
           // Pre-execution diff preview for nested edit_file. formatPreviewDiffBlock
           // renders ⟳ Proposed and applies the AFK_SHOW_DIFFS=0 opt-out.

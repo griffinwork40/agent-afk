@@ -81,10 +81,34 @@ describe('propagateChildFailure', () => {
     lane.addResult(childId, makeError('grandchild failed'));
     lane.propagateChildFailure(childId);
 
-    // Both parent and grandparent should have the count
-    const overlay = stripAnsi(lane.getOverlay());
-    // The overlay renders multiple ancestor rows — badge should appear at least once
-    expect(overlay).toContain('⚠');
+    // Both the root row AND the nested parent row must carry the badge —
+    // asserting per-row, not "somewhere in the overlay", so a badge missing
+    // from the recursive renderOverlayChildren path fails this test.
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    const grandRow = rows.find((r) => r.includes('Agent(grand)'));
+    const parentRow = rows.find((r) => r.includes('Agent(parent)'));
+    expect(grandRow).toContain('⚠ 1');
+    expect(parentRow).toContain('⚠ 1');
+    // The failed leaf itself carries its own ✗ outcome, not an ancestor badge.
+    const childRow = rows.find((r) => r.includes('Agent(child)'));
+    expect(childRow).not.toContain('⚠');
+  });
+
+  it('badge appears on a nested headerEmitted anchor row', () => {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('__g', 'Agent', '(grand)', undefined);
+    lane.addStartWithAgentContext('__p', 'Agent', '(parent)', '__g');
+    lane.addStartWithAgentContext('__c', 'Agent', '(child)', '__p');
+    lane.addResult('__c', makeError('boom'));
+    lane.propagateChildFailure('__c');
+    // Simulate the parent's labeled header having been committed to scrollback.
+    const parent = (lane as unknown as { entries: Map<string, { headerEmitted?: boolean }> }).entries.get('__p');
+    expect(parent).toBeDefined();
+    parent!.headerEmitted = true;
+
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    // Two badged rows: the root and the nested (possibly anonymous) parent anchor.
+    expect(rows.filter((r) => r.includes('⚠ 1')).length).toBe(2);
   });
 
   it('accumulates count for multiple failed children', () => {
