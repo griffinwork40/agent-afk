@@ -141,3 +141,68 @@ describe('deriveCallCostUsd — o3-mini vs o4-mini cache-rate distinction', () =
     expect(cost).toBeCloseTo(0.275, 8);
   });
 });
+
+describe('deriveCallCostUsd — GPT-5.6 family', () => {
+  it('prices a plain gpt-5.6-sol call ($4.00 in + $20.00 out per MTok)', () => {
+    // 1M input, 1M output, 0 cached: $4.00 + $20.00 = $24.00
+    const cost = deriveCallCostUsd('gpt-5.6-sol', M, M, 0);
+    expect(cost).toBeCloseTo(24.0, 8);
+  });
+
+  it('applies the cached rate for gpt-5.6-luna ($0.02/M cached, $1.20/M output)', () => {
+    // 1M input all-cached + 1M output: $0.02 + $1.20 = $1.22
+    const cost = deriveCallCostUsd('gpt-5.6-luna', M, M, M);
+    expect(cost).toBeCloseTo(1.22, 8);
+  });
+
+  it('prices gpt-5.6-terra with split cached/plain input', () => {
+    // $2.00 plain-input, $0.20 cached, $12.00 output per MTok.
+    // 1M input, 500K cached, 0 output: 500K @ $2.00/M + 500K @ $0.20/M = $1.00 + $0.10 = $1.10
+    const cost = deriveCallCostUsd('gpt-5.6-terra', M, 0, M / 2);
+    expect(cost).toBeCloseTo(1.1, 8);
+  });
+
+  it('resolves a gpt-5.6-sol dated snapshot id to the same rate as the alias', () => {
+    const dated = deriveCallCostUsd('gpt-5.6-sol-2026-09-01', M, M, 0);
+    const alias = deriveCallCostUsd('gpt-5.6-sol', M, M, 0);
+    expect(dated).toBeCloseTo(alias!, 8);
+  });
+});
+
+describe('deriveCallCostUsd — GPT-6 family', () => {
+  it('prices a plain gpt-6-sol call ($2.00 in + $10.00 out per MTok)', () => {
+    // 1M input, 1M output, 0 cached: $2.00 + $10.00 = $12.00
+    const cost = deriveCallCostUsd('gpt-6-sol', M, M, 0);
+    expect(cost).toBeCloseTo(12.0, 8);
+  });
+
+  it('prices gpt-6-sol with partial cached input', () => {
+    // 1M input, 500K cached, 0 output: 500K @ $2.00/M + 500K @ $0.20/M = $1.00 + $0.10 = $1.10
+    const cost = deriveCallCostUsd('gpt-6-sol', M, 0, M / 2);
+    expect(cost).toBeCloseTo(1.1, 8);
+  });
+
+  it('prices a plain gpt-6-luna call ($0.10 in + $0.50 out per MTok)', () => {
+    // 1M input, 1M output, 0 cached: $0.10 + $0.50 = $0.60
+    const cost = deriveCallCostUsd('gpt-6-luna', M, M, 0);
+    expect(cost).toBeCloseTo(0.6, 8);
+  });
+
+  it('prices gpt-6-luna all-cached input at $0.01/MTok', () => {
+    // 1M all-cached, 0 output: $0.01
+    const cost = deriveCallCostUsd('gpt-6-luna', M, 0, M);
+    expect(cost).toBeCloseTo(0.01, 8);
+  });
+
+  it('prices gpt-6-astra at $10.00 in + $50.00 out per MTok', () => {
+    // 1M input, 1M output, 0 cached: $10.00 + $50.00 = $60.00
+    const cost = deriveCallCostUsd('gpt-6-astra', M, M, 0);
+    expect(cost).toBeCloseTo(60.0, 8);
+  });
+
+  it('resolves a gpt-6-sol dated snapshot id to the same rate as the alias', () => {
+    const dated = deriveCallCostUsd('gpt-6-sol-2026-09-01', M, M, 0);
+    const alias = deriveCallCostUsd('gpt-6-sol', M, M, 0);
+    expect(dated).toBeCloseTo(alias!, 8);
+  });
+});

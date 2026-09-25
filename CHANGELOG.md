@@ -11,6 +11,17 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.249.2] - 2026-09-25
+
+### Fixed
+- spine-continuation separator between compose/skill sibling bands (#2196) (931e368a)
+
+## [5.249.1] - 2026-09-25
+
+### Fixed
+- add GPT-5.6 and GPT-6 model prices (#2200) (789a5a0f)
+- only restart launchd services on global installs (#2195) (c91d81b1)
+
 ## [5.249.0] - 2026-09-25
 
 ### Added

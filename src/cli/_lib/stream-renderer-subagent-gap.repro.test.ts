@@ -60,6 +60,7 @@ import { TerminalCompositor } from '../terminal-compositor.js';
 import { StatusLine } from '../status-line.js';
 import { OverlayComposer } from './overlay-composer.js';
 import { ToolLane } from '../commands/interactive/tool-lane.js';
+import { commitSubagentBlock } from './commit-block.js';
 import {
   freshSourceState,
   syntheticResult,
@@ -197,10 +198,11 @@ function runSubagentToCompletion(opts: {
   overlayComposer.markDirty('tool-lane');
   overlayComposer.flush();
 
-  // flushSource → commitAbove loop (mirrors coordinator 'after-subagent' batch)
+  // flushSource → commitSubagentBlock (mirrors production commitSubagentBlock
+  // in stream-renderer-process.ts; the old per-line loop + extra commitAbove('')
+  // double-blanked at root depth once flushSource started appending a trailing '').
   const lines = toolLane.flushSource(syntheticId);
-  for (const line of lines) compositor.commitAbove(line);
-  compositor.commitAbove('');
+  commitSubagentBlock(compositor, lines);
   overlayComposer.markDirty('tool-lane');
   overlayComposer.flush();
 }
@@ -452,8 +454,9 @@ describe('TUI subagent-gap: no blank rows between header and Done in scrollback'
 
       // commitAbove while overlay still tall (production pattern)
       const lines = toolLane.flushSource(syntheticId);
-      for (const line of lines) compositor.commitAbove(line);
-      compositor.commitAbove('');
+      // Use commitSubagentBlock to mirror production (old per-line loop +
+      // extra commitAbove('') double-blanked once flushSource added trailing '').
+      commitSubagentBlock(compositor, lines);
       // Collapse the overlay AFTER commit (mimics the production commit closure)
       compositor.setOverlay('');
       const internals = compositor as unknown as { repaint(): void };

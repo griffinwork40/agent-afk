@@ -20,7 +20,7 @@
     "src/cli/commands/chat.ts": { "loc": 549, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/farm.ts": { "loc": 437, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/loop-iteration.ts": { "loc": 430, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/interactive/tool-lane.ts": { "loc": 387, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/interactive/tool-lane.ts": { "loc": 397, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/worktree.ts": { "loc": 472, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/trace.ts": { "loc": 573, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/elicitation/agent-question.ts": { "loc": 399, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
