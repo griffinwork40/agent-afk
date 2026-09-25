@@ -251,16 +251,24 @@ export class MascotBar {
     }
     if (desired === 0) return;
 
-    // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
-    // mascot sprite aligns with centered scrollback and overlay content.
+    // Content centering (AFK_CENTER_CONTENT): when the left margin is wide
+    // enough, float the sprite centered within it — to the left of the
+    // content block — instead of at the content's leading edge. Falls back
+    // to the standard content-aligned position when centering is off or
+    // the margin cannot hold the sprite with breathing room on both sides.
     const pad = contentMargin();
+    const marginCols = pad.length;
+    const spriteInMargin = marginCols >= MINI_MASCOT_WIDTH + 2;
+    const spritePrefix = spriteInMargin
+      ? ' '.repeat(Math.floor((marginCols - MINI_MASCOT_WIDTH) / 2))
+      : pad + GUTTER;
     this.stream.write('\x1b[s');
     for (let i = 0; i < desired; i++) {
       const row = startRow + i;
       if (row < 1 || row > totalRows) continue;
       this.stream.write(`\x1b[${row};1H`);
       this.stream.write('\x1b[2K');
-      this.stream.write(pad + GUTTER + (lines[i] ?? ''));
+      this.stream.write(spritePrefix + (lines[i] ?? ''));
     }
     this.stream.write('\x1b[u');
     this.lastStartRow = startRow;
