@@ -50,7 +50,6 @@ import * as Reset from './terminal-compositor.reset.js';
 import * as QueuedAccess from './terminal-compositor.queued-access.js';
 import * as Api from './terminal-compositor.api.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
-import { contentMargin } from './render/measure.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
 // continue to work without any import-path changes.
@@ -880,17 +879,15 @@ export class TerminalCompositor {
     // is captured/re-pinned. flushPendingRepaint is a no-op when nothing is
     // pending, so this is free on the common (non-typing) commit path.
     this.flushPendingRepaint();
-    // Content centering (AFK_CENTER_CONTENT): prepend the left margin to
-    // every non-blank physical line so ALL scrollback content — prose,
-    // tool-lane flush, thinking summaries, user echoes — aligns with the
-    // centered overlay and input line. Centralised here so every caller
-    // of commitAbove gets centering for free. Blank lines (separators)
-    // pass through untouched to preserve the scrollback rhythm.
-    const pad = contentMargin();
-    const centered = pad
-      ? text.split('\n').map(l => l === '' ? l : pad + l).join('\n')
-      : text;
-    CommittedBand.commitAbove(this, centered);
+    // Content centering (AFK_CENTER_CONTENT): centering is applied at PAINT
+    // TIME (repositionCommittedBand, commitPhase3Band, scrollback flush),
+    // NOT baked into the stored text. Baking margin spaces into the committed
+    // band causes wrapping chaos on terminal resize (tmux split, window drag):
+    // 40 padding spaces computed at 180 cols are still in every line after a
+    // resize to 90 cols, eating half the width and triggering re-wrap havoc.
+    // Storing raw (unpadded) content lets reflow and paint derive the correct
+    // margin from the CURRENT width.
+    CommittedBand.commitAbove(this, text);
   }
 
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
