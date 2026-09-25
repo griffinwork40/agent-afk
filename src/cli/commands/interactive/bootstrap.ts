@@ -10,6 +10,7 @@ import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, InteractiveCtx } from './shared.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
+import { installPluginHooks } from '../../../agent/plugins/load-entrypoints.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -157,6 +158,8 @@ export async function bootstrapSession(
   // so a plugin's registerSkill() side-effects must already have run for its
   // code-backed skills to appear. Idempotent + non-fatal; no-op without plugins.
   await ensurePluginEntrypointsLoaded();
+  // The REPL registry is constructed above, before plugin activation.
+  installPluginHooks(hookRegistry);
 
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).

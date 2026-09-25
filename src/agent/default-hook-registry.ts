@@ -7,6 +7,7 @@
  */
 
 import { createHookRegistry, type HookRegistry } from './hooks.js';
+import { installPluginHooks } from './plugins/load-entrypoints.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
 import { createPlaceholderDetectHook } from './placeholder-detect.js';
 import { createPlaceholderPreventHook } from './placeholder-prevent.js';
@@ -335,6 +336,9 @@ export function createDefaultHookRegistry(
     });
   }
 
+  // Install process-scoped plugin declarations on every new session registry.
+  // Built-in and config handlers retain their registration order.
+  installPluginHooks(registry);
   return { registry, memoryStore: store, addPreviewDiffRef };
 }
 
