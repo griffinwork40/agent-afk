@@ -23,11 +23,19 @@ type IsGlobalInstallFn = (
   env?: Record<string, string | undefined>,
   existsFn?: (p: string) => boolean,
 ) => boolean;
+type MaybeRestartServicesFn = (opts?: {
+  platform?: string;
+  env?: Record<string, string | undefined>;
+  pkgRoot?: string;
+  existsFn?: (p: string) => boolean;
+  restartFn?: (opts?: { labels?: string[] }) => string[];
+}) => string[];
 
 let killStaleDaemon: KillStaleDaemonFn;
 let isManualBotRunning: IsManualBotRunningFn;
 let restartLaunchdServices: RestartLaunchdServicesFn;
 let isGlobalInstall: IsGlobalInstallFn;
+let maybeRestartServices: MaybeRestartServicesFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
@@ -37,6 +45,7 @@ beforeAll(async () => {
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
   isGlobalInstall = mod.isGlobalInstall as IsGlobalInstallFn;
+  maybeRestartServices = mod.maybeRestartServices as MaybeRestartServicesFn;
 });
 
 describe.skipIf(isWin32)('killStaleDaemon', () => {
@@ -303,5 +312,86 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
     const env: Record<string, string | undefined> = { npm_config_global: undefined };
     const noGit = (_p: string) => false;
     expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+});
+
+// ─── maybeRestartServices ─────────────────────────────────────────────────────
+// Tests verify the call-site gate: the decision logic that guards daemon
+// restarts. These tests exercise the extracted maybeRestartServices() helper
+// directly — without running the isMain block — so the guard is reachable
+// from a unit test. Removing the isGlobalInstall guard inside
+// maybeRestartServices makes at least one of these tests fail.
+//
+// All tests inject platform, env, pkgRoot, existsFn, and restartFn so no real
+// filesystem or npm lifecycle environment leaks into the assertions.
+describe.skipIf(isWin32)('maybeRestartServices', () => {
+  const FAKE_PKG_ROOT = '/fake/pkg/root';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does NOT call restartFn when npm_config_global is absent', () => {
+    // Simulates: plain `pnpm install` in any local context (no lifecycle env var).
+    const restartFn = vi.fn(() => [] as string[]);
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: {}, // npm_config_global absent
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: () => false, // no .git
+      restartFn,
+    });
+    expect(result).toEqual([]);
+    expect(restartFn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call restartFn when npm_config_global="true" but .git marker is present', () => {
+    // Simulates: a cron job running `pnpm install` inside a source checkout or
+    // managed worktree — the .git marker unambiguously rules out a global install.
+    const restartFn = vi.fn(() => [] as string[]);
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: { npm_config_global: 'true' },
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: (p) => p === `${FAKE_PKG_ROOT}/.git`, // .git present
+      restartFn,
+    });
+    expect(result).toEqual([]);
+    expect(restartFn).not.toHaveBeenCalled();
+  });
+
+  it('calls restartFn with labels: ["com.afk.daemon"] when npm_config_global="true", no .git, platform="darwin"', () => {
+    // Simulates: a genuine `npm install -g agent-afk` — both detection signals
+    // confirm a global install, so the daemon is restarted.
+    const receivedOpts: Array<{ labels?: string[] }> = [];
+    const restartFn = vi.fn((opts?: { labels?: string[] }) => {
+      receivedOpts.push(opts ?? {});
+      return ['com.afk.daemon'];
+    });
+    const result = maybeRestartServices({
+      platform: 'darwin',
+      env: { npm_config_global: 'true' },
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: () => false, // no .git
+      restartFn,
+    });
+    expect(result).toEqual(['com.afk.daemon']);
+    expect(restartFn).toHaveBeenCalledOnce();
+    expect(receivedOpts[0]?.labels).toEqual(['com.afk.daemon']);
+  });
+
+  it('does NOT call restartFn when platform is not "darwin"', () => {
+    // Simulates: Linux, Windows, or any non-macOS platform where launchd is
+    // unavailable — restartFn must never be called regardless of the env var.
+    const restartFn = vi.fn(() => [] as string[]);
+    const result = maybeRestartServices({
+      platform: 'linux',
+      env: { npm_config_global: 'true' },
+      pkgRoot: FAKE_PKG_ROOT,
+      existsFn: () => false, // no .git
+      restartFn,
+    });
+    expect(result).toEqual([]);
+    expect(restartFn).not.toHaveBeenCalled();
   });
 });
