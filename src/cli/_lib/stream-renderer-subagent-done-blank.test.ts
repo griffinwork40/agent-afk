@@ -8,10 +8,10 @@
  * trailing '\n' as a line terminator, so the '' element was silently dropped —
  * no blank row was painted on the armed TTY path.
  *
- * FIX: stream-renderer-process.ts peels a trailing '' off the lines array
- * and commits it via a separate `compositor.commitAbove('')`, restoring the
- * pre-PR behavior. Non-empty trailing elements (nested dim-spine separators)
- * remain inside the block commit.
+ * FIX: `commitSubagentBlock` (src/cli/_lib/commit-block.ts) peels a trailing
+ * '' off the lines array and commits it via a separate `compositor.commitAbove('')`,
+ * restoring the pre-PR behavior. Non-empty trailing elements (nested dim-spine
+ * separators) remain inside the block commit.
  *
  * All assertions go through the REAL production caller: `processEvent` via
  * `StreamRenderer.process()`, following the same pattern used in
