@@ -1711,6 +1711,22 @@ describe('formatOutcome — error gutter ▌ on continuation lines', () => {
     expect(stripAnsi(hiddenLine!)).toContain('▌');
   });
 
+  it('(a) error result with hiddenLineCount but no tailPreview still includes ▌ in the hidden-lines notice', () => {
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'gutter-hidden-no-tail',
+      content: 'error output',
+      isError: true,
+      lineCount: 20,
+      hiddenLineCount: 15,
+    };
+    const raw = formatOutcome(chunk, undefined, 80, 'bash');
+    const lines = raw.split('\n');
+    const hiddenLine = lines.find((l) => stripAnsi(l).includes('earlier lines hidden'));
+    expect(hiddenLine, 'expected hidden-lines notice').toBeDefined();
+    expect(stripAnsi(hiddenLine!)).toContain('▌');
+  });
+
   // (b) Benign-failure uses warning-tone gutter, not error-tone.
   it('(b) benign failure uses warning-tone gutter on continuation lines', () => {
     const savedWarning = palette.warning;

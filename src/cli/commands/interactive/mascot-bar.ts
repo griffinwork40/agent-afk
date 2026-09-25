@@ -81,6 +81,14 @@ export class MascotBar {
    * only by `stop()` or a resize that collapses the band.
    */
   private claimed = false;
+  /**
+   * Whether the sprite is floated inside the centering margin rather than
+   * at the content leading edge.  Cached on the first claim and reset on
+   * release so a terminal resize crossing the margin threshold does not
+   * produce a 1-frame horizontal jump mid-session.  Mirrors `claimed`'s
+   * lifecycle exactly.
+   */
+  private spriteInMargin = false;
   /** Geometry of the last paint, so a moved band can erase its old rows. */
   private lastStartRow = 0;
   private lastRowCount = 0;
@@ -133,6 +141,7 @@ export class MascotBar {
     this.clearBand();
     this.rowCount = 0;
     this.claimed = false;
+    this.spriteInMargin = false;
     this.state = 'idle';
     this.stageState = 'idle';
     this.onRowCountChange?.(0);
@@ -284,6 +293,13 @@ export class MascotBar {
     }
     if (desired !== this.rowCount) {
       this.rowCount = desired;
+      if (desired > 0 && !this.claimed) {
+        // First claim: lock the centering decision for this session.
+        this.spriteInMargin = contentMargin().length >= MINI_MASCOT_WIDTH + 2;
+      } else if (desired === 0) {
+        // Resize-collapse: release so a re-claim gets a fresh measurement.
+        this.spriteInMargin = false;
+      }
       this.claimed = desired > 0;
       this.onRowCountChange?.(desired);
     }
@@ -310,11 +326,13 @@ export class MascotBar {
     // content block — instead of at the content's leading edge. Falls back
     // to the standard content-aligned position when centering is off or
     // the margin cannot hold the sprite with breathing room on both sides.
+    // The DECISION (spriteInMargin) is cached at claim-time so a resize
+    // crossing the threshold does not produce a 1-frame horizontal jump;
+    // pad is still read fresh each repaint so the pixel offset tracks the
+    // actual margin width.
     const pad = contentMargin();
-    const marginCols = pad.length;
-    const spriteInMargin = marginCols >= MINI_MASCOT_WIDTH + 2;
-    const spritePrefix = spriteInMargin
-      ? ' '.repeat(Math.floor((marginCols - MINI_MASCOT_WIDTH) / 2))
+    const spritePrefix = this.spriteInMargin
+      ? ' '.repeat(Math.max(0, Math.floor((pad.length - MINI_MASCOT_WIDTH) / 2)))
       : pad + GUTTER;
     this.stream.write('\x1b[s');
     for (let i = 0; i < desired; i++) {
