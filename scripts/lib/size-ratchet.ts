@@ -87,19 +87,81 @@ export interface UpdateResult {
   dropped: string[];
 }
 
+/** A growth event blocked because `--allow-growth` was not passed. */
+export interface GrowthEvent {
+  key: string;
+  /** `null` for a new entry (no prior baseline record). */
+  oldLoc: number | null;
+  newLoc: number;
+}
+
+export interface UpdateOptions {
+  /**
+   * When true, growth and new entries are written and stamped with `reason`.
+   * When false (the default), growth events block the write.
+   */
+  allowGrowth?: boolean;
+  /**
+   * Required when `allowGrowth` is true. Stamped as the `reason` on every
+   * grown or new entry. Callers must validate that it is non-empty before
+   * calling updateBaseline; the function treats an empty string as an error.
+   */
+  reason?: string;
+}
+
 /**
  * Regenerate the baseline from measured sizes, preserving `reason` / `permanent`
  * by key so hand-written rationale is never lost to a mechanical refresh.
+ *
+ * Growth guard: if any entry's `loc` would increase, or a new entry would appear,
+ * the write is blocked unless `opts.allowGrowth` is true. When blocked, returns
+ * `blocked` events and does not touch the file. Pass `--allow-growth --reason`
+ * at the CLI to record a deliberate increase; shrinks and removals are always
+ * unrestricted.
+ *
+ * Bootstrap exception: when the baseline file is missing or empty, the write
+ * is always allowed (no prior sizes to compare against).
  */
-export function updateBaseline(cfg: RatchetConfig, sizes: Map<string, number>): UpdateResult {
+export function updateBaseline(
+  cfg: RatchetConfig,
+  sizes: Map<string, number>,
+  opts: UpdateOptions = {},
+): UpdateResult & { blocked: GrowthEvent[] } {
+  if (opts.allowGrowth && !opts.reason) {
+    throw new Error('updateBaseline: allowGrowth requires a non-empty reason');
+  }
+
   const previous = loadBaseline(cfg);
+  const isBootstrap = Object.keys(previous.entries).length === 0;
+
+  // Collect growth events before deciding whether to write.
+  const blocked: GrowthEvent[] = [];
+  if (!isBootstrap) {
+    for (const [key, loc] of sizes) {
+      if (loc <= cfg.limit) continue;
+      const prior = previous.entries[key];
+      if (!prior) {
+        // New entry over the ceiling.
+        blocked.push({ key, oldLoc: null, newLoc: loc });
+      } else if (loc > prior.loc) {
+        // Existing entry grew.
+        blocked.push({ key, oldLoc: prior.loc, newLoc: loc });
+      }
+    }
+  }
+
+  if (blocked.length > 0 && !opts.allowGrowth) {
+    return { kept: 0, dropped: [], blocked };
+  }
+
   const entries: Record<string, BaselineEntry> = {};
   for (const [key, loc] of sizes) {
     if (loc <= cfg.limit) continue;
     const prior = previous.entries[key];
+    const isGrown = blocked.some((e) => e.key === key);
     entries[key] = {
       loc,
-      reason: prior?.reason ?? cfg.legacyReason,
+      reason: isGrown && opts.reason ? opts.reason : (prior?.reason ?? cfg.legacyReason),
       ...(prior?.permanent ? { permanent: true } : {}),
     };
   }
@@ -107,6 +169,7 @@ export function updateBaseline(cfg: RatchetConfig, sizes: Map<string, number>): 
   return {
     kept: Object.keys(entries).length,
     dropped: Object.keys(previous.entries).filter((k) => !entries[k]),
+    blocked: [],
   };
 }
 

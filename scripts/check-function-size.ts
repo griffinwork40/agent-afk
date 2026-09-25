@@ -206,7 +206,31 @@ function main(): void {
   const measured = scanAll();
 
   if (argv.includes('--update-baseline')) {
-    const { kept, dropped } = updateBaseline(RATCHET, measured.sizes);
+    const allowGrowth = argv.includes('--allow-growth');
+    const reasonIdx = argv.indexOf('--reason');
+    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+
+    if (allowGrowth && !reason) {
+      console.error('✗ check-function-size: --allow-growth requires --reason "<text>" (non-empty).');
+      process.exit(1);
+    }
+
+    const { kept, dropped, blocked } = updateBaseline(RATCHET, measured.sizes, { allowGrowth, reason });
+
+    if (blocked.length > 0) {
+      console.error(
+        `✗ check-function-size: ${blocked.length} function(s) grew or are new — refusing to update baseline without --allow-growth:\n`,
+      );
+      for (const e of blocked) {
+        const delta = e.oldLoc === null ? `(new, ${e.newLoc})` : `${e.oldLoc} → ${e.newLoc} (+${e.newLoc - e.oldLoc})`;
+        console.error(`    ${e.key}  ${delta}`);
+      }
+      console.error(
+        `\nTo record a deliberate increase, re-run with:\n  pnpm audit:funcsize:update --allow-growth --reason "<why this growth is intentional>"\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);

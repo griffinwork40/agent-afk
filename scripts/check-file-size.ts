@@ -204,7 +204,31 @@ function main(): void {
   const argv = process.argv.slice(2);
 
   if (argv.includes('--update-baseline')) {
-    const { kept, dropped } = updateBaseline(RATCHET, scanAll());
+    const allowGrowth = argv.includes('--allow-growth');
+    const reasonIdx = argv.indexOf('--reason');
+    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+
+    if (allowGrowth && !reason) {
+      console.error('✗ check-file-size: --allow-growth requires --reason "<text>" (non-empty).');
+      process.exit(1);
+    }
+
+    const { kept, dropped, blocked } = updateBaseline(RATCHET, scanAll(), { allowGrowth, reason });
+
+    if (blocked.length > 0) {
+      console.error(
+        `✗ check-file-size: ${blocked.length} file(s) grew or are new — refusing to update baseline without --allow-growth:\n`,
+      );
+      for (const e of blocked) {
+        const delta = e.oldLoc === null ? `(new, ${e.newLoc})` : `${e.oldLoc} → ${e.newLoc} (+${e.newLoc - e.oldLoc})`;
+        console.error(`    ${e.key}  ${delta}`);
+      }
+      console.error(
+        `\nTo record a deliberate increase, re-run with:\n  pnpm audit:filesize:update --allow-growth --reason "<why this growth is intentional>"\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-code-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);
