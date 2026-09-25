@@ -34,6 +34,31 @@ const TOOL_LANE_INDENT = '  ';
  * Called at the end of {@link ToolLane.getOverlay} after all lines have been
  * assembled, so the margin is applied uniformly to every pushed line
  * (including those from `renderOverlayChildren`).
+ *
+ * ### Width invariant (no double-clamp)
+ *
+ * Each incoming `line` was already clamped by `renderToolLaneOverlay` to
+ * `cols = toolLaneWidth() = capToMeasure(tw)` before being passed here.
+ * The `truncateDisplayWidth(prefix + line, tw)` guard below is therefore a
+ * safety net, not a meaningful truncation:
+ *
+ * - When centering is active (`pad.length > 0`), `contentMargin()` returns
+ *   `Math.floor((tw - measure) / 2)` spaces, where `measure =
+ *   resolveTextMeasure()`. The prefix width is `margin + 2` (TOOL_LANE_INDENT).
+ *   Each line is already clamped to `min(tw, measure)`. Therefore:
+ *   `prefix.length + line.length = margin + 2 + min(tw, measure)
+ *   = (tw - measure)/2 + 2 + measure = (tw + measure)/2 + 2`.
+ *   For the default `measure = 100` on a 200-column terminal:
+ *   `(200 + 100)/2 + 2 = 152 ≤ 200 = tw`. The clamp is a no-op.
+ *
+ * - When `AFK_TEXT_MEASURE=off` (`resolveTextMeasure()` returns `null`),
+ *   `contentMargin()` uses `measure = tw`, giving `margin = 0` and an empty
+ *   `pad` — so this branch is never entered. The double-clamp scenario is
+ *   therefore unreachable: centering implies a finite measure, a finite
+ *   measure keeps `prefix + line ≤ tw`, so the guard never fires.
+ *
+ * The `truncateDisplayWidth` call is kept as a hard terminal-wrap safety net
+ * for any future change to the width pipeline that might violate the invariant.
  */
 export function joinOverlayLines(lines: string[]): string {
   const pad = contentMargin();
