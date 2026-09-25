@@ -17,6 +17,10 @@ import {
 } from './tool-lane-render.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
+import {
+  ancestorDepthOf as ancestorDepthIn,
+  propagateChildFailure as propagateChildFailureIn,
+} from './tool-lane.ancestry.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -202,24 +206,7 @@ export class ToolLane {
    * silently skipped (the walk stops when the agentContext lookup misses).
    */
   propagateChildFailure(failedId: string): void {
-    const seen = new Set<string>([failedId]);
-    const CYCLE_CAP = 32;
-    let cur: string | undefined = failedId;
-    let depth = 0;
-    while (cur !== undefined && depth < CYCLE_CAP) {
-      const entry = this.entries.get(cur);
-      if (!entry || entry.kind !== 'tool') break;
-      const parentId = entry.agentContext;
-      if (parentId === undefined) break;
-      if (seen.has(parentId)) break; // cycle guard
-      seen.add(parentId);
-      const parentEntry = this.entries.get(parentId);
-      if (parentEntry?.kind === 'tool' && NESTING_TOOLS.has(parentEntry.toolName)) {
-        parentEntry.failedChildCount = (parentEntry.failedChildCount ?? 0) + 1;
-      }
-      cur = parentId;
-      depth++;
-    }
+    propagateChildFailureIn(this.entries, failedId);
   }
 
   /**
@@ -502,28 +489,7 @@ export class ToolLane {
    * MAX_NESTING_DEPTH (currently small single-digit), well under the cap.
    */
   private ancestorDepthOf(id: string): number {
-    const seen = new Set<string>([id]);
-    let depth = 0;
-    let current: string | undefined = id;
-    // Hard cap: depth above this means something is wrong (cycle, leak).
-    // Better to under-indent than spin.
-    const CYCLE_CAP = 32;
-    while (current !== undefined && depth < CYCLE_CAP) {
-      const entry = this.entries.get(current);
-      if (!entry || entry.kind !== 'tool') break;
-      const parent = entry.agentContext;
-      if (parent === undefined) break;
-      if (seen.has(parent)) break; // cycle — bail
-      seen.add(parent);
-      // Only count an ancestor toward depth if it is still a live tool entry
-      // in the lane. A dangling agentContext (parent already flushed or never
-      // registered) means the current entry effectively renders at root.
-      const parentEntry = this.entries.get(parent);
-      if (!parentEntry || parentEntry.kind !== 'tool') break;
-      depth += 1;
-      current = parent;
-    }
-    return depth;
+    return ancestorDepthIn(this.entries, id);
   }
 
   /**
