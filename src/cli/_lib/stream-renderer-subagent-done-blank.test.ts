@@ -23,7 +23,8 @@
  *       commitAbove('') (must FAIL on d62b8870, PASS on fix).
  *   (b) Nested-depth subagent done → spine separator is inside the block
  *       commit, no separate blank commitAbove('').
- *   (c) Non-TTY path → exactly one trailing '' from out.line, unchanged behavior.
+ *   (c) No-compositor path (isTTY, compositor null) → exactly one trailing ''
+ *       from out.line, unchanged behavior.
  *
  * @module cli/_lib/stream-renderer-subagent-done-blank.test
  */
@@ -233,18 +234,30 @@ describe('PR #2196 fix — (b) nested-depth subagent-done: spine separator insid
     for (const call of commitAboveCalls) {
       expect(call, `commit '${call}' should not be a standalone blank at nested depth`).not.toBe('');
     }
+
+    // Positive claim: the child's block commit ends with the dim-spine
+    // separator row (the ancestor's `│` column), inside the same commit.
+    const stripAnsi = (t: string): string => t.replace(/\x1b\[[0-9;]*m/g, '');
+    const lastRow = stripAnsi(commitAboveCalls[commitAboveCalls.length - 1]!).split('\n').pop();
+    expect(lastRow?.trimEnd(), 'nested child block must end with the ancestor spine separator').toMatch(/│$/);
   });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// (c) Non-TTY / no-compositor path: exactly one trailing '' from out.line.
+// (c) No-compositor path (isTTY, compositor null): exactly one trailing ''
+//     from out.line.
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('PR #2196 fix — (c) non-TTY path: one trailing blank via out.line', () => {
-  it('non-TTY: subagent done emits tool lines then exactly one trailing "" via out.line', async () => {
+describe('PR #2196 fix — (c) no-compositor path: one trailing blank via out.line', () => {
+  it('no-compositor: subagent done emits tool lines then exactly one trailing "" via out.line', async () => {
     const { writer, lines } = makeWriter();
-    // Use forceNonTty — the compositor stays null, out.line path fires.
+    // isTTY=true reaches the `if (isTerminal && ctx.isTTY)` flushSource branch;
+    // a null compositor routes the commit closure to its `out.line` loop.
+    // (forceNonTty alone skips the flushSource branch entirely.)
     const r = new StreamRenderer({ out: writer, forceNonTty: true });
+    const privateR = r as unknown as PrivateRenderer;
+    privateR.isTTY = true;
+    privateR.streamingMarkdownRef.current = null;
 
     const meta = subagentMeta('agent-nontty-001', { agentType: 'test-agent' });
     r.process(contentEvent('some work'), meta);
@@ -252,13 +265,11 @@ describe('PR #2196 fix — (c) non-TTY path: one trailing blank via out.line', (
 
     await r.dispose();
 
-    // The non-TTY path loops `for (const line of lines) out.line(line)`.
-    // flushSource appends '' at root depth so out.line receives it.
-    if (lines.length > 0) {
-      expect(lines[lines.length - 1], 'non-TTY: last written line must be the blank separator').toBe('');
-      const blanks = lines.filter((l) => l === '');
-      expect(blanks.length, 'non-TTY: exactly one trailing blank').toBe(1);
-    }
-    // If no lines were written (degenerate case), the test is vacuously clean.
+    // The closure loops `for (const line of lines) out.line(line)`;
+    // flushSource appends '' at root depth so out.line receives it last.
+    expect(lines.length, 'no-compositor path must write the subagent block').toBeGreaterThanOrEqual(2);
+    expect(lines[lines.length - 1], 'last written line must be the blank separator').toBe('');
+    const blanks = lines.filter((l) => l === '');
+    expect(blanks.length, 'exactly one trailing blank').toBe(1);
   });
 });

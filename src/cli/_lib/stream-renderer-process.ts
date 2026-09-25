@@ -27,7 +27,7 @@ import { ORCHESTRATOR_SOURCE_KEY, type SourceState, freshSourceState } from './s
 import { noteToolEvent } from '../input/work-derived-verb.js';
 import { handleOrchestratorEvent, setComposedOverlay } from './stream-renderer-orchestrator.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
-import { commitBlockAbove } from './commit-block.js';
+import { commitSubagentBlock } from './commit-block.js';
 import { indentForScrollback } from '../commands/interactive/tool-lane-flush-margin.js';
 import { makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
 
@@ -263,21 +263,9 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
               // Atomic block commit — a subagent block is ONE coherent
               // artifact; per-line commits desync band-hold under a tall
               // overlay. See commit-block.ts.
-              //
-              // Root-depth blank separator: flushSource appends a trailing
-              // '' (empty separator) at depth 0. commitBlockAbove joins lines
-              // on '\n', and decomposeCommitText strips a lone trailing '\n'
-              // as a line terminator — so the '' would be swallowed without a
-              // separate commitAbove('') call. Peel it here and re-commit
-              // separately so the compositor paints exactly one blank row,
-              // matching pre-PR behavior. At nested depth the trailing element
-              // is a non-empty dim-spine string that stays inside the block.
-              const blockLines = lines[lines.length - 1] === ''
-                ? lines.slice(0, -1)
-                : lines;
-              const hasRootBlank = blockLines !== lines;
-              commitBlockAbove(compositor, blockLines);
-              if (hasRootBlank) compositor.commitAbove('');
+              // flushSource's trailing separator ('' at root, dim spine when
+              // nested) is handled by commitSubagentBlock — see its contract.
+              commitSubagentBlock(compositor, lines);
               // Route the overlay update through the composer if available.
               if (overlayComposer) {
                 overlayComposer.markDirty('tool-lane');
