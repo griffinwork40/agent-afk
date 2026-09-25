@@ -8,6 +8,7 @@ import { palette } from '../palette.js';
 import { renderMascotLines, MASCOT_WIDTH, mascotSuppressed } from '../mascot.js';
 import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
 import { renderAsciiWordmark, asciiWordmarkWidth } from './ascii-wordmark.js';
+import { contentMargin } from './measure.js';
 
 // ─── Welcome Banner ───────────────────────────────────────────────────────────
 
@@ -148,6 +149,13 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
     lines.push(...wrapToWidth(palette.dim('  ' + opts.hintLine), getTerminalWidth()).split('\n'));
   }
 
+  // Content centering (AFK_CENTER_CONTENT): prepend left margin to every
+  // line so the banner floats at the same horizontal position as the
+  // centered content below it.
+  const pad = contentMargin();
+  if (pad.length > 0) {
+    return lines.map(l => pad + l).join('\n');
+  }
   return lines.join('\n');
 }
 
@@ -421,6 +429,13 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     );
   }
 
+  // Content centering (AFK_CENTER_CONTENT): prepend left margin to every
+  // line so the banner floats at the same horizontal position as the
+  // centered content below it.
+  const pad = contentMargin();
+  if (pad.length > 0) {
+    return lines.map(l => l.length > 0 ? pad + l : l).join('\n');
+  }
   return lines.join('\n');
 }
 
