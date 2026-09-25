@@ -144,6 +144,23 @@ interface ToolEntryFields {
    * or included in any part of the conversation history.
    */
   outputTail?: string;
+  /**
+   * Count of directly or indirectly failed descendant agent entries.
+   * Incremented on every ancestor NESTING_TOOLS entry when a child agent
+   * signals an error via {@link ToolLane.propagateChildFailure}. Used by
+   * the live overlay to render a compact failure badge (e.g. `⚠ 2`) on
+   * the ancestor row so an operator can spot nested trouble at a glance
+   * without scrolling the entire tree.
+   *
+   * Only set on NESTING_TOOLS entries (Agent / skill / compose / Task).
+   * Plain leaf tools never act as parents and thus never carry this field.
+   *
+   * Invariant: increment-only. Never decremented. A retried child that
+   * eventually succeeds still leaves its ancestor's count intact — the
+   * count signals "at least N failures occurred here", which is always
+   * true and never misleads the operator.
+   */
+  failedChildCount?: number;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };

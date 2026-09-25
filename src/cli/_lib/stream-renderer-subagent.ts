@@ -361,6 +361,11 @@ export function handleSubagentEvent(
         // omission here was the visible-error-vanishes regression.
         ctx.toolLane.setAgentResultSummary(parentId, errorSummary);
         ctx.toolLane.addResult(parentId, syntheticResult(errorSummary, true));
+        // Propagate the failure count upward through all ancestor NESTING
+        // entries so the parent (and grandparent, etc.) rows can show a
+        // compact failure badge in the live overlay. Walk happens AFTER
+        // addResult so the failed entry's result is stamped before the walk.
+        ctx.toolLane.propagateChildFailure(parentId);
       }
       // Route through the full composed frame so the orchestrator's live-
       // thinking paragraph is preserved. (Issue #389.)

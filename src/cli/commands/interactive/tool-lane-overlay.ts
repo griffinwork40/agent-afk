@@ -17,6 +17,7 @@ import {
   batchBadge,
   activeToolBadge,
   formatOutcome,
+  childFailureBadge,
 } from './tool-lane-format.js';
 import { truncateDisplayWidth, stripAnsi, displayWidth } from '../../display.js';
 import { formatElapsed } from '../../terminal-compositor.scrollback.js';
@@ -173,12 +174,15 @@ export function renderToolLaneOverlay(
       // overflow without explicit truncation.
       if (entry.headerEmitted) {
         // Anonymous anchor: marker only, no label body. The committed
-        // label lives in scrollback above.
-        lines.push(clamp(palette.dim(g.turnRoot)));
+        // label lives in scrollback above. Append the failure badge when
+        // any descendant has failed so the operator can spot trouble even
+        // though the label itself is in committed scrollback.
+        lines.push(clamp(palette.dim(g.turnRoot) + childFailureBadge(entry.failedChildCount)));
       } else {
         // Use g.turnRoot for the col-0 marker (◉ / o) so the spine column
-        // aligns with the child rows below.
-        lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix));
+        // aligns with the child rows below. Append the failure badge when
+        // any descendant has failed.
+        lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + childFailureBadge(entry.failedChildCount)));
       }
       renderOverlayChildren(children, childMap, lines, cols, undefined, g);
       // Render the thinking-tail AFTER the children so the subagent's
@@ -245,7 +249,8 @@ export function renderToolLaneOverlay(
         // Live elapsed counter: computed at repaint time so the counter ticks
         // on every overlay refresh without a dedicated timer. Grace period
         // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
-        lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools)));
+        // Append failure badge when any descendant has failed.
+        lines.push(clamp(palette.dim(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools) + childFailureBadge(entry.failedChildCount)));
       }
       // Mirror the thinkingTail handling of the other two NESTING branches
       // (and the childless-leaf branch below): spine glyph (g.spine, │) at

@@ -185,6 +185,44 @@ export class ToolLane {
   }
 
   /**
+   * Propagate a child-failure signal upward through the ancestor chain.
+   *
+   * Starting from `failedId`, walks the `agentContext` links to find each
+   * live ancestor NESTING_TOOLS entry and increments its `failedChildCount`.
+   * This allows the live overlay to show a compact badge (e.g. `⚠ 2`) on
+   * every ancestor row so an operator can spot nested failures at a glance
+   * without scrolling the entire tree.
+   *
+   * Called by the stream-renderer's error handler immediately after the
+   * errored agent entry receives its synthetic result.
+   *
+   * Invariant: only NESTING_TOOLS entries (Agent / skill / compose / Task)
+   * receive the badge — plain leaf tools cannot act as parents so the field
+   * is never set on them. Non-existent or already-flushed ancestors are
+   * silently skipped (the walk stops when the agentContext lookup misses).
+   */
+  propagateChildFailure(failedId: string): void {
+    const seen = new Set<string>([failedId]);
+    const CYCLE_CAP = 32;
+    let cur: string | undefined = failedId;
+    let depth = 0;
+    while (cur !== undefined && depth < CYCLE_CAP) {
+      const entry = this.entries.get(cur);
+      if (!entry || entry.kind !== 'tool') break;
+      const parentId = entry.agentContext;
+      if (parentId === undefined) break;
+      if (seen.has(parentId)) break; // cycle guard
+      seen.add(parentId);
+      const parentEntry = this.entries.get(parentId);
+      if (parentEntry?.kind === 'tool' && NESTING_TOOLS.has(parentEntry.toolName)) {
+        parentEntry.failedChildCount = (parentEntry.failedChildCount ?? 0) + 1;
+      }
+      cur = parentId;
+      depth++;
+    }
+  }
+
+  /**
    * Set (or clear with `undefined`) the in-place thinking tail on an entry.
    * Rendered as a dim italic continuation line under the entry's prefix in
    * the live overlay only — never in {@link ToolLane.flush}, since scrollback
