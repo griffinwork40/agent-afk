@@ -97,19 +97,21 @@ describe('test runner output', () => {
       expect(hasRed(result)).toBe(true);
       expect(hasGreen(result)).toBe(false);
     });
-  });
 
-  describe('vitest body-level (indented)', () => {
-    it('colors indented ✓ pass lines green', () => {
+    it('colors ✓ pass lines with leading whitespace green', () => {
+      // sanitizeLabel trims in production; the regex must also handle
+      // untrimmed input so direct callers are not surprised.
       const result = colorizePreviewLine(' ✓ src/cli/palette.test.ts (42 tests) 12ms')!;
       expect(result).not.toBeNull();
       expect(hasGreen(result)).toBe(true);
+      expect(hasRed(result)).toBe(false);
     });
 
-    it('colors indented × fail lines red', () => {
+    it('colors × fail lines with leading whitespace red', () => {
       const result = colorizePreviewLine(' × src/cli/palette.test.ts (3 failed)')!;
       expect(result).not.toBeNull();
       expect(hasRed(result)).toBe(true);
+      expect(hasGreen(result)).toBe(false);
     });
   });
 

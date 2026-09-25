@@ -16,7 +16,8 @@
  * Called from formatOutcome's tailPreview loop (tool-lane-format.ts).
  *
  * Invariant: all patterns operate on PLAIN TEXT. Input has already passed
- * through stripEscapeSequences + sanitizeLabel before reaching this module.
+ * through sanitizeLabel (which internally runs stripAnsi + control-char scrub)
+ * before reaching this module.
  */
 
 import { palette } from '../../palette.js';
@@ -76,6 +77,9 @@ function colorizeBarGraph(bar: string): string {
 }
 
 function colorizeDiffSummary(line: string): string {
+  // sanitizeLabel .trim()s upstream, but guard defensively in case the call
+  // path changes.
+  line = line.trimStart();
   let result = line;
   result = result.replace(
     /(\d+) (insertions?\(\+\))/,
@@ -93,9 +97,11 @@ function colorizeDiffSummary(line: string): string {
 /* ------------------------------------------------------------------ */
 
 // Vitest file-level pass: `✓ src/cli/palette.test.ts (42 tests) 12ms`
-const VITEST_PASS_RE = /^(✓ .+)/;
+// Leading whitespace is optional: sanitizeLabel .trim()s in production, but
+// tests and future callers may pass pre-trimmed or untrimmed input.
+const VITEST_PASS_RE = /^(\s*✓ .+)/;
 // Vitest file-level fail: `× src/cli/palette.test.ts (3 failed) 12ms`
-const VITEST_FAIL_RE = /^(× .+)/;
+const VITEST_FAIL_RE = /^(\s*× .+)/;
 // Jest file-level: `PASS src/foo.test.ts` / `FAIL src/foo.test.ts`
 const JEST_PASS_RE = /^(PASS\s+.+)/;
 const JEST_FAIL_RE = /^(FAIL\s+.+)/;
@@ -105,13 +111,9 @@ const JEST_FAIL_RE = /^(FAIL\s+.+)/;
 // The pattern captures `N failed` and `N passed` segments for coloring.
 const TEST_SUMMARY_RE = /^\s*(Tests?|Test Files)\s+/;
 
-// Vitest run-header result: ` ✓ src/cli/palette.test.ts (42 tests) 12ms`
-// (leading space variant, appears in the run output body)
-const VITEST_BODY_PASS_RE = /^(\s+✓\s+.+)/;
-const VITEST_BODY_FAIL_RE = /^(\s+×\s+.+)/;
-
 function colorizeTestRunner(line: string): string | null {
-  // File-level pass/fail (top-level, no leading space)
+  // Pass/fail — VITEST_PASS_RE / VITEST_FAIL_RE accept optional leading
+  // whitespace, so they cover both file-level and indented body-level output.
   if (VITEST_PASS_RE.test(line)) {
     return '    ' + palette.success(line);
   }
@@ -122,14 +124,6 @@ function colorizeTestRunner(line: string): string | null {
     return '    ' + palette.success(line);
   }
   if (JEST_FAIL_RE.test(line)) {
-    return '    ' + palette.error(line);
-  }
-
-  // Body-level pass/fail (indented, appears in vitest run output)
-  if (VITEST_BODY_PASS_RE.test(line)) {
-    return '    ' + palette.success(line);
-  }
-  if (VITEST_BODY_FAIL_RE.test(line)) {
     return '    ' + palette.error(line);
   }
 
@@ -150,6 +144,8 @@ function colorizeTestRunner(line: string): string | null {
  *         green(`147 passed`) + dim(` (150)`)
  */
 function colorizeTestSummary(line: string): string {
+  // sanitizeLabel .trim()s upstream, but guard defensively.
+  line = line.trimStart();
   let result = line;
   result = result.replace(
     /(\d+) (failed)/g,
