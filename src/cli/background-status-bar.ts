@@ -18,7 +18,6 @@ import { palette } from './palette.js';
 import { formatDuration } from './format-utils.js';
 import { ResizeBus } from './terminal-size.js';
 import { isPlainOutputRequested } from '../config/env.js';
-import { contentMargin } from './render/measure.js';
 
 const SPINNER_FRAMES = ['◐', '◑', '◒', '◓'] as const;
 
@@ -259,16 +258,16 @@ export class BackgroundStatusBar {
     const startRow = Math.max(1, totalRows - newRowCount - adjacentRows);
     this.lastPaintStartRow = startRow;
 
-    // Content centering (AFK_CENTER_CONTENT): prepend the left margin so the
-    // background-task rows align with centered scrollback and overlay content.
-    const pad = contentMargin();
+    // Background-status bar stays full-width (design doc §3.10.3, Appendix B:
+    // "Background-status bar rows — No — full-width informational"). Centering
+    // would reduce the field count and trigger field-shedding on wide terminals.
     this.stream.write('\x1b[s');
     for (let i = 0; i < newRowCount; i++) {
       const item = items[i]!;
       const row = startRow + i;
       this.stream.write(`\x1b[${row};1H`);
       this.stream.write('\x1b[2K');
-      this.stream.write(pad + this.formatItemLine(item));
+      this.stream.write(this.formatItemLine(item));
     }
     this.stream.write('\x1b[u');
   }

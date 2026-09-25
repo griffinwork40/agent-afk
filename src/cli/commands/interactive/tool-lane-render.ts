@@ -386,8 +386,12 @@ export function colorizeIndent(plainIndent: string, g: Readonly<Glyphs>, startDe
  * `indent` is the plain (no-ANSI) indent string produced by
  * {@link buildIndent}; the function dims spine glyphs at emission and
  * uses `.length` for wrap math (plain string of 3-cell units).
+ *
+ * @param startDepth - Depth offset for spine-tone grading. Callers pass the
+ *   ancestor count so text-child spine columns dim correctly at deeper nesting.
+ *   Defaults to 0 (root-level) for backward compatibility.
  */
-export function renderTextChildLines(text: string, indent: string, g: Readonly<Glyphs>): string[] {
+export function renderTextChildLines(text: string, indent: string, g: Readonly<Glyphs>, startDepth = 0): string[] {
   if (!text || !text.trim()) return [];
   const prefix = palette.dim(g.textPrefix);
   // 3 cols for the text prefix, plus a small safety margin for ANSI widths.
@@ -395,7 +399,7 @@ export function renderTextChildLines(text: string, indent: string, g: Readonly<G
   // enforces on the composed line below — so the wrapped text can never
   // exceed the clamp that will later be applied to it (see `render/measure.ts`).
   const maxWidth = Math.max(1, toolLaneWidth() - indent.length - 3 - 2);
-  const colored = colorizeIndent(indent, g);
+  const colored = colorizeIndent(indent, g, startDepth);
   const out: string[] = [];
   for (const para of text.split('\n')) {
     // Sanitize each paragraph: strip ANSI/control codes from LLM-sourced

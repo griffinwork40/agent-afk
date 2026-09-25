@@ -343,7 +343,7 @@ function renderOverlayChildren(
   // 767, 770, 784, 793, 795).
   const textIndent = calculateTextIndent(toolChildren.length, false, ancestorIsLast, g);
   for (const text of textChildren) {
-    for (const line of renderTextChildLines(text.text, textIndent, g)) {
+    for (const line of renderTextChildLines(text.text, textIndent, g, ancestorIsLast.length)) {
       lines.push(clampLineToTerminal(line, cols));
     }
   }
@@ -499,7 +499,7 @@ function renderFlushChildren(
   // 895, 906).
   const textIndent = calculateTextIndent(toolChildren.length, agentResultSummary != null, ancestorIsLast, g);
   for (const text of textChildren) {
-    for (const line of renderTextChildLines(text.text, textIndent, g)) {
+    for (const line of renderTextChildLines(text.text, textIndent, g, ancestorIsLast.length)) {
       lines.push(clampLineToTerminal(line, cols));
     }
   }
