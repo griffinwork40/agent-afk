@@ -1,3 +1,4 @@
+import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
 import { NESTING_TOOLS } from '../../tool-category.js';
 import { formatElapsed } from '../../terminal-compositor.scrollback.js';
@@ -264,9 +265,10 @@ function renderOverlayChildren(
         // tailPreview). pushOutcomeLines splits on \n so continuation lines
         // carry the spine-aware indent instead of the bare 4-space indent
         // that formatOutcome embeds.
-        const outcomeText = formatOutcome(child.result, undefined, 60, child.toolName);
         const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
+        const outcomeText = formatOutcome(child.result, undefined, outcomeBudget, child.toolName);
         pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
         if (child.diff && !child.result.isError) {
           // Clamp each diff body line to terminal width. Diff lines are
@@ -449,9 +451,10 @@ function renderFlushChildren(
       } else if (child.result) {
         // Mirror overlay path: pushOutcomeLines splits on \n so continuation
         // lines carry the spine-aware indent in scrollback.
-        const outcomeText = formatOutcome(child.result, homeDir, 60, child.toolName);
         const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
+        const outcomeText = formatOutcome(child.result, homeDir, outcomeBudget, child.toolName);
         pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
         if (child.diff && !child.result.isError) {
           // Clamp each diff body line to terminal width -- scrollback is

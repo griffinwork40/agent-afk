@@ -6,6 +6,7 @@ import { palette } from '../../palette.js';
 import { statusBadge } from '../../render/status-badge.js';
 import { fileHyperlink, hyperlinksEnabled } from '../../hyperlink.js';
 import { humanVerbForTool } from '../../tool-category.js';
+import { truncateDisplayWidth } from '../../display.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
 import { colorizePreviewLine } from './tool-lane-format-colorize.js';
 
@@ -212,7 +213,7 @@ export function formatOutcome(
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
       const tailLines = chunk.tailPreview
         .map(l => {
-          const sanitized = sanitizeLabel(l.length > 120 ? l.slice(0, 120) + '…' : l);
+          const sanitized = sanitizeLabel(truncateDisplayWidth(l, maxPreview > 0 ? maxPreview : 120));
           // Try to colorize recognizable patterns (git stat, test
           // results, tsc errors) before falling back to default dim.
           // colorizePreviewLine returns the full line with 4-space indent;
@@ -227,7 +228,7 @@ export function formatOutcome(
     return headline;
   }
   const preview = chunk.content.length > maxPreview
-    ? chunk.content.slice(0, maxPreview - 3) + '…'
+    ? truncateDisplayWidth(chunk.content, maxPreview)
     : chunk.content;
   // sanitizeLabel is the right sanitizer for outcome previews: chunk.content
   // is LLM-controlled and can embed BEL (rings the terminal bell), backspace,

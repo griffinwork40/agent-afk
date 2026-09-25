@@ -144,7 +144,7 @@ function groupSiblings(toolChildren: ToolEntry[]): Array<ToolEntry | GroupedSibl
  * terminal. The preview's job is to identify the failure CLASS ("not a git
  * repository", "ENOENT", "exit 1"), not to reproduce the tool's stderr.
  */
-const GROUP_ERROR_PREVIEW_WIDTH = 40;
+const GROUP_ERROR_PREVIEW_WIDTH = 60;
 
 /**
  * Contract: on an errored result, `ToolResultChunk.content` holds the failure

@@ -1,4 +1,4 @@
-import { displayWidth, truncateDisplayWidth } from '../../display.js';
+import { displayWidth, stripAnsi, truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
 import { styleForToolName } from '../../tool-category.js';
 import {
@@ -128,7 +128,7 @@ export function renderGroupedRootTools(
         pushOutcomeLines(
           lines,
           '   ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ',
-          formatOutcome(e.result, homeDir, 60, e.toolName),
+          formatOutcome(e.result, homeDir, Math.max(20, cols - displayWidth(stripAnsi(e.prefix)) - 12), e.toolName),
           '   ',
           cols,
           batchBadge(e.result),
