@@ -660,27 +660,21 @@ export class ToolLane {
     }
     this.order = this.order.filter((id) => !collected.has(id));
 
-    // Return ancestor header lines (outermost first) followed by the child
-    // block, then a trailing spine-continuation separator for breathing room
-    // between independently committed sibling bands.
-    //
-    // When parentEntry was headerEmitted and had no children + no closer to
-    // render, `formatAgentChildren` returns []; the joined empty string at
-    // the end of the return array is the separator (see below).
+    // Contract: returns [ancestorHeaders..., childBlock, separator].
     //
     // Spine-continuation separator: when this entry sits under a live
-    // ancestor (compose/skill), the trailing separator carries the ancestor's
-    // dim `│` spine so the column stays continuous between sibling bands in
+    // ancestor (compose/skill), the trailing element is a non-empty dim `│`
+    // spine string so the column stays continuous between sibling bands in
     // scrollback. At root depth (0 ancestors), the separator is `''`.
     //
-    // IMPORTANT — root-depth caller contract: the caller (stream-renderer-
-    // process.ts) MUST commit the trailing `''` via a dedicated
-    // `compositor.commitAbove('')` after `commitBlockAbove(compositor, lines)`
-    // so the compositor paints exactly one blank row. `commitBlockAbove` joins
-    // its lines on `\n`, and `decomposeCommitText` strips a lone trailing `\n`
-    // as a line terminator — so the `''` element would be lost without the
-    // separate commit. At nested depth (>0), the dim-spine separator is real
-    // content inside the block and must remain in the joined commit.
+    // Root-depth caller contract: the caller (stream-renderer-process.ts)
+    // MUST commit the trailing `''` via a dedicated `compositor.commitAbove('')`
+    // AFTER `commitBlockAbove(compositor, lines)` so the compositor paints
+    // exactly one blank row. `commitBlockAbove` joins its lines on `\n`, and
+    // `decomposeCommitText` strips a lone trailing `\n` as a line terminator —
+    // so the `''` element would be lost without the separate commit. At nested
+    // depth (>0), the dim-spine separator is real content that must remain
+    // inside the joined block commit.
     const blockLines = childBlock === '' ? [] : [childBlock];
     const separator = scrollbackSeparator(ancestorIsLast.length);
     return [...ancestorLines, ...blockLines, separator];
