@@ -97,10 +97,53 @@ export function setupFooterSubsystems(
   let mascotRowCount = 0;
   let healthRailRowCount = 0;
   const loopStageRows = 1; // LoopStageBar always occupies exactly 1 row.
-  const syncExtraRows = () =>
-    ctx.statusLine.setExtraRows(
-      healthRailRowCount + loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount,
-    );
+
+  // Invariant: microtask-coalesced DECSTBM writes.
+  //
+  // Multiple tenants can fire onRowCountChange in the same synchronous
+  // tick (e.g. a tool completes: mascot goes idle AND verdict-ledger
+  // pushes a new entry).  Without coalescing, each tenant calls
+  // syncExtraRows() which immediately emits a DECSTBM escape to the
+  // terminal.  Two sequential DECSTBM writes in the same tick produce
+  // two visible scroll-region adjustments, one of which is immediately
+  // overwritten by the second — a wasted write at best, and at worst
+  // a visible flicker if the terminal renders between the two.
+  //
+  // The coalescing gate defers the actual setExtraRows call and the
+  // sibling-painter redraws to the next microtask.  All tenant count
+  // updates within the same tick land in the same deferred flush, so
+  // exactly one DECSTBM write and one round of sibling redraws fire.
+  //
+  // During startup (the start() sequence), coalescing is disabled so
+  // each painter reads a fully-initialized getExtraRows() when it
+  // first positions itself.
+  let coalescing = false;
+  let flushScheduled = false;
+  const extraRowsSum = () =>
+    healthRailRowCount + loopStageRows + mascotRowCount + bgBarRowCount + ledgerRowCount;
+
+  const flushExtraRows = () => {
+    flushScheduled = false;
+    ctx.statusLine.setExtraRows(extraRowsSum());
+    // Redraw all painters so they position against the freshly-updated
+    // extraRows.  Each painter brackets its write in cursor save/restore,
+    // so order is cosmetic; go bottom-to-top to match afterScrollRestore.
+    bgStatusBar?.redraw();
+    mascotBar?.redraw();
+    loopStageBar?.redraw();
+    healthRail?.redraw();
+  };
+
+  const syncExtraRows = () => {
+    if (!coalescing) {
+      ctx.statusLine.setExtraRows(extraRowsSum());
+      return;
+    }
+    if (!flushScheduled) {
+      flushScheduled = true;
+      queueMicrotask(flushExtraRows);
+    }
+  };
 
   // Hoisted so the verdict-ledger row-count handler (registered before the
   // bars are constructed) can reference them via closure. All are assigned
@@ -113,19 +156,14 @@ export function setupFooterSubsystems(
 
   // Register the verdict ledger row-count handler BEFORE constructing the bg
   // bar so its getAdjacentRows closure reads a consistent ledgerRowCount.
+  // Invariant: each handler updates its local count synchronously, then
+  // calls syncExtraRows().  In coalescing mode syncExtraRows schedules a
+  // single deferred flush that emits ONE setExtraRows + ONE round of
+  // sibling redraws for all count changes in the same tick.  During
+  // startup (coalescing=false) the setExtraRows call is immediate.
   verdictLedger.setRowCountChangeHandler((rows) => {
     ledgerRowCount = rows;
     syncExtraRows();
-    // The bars ABOVE the verdict rail (bg bar, loop-stage bar, health rail)
-    // position themselves from the live counts, but do not repaint on their
-    // own when ledgerRowCount flips. Nudge them to reflow now so they don't
-    // keep a stale row until their next independent repaint — critical because
-    // the loop-stage bar otherwise only repaints on a stage change, which has
-    // already stopped by the time an end-of-turn terminal-state verdict pushes.
-    bgStatusBar?.redraw();
-    mascotBar?.redraw();
-    loopStageBar?.redraw();
-    healthRail?.redraw();
   });
 
   bgStatusBar = new BackgroundStatusBar(ctx.backgroundRegistry, {
@@ -137,18 +175,6 @@ export function setupFooterSubsystems(
   bgStatusBar.setRowCountChangeHandler((rows) => {
     bgBarRowCount = rows;
     syncExtraRows();
-    // The mascot band sits directly ABOVE the bg bar and derives its paint rows
-    // from bgBarRowCount, so a bg-bar growth/shrink moves it. It has no other
-    // reason to repaint mid-turn (its own animation tick only fires while the
-    // agent is working), so nudge it here or it keeps a stale row.
-    mascotBar?.redraw();
-    // The loop-stage rail and health rail both position from the full extraRows
-    // (which just moved) but only repaint on their own on a stage change or
-    // update() call — a bg-bar-only resize would otherwise leave them at their
-    // old rows. Mirrors the same nudge in the verdict-ledger handler above.
-    // (PR #900 review.)
-    loopStageBar?.redraw();
-    healthRail?.redraw();
   });
 
   // Reacting goblin mini-sprite (issue #336) - opt-in via AFK_GOBLIN_MASCOT=1;
@@ -162,11 +188,6 @@ export function setupFooterSubsystems(
   mascotBar.setRowCountChangeHandler((rows) => {
     mascotRowCount = rows;
     syncExtraRows();
-    // The loop-stage rail and health rail both position from the full extraRows,
-    // so they must reflow when the mascot claims or releases its band — otherwise
-    // they keep the row the mascot just took (or leave a gap where it was).
-    loopStageBar?.redraw();
-    healthRail?.redraw();
   });
 
   loopStageBar = new LoopStageBar({
@@ -197,10 +218,6 @@ export function setupFooterSubsystems(
   healthRail.setRowCountChangeHandler((rows) => {
     healthRailRowCount = rows;
     syncExtraRows();
-    // LoopStageBar is directly below the health rail and must shift when the
-    // health rail's reservation changes (start/stop). Without this nudge it
-    // keeps its stale row until the next stage transition.
-    loopStageBar?.redraw();
   });
 
   // Footer self-heal after a full-screen scroll. commitAbove() and
@@ -237,6 +254,12 @@ export function setupFooterSubsystems(
   // the nudge. The health rail's initial repaint then lands at the correct row
   // (one above the just-shifted loop-stage bar).
   healthRail.start();
+
+  // All painters are now initialized and have read their initial
+  // getExtraRows().  Enable microtask coalescing for all subsequent
+  // row-count changes so that multi-tenant events in the same tick
+  // produce exactly one DECSTBM write + one round of sibling redraws.
+  coalescing = true;
 
   // Start the verdict ledger painter. The verdict rail always occupies the
   // fixed slot immediately above the status line (row totalRows-1). The bg
