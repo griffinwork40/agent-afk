@@ -17,6 +17,7 @@ import { formatThoughtSummary } from '../commands/interactive/thinking-lane.js';
 import { formatThinkingParagraph } from '../commands/interactive/thinking-paragraph.js';
 import { sanitizeLabel } from '../commands/interactive/tool-lane-format-sanitize.js';
 import { commitBlockAbove } from './commit-block.js';
+import { indentForScrollback } from '../commands/interactive/tool-lane-flush-margin.js';
 
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 
@@ -265,6 +266,7 @@ export function finalizeOrchestrator(
       if (lines.length > 0) {
         // Capture ctx references used in the closure — avoids closing over the
         // mutable ctx object (defense against future mutations before flushAll).
+        const indented = indentForScrollback(lines);
         const compositor = ctx.compositor;
         const overlayComposer = ctx.overlayComposer;
         const toolLane = ctx.toolLane;
@@ -277,7 +279,7 @@ export function finalizeOrchestrator(
               // Atomic block commit — the flushed root is ONE coherent block;
               // per-line commits desync band-hold under a tall overlay (a live
               // subagent's rows). See commit-block.ts.
-              commitBlockAbove(compositor, lines);
+              commitBlockAbove(compositor, indented);
               compositor.commitAbove('');
               // Refresh the overlay from CURRENT lane state — in-flight
               // subagent rows that survived the selective flush must keep

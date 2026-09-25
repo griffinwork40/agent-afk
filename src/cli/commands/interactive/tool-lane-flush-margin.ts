@@ -12,13 +12,24 @@ import { contentMargin } from '../../render/measure.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 
 /**
+ * Visual indent prepended to every tool-lane line (overlay and scrollback)
+ * when content centering is active. Aligns the tree glyphs (◉, ●, ├─) with
+ * the progress-banner and stage-rail surfaces, which also use a 2-space
+ * lead. Prose uses a 3-space markdown indent — the 1-space gap between 2
+ * and 3 is barely perceptible and helps distinguish "the agent is talking"
+ * from "the agent is working."
+ */
+const TOOL_LANE_INDENT = '  ';
+
+/**
  * Join assembled overlay lines into a single string, applying the
- * `AFK_CENTER_CONTENT` left margin when centering is active.
+ * `AFK_CENTER_CONTENT` left margin and a 2-space visual indent when
+ * centering is active.
  *
  * On wide terminals with centering enabled, each line is prepended with
- * the margin and clamped to the terminal width so the overlay never wraps.
- * On narrow terminals or when centering is off, lines are joined with `\n`
- * directly — a no-op pass.
+ * the margin + indent and clamped to the terminal width so the overlay
+ * never wraps. On narrow terminals or when centering is off, lines are
+ * joined with `\n` directly — a no-op pass.
  *
  * Called at the end of {@link ToolLane.getOverlay} after all lines have been
  * assembled, so the margin is applied uniformly to every pushed line
@@ -28,10 +39,24 @@ export function joinOverlayLines(lines: string[]): string {
   const pad = contentMargin();
   if (pad.length > 0) {
     const tw = getTerminalWidth();
+    const prefix = pad + TOOL_LANE_INDENT;
     return lines
-      .map((line) => line.length === 0 ? '' : truncateDisplayWidth(pad + line, tw))
+      .map((line) => line.length === 0 ? '' : truncateDisplayWidth(prefix + line, tw))
       .join('\n');
   }
   return lines.join('\n');
+}
+
+/**
+ * Add the 2-space visual indent to tool-lane lines destined for scrollback
+ * when content centering is active. The committed-band paint path adds
+ * `contentMargin()` at paint time, so this only prepends the indent — not
+ * the full margin.
+ *
+ * Returns the input array unchanged when centering is off.
+ */
+export function indentForScrollback(lines: readonly string[]): readonly string[] {
+  if (contentMargin().length === 0) return lines;
+  return lines.map(l => l === '' ? l : TOOL_LANE_INDENT + l);
 }
 

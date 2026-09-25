@@ -28,6 +28,7 @@ import { noteToolEvent } from '../input/work-derived-verb.js';
 import { handleOrchestratorEvent, setComposedOverlay } from './stream-renderer-orchestrator.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
 import { commitBlockAbove } from './commit-block.js';
+import { indentForScrollback } from '../commands/interactive/tool-lane-flush-margin.js';
 import { makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
 
 /**
@@ -250,7 +251,7 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
       // sources' entries remain in the overlay for still-running sub-agents.
       const syntheticId = source.syntheticAgentToolUseId;
       if (syntheticId && ctx.toolLane.hasEntry(syntheticId)) {
-        const lines = ctx.toolLane.flushSource(syntheticId);
+        const lines = indentForScrollback(ctx.toolLane.flushSource(syntheticId));
         const compositor = ctx.compositor;
         const overlayComposer = ctx.overlayComposer;
         const toolLane = ctx.toolLane;
