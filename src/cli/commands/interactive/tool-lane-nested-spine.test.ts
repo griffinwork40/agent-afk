@@ -22,6 +22,9 @@ import { describe, it, expect } from 'vitest';
 import { ToolLane } from './tool-lane.js';
 import { stripAnsi } from '../../display.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
+import { colorizeIndent, buildIndent, UNICODE_GLYPHS } from './tool-lane-render.js';
+import { palette } from '../../palette.js';
+import type { ChalkInstance } from 'chalk';
 
 function makeResult(content: string, isError = false, extra?: Partial<ToolResultChunk>): ToolResultChunk {
   return { type: 'tool_result', toolUseId: 'unused', content, isError, ...extra };
@@ -176,5 +179,130 @@ describe('multi-line outcome spine continuity (hiddenLineCount + tailPreview)', 
     const tailRow = rows.find((l) => l.includes('line 152'));
     expect(tailRow, `no tail-preview row in scrollback\n${rows.join('\n')}`).toBeDefined();
     expect(tailRow![0], `root spine severed in scrollback tail-preview row\n${rows.join('\n')}`).toBe('│');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Depth-graded spine dimming — spineChalk() / colorizeIndent() coverage
+// ---------------------------------------------------------------------------
+
+/**
+ * A stand-in ChalkInstance that renders `<tag>:<text>` uncolored. Used to
+ * distinguish which palette.spineToneN was selected without depending on the
+ * actual hex values (which vary per theme and can coincide at low ANSI depth).
+ */
+function sentinelTone(tag: string): ChalkInstance {
+  return ((...text: unknown[]) => `${tag}:${text.join(' ')}`) as ChalkInstance;
+}
+
+describe('spineChalk / colorizeIndent — depth-graded spine dimming', () => {
+  it('slot 0 uses spineTone0, slot 1 uses spineTone1, slot 2+ uses spineTone2 (startDepth=0)', () => {
+    const g = UNICODE_GLYPHS;
+    const savedT0 = palette.spineTone0;
+    const savedT1 = palette.spineTone1;
+    const savedT2 = palette.spineTone2;
+    try {
+      palette.spineTone0 = sentinelTone('T0');
+      palette.spineTone1 = sentinelTone('T1');
+      palette.spineTone2 = sentinelTone('T2');
+
+      // Three-level indent: [false, false, true] → ancestor0(open), ancestor1(open), parent(open)
+      // buildIndent appends one g.spine per slot: 3 spine glyphs = 3 slots
+      const plain = buildIndent([false, false], g); // ancestorIsLast=[false,false] → 3 spine slots
+      const colored = colorizeIndent(plain, g, 0);
+
+      // slot 0 → T0, slot 1 → T1, slot 2 → T2
+      expect(colored).toContain('T0:│  ');
+      expect(colored).toContain('T1:│  ');
+      expect(colored).toContain('T2:│  ');
+    } finally {
+      palette.spineTone0 = savedT0;
+      palette.spineTone1 = savedT1;
+      palette.spineTone2 = savedT2;
+    }
+  });
+
+  it('startDepth shifts the tone assignment — depth-1 caller starts at T1', () => {
+    const g = UNICODE_GLYPHS;
+    const savedT0 = palette.spineTone0;
+    const savedT1 = palette.spineTone1;
+    const savedT2 = palette.spineTone2;
+    try {
+      palette.spineTone0 = sentinelTone('T0');
+      palette.spineTone1 = sentinelTone('T1');
+      palette.spineTone2 = sentinelTone('T2');
+
+      // Single-slot indent (one g.spine). With startDepth=1, slot 0 maps to toneIdx=min(1+0,2)=1.
+      const plain = g.spine; // one spine slot
+      const colored = colorizeIndent(plain, g, 1);
+      expect(colored).toContain('T1:');
+      expect(colored).not.toContain('T0:');
+    } finally {
+      palette.spineTone0 = savedT0;
+      palette.spineTone1 = savedT1;
+      palette.spineTone2 = savedT2;
+    }
+  });
+
+  it('toneIdx is floored at 2 — depth ≥2 ancestors all use spineTone2', () => {
+    const g = UNICODE_GLYPHS;
+    const savedT2 = palette.spineTone2;
+    try {
+      palette.spineTone2 = sentinelTone('T2');
+
+      // startDepth=2, single slot → toneIdx = min(2+0, 2) = 2.
+      const plain = g.spine;
+      const colored = colorizeIndent(plain, g, 2);
+      expect(colored).toContain('T2:');
+
+      // startDepth=5 (beyond the floor) → toneIdx still floored at 2.
+      const colored5 = colorizeIndent(plain, g, 5);
+      expect(colored5).toContain('T2:');
+    } finally {
+      palette.spineTone2 = savedT2;
+    }
+  });
+
+  it('closed spine slots (spineClosed / spaces) pass through un-toned', () => {
+    const g = UNICODE_GLYPHS;
+    const savedT0 = palette.spineTone0;
+    const savedT1 = palette.spineTone1;
+    try {
+      palette.spineTone0 = sentinelTone('T0');
+      palette.spineTone1 = sentinelTone('T1');
+
+      // ancestorIsLast=[true] → first slot is spineClosed (spaces, slot 0),
+      // second slot is the live parent spine (slot 1 → toneIdx=min(0+1,2)=1 → T1).
+      const plain = buildIndent([true], g); // g.spineClosed + g.spine
+      const colored = colorizeIndent(plain, g, 0);
+
+      // The closed slot (spaces) must pass through raw (no tone wrapper).
+      expect(colored).toContain(g.spineClosed);
+      // The live spine slot (slot 1 at startDepth=0) is T1, not T0.
+      expect(colored).toContain('T1:│  ');
+      // And critically: T0 is NOT applied (the closed slot didn't accidentally get it).
+      expect(colored).not.toContain('T0:');
+    } finally {
+      palette.spineTone0 = savedT0;
+      palette.spineTone1 = savedT1;
+    }
+  });
+
+  it('reads palette.spineToneN at call time (no theme-swap freeze)', () => {
+    const g = UNICODE_GLYPHS;
+    const savedT0 = palette.spineTone0;
+    try {
+      palette.spineTone0 = sentinelTone('BEFORE');
+      const before = colorizeIndent(g.spine, g, 0);
+      expect(before).toContain('BEFORE:');
+
+      // Swap to a new sentinel — the next call must use the NEW value.
+      palette.spineTone0 = sentinelTone('AFTER');
+      const after = colorizeIndent(g.spine, g, 0);
+      expect(after).toContain('AFTER:');
+      expect(after).not.toContain('BEFORE:');
+    } finally {
+      palette.spineTone0 = savedT0;
+    }
   });
 });

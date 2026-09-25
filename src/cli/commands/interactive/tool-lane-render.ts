@@ -196,7 +196,7 @@ export type Entry = ToolEntry | TextEntry;
  *
  * Width invariants (matter for indent math; column-position bookkeeping
  * assumes they hold):
- * - `spine`, `spineClosed`, `turnRoot`, `turnRootClosed`: 3 cells
+ * - `spine`, `spineClosed`, `turnRoot`: 3 cells
  * - `midConnector`, `lastConnector`: 3 cells
  * - `textPrefix` (the inline `│  ` prefix on wrapped text-child lines): 3 cells
  *
