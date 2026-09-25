@@ -19,7 +19,6 @@ import {
   reflowCommittedBandToWidth,
 } from './terminal-compositor.band-reflow.js';
 import { boundLineToTerminal } from './render/bounded-line.js';
-import { contentMargin } from './render/measure.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { decomposeCommitText } from './terminal-compositor.commit-text.js';
 import { snapshotCommitGeometry } from './terminal-compositor.commit-geometry.js';
@@ -90,14 +89,11 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     // so it is bounded here. The armed path below hard-wraps to `cols` as part
     // of its row accounting (line-count math depends on it) and must not be
     // pre-wrapped by this call.
-    // Content centering (AFK_CENTER_CONTENT): mirror the armed path's
-    // margin so disarmed writes (pre-arm separators, borrowed-compositor
-    // commits) align with centered content.
-    const pad = contentMargin();
-    const padded = pad
-      ? text.split('\n').map(l => l === '' ? l : pad + l).join('\n')
-      : text;
-    const bounded = boundLineToTerminal(padded, self.stdout);
+    // Content centering: the caller (TerminalCompositor.commitAbove) has
+    // already prepended contentMargin() to every non-blank line, so no
+    // additional margin is needed here. Applying it again would double the
+    // left offset and push content past the terminal edge.
+    const bounded = boundLineToTerminal(text, self.stdout);
     writeWithScrollGuard(self, () => {
       self.stdout.write(bounded + '\n');
     });
