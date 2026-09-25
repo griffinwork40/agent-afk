@@ -11,10 +11,12 @@ import {
   renderGroupedRootTools,
   buildChildMap,
   freshToolEntry,
+  getGlyphs,
   type ToolEntry,
   type TextEntry,
   type Entry,
 } from './tool-lane-render.js';
+import { palette } from '../../palette.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
 
@@ -660,14 +662,28 @@ export class ToolLane {
     this.order = this.order.filter((id) => !collected.has(id));
 
     // Return ancestor header lines (outermost first) followed by the child
-    // block. The caller iterates with `compositor.commitAbove(line)` for
-    // each element, so ancestor headers land in scrollback before the child.
+    // block, then a trailing spine-continuation separator for breathing room
+    // between independently committed sibling bands.
     //
     // When parentEntry was headerEmitted and had no children + no closer to
     // render, `formatAgentChildren` returns []; the joined empty string is
     // skipped so we don't push a blank line to scrollback.
+    //
+    // Spine-continuation separator: when this entry sits under a live
+    // ancestor (compose/skill), the trailing separator carries the ancestor's
+    // dim `│` spine so the column stays continuous between sibling bands in
+    // scrollback. At root depth (0 ancestors), the separator is an empty
+    // string — identical to the prior `commitAbove('')` behavior. The value
+    // is computed here (before the deletion loop above has run) using
+    // `ancestorIsLast.length`, which is already on the stack from line 562.
+    // The caller's `indentForScrollback()` transform applies content-
+    // centering to this line like every other line in the block.
     const blockLines = childBlock === '' ? [] : [childBlock];
-    return [...ancestorLines, ...blockLines];
+    const g = getGlyphs();
+    const separator = ancestorIsLast.length > 0
+      ? palette.dim(g.spine.repeat(ancestorIsLast.length))
+      : '';
+    return [...ancestorLines, ...blockLines, separator];
   }
 
   /**

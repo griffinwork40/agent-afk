@@ -264,10 +264,6 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
               // artifact; per-line commits desync band-hold under a tall
               // overlay. See commit-block.ts.
               commitBlockAbove(compositor, lines);
-              // One blank line after the subagent block so the next
-              // orchestrator message (or a subsequent subagent block) has
-              // breathing room in scrollback.
-              compositor.commitAbove('');
               // Route the overlay update through the composer if available.
               if (overlayComposer) {
                 overlayComposer.markDirty('tool-lane');
@@ -277,7 +273,6 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
               }
             } else {
               for (const line of lines) out.line(line);
-              out.line('');
             }
           }],
         });
