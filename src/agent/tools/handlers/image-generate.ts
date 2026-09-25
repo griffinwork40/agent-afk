@@ -169,7 +169,7 @@ function parseInput(
  * file header bytes. Returns null when the format is unrecognised or the
  * buffer is too short. Used to enforce MAX_IMAGE_DIMENSION without a lib dep.
  */
-function readImageDimensions(
+export function readImageDimensions(
   buf: Buffer,
   format: string,
 ): { width: number; height: number } | null {

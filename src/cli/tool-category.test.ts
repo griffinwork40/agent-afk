@@ -68,6 +68,7 @@ describe('categorizeTool', () => {
     // agent-afk built-in snake_case tool names (src/agent/tools/schemas.ts)
     ['bash', 'shell'],
     ['read_file', 'read'],
+    ['view_image', 'read'],
     ['write_file', 'write'],
     ['edit_file', 'write'],
     ['glob', 'read'],
