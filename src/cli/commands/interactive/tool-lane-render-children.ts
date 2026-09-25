@@ -10,6 +10,7 @@ import {
   formatPreviewDiffBlock,
   doneGlyph,
   sanitizeLabel,
+  shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry, TextEntry, Entry, Glyphs } from './tool-lane-render.js';
 import {
@@ -433,7 +434,7 @@ function renderFlushChildren(
         //       matching visual row for each slot (Bug B / orphan │ columns).
         if (child.headerEmitted) {
           const refLabel = child.toolInput
-            ? `${child.toolName} ${sanitizeLabel(child.toolInput)}`
+            ? `${child.toolName} ${shortenPaths(sanitizeLabel(child.toolInput))}`
             : child.toolName;
           lines.push(clampLineToTerminal(indentColored + connector + palette.dim('↳ ' + refLabel), cols));
         } else {

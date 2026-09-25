@@ -138,8 +138,8 @@ describe('formatValue', () => {
 describe('keyRowLabel', () => {
   it('prefixes a lock glyph on human-tier keys and none on agent-tier', () => {
     const [temp, perm] = TWO_KEY_SPECS;
-    expect(keyRowLabel(temp!, 1.0, 14)).not.toContain('🔒');
-    expect(keyRowLabel(perm!, 'plan', 14)).toContain('🔒');
+    expect(keyRowLabel(temp!, 1.0, 14)).not.toContain('*');
+    expect(keyRowLabel(perm!, 'plan', 14)).toContain('*');
     expect(keyRowLabel(temp!, 1.0, 14)).toContain('temperature');
     expect(keyRowLabel(temp!, 1.0, 14)).toContain('(number)');
   });

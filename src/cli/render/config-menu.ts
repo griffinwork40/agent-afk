@@ -102,7 +102,7 @@ export interface MenuIo {
 
 // ── Orchestrator ─────────────────────────────────────────────────────────────
 
-const TITLE = '⚙  Settings';
+const TITLE = 'Settings';
 
 /**
  * Run the interactive settings menu to completion. Returns when the user closes

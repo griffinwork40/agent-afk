@@ -300,7 +300,7 @@ export function buildScrollbackArchiveEscape(
  * overflow the row — char-count truncation would under-truncate them 2:1.
  */
 export function formatTipRow(text: string, cols: number): string {
-  const prefix = '  💡 Tip: ';
+  const prefix = '  Tip: ';
   // Reserve the prefix chrome and 1 col for the truncation marker so the
   // rendered line always fits in `cols` regardless of body length.
   const bodyBudget = Math.max(8, cols - displayWidth(prefix) - 1);

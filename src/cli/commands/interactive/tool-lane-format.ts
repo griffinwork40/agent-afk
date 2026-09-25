@@ -147,7 +147,7 @@ export function formatOutcome(
   // on error so the user sees the actual error text instead of a stale
   // success-shape summary the handler may have set before failing.
   if (chunk.display !== undefined && !chunk.isError) {
-    return resultColor(chunk.display);
+    return resultColor(shortenPaths(chunk.display));
   }
 
   if (chunk.persistedPath) {
@@ -228,20 +228,24 @@ export function formatOutcome(
     }
     return headline;
   }
-  const preview = chunk.content.length > maxPreview
-    ? truncateDisplayWidth(chunk.content, maxPreview)
-    : chunk.content;
-  // sanitizeLabel is the right sanitizer for outcome previews: chunk.content
-  // is LLM-controlled and can embed BEL (rings the terminal bell), backspace,
-  // DEL, CSI/OSC sequences, or bare CR (repositions the cursor). The earlier
-  // shape — sanitizePrefixString(stripAnsi(...)) — only scrubbed ESC-prefixed
-  // sequences plus \r\n, letting every other C0 byte through to the terminal.
-  // Outcome lines are single-line contexts so trim + multi-space collapse
-  // (sanitizeLabel's full shape) are the correct semantics.
+  // shortenPaths BEFORE truncation: collapsing `/Users/me/proj/src/x.ts` to
+  // `x.ts` first makes the preview fit in budget far more often, and prevents
+  // the display-width clipper from slicing a long path before the collapsing
+  // regex ever sees it.
+  const shortened = shortenPaths(sanitizeLabel(chunk.content));
+  const preview = shortened.length > maxPreview
+    ? truncateDisplayWidth(shortened, maxPreview)
+    : shortened;
+  // sanitizeLabel (applied above, before shortenPaths) is the right sanitizer
+  // for outcome previews: chunk.content is LLM-controlled and can embed BEL,
+  // backspace, DEL, CSI/OSC sequences, or bare CR. Outcome lines are
+  // single-line contexts so trim + multi-space collapse are the correct
+  // semantics. shortenPaths then collapses absolute paths to clickable
+  // basenames before truncation clips the result.
   const durSuffix = chunk.durationMs !== undefined
     ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
     : '';
-  return resultColor(shortenPaths(sanitizeLabel(preview))) + exitSuffix + durSuffix;
+  return resultColor(preview) + exitSuffix + durSuffix;
 }
 
 /**

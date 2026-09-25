@@ -314,7 +314,7 @@ describe('formatTipRow', () => {
     // label, rendering it under the spinner right after the user typed a
     // DIFFERENT slash command reads as "the agent rerouted my command".
     const row = strip(formatTipRow('/agentify — Use when the user wants to delegate', 120));
-    expect(row.startsWith('  💡 Tip: /agentify')).toBe(true);
+    expect(row.startsWith('  Tip: /agentify')).toBe(true);
   });
 
   it('truncates to one visual line with a single trailing ellipsis', () => {
