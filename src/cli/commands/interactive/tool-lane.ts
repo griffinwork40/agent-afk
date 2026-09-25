@@ -11,14 +11,13 @@ import {
   renderGroupedRootTools,
   buildChildMap,
   freshToolEntry,
-  getGlyphs,
   type ToolEntry,
   type TextEntry,
   type Entry,
 } from './tool-lane-render.js';
-import { palette } from '../../palette.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
+import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -666,23 +665,24 @@ export class ToolLane {
     // between independently committed sibling bands.
     //
     // When parentEntry was headerEmitted and had no children + no closer to
-    // render, `formatAgentChildren` returns []; the joined empty string is
-    // skipped so we don't push a blank line to scrollback.
+    // render, `formatAgentChildren` returns []; the joined empty string at
+    // the end of the return array is the separator (see below).
     //
     // Spine-continuation separator: when this entry sits under a live
     // ancestor (compose/skill), the trailing separator carries the ancestor's
     // dim `│` spine so the column stays continuous between sibling bands in
-    // scrollback. At root depth (0 ancestors), the separator is an empty
-    // string — identical to the prior `commitAbove('')` behavior. The value
-    // is computed here (before the deletion loop above has run) using
-    // `ancestorIsLast.length`, which is already on the stack from line 562.
-    // The caller's `indentForScrollback()` transform applies content-
-    // centering to this line like every other line in the block.
+    // scrollback. At root depth (0 ancestors), the separator is `''`.
+    //
+    // IMPORTANT — root-depth caller contract: the caller (stream-renderer-
+    // process.ts) MUST commit the trailing `''` via a dedicated
+    // `compositor.commitAbove('')` after `commitBlockAbove(compositor, lines)`
+    // so the compositor paints exactly one blank row. `commitBlockAbove` joins
+    // its lines on `\n`, and `decomposeCommitText` strips a lone trailing `\n`
+    // as a line terminator — so the `''` element would be lost without the
+    // separate commit. At nested depth (>0), the dim-spine separator is real
+    // content inside the block and must remain in the joined commit.
     const blockLines = childBlock === '' ? [] : [childBlock];
-    const g = getGlyphs();
-    const separator = ancestorIsLast.length > 0
-      ? palette.dim(g.spine.repeat(ancestorIsLast.length))
-      : '';
+    const separator = scrollbackSeparator(ancestorIsLast.length);
     return [...ancestorLines, ...blockLines, separator];
   }
 
