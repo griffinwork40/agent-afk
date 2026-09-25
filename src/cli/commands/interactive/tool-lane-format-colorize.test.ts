@@ -234,10 +234,13 @@ describe('non-matching lines', () => {
 });
 
 /* ================================================================== */
-/*  All colorized lines include the 4-space indent                    */
+/*  Colorized lines do NOT include the indent (caller's responsibility) */
 /* ================================================================== */
 
-describe('indent invariant', () => {
+describe('no-indent invariant', () => {
+  // colorizePreviewLine now returns CONTENT only — the 4-space indent / error
+  // gutter is prepended by the caller (tool-lane-format.ts contPrefix) so
+  // the correct gutter tone is applied regardless of which pattern matched.
   const cases = [
     '  src/foo.ts | 10 ++++------',
     ' 8 files changed, 44 insertions(+), 28 deletions(-)',
@@ -250,13 +253,13 @@ describe('indent invariant', () => {
   ];
 
   for (const line of cases) {
-    it(`indents: ${line.slice(0, 50)}`, () => {
+    it(`no leading 4-space indent: ${line.slice(0, 50)}`, () => {
       const result = colorizePreviewLine(line)!;
       expect(result).not.toBeNull();
-      // The plain-text content must start with a 4-space indent. ANSI
-      // escape codes may precede the spaces (e.g. palette.dim wraps
-      // the indent), so strip ANSI before checking.
-      expect(stripAnsi(result).startsWith('    ')).toBe(true);
+      // The plain-text content must NOT start with a 4-space indent —
+      // the caller owns indentation. ANSI codes may precede content, so
+      // strip before checking.
+      expect(stripAnsi(result).startsWith('    ')).toBe(false);
     });
   }
 });

@@ -27,9 +27,14 @@ import { palette } from '../../palette.js';
 /* ------------------------------------------------------------------ */
 
 /**
- * Try to colorize a single tailPreview line. Returns the colorized string
- * (including the 4-space indent) or `null` when no pattern matches,
+ * Try to colorize a single tailPreview line. Returns the colorized CONTENT
+ * (without any indentation prefix) or `null` when no pattern matches,
  * letting the caller fall back to default dim rendering.
+ *
+ * Indent/gutter prefix is now the caller's responsibility: the caller in
+ * tool-lane-format.ts always prepends `contPrefix` (error gutter + 3 spaces
+ * for errored chunks, or 4 plain spaces for success) so the correct gutter
+ * tone is applied regardless of which pattern matched.
  */
 export function colorizePreviewLine(line: string): string | null {
   return colorizeGitStat(line)
@@ -51,7 +56,7 @@ function colorizeGitStat(line: string): string | null {
   if (fileMatch) {
     const prefix = fileMatch[1]!;
     const bar = fileMatch[2]!;
-    return palette.dim('    ' + prefix) + colorizeBarGraph(bar);
+    return palette.dim(prefix) + colorizeBarGraph(bar);
   }
   if (DIFF_SUMMARY_RE.test(line)) {
     return colorizeDiffSummary(line);
@@ -89,7 +94,7 @@ function colorizeDiffSummary(line: string): string {
     /(\d+) (deletions?\(-\))/,
     (_, count: string, word: string) => palette.diffRemove(`${count} ${word}`),
   );
-  return palette.dim('    ') + result;
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,16 +120,16 @@ function colorizeTestRunner(line: string): string | null {
   // Pass/fail — VITEST_PASS_RE / VITEST_FAIL_RE accept optional leading
   // whitespace, so they cover both file-level and indented body-level output.
   if (VITEST_PASS_RE.test(line)) {
-    return '    ' + palette.success(line);
+    return palette.success(line);
   }
   if (VITEST_FAIL_RE.test(line)) {
-    return '    ' + palette.error(line);
+    return palette.error(line);
   }
   if (JEST_PASS_RE.test(line)) {
-    return '    ' + palette.success(line);
+    return palette.success(line);
   }
   if (JEST_FAIL_RE.test(line)) {
-    return '    ' + palette.error(line);
+    return palette.error(line);
   }
 
   // Summary line: color the pass/fail counts independently.
@@ -155,7 +160,7 @@ function colorizeTestSummary(line: string): string {
     /(\d+) (passed)/g,
     (_, count: string, word: string) => palette.success(`${count} ${word}`),
   );
-  return palette.dim('    ') + result;
+  return result;
 }
 
 /* ------------------------------------------------------------------ */
@@ -175,13 +180,13 @@ function colorizeTscDiagnostic(line: string): string | null {
   // Error line: dim path + red diagnostic.
   const errMatch = TSC_ERROR_RE.exec(line);
   if (errMatch) {
-    return palette.dim('    ' + errMatch[1]!) + palette.error(errMatch[2]!);
+    return palette.dim(errMatch[1]!) + palette.error(errMatch[2]!);
   }
 
   // Warning line: dim path + yellow diagnostic.
   const warnMatch = TSC_WARNING_RE.exec(line);
   if (warnMatch) {
-    return palette.dim('    ' + warnMatch[1]!) + palette.warning(warnMatch[2]!);
+    return palette.dim(warnMatch[1]!) + palette.warning(warnMatch[2]!);
   }
 
   // Summary: `Found N errors`.
@@ -189,9 +194,9 @@ function colorizeTscDiagnostic(line: string): string | null {
   if (foundMatch) {
     const count = Number.parseInt(foundMatch[1]!, 10);
     if (count === 0) {
-      return '    ' + palette.success(line);
+      return palette.success(line);
     }
-    return '    ' + palette.error(line);
+    return palette.error(line);
   }
 
   return null;

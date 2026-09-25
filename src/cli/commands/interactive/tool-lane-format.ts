@@ -217,11 +217,12 @@ export function formatOutcome(
           const sanitized = sanitizeLabel(truncateDisplayWidth(shortenPaths(l), maxPreview > 0 ? maxPreview : 120));
           // Try to colorize recognizable patterns (git stat, test
           // results, tsc errors) before falling back to default dim.
-          // colorizePreviewLine returns the full line with 4-space indent;
-          // the fallback uses contPrefix (error gutter + 3 spaces, or 4
-          // plain spaces for success) to match the headline gutter tone.
-          return colorizePreviewLine(sanitized)
-            ?? contPrefix + palette.dim(sanitized);
+          // colorizePreviewLine returns colorized CONTENT without indent;
+          // contPrefix (error gutter + 3 spaces for errors, or 4 plain
+          // spaces for success) is always prepended so the gutter tone is
+          // correct regardless of which pattern matched (Fix: C-4 gutter
+          // was bypassed when colorizePreviewLine returned non-null).
+          return contPrefix + (colorizePreviewLine(sanitized) ?? palette.dim(sanitized));
         })
         .join('\n');
       return headline + '\n' + tailLines;

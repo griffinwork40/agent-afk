@@ -18,6 +18,7 @@ import { palette } from './palette.js';
 import { hardWrapToWidth } from './wrap.js';
 import { displayWidth, truncateDisplayWidth } from './display.js';
 import type { BandRowMeta } from './terminal-compositor.types.js';
+import { contentMargin } from './render/measure.js';
 
 export const ELAPSED_GRACE_MS = 2_000;
 export const ELAPSED_AMBER_SEC = 10;
@@ -256,8 +257,15 @@ export function buildScrollbackArchiveEscape(
     for (let r = 0; r < residentRows; r++) out += `\x1b[${floor + r};1H\x1b[2K`;
     // Paint the chunk top-aligned at the floor, flowing with \r\n so each
     // logical line starts on a fresh row and autowrap owns intra-line wrapping.
+    // Apply contentMargin() so archived rows are left-aligned at the same
+    // horizontal offset as the live centered frame. Archived rows are
+    // immutable (never reflow), so baking the margin in here is safe and
+    // mirrors the margin applied at paint time by the band paint paths
+    // (commitPhase3Band, commitPhase3Hold, repositionCommittedBand,
+    // archiveBandPrefixAndRepaintSurvivors).
+    const pad = contentMargin();
     out += `\x1b[${floor};1H`;
-    out += chunk.map((l) => `\x1b[2K${l}`).join('\r\n');
+    out += chunk.map((l) => `\x1b[2K${pad}${l}`).join('\r\n');
     // Scroll the RESIDENT rows off the top into scrollback — not `chunkRows`:
     // for an over-height line the autowrap overflow already scrolled the
     // difference, and counting it twice appends `chunkRows - chunkMax` blank

@@ -232,7 +232,7 @@ function renderOverlayChildren(
           // `parentSlot` value above. Using the current frame's `indentColored`
           // ([...ancestorIsLast]) was one slot too shallow. `clampLineToTerminal`
           // → `truncateDisplayWidth` is ANSI-aware.
-          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length);
+          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length + 1);
           lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
         }
       } else if (NESTING_TOOLS.has(child.toolName) && child.headerEmitted) {
