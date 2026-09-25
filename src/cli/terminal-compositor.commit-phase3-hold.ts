@@ -3,6 +3,7 @@ import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
+import { contentMargin } from './render/measure.js';
 
 /**
  * Band-hold Phase 3 for newTopRow > 1: track the committed run's RETAINED
@@ -35,11 +36,17 @@ export function commitPhase3Hold(
   const modelMeta = overflowRunMeta.slice(archiveCount);
   const paintedCount = Math.min(model.length, maxRun);
   const bandTop = newTopRow - paintedCount;
+  // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
+  // terminal width so painted rows adapt on resize. The band stores raw (unpadded)
+  // content; padding is applied at paint time only.
+  const pad = contentMargin();
   let out = '';
   for (let i = 0; i < paintedCount; i++) {
     const row = bandTop + i;
     if (row >= newTopRow) break; // Never overwrite the live frame.
-    out += eraseAndPaintRow(row, model[model.length - paintedCount + i]);
+    const raw = model[model.length - paintedCount + i];
+    const line = pad && raw !== '' ? pad + raw : raw;
+    out += eraseAndPaintRow(row, line);
   }
   if (out.length > 0) {
     writeWithScrollGuard(self, () => {
