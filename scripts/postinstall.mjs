@@ -31,6 +31,47 @@ export function detectPathGap(prefix, pathEnv) {
 }
 
 /**
+ * Pure function. Determines whether this postinstall run is part of a global
+ * package install (`npm install -g` / `pnpm add -g`) as opposed to a local
+ * dev-checkout `pnpm install` or a worktree install.
+ *
+ * Detection uses two independent signals and fails CLOSED toward NOT-global
+ * (i.e. no restart) whenever either signal is uncertain:
+ *
+ *   1. npm_config_global env var — npm and pnpm both set this to the string
+ *      "true" for every global install. A local `pnpm install` inside a repo
+ *      never sets it. This is the primary, cheapest signal.
+ *
+ *   2. git-worktree presence check — if the package root contains a .git
+ *      entry (file or directory) it is a source checkout or managed worktree,
+ *      never a globally-installed package. A global install lands under
+ *      node_modules inside the global npm prefix, never inside a git tree.
+ *      This is a belt-and-suspenders guard: even if npm_config_global were
+ *      wrong or missing, a .git marker unambiguously rules out a global install.
+ *
+ * // History: Daemon was unconditionally restarted on every postinstall.
+ * // A cron job that ran `pnpm install` inside a repo worktree triggered this
+ * // path and restarted the running daemon mid-session, orphaning 438 subagents
+ * // and leaving the daemon stopped. The guard introduced here ensures restarts
+ * // occur ONLY for genuine global upgrades. See PR #2194.
+ *
+ * @param {string}   pkgRoot   - Absolute path to the package root.
+ * @param {object}   [env]     - Environment variable bag; defaults to process.env.
+ * @param {function} [existsFn] - Injectable fs.existsSync for testing.
+ * @returns {boolean} true only when both signals confirm a global install.
+ */
+export function isGlobalInstall(pkgRoot, env = process.env, existsFn = existsSync) {
+  // Signal 1: npm/pnpm lifecycle env var. Absent or non-"true" → not global.
+  if (env['npm_config_global'] !== 'true') return false;
+
+  // Signal 2: .git marker. Present → source checkout / worktree → not global.
+  const gitMarker = join(pkgRoot, '.git');
+  if (existsFn(gitMarker)) return false;
+
+  return true;
+}
+
+/**
  * Pure function. Attempts to SIGTERM a daemon whose PID is written in the
  * given file. All errors are silently discarded — this is best-effort cleanup
  * that must never fail an install.
@@ -101,6 +142,13 @@ export function isManualBotRunning(pidFilePath, probeFn = process.kill) {
  * installed as a service); a launchctl error (job not loaded, launchctl wedged)
  * is swallowed so the install never fails. macOS only — the caller gates on
  * platform; elsewhere ~/Library/LaunchAgents won't exist so nothing restarts.
+ *
+ * // Invariant: the daemon is NOT stateless. It may be mid-run on one or more
+ * // scheduled agent sessions. This function MUST only be called from a global
+ * // package upgrade path (verified by isGlobalInstall()) — never from a local
+ * // `pnpm install` inside a source checkout or worktree. The caller in the main
+ * // block enforces this via isGlobalInstall(); callers in tests must pass stubs
+ * // for execFn/restartFn so real launchctl is never invoked.
  *
  * Label / path / domain conventions mirror src/service/launchd/paths.ts
  * (labelFor → `com.afk.<name>`, plist under ~/Library/LaunchAgents, guiDomain →
@@ -260,20 +308,30 @@ if (isMain) {
   // here bypasses that session-safety logic and is the root cause of "sessions
   // that work but never respond" — see telegram-stuck-diagnosis.md.
   //
-  // The daemon is stateless (no active user sessions) and safe to force-restart.
+  // Invariant: the daemon may be mid-run on scheduled agent sessions and is
+  // NOT safe to restart unconditionally. Service restart is only correct for a
+  // global package upgrade (`npm install -g`). A local `pnpm install` inside a
+  // source checkout or managed worktree must NEVER trigger a restart — doing so
+  // kills any in-flight sessions owned by that daemon. The isGlobalInstall()
+  // guard below enforces this; it fails closed toward NOT restarting whenever
+  // either detection signal is absent or ambiguous.
   if (process.platform === 'darwin') {
-    try {
-      const restarted = restartLaunchdServices({
-        labels: ['com.afk.daemon'],
-      });
-      if (restarted.length > 0) {
-        const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
-        process.stdout.write(
-          `\n↻ Restarted AFK service(s) onto the new version: ${names}\n`,
-        );
+    const scriptDir = new URL('.', import.meta.url).pathname;
+    const pkgRoot = join(scriptDir, '..');
+    if (isGlobalInstall(pkgRoot, process.env, existsSync)) {
+      try {
+        const restarted = restartLaunchdServices({
+          labels: ['com.afk.daemon'],
+        });
+        if (restarted.length > 0) {
+          const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
+          process.stdout.write(
+            `\n↻ Restarted AFK service(s) onto the new version: ${names}\n`,
+          );
+        }
+      } catch {
+        // restartLaunchdServices is already fail-open; belt-and-suspenders.
       }
-    } catch {
-      // restartLaunchdServices is already fail-open; belt-and-suspenders.
     }
   }
 

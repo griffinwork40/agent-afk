@@ -1,6 +1,6 @@
 // Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -18,10 +18,16 @@ type RestartLaunchdServicesFn = (opts?: {
   existsFn?: (p: string) => boolean;
   execFn?: (argv: string[]) => void;
 }) => string[];
+type IsGlobalInstallFn = (
+  pkgRoot: string,
+  env?: Record<string, string | undefined>,
+  existsFn?: (p: string) => boolean,
+) => boolean;
 
 let killStaleDaemon: KillStaleDaemonFn;
 let isManualBotRunning: IsManualBotRunningFn;
 let restartLaunchdServices: RestartLaunchdServicesFn;
+let isGlobalInstall: IsGlobalInstallFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
@@ -30,6 +36,7 @@ beforeAll(async () => {
   killStaleDaemon = mod.killStaleDaemon as KillStaleDaemonFn;
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
+  isGlobalInstall = mod.isGlobalInstall as IsGlobalInstallFn;
 });
 
 describe.skipIf(isWin32)('killStaleDaemon', () => {
@@ -234,5 +241,67 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
     });
     expect(result).toEqual(['com.afk.daemon']);
     expect(execFn).toHaveBeenCalledWith(['kickstart', '-k', 'gui/1000/com.afk.daemon']);
+  });
+});
+
+// ─── isGlobalInstall ─────────────────────────────────────────────────────────
+// Tests verify the global-install guard introduced to prevent daemon restarts
+// during local `pnpm install` runs inside source checkouts and worktrees.
+// All tests inject pkgRoot, env, and existsFn so no real filesystem or npm
+// lifecycle environment leaks into the assertions.
+describe.skipIf(isWin32)('isGlobalInstall', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'afk-globalinstall-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('returns true when npm_config_global is "true" and no .git marker exists', () => {
+    // Simulates: npm install -g agent-afk landing under a global node_modules.
+    const env = { npm_config_global: 'true' };
+    const noGit = (_p: string) => false; // no .git
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(true);
+  });
+
+  it('returns false when npm_config_global is absent', () => {
+    // Simulates: plain `pnpm install` in any local context.
+    const env: Record<string, string | undefined> = {};
+    const noGit = (_p: string) => false;
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+
+  it('returns false when npm_config_global is "false"', () => {
+    const env = { npm_config_global: 'false' };
+    const noGit = (_p: string) => false;
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+
+  it('returns false when npm_config_global is "true" but .git marker exists (source checkout)', () => {
+    // Belt-and-suspenders: even if npm_config_global were somehow set to "true"
+    // inside a repo (e.g. a misconfigured CI job), the .git marker prevents restart.
+    const gitDir = join(tmpDir, '.git');
+    mkdirSync(gitDir);
+    const env = { npm_config_global: 'true' };
+    // Use real existsSync — .git dir was just created in tmpDir.
+    expect(isGlobalInstall(tmpDir, env, existsSync)).toBe(false);
+  });
+
+  it('returns false when .git is a file (managed git worktree)', () => {
+    // Worktrees use a .git FILE pointing back to the main tree, not a directory.
+    const gitFile = join(tmpDir, '.git');
+    writeFileSync(gitFile, 'gitdir: /some/main/worktree/.git/worktrees/branch\n');
+    const env = { npm_config_global: 'true' };
+    expect(isGlobalInstall(tmpDir, env, existsSync)).toBe(false);
+  });
+
+  it('returns false when npm_config_global is undefined (not set at all)', () => {
+    const env: Record<string, string | undefined> = { npm_config_global: undefined };
+    const noGit = (_p: string) => false;
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
   });
 });
