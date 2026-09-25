@@ -31,8 +31,21 @@ describe('decideCommitMode', () => {
     expect(m.maxBandModel).toBe(20);
   });
 
-  it('fits path: a small block under a known (prevTopRow>1) frame', () => {
+  it('tall-overlay gap fix: fitsAboveFrame + room < maxBandModel routes through band-hold', () => {
+    // room = 10 - 1 = 9 < maxBandModel = 20 → the overlay is taller than
+    // its collapsed minimum. Eager archival would freeze rows in native
+    // scrollback; on collapse, the thin band leaves blank rows at the top
+    // of the visible viewport. Band-hold keeps them in the model.
     const m = decideCommitMode(base({ prevTopRow: 10, frameTop: 10, lineCount: 2 }));
+    expect(m.fitsAboveFrame).toBe(true);
+    expect(m.useBandHold).toBe(true);
+  });
+
+  it('fits path preserved when room >= maxBandModel (frame at minimum height)', () => {
+    // room = 21 - 1 = 20 >= maxBandModel = 20 → the frame is at or near
+    // its collapsed minimum. Eager archival is permanent and correct;
+    // the single-copy optimization applies.
+    const m = decideCommitMode(base({ prevTopRow: 21, frameTop: 21, lineCount: 2 }));
     expect(m.fitsAboveFrame).toBe(true);
     expect(m.useBandHold).toBe(false);
   });

@@ -213,10 +213,20 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   // collapse, where the whole run paints contiguously. Only the genuine
   // overflow beyond maxBandModel is archived, from the top, contiguously.
   const runExceedsCurrentRoom = overflowRun.length > room;
+  // Tall-overlay gap fix: when fitsAboveFrame is true but room < maxBandModel,
+  // the overlay is taller than its collapsed minimum. Each eager-archive commit
+  // during this phase freezes old band rows in native scrollback (C1: frozen,
+  // unrecoverable). On collapse, the band is thinner than the freed space and
+  // repositionCommittedBand bottom-aligns it — blank rows appear at the TOP of
+  // the visible viewport. Route through band-hold so rows accumulate in the
+  // model and paint contiguously on collapse. The single-copy optimization is
+  // preserved when room >= maxBandModel (frame at or near minimum height).
+  const overlayTallEnoughToStrand = fitsAboveFrame && room < maxBandModel;
   const useBandHold =
     overflowHasPending ||
     (!fitsAboveFrame && maxBandModel > 0) ||
-    (runExceedsCurrentRoom && maxBandModel > 0);
+    (runExceedsCurrentRoom && maxBandModel > 0) ||
+    (overlayTallEnoughToStrand && maxBandModel > 0);
 
   return {
     fitsAboveFrame,
