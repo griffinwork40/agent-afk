@@ -159,8 +159,22 @@ interface ToolEntryFields {
    * eventually succeeds still leaves its ancestor's count intact — the
    * count signals "at least N failures occurred here", which is always
    * true and never misleads the operator.
+   *
+   * Invariant: the renderer's 60s stall auto-settle
+   * (stream-renderer-lifecycle.ts `checkPauseAnnotations`) paints a
+   * provisional `[no-result — timed out]` error row but deliberately does
+   * NOT propagate. That row self-heals when a real result arrives later
+   * (finalizeSubagent overwrites it), and an increment-only count cannot
+   * un-count it, so propagating there would leave a permanent false badge.
    */
   failedChildCount?: number;
+  /**
+   * Set once this entry's own failure has been counted into its ancestors'
+   * `failedChildCount`. Guards against double-counting when the same failure
+   * arrives via both the subagent 'error' event and the dispatch's isError
+   * tool_result. See `propagateChildFailure` in tool-lane.ancestry.ts.
+   */
+  failurePropagated?: boolean;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };

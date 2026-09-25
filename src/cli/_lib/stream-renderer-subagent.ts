@@ -204,6 +204,14 @@ export function handleSubagentEvent(
         const renderer = ctx.streamingMarkdown.get(sourceId);
         if (renderer) renderer.commitPending();
         ctx.toolLane.addResult(chunk.toolUseId, chunk);
+        // Invariant: a dispatch refused BEFORE its child forks (depth
+        // ceiling, unknown agent_type, validation, fork throw) never emits a
+        // subagent 'error' event; this isError tool_result is its only
+        // failure signal, so it must bubble here too. propagateChildFailure
+        // ignores non-dispatch entries and is idempotent per entry, so the
+        // mid-run path (which already bubbled via settleSubagentError) is
+        // not double-counted. Runs AFTER addResult, same as the error path.
+        if (chunk.isError) ctx.toolLane.propagateChildFailure(chunk.toolUseId);
         // Route through the full composed frame so the orchestrator's live-
         // thinking paragraph is preserved. (Issue #389.)
         if (ctx.isTTY && ctx.orchestratorCtx) {

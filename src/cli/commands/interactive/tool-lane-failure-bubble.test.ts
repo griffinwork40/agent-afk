@@ -126,9 +126,50 @@ describe('propagateChildFailure', () => {
     lane.addResult(child2, makeError('child2 failed'));
     lane.propagateChildFailure(child2);
 
-    const overlay = stripAnsi(lane.getOverlay());
-    expect(overlay).toContain('⚠');
-    expect(overlay).toContain('2');
+    // Assert on the parent ROW, not the whole overlay: the child label
+    // `(c2)` already contains a '2', so an overlay-wide toContain('2') would
+    // pass with no badge at all.
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    const parentRow = rows.find((r) => r.includes('Agent(parent)'));
+    expect(parentRow).toContain('⚠ 2');
+  });
+
+  it('counts a failure once when it is signalled twice for the same entry', () => {
+    // A mid-run subagent failure reaches the renderer as BOTH the subagent
+    // 'error' event and the dispatch's own isError tool_result.
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('__parent', 'Agent', '(parent)', undefined);
+    lane.addStartWithAgentContext('__child', 'Agent', '(child)', '__parent');
+    lane.addResult('__child', makeError('boom'));
+    lane.propagateChildFailure('__child');
+    lane.propagateChildFailure('__child');
+
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    const parentRow = rows.find((r) => r.includes('Agent(parent)'));
+    expect(parentRow).toContain('⚠ 1');
+    expect(parentRow).not.toContain('⚠ 2');
+  });
+
+  it('does not bubble a failed leaf tool inside a subagent', () => {
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('__parent', 'Agent', '(parent)', undefined);
+    lane.addStartWithAgentContext('__bash', 'bash', 'false', '__parent');
+    lane.addResult('__bash', makeError('exit 1'));
+    lane.propagateChildFailure('__bash');
+
+    expect(stripAnsi(lane.getOverlay())).not.toContain('⚠');
+  });
+
+  it('does not bubble a failed background-job control call', () => {
+    // cancel_background_job is in SUBAGENT_TOOLS (so NESTING_TOOLS) but
+    // dispatches nothing; its failure is not a failed descendant agent.
+    const lane = new ToolLane();
+    lane.addStartWithAgentContext('__parent', 'Agent', '(parent)', undefined);
+    lane.addStartWithAgentContext('__cancel', 'cancel_background_job', '{}', '__parent');
+    lane.addResult('__cancel', makeError('job already finished'));
+    lane.propagateChildFailure('__cancel');
+
+    expect(stripAnsi(lane.getOverlay())).not.toContain('⚠');
   });
 
   it('does not set badge on non-NESTING parent (leaf tool)', () => {
@@ -145,6 +186,8 @@ describe('propagateChildFailure', () => {
     lane.addResult(childId, makeError('child failed'));
     // Should not throw
     expect(() => lane.propagateChildFailure(childId)).not.toThrow();
+    const leaf = (lane as unknown as { entries: Map<string, { failedChildCount?: number }> }).entries.get(leafId);
+    expect(leaf?.failedChildCount).toBeUndefined();
   });
 
   it('no badge on successful subagent (no false positives)', () => {
@@ -182,33 +225,35 @@ describe('overlay failure badge rendering', () => {
     lane.addResult(childId, makeError('subtask failed'));
     lane.propagateChildFailure(childId);
 
-    const overlay = stripAnsi(lane.getOverlay());
-    expect(overlay).toContain('⚠');
-    expect(overlay).toContain('1');
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    const headRow = rows.find((r) => r.includes('Agent(task)'));
+    expect(headRow).toContain('⚠ 1');
   });
 
   it('badge appears on childless NESTING in-flight row', () => {
+    // Pins the CHILDLESS, not-yet-committed branch of renderToolLaneOverlay
+    // (the has-children branch is covered above). A normal flushSource of
+    // the failed child marks the parent headerEmitted, and a headerEmitted
+    // childless NESTING row renders nothing in the overlay, so this branch
+    // is reached only when the failed child left the lane without committing
+    // the parent's header. Simulate that by dropping the child entry
+    // directly after the failure has been counted.
     const lane = new ToolLane();
     const parentId = '__parent_childless';
+    const childId = '__child_of_childless';
 
     lane.addStartWithAgentContext(parentId, 'Agent', '(solo)', undefined);
-    // Manually set the failedChildCount via propagation from a child that
-    // has already been flushed out of the lane — simulate the real scenario.
-    // We do this by adding a child, propagating, then removing child manually
-    // via another approach: just set via a grandchild that's been collected.
-    //
-    // Simpler: re-add a child, propagate, then complete/remove the child entry
-    // by calling addResult on it (which keeps it in the lane as a completed entry).
-    const childId = '__child_of_childless';
     lane.addStartWithAgentContext(childId, 'Agent', '(sub)', parentId);
     lane.addResult(childId, makeError('sub failed'));
     lane.propagateChildFailure(childId);
-    // Now complete the child (it stays in lane until flush)
-    // Parent still has failedChildCount = 1, child is in lane as done
-    // Force the parent to appear childless in the overlay by completing the child
-    // and checking the parent overlay row
-    const overlay = stripAnsi(lane.getOverlay());
-    // Badge is present on parent row (child is still in lane but completed)
-    expect(overlay).toContain('⚠');
+    (lane as unknown as { entries: Map<string, unknown> }).entries.delete(childId);
+
+    const rows = stripAnsi(lane.getOverlay()).split('\n');
+    expect(rows.some((r) => r.includes('Agent(sub)'))).toBe(false);
+    const soloRow = rows.find((r) => r.includes('Agent(solo)'));
+    // The childless in-flight row carries the ' …' tail; the has-children
+    // head row does not, so this pins the branch under test.
+    expect(soloRow).toContain('…');
+    expect(soloRow).toContain('⚠ 1');
   });
 });
