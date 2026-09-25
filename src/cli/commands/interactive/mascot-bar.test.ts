@@ -120,10 +120,37 @@ describe('MascotBar row reservation', () => {
     bar.setState('working');
     expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
     expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
+  });
 
+  it('holds the reservation when transitioning to idle (opacity-toggle)', () => {
+    const stream = fakeStream();
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.setState('working');
     bar.setState('idle');
-    expect(rowCounts).toEqual([MASCOT_BAR_ROWS, 0]);
-    expect(bar.getRowCount()).toBe(0);
+    // Reservation stays at MASCOT_BAR_ROWS — no 0 emitted.
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
+    expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
+    // But the sprite pixels are erased (blank rows written).
+    const eraseCount = stream.writes.filter((w) => w === '\x1b[2K').length;
+    expect(eraseCount).toBeGreaterThan(0);
+    bar.stop();
+  });
+
+  it('reclaims the band without a new onRowCountChange after idle round-trip', () => {
+    const stream = fakeStream();
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.setState('working');
+    bar.setState('idle');
+    bar.setState('working');
+    // Only one reservation event ever — the initial claim.
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
+    bar.stop();
   });
 
   it('publishes the reservation BEFORE the first paint write', () => {
@@ -163,7 +190,7 @@ describe('MascotBar row reservation', () => {
     expect(order[order.length - 1]).toBe('reserve:0');
   });
 
-  it('stop() is idempotent and start() twice does not double-reserve', () => {
+  it('stop() releases the reservation and is idempotent', () => {
     const stream = fakeStream();
     const rowCounts: number[] = [];
     const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
@@ -171,8 +198,12 @@ describe('MascotBar row reservation', () => {
     bar.start();
     bar.start();
     bar.setState('working');
+    bar.setState('idle');
+    // Opacity-toggle: no release on idle.
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
     bar.stop();
     bar.stop();
+    // stop() releases once.
     expect(rowCounts).toEqual([MASCOT_BAR_ROWS, 0]);
   });
 });
@@ -229,7 +260,7 @@ describe('MascotBar geometry', () => {
     expect(bar.getRowCount()).toBe(0);
   });
 
-  it('releases the band when a resize makes the terminal too short', () => {
+  it('releases the reservation when a resize makes the terminal too short', () => {
     const stream = fakeStream(40);
     const rowCounts: number[] = [];
     const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
@@ -237,9 +268,27 @@ describe('MascotBar geometry', () => {
     bar.start();
     bar.setState('working');
     expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
+    // Even though the band is claimed, a resize below the threshold
+    // collapses it — the one case where the reservation is released
+    // mid-session.
     (stream as unknown as { rows: number }).rows = 10;
     bar.redraw();
     expect(rowCounts).toEqual([MASCOT_BAR_ROWS, 0]);
+    bar.stop();
+  });
+
+  it('holds the reservation through idle when the terminal is roomy', () => {
+    const stream = fakeStream(40);
+    const rowCounts: number[] = [];
+    const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
+    bar.setRowCountChangeHandler((n) => rowCounts.push(n));
+    bar.start();
+    bar.setState('working');
+    bar.setState('idle');
+    // Even on resize (still roomy), the reservation is held.
+    (stream as unknown as { rows: number }).rows = 35;
+    bar.redraw();
+    expect(rowCounts).toEqual([MASCOT_BAR_ROWS]);
     bar.stop();
   });
 
@@ -375,7 +424,9 @@ describe('MascotBar animation', () => {
     bar.setState('idle');
     stream.clear();
     vi.advanceTimersByTime(1000);
-    expect(stream.writes).toEqual([]); // ticker released with the band
+    // Timer stopped; no animation frames while idle (only the initial
+    // idle-blank write from setState, then silence).
+    expect(stream.cupRows()).toEqual([]);
     bar.stop();
   });
 
@@ -394,20 +445,21 @@ describe('MascotBar animation', () => {
 });
 
 describe('MascotBar.onStage', () => {
-  it('maps acting → working and every other stage → idle', () => {
+  it('maps acting → working and every other stage → idle (reservation held)', () => {
     const stream = fakeStream(40);
     const bar = new MascotBar({ getAdjacentRows: () => 0, stream });
     bar.start();
     bar.onStage('observing');
-    expect(bar.getRowCount()).toBe(0);
+    expect(bar.getRowCount()).toBe(0); // never claimed yet
     bar.onStage('acting');
     expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
     bar.onStage('updating');
-    expect(bar.getRowCount()).toBe(0);
+    // Opacity-toggle: reservation held even though state is idle.
+    expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
     bar.onStage('acting');
     expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
     bar.onStage('choosing');
-    expect(bar.getRowCount()).toBe(0);
+    expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
   });
 
   it('flashes alert on an errored tool result, then falls back to the live stage', () => {
@@ -424,7 +476,8 @@ describe('MascotBar.onStage', () => {
     expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
     vi.advanceTimersByTime(2000);
     // Dwell expired; the last stage seen was 'updating' → idle.
-    expect(bar.getRowCount()).toBe(0);
+    // Opacity-toggle: reservation held, rowCount stays at MASCOT_BAR_ROWS.
+    expect(bar.getRowCount()).toBe(MASCOT_BAR_ROWS);
     bar.stop();
   });
 

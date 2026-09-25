@@ -16,9 +16,14 @@
  *   rows above that          MascotBar            (0 or MASCOT_BAR_ROWS)  ← here
  *   row N - extraRows        LoopStageBar (always 1, always topmost)
  *
- * Unlike the other tenants this one is *transient*: it reserves rows only
- * while the agent is mid-tool (`working`/`alert`) and releases them at `idle`,
- * so a resting REPL pays no rows and no timer ticks.
+ * Unlike the other tenants this one uses an *opacity-toggle* reservation:
+ * the band claims its rows on the first `working` transition (gated by
+ * `visibleRows()` so short/narrow terminals never pay) and holds that
+ * reservation for the rest of the session.  Subsequent idle transitions
+ * erase the sprite pixels but do NOT release the DECSTBM rows, so the
+ * input area never jumps.  The reservation is released only at `stop()`
+ * (session teardown) or when a resize shrinks the terminal below the
+ * sprite's minimum dimensions.
  *
  * Lifecycle: construct → `start()` → `setState(...)` per loop-stage
  * transition → `stop()` before exit.
@@ -69,6 +74,13 @@ export class MascotBar {
   private state: MascotState = 'idle';
   private frame = 0;
   private rowCount = 0;
+  /**
+   * Whether the band has claimed its DECSTBM reservation this session.
+   * Once true, idle transitions erase the sprite pixels but skip
+   * `onRowCountChange(0)` so the scroll region never jumps.  Reset
+   * only by `stop()` or a resize that collapses the band.
+   */
+  private claimed = false;
   /** Geometry of the last paint, so a moved band can erase its old rows. */
   private lastStartRow = 0;
   private lastRowCount = 0;
@@ -120,6 +132,7 @@ export class MascotBar {
     this.clearAlertTimer();
     this.clearBand();
     this.rowCount = 0;
+    this.claimed = false;
     this.state = 'idle';
     this.stageState = 'idle';
     this.onRowCountChange?.(0);
@@ -147,9 +160,10 @@ export class MascotBar {
   }
 
   /**
-   * Point the mascot at the agent's current state. `idle` collapses the band;
-   * `working`/`alert` claim it and start the animation. Cheap to call on every
-   * loop-stage transition — a no-op when the state has not changed.
+   * Point the mascot at the agent's current state. `idle` erases the sprite
+   * but holds the reservation; `working`/`alert` paint into the reserved band.
+   * Cheap to call on every loop-stage transition — a no-op when the state has
+   * not changed.
    */
   setState(state: MascotState): void {
     if (!this.started || state === this.state) return;
@@ -221,21 +235,44 @@ export class MascotBar {
   }
 
   /**
-   * Recompute geometry, reconcile the reservation, and paint.
+   * Recompute geometry, reconcile the reservation, and paint (or blank).
+   *
+   * Opacity-toggle semantics: the DECSTBM reservation is claimed on the
+   * first `working` transition and held for the session.  Idle repaints
+   * erase the sprite pixels but leave the reservation intact, so the
+   * input area never jumps.  The reservation is only released by `stop()`
+   * or by a resize that collapses the band (terminal too short/narrow).
    *
    * Invariant (DECSTBM ordering): a GROWING reservation must be published
-   * before the paint (the rows must already be outside the scroll region, or
-   * the next scroll drags the sprite away), and a SHRINKING one must be
-   * published after the old rows are erased (the erase targets rows described
-   * by the outgoing reservation). Both directions therefore route through
-   * `clearBand()` → `onRowCountChange` → write, in that order, and the
-   * reservation is pushed only when the count actually changes so an
-   * every-frame repaint does not thrash `setExtraRows`/DECSTBM.
+   * before the paint (the rows must already be outside the scroll region,
+   * or the next scroll drags the sprite away), and a SHRINKING one must be
+   * published after the old rows are erased (the erase targets rows
+   * described by the outgoing reservation).  Both directions therefore
+   * route through `clearBand()` → `onRowCountChange` → write, in that
+   * order, and the reservation is pushed only when the count actually
+   * changes so an every-frame repaint does not thrash
+   * `setExtraRows`/DECSTBM.
    */
   private repaint(): void {
     if (!this.started || !this.stream.isTTY) return;
-    const lines = this.state === 'idle' ? [] : renderMiniMascotLines(this.state, this.frame);
-    const desired = lines.length > 0 ? this.visibleRows() : 0;
+    const canFit = this.visibleRows();
+    const wantSprite = this.state !== 'idle';
+    const lines = wantSprite ? renderMiniMascotLines(this.state, this.frame) : [];
+
+    // Decide the reservation size.  Once claimed, hold it unless a resize
+    // collapses the band (canFit === 0).  Never grow beyond what the
+    // terminal can spare; never shrink mid-session just because the
+    // state went idle.
+    let desired: number;
+    if (this.claimed) {
+      // Already holding a reservation.  Release ONLY on resize-collapse.
+      desired = canFit;
+    } else {
+      // Not yet claimed.  Claim on the first working transition if the
+      // terminal has room; stay at 0 otherwise.
+      desired = wantSprite && canFit > 0 ? canFit : 0;
+    }
+
     const totalRows = this.stream.rows ?? 24;
     const adjacent = this.getAdjacentRows();
     const startRow = Math.max(1, totalRows - desired - adjacent);
@@ -247,9 +284,26 @@ export class MascotBar {
     }
     if (desired !== this.rowCount) {
       this.rowCount = desired;
+      this.claimed = desired > 0;
       this.onRowCountChange?.(desired);
     }
     if (desired === 0) return;
+
+    // If idle but still holding the reservation, blank the rows and return.
+    // The band stays reserved (no DECSTBM change) but visually empty.
+    if (!wantSprite) {
+      this.stream.write('\x1b[s');
+      for (let i = 0; i < desired; i++) {
+        const row = startRow + i;
+        if (row < 1 || row > totalRows) continue;
+        this.stream.write(`\x1b[${row};1H`);
+        this.stream.write('\x1b[2K');
+      }
+      this.stream.write('\x1b[u');
+      this.lastStartRow = startRow;
+      this.lastRowCount = desired;
+      return;
+    }
 
     // Content centering (AFK_CENTER_CONTENT): when the left margin is wide
     // enough, float the sprite centered within it — to the left of the

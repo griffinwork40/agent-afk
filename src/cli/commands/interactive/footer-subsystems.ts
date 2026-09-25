@@ -223,7 +223,8 @@ export function setupFooterSubsystems(
   bgStatusBar.start();
   // Start the mascot before the loop-stage bar for the same reason the bg bar
   // goes first: LoopStageBar must read a fully-initialized extraRows. (The
-  // mascot starts idle at 0 rows, so this is ordering hygiene, not a fix.)
+  // mascot starts idle at 0 rows and claims on first working transition, so
+  // this is ordering hygiene, not a fix.)
   mascotBar.start();
   // LoopStageBar must start AFTER bgStatusBar so it reads a fully-initialized
   // extraRows from StatusLine and paints at the correct row.  The bg bar may
