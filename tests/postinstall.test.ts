@@ -23,11 +23,13 @@ type IsGlobalInstallFn = (
   env?: Record<string, string | undefined>,
   existsFn?: (p: string) => boolean,
 ) => boolean;
+type IsMainModuleFn = (metaUrl: string, argv1?: string) => boolean;
 
 let killStaleDaemon: KillStaleDaemonFn;
 let isManualBotRunning: IsManualBotRunningFn;
 let restartLaunchdServices: RestartLaunchdServicesFn;
 let isGlobalInstall: IsGlobalInstallFn;
+let isMainModule: IsMainModuleFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
@@ -37,6 +39,7 @@ beforeAll(async () => {
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
   isGlobalInstall = mod.isGlobalInstall as IsGlobalInstallFn;
+  isMainModule = mod.isMainModule as IsMainModuleFn;
 });
 
 describe.skipIf(isWin32)('killStaleDaemon', () => {
@@ -303,5 +306,64 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
     const env: Record<string, string | undefined> = { npm_config_global: undefined };
     const noGit = (_p: string) => false;
     expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+});
+
+// ─── isMainModule ─────────────────────────────────────────────────────────────
+// Tests verify the latent bug fixed in #2198: the raw `file://${argv1}` comparison
+// returns false when the install path contains URL-encoding-required characters
+// (spaces, non-ASCII). isMainModule() uses fileURLToPath + realpathSync so the
+// comparison is always on decoded, symlink-resolved absolute paths.
+describe.skipIf(isWin32)('isMainModule', () => {
+  it('returns false when argv1 is undefined', () => {
+    expect(isMainModule('file:///some/path/script.mjs', undefined)).toBe(false);
+  });
+
+  it('returns false when argv1 is an empty string', () => {
+    expect(isMainModule('file:///some/path/script.mjs', '')).toBe(false);
+  });
+
+  it('returns true when metaUrl and argv1 refer to the same real path', async () => {
+    // Use import.meta.url of THIS test file and its resolved path — both are
+    // guaranteed to exist on disk so realpathSync succeeds and the comparison
+    // exercises the happy path.
+    const thisFile = new URL(import.meta.url);
+    // fileURLToPath(import.meta.url) is the real path of this test file.
+    const { fileURLToPath: fup } = await import('node:url');
+    const realPath = fup(thisFile);
+    expect(isMainModule(import.meta.url, realPath)).toBe(true);
+  });
+
+  it('returns false when metaUrl and argv1 refer to different files', () => {
+    expect(
+      isMainModule('file:///some/path/script.mjs', '/other/path/different.mjs'),
+    ).toBe(false);
+  });
+
+  it('handles a space-containing path without throwing (the URL-encoding bug)', () => {
+    // This is the latent bug fixed by #2198. Previously:
+    //   import.meta.url === `file://${process.argv[1]}`
+    // would compare "file:///my%20dir/script.mjs" with "file:///my dir/script.mjs"
+    // and return false even when they represent the same file.
+    //
+    // The fix uses fileURLToPath on metaUrl and realpathSync on argv1.
+    // Since argv1 does not exist on disk, realpathSync throws; isMainModule()
+    // catches and falls back to comparing fileURLToPath(metaUrl) === argv1.
+    // Both sides are now raw paths, so the comparison is correct.
+    const spaceUrl = 'file:///my%20dir/script.mjs';
+    const rawPath = '/my dir/script.mjs'; // same path, not URL-encoded
+    expect(isMainModule(spaceUrl, rawPath)).toBe(true);
+  });
+
+  it('handles non-ASCII characters in the path without throwing', () => {
+    const encodedUrl = 'file:///home/caf%C3%A9/script.mjs'; // café
+    const rawPath = '/home/café/script.mjs';
+    expect(isMainModule(encodedUrl, rawPath)).toBe(true);
+  });
+
+  it('returns false for a non-existent argv1 that does not match', () => {
+    expect(
+      isMainModule('file:///real/script.mjs', '/nonexistent/other.mjs'),
+    ).toBe(false);
   });
 });
