@@ -72,6 +72,7 @@ import { isSubagentContext } from '../../hooks/hook-utils.js';
 /** Tools subject to per-call path approval. Bash is gated separately. */
 const TYPED_FILE_TOOLS = new Set([
   'read_file',
+  'view_image',
   'write_file',
   'edit_file',
   'list_directory',
@@ -472,11 +473,13 @@ function extractCandidatePath(
   toolName: string,
   input: Record<string, unknown>,
 ): string | undefined {
-  // read_file / write_file / edit_file all use `file_path`.
+  // read_file / view_image / write_file / edit_file / json_query all use `file_path`.
   if (
     toolName === 'read_file' ||
+    toolName === 'view_image' ||
     toolName === 'write_file' ||
-    toolName === 'edit_file'
+    toolName === 'edit_file' ||
+    toolName === 'json_query'
   ) {
     const p = input['file_path'];
     return typeof p === 'string' ? p : undefined;
@@ -505,11 +508,6 @@ function extractCandidatePath(
       return typeof p === 'string' ? p : undefined;
     }
     return undefined;
-  }
-  // json_query uses `file_path`.
-  if (toolName === 'json_query') {
-    const p = input['file_path'];
-    return typeof p === 'string' ? p : undefined;
   }
   return undefined;
 }

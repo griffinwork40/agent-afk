@@ -23,7 +23,7 @@ import * as path from 'node:path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
 import { resolveAndContain } from './_cwd-utils.js';
-import { readImageDimensions } from './image-generate.js';
+import { readImageDimensions } from './_image-dimensions.js';
 
 // ---------------------------------------------------------------------------
 // Constants — mirror browser-screenshot.ts (L32) and image-generate.ts (L46, L51)
@@ -158,13 +158,12 @@ async function viewImageImpl(
   }
 
   // 8. Dimension guard — map extension to format key for readImageDimensions().
-  //    GIF returns null (readImageDimensions does not decode GIF headers);
-  //    a null result means no dimension guard fires — image is attached as-is.
+  //    A null result means no dimension guard fires — image is attached as-is.
   //    This mirrors image-generate.ts L440: `if (dims !== null && ...)`.
   const formatKey = ext === '.jpg' || ext === '.jpeg' ? 'jpeg'
     : ext === '.png' ? 'png'
     : ext === '.webp' ? 'webp'
-    : 'gif'; // readImageDimensions returns null for 'gif' — no guard applied
+    : 'gif';
 
   const dims = readImageDimensions(buf, formatKey);
   if (dims !== null && (dims.width > MAX_IMAGE_DIMENSION || dims.height > MAX_IMAGE_DIMENSION)) {
