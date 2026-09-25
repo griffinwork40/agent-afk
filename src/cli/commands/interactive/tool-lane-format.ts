@@ -9,6 +9,7 @@ import { humanVerbForTool } from '../../tool-category.js';
 import { truncateDisplayWidth } from '../../display.js';
 import { sanitizeLabel, sanitizeTextParagraph } from './tool-lane-format-sanitize.js';
 import { colorizePreviewLine } from './tool-lane-format-colorize.js';
+import { shortenPaths } from './tool-lane-format-args.js';
 
 // Re-export the split modules' public surface so external callers keep
 // importing the whole tool-lane formatting API from './tool-lane-format.js'.
@@ -213,7 +214,7 @@ export function formatOutcome(
     if (chunk.tailPreview !== undefined && chunk.tailPreview.length > 0) {
       const tailLines = chunk.tailPreview
         .map(l => {
-          const sanitized = sanitizeLabel(truncateDisplayWidth(l, maxPreview > 0 ? maxPreview : 120));
+          const sanitized = sanitizeLabel(truncateDisplayWidth(shortenPaths(l), maxPreview > 0 ? maxPreview : 120));
           // Try to colorize recognizable patterns (git stat, test
           // results, tsc errors) before falling back to default dim.
           // colorizePreviewLine returns the full line with 4-space indent;
@@ -240,7 +241,7 @@ export function formatOutcome(
   const durSuffix = chunk.durationMs !== undefined
     ? palette.dim(` · ${(chunk.durationMs / 1000).toFixed(1)}s`)
     : '';
-  return resultColor(sanitizeLabel(preview)) + exitSuffix + durSuffix;
+  return resultColor(shortenPaths(sanitizeLabel(preview))) + exitSuffix + durSuffix;
 }
 
 /**
