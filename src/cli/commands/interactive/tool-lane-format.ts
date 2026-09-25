@@ -280,16 +280,19 @@ export function batchBadge(chunk: ToolResultChunk | undefined): string {
  * Live activity badge for an in-flight tool row (Phase 2, issue #516).
  *
  * Rendered while the dispatcher reports this call as one of N genuinely
- * running in parallel. Shows `∥N` in `palette.brand` (warm orange) next to
- * the spinner so the operator sees real concurrency RIGHT NOW.
+ * running in parallel. Shows `∥i/N` in `palette.brand` (warm orange) when
+ * the per-tool index is available (from `toolIndex`), or `∥N` when it is
+ * not. The index makes the position within the wave visible on the live head
+ * row alongside the task label, so `Agent(Security review) ∥1/2` reads as
+ * "this is agent 1 of 2 currently running".
  *
- * Both the live badge (`  ∥N`, two leading spaces) and the post-completion
+ * Both the live badge (`  ∥i/N`, two leading spaces) and the post-completion
  * badge (`∥i/N`) use the `∥` (PARALLEL TO) glyph for vocabulary consistency:
  * `∥` = parallel, always. The visual discriminator is the prefix spacing and
  * color, not the glyph itself.
  *
  * Invariant: `activeTools` is a dispatcher-observed snapshot, so this function
- * is purely a projection of it — it never widens or ages the set. `∥N`
+ * is purely a projection of it — it never widens or ages the set. `∥i/N`
  * therefore always equals the number of handlers actually executing, and a
  * queued or already-settled call cannot be badged.
  *
@@ -301,12 +304,16 @@ export function batchBadge(chunk: ToolResultChunk | undefined): string {
  */
 export function activeToolBadge(
   toolUseId: string,
-  activeTools: { activeCount: number; toolUseIds: Set<string> } | null,
+  activeTools: { activeCount: number; toolUseIds: Set<string>; toolIndex?: Map<string, number> } | null,
 ): string {
   if (!activeTools || activeTools.toolUseIds.size <= 1 || !activeTools.toolUseIds.has(toolUseId)) {
     return '';
   }
-  return palette.brand(`  ∥${activeTools.toolUseIds.size}`);
+  const n = activeTools.toolUseIds.size;
+  const i = activeTools.toolIndex?.get(toolUseId);
+  return typeof i === 'number'
+    ? palette.brand(`  ∥${i}/${n}`)
+    : palette.brand(`  ∥${n}`);
 }
 
 /**

@@ -124,6 +124,19 @@ describe('activeToolBadge — live in-flight parallel-wave indicator (Phase 2, i
     const live = stripAnsi(activeToolBadge('tool-a', active));
     expect(live).toContain('∥');
   });
+
+  it('renders ∥i/N when toolIndex is present — shows position within the wave', () => {
+    const toolIndex = new Map([['tool-a', 1], ['tool-b', 2], ['tool-c', 3]]);
+    const active = { activeCount: 3, toolUseIds: new Set(['tool-a', 'tool-b', 'tool-c']), toolIndex };
+    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe('  ∥1/3');
+    expect(stripAnsi(activeToolBadge('tool-b', active))).toBe('  ∥2/3');
+    expect(stripAnsi(activeToolBadge('tool-c', active))).toBe('  ∥3/3');
+  });
+
+  it('falls back to ∥N when toolIndex is absent (backward compat)', () => {
+    const active = makeActive(3, 'tool-a', 'tool-b', 'tool-c');
+    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe('  ∥3');
+  });
 });
 
 describe('doneGlyph — theme-live glyph resolution', () => {

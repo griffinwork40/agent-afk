@@ -7,6 +7,7 @@ description: "Reference convention for sub-agent I/O schemas. Loaded by orchestr
 
 For each sub-agent you plan to dispatch, define a schema before the call:
 
+- `id_prefix` — **required**: a short, descriptive task label set on the Agent dispatch so the live TUI shows the agent's job (e.g. `"security review"`, `"codebase search"`, `"hypothesis: null deref"`). Never use the default `"agent-tool"`.
 - `goal` — one-sentence objective
 - `inputs` — data/context the sub-agent receives
 - `artifacts` — named structured fields expected back (not freeform prose)

@@ -50,7 +50,7 @@ import type { ToolLaneFlash } from './tool-lane-flash.js';
 export function renderToolLaneOverlay(
   entries: Map<string, Entry>,
   order: string[],
-  activeTools: { activeCount: number; toolUseIds: Set<string> } | null,
+  activeTools: { activeCount: number; toolUseIds: Set<string>; toolIndex?: Map<string, number> } | null,
   flash: ToolLaneFlash | null,
   maxOverlayRoots: number,
 ): string {

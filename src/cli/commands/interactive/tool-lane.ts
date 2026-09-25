@@ -58,8 +58,9 @@ export class ToolLane {
    *
    * Set by {@link notifyToolActivity} when a `tool-activity` event arrives.
    * `toolUseIds` is the set of calls the dispatcher reports as RUNNING right
-   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `∥N`
-   * badge on each in-flight row whose `toolUseId` is a member.
+   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `∥i/N`
+   * badge on each in-flight row whose `toolUseId` is a member, using `toolIndex`
+   * to show the 1-based position of each call within the wave.
    *
    * Invariant: this is replaced wholesale on every update and cleared when the
    * dispatcher reports fewer than two active calls — the lane never infers
@@ -70,7 +71,7 @@ export class ToolLane {
    *
    * `null` when no parallel wave is in flight.
    */
-  private activeTools: { activeCount: number; toolUseIds: Set<string> } | null = null;
+  private activeTools: { activeCount: number; toolUseIds: Set<string>; toolIndex: Map<string, number> } | null = null;
 
   /**
    * Optional flash tracker for 150ms glyph pulses on tool completion.
@@ -263,8 +264,15 @@ export class ToolLane {
    * @param activeToolUseIds Ids of the calls running right now.
    */
   notifyToolActivity(activeCount: number, activeToolUseIds: string[]): void {
-    this.activeTools =
-      activeCount >= 2 ? { activeCount, toolUseIds: new Set(activeToolUseIds) } : null;
+    if (activeCount < 2) {
+      this.activeTools = null;
+      return;
+    }
+    const toolIndex = new Map<string, number>();
+    for (let i = 0; i < activeToolUseIds.length; i++) {
+      toolIndex.set(activeToolUseIds[i]!, i + 1); // 1-based position
+    }
+    this.activeTools = { activeCount, toolUseIds: new Set(activeToolUseIds), toolIndex };
   }
 
   /**
