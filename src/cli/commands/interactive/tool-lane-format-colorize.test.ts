@@ -247,6 +247,7 @@ describe('no-indent invariant', () => {
     '✓ src/cli/palette.test.ts (42 tests) 12ms',
     '× src/cli/palette.test.ts (3 failed)',
     'PASS src/cli/palette.test.ts',
+    'FAIL src/cli/palette.test.ts',
     'Tests  42 passed (42)',
     "src/cli/palette.ts(82,15): error TS2345: bad type",
     'Found 0 errors.',

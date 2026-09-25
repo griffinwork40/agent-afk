@@ -6,8 +6,9 @@
  * Pure-function tests; no ToolLane / no terminal state.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import type { ChalkInstance } from 'chalk';
+import chalk from 'chalk';
 import {
   summarizeToolArgs,
   formatOutcome,
@@ -1793,5 +1794,32 @@ describe('formatOutcome — error gutter ▌ on continuation lines', () => {
     const hiddenLine = lines.find((l) => stripAnsi(l).includes('earlier lines hidden'));
     expect(hiddenLine).toBeDefined();
     expect(stripAnsi(hiddenLine!)).not.toContain('▌');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatOutcome — colorizePreviewLine integration (C-5)
+// Verifies that a recognizable tailPreview line (e.g. a vitest ✓ pass line)
+// is colorized green by the colorizePreviewLine call inside formatOutcome.
+// A future accidental removal of that call would strip all color and cause
+// the raw output to lack the green escape code, making this test fail.
+// ---------------------------------------------------------------------------
+
+describe('formatOutcome — colorizePreviewLine integration', () => {
+  // Force chalk to emit ANSI codes regardless of CI environment.
+  beforeAll(() => { chalk.level = 3; });
+
+  it('tailPreview pass line is colorized green (colorizePreviewLine is called)', () => {
+    const GREEN = '\x1b[32m';
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'colorize-integration',
+      content: 'first line…+5 lines',
+      lineCount: 5,
+      tailPreview: ['✓ src/foo.test.ts (1 test)'],
+    };
+    // Do NOT use stripAnsi here — we are asserting that color codes ARE present.
+    const raw = formatOutcome(chunk, undefined, 80, 'bash');
+    expect(raw).toContain(GREEN);
   });
 });
