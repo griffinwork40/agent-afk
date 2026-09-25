@@ -79,6 +79,18 @@ export class ToolLane {
    */
   flash: ToolLaneFlash | null = null;
 
+  /**
+   * When `true`, completed subagent blocks are flushed to scrollback in
+   * compact form: agent header + Done summary + any errored tool children.
+   * The full tool-call tree is suppressed because it was already visible
+   * in the live overlay while the agent ran.
+   *
+   * Set to `true` by `StreamRenderer` when running on a TTY surface.
+   * Left `false` (default) on non-TTY surfaces (logs, CI) so the full
+   * tree appears in the only output channel available.
+   */
+  compactScrollback = false;
+
   addStart(toolUseId: string, toolName: string, toolInput: string): void {
     // Strip ANSI from toolInput at storage time: it originates from LLM
     // tool_use blocks and can carry OSC/CSI escapes that would render
@@ -630,8 +642,8 @@ export class ToolLane {
     // is completing (e.g., devils-advocate finishes after all its children).
     const children = childMap.get(parentEntry.toolUseId) ?? [];
     const childBlock = parentEntry.headerEmitted
-      ? formatAgentChildren(parentEntry, children, childMap, homeDir, ancestorIsLast).join('\n')
-      : formatAgentSummary(parentEntry, children, childMap, homeDir, ancestorIsLast);
+      ? formatAgentChildren(parentEntry, children, childMap, homeDir, ancestorIsLast, this.compactScrollback).join('\n')
+      : formatAgentSummary(parentEntry, children, childMap, homeDir, ancestorIsLast, this.compactScrollback);
 
     // Remove collected entries from the lane.
     for (const id of collected) {
@@ -717,10 +729,10 @@ export class ToolLane {
         groups.clear();
         groupOrder.length = 0;
         if (entry.headerEmitted) {
-          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, []);
+          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, [], this.compactScrollback);
           lines.push(...closerLines);
         } else {
-          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir));
+          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir, undefined, this.compactScrollback));
         }
       } else {
         if (!groups.has(entry.toolName)) {
@@ -798,10 +810,10 @@ export class ToolLane {
         groupOrder.length = 0;
         if (entry.headerEmitted) {
           // Header already in scrollback from flushSource; emit only closer.
-          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, []);
+          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, [], this.compactScrollback);
           lines.push(...closerLines);
         } else {
-          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir));
+          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir, undefined, this.compactScrollback));
         }
       } else {
         if (!groups.has(entry.toolName)) {

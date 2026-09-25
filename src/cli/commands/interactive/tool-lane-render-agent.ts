@@ -4,6 +4,7 @@ import { MAX_VISIBLE_CHILDREN, batchBadge } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
 import { getGlyphs, clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
+import { renderCompactFlushChildren } from './tool-lane-render-compact.js';
 
 /**
  * Compose a NESTING root's committed-scrollback closer — the `Done (…)` line —
@@ -80,6 +81,7 @@ function formatAgentSummary(
   childMap: Map<string, Entry[]>,
   homeDir?: string,
   ancestorIsLast: readonly boolean[] = [],
+  compact = false,
 ): string {
   const g = getGlyphs();
   const toolChildren = children.filter((c): c is ToolEntry => c.kind === 'tool');
@@ -140,24 +142,29 @@ function formatAgentSummary(
     cols,
   );
 
-  // Pass agentResultSummary into renderFlushChildren so it is added as a
-  // synthetic sibling BEFORE assignConnectors runs — ensuring the Done line
-  // receives the correct LAST connector (not a hardcoded '⎿', which was Bug #5).
-  // Thread `g` so the head row and child rows share one glyph set, and `cols`
-  // (read once above) so the head row and the recursive flush frame agree on
-  // width. `externalAncestors` extends the spine column-set leftward by
-  // `extraDepth` so descendant rows align under the head row's ancestor spines.
-  const childLines = renderFlushChildren(
-    children,
-    childMap,
-    homeDir,
-    // #532: badge the closer (Done line) when this NESTING root ran in a
-    // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
-    summaryWithBatchBadge(agent),
-    cols,
-    externalAncestors,
-    g,
-  );
+  // Choose compact vs full child rendering.
+  //
+  // Compact path (approach A — feat: collapse completed agent subtrees):
+  //   When `compact=true` (set by the TTY stream renderer) AND the agent
+  //   completed successfully (not an error), the full tool-call tree is
+  //   suppressed. The details were already visible in the live overlay while
+  //   the agent ran; only the Done summary needs to persist in scrollback.
+  //   renderCompactFlushChildren emits: errored tool children (per acceptance
+  //   criterion "failures must never be hidden") + the Done summary line.
+  //
+  // Full path (all other cases):
+  //   - compact=false (non-TTY: logs, CI) — scrollback is the only output.
+  //   - Agent-level error (agent result.isError === true, e.g. Ctrl-C/abort):
+  //     the whole tree is failure evidence and must be visible.
+  //
+  // #532: badge the closer (Done line) when this NESTING root ran in a
+  // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
+  const badge = summaryWithBatchBadge(agent);
+  const agentErrored = agent.result?.isError === true;
+  const useCompact = compact && !agentErrored;
+  const childLines = useCompact
+    ? renderCompactFlushChildren(children, childMap, homeDir, badge, cols, externalAncestors, g)
+    : renderFlushChildren(children, childMap, homeDir, badge, cols, externalAncestors, g);
 
   return [agentLine, ...childLines].join('\n');
 }
@@ -231,6 +238,7 @@ function formatAgentChildren(
   childMap: Map<string, Entry[]>,
   homeDir?: string,
   ancestorIsLast: readonly boolean[] = [],
+  compact = false,
 ): string[] {
   // Mirror formatAgentSummary's DESCENDANT-row encoding: thread the per-column
   // last-ness vector into renderFlushChildren so each ancestor column draws an
@@ -244,19 +252,15 @@ function formatAgentChildren(
   // PR #642). `getGlyphs()` is read once so the block shares one glyph set.
   const g = getGlyphs();
   const externalAncestors: readonly boolean[] = ancestorIsLast;
-  return renderFlushChildren(
-    children,
-    childMap,
-    homeDir,
-    // #532: badge the closer (Done line) when this NESTING root ran in a
-    // parallel wave. In this (headerEmitted) path the head row was already
-    // committed eagerly by formatAgentHeader without the badge (batchSize was
-    // unknown then), so the closer is the only completion-time anchor.
-    summaryWithBatchBadge(agent),
-    toolLaneWidth(),
-    externalAncestors,
-    g,
-  );
+  const badge = summaryWithBatchBadge(agent);
+  // Compact path (approach A): mirrors the guard in formatAgentSummary.
+  // compact=true (TTY) AND no agent-level error → compact children.
+  // compact=false (non-TTY) OR agent errored → full tree.
+  const agentErrored = agent.result?.isError === true;
+  const useCompact = compact && !agentErrored;
+  return useCompact
+    ? renderCompactFlushChildren(children, childMap, homeDir, badge, toolLaneWidth(), externalAncestors, g)
+    : renderFlushChildren(children, childMap, homeDir, badge, toolLaneWidth(), externalAncestors, g);
 }
 
 

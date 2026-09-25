@@ -238,6 +238,12 @@ export class StreamRenderer {
       && !isPlainOutputRequested()
       && Boolean(process.stdout.isTTY)
       && Boolean(process.stdin.isTTY);
+    // On TTY surfaces the live overlay shows full tool-call detail while
+    // agents run; compact scrollback keeps only the Done summary once they
+    // finish (approach A — feat: collapse completed agent subtrees).
+    // On non-TTY (logs, CI) the tool-call tree is the only visible output,
+    // so compact mode is disabled and the full tree is preserved.
+    this.toolLane.compactScrollback = this.isTTY;
     this.activeSkillName = opts.activeSkillName;
     this.history = opts.history;
     this.autocompleteState = opts.autocompleteState;
