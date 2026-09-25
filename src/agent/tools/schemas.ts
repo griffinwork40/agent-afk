@@ -82,6 +82,33 @@ export const readFileTool: AnthropicToolDef = {
   },
 };
 
+export const viewImageTool: AnthropicToolDef = {
+  name: 'view_image',
+  category: 'read',
+  concurrencySafe: true,
+  description:
+    'Read an image file from the filesystem and return it as a viewable image attached ' +
+    'to the tool result — you can see it directly. Supports .png, .jpg/.jpeg, .gif, .webp. ' +
+    'Use when you need to inspect a local image: design diagrams, saved screenshots, charts, photos.\n\n' +
+    'WARNING: each inline image consumes ~333K–484K context tokens (≈$1–3 at current rates ' +
+    'for Anthropic models). Use for genuine visual inspection only; do not call in a loop. ' +
+    'Images exceeding 8000px in either dimension or 2 MiB base64 are returned as text-only ' +
+    '(imageOmitted key in the JSON result explains why). On OpenAI-compatible providers the ' +
+    'image pixel data is silently dropped but text metadata is still returned.\n\n' +
+    'Security: subject to the same read-root policy as read_file — paths outside the session\'s ' +
+    'allowed read roots are rejected. Protected credential paths (SSH keys, etc.) are always denied.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Absolute path to the image file to view. Must be .png, .jpg, .jpeg, .gif, or .webp.',
+      },
+    },
+    required: ['file_path'],
+  },
+};
+
 export const extractDocumentTool: AnthropicToolDef = {
   name: 'extract_document',
   category: 'read',
@@ -1414,6 +1441,7 @@ export const clipboardReadTool: AnthropicToolDef = {
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   bashTool,
   readFileTool,
+  viewImageTool,
   extractDocumentTool,
   writeFileTool,
   editFileTool,

@@ -462,7 +462,7 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
       hookConfig,
       { cwd: projectCwd },
     );
-    expect(registry.count('SessionStart')).toBe(1);
+    expect(registry.count('SessionStart')).toBe(2); // 1 user hook + 1 built-in placeholder-prevent hook
   });
 });
 

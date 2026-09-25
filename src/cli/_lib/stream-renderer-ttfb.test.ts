@@ -104,8 +104,10 @@ describe('checkTtfbAnnotation — marks dirty on each second advance', () => {
 // ─── StreamRenderer integration ──────────────────────────────────────────────
 
 describe('StreamRenderer.notifyFirstContent', () => {
-  it('guarantees one post-notification flush in a later event-loop turn', () => {
-    vi.useFakeTimers();
+  it('guarantees one post-notification flush after the current microtask drains', async () => {
+    // notifyFirstContent uses queueMicrotask (not setTimeout) to schedule the
+    // post-notification flush. Drain the microtask queue with `await Promise.resolve()`
+    // instead of vi.runOnlyPendingTimers() — fake timers do not control microtasks.
     const renderer = new StreamRenderer({
       out: writer,
       forceNonTty: true,
@@ -126,11 +128,13 @@ describe('StreamRenderer.notifyFirstContent', () => {
     expect(composer.markDirty).toHaveBeenCalledWith('progress-banner');
     expect(composer.flush).not.toHaveBeenCalled();
 
-    vi.runOnlyPendingTimers();
+    // Drain the microtask queue — the queueMicrotask callback fires here.
+    await Promise.resolve();
     expect(composer.flush).toHaveBeenCalledOnce();
 
+    // Idempotent: a second call (ttfbDone is now true) schedules no microtask.
     renderer.notifyFirstContent();
-    vi.runOnlyPendingTimers();
+    await Promise.resolve();
     expect(composer.flush).toHaveBeenCalledOnce();
   });
 });

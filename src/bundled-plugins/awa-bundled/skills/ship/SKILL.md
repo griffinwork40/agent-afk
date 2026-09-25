@@ -125,7 +125,7 @@ gh pr create \
 PR bodies are markdown: they routinely carry backticks (inline code), `$(...)`, and quotes. **Never** inline the body as `--body "$(cat <<'EOF' … EOF)"` — the shell parses backticks/`$(` inside the command substitution before `gh` ever runs, so the call fails (or worse, opens the PR with a truncated/garbled body and you don't notice). `--body-file` reads the file verbatim: no shell quoting, no escaping. Only `--title` stays inline — keep it a single plain line with no backticks.
 
 **Phase 8b — Fix-of-fix detection (runs immediately after the PR URL is returned by Phase 8).**
-Scan the PR title and body for cross-references to other PRs. If any referenced PR was merged within the last 7 days, apply the `fix-of-fix` label and record a structured metadata block.
+Scan the PR title and body for cross-references to other PRs. If any referenced PR was merged within the last 7 days, apply the `fix-of-fix` label.
 
 ```
 # 1. Extract referenced PR numbers from the PR body using the patterns:
@@ -141,19 +141,6 @@ gh label create fix-of-fix \
   --description "PR that fixes a bug introduced by a recently-merged PR (merged within 7 days)" \
   --color D93F0B --force
 gh pr edit <current-PR-number> --add-label fix-of-fix
-#
-# 4. Append a machine-readable cross-reference section to the PR body:
-gh pr edit <current-PR-number> --body-file <updated-body-file>
-```
-
-Structured metadata to append (only when fix-of-fix is detected):
-
-```markdown
-## Cross-references
-
-<!-- fix-of-fix: true -->
-<!-- referenced-prs: <N1>, <N2>, ... -->
-Recently-merged PRs referenced by this fix: #N1, #N2, …
 ```
 
 **Skip gracefully** when `gh` is unavailable or any step fails — the PR is already open and that is the deliverable. Never abort Phase 8b failure back to the user as a blocking error; log a one-line note instead (e.g. `fix-of-fix detection skipped: <reason>`).

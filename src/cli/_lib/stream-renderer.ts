@@ -238,6 +238,16 @@ export class StreamRenderer {
       && !isPlainOutputRequested()
       && Boolean(process.stdout.isTTY)
       && Boolean(process.stdin.isTTY);
+    // On TTY surfaces the live overlay shows full tool-call detail while
+    // agents run; compact scrollback keeps only the Done summary once they
+    // finish (approach A — feat: collapse completed agent subtrees).
+    // On non-TTY (logs, CI) the tool-call tree is the only visible output,
+    // so compact mode is disabled and the full tree is preserved.
+    // Capture mode is also excluded: a pseudoTTY test harness may have
+    // isTTY = true, but suppressing tool-call detail from the capture
+    // artifact is undesirable — same rationale as the thinkingMode downgrade
+    // above (line 223).
+    this.toolLane.compactScrollback = this.isTTY && !this.captureMode;
     this.activeSkillName = opts.activeSkillName;
     this.history = opts.history;
     this.autocompleteState = opts.autocompleteState;
@@ -429,11 +439,19 @@ export class StreamRenderer {
    * Deferred flush avoids a double-setOverlay race with checkPauseAnnotations'
    * batched flush — the pattern used by setInterrupting, setSoftStopping, and
    * setBashOutputTail (see those methods for the full rationale).
+   *
+   * Uses `queueMicrotask` (not `setTimeout`) so the flush runs after all
+   * synchronous code in the current call stack drains, but BEFORE any timer
+   * callback (including the 80ms pause tick). This removes the setTimeout race
+   * window where an interval callback could issue a second setOverlay() between
+   * the deferred flush and the event that triggered it — the phantom-blank-row
+   * class. JS is single-threaded: the microtask queued here runs at the end of
+   * the current JS task before any I/O callbacks or timers.
    */
   private deferFlush(slot: string): void {
     if (!this.overlayComposer) return;
     this.overlayComposer.markDirty(slot);
-    setTimeout(() => { if (!this.disposed) this.overlayComposer?.flush(); }, 0);
+    queueMicrotask(() => { if (!this.disposed) this.overlayComposer?.flush(); });
   }
 
   /**
@@ -516,12 +534,15 @@ export class StreamRenderer {
     );
     if (dirtied) {
       // A block-boundary chunk can synchronously drain markdown before this
-      // notification marks the banner dirty. Guarantee a later repaint, but
-      // put it in a new event-loop turn so it cannot recreate the two-flush
-      // race that originally corrupted committed-band geometry.
-      setTimeout(() => {
+      // notification marks the banner dirty. Guarantee a repaint after the
+      // current call stack drains, using queueMicrotask so the flush runs
+      // before any timer callback (including the 80ms pause tick) — removing
+      // the two-flush race that corrupted committed-band geometry with
+      // phantom blank rows when a setTimeout and a tick landed in the same
+      // JS event-loop turn.
+      queueMicrotask(() => {
         if (!this.disposed) this.overlayComposer?.flush();
-      }, 0);
+      });
     }
   }
 

@@ -93,14 +93,16 @@ jobs:
         # .afk/plans/enforce-350-line-ceiling.md.
         run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
 
-      - name: Audit the 200-line function ceiling (advisory)
-        # Advisory — warns on violations but never fails CI. The baseline ratchet
-        # still tracks which functions are over; run `pnpm audit:funcsize:update`
-        # to regenerate it after an extraction.
-        run: pnpm audit:funcsize:check || true
+      - name: Audit the 200-line function ceiling (CI-blocking)
+        # CI-blocking — fails on any violation not in the grandfathered baseline.
+        # The baseline ratchet tracks which functions are over; run
+        # `pnpm audit:funcsize:update` to regenerate it after an extraction.
+        # Promoted from advisory to CI-blocking in issue #1757 once the baseline
+        # shrank to a manageable size. Baseline: .funcsize-baseline.json.
+        run: pnpm audit:funcsize:check
 
-      - name: Audit the 200-line function ceiling on functions this PR touches (advisory)
-        run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
+      - name: Audit the 200-line function ceiling on functions this PR touches
+        run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }}
 
       - name: Audit module-scope state duplication across sibling families
         # A split that re-declares a module-scope singleton or a process.on

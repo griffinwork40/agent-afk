@@ -64,7 +64,7 @@ const PINNED_HASHES = {
   // subagent-executor.isolation.test.ts + input-parse.ts confirm it is honored
   // at any depth, incl. nested inside a forked skill). Behavior-preserving prose
   // correction; frontmatter (context: fork) unchanged.
-  diagnose: '9d9751315bbae5a5411b034f6b311f9e9d7e8069a71e46384fa683da5915a090',
+  diagnose: '32e74b291f913433efdc524d4e98fde4a75a9cbc6c57a11618f9c18366a671b1',
   // false-completion-gate, fix-pr, polish: high-usage user-scope skills bundled
   // in #943. No upstream counterpart — bundled-only.
   'false-completion-gate':
@@ -97,10 +97,6 @@ const PINNED_HASHES = {
   // mutating-bash guard) AND `context: fork` (pins it to forking so the recon
   // wave keeps dispatching). The upstream ground-state has neither layer, so
   // both lines are permanent bundled-only divergence.
-  // Hash re-bumped: added eval-pipeline recency survey section (#2010) — surfaces
-  // a warning finding when eval-run hasn't executed in N days (default 7,
-  // configurable via AFK_EVAL_STALENESS_DAYS). Bundled-only; no upstream
-  // counterpart to back-port.
   'ground-state':
     '619d00252cb2006184f4e0e3fcd3b00a1a01c2e8751c6165ad16c313cb716bc2',
 
@@ -118,7 +114,7 @@ const PINNED_HASHES = {
   // the `--` form. Bundled-only — mirror into the user-scope /refactor at
   // ~/.afk/skills/ if it drifts back.
   refactor: '816bcc71c185cf0fe511c67424986ae08b45364d00bb790c1b972c3d562d099e',
-  research: 'abe79d75a5f3c74696ef002293dbe8714e446f8955de97089d1005f1e70bc269',
+  research: '052f8ec6f467f5b9200bea01286bebecf079c7135897a6a503c9cd74a019304b',
   // History: /review Wave 1 no longer mandates a `git show` re-read (#726,
   // #777); severity and disposition split into separate axes with an explicit
   // `blocking` field, never-overridable security/data-integrity mediums, and a
@@ -132,13 +128,13 @@ const PINNED_HASHES = {
 
 
 
-  review: 'ebf930c14958adea68de9a22e8d1f97090e20139ad79e17da45e048eeb9285d7',
+  review: 'ba12c536ca301011e26cd12156f9b922cceb8ddc4b531f58d5c15d80006e414e',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
   // Full rationale: docs/bundled-plugins.md#shadow-verify-52
   'shadow-verify':
-    '9f7db5a0612c6042512729c84ce6ee1b534a04fdb49ba0c0904903208acfb136',
+    'd38252df942bc87978fe051f81bb3a02114f80e7dee46e120cb1d0d58c91f06f',
   // Hash bumped 2026-06: Phase 4 (commit) + Phase 8 (PR) switched from the
   // `--body "$(cat <<'EOF' … EOF)"` heredoc-in-command-substitution antipattern
   // to the file-based form (`git commit -F` / `gh pr create --body-file`). The
@@ -147,7 +143,7 @@ const PINNED_HASHES = {
   // git/gh ran, failing the call or recording a mangled/truncated body. The
   // file-based form matches the safe convention already used in src/agent/gh.ts.
   // BACK-PORT GAP: the same fix should still land in the upstream /ship skill.
-  ship: 'f45f24eefcc3f36e0276c6beceb97e139394b2019abd59b9099c41e13809ac66',
+  ship: '65cd01d2ebc3db399483ce2a583d62ecbf85d87bb9b6ae6b71dbfe348dbf0368',
   // simplify is bundled-only (no upstream counterpart).
   simplify:
     'a984a507872949e17c87ab72979cb089524ba1da899f38af80fd0e725ebff667',

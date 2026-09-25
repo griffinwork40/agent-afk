@@ -47,7 +47,10 @@ export function colorizePreviewLine(line: string): string | null {
 /* ------------------------------------------------------------------ */
 
 // File-stat: `  src/foo.ts | 10 ++++----`
-const FILE_STAT_RE = /^(\s*\S+.*\|\s*\d+\s+)([+-]+)$/;
+// Use [^|]+ instead of \S+.* to avoid greedy backtracking on `|`-dense input
+// and to anchor deterministically to the first `|` (filenames may contain `|`
+// on macOS/Linux, but git stat never emits them — the fix is a precaution).
+const FILE_STAT_RE = /^(\s*[^|]+\|\s*\d+\s+)([+-]+)$/;
 // Summary: `8 files changed, 44 insertions(+), 28 deletions(-)`
 const DIFF_SUMMARY_RE = /^\s*\d+ files? changed/;
 
@@ -114,7 +117,9 @@ const JEST_FAIL_RE = /^(FAIL\s+.+)/;
 // Vitest/jest summary: `Tests  3 failed | 147 passed (150)`
 // Also matches: `Test Files  1 passed (1)`
 // The pattern captures `N failed` and `N passed` segments for coloring.
-const TEST_SUMMARY_RE = /^\s*(Tests?|Test Files)\s+/;
+// Require plural `Tests` (not singular `Test`) to avoid matching generic bash
+// lines like "Test failed with error code 1" that start with "Test ".
+const TEST_SUMMARY_RE = /^\s*(Tests|Test Files)\s+/;
 
 function colorizeTestRunner(line: string): string | null {
   // Pass/fail — VITEST_PASS_RE / VITEST_FAIL_RE accept optional leading

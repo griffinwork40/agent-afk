@@ -31,14 +31,16 @@ function hasBadge(lines: string[], width: number): boolean {
 }
 
 describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () => {
-  it('shows ∥2 on in-flight rows after notifyToolActivity(2)', () => {
+  it('shows ∥i/N on in-flight rows after notifyToolActivity(2)', () => {
     const lane = new ToolLane();
     lane.addStart('id-read', 'read_file', '("x.ts")');
     lane.addStart('id-glob', 'glob', '("**/*.ts")');
     lane.notifyToolActivity(2, ['id-read', 'id-glob']);
 
     const lines = overlayLines(lane);
-    expect(hasBadge(lines, 2)).toBe(true);
+    // id-read is position 1, id-glob is position 2 → ∥1/2 and ∥2/2
+    expect(lines.some((l) => l.includes('∥1/2'))).toBe(true);
+    expect(lines.some((l) => l.includes('∥2/2'))).toBe(true);
   });
 
   it('shows the badge on both member rows, not on non-members', () => {

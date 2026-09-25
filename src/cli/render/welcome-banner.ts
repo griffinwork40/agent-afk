@@ -1,4 +1,3 @@
-import { sep } from 'node:path';
 import chalk from 'chalk';
 import { displayWidth, padDisplayRight } from '../display.js';
 import { env } from '../../config/env.js';
@@ -458,9 +457,13 @@ function tildifyHome(p: string): string {
   const home = env.HOME;
   if (home === undefined || home.length === 0) return p;
   if (p === home) return '~';
-  const prefix = home.endsWith(sep) ? home : home + sep;
+  // Use '/' unconditionally: callers always pass forward-slash paths (POSIX
+  // convention on all platforms), so matching against path.sep ('\\' on
+  // Windows) would never find a match there. The display output is also
+  // forward-slash by convention regardless of platform.
+  const prefix = home.endsWith('/') ? home : home + '/';
   if (p.startsWith(prefix)) {
-    return '~' + sep + p.slice(prefix.length);
+    return '~/' + p.slice(prefix.length);
   }
   return p;
 }

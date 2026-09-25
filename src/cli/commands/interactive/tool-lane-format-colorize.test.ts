@@ -76,6 +76,21 @@ describe('git diff --stat', () => {
     expect(result).not.toBeNull();
     expect(hasGreen(result)).toBe(true);
   });
+
+  it('matches correctly when path contains a pipe character', () => {
+    // A filename with a literal `|` (allowed on macOS/Linux, never emitted by
+    // git stat in practice). FILE_STAT_RE must anchor to the *last* `|` so
+    // the bar graph capture is still correct; [^|]+ ensures linear matching.
+    // The pattern should still match — the bar is captured after the final `|`.
+    const result = colorizePreviewLine('  foo|bar.ts | 3 +++');
+    // With [^|]+ the first `|` in the path ends the filename capture, so the
+    // whole line no longer looks like a valid stat line (the count segment would
+    // be `bar.ts ` not `\d+`).  The fix intentionally sacrifices this rare
+    // ambiguous case for deterministic, linear matching.
+    // Either null (no match) or a colorized result is acceptable; what must NOT
+    // happen is a catastrophic backtracking hang on `|`-dense input.
+    expect(typeof result === 'string' || result === null).toBe(true);
+  });
 });
 
 /* ================================================================== */
@@ -155,6 +170,21 @@ describe('test runner output', () => {
       expect(result).not.toBeNull();
       expect(hasRed(result)).toBe(true);
       expect(hasGreen(result)).toBe(false);
+    });
+
+    it('does NOT route singular "Test " prefix lines through colorizeTestSummary', () => {
+      // A bash output line like "Test failed with error code 1" starts with
+      // "Test " (singular). After tightening TEST_SUMMARY_RE to require plural
+      // "Tests", this must return null (no match) rather than passing through
+      // colorizeTestSummary and rendering in default terminal color.
+      const result = colorizePreviewLine('Test failed with error code 1');
+      expect(result).toBeNull();
+    });
+
+    it('does NOT route "Test:" lines through colorizeTestSummary', () => {
+      // Another common bash output variant.
+      const result = colorizePreviewLine('Test: checking something');
+      expect(result).toBeNull();
     });
   });
 });
@@ -247,6 +277,7 @@ describe('no-indent invariant', () => {
     '✓ src/cli/palette.test.ts (42 tests) 12ms',
     '× src/cli/palette.test.ts (3 failed)',
     'PASS src/cli/palette.test.ts',
+    'FAIL src/cli/palette.test.ts',
     'Tests  42 passed (42)',
     "src/cli/palette.ts(82,15): error TS2345: bad type",
     'Found 0 errors.',

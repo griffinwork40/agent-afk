@@ -1038,6 +1038,20 @@ export const ENV_REGISTRY = [
     required: false,
     category: 'process',
   },
+  {
+    name: 'USER',
+    description: 'Unix login name of the current user. Used as a default approver identity in improve/approve.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USERNAME',
+    description: 'Windows login name of the current user. Fallback after USER when identifying the approver.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
 
   // ── Daemon ────────────────────────────────────────────────────────────────
   {

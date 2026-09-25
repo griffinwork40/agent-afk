@@ -11,12 +11,13 @@
  * Covers the grace-period gate (nothing rendered before ELAPSED_GRACE_MS),
  * the seconds-only vs. minutes+seconds format switch at the 60s boundary,
  * the padStart zero-padding on the seconds remainder, and the C-2 adaptive
- * color thresholds (dim -> amber -> red).
+ * color thresholds (dim -> amber). Red is no longer used for elapsed time —
+ * it is reserved for actual error conditions (failures, blocked states).
  */
 
 import type { ChalkInstance } from 'chalk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { formatElapsed, ELAPSED_GRACE_MS, ELAPSED_AMBER_SEC, ELAPSED_RED_SEC } from './terminal-compositor.scrollback.js';
+import { formatElapsed, ELAPSED_GRACE_MS, ELAPSED_AMBER_SEC, ELAPSED_RED_SEC, ELAPSED_AMBER_MAX_SEC } from './terminal-compositor.scrollback.js';
 import { stripAnsi } from './display.js';
 import { palette } from './palette.js';
 
@@ -136,24 +137,28 @@ describe('formatElapsed', () => {
     }
   });
 
-  it('switches to palette.error at exactly ELAPSED_RED_SEC', () => {
+  it('stays on palette.warning at and beyond ELAPSED_AMBER_MAX_SEC (60s) — red reserved for errors', () => {
     const savedWarning = palette.warning;
     const savedError = palette.error;
     try {
       palette.warning = sentinelChalk('WARN');
       palette.error = sentinelChalk('ERR');
 
-      // Exactly at red threshold (60s)
-      const atRed = Date.now() - ELAPSED_RED_SEC * 1_000;
-      const rawRed = formatElapsed(atRed);
-      expect(rawRed).toContain('ERR:');
-      expect(rawRed).not.toContain('WARN:');
+      // Exactly at the 60s threshold: still warning (not error)
+      const atMax = Date.now() - ELAPSED_AMBER_MAX_SEC * 1_000;
+      const rawAtMax = formatElapsed(atMax);
+      expect(rawAtMax).toContain('WARN:');
+      expect(rawAtMax).not.toContain('ERR:');
 
-      // One second before (59s): still warning
-      const beforeRed = Date.now() - (ELAPSED_RED_SEC - 1) * 1_000;
-      const rawBefore = formatElapsed(beforeRed);
-      expect(rawBefore).toContain('WARN:');
-      expect(rawBefore).not.toContain('ERR:');
+      // Well past 60s (e.g. 5 minutes): still warning, never red
+      const pastMax = Date.now() - 300_000;
+      const rawPast = formatElapsed(pastMax);
+      expect(rawPast).toContain('WARN:');
+      expect(rawPast).not.toContain('ERR:');
+
+      // ELAPSED_RED_SEC is kept as a deprecated alias — its numeric value (60)
+      // matches ELAPSED_AMBER_MAX_SEC, so the threshold math is unchanged.
+      expect(ELAPSED_RED_SEC).toBe(ELAPSED_AMBER_MAX_SEC);
     } finally {
       palette.warning = savedWarning;
       palette.error = savedError;

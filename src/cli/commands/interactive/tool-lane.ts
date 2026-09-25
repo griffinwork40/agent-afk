@@ -62,8 +62,9 @@ export class ToolLane {
    *
    * Set by {@link notifyToolActivity} when a `tool-activity` event arrives.
    * `toolUseIds` is the set of calls the dispatcher reports as RUNNING right
-   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `∥N`
-   * badge on each in-flight row whose `toolUseId` is a member.
+   * now; `activeCount` is that set's size (≥ 2). The overlay renders a `∥i/N`
+   * badge on each in-flight row whose `toolUseId` is a member, using `toolIndex`
+   * to show the 1-based position of each call within the wave.
    *
    * Invariant: this is replaced wholesale on every update and cleared when the
    * dispatcher reports fewer than two active calls — the lane never infers
@@ -74,7 +75,7 @@ export class ToolLane {
    *
    * `null` when no parallel wave is in flight.
    */
-  private activeTools: { activeCount: number; toolUseIds: Set<string> } | null = null;
+  private activeTools: { activeCount: number; toolUseIds: Set<string>; toolIndex: Map<string, number> } | null = null;
 
   /**
    * Optional flash tracker for 150ms glyph pulses on tool completion.
@@ -82,6 +83,18 @@ export class ToolLane {
    * `null` on non-TTY surfaces (no overlay to repaint) and in tests.
    */
   flash: ToolLaneFlash | null = null;
+
+  /**
+   * When `true`, completed subagent blocks are flushed to scrollback in
+   * compact form: agent header + Done summary + any errored tool children.
+   * The full tool-call tree is suppressed because it was already visible
+   * in the live overlay while the agent ran.
+   *
+   * Set to `true` by `StreamRenderer` when running on a TTY surface.
+   * Left `false` (default) on non-TTY surfaces (logs, CI) so the full
+   * tree appears in the only output channel available.
+   */
+  compactScrollback = false;
 
   addStart(toolUseId: string, toolName: string, toolInput: string): void {
     // Strip ANSI from toolInput at storage time: it originates from LLM
@@ -288,8 +301,15 @@ export class ToolLane {
    * @param activeToolUseIds Ids of the calls running right now.
    */
   notifyToolActivity(activeCount: number, activeToolUseIds: string[]): void {
-    this.activeTools =
-      activeCount >= 2 ? { activeCount, toolUseIds: new Set(activeToolUseIds) } : null;
+    if (activeCount < 2) {
+      this.activeTools = null;
+      return;
+    }
+    const toolIndex = new Map<string, number>();
+    for (let i = 0; i < activeToolUseIds.length; i++) {
+      toolIndex.set(activeToolUseIds[i]!, i + 1); // 1-based position
+    }
+    this.activeTools = { activeCount, toolUseIds: new Set(activeToolUseIds), toolIndex };
   }
 
   /**
@@ -634,8 +654,8 @@ export class ToolLane {
     // is completing (e.g., devils-advocate finishes after all its children).
     const children = childMap.get(parentEntry.toolUseId) ?? [];
     const childBlock = parentEntry.headerEmitted
-      ? formatAgentChildren(parentEntry, children, childMap, homeDir, ancestorIsLast).join('\n')
-      : formatAgentSummary(parentEntry, children, childMap, homeDir, ancestorIsLast);
+      ? formatAgentChildren(parentEntry, children, childMap, homeDir, ancestorIsLast, this.compactScrollback).join('\n')
+      : formatAgentSummary(parentEntry, children, childMap, homeDir, ancestorIsLast, this.compactScrollback);
 
     // Remove collected entries from the lane.
     for (const id of collected) {
@@ -721,10 +741,10 @@ export class ToolLane {
         groups.clear();
         groupOrder.length = 0;
         if (entry.headerEmitted) {
-          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, []);
+          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, [], this.compactScrollback);
           lines.push(...closerLines);
         } else {
-          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir));
+          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir, undefined, this.compactScrollback));
         }
       } else {
         if (!groups.has(entry.toolName)) {
@@ -802,10 +822,10 @@ export class ToolLane {
         groupOrder.length = 0;
         if (entry.headerEmitted) {
           // Header already in scrollback from flushSource; emit only closer.
-          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, []);
+          const closerLines = formatAgentChildren(entry, children ?? [], childMap, homeDir, [], this.compactScrollback);
           lines.push(...closerLines);
         } else {
-          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir));
+          lines.push(formatAgentSummary(entry, children ?? [], childMap, homeDir, undefined, this.compactScrollback));
         }
       } else {
         if (!groups.has(entry.toolName)) {

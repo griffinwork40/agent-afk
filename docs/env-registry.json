@@ -1540,6 +1540,20 @@
       "category": "process"
     },
     {
+      "name": "USER",
+      "description": "Unix login name of the current user. Used as a default approver identity in improve/approve.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
+      "name": "USERNAME",
+      "description": "Windows login name of the current user. Fallback after USER when identifying the approver.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "USERPROFILE",
       "description": "Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32.",
       "type": "string",

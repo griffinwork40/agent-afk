@@ -131,7 +131,7 @@ function renderSdkBreakdown(
   out.line(divider());
 
   // Cumulative context vs model max — the authoritative numbers.
-  out.line(`  total         ${palette.success(formatTokens(usage.totalTokens))}  of  ${palette.meta(formatTokens(usage.maxTokens))}  (${palette.meta(`${Math.round(usage.percentage * 100) / 100}%`)})`);
+  out.line(`  total         ${palette.success(formatTokens(usage.totalTokens ?? 0))}  of  ${palette.meta(formatTokens(usage.maxTokens ?? 0))}  (${palette.meta(`${usage.percentage !== undefined ? Math.round(usage.percentage * 100) / 100 : '?'}%`)})`);
   if (usage.autoCompactThreshold && usage.isAutoCompactEnabled) {
     out.line(`  compact at    ${palette.meta(formatTokens(usage.autoCompactThreshold))}`);
   }

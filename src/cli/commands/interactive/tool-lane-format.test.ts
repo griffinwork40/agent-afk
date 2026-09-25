@@ -6,8 +6,9 @@
  * Pure-function tests; no ToolLane / no terminal state.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import type { ChalkInstance } from 'chalk';
+import chalk from 'chalk';
 import {
   summarizeToolArgs,
   formatOutcome,
@@ -123,6 +124,19 @@ describe('activeToolBadge — live in-flight parallel-wave indicator (Phase 2, i
     const active = makeActive(2, 'tool-a', 'tool-b');
     const live = stripAnsi(activeToolBadge('tool-a', active));
     expect(live).toContain('∥');
+  });
+
+  it('renders ∥i/N when toolIndex is present — shows position within the wave', () => {
+    const toolIndex = new Map([['tool-a', 1], ['tool-b', 2], ['tool-c', 3]]);
+    const active = { activeCount: 3, toolUseIds: new Set(['tool-a', 'tool-b', 'tool-c']), toolIndex };
+    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe('  ∥1/3');
+    expect(stripAnsi(activeToolBadge('tool-b', active))).toBe('  ∥2/3');
+    expect(stripAnsi(activeToolBadge('tool-c', active))).toBe('  ∥3/3');
+  });
+
+  it('falls back to ∥N when toolIndex is absent (backward compat)', () => {
+    const active = makeActive(3, 'tool-a', 'tool-b', 'tool-c');
+    expect(stripAnsi(activeToolBadge('tool-a', active))).toBe('  ∥3');
   });
 });
 
@@ -1793,5 +1807,32 @@ describe('formatOutcome — error gutter ▌ on continuation lines', () => {
     const hiddenLine = lines.find((l) => stripAnsi(l).includes('earlier lines hidden'));
     expect(hiddenLine).toBeDefined();
     expect(stripAnsi(hiddenLine!)).not.toContain('▌');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatOutcome — colorizePreviewLine integration (C-5)
+// Verifies that a recognizable tailPreview line (e.g. a vitest ✓ pass line)
+// is colorized green by the colorizePreviewLine call inside formatOutcome.
+// A future accidental removal of that call would strip all color and cause
+// the raw output to lack the green escape code, making this test fail.
+// ---------------------------------------------------------------------------
+
+describe('formatOutcome — colorizePreviewLine integration', () => {
+  // Force chalk to emit ANSI codes regardless of CI environment.
+  beforeAll(() => { chalk.level = 3; });
+
+  it('tailPreview pass line is colorized green (colorizePreviewLine is called)', () => {
+    const GREEN = '\x1b[32m';
+    const chunk: ToolResultChunk = {
+      type: 'tool_result',
+      toolUseId: 'colorize-integration',
+      content: 'first line…+5 lines',
+      lineCount: 5,
+      tailPreview: ['✓ src/foo.test.ts (1 test)'],
+    };
+    // Do NOT use stripAnsi here — we are asserting that color codes ARE present.
+    const raw = formatOutcome(chunk, undefined, 80, 'bash');
+    expect(raw).toContain(GREEN);
   });
 });

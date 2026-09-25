@@ -11,6 +11,94 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.248.1] - 2026-09-25
+
+### Fixed
+- restore strict assertions in 2 DAG isolation tests (8e183b1f)
+
+### Changed
+- Merge pull request #2178 from griffinwork40/afk/iso-agent-tool-1-6jr39a (6f3fb823)
+- add 4 missing DAG isolation edge-case tests (087d4762)
+
+## [5.248.0] - 2026-09-25
+
+### Added
+- surface task responsibility labels on agent rows (#2173) (2e1c4830)
+- add placeholder prevention SessionStart hook (Layer 1) (8fbb3008)
+
+### Fixed
+- gracefully handle shallow-checkout diff failure in changedSince() (a2a30fa2)
+- update SessionStart hook count assertion to 2 (placeholder-prevent built-in) (e1f1baab)
+- cap blank gap above committed band on short terminals (#2182) (a3428c82)
+
+### Changed
+- Merge pull request #2179 from griffinwork40/afk/iso-agent-tool-2-05vah6 (239cc28c)
+- update stale hash pins after rebase on main (df3d2e57)
+- sync baseline after rebase on main (createDefaultHookRegistry 240→250) (b993f072)
+- promote funcsize gate to CI-blocking (fa94f211)
+- Merge pull request #2192 from griffinwork40/afk/iso-agent-tool-1-bo5jkl (bd5898f2)
+- Merge pull request #2189 from griffinwork40/afk/iso-agent-tool-3-2a5ujd (bfa99f3f)
+
+## [5.247.2] - 2026-09-25
+
+### Fixed
+- remove setTimeout race conditions in lifecycle module (b062de37)
+- thread resolved sessionId into tool dispatcher for fresh sessions (beeee004)
+- gate compactScrollback on captureMode (f8c78b76)
+- view_image non-blocking follow-ups from review (8f74c792)
+
+### Changed
+- Merge pull request #2190 from griffinwork40/afk/iso-agent-tool-2-c2aqyb (503cf42b)
+- Merge pull request #2188 from griffinwork40/fix/image-generate-sessionid-wiring (9dfc9c80)
+- Merge pull request #2187 from griffinwork40/afk/iso-agent-tool-1-thtbyl (2ada9857)
+- Merge pull request #2186 from griffinwork40/afk/iso-agent-tool-2-hdzwj1 (52ef1aaf)
+- Merge pull request #2185 from griffinwork40/afk/iso-agent-tool-5-1qs2bs (9b360bac)
+- add 4 missing DAG isolation edge-case tests (#2183) (19fb251d)
+- improve colorize test coverage (#2184) (a75de197)
+- harden colorize regex patterns (068bbe21)
+
+## [5.247.1] - 2026-09-25
+
+### Fixed
+- preserve spine root anchor on short-terminal overlay truncation (#2176) (b25115e5)
+
+## [5.247.0] - 2026-09-25
+
+### Added
+- collapse completed agent subtrees in scrollback (#2174) (0efa2c8a)
+
+## [5.246.0] - 2026-09-25
+
+### Added
+- add proposal/eval-case promotion workflow (0bcd564e)
+- track human vs agent review coverage at merge time (a4dc600a)
+
+### Fixed
+- route USER/USERNAME through env registry; always validate --status (be50b56a)
+- address review feedback — parsePrNumber, ExecFn import, SKILL.md body-append, hash pins (a59f82ff)
+- windows production code gaps blocking test skips (fa467349)
+
+### Changed
+- Merge pull request #2105 from griffinwork40/refactor/2064-cast-removal (518d1441)
+- Merge pull request #2101 from griffinwork40/afk/fix-of-fix-detector-2012 (dcf9fcc7)
+- Merge pull request #2089 from griffinwork40/feat/1916-approve-promotion-workflow (2be8d9bf)
+- Merge pull request #2150 from griffinwork40/afk/iso-issue-1941-8-qn5otw (e6c5fc48)
+- remove type-assertion casts in AgentSession provider delegations (6e59e0a2)
+- regenerate env-registry docs (USER, USERNAME added) (c4b2c09a)
+
+## [5.245.0] - 2026-09-25
+
+### Added
+- add view_image tool for inline local image inspection (#2169) (7ec3dd1a)
+
+## [5.244.1] - 2026-09-25
+
+### Added
+- visual redesign — depth dimming, spacing, centering (#2141) (fa30684a)
+
+### Fixed
+- make Google results clearly show this is docs (#2170) (c5c6dac0)
+
 ## [5.244.0] - 2026-09-25
 
 ### Added

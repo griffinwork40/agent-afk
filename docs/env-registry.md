@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**193 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**195 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -222,6 +222,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
+| `USER` | string |  |  |  | Unix login name of the current user. Used as a default approver identity in improve/approve. |
+| `USERNAME` | string |  |  |  | Windows login name of the current user. Fallback after USER when identifying the approver. |
 | `USERPROFILE` | string |  |  |  | Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32. |
 | `VISUAL` | string |  |  | `nvim` | Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing. |
 | `VITEST` | string |  |  |  | Set automatically by Vitest. Used at runtime to short-circuit code paths that should not fire in tests. |

@@ -73,6 +73,7 @@ import { registerCardsSubcommand } from './cards.js';
 import { registerProposeSubcommand, registerProposalsSubcommand } from './propose.js';
 import { registerEvalGenSubcommand, registerEvalCasesSubcommand } from './eval-gen.js';
 import { registerEvalRunSubcommand } from './eval-run.js';
+import { registerApproveSubcommand } from './approve.js';
 
 export { VALID_PATTERNS } from './shared.js';
 export { applyEvalRunExit } from './eval-run.js';
@@ -89,4 +90,5 @@ export function registerImproveCommand(program: Command): void {
   registerEvalGenSubcommand(improve);
   registerEvalCasesSubcommand(improve);
   registerEvalRunSubcommand(improve);
+  registerApproveSubcommand(improve);
 }

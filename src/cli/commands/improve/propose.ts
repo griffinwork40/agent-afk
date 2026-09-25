@@ -10,6 +10,15 @@ import {
   renderProposalMarkdown,
   writeProposal,
 } from '../../../improve/propose/writer.js';
+import { formatAgeDays } from './triage-helpers.js';
+import type { ProposalStatus } from '../../../improve/schemas.js';
+
+const VALID_PROPOSAL_STATUSES: readonly ProposalStatus[] = [
+  'draft',
+  'approved',
+  'rejected',
+  'superseded',
+];
 
 // ---------------------------------------------------------------------------
 // propose (template mode only)
@@ -111,12 +120,35 @@ export function registerProposalsSubcommand(improve: Command): void {
     .description('List all proposals, newest first')
     .option('--card <slug>', 'Filter by card slug')
     .option('--risk <level>', 'Filter by risk: low | medium | high')
+    .option('--status <state>', 'Filter by status: draft | approved | rejected | superseded')
+    .option(
+      '--triage',
+      'Show only draft proposals, sorted oldest-first by age (highest-priority first for human review)',
+      false,
+    )
     .option('--json', 'Emit JSON instead of a table', false)
-    .action((opts: { card?: string; risk?: string; json: boolean }) => {
+    .action((opts: { card?: string; risk?: string; status?: string; triage: boolean; json: boolean }) => {
       try {
+        if (opts.status && !VALID_PROPOSAL_STATUSES.includes(opts.status as ProposalStatus)) {
+          console.error(
+            `Invalid --status: '${opts.status}'. Must be one of: ${VALID_PROPOSAL_STATUSES.join(', ')}`,
+          );
+          process.exit(2);
+        }
+        if (opts.triage && opts.status) {
+          console.warn(`Warning: --status is ignored when --triage is set (--triage always filters to 'draft').`);
+        }
         let entries = listProposals();
         if (opts.card) entries = entries.filter((e) => e.cardSlug === opts.card);
         if (opts.risk) entries = entries.filter((e) => e.riskLevel === opts.risk);
+        if (opts.triage) {
+          // --triage: narrow to drafts, sort oldest-first so the longest-waiting
+          // proposals surface at the top.
+          entries = entries.filter((e) => e.status === 'draft');
+          entries.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+        } else if (opts.status) {
+          entries = entries.filter((e) => e.status === opts.status);
+        }
 
         if (opts.json) {
           console.log(JSON.stringify(entries, null, 2));
@@ -124,25 +156,52 @@ export function registerProposalsSubcommand(improve: Command): void {
         }
 
         if (entries.length === 0) {
-          console.log('No proposals found.');
+          if (opts.triage) {
+            console.log('No draft proposals need review. All proposals are approved, rejected, or superseded.');
+          } else {
+            console.log('No proposals found.');
+          }
           return;
         }
 
-        const header =
-          'PROPOSAL ID                                                     | CARD                                       | RISK   | STATUS    | CREATED';
+        if (opts.triage) {
+          const draftCount = entries.length;
+          console.log(
+            `${draftCount} draft proposal(s) awaiting review (oldest first). ` +
+              `Approve with: afk improve approve <proposal-id>`,
+          );
+          console.log('');
+        }
+
+        const showAge = opts.triage;
+        const header = showAge
+          ? 'AGE   | PROPOSAL ID                                                     | CARD                                       | RISK   | CREATED'
+          : 'PROPOSAL ID                                                     | CARD                                       | RISK   | STATUS    | CREATED';
         const sep = '-'.repeat(header.length);
         console.log(header);
         console.log(sep);
         for (const e of entries) {
-          console.log(
-            [
-              e.proposalId.padEnd(64).slice(0, 64),
-              e.cardSlug.padEnd(44).slice(0, 44),
-              e.riskLevel.padEnd(6),
-              e.status.padEnd(9),
-              e.createdAt,
-            ].join(' | '),
-          );
+          if (showAge) {
+            console.log(
+              [
+                formatAgeDays(e.createdAt).padEnd(5),
+                e.proposalId.padEnd(64).slice(0, 64),
+                e.cardSlug.padEnd(44).slice(0, 44),
+                e.riskLevel.padEnd(6),
+                e.createdAt,
+              ].join(' | '),
+            );
+          } else {
+            console.log(
+              [
+                e.proposalId.padEnd(64).slice(0, 64),
+                e.cardSlug.padEnd(44).slice(0, 44),
+                e.riskLevel.padEnd(6),
+                e.status.padEnd(9),
+                e.createdAt,
+              ].join(' | '),
+            );
+          }
         }
       } catch (err) {
         handleCommandError(err);

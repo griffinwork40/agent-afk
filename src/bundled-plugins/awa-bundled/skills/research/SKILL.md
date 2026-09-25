@@ -9,6 +9,10 @@ context: load
 
 Dispatch two sub-agents in parallel using the Agent tool. Prefer `subagent_type: "research-agent"`; fall back to `subagent_type: "Explore"` with thoroughness "very thorough" if the research-agent is not available. One researches the web for external context relevant to the current task. The other inspects the local working directory for domain-relevant artifacts. Return a concise merged research brief highlighting relevant findings, conflicts, risks, and implications for the task.
 
+**TUI label convention.** Set `id_prefix` on each Agent dispatch to a short, descriptive task label so the live progress view shows the agent's job rather than a generic identifier:
+- Web agent: `id_prefix: "web research"`
+- Local inspection agent: `id_prefix: "local inspection"`
+
 **Web research agent** — always the same: search for external context, prior art, patterns, APIs, and comparable approaches relevant to the task. Domain-agnostic.
 
 **Local inspection agent** — adapt to the domain:
