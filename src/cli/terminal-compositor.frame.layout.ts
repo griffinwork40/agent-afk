@@ -64,6 +64,35 @@ export interface ViewportLayout {
 }
 
 /**
+ * Truncate an overlay to `budget` rows while preserving the head (root anchor
+ * context) and tail (most recently active content).
+ *
+ * When the overlay fits in the budget it is returned unchanged. When it must
+ * be shortened:
+ *
+ * - `budget <= 3`: fall back to a plain tail-slice (too little room to split).
+ * - Otherwise: allocate ~25% of the budget (min 1, max 5) to head rows, 1 row
+ *   for a dim "N earlier lines hidden" indicator, and the remainder to tail rows.
+ *
+ * This keeps the root `◉`/`○` turn-anchor visible so the user always knows
+ * which workflow they are in, while still showing the most recent activity at
+ * the bottom — fixing the broken-spine appearance caused by pure tail-slicing.
+ */
+export function truncateOverlayPreservingHead(lines: string[], budget: number): string[] {
+  if (lines.length <= budget) return lines;
+  // Too small to split sensibly — fall back to tail slice.
+  // Note: budget=0 must return [] (Array.slice(-0) returns the whole array).
+  if (budget <= 3) return budget === 0 ? [] : lines.slice(-budget);
+  const headCount = Math.min(5, Math.max(1, Math.floor(budget * 0.25)));
+  // 1 row for the indicator; rest goes to tail.
+  const tailCount = budget - headCount - 1;
+  if (tailCount <= 0) return lines.slice(-budget);
+  const hidden = lines.length - headCount - tailCount;
+  const indicator = palette.dim(`      ${hidden} earlier lines hidden`);
+  return [...lines.slice(0, headCount), indicator, ...lines.slice(-tailCount)];
+}
+
+/**
  * Compute the viewport layout budget for a normal (non-picker) repaint.
  *
  * @param chrome          Chrome rows gathered by {@link gatherChromeRows}.
@@ -96,7 +125,7 @@ export function computeViewportLayout(
     + (hasHintRow ? 1 : 0) + 1; // +1 for the input line
   const overlayBudget = Math.max(0, maxLines - fixedRows);
   const trimmedOverlay = overlayLines.length > overlayBudget
-    ? overlayLines.slice(-overlayBudget)
+    ? truncateOverlayPreservingHead(overlayLines, overlayBudget)
     : overlayLines;
   // Re-derive after trimming: if the overlay was the only thing above
   // input and got entirely trimmed away by the viewport budget, suppress
@@ -127,7 +156,7 @@ export function computePickerViewportLayout(
     + (attachmentRow ? 1 : 0) + gapRows + pickerRowCount;
   const overlayBudget = Math.max(0, maxLines - fixedRows);
   const trimmedOverlay = overlayLines.length > overlayBudget
-    ? overlayLines.slice(-overlayBudget)
+    ? truncateOverlayPreservingHead(overlayLines, overlayBudget)
     : overlayLines;
   const renderGap = hasFixedChrome || trimmedOverlay.length > 0;
   return { maxLines, trimmedOverlay, renderGap, extraRows };
