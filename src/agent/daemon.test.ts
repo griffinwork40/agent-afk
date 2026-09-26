@@ -825,6 +825,26 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(task?.executor).not.toBe('builtin');
   });
 
+  it('POST /tasks carries cwd through to GET /tasks', async () => {
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'cwd-task',
+        command: '/cmd',
+        cron: '* * * * *',
+        cwd: '/tmp',
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string; cwd?: string }>;
+    const task = tasks.find((t) => t.taskId === 'cwd-task');
+    expect(task?.cwd).toBe('/tmp');
+  });
+
   it('disable→re-enable regression: DELETE then POST re-registers the task in scheduler', async () => {
     // Regression path from PR #1879: disabling (DELETE) then re-enabling (POST)
     // a task must leave the task present and active in the scheduler.

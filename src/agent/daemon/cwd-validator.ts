@@ -9,7 +9,7 @@
 
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { statSync } from 'node:fs';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
 
 /**
  * Expand a leading `~/` or a bare `~` to the real home directory, then
@@ -45,6 +45,12 @@ export function expandCwd(rawCwd: string): string {
 export function validateScheduleCwd(
   rawCwd: string,
 ): { ok: true; resolved: string } | { ok: false; error: string } {
+  if (rawCwd.startsWith('~') && rawCwd !== '~' && !rawCwd.startsWith('~/')) {
+    return {
+      ok: false,
+      error: `cwd path uses unsupported tilde form (use ~/ or an absolute path): ${rawCwd}`,
+    };
+  }
   const resolved = expandCwd(rawCwd);
   let stat: ReturnType<typeof statSync>;
   try {
@@ -74,7 +80,20 @@ export function validateScheduleCwd(
  */
 export function checkTaskCwdAtRuntime(cwd: string): string | undefined {
   try {
-    const s = statSync(cwd);
+    const s = lstatSync(cwd);
+    if (s.isSymbolicLink()) {
+      let real: string;
+      try {
+        real = realpathSync(cwd);
+      } catch {
+        return `per-task cwd symlink target does not resolve: ${cwd}`;
+      }
+      const rs = lstatSync(real);
+      if (!rs.isDirectory()) {
+        return `per-task cwd symlink target is not a directory: ${real}`;
+      }
+      return undefined;
+    }
     if (!s.isDirectory()) {
       return `per-task cwd is not a directory: ${cwd}`;
     }

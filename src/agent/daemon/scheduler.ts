@@ -316,7 +316,7 @@ export class CronScheduler {
           triggeredAt: triggeredAt.toISOString(),
           durationMs: 0,
           status: 'error',
-          errorMessage: cwdError,
+          errorMessage: redactInlineSecrets(cwdError),
         };
         this.writeTelemetry(record, task);
         return record;

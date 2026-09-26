@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { validateScheduleCwd, expandCwd, checkTaskCwdAtRuntime } from './cwd-validator.js';
@@ -61,11 +61,16 @@ describe('validateScheduleCwd', () => {
 
   it('resolves to absolute path when given relative input', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'cwd-val-'));
-    // We need a relative path from cwd — use the tmpDir as absolute to avoid
-    // process.cwd() dependency, but test the resolve call:
-    const result = validateScheduleCwd(tmpDir);
+    const rel = relative(process.cwd(), tmpDir);
+    const result = validateScheduleCwd(rel);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.resolved).toBe(tmpDir);
+  });
+
+  it('returns ok:false for ~user/foo unsupported tilde form', () => {
+    const result = validateScheduleCwd('~otheruser/projects');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/unsupported tilde form/);
   });
 });
 
@@ -92,5 +97,19 @@ describe('checkTaskCwdAtRuntime', () => {
     writeFileSync(file, 'x');
     const err = checkTaskCwdAtRuntime(file);
     expect(err).toMatch(/not a directory/);
+  });
+
+  it('detects a swapped symlink (TOCTOU guard)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'cwd-symlink-'));
+    const realDir = join(tmpDir, 'real');
+    mkdirSync(realDir);
+    const link = join(tmpDir, 'link');
+    symlinkSync(realDir, link);
+    // Symlink is valid — should pass
+    expect(checkTaskCwdAtRuntime(link)).toBeUndefined();
+    // Remove the real target — symlink is now dangling
+    rmSync(realDir, { recursive: true, force: true });
+    const err = checkTaskCwdAtRuntime(link);
+    expect(err).toMatch(/does not resolve|does not exist|not a directory/);
   });
 });

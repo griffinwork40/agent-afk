@@ -358,6 +358,7 @@ async function handleRequestAsync(
       ...(executorRaw === 'agent' || executorRaw === 'shell'
         ? { executor: executorRaw as TaskExecutor }
         : {}),
+      ...(typeof obj['cwd'] === 'string' && obj['cwd'] ? { cwd: obj['cwd'] } : {}),
     };
     try {
       scheduler.register(task);

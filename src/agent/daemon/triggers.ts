@@ -109,4 +109,7 @@ export function validateScheduledTask(task: ScheduledTask): void {
       `task ${task.taskId}: unknown builtin '${task.command}' — known: ${KNOWN_BUILTINS.join(', ')}`,
     );
   }
+  if (task.cwd !== undefined && (typeof task.cwd !== 'string' || !task.cwd)) {
+    throw new Error(`task ${task.taskId}: cwd must be a non-empty string when set`);
+  }
 }
