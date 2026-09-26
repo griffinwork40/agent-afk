@@ -1,6 +1,6 @@
 // Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -18,10 +18,18 @@ type RestartLaunchdServicesFn = (opts?: {
   existsFn?: (p: string) => boolean;
   execFn?: (argv: string[]) => void;
 }) => string[];
+type IsGlobalInstallFn = (
+  pkgRoot: string,
+  env?: Record<string, string | undefined>,
+  existsFn?: (p: string) => boolean,
+) => boolean;
+type IsMainModuleFn = (metaUrl: string, argv1?: string) => boolean;
 
 let killStaleDaemon: KillStaleDaemonFn;
 let isManualBotRunning: IsManualBotRunningFn;
 let restartLaunchdServices: RestartLaunchdServicesFn;
+let isGlobalInstall: IsGlobalInstallFn;
+let isMainModule: IsMainModuleFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
@@ -30,6 +38,8 @@ beforeAll(async () => {
   killStaleDaemon = mod.killStaleDaemon as KillStaleDaemonFn;
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
+  isGlobalInstall = mod.isGlobalInstall as IsGlobalInstallFn;
+  isMainModule = mod.isMainModule as IsMainModuleFn;
 });
 
 describe.skipIf(isWin32)('killStaleDaemon', () => {
@@ -234,5 +244,126 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
     });
     expect(result).toEqual(['com.afk.daemon']);
     expect(execFn).toHaveBeenCalledWith(['kickstart', '-k', 'gui/1000/com.afk.daemon']);
+  });
+});
+
+// ─── isGlobalInstall ─────────────────────────────────────────────────────────
+// Tests verify the global-install guard introduced to prevent daemon restarts
+// during local `pnpm install` runs inside source checkouts and worktrees.
+// All tests inject pkgRoot, env, and existsFn so no real filesystem or npm
+// lifecycle environment leaks into the assertions.
+describe.skipIf(isWin32)('isGlobalInstall', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'afk-globalinstall-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('returns true when npm_config_global is "true" and no .git marker exists', () => {
+    // Simulates: npm install -g agent-afk landing under a global node_modules.
+    const env = { npm_config_global: 'true' };
+    const noGit = (_p: string) => false; // no .git
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(true);
+  });
+
+  it('returns false when npm_config_global is absent', () => {
+    // Simulates: plain `pnpm install` in any local context.
+    const env: Record<string, string | undefined> = {};
+    const noGit = (_p: string) => false;
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+
+  it('returns false when npm_config_global is "false"', () => {
+    const env = { npm_config_global: 'false' };
+    const noGit = (_p: string) => false;
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+
+  it('returns false when npm_config_global is "true" but .git marker exists (source checkout)', () => {
+    // Belt-and-suspenders: even if npm_config_global were somehow set to "true"
+    // inside a repo (e.g. a misconfigured CI job), the .git marker prevents restart.
+    const gitDir = join(tmpDir, '.git');
+    mkdirSync(gitDir);
+    const env = { npm_config_global: 'true' };
+    // Use real existsSync — .git dir was just created in tmpDir.
+    expect(isGlobalInstall(tmpDir, env, existsSync)).toBe(false);
+  });
+
+  it('returns false when .git is a file (managed git worktree)', () => {
+    // Worktrees use a .git FILE pointing back to the main tree, not a directory.
+    const gitFile = join(tmpDir, '.git');
+    writeFileSync(gitFile, 'gitdir: /some/main/worktree/.git/worktrees/branch\n');
+    const env = { npm_config_global: 'true' };
+    expect(isGlobalInstall(tmpDir, env, existsSync)).toBe(false);
+  });
+
+  it('returns false when npm_config_global is undefined (not set at all)', () => {
+    const env: Record<string, string | undefined> = { npm_config_global: undefined };
+    const noGit = (_p: string) => false;
+    expect(isGlobalInstall(tmpDir, env, noGit)).toBe(false);
+  });
+});
+
+// ─── isMainModule ─────────────────────────────────────────────────────────────
+// Tests verify the latent bug fixed in #2198: the raw `file://${argv1}` comparison
+// returns false when the install path contains URL-encoding-required characters
+// (spaces, non-ASCII). isMainModule() uses fileURLToPath + realpathSync so the
+// comparison is always on decoded, symlink-resolved absolute paths.
+describe.skipIf(isWin32)('isMainModule', () => {
+  it('returns false when argv1 is undefined', () => {
+    expect(isMainModule('file:///some/path/script.mjs', undefined)).toBe(false);
+  });
+
+  it('returns false when argv1 is an empty string', () => {
+    expect(isMainModule('file:///some/path/script.mjs', '')).toBe(false);
+  });
+
+  it('returns true when metaUrl and argv1 refer to the same real path', async () => {
+    // Use import.meta.url of THIS test file and its resolved path — both are
+    // guaranteed to exist on disk so realpathSync succeeds and the comparison
+    // exercises the happy path.
+    const thisFile = new URL(import.meta.url);
+    // fileURLToPath(import.meta.url) is the real path of this test file.
+    const { fileURLToPath: fup } = await import('node:url');
+    const realPath = fup(thisFile);
+    expect(isMainModule(import.meta.url, realPath)).toBe(true);
+  });
+
+  it('returns false when metaUrl and argv1 refer to different files', () => {
+    expect(
+      isMainModule('file:///some/path/script.mjs', '/other/path/different.mjs'),
+    ).toBe(false);
+  });
+
+  it('handles a space-containing path without throwing (the URL-encoding bug)', () => {
+    // This is the latent bug fixed by #2198. Previously:
+    //   import.meta.url === `file://${process.argv[1]}`
+    // would compare "file:///my%20dir/script.mjs" with "file:///my dir/script.mjs"
+    // and return false even when they represent the same file.
+    //
+    // The fix uses fileURLToPath on metaUrl and realpathSync on argv1.
+    // Since argv1 does not exist on disk, realpathSync throws; isMainModule()
+    // catches and falls back to comparing fileURLToPath(metaUrl) === argv1.
+    // Both sides are now raw paths, so the comparison is correct.
+    const spaceUrl = 'file:///my%20dir/script.mjs';
+    const rawPath = '/my dir/script.mjs'; // same path, not URL-encoded
+    expect(isMainModule(spaceUrl, rawPath)).toBe(true);
+  });
+
+  it('handles non-ASCII characters in the path without throwing', () => {
+    const encodedUrl = 'file:///home/caf%C3%A9/script.mjs'; // café
+    const rawPath = '/home/café/script.mjs';
+    expect(isMainModule(encodedUrl, rawPath)).toBe(true);
+  });
+
+  it('returns false for a non-existent argv1 that does not match', () => {
+    expect(
+      isMainModule('file:///real/script.mjs', '/nonexistent/other.mjs'),
+    ).toBe(false);
   });
 });

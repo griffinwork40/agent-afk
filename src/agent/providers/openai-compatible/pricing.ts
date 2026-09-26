@@ -37,13 +37,24 @@ import { clampPositive, lookupPricing as sharedLookupPricing } from '../shared/p
 /**
  * Rates are USD per 1 million tokens.
  *
- * MAINTENANCE: these are OpenAI's publicly announced list prices as of
- * 2025-04 (the gpt-4.1 launch window), extended 2026-08 to include the
- * historical o1-preview alias and o1-pro — recorded from prior knowledge per
- * this task's constraint against live pricing-page lookups — NOT re-verified
- * against a live pricing page at authoring time. Update this table whenever
- * OpenAI revises rates or ships a new model family; an unknown model yields
- * `undefined` cost (never zero) — see {@link deriveCallCostUsd}.
+ * MAINTENANCE: these are OpenAI's publicly announced list prices. Original
+ * gpt-4o/4.1/o-series entries as of 2025-04 (gpt-4.1 launch window), extended
+ * 2026-08 to include o1-preview alias and o1-pro. GPT-5.6 and GPT-6 families
+ * added 2026-09-25 — verified from developers.openai.com/api/docs/pricing and
+ * the per-model pages on that date. Update this table whenever OpenAI revises
+ * rates or ships a new model family; an unknown model yields `undefined` cost
+ * (never zero) — see {@link deriveCallCostUsd}.
+ *
+ * Contract: only standard list prices for prompts ≤272K input tokens are
+ * modeled here. The following are NOT modeled:
+ *   - Long-context surcharge (>272K input tokens: 2× input + cache, 1.5× output)
+ *   - Batch/Flex processing (50% of standard)
+ *   - Fast mode (2× standard)
+ *   - Cache-write fees (1.25× input per MTok, charged separately by the API)
+ * These tiers would require per-call context (prompt length, processing tier,
+ * whether the call is a cache prime) that is not available in the provider's
+ * usage block. Adding them without that signal would produce wrong estimates
+ * more often than correct ones.
  */
 export interface ModelPricing {
   inputPerMTok: number;
@@ -69,6 +80,16 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   ['o3', { inputPerMTok: 2.0, outputPerMTok: 8.0, cachedInputPerMTok: 0.5 }],
   ['o3-mini', { inputPerMTok: 1.1, outputPerMTok: 4.4, cachedInputPerMTok: 0.55 }],
   ['o4-mini', { inputPerMTok: 1.1, outputPerMTok: 4.4, cachedInputPerMTok: 0.275 }],
+  // GPT-5.6 family — source: developers.openai.com/api/docs/pricing, verified 2026-09-25.
+  // Standard (≤272K input) list rates only; long-context/batch/fast not modeled (see Contract above).
+  ['gpt-5.6-sol', { inputPerMTok: 4.0, outputPerMTok: 20.0, cachedInputPerMTok: 0.4 }],
+  ['gpt-5.6-terra', { inputPerMTok: 2.0, outputPerMTok: 12.0, cachedInputPerMTok: 0.2 }],
+  ['gpt-5.6-luna', { inputPerMTok: 0.2, outputPerMTok: 1.2, cachedInputPerMTok: 0.02 }],
+  // GPT-6 family — source: developers.openai.com/api/docs/pricing, verified 2026-09-25.
+  // Standard (≤272K input) list rates only; long-context/batch/fast not modeled (see Contract above).
+  ['gpt-6-astra', { inputPerMTok: 10.0, outputPerMTok: 50.0, cachedInputPerMTok: 1.0 }],
+  ['gpt-6-sol', { inputPerMTok: 2.0, outputPerMTok: 10.0, cachedInputPerMTok: 0.2 }],
+  ['gpt-6-luna', { inputPerMTok: 0.1, outputPerMTok: 0.5, cachedInputPerMTok: 0.01 }],
 ]);
 
 /**

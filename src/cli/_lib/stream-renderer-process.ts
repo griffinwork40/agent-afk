@@ -27,7 +27,7 @@ import { ORCHESTRATOR_SOURCE_KEY, type SourceState, freshSourceState } from './s
 import { noteToolEvent } from '../input/work-derived-verb.js';
 import { handleOrchestratorEvent, setComposedOverlay } from './stream-renderer-orchestrator.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
-import { commitBlockAbove } from './commit-block.js';
+import { commitSubagentBlock } from './commit-block.js';
 import { indentForScrollback } from '../commands/interactive/tool-lane-flush-margin.js';
 import { makeSubagentCtx, resolveParentSyntheticId } from './stream-renderer-contexts.js';
 
@@ -263,11 +263,9 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
               // Atomic block commit — a subagent block is ONE coherent
               // artifact; per-line commits desync band-hold under a tall
               // overlay. See commit-block.ts.
-              commitBlockAbove(compositor, lines);
-              // One blank line after the subagent block so the next
-              // orchestrator message (or a subsequent subagent block) has
-              // breathing room in scrollback.
-              compositor.commitAbove('');
+              // flushSource's trailing separator ('' at root, dim spine when
+              // nested) is handled by commitSubagentBlock — see its contract.
+              commitSubagentBlock(compositor, lines);
               // Route the overlay update through the composer if available.
               if (overlayComposer) {
                 overlayComposer.markDirty('tool-lane');
@@ -277,7 +275,6 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
               }
             } else {
               for (const line of lines) out.line(line);
-              out.line('');
             }
           }],
         });

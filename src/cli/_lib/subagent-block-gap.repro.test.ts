@@ -79,6 +79,7 @@ import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { finalizeOrchestrator } from './stream-renderer-orchestrator.js';
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import type { Writer } from '../slash/types.js';
+import { commitSubagentBlock } from './commit-block.js';
 import { syntheticResult, formatDoneSummary, freshSourceState } from './stream-renderer-source.js';
 
 // ─── TTY mock harness (mirrors pad-decay-straddle.test.ts) ────────────────────
@@ -319,8 +320,10 @@ async function runMintScenario(opts: {
       coordinator.schedule({
         anchor: `after-subagent:${sourceIdA}`,
         commits: [() => {
-          for (const line of lines) capturedCompositor.commitAbove(line);
-          capturedCompositor.commitAbove('');
+          // Mirror production: commitSubagentBlock handles the trailing ''
+          // separator — the old per-line loop + extra commitAbove('') would
+          // double-blank once flushSource started appending a trailing ''.
+          commitSubagentBlock(capturedCompositor, lines);
           capturedOverlayComposer.markDirty('tool-lane');
           capturedOverlayComposer.flush();
         }],
@@ -402,8 +405,10 @@ async function runMintScenario(opts: {
       coordinator.schedule({
         anchor: `after-subagent:${sourceIdB}`,
         commits: [() => {
-          for (const line of lines) capturedCompositor.commitAbove(line);
-          capturedCompositor.commitAbove('');
+          // Mirror production: commitSubagentBlock handles the trailing ''
+          // separator — the old per-line loop + extra commitAbove('') would
+          // double-blank once flushSource started appending a trailing ''.
+          commitSubagentBlock(capturedCompositor, lines);
           capturedOverlayComposer.markDirty('tool-lane');
           capturedOverlayComposer.flush();
         }],

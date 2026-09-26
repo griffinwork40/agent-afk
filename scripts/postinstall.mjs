@@ -11,9 +11,46 @@
  */
 
 import { execSync, execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// ─── Module-scope derived paths ────────────────────────────────────────────
+// Computed once so restartLaunchdServices and the main block share the same
+// decoded, symlink-resolved package root rather than each re-deriving it.
+// fileURLToPath decodes percent-encoded characters (e.g. spaces → %20) that
+// new URL().pathname leaves encoded and that path.join then mis-handles.
+const _pkgRoot = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+
+// ─── Exported helpers ───────────────────────────────────────────────────────
+
+/**
+ * Pure function. Returns true when this module is the Node.js entry-point
+ * (i.e. run directly, not imported). Accepts the two pieces of identity as
+ * parameters so it can be unit-tested with arbitrary values.
+ *
+ * Comparison uses fileURLToPath (not a raw `file://` string) so that
+ * percent-encoded characters in the install path — e.g. `/my%20dir/` — do not
+ * cause a false negative. realpathSync resolves symlinks in argv[1] so that
+ * globally-installed bins (typically symlinked into /usr/local/bin) compare
+ * equal to the real file recorded in import.meta.url.
+ *
+ * @param {string} metaUrl  - import.meta.url of the calling module.
+ * @param {string} [argv1]  - process.argv[1]; may be absent or non-existent.
+ * @returns {boolean}
+ */
+export function isMainModule(metaUrl, argv1) {
+  if (!argv1) return false;
+  try {
+    return fileURLToPath(metaUrl) === realpathSync(argv1);
+  } catch {
+    // argv[1] does not exist on disk (e.g. a piped script, a test runner
+    // that synthesises a path). Fall back to a plain string comparison so
+    // the guard never throws at module evaluation time.
+    return fileURLToPath(metaUrl) === argv1;
+  }
+}
 
 /**
  * Pure function. Determines whether the npm bin directory is on PATH.
@@ -28,6 +65,47 @@ export function detectPathGap(prefix, pathEnv) {
   const pathParts = (pathEnv ?? '').split(':').map((p) => p.replace(/\/$/, ''));
   const onPath = pathParts.includes(binDir);
   return { onPath, binDir };
+}
+
+/**
+ * Pure function. Determines whether this postinstall run is part of a global
+ * package install (`npm install -g` / `pnpm add -g`) as opposed to a local
+ * dev-checkout `pnpm install` or a worktree install.
+ *
+ * Detection uses two independent signals and fails CLOSED toward NOT-global
+ * (i.e. no restart) whenever either signal is uncertain:
+ *
+ *   1. npm_config_global env var — npm and pnpm both set this to the string
+ *      "true" for every global install. A local `pnpm install` inside a repo
+ *      never sets it. This is the primary, cheapest signal.
+ *
+ *   2. git-worktree presence check — if the package root contains a .git
+ *      entry (file or directory) it is a source checkout or managed worktree,
+ *      never a globally-installed package. A global install lands under
+ *      node_modules inside the global npm prefix, never inside a git tree.
+ *      This is a belt-and-suspenders guard: even if npm_config_global were
+ *      wrong or missing, a .git marker unambiguously rules out a global install.
+ *
+ * History: Daemon was unconditionally restarted on every postinstall.
+ * A cron job that ran `pnpm install` inside a repo worktree triggered this
+ * path and restarted the running daemon mid-session, orphaning 438 subagents
+ * and leaving the daemon stopped. The guard introduced here ensures restarts
+ * occur ONLY for genuine global upgrades. See PR #2195.
+ *
+ * @param {string}   pkgRoot   - Absolute path to the package root.
+ * @param {object}   [env]     - Environment variable bag; defaults to process.env.
+ * @param {function} [existsFn] - Injectable fs.existsSync for testing.
+ * @returns {boolean} true only when both signals confirm a global install.
+ */
+export function isGlobalInstall(pkgRoot, env = process.env, existsFn = existsSync) {
+  // Signal 1: npm/pnpm lifecycle env var. Absent or non-"true" → not global.
+  if (env['npm_config_global'] !== 'true') return false;
+
+  // Signal 2: .git marker. Present → source checkout / worktree → not global.
+  const gitMarker = join(pkgRoot, '.git');
+  if (existsFn(gitMarker)) return false;
+
+  return true;
 }
 
 /**
@@ -102,6 +180,13 @@ export function isManualBotRunning(pidFilePath, probeFn = process.kill) {
  * is swallowed so the install never fails. macOS only — the caller gates on
  * platform; elsewhere ~/Library/LaunchAgents won't exist so nothing restarts.
  *
+ * Invariant: the daemon is NOT stateless. It may be mid-run on one or more
+ * scheduled agent sessions. This function MUST only be called from a global
+ * package upgrade path (verified by isGlobalInstall()) — never from a local
+ * `pnpm install` inside a source checkout or worktree. The caller in the main
+ * block enforces this via isGlobalInstall(); callers in tests must pass stubs
+ * for execFn/restartFn so real launchctl is never invoked.
+ *
  * Label / path / domain conventions mirror src/service/launchd/paths.ts
  * (labelFor → `com.afk.<name>`, plist under ~/Library/LaunchAgents, guiDomain →
  * `gui/<uid>`). Kept in sync by hand — this plain .mjs cannot import the
@@ -138,8 +223,9 @@ export function restartLaunchdServices(opts = {}) {
   //
   // __dirname equivalent for ESM: derive from import.meta.url.
   // scripts/postinstall.mjs → dist/cli.mjs (package root / dist/).
-  const scriptDir = new URL('.', import.meta.url).pathname;
-  const pkgRoot = join(scriptDir, '..');
+  // fileURLToPath is used (not .pathname) so percent-encoded characters in the
+  // path are decoded correctly — e.g. a space-containing install dir on macOS.
+  const pkgRoot = _pkgRoot;
   const cliMjs = join(pkgRoot, 'dist', 'cli.mjs');
 
   // Invariant: `afk service restart` is the correct single command — it
@@ -193,10 +279,14 @@ export function restartLaunchdServices(opts = {}) {
 
 // ─── Main block ─────────────────────────────────────────────────────────────
 // Guard: only run when executed directly (not when imported by tests).
+// isMainModule() handles percent-encoded paths and symlinked global bins
+// correctly; the raw `file://${process.argv[1]}` comparison it replaces
+// would return false when the install path contains spaces or other chars
+// that import.meta.url encodes as percent-sequences.
 const isMain =
   typeof process !== 'undefined' &&
   typeof process.argv !== 'undefined' &&
-  import.meta.url === `file://${process.argv[1]}`;
+  isMainModule(import.meta.url, process.argv[1]);
 
 if (isMain) {
   // Only meaningful on macOS/Linux where PATH-based installs are common.
@@ -260,20 +350,28 @@ if (isMain) {
   // here bypasses that session-safety logic and is the root cause of "sessions
   // that work but never respond" — see telegram-stuck-diagnosis.md.
   //
-  // The daemon is stateless (no active user sessions) and safe to force-restart.
+  // Invariant: the daemon may be mid-run on scheduled agent sessions and is
+  // NOT safe to restart unconditionally. Service restart is only correct for a
+  // global package upgrade (`npm install -g`). A local `pnpm install` inside a
+  // source checkout or managed worktree must NEVER trigger a restart — doing so
+  // kills any in-flight sessions owned by that daemon. The isGlobalInstall()
+  // guard below enforces this; it fails closed toward NOT restarting whenever
+  // either detection signal is absent or ambiguous.
   if (process.platform === 'darwin') {
-    try {
-      const restarted = restartLaunchdServices({
-        labels: ['com.afk.daemon'],
-      });
-      if (restarted.length > 0) {
-        const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
-        process.stdout.write(
-          `\n↻ Restarted AFK service(s) onto the new version: ${names}\n`,
-        );
+    if (isGlobalInstall(_pkgRoot, process.env, existsSync)) {
+      try {
+        const restarted = restartLaunchdServices({
+          labels: ['com.afk.daemon'],
+        });
+        if (restarted.length > 0) {
+          const names = restarted.map((l) => l.replace(/^com\.afk\./, '')).join(', ');
+          process.stdout.write(
+            `\n↻ Restarted AFK service(s) onto the new version: ${names}\n`,
+          );
+        }
+      } catch {
+        // restartLaunchdServices is already fail-open; belt-and-suspenders.
       }
-    } catch {
-      // restartLaunchdServices is already fail-open; belt-and-suspenders.
     }
   }
 

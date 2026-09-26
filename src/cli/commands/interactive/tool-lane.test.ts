@@ -2401,7 +2401,13 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     // With eager ancestor-header emission flushSource returns:
     //   [0] skill ancestor header (eagerly emitted)
     //   [1] the subagent block (Agent + children)
-    expect(flushed).toHaveLength(2);
+    //   [2] trailing spine-continuation separator (│ at depth 1)
+    expect(flushed).toHaveLength(3);
+
+    // Trailing separator: carries the skill's spine so the │ column stays
+    // continuous between independently committed sibling bands.
+    const separator = stripAnsi(flushed[2]!);
+    expect(separator).toBe('│  ');
 
     // First element: the skill ancestor header at root depth — uses the
     // same spine-encoded head-row shape as formatAgentSummary: `◉ ` at col 0
@@ -2479,7 +2485,12 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     //   [0] skill ancestor header (depth 0 → ◉ at col 0)
     //   [1] outer-agent ancestor header (depth 1 → │ ◉)
     //   [2] inner-agent block (depth 2 → │ │ ◉ head)
-    expect(flushed).toHaveLength(3);
+    //   [3] trailing spine-continuation separator (│ │ at depth 2)
+    expect(flushed).toHaveLength(4);
+
+    // Trailing separator: carries both ancestors' spines.
+    const separator = stripAnsi(flushed[3]!);
+    expect(separator).toBe('│  │  ');
 
     // [0] skill at root indent — spine-encoded head row, `◉ ` at col 0
     // (0 live-ancestor spine slots, turn-root marker). Pre-fix this was
@@ -2537,7 +2548,13 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     //   [1] inner-skill header (depth 1 → │ ◉)
     //   [2] agent block (depth 2 → │ │ ◉ head, │ │ │ … children)
     const flushed = lane.flushSource('agent');
-    expect(flushed).toHaveLength(3);
+    // [0] outer-skill header, [1] inner-skill header,
+    // [2] agent block, [3] trailing spine separator (│ │ at depth 2)
+    expect(flushed).toHaveLength(4);
+
+    // Trailing separator: carries both skill ancestors' spines.
+    const depthTwoSep = stripAnsi(flushed[3]!);
+    expect(depthTwoSep).toBe('│  │  ');
 
     const block = stripAnsi(flushed[2]!);
     const rows = block.split('\n');

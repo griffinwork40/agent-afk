@@ -37,3 +37,25 @@ export function commitBlockAbove(compositor: BlockCommitter, lines: readonly str
   if (lines.length === 0) return;
   compositor.commitAbove(lines.join('\n'));
 }
+
+/**
+ * commitSubagentBlock — commit a `ToolLane.flushSource` result to scrollback.
+ *
+ * Contract: `lines` is `[ancestorHeaders..., childBlock, separator]` (see
+ * `ToolLane.flushSource`). The trailing separator is depth-dependent:
+ *
+ * - Root depth (0 live ancestors): `''`. `commitBlockAbove` joins on `'\n'`
+ *   and `decomposeCommitText` strips a lone trailing `'\n'` as a line
+ *   terminator, so a `''` left inside the block would be swallowed and no
+ *   blank row painted. It is peeled off and committed as a dedicated
+ *   `commitAbove('')` AFTER the block, so the compositor paints exactly one
+ *   breathing-room blank row (the pre-#2196 behavior).
+ * - Nested depth (>0): a non-empty dim `│` spine string. It is real content
+ *   and stays inside the single atomic block commit, keeping the ancestor
+ *   spine continuous between independently committed sibling bands.
+ */
+export function commitSubagentBlock(compositor: BlockCommitter, lines: readonly string[]): void {
+  const hasRootBlank = lines.length > 0 && lines[lines.length - 1] === '';
+  commitBlockAbove(compositor, hasRootBlank ? lines.slice(0, -1) : lines);
+  if (hasRootBlank) compositor.commitAbove('');
+}

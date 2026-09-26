@@ -255,7 +255,7 @@ export function renderToolLaneOverlay(
         // Completed nesting entry: dim the structural chrome — it is done.
         // pushOutcomeLines splits multi-line formatOutcome; headLine computed first so its display-width derives the outcome budget.
         const headLine = palette.dimCompleted(g.turnRoot) + entry.prefix + palette.dimCompleted(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ';
-        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dimCompleted(g.spine) + '  ', cols, batchBadge(entry.result));
+        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dimCompleted(g.spine) + '  ', cols, batchBadge(entry.result) + childFailureBadge(entry.failedChildCount));
       } else {
         // Active (in-flight) nesting entry: use activeAgent for ◉ so the agent
         // name row is clearly readable. The ' …' tail is structural/informational

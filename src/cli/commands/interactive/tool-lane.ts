@@ -21,6 +21,7 @@ import {
   ancestorDepthOf as ancestorDepthIn,
   propagateChildFailure as propagateChildFailureIn,
 } from './tool-lane.ancestry.js';
+import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -663,15 +664,19 @@ export class ToolLane {
     }
     this.order = this.order.filter((id) => !collected.has(id));
 
-    // Return ancestor header lines (outermost first) followed by the child
-    // block. The caller iterates with `compositor.commitAbove(line)` for
-    // each element, so ancestor headers land in scrollback before the child.
+    // Contract: returns [ancestorHeaders..., childBlock, separator].
     //
-    // When parentEntry was headerEmitted and had no children + no closer to
-    // render, `formatAgentChildren` returns []; the joined empty string is
-    // skipped so we don't push a blank line to scrollback.
+    // Spine-continuation separator: when this entry sits under a live
+    // ancestor (compose/skill), the trailing element is a non-empty dim `│`
+    // spine string so the column stays continuous between sibling bands in
+    // scrollback. At root depth (0 ancestors), the separator is `''`.
+    //
+    // Root-depth caller contract: the trailing `''` must be committed as a
+    // dedicated blank row, not inside the joined block — see
+    // `commitSubagentBlock` (src/cli/_lib/commit-block.ts).
     const blockLines = childBlock === '' ? [] : [childBlock];
-    return [...ancestorLines, ...blockLines];
+    const separator = scrollbackSeparator(ancestorIsLast.length);
+    return [...ancestorLines, ...blockLines, separator];
   }
 
   /**

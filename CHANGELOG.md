@@ -11,6 +11,46 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.249.4] - 2026-09-26
+
+### Fixed
+- tighten hasBadge to ∥i/N pattern, fix stale comment, fix light-review id_prefix (#2202) (a56923c5)
+
+### Changed
+- add unit tests for compact scrollback renderer (#2203) (6e17c434)
+- promote macOS test leg to required (#2216) (88e5320e)
+- make the filesize gate blocking and fix the env.ts regression (#2214) (45dbc4c0)
+
+## [5.249.3] - 2026-09-25
+
+### Fixed
+- clean up non-blocking review findings from #2176 (#2201) (d1cecd53)
+- isMain fails on URL-encoded install paths; use fileURLToPath; comment cleanups (#2205) (fac6d59c)
+
+## [5.249.2] - 2026-09-25
+
+### Fixed
+- spine-continuation separator between compose/skill sibling bands (#2196) (931e368a)
+
+## [5.249.1] - 2026-09-25
+
+### Fixed
+- add GPT-5.6 and GPT-6 model prices (#2200) (789a5a0f)
+- only restart launchd services on global installs (#2195) (c91d81b1)
+
+## [5.249.0] - 2026-09-25
+
+### Added
+- split active vs. completed dimming for readable agent rows (dc2bf885)
+
+### Fixed
+- address review feedback (061847bc)
+
+### Changed
+- add .afk/generated-images/ to ignore list (70a75347)
+- Merge pull request #2172 from griffinwork40/afk/tui-contrast-split (6ef88a6f)
+- sync funcsize baseline after rebase (681dace0)
+
 ## [5.248.1] - 2026-09-25
 
 ### Fixed
