@@ -43,6 +43,7 @@ import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-
 import { emitSessionPhase } from '../../agent/trace/emit.js';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { errorMessage } from '../../utils/errors.js';
+import { buildOneShotJsonOutput } from './chat.json-output.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -420,6 +421,7 @@ export function registerChatCommand(program: Command): void {
         // ~/.afk/state/witness/ after the run.
         const trace = createDefaultTraceWriter();
         receiptTracePath = trace?.tracePath;
+        const receiptSessionLabel = trace?.sessionLabel;
 
         // The session is constructed after the executors, so the parent view
         // they fork from reads through `boundSession` lazily.
@@ -702,26 +704,18 @@ export function registerChatCommand(program: Command): void {
         }
 
         if (options.format === 'json') {
-          // Surface per-turn cost/duration/token metadata in JSON output so
-          // headless runners can do budget bookkeeping without parsing
-          // human-readable lines or telemetry side-channels. Additive —
-          // existing JSON consumers still see `success`/`model`/`message`/`timestamp`.
-          // The metadata fields appear only when the provider populates them:
-          // the bundled `anthropic-direct` provider surfaces tokens but not
-          // cost/duration today, so consumers should treat all four new
-          // fields as best-effort.
-          const jsonInputTokens = responseMeta ? Number(responseMeta.usage?.['input_tokens'] ?? 0) : 0;
-          const jsonOutputTokens = responseMeta ? Number(responseMeta.usage?.['output_tokens'] ?? 0) : 0;
-          console.log(JSON.stringify({
-            success: true,
-            model: sessionModel,
-            message: response.content,
-            timestamp: response.timestamp,
-            ...(responseMeta?.totalCostUsd !== undefined ? { costUsd: responseMeta.totalCostUsd } : {}),
-            ...(responseMeta?.durationMs !== undefined ? { durationMs: responseMeta.durationMs } : {}),
-            ...(jsonInputTokens > 0 ? { inputTokens: jsonInputTokens } : {}),
-            ...(jsonOutputTokens > 0 ? { outputTokens: jsonOutputTokens } : {}),
-          }, null, 2));
+          // Surface per-turn metadata in JSON output so headless runners can
+          // do budget bookkeeping and locate the witness trace without parsing
+          // human-readable lines or racing concurrent sessions via ls -t.
+          console.log(JSON.stringify(buildOneShotJsonOutput({
+            sessionModel,
+            responseContent: response.content,
+            responseTimestamp: response.timestamp,
+            responseMeta,
+            sessionId: stats.sessionId,
+            witnessLabel: receiptSessionLabel,
+            tracePath: receiptTracePath,
+          }), null, 2));
         } else {
           console.log(palette.heading('\n🤖 Claude:'));
           console.log(renderMarkdownToTerminal(response.content));
