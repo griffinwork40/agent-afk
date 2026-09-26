@@ -631,9 +631,10 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     // content-hug hides growth-covered rows as pending rather than evicting
     // them (terminal-compositor.content-hug.ts), so the eviction precondition
     // never occurs: the whole run stays on screen, exactly once, in order, with
-    // no blank void before the frame. (On-screen band rows are not REJOINED on
-    // a widen in either mode — reflowBandSplit only splits — so the rejoin
-    // property is asserted only where the line reached scrollback.)
+    // no blank void before the frame. (On-screen band rows ARE rejoined on a
+    // widen since #2228 fixed reflowBandSplit to re-wrap from logicalText when
+    // meta is present; the rejoin property is still asserted in scrollback here
+    // because this scenario's line reaches scrollback via eviction.)
     hugExpect: {
       inViewport: ['LOGSTART', 'FILLER_09'],
       exactlyOnce: ['LOGSTART', 'LOGEND', 'FILLER_00', 'FILLER_09'],

@@ -274,16 +274,20 @@ describe('reflowBandSplit — meta propagation (#540)', () => {
     expect(reflowBandSplit([], 0, 80, [])).toEqual({ rows: [], paintedRows: 0, meta: [] });
   });
 
-  it('widening keeps the retained logicalText so a later flush can rejoin the line', () => {
-    // Committed narrow (48 → 4 rows), then WIDEN to 110. Re-wrapping physical
-    // rows independently keeps their (stale) break points on screen, but the
-    // retained logicalText is the whole line — which the scrollback flush emits.
+  it('widening re-joins physical rows into the logical line and retains logicalText', () => {
+    // Committed narrow (48 → 4 rows), then WIDEN to 110. The fix (#2228) rejoins
+    // the four physical rows back into the logical line and re-wraps at 110 cols —
+    // so the on-screen band shows fewer rows with correct wide wrapping. The
+    // retained logicalText also lets the scrollback flush emit the line correctly.
     const band0 = hardWrapToWidth(LONG, 48).split('\n');
     const meta0 = buildBandMeta([LONG], 48);
     expect(band0.length).toBe(4);
     const res = reflowBandSplit(band0, band0.length, 110, meta0);
-    // Whatever the on-screen physical rows become, the logical source is intact
-    // and single, so scrollbackFlushLines(res.rows, res.meta, all) === [LONG].
+    // On-screen rows must now match hardWrapToWidth(LONG, 110) — rejoined, not
+    // the stale 48-col-broken fragments.
+    const expected110 = hardWrapToWidth(LONG, 110).split('\n');
+    expect(res.rows).toEqual(expected110);
+    // logicalText is intact and single, so flush still emits [LONG].
     const flushed = scrollbackFlushLines(res.rows, res.meta, res.rows.length);
     expect(flushed).toEqual([LONG]);
   });
