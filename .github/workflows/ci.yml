@@ -157,18 +157,19 @@ jobs:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Cross-platform matrix (see issue #703 for the Windows-compat effort).
-    # ubuntu-latest is the REQUIRED gate; macos-latest runs for SIGNAL but does not
-    # block merges yet — `continue-on-error` keeps it advisory. It has been green
-    # since the matrix landed, so promoting it to required is a live follow-up.
-    # `fail-fast: false` so one OS failing never cancels the other. Public repos get
-    # unlimited free GitHub-hosted minutes on both runners.
-    # windows-latest is NOT in this matrix — it runs in `test-windows` below, which
-    # is trigger-scoped because it is uniformly red today. See that job's comment.
+    # Both ubuntu-latest and macos-latest are REQUIRED gates (issue #2209).
+    # macos-latest was advisory under `continue-on-error` while compat was
+    # validated; it passed 13/14 completed runs on main (the one failure was a
+    # general Lint & Build failure, not macOS-specific), so it is promoted here.
+    # `fail-fast: false` so one OS failing never cancels the other. Public repos
+    # get unlimited free GitHub-hosted minutes on both runners.
+    # windows-latest is NOT in this matrix — it runs in `test-windows` below,
+    # which is trigger-scoped because it is uniformly red today. See that job's
+    # comment.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Checkout
