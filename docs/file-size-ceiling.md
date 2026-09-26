@@ -164,8 +164,7 @@ exempts prose. Reversible via one constant if tests should be included later.
 6. `.github/workflows/ci.yml`: new step beside the other audits.
 7. `.gitattributes`: `-merge -diff` on the baseline so git never invents a broken
    JSON hybrid; collisions are resolved by regeneration, not by editing markers.
-8. Document in AFK.md (at the time also CLAUDE.md, since removed — AFK.md is now
-   the single home).
+8. Document in AFK.md (the single home; CLAUDE.md was removed).
 
 ### Phase 0.5 — guards the critique earned
 
