@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.249.4] - 2026-09-26
+
+### Fixed
+- tighten hasBadge to ∥i/N pattern, fix stale comment, fix light-review id_prefix (#2202) (a56923c5)
+
+### Changed
+- add unit tests for compact scrollback renderer (#2203) (6e17c434)
+- promote macOS test leg to required (#2216) (88e5320e)
+- make the filesize gate blocking and fix the env.ts regression (#2214) (45dbc4c0)
+
 ## [5.249.3] - 2026-09-25
 
 ### Fixed
