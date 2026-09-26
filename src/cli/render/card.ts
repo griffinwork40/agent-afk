@@ -55,6 +55,18 @@ export interface CardSpec {
    * type for source-compat with callers still passing it.
    */
   leftPad?: number;
+  /**
+   * Explicit column width for `kind: 'user'` cards. When provided, the card
+   * sizes to this width instead of reading {@link getTerminalWidth}. Ignored
+   * for all other kinds. Callers inside a centered content band (AFK_CENTER_CONTENT)
+   * should pass the band width so the card stays within the band rather than
+   * overflowing to the raw terminal width.
+   *
+   * Default behavior when omitted is byte-identical to the pre-existing code,
+   * so existing callers (stream-renderer-subagent, stream-renderer-orchestrator-emit)
+   * are unaffected.
+   */
+  width?: number;
 }
 
 /**
@@ -105,14 +117,14 @@ export function card(spec: CardSpec): string {
   const bodyLines = Array.isArray(spec.body) ? spec.body : spec.body.split('\n');
 
   if (spec.kind === 'user') {
-    return renderUserCard(bodyLines);
+    return renderUserCard(bodyLines, spec.width);
   }
 
   const title = spec.title ?? CARD_DEFAULT_TITLE[spec.kind];
   return renderBorderedCard(spec.kind, title, bodyLines);
 }
 
-function renderUserCard(bodyLines: string[]): string {
+function renderUserCard(bodyLines: string[], explicitWidth?: number): string {
   // Chat-bubble layout: the bubble BLOCK is positioned against the right
   // edge of the terminal, but the text INSIDE it stays left-aligned —
   // mirroring how iMessage/WhatsApp render the speaker's own messages.
@@ -124,7 +136,12 @@ function renderUserCard(bodyLines: string[]): string {
   //   2. Every row is padded to the width of the WIDEST row, giving the
   //      bubble a straight left edge. Per-row right-alignment (the prior
   //      layout) produced a ragged left edge that read as broken wrapping.
-  const cols = getTerminalWidth();
+  //
+  // `explicitWidth` is supplied by callers inside a centered content band
+  // (AFK_CENTER_CONTENT) so the card sizes to the band, not the full terminal.
+  // When omitted, behavior is byte-identical to the historical getTerminalWidth()
+  // path, preserving existing callers' output exactly.
+  const cols = explicitWidth ?? getTerminalWidth();
   const innerW = Math.max(20, Math.min(cols - 4, Math.floor(cols * 0.75), 100));
   const wrapped: string[] = [];
   for (const line of bodyLines) {

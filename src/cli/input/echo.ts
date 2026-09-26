@@ -107,7 +107,11 @@ export function formatSubmittedEcho(opts: {
     const pad = Math.max(0, rightEdge - bufferW - GLYPH_W);
     primary = GLYPH + ' '.repeat(pad) + buffer;
   } else {
-    primary = card({ kind: 'user', body: buffer });
+    // Pass the content-band width explicitly so the card sizes to the band
+    // (not rawCols) under AFK_CENTER_CONTENT. Existing callers that omit
+    // width get byte-identical output (renderUserCard falls back to
+    // getTerminalWidth() when width is undefined).
+    primary = card({ kind: 'user', body: buffer, width: cols });
   }
 
   if (summary === null) {
