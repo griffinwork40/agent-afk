@@ -380,7 +380,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
             // SMALLER binds, so take the min: deriving from the node timeout alone
             // would arm a deadline later than the fork budget that will actually
             // fire.
-            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}), ...{ depth: spec.depth, maxDepth: spec.maxDepth }, // #2266
+            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}), depth: spec.depth, maxDepth: spec.maxDepth,
           },
           idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
           ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),
