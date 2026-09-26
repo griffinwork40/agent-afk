@@ -193,7 +193,7 @@ describe('/fast', () => {
     controller.setPreference('on');
     await dispatch('/fast', ctx);
     expect(lines.join('\n')).toContain('inactive');
-    expect(lines.join('\n')).toContain('not a supported Opus');
+    expect(lines.join('\n')).toContain('does not support fast mode (Anthropic: Opus 5 or 4.8');
     expect(controller.getPreference()).toBe('on');
   });
 

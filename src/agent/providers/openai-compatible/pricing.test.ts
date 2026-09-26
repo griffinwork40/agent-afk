@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { deriveCallCostUsd, MODEL_PRICING } from './pricing.js';
+import { deriveCallCostUsd, deriveCallCostUsdWithTier, MODEL_PRICING } from './pricing.js';
 
 const M = 1_000_000;
 
@@ -204,5 +204,36 @@ describe('deriveCallCostUsd — GPT-6 family', () => {
     const dated = deriveCallCostUsd('gpt-6-sol-2026-09-01', M, M, 0);
     const alias = deriveCallCostUsd('gpt-6-sol', M, M, 0);
     expect(dated).toBeCloseTo(alias!, 8);
+  });
+});
+
+describe('deriveCallCostUsdWithTier — fast (priority) pricing', () => {
+  it('applies 2x multiplier when confirmedPriorityTier=true', () => {
+    const base = deriveCallCostUsd('gpt-6-sol', M, M, 0);
+    const fast = deriveCallCostUsdWithTier('gpt-6-sol', M, M, 0, true);
+    expect(fast).toBeCloseTo(base! * 2, 8);
+  });
+
+  it('does NOT apply multiplier when confirmedPriorityTier=false', () => {
+    const base = deriveCallCostUsd('gpt-6-sol', M, M, 0);
+    const standard = deriveCallCostUsdWithTier('gpt-6-sol', M, M, 0, false);
+    expect(standard).toBeCloseTo(base!, 8);
+  });
+
+  it('does NOT apply multiplier when confirmedPriorityTier is omitted', () => {
+    const base = deriveCallCostUsd('gpt-6-sol', M, M, 0);
+    const standard = deriveCallCostUsdWithTier('gpt-6-sol', M, M, 0);
+    expect(standard).toBeCloseTo(base!, 8);
+  });
+
+  it('returns undefined (not 0) for an unknown model even in fast mode', () => {
+    const result = deriveCallCostUsdWithTier('unknown-model-xyz', M, M, 0, true);
+    expect(result).toBeUndefined();
+  });
+
+  it('prices gpt-5.6-sol at 2x the standard $24/M rate in fast mode', () => {
+    // gpt-5.6-sol standard: $4 input + $20 output = $24/M → fast: $48/M
+    const fast = deriveCallCostUsdWithTier('gpt-5.6-sol', M, M, 0, true);
+    expect(fast).toBeCloseTo(48.0, 8);
   });
 });
