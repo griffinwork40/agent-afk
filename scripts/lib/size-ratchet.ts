@@ -57,10 +57,10 @@ export interface RatchetConfig {
   legacyReason: string;
 }
 
-export function loadBaseline(cfg: RatchetConfig): Baseline {
-  if (!fs.existsSync(cfg.baselinePath)) return { limit: cfg.limit, entries: {} };
+export function loadBaseline(cfg: RatchetConfig): Baseline & { fileExisted: boolean } {
+  if (!fs.existsSync(cfg.baselinePath)) return { limit: cfg.limit, entries: {}, fileExisted: false };
   const parsed = JSON.parse(fs.readFileSync(cfg.baselinePath, 'utf8')) as Partial<Baseline>;
-  return { limit: parsed.limit ?? cfg.limit, entries: parsed.entries ?? {} };
+  return { limit: parsed.limit ?? cfg.limit, entries: parsed.entries ?? {}, fileExisted: true };
 }
 
 /**
@@ -87,19 +87,89 @@ export interface UpdateResult {
   dropped: string[];
 }
 
+/** A growth event blocked because `--allow-growth` was not passed. */
+export interface GrowthEvent {
+  key: string;
+  /** `null` for a new entry (no prior baseline record). */
+  oldLoc: number | null;
+  newLoc: number;
+}
+
+export interface UpdateOptions {
+  /**
+   * When true, growth and new entries are written and stamped with `reason`.
+   * When false (the default), growth events block the write.
+   */
+  allowGrowth?: boolean;
+  /**
+   * Required when `allowGrowth` is true. Stamped as the `reason` on **new**
+   * entries only (entries with no prior baseline record). Grown entries retain
+   * their existing hand-written reason unchanged.
+   */
+  reason?: string;
+}
+
 /**
  * Regenerate the baseline from measured sizes, preserving `reason` / `permanent`
  * by key so hand-written rationale is never lost to a mechanical refresh.
+ *
+ * Growth guard: if any entry's `loc` would increase, or a new entry would appear,
+ * the write is blocked unless `opts.allowGrowth` is true. When blocked, returns
+ * `blocked` events and does not touch the file. Pass `--allow-growth --reason`
+ * at the CLI to record a deliberate increase; shrinks and removals are always
+ * unrestricted.
+ *
+ * Bootstrap exception: when the baseline file is missing or empty, the write
+ * is always allowed (no prior sizes to compare against).
  */
-export function updateBaseline(cfg: RatchetConfig, sizes: Map<string, number>): UpdateResult {
+export function updateBaseline(
+  cfg: RatchetConfig,
+  sizes: Map<string, number>,
+  opts: UpdateOptions = {},
+): UpdateResult & { blocked: GrowthEvent[] } {
+  if (opts.allowGrowth && !opts.reason) {
+    throw new Error('updateBaseline: allowGrowth requires a non-empty reason');
+  }
+
   const previous = loadBaseline(cfg);
+  // A genuine bootstrap means the file was absent — not just that entries is empty.
+  // An existing file with zero entries (e.g. after a bad merge resolution) is NOT
+  // a bootstrap; --allow-growth is required to populate it.
+  const isBootstrap = !previous.fileExisted;
+
+  // Collect growth events before deciding whether to write.
+  const blocked: GrowthEvent[] = [];
+  if (!isBootstrap) {
+    for (const [key, loc] of sizes) {
+      if (loc <= cfg.limit) continue;
+      const prior = previous.entries[key];
+      if (!prior) {
+        // New entry over the ceiling.
+        blocked.push({ key, oldLoc: null, newLoc: loc });
+      } else if (loc > prior.loc) {
+        // Existing entry grew.
+        blocked.push({ key, oldLoc: prior.loc, newLoc: loc });
+      }
+    }
+  }
+
+  if (blocked.length > 0 && !opts.allowGrowth) {
+    return { kept: 0, dropped: [], blocked };
+  }
+
   const entries: Record<string, BaselineEntry> = {};
   for (const [key, loc] of sizes) {
     if (loc <= cfg.limit) continue;
     const prior = previous.entries[key];
+    const growthEvent = blocked.find((e) => e.key === key);
+    const isNew = growthEvent !== undefined && growthEvent.oldLoc === null;
     entries[key] = {
       loc,
-      reason: prior?.reason ?? cfg.legacyReason,
+      // For new entries (no prior record), stamp opts.reason so the caller's
+      // rationale is recorded. For grown entries, the hand-written reason is
+      // authoritative — preserve it. AFK.md: "the `reason` and `permanent`
+      // fields are yours and survive regeneration".
+      reason: isNew ? (opts.reason ?? cfg.legacyReason) : (prior?.reason ?? cfg.legacyReason),
       ...(prior?.permanent ? { permanent: true } : {}),
     };
   }
@@ -107,6 +177,7 @@ export function updateBaseline(cfg: RatchetConfig, sizes: Map<string, number>): 
   return {
     kept: Object.keys(entries).length,
     dropped: Object.keys(previous.entries).filter((k) => !entries[k]),
+    blocked: [],
   };
 }
 

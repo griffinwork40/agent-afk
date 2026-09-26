@@ -24,9 +24,9 @@ pnpm audit:env:check                               # CI gate: no raw process.env
 pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
 pnpm audit:filesize:check                          # CI gate: 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json
-pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values)
+pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values; add --allow-growth --reason "<text>" to record a deliberate increase)
 pnpm audit:funcsize:check                          # advisory: 200-line function ceiling, warns but never fails CI
-pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction
+pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction (add --allow-growth --reason "<text>" to record a deliberate increase)
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
@@ -167,7 +167,9 @@ gate landed, and it is a **one-way ratchet** — it fails when a non-baselined f
 goes over, when a baselined file *grows*, when a baselined file now fits (remove
 it), and when a baselined path disappears. Regenerate it with
 `pnpm audit:filesize:update`; never hand-edit `loc` values (the `reason` and
-`permanent` fields are yours and survive regeneration). It carries
+`permanent` fields are yours and survive regeneration). Growth is refused unless
+you pass `--allow-growth --reason "<why>"` — shrinks and removals are always
+allowed. It carries
 `-merge` in `.gitattributes`, so resolve conflicts by regenerating, never
 by editing conflict markers.
 
@@ -191,7 +193,7 @@ and closed while `forkSubagent` never changed, and it has since grown to 586).
 
 The baseline ratchet and the never-hand-edit rule still apply, against
 `.funcsize-baseline.json` (54 grandfathered = 1.2% of 4,388 functions; regenerate
-with `pnpm audit:funcsize:update`). Measurement is AST-based, so **JSDoc is
+with `pnpm audit:funcsize:update`; pass `--allow-growth --reason "<why>"` to record a deliberate increase). Measurement is AST-based, so **JSDoc is
 excluded** — same as the file metric, which also excludes comments and blanks.
 Both gates measure logic density, not documentation volume.
 
