@@ -396,3 +396,30 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
 });
 
 // F5 tests live in paths-exdev.test.ts (requires vi.mock hoisting in isolation).
+
+// ---------------------------------------------------------------------------
+// getWhatifDir
+// ---------------------------------------------------------------------------
+
+import { getWhatifDir } from './paths.js';
+
+describe('getWhatifDir', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns a path ending with "whatif" under getAfkStateDir()', () => {
+    const dir = getWhatifDir();
+    expect(dir).toMatch(/whatif$/);
+    expect(dir).toBe(join(getAfkStateDir(), 'whatif'));
+  });
+
+  it('reflects AFK_HOME overrides', () => {
+    const customHome = join(tmpdir(), 'afk-wid-test');
+    vi.stubEnv('AFK_HOME', customHome);
+    const dir = getWhatifDir();
+    expect(dir).toContain('whatif');
+    expect(dir).toContain(customHome);
+    expect(dir).toBe(join(customHome, 'state', 'whatif'));
+  });
+});

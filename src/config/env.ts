@@ -48,6 +48,8 @@
 
 import { BROWSER_ENV_REGISTRY } from './env.browser.js';
 import { DISPLAY_ENV_REGISTRY } from './env.display.js';
+import { PATHS_ENV_REGISTRY } from './env.paths.js';
+import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -975,37 +977,7 @@ export const ENV_REGISTRY = [
   },
 
   // ── Paths / state ─────────────────────────────────────────────────────────
-  {
-    name: 'AFK_HOME',
-    description: 'Override the AFK home directory. Default: ~/.afk/.',
-    type: 'string',
-    required: false,
-    default: '~/.afk',
-    example: '/opt/afk',
-    category: 'paths',
-  },
-  {
-    name: 'AFK_STATE_DIR',
-    description: 'Override the entire AFK state tier (sessions/, todos/, transcripts/, memory/, daemon/, etc.), not just one subdirectory. Must be an absolute path (not /). Default: $AFK_HOME/state/.',
-    type: 'string',
-    required: false,
-    category: 'paths',
-  },
-  {
-    name: 'AFK_FRAMEWORK_DIR',
-    description: 'Override the AFK agent-framework directory used for telemetry and briefs. Default: $AFK_HOME/agent-framework/.',
-    type: 'string',
-    required: false,
-    category: 'paths',
-  },
-  {
-    name: 'AFK_COMPANION_PRIMER',
-    description: 'Opt-in: absolute path to a single companion-primer file. When set, its content is bounded (capped, fenced as <companion-primer>) and appended to the system prompt at session start for top-level sessions (chat/REPL/telegram/daemon), as lower-authority "reflections, not facts" context. Unset (default) = no-op. Only the one named file is ever read — never a directory or repo walk.',
-    type: 'string',
-    required: false,
-    example: '/Users/me/Projects/afk-companion/PRIMER.md',
-    category: 'paths',
-  },
+  ...PATHS_ENV_REGISTRY,
   {
     name: 'HOME',
     description: 'Standard Unix home directory. Used as the fallback when AFK_HOME is unset.',
@@ -1696,6 +1668,10 @@ export const ENV_REGISTRY = [
   // ── Browser-control tools ────────────────────────────────────────────────
   // Entries live in env.browser.ts (extracted for the 350-line ceiling, #2206).
   ...BROWSER_ENV_REGISTRY,
+
+  // ── What-if episode mode ──────────────────────────────────────────────────
+  // Entries live in env.whatif.ts (extracted for the 350-line ceiling).
+  ...WHATIF_ENV_REGISTRY,
 
   // ── Filesystem ────────────────────────────────────────────────────────────
   {

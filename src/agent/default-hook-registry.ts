@@ -34,6 +34,7 @@ import type { PermissionMode } from './types/sdk-types.js';
 import type { TraceSink } from './trace/index.js';
 import type { LoadedHooksConfig } from './hooks/config-loader.js';
 import { loadAndRegisterConfigHooks } from './hooks/config-bridge.js';
+import { createWhatifEpisodeGate } from './whatif-episode-gate.js';
 
 export interface SubagentCompleteInfo {
   subagentId: string;
@@ -133,6 +134,18 @@ function registerSubagentCompleteHook(
   });
 }
 
+/**
+ * Register the what-if episode gate as the FIRST PreToolUse hook.
+ *
+ * Self-disables when AFK_WHATIF_EPISODE is not set, so registration is
+ * unconditional. Tree-wide: no subagent exemption — episode isolation must
+ * hold across every nested fork. Extracted from {@link createDefaultHookRegistry}
+ * to keep that function within its baselined line-count ceiling.
+ */
+function registerWhatifEpisodeGate(registry: HookRegistry): void {
+  registry.register('PreToolUse', createWhatifEpisodeGate());
+}
+
 export function createDefaultHookRegistry(
   onSubagentComplete?: (info: SubagentCompleteInfo) => void,
   surface?: string,
@@ -143,9 +156,9 @@ export function createDefaultHookRegistry(
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
-  // Session-scoped instance: the nudge latches once-per-turn (reset on 'Stop')
-  // and once-per-child, so a parallel verifier wave can't spam the parent with
-  // identical nudges across consecutive turns (#355).
+  registerWhatifEpisodeGate(registry);
+  // Session-scoped instance: latches once-per-turn + once-per-child (#355) so a
+  // parallel verifier wave can't spam the parent with identical nudges.
   const shadowVerifyNudge = createShadowVerifyNudge();
   registry.register('SubagentStop', shadowVerifyNudge);
   registry.register('Stop', shadowVerifyNudge);
