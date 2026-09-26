@@ -144,6 +144,37 @@ interface ToolEntryFields {
    * or included in any part of the conversation history.
    */
   outputTail?: string;
+  /**
+   * Count of directly or indirectly failed descendant agent entries.
+   * Incremented on every ancestor NESTING_TOOLS entry when a child agent
+   * signals an error via {@link ToolLane.propagateChildFailure}. Used by
+   * the live overlay to render a compact failure badge (e.g. `⚠ 2`) on
+   * the ancestor row so an operator can spot nested trouble at a glance
+   * without scrolling the entire tree.
+   *
+   * Only set on NESTING_TOOLS entries (Agent / skill / compose / Task).
+   * Plain leaf tools never act as parents and thus never carry this field.
+   *
+   * Invariant: increment-only. Never decremented. A retried child that
+   * eventually succeeds still leaves its ancestor's count intact — the
+   * count signals "at least N failures occurred here", which is always
+   * true and never misleads the operator.
+   *
+   * Invariant: the renderer's 60s stall auto-settle
+   * (stream-renderer-lifecycle.ts `checkPauseAnnotations`) paints a
+   * provisional `[no-result — timed out]` error row but deliberately does
+   * NOT propagate. That row self-heals when a real result arrives later
+   * (finalizeSubagent overwrites it), and an increment-only count cannot
+   * un-count it, so propagating there would leave a permanent false badge.
+   */
+  failedChildCount?: number;
+  /**
+   * Set once this entry's own failure has been counted into its ancestors'
+   * `failedChildCount`. Guards against double-counting when the same failure
+   * arrives via both the subagent 'error' event and the dispatch's isError
+   * tool_result. See `propagateChildFailure` in tool-lane.ancestry.ts.
+   */
+  failurePropagated?: boolean;
 }
 
 export type ToolEntry = ToolEntryFields & { kind: 'tool' };

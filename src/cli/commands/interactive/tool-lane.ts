@@ -17,6 +17,10 @@ import {
 } from './tool-lane-render.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
+import {
+  ancestorDepthOf as ancestorDepthIn,
+  propagateChildFailure as propagateChildFailureIn,
+} from './tool-lane.ancestry.js';
 import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
 
 // Re-export types from render module for consumers
@@ -196,6 +200,27 @@ export class ToolLane {
   setAgentResultSummary(toolUseId: string, summary: string): void {
     const entry = this.entries.get(toolUseId);
     if (entry?.kind === 'tool') entry.agentResultSummary = summary;
+  }
+
+  /**
+   * Propagate a child-failure signal upward through the ancestor chain.
+   *
+   * Starting from `failedId`, walks the `agentContext` links to find each
+   * live ancestor NESTING_TOOLS entry and increments its `failedChildCount`.
+   * This allows the live overlay to show a compact badge (e.g. `⚠ 2`) on
+   * every ancestor row so an operator can spot nested failures at a glance
+   * without scrolling the entire tree.
+   *
+   * Called by the stream-renderer's error handler immediately after the
+   * errored agent entry receives its synthetic result.
+   *
+   * Invariant: only NESTING_TOOLS entries (Agent / skill / compose / Task)
+   * receive the badge — plain leaf tools cannot act as parents so the field
+   * is never set on them. Non-existent or already-flushed ancestors are
+   * silently skipped (the walk stops when the agentContext lookup misses).
+   */
+  propagateChildFailure(failedId: string): void {
+    propagateChildFailureIn(this.entries, failedId);
   }
 
   /**
@@ -485,28 +510,7 @@ export class ToolLane {
    * MAX_NESTING_DEPTH (currently small single-digit), well under the cap.
    */
   private ancestorDepthOf(id: string): number {
-    const seen = new Set<string>([id]);
-    let depth = 0;
-    let current: string | undefined = id;
-    // Hard cap: depth above this means something is wrong (cycle, leak).
-    // Better to under-indent than spin.
-    const CYCLE_CAP = 32;
-    while (current !== undefined && depth < CYCLE_CAP) {
-      const entry = this.entries.get(current);
-      if (!entry || entry.kind !== 'tool') break;
-      const parent = entry.agentContext;
-      if (parent === undefined) break;
-      if (seen.has(parent)) break; // cycle — bail
-      seen.add(parent);
-      // Only count an ancestor toward depth if it is still a live tool entry
-      // in the lane. A dangling agentContext (parent already flushed or never
-      // registered) means the current entry effectively renders at root.
-      const parentEntry = this.entries.get(parent);
-      if (!parentEntry || parentEntry.kind !== 'tool') break;
-      depth += 1;
-      current = parent;
-    }
-    return depth;
+    return ancestorDepthIn(this.entries, id);
   }
 
   /**
