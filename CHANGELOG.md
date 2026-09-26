@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.250.1] - 2026-09-26
+
+### Fixed
+- content-hug placement — no blank gaps between output and prompt (#2226) (164170ed)
+
 ## [5.250.0] - 2026-09-26
 
 ### Added
