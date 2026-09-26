@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.254.3] - 2026-09-26
+
+### Added
+- tell forked children they are subagents; drop unused 'subagent' PromptSurface (#2255) (7ecc7819)
+- AFK_SMOKE_TEXT visual hierarchy, machine-status UI fades in (#2254) (1a16ebad)
+- point opus alias at claude-opus-5-5 (#2252) (c9c49148)
+
+### Fixed
+- put tool_result blocks first in persisted user turns (#2251) (c1f6dd04)
+
 ## [5.254.2] - 2026-09-26
 
 ### Fixed
