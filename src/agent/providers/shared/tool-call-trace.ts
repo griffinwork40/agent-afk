@@ -193,12 +193,18 @@ const ERROR_HEAD_CAP = 200;
  */
 export function buildErrorHead(isError: boolean, content: string): string | undefined {
   if (!isError) return undefined;
-  // Collapse all newline variants to a space, then trim.
-  const oneLine = content.replace(/\r\n|\r|\n/g, ' ').trim();
+  // Collapse all control characters (including newlines) to a space, then
+  // collapse consecutive spaces and trim.
+  // eslint-disable-next-line no-control-regex
+  const oneLine = content.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/  +/g, ' ').trim();
   if (oneLine.length === 0) return undefined;
   const redacted = redactSecrets(oneLine);
-  if (redacted.length <= ERROR_HEAD_CAP) return redacted;
-  return redacted.slice(0, ERROR_HEAD_CAP) + '… (truncated)';
+  // Use Array.from to count/slice by Unicode code points (not UTF-16 code
+  // units) so an astral-plane character (emoji, supplementary CJK) straddling
+  // the cap boundary cannot leave a lone surrogate in the stored field.
+  const codePoints = Array.from(redacted);
+  if (codePoints.length <= ERROR_HEAD_CAP) return redacted;
+  return codePoints.slice(0, ERROR_HEAD_CAP).join('') + '… (truncated)';
 }
 
 /**

@@ -699,6 +699,35 @@ describe('buildToolCallCompletedPayload — errorHead field', () => {
     });
     expect(payload.errorHead).toBe('line1 line2 line3');
   });
+
+  it('slices at the code-point boundary — no lone surrogate when an emoji straddles char 199', () => {
+    // "error ".repeat(33) + "x" gives 199 chars with spaces — redactSecrets
+    // leaves it untouched (not a long homogeneous blob). Appending "😀tail"
+    // puts the emoji at code-unit index 199; it occupies TWO UTF-16 code units
+    // (0xD83D 0xDE00). A .slice(0, 200) cut leaves a lone high surrogate
+    // (\uD83D) in the head. Code-point slicing must yield exactly 200 code
+    // points with the emoji at position 199 intact.
+    const base = 'error '.repeat(33) + 'x'; // 199 chars, spaces prevent redaction
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_cp_boundary',
+      name: 'bash',
+      result: { content: base + '😀tail', isError: true },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect(payload.errorHead).toBeDefined();
+    const head = payload.errorHead!;
+    // The head should end with the truncation marker.
+    expect(head.endsWith('… (truncated)')).toBe(true);
+    const withoutMarker = head.slice(0, head.lastIndexOf('…'));
+    // Must be exactly 199 'a's + one complete emoji — no lone surrogate.
+    expect(Array.from(withoutMarker)).toHaveLength(200);
+    // Verify no lone surrogate: JSON round-trip must not produce \uFFFD
+    // replacement (Node 20+ strict mode rejects lone surrogates in JSON.stringify).
+    expect(() => JSON.stringify(head)).not.toThrow();
+    // The 200th code point must be the full emoji, not a bare surrogate.
+    expect(withoutMarker.endsWith('😀')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

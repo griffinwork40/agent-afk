@@ -652,3 +652,34 @@ describe('formatTrace — overload pause/resume is high-signal (shown by default
     expect(out).not.toContain('usage-limit');
   });
 });
+
+describe('formatTrace — fmtErrorHead sanitizes escape sequences', () => {
+  it('strips an ESC CSI sequence injected into errorHead before rendering', () => {
+    const sessionId = 'esc-sanitize-test';
+    const tracePath = '/fake/trace.jsonl';
+    const escPayload = '\x1B[31mRED\x1B[0m text';  // CSI color sequence
+    const event = {
+      kind: 'tool_call' as const,
+      seq: 1,
+      ts: '2024-01-01T00:00:00.000Z',
+      payload: {
+        phase: 'completed' as const,
+        toolUseId: 'tu_esc1',
+        name: 'bash',
+        resultBytes: 10,
+        isError: true,
+        truncated: false,
+        durationMs: 5,
+        errorHead: escPayload,
+      },
+    };
+    const parsed = { events: [event], malformed: 0 };
+    const output = formatTrace(sessionId, tracePath, parsed, { showAll: true });
+    // The raw ESC sequence must not appear in the rendered output.
+    expect(output).not.toContain('\x1B[31m');
+    expect(output).not.toContain('\x1B[0m');
+    // But the visible text 'RED' and 'text' must survive sanitization.
+    expect(output).toContain('RED');
+    expect(output).toContain('text');
+  });
+});
