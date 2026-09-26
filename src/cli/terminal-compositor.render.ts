@@ -9,7 +9,7 @@
  * bodies are moves with `this.` rewritten to `self.`.
  */
 
-import { displayWidth, nextGraphemeIndex, stripAnsi, truncateDisplayWidth } from './display.js';
+import { displayWidth, nextGraphemeIndex, stripAnsi, suffixDisplayWidth, truncateDisplayWidth } from './display.js';
 import { formatDropdownRow, formatHintRow } from './input/dropdown.js';
 import { stripGhostControlChars } from './input/suggest.js';
 import { palette } from './palette.js';
@@ -114,6 +114,7 @@ export function renderInputLine(self: RenderHost): string {
   // Invariant: the ghost is appended AFTER the caret cell — never interleaved.
   // Truncate to `cols - promptWidth - bufferWidth - 1` so the input line
   // never wraps (wrapping would corrupt DECSTBM scroll-region math).
+  const cols = self.stdout.columns ?? 80;
   const ac = self.autocompleteState;
   let ghostSuffix = '';
   const shellGhost = shellModeGhost(self.input.buffer);
@@ -145,7 +146,6 @@ export function renderInputLine(self: RenderHost): string {
     // already consume. Measure with grapheme/column-aware displayWidth — NOT
     // String.length (UTF-16 code units) — so CJK (2 cells / 1 unit) and emoji
     // (2 cells / surrogate pair) are budgeted by the cells they occupy.
-    const cols = self.stdout.columns ?? 80;
     const marginWidth = contentMargin(cols).length;
     const promptWidth = displayWidth(stripAnsi(self.promptTextFn(self.input.buffer)));
     const bufferWidth = displayWidth(stripAnsi(rawBefore)) + 1; // +1 for caret cell
@@ -163,7 +163,94 @@ export function renderInputLine(self: RenderHost): string {
   }
   // Content centering (AFK_CENTER_CONTENT): prepend left margin so the input
   // line floats at the same horizontal position as the tool-lane content.
-  return contentMargin() + self.promptTextFn(self.input.buffer) + before + caret + after + ghostSuffix + suffix;
+  //
+  // Contract: the assembled line (margin + prompt + before + caret + after +
+  // ghostSuffix + suffix) MUST fit within stdout.columns so CupFrameRenderer
+  // never hard-wraps it. A wrap would push continuation text to column 0,
+  // visually breaking the centered layout and corrupting DECSTBM scroll-region
+  // row accounting (see issue #2167). Apply a margin-aware viewport clip so
+  // the visible buffer slice always fits within the available width.
+  const margin = contentMargin(cols);
+  if (margin.length > 0) {
+    const promptWidth = displayWidth(stripAnsi(self.promptTextFn(self.input.buffer)));
+    const availableWidth = Math.max(0, cols - margin.length - promptWidth);
+    const visibleLine = clipInputViewport(
+      rawBefore, before, caret, rawAfter, after, ghostSuffix, suffix,
+      shellMode, self.formatInputBuffer, availableWidth,
+    );
+    return margin + self.promptTextFn(self.input.buffer) + visibleLine;
+  }
+  return contentMargin(cols) + self.promptTextFn(self.input.buffer) + before + caret + after + ghostSuffix + suffix;
+}
+
+/**
+ * Clip the assembled input buffer region to `availableWidth` display columns
+ * so the full rendered line (margin + prompt + visible) never exceeds the
+ * terminal width, preventing CupFrameRenderer from hard-wrapping continuation
+ * rows to column 0 and corrupting the centered layout (issue #2167).
+ *
+ * Contract:
+ *   - The caret MUST remain visible: we keep it on screen even when `rawBefore`
+ *     alone is wider than `availableWidth`.
+ *   - `before` / `after` carry ANSI styling — we measure via their stripped raw
+ *     counterparts and re-apply coloring after slicing raw text.
+ *   - Ghost and suffix are already bounded elsewhere; we pass them through
+ *     unchanged as long as they fit in the remaining budget.
+ *   - Returns the concatenated visible slice: caller prepends margin + prompt.
+ *   - When `availableWidth` is 0 or negative the caret cell alone is returned.
+ *
+ * Invariant: displayWidth(stripAnsi(result)) ≤ max(1, availableWidth).
+ */
+function clipInputViewport(
+  rawBefore: string,
+  before: string,
+  caret: string,
+  rawAfter: string,
+  after: string,
+  ghostSuffix: string,
+  suffix: string,
+  shellMode: boolean,
+  formatInputBuffer: ((s: string) => string) | undefined,
+  availableWidth: number,
+): string {
+  const beforeWidth = displayWidth(rawBefore);
+  const caretWidth = 1; // the caret cell is always exactly 1 display column
+  const afterWidth = displayWidth(rawAfter);
+  const suffixWidth = displayWidth(stripAnsi(suffix));
+  const ghostWidth = displayWidth(stripAnsi(ghostSuffix));
+  const total = beforeWidth + caretWidth + afterWidth + ghostWidth + suffixWidth;
+  if (total <= availableWidth) {
+    // Common path — everything fits; no clipping required.
+    return before + caret + after + ghostSuffix + suffix;
+  }
+  // Overflow: clip right side first (after + ghost + suffix), then scroll left
+  // into `before` if the cursor itself is still off-screen.
+  //
+  // Step 1: budget for `after` after reserving space for before + caret + suffix.
+  const afterBudget = Math.max(0, availableWidth - beforeWidth - caretWidth - suffixWidth);
+  const clippedRawAfter = truncateDisplayWidth(rawAfter, afterBudget, '');
+  const clippedAfter = clippedRawAfter.length === 0
+    ? ''
+    : shellMode ? palette.shell(clippedRawAfter) : (formatInputBuffer?.(clippedRawAfter) ?? clippedRawAfter);
+  // Ghost is dropped entirely when before + caret + after + suffix already fills
+  // the line — it was already bounded but recheck defensively.
+  const remainAfterContent = Math.max(0, availableWidth - beforeWidth - caretWidth - displayWidth(clippedRawAfter) - suffixWidth);
+  const clippedGhost = remainAfterContent <= 0 ? '' : ghostSuffix;
+  // Step 2: if before + caret + suffix still exceeds available, scroll left —
+  // show only the rightmost visible portion of rawBefore (cursor stays visible).
+  const caretPlusSuffix = caretWidth + suffixWidth;
+  if (beforeWidth + caretPlusSuffix > availableWidth) {
+    const beforeBudget = Math.max(0, availableWidth - caretPlusSuffix);
+    // suffixDisplayWidth returns the rightmost `beforeBudget` columns of plain
+    // text with a leading '…' so the user knows content is hidden to the left.
+    const scrolledRawBefore = suffixDisplayWidth(rawBefore, beforeBudget, '…');
+    const scrolledBefore = shellMode
+      ? palette.shell(scrolledRawBefore)
+      : (formatInputBuffer?.(scrolledRawBefore) ?? scrolledRawBefore);
+    // After and ghost are empty in this branch (no room beyond caret + suffix).
+    return scrolledBefore + caret + suffix;
+  }
+  return before + caret + clippedAfter + clippedGhost + suffix;
 }
 
 /** Fixed, non-accepting shell-mode hint rendered in the ghost-text lane. */
