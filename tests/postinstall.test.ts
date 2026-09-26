@@ -23,7 +23,13 @@ vi.mock('node:child_process', async (importOriginal) => {
     realChildProcessCalls.push(`${name} ${JSON.stringify(args[0])} ${JSON.stringify(args[1] ?? '')}`);
     throw new Error(`postinstall test reached real child_process.${name}; inject execFn/restartFn`);
   };
-  return { ...actual, execSync: refuse('execSync'), execFileSync: refuse('execFileSync') };
+  return {
+    ...actual,
+    execSync: refuse('execSync'),
+    execFileSync: refuse('execFileSync'),
+    // Forward guard: production does not use spawnSync today.
+    spawnSync: refuse('spawnSync'),
+  };
 });
 afterEach(() => {
   const leaked = realChildProcessCalls.splice(0);
@@ -268,6 +274,29 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
     // telegram threw → excluded; daemon succeeded → included. No throw.
     expect(result).toEqual(['com.afk.daemon']);
     expect(execFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to raw kickstart via execFn when the CLI restartFn throws', () => {
+    // Plists AND dist/cli.mjs all reported present, so the CLI restart path is
+    // tried first. It is injected (never the real `afk service restart`) and
+    // throws, which must fall through to the raw launchctl kickstart.
+    const restartFn = vi.fn(() => {
+      throw new Error('simulated CLI restart failure');
+    });
+    const execFn = vi.fn();
+    const result = restartLaunchdServices({
+      home: HOME,
+      uid: 501,
+      labels: ['com.afk.daemon'],
+      existsFn: () => true,
+      restartFn,
+      execFn,
+    });
+    expect(result).toEqual(['com.afk.daemon']);
+    expect(restartFn).toHaveBeenCalledTimes(1);
+    expect(restartFn.mock.calls[0]?.[2]).toBe('daemon');
+    expect(execFn).toHaveBeenCalledTimes(1);
+    expect(execFn).toHaveBeenCalledWith(['kickstart', '-k', 'gui/501/com.afk.daemon']);
   });
 
   it('honours a custom labels list', () => {

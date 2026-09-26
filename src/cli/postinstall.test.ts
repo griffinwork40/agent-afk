@@ -1,6 +1,8 @@
 // Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 
+const isWin32 = process.platform === 'win32';
+
 // Invariant (no real service side effects): restartLaunchdServices'
 // DEFAULT restartFn runs `node <repo>/dist/cli.mjs service restart <name>`,
 // which rewrites the developer's REAL ~/Library/LaunchAgents plists and
@@ -18,14 +20,18 @@ vi.mock('node:child_process', async (importOriginal) => {
     realChildProcessCalls.push(`${name} ${JSON.stringify(args[0])} ${JSON.stringify(args[1] ?? '')}`);
     throw new Error(`postinstall test reached real child_process.${name}; inject execFn/restartFn`);
   };
-  return { ...actual, execSync: refuse('execSync'), execFileSync: refuse('execFileSync') };
+  return {
+    ...actual,
+    execSync: refuse('execSync'),
+    execFileSync: refuse('execFileSync'),
+    // Forward guard: production does not use spawnSync today.
+    spawnSync: refuse('spawnSync'),
+  };
 });
 afterEach(() => {
   const leaked = realChildProcessCalls.splice(0);
   expect(leaked, 'a test reached a real child_process call').toEqual([]);
 });
-
-const isWin32 = process.platform === 'win32';
 
 type DetectPathGapFn = (
   prefix: string,
