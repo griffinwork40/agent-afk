@@ -32,6 +32,7 @@ import { emitSessionPhase } from '../trace/emit.js';
 import type { TraceSink } from '../trace/index.js';
 import type { McpServerLayer } from './env-containment.js';
 import { errorMessage } from '../../utils/errors.js';
+import { isMcpHealthCheckEnabled, runMcpHealthChecks, warnUnhealthyServers } from './health-check.js';
 
 /**
  * Per-server runtime record. Holds the live client, the list of tools the
@@ -295,6 +296,21 @@ export class McpManager {
     const manager = new McpManager(records);
     // Fill the deferred box so onToolListChanged closures can call refreshServer().
     managerBox.manager = manager;
+
+    // Optional post-connect liveness probe (issue #1751).
+    // Gated behind AFK_MCP_HEALTHCHECK=1 — off by default to avoid adding
+    // cold-start latency. The probe re-issues tools/list to each connected
+    // server with a short timeout; failures are boot warnings, not fatal.
+    if (isMcpHealthCheckEnabled()) {
+      const targets = [...records.entries()]
+        .filter(([, rec]) => rec.state.status === 'connected' && rec.client !== undefined)
+        .map(([serverName, rec]) => ({ serverName, listTools: (signal?: AbortSignal) => rec.client!.listTools(signal) }));
+      if (targets.length > 0) {
+        const healthResults = await runMcpHealthChecks(targets);
+        warnUnhealthyServers(healthResults);
+      }
+    }
+
     return manager;
   }
 

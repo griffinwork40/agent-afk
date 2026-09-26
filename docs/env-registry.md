@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**196 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**197 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -140,6 +140,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
 | `AFK_ALLOW_PROJECT_MCP` | boolean |  |  | `1` | Opt-in to loading + spawning MCP servers declared in <cwd>/.mcp.json. Fail-closed: when unset (or 0), project-local servers are NOT spawned; set to a truthy value (1/true/yes/on) to load them. A project-local .mcp.json spawns arbitrary commands on session start, so it is off by default to prevent code execution when entering an untrusted repo (issue #571). Skipped servers are listed in a startup warning with the opt-in instruction. |
+| `AFK_MCP_HEALTHCHECK` | boolean |  |  | `1` | Enable an optional post-connect liveness probe that re-issues tools/list to every connected MCP server in parallel after the initial connect burst. OFF by default — the extra round-trip adds cold-start latency (issue #1751). Set to a truthy value (1/true/yes/on) to enable. |
 
 ## Routing
 

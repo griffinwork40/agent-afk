@@ -307,12 +307,16 @@ export class McpClient {
    * lifecycle is owned by `McpManager`; the manager (or a subsequent
    * notification refresh) may legitimately retry against the same client.
    * The in-flight request remains dangling on the SDK side but is harmless.
+   *
+   * @param signal Optional abort signal forwarded to the SDK request so a
+   *   caller-side deadline (e.g. the #1751 health-check probe) cancels the
+   *   underlying `tools/list` instead of leaving it in flight.
    */
-  async listTools(): Promise<McpTool[]> {
+  async listTools(signal?: AbortSignal): Promise<McpTool[]> {
     if (!this.client) throw new Error(`McpClient(${this.serverName}): not connected`);
     const timeoutMs = this.config.timeout ?? DEFAULT_TIMEOUT_MS;
     const listed = await withTimeout(
-      this.client.listTools(),
+      this.client.listTools(undefined, signal ? { signal } : undefined),
       timeoutMs,
       () => new Error(`MCP server "${this.serverName}" listTools timed out after ${timeoutMs}ms`),
     );
