@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.254.1] - 2026-09-26
+
+### Fixed
+- re-join on-screen committed-band rows on widen (#2234) (526179cf)
+
+### Changed
+- tighten compact scrollback renderer tests (#2236) (#2243) (8bc8f826)
+
 ## [5.254.0] - 2026-09-26
 
 ### Added
