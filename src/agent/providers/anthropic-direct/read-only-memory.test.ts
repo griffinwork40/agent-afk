@@ -2,19 +2,20 @@
  * Unit tests for the `readOnlyMemory` provider option and its propagation
  * through {@link createChildProviderFactory}.
  *
- * Child (subagent / skill) sessions must only see `memory_search` — never
- * `memory_update` or `procedure_write`. The parent session is the single
- * writer for the cross-session store; allowing writes from subagents would
- * cause uncoordinated fan-out into the shared memory.
+ * Child (subagent / skill) sessions see `memory_search` AND `memory_update`
+ * (target:"fact" only). Writing to `target:"hot"` is blocked at runtime by
+ * the `createChildMemoryHotBlockHook` PreToolUse hook. `procedure_write` is
+ * still unavailable.
  *
  * What we verify:
- *  1. Read-only provider exposes only the `memory_search` tool schema.
+ *  1. Read-only provider exposes only the `memory_search` tool schema
+ *     (readOnlyMemory: true still fully blocks memory_update in the schema).
  *  2. Full (default) provider still exposes all three memory tool schemas.
  *  3. System prompt for read-only provider lacks write-side memory
  *     instructions and includes the read-only sentinel.
- *  4. `createChildProviderFactory()` produces a provider that exhibits
- *     read-only behaviour AND that the dispatcher refuses a `memory_update`
- *     tool_use with an `is_error: true` tool_result.
+ *  4. `createChildProviderFactory()` produces a provider that exposes BOTH
+ *     `memory_search` AND `memory_update` — the hot-write guard is enforced
+ *     by the hook, not by schema exclusion.
  *
  * Pattern: same mocked Anthropic Messages-API client factory used by
  * `plan-mode-system-payload.test.ts` — intercept at `messages.create`,
@@ -22,6 +23,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createHookRegistry } from '../../hooks.js';
+import { createChildMemoryHotBlockHook } from '../../memory/memory-hooks.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type {
   ContentBlockParam,
@@ -32,7 +35,7 @@ import {
   AnthropicDirectProvider,
   __setAnthropicClientFactory,
 } from './index.js';
-import { createChildProviderFactory } from '../../tools/nesting.js';
+import { createChildProviderFactory, buildSkillRestrictedProvider, CHILD_ALLOWED_TOOLS } from '../../tools/nesting.js';
 import type OpenAI from 'openai';
 import { __setOpenAIClientFactory, type OpenAIClientFactory } from '../openai-compatible/query.js';
 import type { OpenAIChunk } from '../openai-compatible/translate.js';
@@ -324,7 +327,7 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     installOpenAIFactory();
   });
 
-  it('produces a provider that exposes only memory_search', async () => {
+  it('produces a provider that exposes memory_search AND memory_update (fact writes unblocked)', async () => {
     messagesCreateMock.mockImplementation(() =>
       fromArray(makeTextStream('ok')),
     );
@@ -352,17 +355,21 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     const toolsArg = (firstCall[0] as { tools?: unknown }).tools;
     const names = toolNamesFromArg(toolsArg);
     expect(names).toContain('memory_search');
-    expect(names).not.toContain('memory_update');
+    // memory_update is now present — target:"fact" writes are allowed;
+    // target:"hot" writes are blocked at runtime by createChildMemoryHotBlockHook.
+    expect(names).toContain('memory_update');
     expect(names).not.toContain('procedure_write');
 
-    // System prompt is also read-only.
+    // Child providers no longer suppress memory_update guidance in the system
+    // prompt — the full MEMORY_SYSTEM_PROMPT is used (children can write facts).
     const systemArg = (firstCall[0] as { system?: unknown }).system;
     const text = extractSystemText(systemArg);
-    expect(text).toContain('Cross-Session Memory (read-only)');
-    expect(text).not.toContain('Writing memory');
+    expect(text).toContain('Cross-Session Memory');
+    // The full prompt includes memory_update guidance (target:"fact").
+    expect(text).toContain('memory_update');
   });
 
-  it('applies read-only memory to OpenAI-routed child providers', async () => {
+  it('exposes memory_search AND memory_update on OpenAI-routed child providers', async () => {
     pendingOpenAIChunks = [
       {
         choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
@@ -390,17 +397,22 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     const firstCall = openAICreateCalls[0]!;
     const toolNames = openAIToolNames((firstCall.args as { tools?: unknown }).tools);
     expect(toolNames).toContain('memory_search');
-    expect(toolNames).not.toContain('memory_update');
+    // memory_update is now present — target:"fact" writes are allowed;
+    // target:"hot" writes are blocked at runtime by createChildMemoryHotBlockHook.
+    expect(toolNames).toContain('memory_update');
     expect(toolNames).not.toContain('procedure_write');
   });
 
-  it('dispatcher rejects a memory_update tool_use with is_error tool_result', async () => {
+  it('dispatcher accepts a memory_update tool_use (target:fact — allowed in child sessions)', async () => {
     // Two-turn dance:
-    //   turn 1 → model emits memory_update tool_use
+    //   turn 1 → model emits memory_update tool_use with target:"fact"
     //   turn 2 → model receives tool_result, ends turn with text
     // We assert that the tool_result block in the *user* message of turn 2
-    // has is_error: true and contains the permission-denied / unknown-tool
-    // sentinel — proving the dispatcher refused to execute the write.
+    // does NOT have is_error: true — proving the dispatcher now allows the call.
+    // (target:"hot" writes are blocked by the createChildMemoryHotBlockHook
+    // PreToolUse hook registered in default-hook-registry.ts, not by schema
+    // exclusion. That hook is not wired into this unit test's provider, so we
+    // verify the schema-level allowance here.)
     let callCount = 0;
     messagesCreateMock.mockImplementation(() => {
       callCount++;
@@ -409,7 +421,7 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
           makeToolUseStream(
             'tool_update_1',
             'memory_update',
-            JSON.stringify({ target: 'hot', action: 'set', content: 'x' }),
+            JSON.stringify({ target: 'fact', action: 'set', content: 'x', category: 'learning' }),
           ),
         );
       }
@@ -455,18 +467,168 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     ) as { is_error?: boolean; content?: unknown } | undefined;
 
     expect(toolResult).toBeDefined();
+    // memory_update is now in CHILD_ALLOWED_TOOLS — the dispatcher must NOT
+    // reject it with is_error. The tool handler may set is_error for other
+    // reasons (e.g. missing MemoryStore), but the allowlist gate must not fire.
+    expect(toolResult!.is_error).not.toBe(true);
+  });
+
+  it('hook blocks target:"hot" write from a child session — tool result carries is_error: true', async () => {
+    // Integration path: wire the createChildMemoryHotBlockHook into a real
+    // HookRegistry, pass it on the query config, and assert the dispatcher
+    // returns is_error: true when the model calls memory_update(target:"hot")
+    // from a child session (parentSessionId set). This proves the hook's
+    // `decision: 'block'` actually reaches the dispatcher — a unit test that
+    // only checks the hook's return value cannot catch a wrong field name.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fromArray(
+          makeToolUseStream(
+            'tool_hot_1',
+            'memory_update',
+            JSON.stringify({ target: 'hot', action: 'set', content: 'bad hot write', category: 'preference' }),
+          ),
+        );
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    // Registry with the real hot-block hook.
+    const hookRegistry = createHookRegistry();
+    hookRegistry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    const factory = createChildProviderFactory();
+    const provider = factory({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      childExecutor: { execute: vi.fn() } as any,
+    });
+
+    const query = provider.query({
+      prompt: singleInput('please write to hot memory'),
+      config: {
+        model: 'claude-sonnet-5',
+        apiKey: 'sk-ant-oat01-test',
+        // Signal a child session — the hook only blocks when parentSessionId is set.
+        parentSessionId: 'parent-session-x',
+        hookRegistry,
+      },
+    });
+    await drainQuery(query);
+
+    // Two messages.create calls: initial turn + tool-result follow-up.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+
+    const secondCall = messagesCreateMock.mock.calls[1]!;
+    const messages = (secondCall[0] as {
+      messages?: Array<{ role: string; content: ContentBlockParam[] | string }>;
+    }).messages;
+    const lastUser = [...(messages ?? [])]
+      .reverse()
+      .find((m) => m.role === 'user');
+    const blocks = Array.isArray(lastUser!.content)
+      ? (lastUser!.content as ContentBlockParam[])
+      : [];
+    const toolResult = blocks.find(
+      (b) =>
+        (b as { type?: string }).type === 'tool_result' &&
+        (b as { tool_use_id?: string }).tool_use_id === 'tool_hot_1',
+    ) as { is_error?: boolean; content?: unknown } | undefined;
+
+    expect(toolResult).toBeDefined();
+    // The hook blocks the hot write — the dispatcher must set is_error: true.
     expect(toolResult!.is_error).toBe(true);
-    const content =
-      typeof toolResult!.content === 'string'
-        ? toolResult!.content
-        : Array.isArray(toolResult!.content)
-          ? (toolResult!.content as Array<{ text?: string }>)
-              .map((c) => c.text ?? '')
-              .join('')
-          : '';
-    // Permission rejection sentinel (CHILD_ALLOWED_TOOLS excludes memory_update)
-    // OR unknown-tool sentinel (handler is also unregistered) — either proves
-    // the dispatcher refused to write.
-    expect(content).toMatch(/not in the configured allowlist|Unknown tool/);
+  });
+
+  it('child hot write is rejected structurally even with NO hook registry (library-embedder path)', async () => {
+    // Regression for the #2093 re-review: the PreToolUse hook only runs when a
+    // hookRegistry reaches the dispatcher. Library embedders (query()/AgentSession)
+    // may omit it, so guardChildHotWrites must reject target:"hot" on its own.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fromArray(
+          makeToolUseStream(
+            'tool_hot_noreg',
+            'memory_update',
+            JSON.stringify({ target: 'hot', action: 'set', content: 'PWNED-BY-CHILD' }),
+          ),
+        );
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    const factory = createChildProviderFactory();
+    const provider = factory({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      childExecutor: { execute: vi.fn() } as any,
+    });
+    const query = provider.query({
+      prompt: singleInput('please write to hot memory'),
+      // No hookRegistry on purpose.
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', parentSessionId: 'parent-session-x' },
+    });
+    await drainQuery(query);
+
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+    const messages = (messagesCreateMock.mock.calls[1]![0] as {
+      messages?: Array<{ role: string; content: ContentBlockParam[] | string }>;
+    }).messages;
+    const lastUser = [...(messages ?? [])].reverse().find((m) => m.role === 'user');
+    const blocks = Array.isArray(lastUser!.content) ? (lastUser!.content as ContentBlockParam[]) : [];
+    const toolResult = blocks.find(
+      (b) =>
+        (b as { type?: string }).type === 'tool_result' &&
+        (b as { tool_use_id?: string }).tool_use_id === 'tool_hot_noreg',
+    ) as { is_error?: boolean; content?: unknown } | undefined;
+
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.is_error).toBe(true);
+    expect(JSON.stringify(toolResult!.content)).toContain('may not write target:\\"hot\\"');
+  });
+
+  it('skill-restricted child (no readOnlyState, no parentSessionId, no hook registry) cannot write hot', async () => {
+    // Regression for the #2093 third re-review: buildSkillRestrictedProvider builds
+    // children WITHOUT readOnlyState, and a skill fork under a stub parent carries no
+    // parentSessionId. forkSubagent still stamps subagentToolOutputCapBytes on every
+    // fork, so isForkedChildSession must catch it.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fromArray(
+          makeToolUseStream(
+            'tool_hot_skill',
+            'memory_update',
+            JSON.stringify({ target: 'hot', action: 'set', content: 'PWNED-SKILLRESTRICTED' }),
+          ),
+        );
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    const provider = buildSkillRestrictedProvider([...CHILD_ALLOWED_TOOLS], 'claude-sonnet-5');
+    const query = provider.query({
+      prompt: singleInput('please write to hot memory'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', subagentToolOutputCapBytes: 100_000 },
+    });
+    await drainQuery(query);
+
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+    const messages = (messagesCreateMock.mock.calls[1]![0] as {
+      messages?: Array<{ role: string; content: ContentBlockParam[] | string }>;
+    }).messages;
+    const lastUser = [...(messages ?? [])].reverse().find((m) => m.role === 'user');
+    const blocks = Array.isArray(lastUser!.content) ? (lastUser!.content as ContentBlockParam[]) : [];
+    const toolResult = blocks.find(
+      (b) =>
+        (b as { type?: string }).type === 'tool_result' &&
+        (b as { tool_use_id?: string }).tool_use_id === 'tool_hot_skill',
+    ) as { is_error?: boolean; content?: unknown } | undefined;
+
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.is_error).toBe(true);
   });
 });

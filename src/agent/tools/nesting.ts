@@ -101,6 +101,13 @@ export interface ChildProviderFactoryArgs {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, the provider exposes only `state_get` and `state_query`
+   * (no `state_put`, `state_cas`, or `state_delete`). Independent of
+   * `readOnlyMemory` so children can write facts to the memory archive while
+   * still being denied state-store mutations. Always set for child sessions.
+   */
+  readOnlyState?: boolean;
+  /**
    * Custom tools to register on the child's provider. Threaded from
    * `childConfig.customTools` so tools injected at fork time (e.g.
    * `emit_progress` via `wireProgressEvents`) reach the provider's
@@ -138,13 +145,18 @@ export function createStubParentSession(
 // 'memory_search' is included because READ_ONLY_PHASE_TOOLS (src/agent/tool-category.ts:175)
 // — the most restricted role in the system (mint's spec/research/plan phases) — already trusts
 // it ("read-only by construction"). Excluding memory_search for general sub-agents while
-// allowing it in the more restricted role is incoherent. 'memory_update' and 'procedure_write'
-// are deliberately NOT included: memory_update with target:"hot" mutates HOT.md, which is
-// injected into every future session's system prompt — blast radius too large for unsupervised
-// sub-agent writes. If specific skills need memory write access, do it per-skill via a
-// buildPhaseRestrictedProvider-style opt-in builder (see nesting.ts around line 207), not by
-// extending this global default.
-export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query'];
+// allowing it in the more restricted role is incoherent.
+//
+// 'memory_update' is NOW included so sub-agents can persist non-volatile findings (target:
+// "fact") across sessions. Writing to target:"hot" (HOT.md, injected into every future
+// session's system prompt) is the only dangerous write — its blast radius is too large for
+// unsupervised children. That specific call is blocked at runtime by the
+// `createChildMemoryHotBlockHook` PreToolUse hook registered in default-hook-registry.ts, so
+// the schema can be present without opening the hot-write path.
+//
+// 'procedure_write' is deliberately NOT included: there is no analogous safe subset — a
+// procedure is either written or not. Per-skill opt-in remains the intended route.
+export const CHILD_ALLOWED_TOOLS = [...BUILTIN_TOOL_NAMES, ...AWARENESS_TOOL_NAMES, 'memory_search', 'memory_update', ...WORKSPACE_CHILD_TOOL_NAMES, 'agent', 'skill', 'state_get', 'state_query'];
 
 // Recon allowlist for a READ-ONLY skill's forked child. This is the tool half
 // of read-only-skill enforcement (the bash half is the dispatcher's
@@ -259,6 +271,10 @@ export function createChildProviderFactory(
       // Bash gate (read-only skill child). Forwarded into BOTH provider
       // constructors so the per-query dispatcher blocks mutating shell commands.
       ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+      // State gate: children may call memory_update (target:"fact") but must
+      // never write to the state store (state_put/cas/delete). Independent of
+      // readOnlyMemory so fact writes remain open while state writes stay closed.
+      readOnlyState: true as const,
       // Custom tools injected at fork time (e.g. emit_progress). The provider
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
@@ -270,18 +286,16 @@ export function createChildProviderFactory(
         ...providerOpts,
         ...(opts.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
         ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
-        readOnlyMemory: true,
       });
     }
-    // Child sessions get read-only memory access — they may call `memory_search`
-    // to recall prior facts but cannot persist new memory (no `memory_update` /
-    // `procedure_write`). The parent session is the only writer; allowing writes
-    // from subagents would cause uncoordinated fan-out into the shared store.
+    // Child sessions may call memory_search AND memory_update (target:"fact").
+    // Writing to target:"hot" (HOT.md, injected into every future session's system
+    // prompt) is rejected structurally by guardChildHotWrites (keyed on readOnlyState,
+    // no hook registry required); createChildMemoryHotBlockHook is a first-party backstop.
     return new AnthropicDirectProvider({
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
       ...(subscribeHandler !== undefined ? { subscribeHandler } : {}),
-      readOnlyMemory: true,
     });
   };
 }
@@ -302,7 +316,8 @@ export function createChildProviderFactory(
  *     declared; falls back to the full RECON set when the skill declares no
  *     `tools:`)
  *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
- *   - `readOnlyMemory: true` (consistency with the factory path)
+ *   - `readOnlyMemory: true` (read-only recon: no memory_update / procedure_write)
+ *   - `readOnlyState: true` (children cannot write to the state store)
  *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
  *     cannot fan out further anyway, so `agent`/`skill` would be dead schema.
  *

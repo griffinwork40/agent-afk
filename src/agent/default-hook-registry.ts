@@ -14,7 +14,7 @@ import { createPlaceholderPreventHook } from './placeholder-prevent.js';
 import { createAskQuestionGate } from './ask-question-gate.js';
 import { createSafeDestructDetect } from './safe-destruct-detect.js';
 import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
-import { MemoryStore, createMemorySessionEndHook } from './memory/index.js';
+import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
@@ -89,6 +89,28 @@ export function _resetWarningForTests(): void {
 }
 
 /**
+ * Register the child-memory hot-write block hook on the given registry.
+ * Sub-agents may call `memory_update` with `target:"fact"` (safe — fact
+ * archive only) but are blocked from `target:"hot"` (would rewrite HOT.md,
+ * injected into every future session's system prompt). The hook is a no-op
+ * for top-level sessions (no parentSessionId).
+ */
+function registerChildMemoryGuard(registry: HookRegistry): void {
+  registry.register('PreToolUse', createChildMemoryHotBlockHook());
+}
+
+/**
+ * Register the SessionEnd hooks that clean up per-session transient state:
+ * compose-truncation spill files and inbound attachment records. Both are
+ * best-effort no-ops when `sessionId` is absent (top-level teardown without
+ * an ID, or a non-SessionEnd event routed here by mistake).
+ */
+function registerSessionEndCleanupHooks(registry: HookRegistry): void {
+  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) cleanupComposeSpills(c.sessionId); return {}; });
+  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) inboundAttachmentRegistry.clear(c.sessionId); return {}; });
+}
+
+/**
  * Register the subagent-complete forwarding handler when a callback is
  * provided. Extracted from {@link createDefaultHookRegistry} to keep that
  * function within its baselined line-count ceiling.
@@ -153,6 +175,7 @@ export function createDefaultHookRegistry(
   // router park-and-decline after the round-trip. No-op on REPL/Telegram
   // (handler installed; probed at call time). See ask-question-gate.ts.
   registry.register('PreToolUse', createAskQuestionGate());
+  registerChildMemoryGuard(registry);
   // Safe-destruct detector (two-tier, ALL surfaces): OBSERVE-tier records
   // destructive bash commands (rm -rf, git branch -D, etc.) via `approve`
   // catch-records without blocking; BLOCK-tier hard-blocks irrecoverable
@@ -298,8 +321,7 @@ export function createDefaultHookRegistry(
   registry.register('SessionEnd', createMemorySessionEndHook(store, surface));
   // Clean up compose-truncation spill files (written under <sessions>/<sessionId>/compose/)
   // and evict inbound image records at session end so terminated sessions don't leak data.
-  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) cleanupComposeSpills(c.sessionId); return {}; });
-  registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) inboundAttachmentRegistry.clear(c.sessionId); return {}; });
+  registerSessionEndCleanupHooks(registry);
   // Read-only run receipt: after the trace is sealed (sealing precedes
   // SessionEnd dispatch — see agent-session.ts dispatchSessionEndOnce), emit a
   // JSON+Markdown summary of the run under ~/.afk/state/receipts/. Best-effort

@@ -43,7 +43,7 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import { createMemoryHandlers } from '../../memory/index.js';
+import { createMemoryHandlers, guardChildHotWrites, isForkedChildSession } from '../../memory/index.js';
 import { createGetRuntimeStateHandler } from '../../awareness/index.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import {
@@ -130,6 +130,8 @@ export interface BuildDispatcherDeps {
   stateStore?: StateStore;
   surface: string;
   readOnlyMemory: boolean;
+  /** When true, gate state_put/cas/delete regardless of readOnlyMemory. */
+  readOnlyState: boolean;
   readOnlyBash: boolean;
   customTools: readonly CustomToolDef[];
   mcpManager: import('../../mcp/index.js').McpManager | undefined;
@@ -172,14 +174,13 @@ export function buildDispatcher(
   opts?: BuildDispatcherOptions,
 ): SessionToolDispatcher {
   const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
-  const memoryHandlers = createMemoryHandlers(
-    deps.memoryStore,
-    undefined,
-    deps.surface,
+  // Forked children (any fork signal) get memory_update with target:"hot" rejected
+  // structurally by guardChildHotWrites — independent of any hook registry.
+  const memoryHandlers = guardChildHotWrites(
+    createMemoryHandlers(deps.memoryStore, undefined, deps.surface),
+    isForkedChildSession(deps.readOnlyState, opts),
   );
-  // Read-only memory: register `memory_search` only. The dispatcher's
-  // unknown-tool path produces a clear error if the model attempts
-  // `memory_update` / `procedure_write` despite the schema being absent.
+  // Recon sessions (readOnlyMemory=true): register only `memory_search`.
   for (const [name, handler] of memoryHandlers) {
     if (deps.readOnlyMemory && name !== 'memory_search') continue;
     handlers.set(name, handler);
@@ -203,12 +204,13 @@ export function buildDispatcher(
     }
   }
   // State store tools: state_get, state_put, state_cas, state_delete, state_query.
-  // Read-only sessions get only state_get and state_query (mirroring the
-  // readOnlyMemory gate for memory_search above).
+  // Read-only sessions (readOnlyMemory) get only state_get and state_query.
+  // Child sessions (readOnlyState) are also restricted to reads — independent
+  // of readOnlyMemory so children can write facts while being denied state writes.
   if (deps.stateStore !== undefined) {
     const stateHandlers = createStateHandlers(deps.stateStore, opts?.sessionId);
     for (const [name, handler] of stateHandlers) {
-      if (deps.readOnlyMemory && name !== 'state_get' && name !== 'state_query') continue;
+      if ((deps.readOnlyMemory || deps.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
   }

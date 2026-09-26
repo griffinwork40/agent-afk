@@ -1,7 +1,8 @@
 export { MemoryStore, estimateTokens } from './memory-store.js';
 export { loadHotMemory, injectHotMemory } from './memory-loader.js';
 export { injectGoalPrompt } from '../goals/inject.js';
-export { createMemorySessionEndHook } from './memory-hooks.js';
+export { createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory-hooks.js';
+export { guardChildHotWrites, isForkedChildSession, CHILD_HOT_WRITE_DENIED } from './memory-hot-guard.js';
 export {
   memorySearchTool,
   memoryUpdateTool,

@@ -118,6 +118,14 @@ export interface AnthropicDirectProviderOptions {
    */
   readOnlyMemory?: boolean;
   /**
+   * When true, the provider exposes only `state_get` and `state_query`
+   * (no `state_put`, `state_cas`, or `state_delete`). Independent of
+   * `readOnlyMemory` so child sessions can write facts to the memory archive
+   * while still being denied state-store mutations. Always set for children
+   * via {@link createChildProviderFactory}.
+   */
+  readOnlyState?: boolean;
+  /**
    * When true, the per-query {@link SessionToolDispatcher} blocks mutating
    * `bash` commands (read-only recon — git status/log/diff, ls, cat, find,
    * grep — is allowed). Set by `createChildProviderFactory` /
