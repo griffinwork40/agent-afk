@@ -54,9 +54,19 @@ describe('segmentAnsi', () => {
     expect(countVisible(s)).toBe(7);
   });
 
-  it('swallows an unterminated OSC so URL bytes never count as visible', () => {
-    const segs = segmentAnsi('ok\u001b]8;;https://half');
-    expect(segs.filter((x) => x.kind === 'char').map((x) => x.text).join('')).toBe('ok');
+  it('treats an unterminated OSC as a 2-byte literal — does not swallow following text', () => {
+    // A truncated OSC 8 hyperlink with no BEL or ST terminator (e.g. a streaming
+    // chunk boundary): the ESC ] must not silently consume everything after it.
+    const s = '\u001b]8;;hello world';
+    const segs = segmentAnsi(s);
+    // ESC ] emitted as a 2-byte raw literal.
+    const raw = segs.filter((x) => x.kind === 'raw');
+    expect(raw.length).toBeGreaterThanOrEqual(1);
+    const oscRaw = raw.find((r) => r.text === '\u001b]');
+    expect(oscRaw, 'ESC ] must appear as a 2-byte raw segment').toBeDefined();
+    // The payload bytes after ESC ] ('8;;hello world') are emitted as char segments.
+    const chars = segs.filter((x) => x.kind === 'char' && !x.ws);
+    expect(chars.length, 'payload chars must NOT be swallowed').toBeGreaterThan(0);
   });
 
   // DCS / APC / PM / SOS — terminated by ST (ESC \), not BEL.

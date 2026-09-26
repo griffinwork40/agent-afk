@@ -176,7 +176,15 @@ export class SmokeReveal {
     this.clearTick();
   }
 
-  /** Stop the settle driver. Safe to call repeatedly. */
+  /**
+   * Stop the settle driver and clear all history. Safe to call repeatedly.
+   *
+   * Intentionally delegates to reset() rather than clearTick() alone: on
+   * dispose the caller is done with this instance entirely, so wiping burst
+   * history is the right semantic (avoids a stale burst list if the object is
+   * ever reused after disposal). Call reset() directly if only clearing history
+   * mid-lifetime without disposing.
+   */
   dispose(): void {
     this.reset();
   }
