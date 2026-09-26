@@ -96,6 +96,7 @@ describe('truncateOverlayPreservingHead', () => {
     const result = truncateOverlayPreservingHead(lines, 4);
     expect(result.length).toBe(4);
     expect(result[0]).toBe('◉ root');
+    expect(stripAnsi(result[1])).toContain('earlier lines hidden');
     expect(result[result.length - 2]).toBe('child C');
     expect(result[result.length - 1]).toBe('child D');
   });
