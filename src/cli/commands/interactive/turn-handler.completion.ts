@@ -83,10 +83,12 @@ export function buildUserContentBlocks(
   const completedToolUses = toolEvents.filter((te) => te.result !== undefined);
   if (completedToolUses.length === 0) return undefined;
 
+  // Invariant: the Messages API requires every `tool_result` block to come
+  // FIRST in the user message that follows a `tool_use` turn; any text must
+  // come after them. Text-first ordering is rejected with HTTP 400
+  // ("tool_use ids were found without tool_result blocks immediately after"),
+  // which made every session with a tool-using turn unresumable.
   const blocks: ContentBlockParam[] = [];
-  if (userText.trim().length > 0) {
-    blocks.push({ type: 'text', text: userText });
-  }
   for (const te of completedToolUses) {
     blocks.push({
       type: 'tool_result',
@@ -94,6 +96,9 @@ export function buildUserContentBlocks(
       content: te.result ?? '',
       ...(te.isError ? { is_error: true } : {}),
     });
+  }
+  if (userText.trim().length > 0) {
+    blocks.push({ type: 'text', text: userText });
   }
   return blocks.length > 0 ? blocks : undefined;
 }

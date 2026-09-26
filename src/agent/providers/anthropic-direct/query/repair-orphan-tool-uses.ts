@@ -55,6 +55,32 @@ function coveredToolResultIds(msg: MessageParam | undefined): Set<string> {
   return covered;
 }
 
+/**
+ * Move every `tool_result` block to the front of its user message, keeping
+ * relative order within each group (stable partition).
+ *
+ * Invariant: the Messages API rejects a user message in which any other block
+ * (typically `text`) precedes a `tool_result` answering the previous assistant
+ * turn's `tool_use`, with the same 400 as a missing result. Sidecars written by
+ * builds whose `buildUserContentBlocks` emitted text first carry exactly that
+ * shape on disk, so this pass heals them on resume. It must run before the
+ * orphan pass, whose coverage check only tests presence, not position.
+ */
+function hoistToolResultsPass(messages: MessageParam[]): void {
+  for (const msg of messages) {
+    if (msg.role !== 'user' || typeof msg.content === 'string') continue;
+    const blocks = msg.content as ContentBlockParam[];
+    const firstOther = blocks.findIndex((b) => b.type !== 'tool_result');
+    if (firstOther === -1) continue;
+    const misplaced = blocks.slice(firstOther).some((b) => b.type === 'tool_result');
+    if (!misplaced) continue;
+    msg.content = [
+      ...blocks.filter((b) => b.type === 'tool_result'),
+      ...blocks.filter((b) => b.type !== 'tool_result'),
+    ];
+  }
+}
+
 // Invariant: repairOrphanToolUses runs BEFORE repairRoleAlternation so that
 // synthetic tool_result user messages resolve some alternation violations for
 // free. repairRoleAlternation is the catch-all for any remaining gaps.
@@ -125,6 +151,10 @@ function repairRoleAlternation(messages: MessageParam[]): void {
 
 export function repairOrphanToolUses(messages: MessageParam[]): void {
   if (messages.length === 0) return;
+
+  // Pass 0: put tool_result blocks first in each user message (heals sidecars
+  // persisted with text-before-tool_result ordering).
+  hoistToolResultsPass(messages);
 
   // Pass 1: fix orphaned tool_use blocks (may insert user messages that also
   // resolve some alternation violations).
