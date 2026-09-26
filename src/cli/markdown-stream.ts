@@ -1,8 +1,9 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
-import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence } from './markdown-stream-format.js';
+import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable } from './markdown-stream-format.js';
 import { contentMargin } from './render/measure.js';
+import { SmokeReveal, isSmokeTextEnabled } from './smoke-reveal.js';
 import {
   type InputBufferState,
   type LogUpdateFunction,
@@ -113,6 +114,9 @@ export class StreamingMarkdownRenderer {
   private bufferMs: number;
   private inputState: InputBufferState;
 
+  /** Smoke-text reveal mask (AFK_SMOKE_TEXT). Null when the effect is off. */
+  private smoke: SmokeReveal | null = null;
+
   constructor(opts?: StreamingMarkdownRendererOptions) {
     this.out = opts?.out ?? process.stdout;
     this.throttleMs = opts?.throttleMs ?? 33;
@@ -128,6 +132,7 @@ export class StreamingMarkdownRenderer {
     // subscription is a no-op there — skip it to avoid the listener overhead.
     if (this.isTTY) {
       this.resizeUnsub = ResizeBus.subscribe(() => this.scheduleRepaint());
+      if (isSmokeTextEnabled()) this.smoke = new SmokeReveal(() => this.scheduleRepaint());
     }
   }
 
@@ -203,7 +208,13 @@ export class StreamingMarkdownRenderer {
     const contentWidth = inCode
       ? calculateContentWidth(this.indent.length)
       : calculateProseContentWidth(this.indent.length);
-    const formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
+    let formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
+    // Smoke-text reveal: prose only. Code fences and table previews keep
+    // their dimmed live view (the table's box-drawing would otherwise read
+    // as the "youngest" characters).
+    if (this.smoke && formatted && !inCode && !isInOpenTable(this.buffer)) {
+      formatted = this.smoke.apply(formatted);
+    }
     // Content centering (AFK_CENTER_CONTENT): live pending prose is part of
     // the overlay frame, so it receives the centering margin here (the overlay
     // is never routed through commitAbove, which handles scrollback centering).
@@ -265,6 +276,7 @@ export class StreamingMarkdownRenderer {
    */
   private pushDirect(chunk: string): void {
     if (this.flushing) return;
+    this.smoke?.record(chunk);
     this.buffer = runParsePipeline(this.buffer, chunk, {
       onPreCommit: (newBuffer) => {
         this.buffer = newBuffer;
@@ -292,6 +304,7 @@ export class StreamingMarkdownRenderer {
     // Mark flushing so any in-flight repaint() bails out before painting,
     // and no further repaints are scheduled.
     this.flushing = true;
+    this.smoke?.dispose();
 
     // Composer mode: clear the markdown slot and flush so the overlay
     // re-renders without the pending block. This happens BEFORE committing
@@ -413,6 +426,7 @@ export class StreamingMarkdownRenderer {
     }
     this.lastPaintTime = 0;
     this.buffer = '';
+    this.smoke?.reset();
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
     // the screen, not just from the buffer.
@@ -429,6 +443,7 @@ export class StreamingMarkdownRenderer {
       this.throttleTimer = null;
     }
     this.lastPaintTime = 0;
+    this.smoke?.dispose();
 
     if (this.resizeUnsub) {
       this.resizeUnsub();

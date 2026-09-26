@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**195 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**196 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -166,6 +166,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
 | `AFK_CENTER_CONTENT` | boolean |  |  | `1` | When set to "1" (or any truthy value), content surfaces (tool-lane overlay, scrollback blocks, input line, spinner, and OODA stage rail) are horizontally centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). No-op when the terminal is at or below the content measure — the common 80–100 column case. Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable. |
+| `AFK_SMOKE_TEXT` | boolean |  |  | `1` | When set to "1" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, and the daemon, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable. |
 | `AFK_STREAM_BUFFER_MS` | number |  | `0` | `16` | Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50. |
 
 ## Debug

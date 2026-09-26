@@ -26,7 +26,7 @@
     "src/cli/elicitation/agent-question.ts": { "loc": 399, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/slash/commands/info.ts": { "loc": 439, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts": { "loc": 510, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/config/env.ts": { "loc": 1823, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/config/env.ts": { "loc": 1781, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/config/import-sources.ts": { "loc": 373, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/contracts.ts": { "loc": 500, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/runner.ts": { "loc": 362, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
