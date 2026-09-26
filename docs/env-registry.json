@@ -501,6 +501,14 @@
       "category": "model"
     },
     {
+      "name": "AFK_MCP_HEALTHCHECK",
+      "description": "Enable an optional post-connect liveness probe that re-issues tools/list to every connected MCP server in parallel after the initial connect burst. OFF by default — the extra round-trip adds cold-start latency (issue #1751). Set to a truthy value (1/true/yes/on) to enable.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "mcp"
+    },
+    {
       "name": "AFK_MEMORY_EVIDENCE_GATE",
       "description": "Evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category \"convention\") stored without an evidence citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. On by default. Set to 0 to disable.",
       "type": "boolean",
