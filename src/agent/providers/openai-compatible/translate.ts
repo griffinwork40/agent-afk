@@ -22,7 +22,7 @@
  */
 
 import type { ProviderEvent, ProviderUsage } from '../../provider.js';
-import { deriveCallCostUsd } from './pricing.js';
+import { deriveCallCostUsdWithTier } from './pricing.js';
 
 /**
  * Minimal shape of a Chat Completions streaming chunk. We do not import the
@@ -182,7 +182,11 @@ export function* translateChunk(
  * because the Responses-API translator (`responses-translate.ts`) never
  * populates that field.
  */
-export function usageFromState(state: StreamState, model?: string): ProviderUsage {
+export function usageFromState(
+  state: StreamState,
+  model?: string,
+  confirmedPriorityTier = false,
+): ProviderUsage {
   const u = state.usage;
   if (!u) {
     return {
@@ -205,7 +209,13 @@ export function usageFromState(state: StreamState, model?: string): ProviderUsag
     raw: { ...u },
   };
   if (model) {
-    const cost = deriveCallCostUsd(model, inputTokens, outputTokens, cachedInputTokens);
+    const cost = deriveCallCostUsdWithTier(
+      model,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens,
+      confirmedPriorityTier,
+    );
     if (cost !== undefined) out.totalCostUsd = cost;
   }
   return out;

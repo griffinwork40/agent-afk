@@ -134,6 +134,8 @@ import {
   buildChatCompletionsRequestBody,
   buildResponsesRequestBody,
 } from './query/request-body.js';
+import { FastTierSession, type FastTierOptions } from './query/fast-tier-session.js';
+import { chatGptClaudeModelError, clarifyResponsesError } from './query/chatgpt-backend-errors.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
 // (sibling tests + index.ts) keep resolving these from './query.js'.
@@ -207,6 +209,8 @@ export interface OpenAICompatibleQueryOptions {
    * stalls or crashes the session.
    */
   traceWriter?: TraceSink;
+  /** Fast mode (service_tier "priority"); absent for forks. See query/fast-tier-session.ts. */
+  fastTier?: FastTierOptions;
 }
 
 import { provesResponsesCompactionUnsupported } from './query/compaction-guard.js';
@@ -227,6 +231,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly useOpenAIPricing: boolean;
   /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
   private readonly traceWriter: TraceSink | undefined;
+  private readonly fastTier: FastTierSession;
 
   /** Running conversation state for multi-turn sessions. */
   private priorTurns: OpenAIMessage[] = [];
@@ -297,6 +302,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.onPermissionMode = opts.onPermissionMode;
     this.onCwdChange = opts.onCwdChange;
     this.traceWriter = opts.traceWriter;
+    this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
 
     // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
@@ -495,6 +501,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // event-loop turn; openai@6 swallows a mid-stream abort, so without
     // abortableStream the halt lagged the parked read).
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
+    this.fastTier.beginTurn(this.currentModel); // once per turn; /fast applies next turn
     try {
       yield* this._runTurnInner(content, controller, turnStartTime, taskId);
     } finally {
@@ -619,10 +626,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
         return;
       }
 
-      const roundUsage = usageFromState(
-        result.state,
-        this.useOpenAIPricing ? this.currentModel : undefined,
-      );
+      const pricedModel = this.useOpenAIPricing ? this.currentModel : undefined;
+      const roundUsage = usageFromState(result.state, pricedModel, this.fastTier.confirmedFast());
       accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
       // Context-window footprint for THIS round. Unlike Anthropic, OpenAI's
       // `prompt_tokens` (→ inputTokens) already INCLUDES cached tokens
@@ -858,35 +863,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * yield `assistant.message` / `turn.completed` — those are the parent
    * `runTurn`'s responsibility once the iteration loop has settled.
    */
-  /**
-   * Turn an opaque ChatGPT-backend failure into an actionable message. That
-   * backend returns 400 for unsupported models, and the OpenAI SDK often
-   * surfaces it as "400 status code (no body)". Only rewrites 400s on the
-   * ChatGPT backend; every other error passes through unchanged.
-   */
-  private clarifyResponsesError(err: unknown, isChatGptBackend: boolean): Error {
-    const e = err instanceof Error ? err : new Error(String(err));
-    if (!isChatGptBackend) return e;
-    const status =
-      err && typeof err === 'object' && 'status' in err
-        ? (err as { status?: number }).status
-        : undefined;
-    if (status !== 400 && !/\b400\b/.test(e.message)) return e;
-    let detail: string | undefined;
-    const inner = (err as { error?: unknown } | null)?.error;
-    if (inner && typeof inner === 'object') {
-      const d = inner as { detail?: unknown; message?: unknown };
-      if (typeof d.detail === 'string') detail = d.detail;
-      else if (typeof d.message === 'string') detail = d.message;
-    }
-    return new Error(
-      `ChatGPT/Codex backend rejected model "${this.currentModel}" (HTTP 400). A ChatGPT ` +
-        `subscription only serves certain OpenAI models on this backend (gpt-5.6 and gpt-5.5 ` +
-        `work; gpt-5, gpt-5.1, gpt-5.2 and *-codex do not). ` +
-        (detail ? `Backend said: ${detail}` : `No error body was returned.`),
-    );
-  }
-
   private async *runIteration(
     controller: AbortController,
     vision: boolean,
@@ -955,17 +931,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // openai-compatible force-routes it here. Fail fast with an actionable
       // message instead of the bare 400.
       if (isChatGptBackend && isClaudeFamilyModel(this.currentModel)) {
-        yield {
-          type: 'error',
-          error: new Error(
-            `Model "${this.currentModel}" can't run on a ChatGPT subscription — the ChatGPT/Codex ` +
-              `backend only supports OpenAI gpt-5.x models. This usually means a subagent or skill ` +
-              `requested a Claude model. Pass a gpt-5.x model to it (e.g. model: "gpt-5.5"); for an ` +
-              `auto-dispatched agent you can't pass a model to (e.g. git-investigator), set ` +
-              `AFK_DEFAULT_SUBAGENT_MODEL to a gpt-5.x id. Or run it on a provider configured with ` +
-              `the matching API key.`,
-          ),
-        };
+        yield { type: 'error', error: chatGptClaudeModelError(this.currentModel) };
         return null;
       }
 
@@ -983,14 +949,17 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // Retry / stream-drive is shared with the Chat-Completions branch — see
       // query/stream-drive.ts. Only the four per-wire deltas differ here:
       // client call, event type, translator, and error clarification.
-      return yield* driveStream<ResponsesStreamEvent>(driveCtx, {
-        createStream: async (signal) =>
-          (await this.client.responses.create(requestBody as never, {
-            signal,
-          })) as unknown as AsyncIterable<ResponsesStreamEvent>,
-        translate: (event, state) => translateResponsesEvent(event, state, this.initSessionId),
-        clarifyError: (err) => this.clarifyResponsesError(err, isChatGptBackend),
+      const result = yield* driveStream<ResponsesStreamEvent>(driveCtx, {
+        createStream: async (signal) => (await this.fastTier.create(requestBody, (body) =>
+          this.client.responses.create(body as never, { signal }))) as unknown as AsyncIterable<ResponsesStreamEvent>,
+        translate: (event, state) => {
+          this.fastTier.observeResponsesEvent(event);
+          return translateResponsesEvent(event, state, this.initSessionId);
+        },
+        clarifyError: (err) => clarifyResponsesError(err, isChatGptBackend, this.currentModel),
       });
+      yield* this.fastTier.drainNotice(this.initSessionId);
+      return result;
     } else {
       // Chat Completions path. Request-body assembly lives in
       // query/request-body.ts.
@@ -1005,14 +974,17 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // Retry / stream-drive is shared with the Responses branch — see
       // query/stream-drive.ts. This wire differs only in the client call, the
       // event type, the translator, and plain Error coercion (no clarify step).
-      return yield* driveStream<OpenAIChunk>(driveCtx, {
-        createStream: async (signal) =>
-          (await this.client.chat.completions.create(requestBody as never, {
-            signal,
-          })) as unknown as AsyncIterable<OpenAIChunk>,
-        translate: (event, state) => translateChunk(event, state, this.initSessionId),
+      const result = yield* driveStream<OpenAIChunk>(driveCtx, {
+        createStream: async (signal) => (await this.fastTier.create(requestBody, (body) =>
+          this.client.chat.completions.create(body as never, { signal }))) as unknown as AsyncIterable<OpenAIChunk>,
+        translate: (event, state) => {
+          this.fastTier.observeChatChunk(event);
+          return translateChunk(event, state, this.initSessionId);
+        },
         clarifyError: (err) => (err instanceof Error ? err : new Error(String(err))),
       });
+      yield* this.fastTier.drainNotice(this.initSessionId);
+      return result;
     }
   }
 
@@ -1391,6 +1363,8 @@ export function buildQueryFromConfig(
      * ledger. Omitted for forks, which keep the local mint below.
      */
     sessionIdOverride?: string;
+    /** Fast mode wiring from the provider (top-level sessions only). */
+    fastTier?: FastTierOptions;
   } = {},
 ): OpenAICompatibleQuery {
   const auth = resolveOpenAIAuth(config.apiKey, options.authDeps, config.forceChatgptOAuth ?? false);
@@ -1424,5 +1398,6 @@ export function buildQueryFromConfig(
   // Thread traceWriter from AgentConfig so witness events are emitted for
   // openai-compatible sessions when a session-scoped trace writer is present.
   if (config.traceWriter !== undefined) opts.traceWriter = config.traceWriter;
+  if (options.fastTier !== undefined) opts.fastTier = options.fastTier;
   return new OpenAICompatibleQuery(opts);
 }

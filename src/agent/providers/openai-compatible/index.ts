@@ -53,6 +53,7 @@ import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSys
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { buildQueryFromConfig } from './query.js';
+import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
 import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
 import {
   getRuntimeStateTool,
@@ -137,6 +138,8 @@ export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
    * builtin is silently skipped — see `buildDispatcher`).
    */
   customTools?: import('../../tools/custom-tool.js').CustomToolDef[];
+  /** `/fast` controller (top-level REPL sessions); sends service_tier "priority" when eligible. */
+  fastModeController?: import('../../fast-mode.js').FastModeController;
 }
 
 export class OpenAICompatibleProvider implements ModelProvider {
@@ -356,15 +359,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     });
     this._mintedSessionId = resolvedSession.memoized;
 
-    const buildOpts: {
-      baseURL?: string;
-      defaultHeaders?: Record<string, string>;
-      toolDispatcher?: ToolDispatcher;
-      onPermissionMode?: (mode: string) => void;
-      onCwdChange?: (cwd: string) => void;
-      mcpManager?: import('../../mcp/index.js').McpManager;
-      sessionIdOverride?: string;
-    } = {};
+    const buildOpts: NonNullable<Parameters<typeof buildQueryFromConfig>[2]> = {};
     // Undefined for forks — they keep the factory's own per-call mint.
     if (resolvedSession.id !== undefined) buildOpts.sessionIdOverride = resolvedSession.id;
     // Per-slot / per-session baseURL (`config.openaiBaseUrl`, set by
@@ -382,6 +377,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       this._currentPermissionMode = mode;
     };
     if (this.providerOpts.mcpManager !== undefined) buildOpts.mcpManager = this.providerOpts.mcpManager;
+    // Fast mode: top-level only (forks are built without a controller in tools/nesting.ts).
+    if (this.providerOpts.fastModeController !== undefined && (config.depth ?? 0) === 0) buildOpts.fastTier = { controller: this.providerOpts.fastModeController, hasCustomEndpoint: isCustomOpenAIEndpoint(config.openaiBaseUrl ?? this.providerOpts.baseURL) };
 
     // Phase 2 — Presence file lifecycle (top-level sessions only), using the id
     // resolved above so presence and query construction cannot diverge.

@@ -122,7 +122,7 @@ export type OutputEvent =
       /** Short operator-facing message (one sentence, no markdown). */
       text: string;
       /** Semantic category — guides rendering and programmatic branching. */
-      kind: 'truncation' | 'refusal';
+      kind: 'truncation' | 'refusal' | 'fast-tier';
     }
   // Live tool-activity marker (Phase 2, issue #516). Mirrors ProviderEvent
   // 'tool.activity'. Reports the tool calls ACTUALLY running at this instant,

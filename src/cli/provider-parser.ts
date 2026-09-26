@@ -161,6 +161,7 @@ export function parseProvider(
       ...(opts?.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),
       ...(opts?.mcpManager !== undefined ? { mcpManager: opts.mcpManager } : {}),
       ...(opts?.openaiBaseUrl !== undefined ? { baseURL: opts.openaiBaseUrl } : {}),
+      ...(opts?.fastModeController !== undefined ? { fastModeController: opts.fastModeController } : {}),
     });
   }
   if (effective === 'xai' || effective === 'xai-oauth') {
