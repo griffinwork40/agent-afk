@@ -214,8 +214,15 @@ export class StreamingMarkdownRenderer {
     // as the "youngest" characters). A height-truncated render is skipped
     // too: it keeps only the first rows, so its end is NOT the newest text,
     // and the distance-from-end mask would re-smoke settled on-screen text.
-    const truncated = formatted.split('\n').length >= pendingRowCap();
-    if (this.smoke && formatted && !inCode && !truncated && !isInOpenTable(this.buffer)) {
+    // The row count is evaluated last so the smoke-off path never pays for
+    // the split.
+    if (
+      this.smoke &&
+      formatted &&
+      !inCode &&
+      !isInOpenTable(this.buffer) &&
+      formatted.split('\n').length < pendingRowCap()
+    ) {
       formatted = this.smoke.apply(formatted);
     }
     // Content centering (AFK_CENTER_CONTENT): live pending prose is part of

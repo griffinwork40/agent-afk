@@ -137,6 +137,15 @@ describe('SmokeReveal', () => {
     expect(r.apply(s)).toBe(s);
   });
 
+  it('uses only glyphs that stay 1 column even on ambiguous-wide terminals', () => {
+    // East-Asian-Width Ambiguous glyphs (e.g. U+00B7) render 2 columns when a
+    // terminal treats ambiguous characters as double-width.
+    for (const g of SMOKE_GLYPHS) {
+      expect(stringWidth(g), g).toBe(1);
+      expect(stringWidth(g, { ambiguousIsNarrow: false }), g).toBe(1);
+    }
+  });
+
   it('never changes the rendered column width at any point in the fade', () => {
     const c = clockAt();
     const r = new SmokeReveal(() => {}, c.now);

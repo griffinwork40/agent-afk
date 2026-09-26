@@ -54,12 +54,18 @@ export const MAX_LAG_MS = 160;
 /** Settle-driver cadence, which matches the renderer's default throttle. */
 export const FRAME_MS = 33;
 /**
- * Smoke glyph ladder, faintest first: a lone speck, then braille particles
- * that grow denser. Chosen by rendering candidate ladders side by side.
- * Shade blocks (░▒) read as redaction bars, and plain dots read as a
+ * Smoke glyph ladder, faintest first: a lone braille speck, then braille
+ * particles that grow denser. Chosen by rendering candidate ladders side by
+ * side. Shade blocks (░▒) read as redaction bars, and plain dots read as a
  * loading ellipsis.
+ *
+ * Invariant: every glyph must be East-Asian-Width NEUTRAL/narrow, never
+ * Ambiguous. An Ambiguous glyph (e.g. U+00B7 `·`) renders 2 columns on
+ * terminals set to "ambiguous characters are double-width" (common in CJK
+ * locales), which breaks the column-width invariant and can wrap a
+ * full-width line mid-fade. Braille patterns are always 1 column.
  */
-export const SMOKE_GLYPHS: readonly string[] = ['·', '⠂', '⠢', '⠶'];
+export const SMOKE_GLYPHS: readonly string[] = ['⠁', '⠂', '⠢', '⠶'];
 
 /** SGR reset. Clears the tail's original styling before a smoke glyph. */
 const RESET = '\u001b[0m';
@@ -92,7 +98,7 @@ function renderAt(ch: string, age: number): string {
   if (f < GLYPH_PHASE && stringWidth(ch) === 1) {
     const p = f / GLYPH_PHASE;
     const g = Math.min(SMOKE_GLYPHS.length - 1, Math.floor(p * SMOKE_GLYPHS.length));
-    return RESET + smokeTone(0.12 + 0.28 * p)(SMOKE_GLYPHS[g] ?? '·');
+    return RESET + smokeTone(0.12 + 0.28 * p)(SMOKE_GLYPHS[g] ?? '⠁');
   }
   // Letter phase: the real character fades up from dim to the settled tone,
   // after which apply() stops styling it and its own markdown styling returns.
@@ -136,6 +142,9 @@ export class SmokeReveal {
     let visible = 0;
     for (const s of segs) if (s.kind === 'char' && !s.ws) visible++;
 
+    // Characters at or beyond the recorded total are settled by definition,
+    // so skip the per-burst walk for them (most of a long paragraph).
+    const recorded = this.recordedCount();
     let idx = 0;
     let animating = false;
     let out = '';
@@ -144,7 +153,8 @@ export class SmokeReveal {
         out += s.text;
         continue;
       }
-      const birth = this.birthOf(visible - 1 - idx);
+      const d = visible - 1 - idx;
+      const birth = d >= recorded ? null : this.birthOf(d);
       idx++;
       if (birth === null || t - birth >= LIFETIME_MS) {
         out += s.text;
@@ -169,6 +179,13 @@ export class SmokeReveal {
   /** Stop the settle driver. Safe to call repeatedly. */
   dispose(): void {
     this.reset();
+  }
+
+  /** Total characters across live (not yet pruned) bursts. */
+  private recordedCount(): number {
+    let n = 0;
+    for (const b of this.bursts) n += b.count;
+    return n;
   }
 
   /** Birth time of the character `d` positions from the end, or null if settled. */
