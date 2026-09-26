@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.253.0] - 2026-09-26
+
+### Added
+- AFK_SMOKE_TEXT, streamed prose condenses out of smoke (#2232) (d0da883d)
+
+### Changed
+- AFK.md and ci.yml comments contradict current gate state (funcsize, filesize, CLAUDE.md) (#2224) (1d5de9ba)
+- Replace workspace A/B runner with fail-closed TypeScript orchestration (#2230) (cb0f9cd9)
+
 ## [5.252.0] - 2026-09-26
 
 ### Added
