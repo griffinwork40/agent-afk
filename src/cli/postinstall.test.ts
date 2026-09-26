@@ -1,5 +1,29 @@
 // Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
+
+// Invariant (no real service side effects): restartLaunchdServices'
+// DEFAULT restartFn runs `node <repo>/dist/cli.mjs service restart <name>`,
+// which rewrites the developer's REAL ~/Library/LaunchAgents plists and
+// bootouts/bootstraps their live telegram bot and daemon. It fires whenever
+// existsFn reports dist/cli.mjs present, which a real `pnpm build` makes true,
+// or which a blanket `existsFn: () => true` fakes. This happened on
+// 2026-09-26: an un-injected test repointed a live bot at a worktree build and
+// sent its logs to a deleted tmp dir. Every child_process entry point is
+// therefore mocked to record-and-throw, and afterEach fails the test that
+// reached one. Inject execFn/restartFn instead.
+const realChildProcessCalls: string[] = [];
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const refuse = (name: string) => (...args: unknown[]): never => {
+    realChildProcessCalls.push(`${name} ${JSON.stringify(args[0])} ${JSON.stringify(args[1] ?? '')}`);
+    throw new Error(`postinstall test reached real child_process.${name}; inject execFn/restartFn`);
+  };
+  return { ...actual, execSync: refuse('execSync'), execFileSync: refuse('execFileSync') };
+});
+afterEach(() => {
+  const leaked = realChildProcessCalls.splice(0);
+  expect(leaked, 'a test reached a real child_process call').toEqual([]);
+});
 
 const isWin32 = process.platform === 'win32';
 
