@@ -186,7 +186,6 @@ agent-afk/
 ├── docs/                           # internal docs (this directory)
 ├── AGENTS.md                       # operator/agent runtime brief
 ├── CHANGELOG.md
-├── CLAUDE.md                       # Claude Code instructions
 ├── AFK.md                          # session system prompt
 ├── afk.config.json.example
 ├── pnpm-lock.yaml
