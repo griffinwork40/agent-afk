@@ -542,6 +542,8 @@ export function registerChatCommand(program: Command): void {
         // + non-fatal; no-op without plugins.
         await ensurePluginEntrypointsLoaded();
 
+        // Resolved permission mode getter — wires the AFK gate for 'autonomous' (#2298).
+        const getChatPermissionMode = (): import('../../agent/types/sdk-types.js').PermissionMode => options.dangerouslySkipPermissions ? 'bypassPermissions' : (cliConfig.permissionMode ?? 'bypassPermissions');
         // Witness layer: `trace` was opened above (before executors) so
         // SkillExecutor could be wired with traceWriter; reuse it here for
         // the AgentSession.
@@ -582,9 +584,7 @@ export function registerChatCommand(program: Command): void {
             : cliConfig.permissionMode !== undefined
               ? { permissionMode: cliConfig.permissionMode }
               : {}),
-          hookRegistry: createDefaultHookRegistry((info) => {
-            console.log(formatSubagentCompletion(info));
-          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
+          hookRegistry: createDefaultHookRegistry((info) => { console.log(formatSubagentCompletion(info)); }, 'cli', sharedMemoryStore, getChatPermissionMode, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
           ...(systemPrompt !== undefined ? { systemPrompt } : {}),
           ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
           ...(thinking !== undefined ? { thinking } : {}),
