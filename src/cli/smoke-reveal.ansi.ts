@@ -84,6 +84,9 @@ function escapeLength(s: string, i: number): number {
   if (next === 'P' || next === 'X' || next === '^' || next === '_') {
     return swallowToST(s, i, i + 2, /* acceptBEL */ false);
   }
+  // Any other ESC is a two-byte escape (ESC 7/8/c/=/>, SS2/SS3, ...) or a
+  // lone trailing ESC. It is passed through unchanged as a zero-cell `raw`
+  // segment: the mask only measures escapes, it never strips or rewrites them.
   return next === undefined ? 1 : 2;
 }
 

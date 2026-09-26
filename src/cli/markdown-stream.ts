@@ -132,6 +132,8 @@ export class StreamingMarkdownRenderer {
     // subscription is a no-op there — skip it to avoid the listener overhead.
     if (this.isTTY) {
       this.resizeUnsub = ResizeBus.subscribe(() => this.scheduleRepaint());
+      // Read once per renderer, like the other display settings: toggling
+      // AFK_SMOKE_TEXT mid-session applies to the next renderer, not this one.
       if (isSmokeTextEnabled()) this.smoke = new SmokeReveal(() => this.scheduleRepaint());
     }
   }
@@ -290,6 +292,9 @@ export class StreamingMarkdownRenderer {
     this.buffer = runParsePipeline(this.buffer, chunk, {
       onPreCommit: (newBuffer) => {
         this.buffer = newBuffer;
+        // Text is leaving the overlay's front: drop the smoke growth baseline
+        // BEFORE the sync repaints, or the shrink reads as consumed syntax.
+        this.smoke?.noteCommit();
         this.syncPendingOverlay();
       },
       onCommitBlock: (blockText) => this.commitBlock(blockText),
@@ -386,6 +391,7 @@ export class StreamingMarkdownRenderer {
     // so commitAbove() does not fire while the overlay still shows this block.
     // See syncPendingOverlay() / push() for the rationale (prevTopRow==1 drop).
     this.buffer = '';
+    this.smoke?.noteCommit();
     this.syncPendingOverlay();
     this.commitBlock(pending);
   }
@@ -413,6 +419,8 @@ export class StreamingMarkdownRenderer {
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     if (offset < 0 || offset >= this.buffer.length) return false;
     this.buffer = this.buffer.slice(0, offset).trimEnd();
+    // The stripped tail's bursts would otherwise remap onto the kept text.
+    this.smoke?.reset();
     return true;
   }
 

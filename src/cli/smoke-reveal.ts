@@ -16,9 +16,19 @@
  * character sits from the END of the text, counting non-whitespace code
  * points only. New text always lands at the end, and a block commit only
  * removes text from the FRONT, so distance-from-end survives commits,
- * re-wrapping, indentation, and centering margins unchanged. Markdown syntax
- * that the formatter consumes (`**`, backticks) can shift the mapping by a
- * character or two near the tail, which is visually harmless.
+ * re-wrapping, indentation, and centering margins unchanged.
+ *
+ * Invariant (raw vs formatted counts): `record()` sees RAW markdown, but
+ * `apply()` indexes the FORMATTED overlay, and the formatter consumes syntax
+ * (`**`, backticks, link brackets). Left unreconciled, every consumed syntax
+ * character pushes the reveal window one cell onto text that has already
+ * settled, re-smoking (or blanking) it. So each `apply()` compares how much
+ * the formatted text actually grew since the previous apply against how much
+ * raw text was recorded, and trims the excess from the newest bursts. The
+ * comparison needs a baseline; `noteCommit()` drops it whenever text leaves
+ * the FRONT of the overlay, since the growth delta is meaningless across a
+ * commit. The first frame after a commit is left unreconciled, which is
+ * harmless: the excess lands on the fresh paragraph's own young text.
  *
  * Invariant (settle driver): pending-overlay repaints are content-driven.
  * They fire on push() and resize, never on a periodic tick. Without a driver
@@ -110,6 +120,10 @@ export class SmokeReveal {
   private bursts: Burst[] = [];
   private nextBirth = 0;
   private timer: NodeJS.Timeout | null = null;
+  /** Visible count at the last walked apply(); null = no valid baseline. */
+  private lastVisible: number | null = null;
+  /** Raw visible characters recorded since the last walked apply(). */
+  private sinceApply = 0;
 
   constructor(
     private readonly requestRepaint: () => void,
@@ -126,6 +140,7 @@ export class SmokeReveal {
     const end = Math.min(start + (count - 1) * STAGGER_MS, cap);
     this.bursts.push({ start, end, count });
     this.nextBirth = end + STAGGER_MS;
+    this.sinceApply += count;
     this.prune(t);
   }
 
@@ -141,6 +156,7 @@ export class SmokeReveal {
     const segs = segmentAnsi(formatted);
     let visible = 0;
     for (const s of segs) if (s.kind === 'char' && !s.ws) visible++;
+    this.reconcile(visible);
 
     // Characters at or beyond the recorded total are settled by definition,
     // so skip the per-burst walk for them (most of a long paragraph).
@@ -169,10 +185,20 @@ export class SmokeReveal {
     return animating ? out + RESET : formatted;
   }
 
+  /**
+   * Text just left the FRONT of the overlay (a block commit). Drops the growth
+   * baseline so the next apply() does not read the shrink as consumed syntax.
+   */
+  noteCommit(): void {
+    this.lastVisible = null;
+  }
+
   /** Forget all history (e.g. the pending buffer was discarded). */
   reset(): void {
     this.bursts = [];
     this.nextBirth = 0;
+    this.lastVisible = null;
+    this.sinceApply = 0;
     this.clearTick();
   }
 
@@ -187,6 +213,26 @@ export class SmokeReveal {
    */
   dispose(): void {
     this.reset();
+  }
+
+  /**
+   * Trim raw-count excess (formatter-consumed syntax) from the newest bursts
+   * so their total matches how much the formatted text actually grew. See the
+   * "raw vs formatted counts" invariant in the module header.
+   */
+  private reconcile(visible: number): void {
+    const grown = this.lastVisible === null ? null : Math.max(0, visible - this.lastVisible);
+    let excess = grown === null ? 0 : this.sinceApply - grown;
+    this.lastVisible = visible;
+    this.sinceApply = 0;
+    for (let i = this.bursts.length - 1; i >= 0 && excess > 0; i--) {
+      const b = this.bursts[i];
+      if (!b) continue;
+      const take = Math.min(excess, b.count);
+      b.count -= take;
+      excess -= take;
+      if (b.count === 0) this.bursts.splice(i, 1);
+    }
   }
 
   /** Total characters across live (not yet pruned) bursts. */

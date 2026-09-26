@@ -79,6 +79,64 @@ describe('StreamingMarkdownRenderer with AFK_SMOKE_TEXT', () => {
     await r.flush();
   });
 
+  // Regression (PR #2232 review): record() used to count the RAW chunk, so
+  // markdown syntax the formatter consumes (`**`, backticks, link brackets)
+  // inflated the live-burst total and pushed the reveal window onto text that
+  // had already settled, re-smoking (or blanking) it.
+  it.each([
+    ['bold', ' then **bold** words'],
+    ['inline code', ' then `code` words'],
+    ['link', ' then [docs](https://example.com/x) words'],
+  ])('never re-smokes settled text when new text carries %s syntax', async (_label, tail) => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    const { r, overlays } = makeRenderer();
+    const settled = 'alpha bravo charlie delta echo foxtrot';
+    r.push(settled);
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS + LIFETIME_MS + 200);
+    expect(stripAnsi(overlays.at(-1) ?? '')).toContain(settled);
+
+    r.push(tail);
+    await vi.advanceTimersByTimeAsync(40);
+    const frame = stripAnsi(overlays.at(-1) ?? '');
+    expect(hasSmoke(frame), 'fresh tail should still be mid-smoke').toBe(true);
+    expect(frame.trimStart().startsWith(settled), `settled prefix disturbed: ${JSON.stringify(frame)}`).toBe(true);
+    await r.flush();
+  });
+
+  it('still smokes a fresh paragraph that arrives with a block commit', async () => {
+    // The commit shrinks the overlay from the front. Without noteCommit() the
+    // shrink would read as consumed syntax and trim the new text's bursts.
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    const { r, overlays, commits } = makeRenderer();
+    r.push('alpha bravo charlie delta echo foxtrot golf hotel');
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS + LIFETIME_MS + 200);
+    r.push('.\n\nSecond paragraph');
+    expect(commits).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(hasSmoke(overlays.at(-1) ?? ''), 'post-commit text should be mid-smoke').toBe(true);
+    await r.flush();
+  });
+
+  it('resets smoke history when the pending tail is stripped', async () => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    const { r, overlays } = makeRenderer();
+    const keep = 'alpha bravo charlie delta echo foxtrot';
+    r.push(keep);
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS + LIFETIME_MS + 200);
+    r.push(' TAILSTRIP golf hotel india');
+    await vi.advanceTimersByTimeAsync(5);
+    const off = r.getPendingBuffer().indexOf(' TAILSTRIP');
+    expect(r.stripPendingFrom(off)).toBe(true);
+    // Any repaint after the strip must show the kept text solid: the stripped
+    // tail's bursts must not be remapped onto it.
+    r.push(' ');
+    await vi.advanceTimersByTimeAsync(40);
+    const frame = stripAnsi(overlays.at(-1) ?? '');
+    expect(hasSmoke(frame)).toBe(false);
+    expect(frame).toContain(keep);
+    await r.flush();
+  });
+
   it('never masks or delays committed blocks', async () => {
     vi.stubEnv('AFK_SMOKE_TEXT', '1');
     const { r, commits } = makeRenderer();
