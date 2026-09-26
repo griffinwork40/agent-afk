@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { pathToFileURL } from 'url';
-import { loadPluginEntrypoints, _resetLoadedEntrypoints, registerPluginHook } from './load-entrypoints.js';
+import { loadPluginEntrypoints, _resetLoadedEntrypoints, registerPluginHook, installPluginHooks } from './load-entrypoints.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import type { PluginApi } from './load-entrypoints.js';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
@@ -239,15 +239,45 @@ describe('loadPluginEntrypoints', () => {
       // A plugin must not be able to disable the per-handler timeout by
       // setting longRunning: true — that privilege is reserved for first-party
       // hooks (e.g. path-approval) that await human input.
-      let called = 0;
+      // Prove stripping: spy on a raw createHookRegistry() instance and assert
+      // that the options forwarded to register() do NOT contain longRunning.
+      const rawRegistry = createHookRegistry();
+      const registeredOptions: Array<unknown> = [];
+      const origRegister = rawRegistry.register.bind(rawRegistry);
+      rawRegistry.register = (event, handler, options) => {
+        registeredOptions.push(options);
+        return origRegister(event, handler, options);
+      };
+
       // Register with longRunning:true (should be stripped)
-      registerPluginHook('PostToolUse', () => { called++; return {}; }, { longRunning: true });
+      registerPluginHook('PostToolUse', () => ({}), { longRunning: true });
+      installPluginHooks(rawRegistry);
+
+      // longRunning must NOT appear in any forwarded options.
+      // sanitizePluginOptions returns undefined when all keys are stripped, so
+      // registeredOptions[0] is undefined — that alone proves longRunning was
+      // removed. If it were an object, it still must not carry longRunning.
+      expect(registeredOptions).toHaveLength(1);
+      const opts = registeredOptions[0];
+      if (opts !== undefined) {
+        expect(opts).not.toHaveProperty('longRunning');
+      }
+      // In either branch longRunning is absent — undefined means fully stripped.
+    });
+
+    it('installPluginHooks: isolated wrapper forwards AbortSignal to the plugin handler', async () => {
+      // The load-bearing proof: the error-isolation wrapper must pass the second
+      // `signal` argument so plugin handlers can respect abort/cancellation.
+      let receivedSignal: AbortSignal | undefined;
+      registerPluginHook('PostToolUse', (_ctx, signal) => {
+        receivedSignal = signal;
+        return {};
+      });
       const registry = createDefaultHookRegistry().registry;
       const ctx: HookContext = { event: 'PostToolUse', toolName: 'bash', sessionId: 'test-session' };
-      // The handler must still fire (registered, just without the unsafe option)
-      return registry.dispatch(ctx).then(() => {
-        expect(called).toBe(1);
-      });
+      const ac = new AbortController();
+      await registry.dispatch(ctx, ac.signal);
+      expect(receivedSignal).toBe(ac.signal);
     });
 
     it.skipIf(process.platform === 'win32')('installs a plugin declaration on every new session registry', async () => {

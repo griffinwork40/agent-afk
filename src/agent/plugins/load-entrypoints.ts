@@ -93,11 +93,12 @@ const pluginHooks = new Set<{
 }>();
 
 /**
- * Keys from {@link RegisterOptions} that a plugin is allowed to set.
+ * Keys from {@link RegisterOptions} that are **denied** to plugins (denylist).
  * `longRunning: true` disables the per-handler timeout and is reserved for
  * first-party handlers that await human input (e.g. path-approval). Plugins
  * that set it would prevent session boot on a throw, violating the module
- * invariant at :10-11. All other unknown future options are also stripped.
+ * invariant at :10-11. Unknown future options are forwarded unless explicitly
+ * listed here.
  */
 const PLUGIN_REGISTER_OPTION_ALLOWLIST = ['longRunning'] as const satisfies ReadonlyArray<keyof RegisterOptions>;
 type PluginRegisterOptions = Omit<RegisterOptions, (typeof PLUGIN_REGISTER_OPTION_ALLOWLIST)[number]>;
@@ -131,9 +132,9 @@ export const registerPluginHook: NonNullable<PluginApi['registerHook']> = (event
  */
 export function installPluginHooks(registry: HookRegistry): void {
   for (const { event, handler, options } of pluginHooks) {
-    const isolated: typeof handler = async (ctx) => {
+    const isolated: typeof handler = async (ctx, signal) => {
       try {
-        return await (handler as (c: typeof ctx) => Promise<ReturnType<typeof handler>>)(ctx);
+        return await handler(ctx, signal);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[plugin-hook] handler threw — degrading to no-op', err);
