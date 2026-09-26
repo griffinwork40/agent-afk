@@ -20,11 +20,12 @@ import { stripAnsi } from '../../display.js';
 import { freshToolEntry } from './tool-lane-render.js';
 import type { Entry, ToolEntry } from './tool-lane-render.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
+import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { ToolLane } from './tool-lane.js';
 
 // ── Fixture helpers ────────────────────────────────────────────────────────────
 
-function makeResult(content: string, isError = false, failureClass?: string): ToolResultChunk {
+function makeResult(content: string, isError = false, failureClass?: ToolFailureClass): ToolResultChunk {
   return {
     type: 'tool_result',
     toolUseId: 'unused',
@@ -101,7 +102,7 @@ describe('renderCompactFlushChildren', () => {
     );
 
     // 2 output rows: one error child + one Done summary
-    expect(lines.length).toBeGreaterThanOrEqual(2);
+    expect(lines).toHaveLength(2);
     const stripped = lines.map((l) => stripAnsi(l));
 
     // Error child uses mid connector (not last)
@@ -140,10 +141,10 @@ describe('renderCompactFlushChildren', () => {
     expect(doneLines).toHaveLength(1);
     expect(doneLines[0]).toContain('╰─');
 
-    // At least two mid-connector lines (the 3 error children could each
-    // produce one or more lines, but the head row of each uses ├─)
+    // Exactly three mid-connector lines: one per error child (err1, err2, err3),
+    // each producing exactly one head row with ├─.
     const midLines = stripped.filter((l) => l.includes('├─'));
-    expect(midLines.length).toBeGreaterThanOrEqual(2);
+    expect(midLines).toHaveLength(3);
   });
 
   // ── 1e. Children present but none errored + summary → only Done line ──────
@@ -169,12 +170,28 @@ describe('renderCompactFlushChildren', () => {
     expect(stripAnsi(lines[0]!)).toContain('╰─');
   });
 
-  // ── 1f. No children, no summary → empty (edge case: agent ran nothing) ───
+  // ── 1f. In-flight child (no result yet) → treated as non-error, suppressed ───
 
-  it('empty children + undefined summary → empty array (no phantom lines)', async () => {
+  it('child with no .result yet → treated as non-errored, suppressed in compact output', async () => {
     const { renderCompactFlushChildren } = await getModule();
-    const result = renderCompactFlushChildren([], new Map());
-    expect(result).toEqual([]);
+
+    // makeTool without a result argument leaves entry.result undefined,
+    // simulating a tool that is still in-flight.
+    const inFlight = makeTool('inf-1', 'Bash', '("running")');
+    const children: Entry[] = [inFlight];
+    const childMap = new Map<string, Entry[]>();
+
+    const lines = renderCompactFlushChildren(
+      children,
+      childMap,
+      undefined,
+      'Done (1 tool · 0.5s)',
+    );
+
+    // In-flight (no result) ⇒ not an error child ⇒ suppressed; only Done line
+    expect(lines).toHaveLength(1);
+    expect(stripAnsi(lines[0]!)).toContain('Done (1 tool · 0.5s)');
+    expect(stripAnsi(lines[0]!)).not.toContain('Bash');
   });
 });
 
@@ -273,13 +290,19 @@ describe('collectErrorChildren (via renderCompactFlushChildren observable side-c
     ]);
 
     const lines = await render(children, childMap, 'Done');
-    const stripped = lines.map((l) => stripAnsi(l)).join('\n');
+    const joined = lines.map((l) => stripAnsi(l)).join('\n');
 
     // All three errors must be visible
-    expect(stripped).toContain('Bash');
-    expect(stripped).toContain('Grep');
-    expect(stripped).toContain('Read');
-    expect(stripped).toContain('Done');
+    expect(joined).toContain('Bash');
+    expect(joined).toContain('Grep');
+    expect(joined).toContain('Read');
+    expect(joined).toContain('Done');
+
+    // BFS order: top-level errors (Bash, Grep) appear before grandchild (Read).
+    // e1 and e2 are siblings at depth 1; gc is at depth 2.
+    // collectErrorChildren BFS processes depth-1 before depth-2, so Read must
+    // come after both Grep and Bash in the output.
+    expect(joined.indexOf('Grep')).toBeLessThan(joined.indexOf('Read'));
   });
 });
 
