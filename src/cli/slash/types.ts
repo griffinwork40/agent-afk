@@ -63,9 +63,15 @@ export interface TurnRecord {
   inputTokens?: number;
   outputTokens?: number;
   toolEvents?: ToolEvent[];
-  /** Structured content blocks from the API response. Optional; absent in pre-v5.226 sidecars. */
+  /**
+   * @deprecated Read-only — no longer written by new sessions (replaced by full-fidelity
+   * `StoredSession.messages` snapshot). Kept for backward-compat reading of pre-v5.227 sidecars.
+   */
   userContentBlocks?: import('@anthropic-ai/sdk/resources').ContentBlockParam[];
-  /** Structured content blocks from the API response. Optional; absent in pre-v5.226 sidecars. */
+  /**
+   * @deprecated Read-only — no longer written by new sessions (replaced by full-fidelity
+   * `StoredSession.messages` snapshot). Kept for backward-compat reading of pre-v5.227 sidecars.
+   */
   assistantContentBlocks?: import('@anthropic-ai/sdk/resources').ContentBlockParam[];
 }
 
@@ -159,6 +165,14 @@ export interface SessionStats {
    * optional/absent on legacy and un-threaded callers.
    */
   actor?: TraceActor;
+  /**
+   * Non-serialized callback — returns the current raw `MessageParam[]` from
+   * the live Anthropic-direct provider, or `undefined` when the provider does
+   * not expose this (OpenAI-compatible). `saveSession` calls it and writes the
+   * result as `StoredSession.messages` when the result is non-empty. The
+   * function itself is never written to the sidecar.
+   */
+  messagesSource?: () => readonly import('@anthropic-ai/sdk/resources').MessageParam[] | undefined;
 }
 
 /** Minimal console writer passed to handlers — thin wrapper around chalk output. */

@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { resolveEffort, resolveMaxTokens, resolveThinkingParam, resolveAnthropicTemperature, resumeHistoryToMessages, filterContentBlocks, hasValidToolUsePairing } from './resolve-params.js';
+import { resolveEffort, resolveMaxTokens, resolveThinkingParam, resolveAnthropicTemperature, resumeHistoryToMessages, filterContentBlocks } from './resolve-params.js';
 import { maxOutputTokensFor } from '../../model-limits.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { ThinkingConfig } from '../../types/sdk-types.js';
@@ -737,82 +737,3 @@ describe('resumeHistoryToMessages', () => {
   });
 });
 
-describe('hasValidToolUsePairing (#2004 — only nextUserBlocks, not currentUserBlocks)', () => {
-  // Shared test fixtures
-  const toolUseBlock = (id: string): ContentBlockParam =>
-    ({ type: 'tool_use', id, name: 'bash', input: {} } as ContentBlockParam);
-  const toolResultBlock = (toolUseId: string): ContentBlockParam =>
-    ({ type: 'tool_result', tool_use_id: toolUseId, content: 'result' } as ContentBlockParam);
-  const textBlock: ContentBlockParam = { type: 'text', text: 'some text' };
-
-  // ── Trivial satisfactions ─────────────────────────────────────────────
-
-  it('returns true when assistantBlocks has no tool_use blocks (pairing trivially satisfied)', () => {
-    const assistantBlocks: ContentBlockParam[] = [textBlock];
-    expect(hasValidToolUsePairing(assistantBlocks, undefined)).toBe(true);
-    expect(hasValidToolUsePairing(assistantBlocks, [])).toBe(true);
-    expect(hasValidToolUsePairing([], undefined)).toBe(true);
-  });
-
-  // ── Normal case: tool_result in nextUserBlocks satisfies pairing ──────
-
-  it('returns true when all tool_use ids are covered by tool_result in nextUserBlocks', () => {
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1'), toolUseBlock('tu_2')];
-    const nextUserBlocks: ContentBlockParam[] = [
-      toolResultBlock('tu_1'),
-      toolResultBlock('tu_2'),
-    ];
-    expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(true);
-  });
-
-  it('returns true when nextUserBlocks has extra tool_result blocks beyond what is needed', () => {
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1')];
-    const nextUserBlocks: ContentBlockParam[] = [
-      toolResultBlock('tu_1'),
-      toolResultBlock('tu_extra'), // unrelated extra result — should not affect verdict
-    ];
-    expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(true);
-  });
-
-  it('returns true when nextUserBlocks contains a mix of text and matching tool_result blocks', () => {
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1')];
-    const nextUserBlocks: ContentBlockParam[] = [textBlock, toolResultBlock('tu_1')];
-    expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(true);
-  });
-
-  // ── False-positive prevention: tool_result in currentUserBlocks must NOT satisfy ──
-
-  it('returns false when the matching tool_result is only in currentUserBlocks (false-positive prevention)', () => {
-    // This is the key regression guard for #2004. A tool_result from a PRIOR
-    // tool exchange sits in the preceding user turn. The old dual-search would
-    // have counted it as satisfying the pairing for the current assistant turn's
-    // tool_use blocks — producing a false positive. The narrowed function must
-    // return false here because nextUserBlocks has no matching result.
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1')];
-    // The function signature only accepts `nextUserBlocks` — `currentUserBlocks`
-    // is never a parameter. This test verifies that an empty next-turn yields
-    // `false`, which is the structural guarantee preventing the false-positive
-    // that a dual-search function would allow.
-    const nextUserBlocks: ContentBlockParam[] = []; // no result in the next turn
-    expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(false);
-  });
-
-  it('returns false when nextUserBlocks is undefined (no following user turn exists)', () => {
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1')];
-    expect(hasValidToolUsePairing(assistantBlocks, undefined)).toBe(false);
-  });
-
-  // ── Partial coverage ──────────────────────────────────────────────────
-
-  it('returns false when only some tool_use ids are covered in nextUserBlocks', () => {
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1'), toolUseBlock('tu_2')];
-    const nextUserBlocks: ContentBlockParam[] = [toolResultBlock('tu_1')]; // tu_2 missing
-    expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(false);
-  });
-
-  it('returns false when nextUserBlocks has tool_result blocks but none match the tool_use ids', () => {
-    const assistantBlocks: ContentBlockParam[] = [toolUseBlock('tu_1')];
-    const nextUserBlocks: ContentBlockParam[] = [toolResultBlock('tu_unrelated')];
-    expect(hasValidToolUsePairing(assistantBlocks, nextUserBlocks)).toBe(false);
-  });
-});

@@ -51,35 +51,44 @@ export function resolveResumeTarget(options: ResumeCliOptions): ResolvedResumeTa
 
 export function resumeConfigFor(target: ResolvedResumeTarget | undefined): Partial<AgentConfig> {
   if (!target) return {};
+  const stored = target.stored;
+  if (!stored) {
+    return { resume: target.resumeId, sessionId: target.resumeId };
+  }
+
+  const resumeHistory = stored.turns.map((turn, idx, arr) => {
+    const entry: import('../agent/types.js').ResumeHistoryTurn = {
+      user: turn.user,
+      assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
+      // Propagate structured content blocks when available (added in v5.226).
+      // Old sidecars without these fields round-trip correctly — the field
+      // is simply absent and the provider falls back to the text-only path.
+      ...(turn.userContentBlocks ? { userContentBlocks: turn.userContentBlocks } : {}),
+      ...(turn.assistantContentBlocks ? { assistantContentBlocks: turn.assistantContentBlocks } : {}),
+    };
+    // Seed the last turn's token count so the context-overflow guard
+    // (#1294) fires on the first resumed turn instead of being skipped.
+    // Only the last turn's count matters — it is the most recent (and
+    // largest) context footprint the provider will use as a lower bound.
+    // Conservative: prefer inputTokens (raw billed tokens) over
+    // outputTokens because inputTokens already includes the full
+    // conversation history in the prompt. When absent (legacy sidecars),
+    // the field is omitted and the guard falls back to the null path.
+    if (idx === arr.length - 1 && turn.inputTokens !== undefined) {
+      entry.inputTokens = turn.inputTokens;
+    }
+    return entry;
+  });
+
   return {
     resume: target.resumeId,
     sessionId: target.resumeId,
-    ...(target.stored
-      ? {
-          resumeHistory: target.stored.turns.map((turn, idx, arr) => {
-            const entry: import('../agent/types.js').ResumeHistoryTurn = {
-              user: turn.user,
-              assistant: (turn.assistant ?? '') + summarizeToolEvents(turn.toolEvents),
-              // Propagate structured content blocks when available (added in v5.226).
-              // Old sidecars without these fields round-trip correctly — the field
-              // is simply absent and the provider falls back to the text-only path.
-              ...(turn.userContentBlocks ? { userContentBlocks: turn.userContentBlocks } : {}),
-              ...(turn.assistantContentBlocks ? { assistantContentBlocks: turn.assistantContentBlocks } : {}),
-            };
-            // Seed the last turn's token count so the context-overflow guard
-            // (#1294) fires on the first resumed turn instead of being skipped.
-            // Only the last turn's count matters — it is the most recent (and
-            // largest) context footprint the provider will use as a lower bound.
-            // Conservative: prefer inputTokens (raw billed tokens) over
-            // outputTokens because inputTokens already includes the full
-            // conversation history in the prompt. When absent (legacy sidecars),
-            // the field is omitted and the guard falls back to the null path.
-            if (idx === arr.length - 1 && turn.inputTokens !== undefined) {
-              entry.inputTokens = turn.inputTokens;
-            }
-            return entry;
-          }),
-        }
+    resumeHistory,
+    // Full-fidelity path: pass the raw MessageParam[] snapshot when available.
+    // The provider will validate and strip thinking blocks before use.
+    // Old sidecars without this field fall through to resumeHistoryToMessages.
+    ...(stored.messages && stored.messages.length > 0
+      ? { resumeMessages: stored.messages }
       : {}),
   };
 }

@@ -608,6 +608,10 @@ export function registerChatCommand(program: Command): void {
         }))), trace?.writer);
 
         boundSession = session;
+        // Wire the full-fidelity messages source so saveSession can snapshot
+        // the live Anthropic history on persist. The closure captures `session`
+        // by reference so it always reflects the most-recently-assigned session.
+        stats.messagesSource = () => session?.getMessages?.();
 
         // Wave-manifest reconciliation at one-shot chat startup: surface
         // resumption offers for unfinished work. Non-interactive — requires

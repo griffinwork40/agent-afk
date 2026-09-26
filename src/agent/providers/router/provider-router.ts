@@ -574,6 +574,15 @@ export class ProviderRouter implements ProviderQuery {
     return undefined;
   }
 
+  /**
+   * Delegates {@link ProviderQuery.getMessages} to the current inner query.
+   * Returns undefined when the inner has no such method (OpenAI-compatible)
+   * or when there is no active inner yet.
+   */
+  getMessages(): readonly import('@anthropic-ai/sdk/resources').MessageParam[] | undefined {
+    return this.active?.query.getMessages?.();
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     await this.closeActive();

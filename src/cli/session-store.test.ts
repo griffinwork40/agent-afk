@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, rmSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+import { existsSync, rmSync, readFileSync, symlinkSync, writeFileSync, mkdirSync, readdirSync, statSync, chmodSync } from 'fs';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -582,5 +582,112 @@ describe('session-registry bridge — storedToHandle / bindingsForStored', () =>
     const reloaded = storedToHandle(makeStored({ source: 'telegram', ...fields }), 'ignored');
     expect(reloaded.id).toBe('H');
     expect(reloaded.bindings).toEqual(h.bindings);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// messagesSource / full-fidelity snapshot (Task 2a)
+// ---------------------------------------------------------------------------
+
+describe('session-store — messagesSource and sidecar mode', () => {
+  it('saveSession writes messages from messagesSource when source returns non-empty', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-msg' });
+    const fakeMessages = [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'world' },
+    ];
+    stats.messagesSource = () => fakeMessages;
+    const path = saveSession(stats, 'msg-session');
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect(Array.isArray(raw['messages'])).toBe(true);
+    expect(raw['messages']).toEqual(fakeMessages);
+  });
+
+  it('saveSession omits messages key when source returns undefined', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-nomsg' });
+    stats.messagesSource = () => undefined;
+    const path = saveSession(stats, 'nomsg-session');
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect('messages' in raw).toBe(false);
+  });
+
+  it('saveSession omits messages key when source returns empty array', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-emptymsg' });
+    stats.messagesSource = () => [];
+    const path = saveSession(stats, 'emptymsg-session');
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect('messages' in raw).toBe(false);
+  });
+
+  it('saveSession omits messages key when no messagesSource is set', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-nosource' });
+    // No messagesSource — old behavior.
+    const path = saveSession(stats, 'nosource-session');
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect('messages' in raw).toBe(false);
+  });
+
+  it('the sidecar JSON never contains messagesSource (non-serialized callback is dropped by JSON.stringify)', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-cb' });
+    const fakeMessages = [{ role: 'user' as const, content: 'hello' }];
+    stats.messagesSource = () => fakeMessages;
+    const path = saveSession(stats, 'cb-session');
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    // The callback itself must never appear.
+    expect('messagesSource' in raw).toBe(false);
+    // But the snapshot it produced should be there.
+    expect(Array.isArray(raw['messages'])).toBe(true);
+  });
+
+  it('sidecar is written mode 0600 for a new file', () => {
+    if (process.platform === 'win32') return; // chmod not meaningful on Windows
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-mode' });
+    const path = saveSession(stats, 'mode-session');
+    const mode = statSync(path).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it('sidecar is tightened to 0600 even for a pre-existing 0644 file', () => {
+    if (process.platform === 'win32') return; // chmod not meaningful on Windows
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-chmod' });
+    // First save creates the file at 0600; widen it to 0644 to simulate an
+    // older build that did not set mode.
+    const path = saveSession(stats, 'chmod-session');
+    chmodSync(path, 0o644);
+    expect(statSync(path).mode & 0o777).toBe(0o644); // verify widening worked
+    // Second save must tighten back to 0600.
+    saveSession(stats, 'chmod-session');
+    const mode = statSync(path).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it('forkStoredSession copies messages from messagesSource', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-fork-msg' });
+    const fakeMessages = [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'world' },
+    ];
+    stats.messagesSource = () => fakeMessages;
+    const { path } = forkStoredSession(stats);
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect(Array.isArray(raw['messages'])).toBe(true);
+    expect(raw['messages']).toEqual(fakeMessages);
+  });
+
+  it('forkStoredSession omits messages when messagesSource is absent', () => {
+    const stats = createSessionStats('sonnet');
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-fork-noms' });
+    // No messagesSource.
+    const { path } = forkStoredSession(stats);
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    expect('messages' in raw).toBe(false);
   });
 });

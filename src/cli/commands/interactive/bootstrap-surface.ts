@@ -11,6 +11,7 @@ import { createReplRenderer } from './repl-renderer.js';
 import { TrustedSkillLedger } from '../../trusted-skill-ledger.js';
 import type { CliConfig } from '../../config.js';
 import type { CliOptions } from './shared.js';
+import type { SessionRef } from '../../../agent/session-ref.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
 import { palette } from '../../palette.js';
@@ -36,6 +37,8 @@ export function createReplSurface(a: {
   effectiveCwd: string | undefined;
   extrasCwd: string | undefined;
   trace: ReturnType<typeof createDefaultTraceWriter>;
+  /** Live-session handle; populated after this phase returns. */
+  sessionRef: SessionRef;
 }): {
   stats: SessionStats;
   initialPermissionMode: PermissionMode | undefined;
@@ -51,6 +54,10 @@ export function createReplSurface(a: {
   if (a.resumeTarget?.stored) {
     reseedStatsFromStored(stats, a.resumeTarget.stored, a.resumeTarget.resumeId);
   }
+  // Full-fidelity resume: saveSession snapshots the live provider message
+  // array through this callback. It reads `sessionRef.current` lazily, so the
+  // session built after this phase (and any /resume swap) is picked up.
+  stats.messagesSource = () => a.sessionRef.current?.getMessages?.();
   // Initial permission mode: --dangerously-skip-permissions wins, else the
   // resolved afk.config.json `permissionMode` (loadConfig now always returns one
   // — DEFAULT_CLI_PERMISSION_MODE = bypass for new installs, overridable by the

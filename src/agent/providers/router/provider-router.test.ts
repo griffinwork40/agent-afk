@@ -513,3 +513,89 @@ describe('ProviderRouter', () => {
     await router.close();
   });
 });
+
+// ---------------------------------------------------------------------------
+// ProviderRouter.getMessages (Task 2e)
+// ---------------------------------------------------------------------------
+
+describe('ProviderRouter.getMessages', () => {
+  it('delegates getMessages to the active inner and returns its result', async () => {
+    // Extend FakeQuery to implement getMessages.
+    class FakeQueryWithMessages extends FakeQuery {
+      private readonly _msgs: import('@anthropic-ai/sdk/resources').MessageParam[];
+      constructor(
+        args: ProviderQueryArgs,
+        sessionId: string,
+        msgs: import('@anthropic-ai/sdk/resources').MessageParam[],
+      ) {
+        super(args, sessionId, true);
+        this._msgs = msgs;
+      }
+      getMessages(): readonly import('@anthropic-ai/sdk/resources').MessageParam[] {
+        return this._msgs;
+      }
+    }
+
+    const snapshotMsgs = [
+      { role: 'user' as const, content: 'snapshot hello' },
+      { role: 'assistant' as const, content: 'snapshot reply' },
+    ];
+
+    // Build a provider whose query implements getMessages.
+    class FakeProviderWithMessages implements import('../../provider.js').ModelProvider {
+      readonly name = 'anthropic-direct';
+      readonly queries: FakeQueryWithMessages[] = [];
+      query(args: ProviderQueryArgs): import('../../provider.js').ProviderQuery {
+        const q = new FakeQueryWithMessages(args, 'msg-inner', snapshotMsgs);
+        this.queries.push(q);
+        return q;
+      }
+    }
+
+    const providerWithMsgs = new FakeProviderWithMessages();
+    const { openai } = makeRouter({ model: 'sonnet' });
+    const outer2 = new QueryInputStream(() => 'sess2');
+    const deps2: ProviderRouterDeps = {
+      resolveProvider: () => providerWithMsgs,
+      providerNameForModel: () => 'anthropic-direct',
+      resolveApiKey: () => 'key-anthropic',
+    };
+    const router2 = new ProviderRouter(
+      { prompt: outer2.createIterable(), config: { model: 'sonnet' } as AgentConfig },
+      deps2,
+    );
+    const iter2 = router2[Symbol.asyncIterator]();
+    await pullInit(iter2);
+
+    // After init, active inner has getMessages — router must delegate.
+    const msgs = router2.getMessages();
+    expect(msgs).toBeDefined();
+    expect(msgs).toEqual(snapshotMsgs);
+
+    await router2.close();
+    void openai; // suppress unused var
+  });
+
+  it('returns undefined when the active inner does not implement getMessages', async () => {
+    // FakeQuery (the default) does NOT implement getMessages.
+    const { router, outer } = makeRouter({ model: 'sonnet' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    // FakeQuery has no getMessages → router must return undefined.
+    const msgs = router.getMessages();
+    expect(msgs).toBeUndefined();
+
+    await router.close();
+    void outer; // suppress unused var
+  });
+
+  it('returns undefined when there is no active inner (before init)', () => {
+    // A freshly constructed router has no active inner.
+    const { router } = makeRouter({ model: 'sonnet' });
+    // Do NOT pull init — no active inner exists yet.
+    // Access getMessages on the non-started router.
+    const msgs = router.getMessages();
+    expect(msgs).toBeUndefined();
+  });
+});

@@ -462,6 +462,9 @@ export class AgentSession implements IAgentSession {
   getHistory(): readonly Message[] { return [...this.conversationHistory]; }
   getTurnCount(): number { return this.turnCount; }
 
+  /** Snapshot of raw MessageParam[]. See {@link IAgentSession.getMessages}. */
+  getMessages(): readonly import('@anthropic-ai/sdk/resources').MessageParam[] | undefined { return this.providerQuery.getMessages?.(); }
+
   async close(): Promise<void> {
     if (this.currentState === 'closed') return;
     this.currentState = 'closed';

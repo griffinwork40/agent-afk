@@ -381,6 +381,18 @@ export interface IAgentSession {
   ): Promise<RewindFilesResult>;
 
   /**
+   * Return a snapshot of the raw `MessageParam[]` history as seen by the
+   * Anthropic Messages API, or `undefined` when the underlying provider does
+   * not expose this (OpenAI-compatible, ProviderRouter on a non-Anthropic
+   * inner). Optional to preserve backward-compat with external implementers.
+   *
+   * Used by `saveSession` (via `stats.messagesSource`) to persist full-fidelity
+   * message history for lossless resume. Callers that feed the snapshot to
+   * `resumeMessages` must strip `thinking`/`redacted_thinking` blocks first.
+   */
+  getMessages?(): readonly import('@anthropic-ai/sdk/resources').MessageParam[] | undefined;
+
+  /**
    * Compact older history into a synthetic preamble. Providers that don't
    * support compaction (e.g. Codex) return `{ compacted: false, reason:
    * 'not-supported' }` instead of throwing.

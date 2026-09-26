@@ -137,7 +137,7 @@ export async function bootstrapSession(
     stats, initialPermissionMode, completionWriter, statusLine, replRenderer,
     writer, trustedSkillLedger, gitStatusSampler,
   } = createReplSurface({
-    options, cliConfig, sessionModel, resumeTarget, effectiveCwd, extrasCwd: extras?.cwd, trace,
+    options, cliConfig, sessionModel, resumeTarget, effectiveCwd, extrasCwd: extras?.cwd, trace, sessionRef,
   });
 
   // Stable hookRegistry shared across sessions (including swaps), plus the

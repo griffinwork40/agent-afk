@@ -14,7 +14,7 @@
  * assistant TEXT survives replay; tool calls and thinking blocks do not.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync, chmodSync } from 'fs';
 import { join, basename, resolve, sep, isAbsolute } from 'path';
 import { randomUUID } from 'node:crypto';
 import { ensureSessionsMigrated, getSessionsDir } from '../paths.js';
@@ -66,6 +66,14 @@ export interface StoredSession {
    *  pre-registry sidecars; a legacy `telegramChatId` migrates to one telegram
    *  binding so existing Telegram conversations resolve unchanged. */
   bindings?: SessionBinding[];
+  /**
+   * Full-fidelity Anthropic Messages API history snapshot. Written by
+   * `saveSession` when `stats.messagesSource` returns a non-empty array.
+   * Absent on pre-full-fidelity sidecars and OpenAI-sourced sessions.
+   * Used by `resumeConfigFor` to populate `AgentConfig.resumeMessages` so
+   * the provider can skip the lossy `resumeHistoryToMessages` path.
+   */
+  messages?: import('@anthropic-ai/sdk/resources').MessageParam[];
 }
 
 export interface SessionListEntry {
@@ -146,14 +154,39 @@ function safeResolvePath(
 }
 
 /**
+ * Read the live provider message array through the non-serialized
+ * `stats.messagesSource` callback. Returns a spreadable `{ messages }` only
+ * when the snapshot is non-empty; the callback itself is never persisted.
+ */
+function snapshotMessages(stats: SessionStats): Pick<StoredSession, 'messages'> {
+  const snap = stats.messagesSource?.();
+  return snap && snap.length > 0 ? { messages: [...snap] } : {};
+}
+
+/**
+ * Write a sidecar readable only by the owner. Sidecars now carry full tool
+ * output, which can include secrets from command output. `mode` on
+ * writeFileSync only applies when the file is created, so an existing sidecar
+ * written by an older build (0644) is tightened with an explicit chmod.
+ */
+function writeSidecarPrivate(path: string, payload: StoredSession): void {
+  writeFileSync(path, JSON.stringify(payload, null, 2), { mode: 0o600 });
+  try { chmodSync(path, 0o600); } catch { /* best-effort: never fail a save on chmod */ }
+}
+
+/**
  * Write the current session stats to disk. Uses the SDK sessionId when
  * present; otherwise falls back to a timestamped ID. Returns the path written.
+ *
+ * When `stats.messagesSource` returns a non-empty array, it is written as
+ * `StoredSession.messages` for full-fidelity resume. Sidecars are mode 0600.
  */
 export function saveSession(stats: SessionStats, overrideId?: string): string {
   const dir = sessionsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   const id = overrideId ?? stats.sessionId ?? `session-${Date.now()}`;
+
   const payload: StoredSession = {
     sessionId: stats.sessionId,
     ...(stats.name ? { name: stats.name } : {}),
@@ -170,12 +203,15 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     totalTokens: stats.totalTokens,
     totalDurationMs: stats.totalDurationMs,
     turns: stats.turns,
+    // Full-fidelity message snapshot. Omitted when unavailable so a session
+    // whose current provider is OpenAI never writes a stale Anthropic snapshot.
+    ...snapshotMessages(stats),
   };
   // Validate write destination — pathForId(id) calls path.join() which does
   // NOT block traversal; `id = '../../evil'` would otherwise escape the
   // sessions dir. safeResolvePath rejects on prefix mismatch.
   const path = safeResolvePath(id, { write: true });
-  writeFileSync(path, JSON.stringify(payload, null, 2));
+  writeSidecarPrivate(path, payload);
   return path;
 }
 
@@ -218,9 +254,15 @@ export function forkStoredSession(
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
     ...(stats.sessionId ? { forkedFrom: stats.sessionId } : {}),
     forkedAt: Date.now(),
+    // Carry the full-fidelity messages snapshot into the fork — a forked
+    // session resumes with the same fidelity as the parent. Snapshot at
+    // fork time (not live session state) so the fork is a true point-in-time
+    // copy. When messagesSource is absent or returns empty, omit the field so
+    // the resume falls back to resumeHistoryToMessages (text path).
+    ...snapshotMessages(stats),
   };
   const path = safeResolvePath(newId, { write: true });
-  writeFileSync(path, JSON.stringify(payload, null, 2));
+  writeSidecarPrivate(path, payload);
   return { id: newId, path };
 }
 

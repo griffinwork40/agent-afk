@@ -526,6 +526,22 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * leave it undefined; `AgentSession.reauth()` returns `null` in that case.
    */
   reauth?(): Promise<{ accountId: string; swapped: boolean } | null>;
+  /**
+   * Optional. Return a snapshot of the current raw `MessageParam[]` history
+   * as seen by the Anthropic Messages API, or `undefined` when the provider
+   * does not expose this (OpenAI-compatible, ProviderRouter on a non-Anthropic
+   * inner).
+   *
+   * Contract: the returned array is a shallow copy — safe to pass around, but
+   * each element is not deeply cloned. `cache_control` markers are NOT stored
+   * in state.messages (cache-policy.ts clones them per-request), so the
+   * snapshot is clean. `thinking`/`redacted_thinking` blocks ARE included;
+   * callers that feed the snapshot to resume must strip them before use.
+   *
+   * No idle guard: calling mid-turn returns the snapshot as of the latest
+   * appended message. `repairOrphanToolUses` heals any orphan tail on resume.
+   */
+  getMessages?(): readonly import('@anthropic-ai/sdk/resources').MessageParam[] | undefined;
   close(): void | Promise<void>;
 }
 

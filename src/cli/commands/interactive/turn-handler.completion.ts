@@ -14,94 +14,12 @@
  */
 
 import type { SessionStats, ToolEvent } from '../../slash/types.js';
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { CompletionWriter, TurnHandles } from './shared.js';
 import type { StreamEventState } from './turn-handler.stream-events.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { recordTurn } from '../../slash/session-stats.js';
 
-// ─── Content block builders ───────────────────────────────────────────────────
-
-/**
- * Build `ContentBlockParam[]` for the assistant message from the accumulated
- * response text and tool events.
- *
- * Only emitted when meaningful — i.e. the turn has tool_use blocks (so the
- * structured path carries semantic value beyond plain text). Text-only turns
- * skip blocks entirely to keep sidecar size reasonable.
- *
- * Structure per the Anthropic Messages API:
- *   - One `text` block (when responseText is non-empty)
- *   - One `tool_use` block per completed tool event (no pending tools)
- *
- * The corresponding `tool_result` blocks belong in the NEXT user message, not
- * here. `resumeHistoryToMessages` will read the next TurnRecord's
- * `userContentBlocks` to satisfy that side of the pairing.
- */
-export function buildAssistantContentBlocks(
-  responseText: string,
-  toolEvents: ToolEvent[],
-): ContentBlockParam[] | undefined {
-  const completedToolUses = toolEvents.filter((te) => te.result !== undefined);
-  // Only emit blocks when there are tool_use calls — preserves sidecar brevity
-  // for simple text turns while capturing the semantically rich mixed turns.
-  if (completedToolUses.length === 0) return undefined;
-
-  const blocks: ContentBlockParam[] = [];
-  if (responseText.trim().length > 0) {
-    blocks.push({ type: 'text', text: responseText });
-  }
-  for (const te of completedToolUses) {
-    let parsedInput: Record<string, unknown> = {};
-    if (te.inputRaw) {
-      try { parsedInput = JSON.parse(te.inputRaw) as Record<string, unknown>; } catch { /* leave empty */ }
-    } else if (te.input) {
-      try { parsedInput = JSON.parse(te.input) as Record<string, unknown>; } catch { /* leave empty */ }
-    }
-    blocks.push({ type: 'tool_use', id: te.toolUseId, name: te.toolName, input: parsedInput });
-  }
-  return blocks.length > 0 ? blocks : undefined;
-}
-
-/**
- * Build `ContentBlockParam[]` for the user message when the turn included
- * tool results from the previous assistant turn's tool_use blocks.
- *
- * In a tool-use turn, the *user* side of the exchange carries `tool_result`
- * blocks corresponding to each tool_use the assistant emitted. These are
- * stored on the TurnRecord that *follows* the tool_use turn, which is why
- * callers must pass in the tool events from the preceding assistant turn.
- *
- * For turns with no tool results (plain text exchange), returns `undefined`
- * so the text fallback path is used instead.
- */
-export function buildUserContentBlocks(
-  userText: string,
-  toolEvents: ToolEvent[],
-): ContentBlockParam[] | undefined {
-  const completedToolUses = toolEvents.filter((te) => te.result !== undefined);
-  if (completedToolUses.length === 0) return undefined;
-
-  // Invariant: the Messages API requires every `tool_result` block to come
-  // FIRST in the user message that follows a `tool_use` turn; any text must
-  // come after them. Text-first ordering is rejected with HTTP 400
-  // ("tool_use ids were found without tool_result blocks immediately after"),
-  // which made every session with a tool-using turn unresumable.
-  const blocks: ContentBlockParam[] = [];
-  for (const te of completedToolUses) {
-    blocks.push({
-      type: 'tool_result',
-      tool_use_id: te.toolUseId,
-      content: te.result ?? '',
-      ...(te.isError ? { is_error: true } : {}),
-    });
-  }
-  if (userText.trim().length > 0) {
-    blocks.push({ type: 'text', text: userText });
-  }
-  return blocks.length > 0 ? blocks : undefined;
-}
 import { palette } from '../../palette.js';
 import {
   ringBellIfEnabled,
@@ -122,10 +40,6 @@ export interface TurnCompletionContext {
   h: TurnHandles;
   toolEvents: ToolEvent[];
   historyText: string;
-  /** Pre-computed by `buildAssistantContentBlocks` in `runTurn`. */
-  assistantBlocks: ContentBlockParam[] | undefined;
-  /** Pre-computed by `buildUserContentBlocks` (or raw structured payload). */
-  userBlocks: ContentBlockParam[] | undefined;
   completionWriter: CompletionWriter | undefined;
   /** Borrowed REPL compositor, or `null` on non-TTY paths. */
   borrowedCompositor: TerminalCompositor | null;
@@ -144,7 +58,7 @@ export interface TurnCompletionContext {
  */
 export async function handleTurnCompletion(ctx: TurnCompletionContext): Promise<void> {
   const {
-    state, stats, h, toolEvents, historyText, assistantBlocks, userBlocks,
+    state, stats, h, toolEvents, historyText,
     completionWriter, borrowedCompositor, renderer, disposeRendererOnce,
   } = ctx;
 
@@ -189,7 +103,10 @@ export async function handleTurnCompletion(ctx: TurnCompletionContext): Promise<
   }
 
   if (state.doneFired && !state.softStopRequested && !state.pauseInterruptRequested) {
-    recordTurn(stats, historyText, state.responseText, state.doneMeta, toolEvents, userBlocks, assistantBlocks);
+    // Structured resume history is no longer derived from UI tool events: the
+    // provider's real message array is snapshotted by saveSession through
+    // stats.messagesSource, so no content blocks are recorded per turn.
+    recordTurn(stats, historyText, state.responseText, state.doneMeta, toolEvents);
     await h.onTurnComplete?.(historyText, state.responseText).catch(() => { /* best-effort */ });
 
     // Bell (AFK_BELL=1) and desktop notification (AFK_NOTIFY=1, OSC 9):

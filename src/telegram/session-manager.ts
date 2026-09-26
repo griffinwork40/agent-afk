@@ -502,6 +502,11 @@ export class SessionManager {
       if (cwd) stats.cwd = cwd;
       this.sessionStats.set(key, stats);
     }
+    // Full-fidelity resume: saveSession snapshots the live session's real
+    // message array through this callback. Wired here (not at createSession)
+    // so hydrated and reset stats get it too; it reads the map lazily, so a
+    // rebuilt session under the same route is picked up automatically.
+    stats.messagesSource ??= () => this.sessions.get(key)?.getMessages?.();
     return stats;
   }
 

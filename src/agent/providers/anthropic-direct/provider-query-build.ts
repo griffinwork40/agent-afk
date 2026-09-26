@@ -17,7 +17,7 @@ import {
   resolveAutoCompactThreshold,
   resolveEffort,
   resolveThinkingParam,
-  resumeHistoryToMessages,
+  resolveInitialMessages,
 } from './resolve-params.js';
 import { createCwdDependentsFactory } from './query/cwd-dependents.js';
 import { createSystemPromptRebuildFactory } from './query/overlay-rebuild.js';
@@ -58,7 +58,8 @@ export function buildProviderQuery(
   // resume behavior — so supplying a minted id here is inert apart from
   // making the id known earlier.
   const resumedSessionId = resolvedSessionId;
-  const initialMessages = resumeHistoryToMessages(config.resumeHistory);
+  // Full-fidelity snapshot when present, else the legacy per-turn rebuild.
+  const initialMessages = resolveInitialMessages(config);
   // Seed the context-overflow guard from the last stored turn's token count
   // (#1294). The last turn of resumeHistory carries `inputTokens` when the
   // session was saved with a recent enough sidecar; absent on legacy sidecars.

@@ -358,6 +358,11 @@ export class AnthropicDirectQuery implements ProviderQuery {
     return rewindQueryConversation(this.state, this.abort, turnIndex);
   }
 
+  /** Snapshot of the raw MessageParam history. See {@link ProviderQuery.getMessages}. */
+  getMessages(): readonly import('@anthropic-ai/sdk/resources').MessageParam[] {
+    return [...this.state.messages];
+  }
+
   close(): void {
     this.state.closed = true;
     this.abort.requestAbort('closed');

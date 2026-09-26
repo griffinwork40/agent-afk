@@ -182,53 +182,6 @@ export function filterContentBlocks(raw: unknown[] | undefined): ContentBlockPar
 }
 
 /**
- * Check whether every `tool_use` block in an assistant turn has a
- * corresponding `tool_result` block in the **next** user turn.
- *
- * Per the Anthropic Messages API contract, `tool_result` blocks must appear
- * in the user turn that *immediately follows* the assistant turn that issued
- * the `tool_use` — never in the *preceding* user turn. Searching the
- * preceding user turn (`currentUserBlocks`) would cause false positives: a
- * `tool_result` from an earlier, unrelated tool exchange could satisfy the
- * pairing check for the current assistant turn's `tool_use` blocks.
- *
- * This function therefore searches **only** `nextUserBlocks` — the blocks
- * from the user turn that follows the assistant turn — and ignores the
- * preceding user turn entirely.
- *
- * Returns `true` when every `tool_use` id is covered by a `tool_result` in
- * `nextUserBlocks`; returns `true` trivially when there are no `tool_use`
- * blocks; returns `false` otherwise.
- *
- * **Staging note (INV-048):** This function is intentionally exported but has
- * no production caller yet — it is staged for the orphan-repair path. When
- * wiring it into orphan-repair callers, pass **only** `nextUserBlocks` (the
- * turn immediately following the assistant turn). The function signature
- * enforces this, but callers must not re-introduce a dual-search by accident
- * (i.e., do not also pass or search `currentUserBlocks`).
- *
- * Exported for unit testing.
- */
-export function hasValidToolUsePairing(
-  assistantBlocks: ContentBlockParam[],
-  nextUserBlocks: ContentBlockParam[] | undefined,
-): boolean {
-  const toolUseIds = assistantBlocks
-    .filter((b): b is Extract<ContentBlockParam, { type: 'tool_use' }> => b.type === 'tool_use')
-    .map((b) => b.id);
-  if (toolUseIds.length === 0) return true; // no tool_use blocks — pairing is trivially satisfied
-  if (!nextUserBlocks || nextUserBlocks.length === 0) return false;
-  const resultIds = new Set(
-    nextUserBlocks
-      .filter(
-        (b): b is Extract<ContentBlockParam, { type: 'tool_result' }> => b.type === 'tool_result',
-      )
-      .map((b) => b.tool_use_id),
-  );
-  return toolUseIds.every((id) => resultIds.has(id));
-}
-
-/**
  * Contract: Rebuild a `MessageParam[]` from persisted `ResumeHistoryTurn` records.
  *
  * Two paths:
@@ -299,6 +252,73 @@ export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined
     }
   }
   return messages.length > 0 ? messages : undefined;
+}
+
+/**
+ * Block types that are NEVER safe to replay from a resumed session.
+ *
+ * - `thinking` / `redacted_thinking`: signatures are model-scoped and a
+ *   resumed session may use a different model. The API rejects cross-model
+ *   thinking blocks with HTTP 400 "thinking blocks require special handling."
+ *   Stripping them is always correct because the prior-turn thinking is not
+ *   required for the resumed session — the conversation text carries the
+ *   conclusions.
+ */
+const STRIP_FROM_RESUME = new Set<string>(['thinking', 'redacted_thinking']);
+
+/**
+ * Validate and sanitize a `MessageParam[]` loaded from a stored sidecar for
+ * use as `initialMessages` on resume.
+ *
+ * Applies three guards:
+ *   1. **Role check** — only `'user'` and `'assistant'` roles are valid.
+ *   2. **Block allowlist** — unknown block types are dropped via the same
+ *      `filterContentBlocks` allowlist used by `resumeHistoryToMessages`.
+ *   3. **Thinking strip** — `thinking` and `redacted_thinking` blocks are
+ *      removed. Their signatures are model-scoped; resuming on a different
+ *      model causes HTTP 400.
+ *
+ * Messages left empty after filtering (no role, no content) are dropped.
+ * `repairOrphanToolUses` heals any orphan tail on the first resumed turn.
+ *
+ * Exported for unit testing.
+ */
+export function filterResumeMessages(raw: unknown): MessageParam[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const result: MessageParam[] = [];
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const e = entry as Record<string, unknown>;
+    const role = e['role'];
+    if (role !== 'user' && role !== 'assistant') continue;
+
+    const content = e['content'];
+    if (typeof content === 'string') {
+      if (content.length > 0) result.push({ role, content } as MessageParam);
+    } else if (Array.isArray(content)) {
+      // First filter to known block types, then strip thinking blocks.
+      const filtered = filterContentBlocks(content).filter(
+        (b) => !STRIP_FROM_RESUME.has(b.type),
+      );
+      if (filtered.length > 0) result.push({ role, content: filtered } as MessageParam);
+    }
+  }
+  return result;
+}
+
+/**
+ * Choose the provider's initial message array for a resumed session.
+ *
+ * Prefers the full-fidelity `resumeMessages` snapshot (validated by
+ * {@link filterResumeMessages}); falls back to rebuilding from the per-turn
+ * `resumeHistory` when the snapshot is absent or filters to nothing, so
+ * sidecars written before the snapshot existed keep resuming.
+ */
+export function resolveInitialMessages(
+  config: Pick<AgentConfig, 'resumeMessages' | 'resumeHistory'>,
+): MessageParam[] | undefined {
+  const snapshot = filterResumeMessages(config.resumeMessages);
+  return snapshot.length > 0 ? snapshot : resumeHistoryToMessages(config.resumeHistory);
 }
 
 /** Effort levels at which Opus 5 rejects `{type:'disabled'}` thinking. */

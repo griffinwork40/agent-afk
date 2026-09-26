@@ -250,3 +250,197 @@ describe('resumeHistoryToMessages', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// filterResumeMessages (Task 2c)
+// ---------------------------------------------------------------------------
+
+import { filterResumeMessages } from './resolve-params.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources';
+
+describe('filterResumeMessages', () => {
+  it('returns [] for non-array input', () => {
+    expect(filterResumeMessages(null)).toEqual([]);
+    expect(filterResumeMessages(undefined)).toEqual([]);
+    expect(filterResumeMessages('string')).toEqual([]);
+    expect(filterResumeMessages(42)).toEqual([]);
+  });
+
+  it('returns [] for empty array', () => {
+    expect(filterResumeMessages([])).toEqual([]);
+  });
+
+  it('drops entries with invalid roles', () => {
+    const raw = [
+      { role: 'system', content: 'sys prompt' },
+      { role: 'user', content: 'hello' },
+      { role: 'invalid', content: 'bad' },
+      { role: null, content: 'also bad' },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(1);
+    expect((result[0] as MessageParam).role).toBe('user');
+    expect((result[0] as MessageParam).content).toBe('hello');
+  });
+
+  it('drops non-object entries (null, arrays, primitives)', () => {
+    const raw = [
+      null,
+      42,
+      'string',
+      [],
+      { role: 'user', content: 'valid' },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(1);
+    expect((result[0] as MessageParam).content).toBe('valid');
+  });
+
+  it('drops messages whose content is empty string after filtering', () => {
+    const raw = [
+      { role: 'user', content: '' },
+      { role: 'assistant', content: 'answer' },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(1);
+    expect((result[0] as MessageParam).role).toBe('assistant');
+  });
+
+  it('passes through string content unchanged', () => {
+    const raw = [
+      { role: 'user', content: 'hello there' },
+      { role: 'assistant', content: 'hi back' },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(2);
+    expect((result[0] as MessageParam).content).toBe('hello there');
+    expect((result[1] as MessageParam).content).toBe('hi back');
+  });
+
+  it('strips thinking and redacted_thinking blocks from array content', () => {
+    const raw = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'private thoughts' },
+          { type: 'text', text: 'visible reply' },
+          { type: 'redacted_thinking', data: 'encrypted' },
+        ],
+      },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(1);
+    const content = (result[0] as MessageParam).content as Array<{ type: string }>;
+    expect(content).toHaveLength(1);
+    expect(content[0]!.type).toBe('text');
+  });
+
+  it('drops unknown block types from array content', () => {
+    const raw = [
+      {
+        role: 'user',
+        content: [
+          { type: 'unknown_future_block', data: 'something' },
+          { type: 'text', text: 'my question' },
+        ],
+      },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(1);
+    const content = (result[0] as MessageParam).content as Array<{ type: string }>;
+    expect(content).toHaveLength(1);
+    expect(content[0]!.type).toBe('text');
+  });
+
+  it('drops messages left empty after filtering (all blocks stripped)', () => {
+    const raw = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'only thinking, no text' },
+          { type: 'redacted_thinking', data: 'enc' },
+        ],
+      },
+      { role: 'user', content: 'still here' },
+    ];
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(1);
+    expect((result[0] as MessageParam).role).toBe('user');
+  });
+
+  it('preserves a realistic multi-round tool loop verbatim and in order', () => {
+    // user text → assistant [text, tool_use] → user [tool_result, text] →
+    // assistant [tool_use] → user [tool_result] → assistant text
+    const raw: unknown[] = [
+      { role: 'user', content: 'run it' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will run bash.' },
+          { type: 'tool_use', id: 'tu_1', name: 'bash', input: { command: 'ls' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu_1', content: 'file.ts\nother.ts' },
+          { type: 'text', text: 'thanks' },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'tu_2', name: 'read_file', input: { file_path: 'file.ts' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu_2', content: 'export const x = 1;' },
+        ],
+      },
+      { role: 'assistant', content: 'Done reading.' },
+    ];
+
+    const result = filterResumeMessages(raw);
+    expect(result).toHaveLength(6);
+
+    // Roles in correct order.
+    expect(result.map((m) => (m as MessageParam).role)).toEqual([
+      'user', 'assistant', 'user', 'assistant', 'user', 'assistant',
+    ]);
+
+    // Turn 0: plain user text preserved.
+    expect((result[0] as MessageParam).content).toBe('run it');
+
+    // Turn 1: text + tool_use both preserved, in order.
+    const t1 = (result[1] as MessageParam).content as Array<{ type: string; text?: string; id?: string }>;
+    expect(t1).toHaveLength(2);
+    expect(t1[0]!.type).toBe('text');
+    expect(t1[0]!.text).toBe('I will run bash.');
+    expect(t1[1]!.type).toBe('tool_use');
+    expect(t1[1]!.id).toBe('tu_1');
+
+    // Turn 2: tool_result + text in FULL (content string preserved verbatim).
+    const t2 = (result[2] as MessageParam).content as Array<{ type: string; content?: string; tool_use_id?: string }>;
+    expect(t2).toHaveLength(2);
+    expect(t2[0]!.type).toBe('tool_result');
+    expect(t2[0]!.tool_use_id).toBe('tu_1');
+    expect(t2[0]!.content).toBe('file.ts\nother.ts');
+
+    // Turn 3: single tool_use preserved.
+    const t3 = (result[3] as MessageParam).content as Array<{ type: string; id?: string }>;
+    expect(t3).toHaveLength(1);
+    expect(t3[0]!.type).toBe('tool_use');
+    expect(t3[0]!.id).toBe('tu_2');
+
+    // Turn 4: tool_result preserved.
+    const t4 = (result[4] as MessageParam).content as Array<{ type: string; tool_use_id?: string }>;
+    expect(t4).toHaveLength(1);
+    expect(t4[0]!.type).toBe('tool_result');
+    expect(t4[0]!.tool_use_id).toBe('tu_2');
+
+    // Turn 5: plain assistant text preserved.
+    expect((result[5] as MessageParam).content).toBe('Done reading.');
+  });
+});

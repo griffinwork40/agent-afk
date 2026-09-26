@@ -5,7 +5,6 @@ import { tmpdir } from 'os';
 import { saveSession } from './session-store.js';
 import { resolveResumeTarget, resumeConfigFor, type ResolvedResumeTarget } from './resume-session.js';
 import { createSessionStats, recordTurn } from './slash/session-stats.js';
-import { buildAssistantContentBlocks, buildUserContentBlocks } from './commands/interactive/turn-handler.js';
 import type { StoredSession } from './session-store.js';
 
 let tmpHome: string;
@@ -119,37 +118,6 @@ describe('resume-session', () => {
     expect(config.resumeHistory?.[0]?.assistantContentBlocks).toEqual(assistantBlocks);
   });
 
-  it('always appends tool summary to text field even when assistantContentBlocks is present (#2005)', () => {
-    // Regression test for issue #2005: when assistantContentBlocks is present on a turn,
-    // the text field must still carry the tool-event summary so the text fallback path
-    // (used when pairing validation fails on the structured path) has full tool context.
-    const stats = createSessionStats('sonnet');
-    const record = recordTurn(
-      stats,
-      'run a command',
-      'done',
-      { sessionId: 'sdk-blocks-tools' },
-      [{ toolName: 'bash', toolUseId: 'tu_1', input: 'echo hi', isError: false }],
-    );
-    // Simulate a v5.226+ sidecar that also has structured content blocks.
-    const assistantBlocks = [
-      { type: 'text' as const, text: 'done' },
-      { type: 'tool_use' as const, id: 'tu_1', name: 'bash', input: { command: 'echo hi' } },
-    ];
-    record.assistantContentBlocks = assistantBlocks;
-    saveSession(stats, 'blocks-tools-session');
-
-    const target = resolveResumeTarget({ resume: 'blocks-tools-session' });
-    const config = resumeConfigFor(target);
-    // The structured blocks are propagated for the normal path.
-    expect(config.resumeHistory?.[0]?.assistantContentBlocks).toEqual(assistantBlocks);
-    // The text field must still include the tool summary so the text fallback path
-    // (triggered when hasValidToolUsePairing returns false on the structured path)
-    // retains tool context. The text field is simply ignored when the structured
-    // path succeeds, so this redundancy is harmless.
-    expect(config.resumeHistory?.[0]?.assistant).toBe('done\n[Tools used: bash(echo hi)✓]');
-  });
-
   it('produces identical output for old TurnRecords without content blocks', () => {
     const stats = createSessionStats('sonnet');
     recordTurn(stats, 'hello', 'hi', { sessionId: 'sdk-noblocks-resume' });
@@ -189,170 +157,54 @@ describe('resume-session', () => {
     expect(config.resumeHistory?.[0]?.assistant).toBe('\n[Tools used: bash(ls)✓]');
     expect(config.resumeHistory?.[0]?.assistant).not.toContain('null');
   });
-});
 
-// ---------------------------------------------------------------------------
-// buildAssistantContentBlocks / buildUserContentBlocks helpers
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Full-fidelity path: messagesSource → saveSession → resumeConfigFor
+  // ---------------------------------------------------------------------------
 
-describe('buildAssistantContentBlocks', () => {
-  it('returns undefined for text-only turns (no tool_use)', () => {
-    expect(buildAssistantContentBlocks('Hello, world!', [])).toBeUndefined();
-  });
-
-  it('returns undefined when no tool events have results', () => {
-    // pending tool (result === undefined) should not trigger block emission
-    const pending = [{ toolName: 'bash', toolUseId: 'tu_1', input: 'ls' }];
-    expect(buildAssistantContentBlocks('', pending)).toBeUndefined();
-  });
-
-  it('builds text + tool_use blocks for a tool-use turn', () => {
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_1', input: '', inputRaw: '{"command":"ls"}', result: 'file.ts', isError: false },
-    ];
-    const blocks = buildAssistantContentBlocks('running…', toolEvents);
-    expect(blocks).toBeDefined();
-    expect(blocks).toHaveLength(2);
-    expect(blocks![0]).toEqual({ type: 'text', text: 'running…' });
-    expect(blocks![1]).toEqual({ type: 'tool_use', id: 'tu_1', name: 'bash', input: { command: 'ls' } });
-  });
-
-  it('omits the text block when responseText is blank', () => {
-    const toolEvents = [
-      { toolName: 'read_file', toolUseId: 'tu_2', input: '', inputRaw: '{"file_path":"/tmp/x.ts"}', result: 'content', isError: false },
-    ];
-    const blocks = buildAssistantContentBlocks('', toolEvents);
-    expect(blocks).toBeDefined();
-    expect(blocks).toHaveLength(1);
-    expect(blocks![0]!.type).toBe('tool_use');
-  });
-
-  it('falls back to parsing input when inputRaw is absent', () => {
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_3', input: '{"command":"pwd"}', result: '/tmp', isError: false },
-    ];
-    const blocks = buildAssistantContentBlocks('', toolEvents);
-    expect(blocks![0]).toEqual({ type: 'tool_use', id: 'tu_3', name: 'bash', input: { command: 'pwd' } });
-  });
-
-  it('uses empty object for input when JSON parse fails', () => {
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_4', input: 'not-json', result: 'ok', isError: false },
-    ];
-    const blocks = buildAssistantContentBlocks('', toolEvents);
-    expect(blocks![0]).toEqual({ type: 'tool_use', id: 'tu_4', name: 'bash', input: {} });
-  });
-
-  it('emits multiple tool_use blocks for multi-tool turns', () => {
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_1', input: '', inputRaw: '{"command":"ls"}', result: 'ok', isError: false },
-      { toolName: 'read_file', toolUseId: 'tu_2', input: '', inputRaw: '{"file_path":"/x"}', result: 'data', isError: false },
-    ];
-    const blocks = buildAssistantContentBlocks('checking…', toolEvents);
-    expect(blocks).toHaveLength(3); // text + 2 × tool_use
-    expect(blocks![1]!.type).toBe('tool_use');
-    expect(blocks![2]!.type).toBe('tool_use');
-  });
-});
-
-describe('buildUserContentBlocks', () => {
-  it('returns undefined when there are no tool results', () => {
-    expect(buildUserContentBlocks('hello', [])).toBeUndefined();
-  });
-
-  it('returns undefined when no tool events have results', () => {
-    const pending = [{ toolName: 'bash', toolUseId: 'tu_1', input: 'ls' }]; // no result
-    expect(buildUserContentBlocks('hello', pending)).toBeUndefined();
-  });
-
-  it('builds tool_result blocks FIRST, then text (Messages API ordering contract)', () => {
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_1', input: 'ls', result: 'file.ts', isError: false },
-      { toolName: 'grep', toolUseId: 'tu_2', input: 'x', result: 'hit', isError: false },
-    ];
-    const blocks = buildUserContentBlocks('run it', toolEvents);
-    expect(blocks).toBeDefined();
-    expect(blocks).toHaveLength(3);
-    // Text before a tool_result is rejected with HTTP 400 ("tool_use ids were
-    // found without tool_result blocks immediately after"), breaking resume.
-    expect(blocks![0]).toEqual({ type: 'tool_result', tool_use_id: 'tu_1', content: 'file.ts' });
-    expect(blocks![1]).toEqual({ type: 'tool_result', tool_use_id: 'tu_2', content: 'hit' });
-    expect(blocks![2]).toEqual({ type: 'text', text: 'run it' });
-  });
-
-  it('marks error tool results with is_error', () => {
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_err', input: 'bad', result: 'fail', isError: true },
-    ];
-    const blocks = buildUserContentBlocks('', toolEvents);
-    expect(blocks).toBeDefined();
-    const resultBlock = blocks!.find((b) => b.type === 'tool_result') as { is_error?: boolean } | undefined;
-    expect(resultBlock?.is_error).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Round-trip: recordTurn with blocks → saveSession → resumeConfigFor
-// ---------------------------------------------------------------------------
-
-describe('structured content blocks round-trip', () => {
-  it('blocks written via recordTurn survive save+resume as resumeHistory entries', () => {
+  it('resumeConfigFor passes resumeMessages when stored.messages is non-empty', () => {
     const stats = createSessionStats('sonnet');
-    const toolEvents = [
-      { toolName: 'bash', toolUseId: 'tu_rt1', input: '', inputRaw: '{"command":"echo hi"}', result: 'hi', isError: false },
+    recordTurn(stats, 'hello', 'world', { sessionId: 'sdk-ff' });
+    const fakeMessages = [
+      { role: 'user' as const, content: 'hello' },
+      { role: 'assistant' as const, content: 'world' },
     ];
-    const assistantBlocks = buildAssistantContentBlocks('done', toolEvents)!;
-    const userBlocks = [{ type: 'text' as const, text: 'run command' }];
+    stats.messagesSource = () => fakeMessages;
+    saveSession(stats, 'ff-session');
 
-    const rec = recordTurn(
-      stats,
-      'run command',
-      'done',
-      { sessionId: 'sdk-roundtrip' },
-      toolEvents,
-      userBlocks,
-      assistantBlocks,
-    );
-
-    // Verify the TurnRecord itself has blocks.
-    expect(rec.userContentBlocks).toEqual(userBlocks);
-    expect(rec.assistantContentBlocks).toBeDefined();
-    expect(rec.assistantContentBlocks!.some((b) => b.type === 'tool_use')).toBe(true);
-
-    // Save and reload via resumeConfigFor.
-    saveSession(stats, 'roundtrip-session');
-    const target = resolveResumeTarget({ resume: 'roundtrip-session' });
+    const target = resolveResumeTarget({ resume: 'ff-session' });
     const config = resumeConfigFor(target);
-
-    const turn = config.resumeHistory?.[0];
-    expect(turn).toBeDefined();
-    expect(turn?.userContentBlocks).toEqual(userBlocks);
-    expect(turn?.assistantContentBlocks).toBeDefined();
-    expect(turn?.assistantContentBlocks?.some((b) => b.type === 'tool_use')).toBe(true);
-    // Text fallback paths still intact.
-    expect(turn?.user).toBe('run command');
-    expect(turn?.assistant).toMatch(/done/);
+    // Full-fidelity path: resumeMessages is set.
+    expect(config.resumeMessages).toEqual(fakeMessages);
+    // resumeHistory is ALSO present (text fallback path).
+    expect(config.resumeHistory).toBeDefined();
   });
 
-  it('backward compat: old TurnRecords without blocks still work via text fallback', () => {
-    // Old sidecar: no userContentBlocks, no assistantContentBlocks.
+  it('resumeConfigFor does not include resumeMessages for old sidecars without .messages field', () => {
+    // Old sidecar: recordTurn without messagesSource — messages field absent.
     const stats = createSessionStats('sonnet');
-    recordTurn(stats, 'old query', 'old reply', { sessionId: 'sdk-compat' });
-    saveSession(stats, 'compat-session');
+    recordTurn(stats, 'hello', 'hi', { sessionId: 'sdk-old-sidecar' });
+    // intentionally NO messagesSource
+    saveSession(stats, 'old-sidecar-session');
 
-    const target = resolveResumeTarget({ resume: 'compat-session' });
+    const target = resolveResumeTarget({ resume: 'old-sidecar-session' });
     const config = resumeConfigFor(target);
-    const turn = config.resumeHistory?.[0];
-
-    expect(turn?.userContentBlocks).toBeUndefined();
-    expect(turn?.assistantContentBlocks).toBeUndefined();
-    expect(turn?.user).toBe('old query');
-    expect(turn?.assistant).toBe('old reply');
+    expect(config.resumeMessages).toBeUndefined();
+    expect(config.resumeHistory).toBeDefined();
   });
+});
 
-  it('structured path used in resumeHistoryToMessages when blocks present', async () => {
-    // Test that resumeHistoryToMessages uses the structured path.
+// ---------------------------------------------------------------------------
+// Legacy sidecar backward-compat: hand-written userContentBlocks/assistantContentBlocks
+// still resume through resumeHistoryToMessages (structured blocks path).
+// ---------------------------------------------------------------------------
+
+describe('legacy sidecar resume via resumeHistoryToMessages', () => {
+  it('hand-written userContentBlocks/assistantContentBlocks survive via resumeHistoryToMessages', async () => {
     const { resumeHistoryToMessages } = await import('../agent/providers/anthropic-direct/resolve-params.js');
+
+    // Simulate an old sidecar that stored userContentBlocks/assistantContentBlocks
+    // but has no .messages field — these go through resumeHistoryToMessages.
     const history = [
       {
         user: 'run command',
@@ -370,160 +222,7 @@ describe('structured content blocks round-trip', () => {
     // User message uses structured blocks.
     expect(Array.isArray(messages![0]!.content)).toBe(true);
     // Assistant message uses structured blocks with tool_use.
-    expect(Array.isArray(messages![1]!.content)).toBe(true);
     const assistantContent = messages![1]!.content as Array<{ type: string }>;
     expect(assistantContent.some((b) => b.type === 'tool_use')).toBe(true);
-  });
-
-  // ---------------------------------------------------------------------------
-  // Two-turn round-trip: buildUserContentBlocks produces tool_result blocks,
-  // and repairOrphanToolUses does NOT fire on a well-formed history.
-  //
-  // Data-model invariant (why tool_results belong on the NEXT turn):
-  //   resumeHistoryToMessages maps each TurnRecord to TWO API messages:
-  //     messages[2N]   = Turn[N].userContentBlocks  (user initial prompt)
-  //     messages[2N+1] = Turn[N].assistantContentBlocks (assistant incl. tool_use)
-  //
-  //   Therefore the tool_result blocks for Turn[N]'s tool_use blocks
-  //   must live in Turn[N+1].userContentBlocks so the ordering is:
-  //     messages[2N]   user (text)
-  //     messages[2N+1] assistant (tool_use)   ← tool_use issued HERE
-  //     messages[2N+2] user (tool_result)     ← paired tool_result HERE
-  //     messages[2N+3] assistant (text)
-  //   satisfying the Anthropic API contract.
-  //
-  // Regression guard: before the fix, the call site used a text-only fallback
-  // instead of buildUserContentBlocks. Turn[N].assistantContentBlocks carried
-  // tool_use blocks with no tool_result in Turn[N+1].userContentBlocks, so
-  // repairOrphanToolUses fired on resume and replaced all tool output with
-  // synthetic error placeholders.
-  // ---------------------------------------------------------------------------
-  it('two-turn tool-use round-trip: tool_result appears in SECOND turn user blocks and repairOrphanToolUses does not fire', async () => {
-    const { resumeHistoryToMessages } = await import('../agent/providers/anthropic-direct/resolve-params.js');
-    const { repairOrphanToolUses } = await import('../agent/providers/anthropic-direct/query/repair-orphan-tool-uses.js');
-
-    // --- Turn 0: tool-use turn ---
-    // The assistant calls bash and gets a result. userContentBlocks = user initial
-    // text only (no tool_results yet — those go in turn 1's user blocks).
-    const turn0ToolEvents = [
-      {
-        toolName: 'bash',
-        toolUseId: 'tu_two_turn_1',
-        input: '',
-        inputRaw: '{"command":"echo hello"}',
-        result: 'hello',
-        isError: false,
-      },
-    ];
-    const turn0AssistantBlocks = buildAssistantContentBlocks('I will run that command.', turn0ToolEvents)!;
-    expect(turn0AssistantBlocks.some((b) => b.type === 'tool_use')).toBe(true);
-
-    // Turn 0's userContentBlocks: NO previous tool events, so buildUserContentBlocks
-    // returns undefined → falls back to plain text field.
-    const turn0UserBlocks = buildUserContentBlocks('run it', []); // no prev tool events
-    expect(turn0UserBlocks).toBeUndefined();
-
-    const stats = createSessionStats('sonnet');
-    const t0 = recordTurn(
-      stats,
-      'run it',
-      'I will run that command.',
-      { sessionId: 'sdk-two-turn' },
-      turn0ToolEvents,
-      turn0UserBlocks,        // undefined → plain text stored
-      turn0AssistantBlocks,
-    );
-    expect(t0.userContentBlocks).toBeUndefined();
-    expect(t0.assistantContentBlocks?.some((b) => b.type === 'tool_use')).toBe(true);
-
-    // --- Turn 1: follow-up turn ---
-    // The fixed call site reads stats.turns.at(-1).toolEvents (= turn 0's events)
-    // and passes them to buildUserContentBlocks. Replicate that logic here.
-    const prevToolEvents = stats.turns.at(-1)?.toolEvents ?? [];
-    const turn1UserBlocks = buildUserContentBlocks('thanks', prevToolEvents);
-    expect(turn1UserBlocks).toBeDefined();
-
-    // Verify the tool_result block pairs with turn 0's tool_use.
-    const resultBlock = turn1UserBlocks!.find((b) => b.type === 'tool_result') as
-      | { type: 'tool_result'; tool_use_id: string; content: string }
-      | undefined;
-    expect(resultBlock).toBeDefined();
-    expect(resultBlock!.tool_use_id).toBe('tu_two_turn_1');
-    expect(resultBlock!.content).toBe('hello');
-
-    const t1 = recordTurn(
-      stats,
-      'thanks',
-      'You are welcome.',
-      { sessionId: 'sdk-two-turn' },
-      [],             // no tool events in this turn
-      turn1UserBlocks,
-      undefined,
-    );
-    expect(t1.userContentBlocks?.some((b) => b.type === 'tool_result')).toBe(true);
-
-    saveSession(stats, 'two-turn-session');
-
-    // --- Reload and verify persistence ---
-    const target = resolveResumeTarget({ resume: 'two-turn-session' });
-    const config = resumeConfigFor(target);
-    expect(config.resumeHistory).toHaveLength(2);
-
-    const rt0 = config.resumeHistory![0]!;
-    // Turn 0: assistant has tool_use; user falls back to plain text (no userContentBlocks).
-    expect(rt0.assistantContentBlocks?.some((b) => b.type === 'tool_use')).toBe(true);
-    expect(rt0.userContentBlocks).toBeUndefined();
-
-    const rt1 = config.resumeHistory![1]!;
-    // Turn 1: user has the tool_result that pairs with turn 0's tool_use.
-    expect(rt1.userContentBlocks).toBeDefined();
-    const pr = rt1.userContentBlocks!.find((b) => b.type === 'tool_result') as
-      | { type: 'tool_result'; tool_use_id: string }
-      | undefined;
-    expect(pr).toBeDefined();
-    expect(pr!.tool_use_id).toBe('tu_two_turn_1');
-
-    // --- Rebuild messages via resumeHistoryToMessages ---
-    const messages = resumeHistoryToMessages(config.resumeHistory);
-    expect(messages).toBeDefined();
-    // Turn 0 → 2 msgs (user text fallback + assistant with tool_use)
-    // Turn 1 → 2 msgs (user with tool_result + assistant text)
-    expect(messages!.length).toBe(4);
-
-    // messages[0] = turn 0 user (plain text)
-    expect(messages![0]!.role).toBe('user');
-
-    // messages[1] = turn 0 assistant (has tool_use)
-    const aContent = messages![1]!.content as Array<{ type: string }>;
-    expect(aContent.some((b) => b.type === 'tool_use')).toBe(true);
-
-    // messages[2] = turn 1 user (has tool_result — immediately follows messages[1])
-    const uContent = messages![2]!.content;
-    expect(Array.isArray(uContent)).toBe(true);
-    const toolResultInUser = (uContent as Array<{ type: string; tool_use_id?: string }>).find(
-      (b) => b.type === 'tool_result',
-    );
-    expect(toolResultInUser).toBeDefined();
-    expect(toolResultInUser!.tool_use_id).toBe('tu_two_turn_1');
-
-    // messages[3] = turn 1 assistant (plain text)
-    expect(messages![3]!.role).toBe('assistant');
-
-    // repairOrphanToolUses must NOT add any synthetic messages — every tool_use
-    // in messages[1] is covered by a tool_result in messages[2].
-    const countBefore = messages!.length;
-    repairOrphanToolUses(messages!);
-    expect(messages!.length).toBe(countBefore);
-
-    // Double-check: no is_error synthetic placeholders injected.
-    const syntheticErrors = messages!.filter(
-      (m) =>
-        m.role === 'user' &&
-        Array.isArray(m.content) &&
-        (m.content as Array<{ type: string; is_error?: boolean }>).some(
-          (b) => b.type === 'tool_result' && b.is_error === true,
-        ),
-    );
-    expect(syntheticErrors).toHaveLength(0);
   });
 });

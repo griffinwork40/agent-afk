@@ -427,6 +427,20 @@ export interface AgentConfig {
    */
   resumeHistory?: ResumeHistoryTurn[];
 
+  /**
+   * Full-fidelity Anthropic Messages API history, loaded from
+   * `StoredSession.messages`. When present AND non-empty, the
+   * `anthropic-direct` provider uses this verbatim as its initial
+   * `MessageParam[]` instead of the lossy `resumeHistoryToMessages` path.
+   *
+   * Security contract: blocks are validated by `filterResumeMessages` before
+   * use — unknown block types and role violations are dropped.
+   * `thinking`/`redacted_thinking` blocks are ALWAYS stripped (signatures are
+   * model-scoped). OpenAI-compatible and ProviderRouter providers ignore this
+   * field and continue to use `resumeHistory` (text path).
+   */
+  resumeMessages?: import('@anthropic-ai/sdk/resources').MessageParam[];
+
   /** Override or seed the SDK session ID */
   sessionId?: string;
 
