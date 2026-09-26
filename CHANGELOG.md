@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.254.2] - 2026-09-26
+
+### Fixed
+- prune .afk-worktrees and walk absolute patterns from their prefix (#2248) (507446a9)
+
 ## [5.254.1] - 2026-09-26
 
 ### Fixed
