@@ -130,6 +130,14 @@ export async function runArm(
 
   // Build child environment: control arm disables the workspace; treatment
   // arm runs with the workspace enabled (env var absent).
+  //
+  // Invariant: the full process.env is forwarded deliberately.  A strict
+  // allowlist would need to enumerate every credential and config variable that
+  // `afk chat` reads at startup (ANTHROPIC_API_KEY, AFK_HOME, PATH, HOME, …)
+  // and every future variable added to src/config/env.ts.  That list drifts
+  // silently and a missing entry causes a cryptic auth failure mid-trial.
+  // The only variable we manipulate is AFK_WORKSPACE_DISABLED, which is
+  // the sole experimental control; all other env vars are inherited unchanged.
   const childEnv: NodeJS.ProcessEnv = { ...process.env };
   if (arm === 'control') {
     childEnv['AFK_WORKSPACE_DISABLED'] = '1';

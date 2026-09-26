@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /**
  * Canonical experiment prompt for the workspace A/B runner.
  *
@@ -59,6 +61,5 @@ Write the comparison to a file at /tmp/workspace-ab-result.md.
  * the experiment manifest for reproducibility checks.
  */
 export function promptHash(prompt: string): string {
-  const { createHash } = require('node:crypto') as typeof import('node:crypto');
   return createHash('sha256').update(prompt, 'utf8').digest('hex');
 }

@@ -26,7 +26,7 @@ export interface TrialResult {
   treatment: ArmResult;
   /** validate() results for each arm. */
   validation: { control: ValidationResult; treatment: ValidationResult };
-  /** analyze() reports for each arm — absent when the arm failed or trace is missing. */
+  /** analyze() reports for each arm — absent when the arm failed, trace is missing, or validation failed. */
   metrics: { control?: DedupReport; treatment?: DedupReport };
   /** True when both arms passed validation and can contribute to aggregate stats. */
   usable: boolean;

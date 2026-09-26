@@ -55,6 +55,11 @@ function parseCliArgs(): {
       trials:       { type: 'string', default: String(DEFAULT_TRIALS) },
       'max-turns':  { type: 'string', default: String(DEFAULT_MAX_TURNS) },
       'max-budget': { type: 'string', default: String(DEFAULT_MAX_BUDGET_USD) },
+      // Invariant: --budget is a deprecated alias for --max-budget; it was the
+      // original flag name before the CLI was standardised.  strict:false silently
+      // drops unknown flags, so without this alias `--budget 5` would be ignored
+      // with no error, leaving the default 3 USD ceiling in effect.
+      'budget':     { type: 'string' },
       'dry-run':    { type: 'boolean', default: false },
       'output-dir': { type: 'string' },
       'afk-bin':    { type: 'string' },
@@ -63,6 +68,10 @@ function parseCliArgs(): {
     strict: false,
     allowPositionals: false,
   });
+
+  if (values['budget'] !== undefined && values['max-budget'] === undefined) {
+    console.warn('Warning: --budget is deprecated; use --max-budget instead.');
+  }
 
   if (values.help) {
     console.log([
@@ -73,6 +82,7 @@ function parseCliArgs(): {
       '  --trials <n>      Number of paired trials (min 5, default 5)',
       '  --max-turns <n>   Max conversation turns per arm (default 25)',
       '  --max-budget <$>  Max cost per arm in USD (default 3)',
+      '  --budget <$>      Deprecated alias for --max-budget',
       '  --dry-run         Print plan and exit without spawning agents',
       '  --output-dir <d>  Results directory (default: scripts/ab-results/<ts>)',
       '  --afk-bin <p>     Path to afk CLI entry (default: dist/cli/index.js)',
@@ -94,7 +104,8 @@ function parseCliArgs(): {
     model: String(values.model ?? DEFAULT_MODEL),
     trials,
     maxTurns: Number(values['max-turns'] ?? DEFAULT_MAX_TURNS),
-    maxBudgetUsd: Number(values['max-budget'] ?? DEFAULT_MAX_BUDGET_USD),
+    // Prefer --max-budget; fall back to deprecated --budget alias.
+    maxBudgetUsd: Number(values['max-budget'] ?? values['budget'] ?? DEFAULT_MAX_BUDGET_USD),
     dryRun: Boolean(values['dry-run']),
     outputDir: values['output-dir']
       ? resolve(String(values['output-dir']))

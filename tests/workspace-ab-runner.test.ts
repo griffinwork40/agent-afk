@@ -453,6 +453,45 @@ describe('buildManifest', () => {
     expect(ctrlEntry?.sessionId).toBe('sid-ctrl');
     expect(ctrlEntry?.tracePath).toBe('/fake/ctrl/trace.jsonl');
   });
+
+  it('validTrials counts paired trials where both arms are usable, not the minimum of separate arm counts', () => {
+    // Scenario: 3 trials run; trial 0 control fails, trial 2 treatment fails.
+    // Both arms pass on trial 1 only → validTrials should be 1, not 2 (Math.min).
+    function makeTrialResult(idx: number, ctrlUsable: boolean, trtUsable: boolean): TrialResult {
+      return {
+        trialIndex: idx,
+        control: makeArmResult({ tracePath: `/fake/t${idx}/ctrl/trace.jsonl` }),
+        treatment: makeArmResult({ arm: 'treatment', tracePath: `/fake/t${idx}/trt/trace.jsonl` }),
+        validation: {
+          control: { valid: ctrlUsable, failures: ctrlUsable ? [] : [{ rule: 'no-closure', message: 'failed' }] },
+          treatment: { valid: trtUsable, failures: trtUsable ? [] : [{ rule: 'no-closure', message: 'failed' }] },
+        },
+        metrics: {
+          ...(ctrlUsable ? { control: makeReport({ crossAgentDedupRatio: 0.3 }) } : {}),
+          ...(trtUsable ? { treatment: makeReport({ crossAgentDedupRatio: 0.1 }) } : {}),
+        },
+        usable: ctrlUsable && trtUsable,
+      };
+    }
+
+    const trials = [
+      makeTrialResult(0, false, true),  // control fails, treatment passes
+      makeTrialResult(1, true,  true),  // both pass — the only usable pair
+      makeTrialResult(2, true,  false), // control passes, treatment fails
+    ];
+
+    const manifest = buildManifest({
+      startedAt: '2026-09-25T00:00:00.000Z',
+      model: 'sonnet',
+      promptHash: fp('test-prompt'),
+      trialCount: 3,
+      trials,
+    });
+
+    // Math.min(controlPassCount=2, treatmentPassCount=2) would return 2.
+    // The correct answer is 1 (only trial 1 had both arms usable).
+    expect(manifest.summary.validTrials).toBe(1);
+  });
 });
 
 // ─── prompt ───────────────────────────────────────────────────────────────

@@ -153,14 +153,19 @@ export function buildManifest(opts: {
     trialCount,
     trials: entries,
     summary: {
-      validTrials: Math.min(validControlRatios.length, validTreatmentRatios.length),
+      // A paired trial is usable only when BOTH arms passed validation and
+      // produced dedup metrics; counting them independently and taking Math.min
+      // overstates valid pairs when failures are asymmetric (e.g. control passed
+      // on 3 trials, treatment passed on 2 different ones — Math.min returns 2
+      // but zero pairs actually share the same trial index).
+      validTrials: trials.filter((t) => t.usable).length,
       controlAvgDedupRatio: controlAvg,
       treatmentAvgDedupRatio: treatmentAvg,
       dedupRatioDelta:
         controlAvg !== null && treatmentAvg !== null ? treatmentAvg - controlAvg : null,
       controlAvgDurationMs: avg(validControlDurations),
       treatmentAvgDurationMs: avg(validTreatmentDurations),
-      totalCostUsd: null, // populated by compare when cost data is available
+      totalCostUsd: null, // cost-per-trial data not yet available; reserved for a future instrumentation pass
     },
   };
 }
