@@ -445,6 +445,10 @@ export const SessionPhaseNameSchema = z.enum([
   // Gate-shape telemetry for parallel dispatch (#1924). See SessionPhaseName
   // JSDoc in types.ts — metadata carries safeCount, unsafeCount, parallelGatesMs.
   'gate_shape',
+  // Session-identity assignment. See SessionPhaseName JSDoc in types.ts.
+  // `sessionId` on the payload carries the provider-issued id; present only
+  // on this phase kind. Absent on all older traces — treat absence as unknown.
+  'session_id_assigned',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
@@ -469,6 +473,11 @@ export const SessionPhasePayloadSchema = z.object({
   // trace events until this line was widened.
   origin: z.enum(['cli', 'telegram', 'daemon', 'web', 'unknown']).optional(),
   actor: z.enum(['main', 'subagent']).optional(),
+  // Session id assignment — set ONLY on `session_id_assigned` phase events.
+  // Absent on all other phase kinds and on older traces. See SessionPhasePayload
+  // JSDoc in types.ts for the backward-compat contract.
+  sessionId: z.string().optional(),
+  priorSessionId: z.string().optional(),
 });
 
 // ---------------------------------------------------------------------------
