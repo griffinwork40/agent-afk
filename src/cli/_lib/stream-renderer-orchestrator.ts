@@ -28,6 +28,7 @@ import { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import { env } from '../../config/env.js';
 import type { CommitCoordinator } from './commit-coordinator.js';
 import type { OverlayComposer } from './overlay-composer.js';
+import type { ThoughtSummaryHold } from './thought-summary-hold.js';
 import type { CardSpec } from '../render.js';
 
 import {
@@ -98,6 +99,12 @@ export interface OrchestratorCtx {
   thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
   /** Lazy holder so callers can swap StreamingMarkdownRenderer in/out. */
   streamingMarkdown: { current: StreamingMarkdownRenderer | null };
+  /**
+   * AFK_SMOKE_TEXT only: holds the inline `◆ thought for Xs` line in the
+   * overlay while it fades in, then commits it. Absent when smoke is off,
+   * and commitThinkingPhase commits directly as before.
+   */
+  thoughtHold?: ThoughtSummaryHold;
   /**
    * Optional loop-stage tracker. When present, the orchestrator feeds it
    * each event and includes a one-line stage rail at the top of the

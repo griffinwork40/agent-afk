@@ -25,6 +25,10 @@ import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
+import { OverlayComposer } from '../../src/cli/_lib/overlay-composer.js';
+import { armSmokeEffects, THOUGHT_SUMMARY_SLOT } from '../../src/cli/_lib/stream-renderer-smoke.js';
+import { ToolLane } from '../../src/cli/commands/interactive/tool-lane.js';
+import { formatThoughtSummary } from '../../src/cli/commands/interactive/thinking-lane.js';
 import { buildResizeMarker } from './constants.js';
 
 /**
@@ -792,6 +796,55 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // still be an unrevealed blank placeholder rather than a glyph, so
       // requiring a specific glyph races the fade and flaked on CI.
       absent: ['SMOKETWO_END'],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // smoke-fade-status-order (AFK_SMOKE_TEXT machine-status fade): the
+  // `◆ thought for Xs` summary is HELD in the overlay while it fades, and a
+  // tool row fades in below it. A tool row committed to scrollback mid-fade
+  // must land BELOW the summary (the compositor commit barrier pulls the held
+  // summary in first), each exactly once, and both must settle to real text.
+  // Without the barrier the summary would commit ~210ms later, after the tool
+  // row, and the order assertion fails.
+  // ─────────────────────────────────────────────────────────────────────────
+  'smoke-fade-status-order': {
+    description: 'AFK_SMOKE_TEXT: a held thought summary commits above a tool row committed during its fade, exactly once',
+    cols: 100,
+    rows: 24,
+    ref: 'src/cli/_lib/thought-summary-hold.ts',
+    async drive(ctx): Promise<void> {
+      process.env['AFK_SMOKE_TEXT'] = '1';
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
+      await c.arm();
+      const composer = new OverlayComposer(c, [THOUGHT_SUMMARY_SLOT, 'tool-lane']);
+      const lane = new ToolLane();
+      composer.register({ key: 'tool-lane', render: () => lane.getOverlay() });
+      const fx = armSmokeEffects({
+        compositor: c,
+        overlayComposer: composer,
+        toolLane: lane,
+        reducedMotion: false,
+        deferFlush: (slot) => { composer.markDirty(slot); queueMicrotask(() => composer.flush()); },
+      });
+      if (!fx) throw new Error('armSmokeEffects returned null: AFK_SMOKE_TEXT did not engage in the pty child');
+      fx.thoughtHold.hold(formatThoughtSummary(4321, 200)); // "thought for 4.3s"
+      lane.addStart('tu_fade', 'Read', '("FADEROW_MARK.ts")');
+      lane.addResult('tu_fade', { type: 'tool_result', toolUseId: 'tu_fade', content: 'ok', isError: false });
+      composer.markDirty('tool-lane');
+      composer.flush();
+      await settle(40); // mid-fade for both elements
+      const rows = lane.flush();
+      composer.markDirty('tool-lane');
+      composer.flush();
+      commitBlockAbove(c, rows);
+      await settle(500); // well past both fades; only the frame driver repaints
+      fx.dispose();
+      c.endTurn();
+    },
+    expect: {
+      exactlyOnce: ['thought for 4.3s', 'FADEROW_MARK'],
+      order: [['thought for 4.3s', 'FADEROW_MARK']],
     },
   },
 
