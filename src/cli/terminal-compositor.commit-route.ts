@@ -84,6 +84,7 @@ export function routeCommit(
     committedBandBottomRow: self.committedBandBottomRow,
     committedBandPaintedRows: self.committedBandPaintedRows,
     geometryStale: self.bandGeometryStale,
+    ...(geo.hugSlack > 0 ? { roomTop: geo.roomTop } : {}),
   });
   // #540 axis-2: the per-physical-row provenance for `overflowRun`, rebuilt
   // here to stay 1:1 with it — decideCommitMode is a pure geometry helper and

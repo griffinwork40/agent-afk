@@ -198,6 +198,8 @@ export interface InputSurfaceArmOpts {
    * verbatim to the underlying TerminalCompositor.
    */
   anchorRow?: number;
+  /** Forwarded to {@link import('../terminal-compositor.js').TerminalCompositorOptions.contentHug}. */
+  contentHug?: boolean;
   /**
    * Optional ghost-text suggestion engine. When provided, the compositor
    * renders fish-shell-style inline completions. The engine is disposed
@@ -389,6 +391,7 @@ export class InputSurface {
       goblinSpinner: detectGoblinSpinner(),
       ...(opts.scrollRegion ? { scrollRegion: opts.scrollRegion } : {}),
       ...(opts.anchorRow !== undefined ? { anchorRow: opts.anchorRow } : {}),
+      ...(opts.contentHug !== undefined ? { contentHug: opts.contentHug } : {}),
       ...(opts.suggest ? { suggest: opts.suggest } : {}),
     });
     await compositor.arm();

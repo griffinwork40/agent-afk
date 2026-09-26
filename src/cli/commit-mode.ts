@@ -49,6 +49,12 @@ export interface CommitModeInput {
    * `frameTop` no longer shares — see `overflowPriorContiguous` below.
    */
   geometryStale: boolean;
+  /**
+   * content-hug only: the frame's bottom-pinned top, used for the ROOM math
+   * (fits / room / strand) while `frameTop` keeps driving contiguity. Omitted
+   * outside content-hug, where it defaults to `frameTop` / `prevTopRow`.
+   */
+  roomTop?: number;
 }
 
 /** The routing decision + the geometry the caller's phases consume. */
@@ -155,7 +161,10 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
     committedBandBottomRow,
     committedBandPaintedRows,
     geometryStale,
+    roomTop,
   } = input;
+  const effPrevTop = roomTop ?? prevTopRow;
+  const effRoomTop = roomTop ?? frameTop;
 
   // F2 (fail-safe commit mode on stale geometry): `!geometryStale` extends the
   // existing BLOCKER-1 guard (`prevTopRow > 1`) from "frame top is literally
@@ -167,9 +176,9 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   // instead of merge-then-cap silently truncating content that was never
   // actually scrolled into real terminal scrollback (see
   // terminal-compositor.resize-stale-width.repro.test.ts's H2 case).
-  const fitsAboveFrame = prevTopRow > 1 && !geometryStale && lineCount <= frameTop - anchorFloor;
+  const fitsAboveFrame = effPrevTop > 1 && !geometryStale && lineCount <= effRoomTop - anchorFloor;
 
-  const room = Math.max(0, frameTop - anchorFloor);
+  const room = Math.max(0, effRoomTop - anchorFloor);
   const overflowTargetBottom = Math.max(1, rows - 1 - extraRows);
   const maxBandModel = Math.max(0, overflowTargetBottom - anchorFloor);
   // Invariant (committedBand is always frame-adjacent by construction): the

@@ -18,6 +18,7 @@ import {
   QUEUED_USER_MESSAGE_PROMPT,
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
+  MEMORY_SYSTEM_PROMPT_SEARCH_ONLY,
   WORKSPACE_SYSTEM_PROMPT,
   resolveToolSystemPrompt,
   resolveMemorySystemPrompt,
@@ -100,16 +101,33 @@ describe('resolveMemorySystemPrompt', () => {
     expect(resolveMemorySystemPrompt(undefined)).toBe(MEMORY_SYSTEM_PROMPT);
   });
 
-  it('returns the read-only variant for a read-only child session (true)', () => {
-    expect(resolveMemorySystemPrompt(true)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
+  it('returns the child variant when readOnlyState is true (fact writes OK, no hot)', () => {
+    // Child sessions (readOnlyState=true, readOnlyMemory=false/undefined) have
+    // memory_search + memory_update(target:"fact"). They get MEMORY_SYSTEM_PROMPT_READONLY.
+    expect(resolveMemorySystemPrompt(false, true)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
+    expect(resolveMemorySystemPrompt(undefined, true)).toBe(MEMORY_SYSTEM_PROMPT_READONLY);
   });
 
-  it('the read-only variant omits the write-guidance section but keeps read guidance', () => {
-    // The full prompt has a dedicated write section; the read-only variant must
+  it('returns the search-only variant when readOnlyMemory is true (recon: no memory_update)', () => {
+    // Recon children (readOnlyMemory=true) have only memory_search. They must
+    // NOT see a prompt that advertises memory_update.
+    expect(resolveMemorySystemPrompt(true)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+    expect(resolveMemorySystemPrompt(true, false)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+    expect(resolveMemorySystemPrompt(true, true)).toBe(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY);
+  });
+
+  it('the child variant omits the write-guidance section but keeps read guidance', () => {
+    // The full prompt has a dedicated write section; the child variant must
     // not (it only mentions the write tools to say they are unavailable).
     expect(MEMORY_SYSTEM_PROMPT).toContain('## Writing memory');
     expect(MEMORY_SYSTEM_PROMPT_READONLY).not.toContain('## Writing memory');
     expect(MEMORY_SYSTEM_PROMPT_READONLY).not.toContain('## Procedures');
-    expect(MEMORY_SYSTEM_PROMPT_READONLY).toContain('read-only');
+    expect(MEMORY_SYSTEM_PROMPT_READONLY).toContain('memory_update');
+  });
+
+  it('the search-only variant does not advertise memory_update at all', () => {
+    expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).not.toContain('memory_update');
+    expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).toContain('memory_search');
+    expect(MEMORY_SYSTEM_PROMPT_SEARCH_ONLY).toContain('read-only');
   });
 });

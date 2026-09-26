@@ -17,6 +17,7 @@ import {
   batchBadge,
   activeToolBadge,
   formatOutcome,
+  childFailureBadge,
 } from './tool-lane-format.js';
 import { truncateDisplayWidth, stripAnsi, displayWidth } from '../../display.js';
 import { formatElapsed } from '../../terminal-compositor.scrollback.js';
@@ -180,18 +181,18 @@ export function renderToolLaneOverlay(
         // Anonymous anchor: marker only, no label body. The committed
         // label lives in scrollback above. Header was already committed so
         // this is structural geometry only — dim the marker.
-        lines.push(clamp(palette.dimCompleted(g.turnRoot)));
+        lines.push(clamp(palette.dimCompleted(g.turnRoot) + childFailureBadge(entry.failedChildCount)));
       } else if (entry.result) {
         // Completed nesting root whose children are still in the lane:
         // addResult() sets entry.result before the next overlay repaint,
         // so a completed parent must use dimCompleted — not activeAgent —
         // to maintain the active-vs-completed distinction.
-        lines.push(clamp(palette.dimCompleted(g.turnRoot) + entry.prefix));
+        lines.push(clamp(palette.dimCompleted(g.turnRoot) + entry.prefix + childFailureBadge(entry.failedChildCount)));
       } else {
         // Active (in-flight) nesting root: use activeAgent for the ◉ marker
         // so the whole row is clearly readable. The entry.prefix (agent name
         // + args) is already colorized by formatToolLine with color.bold(name).
-        lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix));
+        lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix + childFailureBadge(entry.failedChildCount)));
       }
       renderOverlayChildren(children, childMap, lines, cols, undefined, g);
       // Render the thinking-tail AFTER the children so the subagent's
@@ -254,7 +255,7 @@ export function renderToolLaneOverlay(
         // Completed nesting entry: dim the structural chrome — it is done.
         // pushOutcomeLines splits multi-line formatOutcome; headLine computed first so its display-width derives the outcome budget.
         const headLine = palette.dimCompleted(g.turnRoot) + entry.prefix + palette.dimCompleted(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ';
-        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dimCompleted(g.spine) + '  ', cols, batchBadge(entry.result));
+        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dimCompleted(g.spine) + '  ', cols, batchBadge(entry.result) + childFailureBadge(entry.failedChildCount));
       } else {
         // Active (in-flight) nesting entry: use activeAgent for ◉ so the agent
         // name row is clearly readable. The ' …' tail is structural/informational
@@ -262,7 +263,7 @@ export function renderToolLaneOverlay(
         // Live elapsed counter: computed at repaint time so the counter ticks
         // on every overlay refresh without a dedicated timer. Grace period
         // (ELAPSED_GRACE_MS = 2s) suppresses the counter for fast tools.
-        lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools)));
+        lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix + palette.dim(' …') + formatElapsed(entry.startedAt) + activeToolBadge(entry.toolUseId, activeTools) + childFailureBadge(entry.failedChildCount)));
       }
       // Mirror the thinkingTail handling of the other two NESTING branches
       // (and the childless-leaf branch below): spine glyph (g.spine, │) at

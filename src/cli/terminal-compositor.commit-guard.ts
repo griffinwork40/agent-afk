@@ -18,3 +18,30 @@ export function writeWithScrollGuard(
     write();
   }
 }
+
+/**
+ * The first-commit banner scroll: scroll `bannerRows` rows into scrollback,
+ * then erase the rows the full-screen scroll leaves behind.
+ *
+ * Invariant (banner-scroll orphans): the first-commit banner scroll runs
+ * inside {@link writeWithScrollGuard}, so it scrolls the WHOLE screen —
+ * including the reserved footer (status line, health rail, idle/loop rows).
+ * Every row that survives on screen after scrolling `bannerRows` rows is
+ * stale by construction: the frame was cleared just before, and everything
+ * else below the banner was footer, which self-heals at the physical bottom
+ * via `flush()` + `afterScrollRestore`. The footer's scrolled-up COPY lands
+ * `bannerRows` rows higher, inside the compositor region, where nothing
+ * repaints it once the frame sits high (content-hug parks the frame directly
+ * under the committed content and never touches the rows below the prompt).
+ * So erase the surviving compositor rows here, before the footer repaints.
+ * The erase stops at `min(rows - bannerRows, absoluteBottom)`: rows below
+ * `rows - bannerRows` are the fresh blank lines the scroll introduced, and
+ * rows below absoluteBottom (`rows - 1 - extraRows`) are live footer, which is
+ * never erased here. Must run inside writeWithScrollGuard.
+ */
+export function bannerScrollSequence(rows: number, bannerRows: number, extraRows: number): string {
+  let out = `\x1b[${rows};1H${'\n'.repeat(bannerRows)}`;
+  const survivingRows = Math.min(rows - bannerRows, rows - 1 - extraRows);
+  for (let r = 1; r <= survivingRows; r++) out += `\x1b[${r};1H\x1b[2K`;
+  return out;
+}

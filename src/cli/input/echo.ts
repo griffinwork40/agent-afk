@@ -70,10 +70,13 @@ export function formatSubmittedEcho(opts: {
   const rawCols = opts.terminalWidth ?? getTerminalWidth();
   // Content centering (AFK_CENTER_CONTENT): commitAbove prepends the
   // centering margin to every non-blank line AFTER this function returns.
-  // The echo must right-align within the remaining content band, not the
-  // full terminal width, or the margin + right-aligned padding exceeds
-  // the terminal and hard-wraps the echoed command across two lines.
-  const cols = rawCols - contentMargin(rawCols).length;
+  // The echo must right-align within the content band, not the full
+  // terminal width. The band is symmetric ([margin, rawCols - margin),
+  // see contentMargin), so subtract the margin from BOTH sides: subtracting
+  // only the left one right-aligns the echo to the terminal edge, which
+  // strands the message in the far corner, detached from the ▶ glyph and
+  // the rest of the centered column.
+  const cols = rawCols - 2 * contentMargin(rawCols).length;
   const isMultiLine = buffer.includes('\n');
   const bufferW = stringWidth(stripAnsi(buffer));
   // "Long" = the rendered single line would not comfortably fit on one row
@@ -104,7 +107,11 @@ export function formatSubmittedEcho(opts: {
     const pad = Math.max(0, rightEdge - bufferW - GLYPH_W);
     primary = GLYPH + ' '.repeat(pad) + buffer;
   } else {
-    primary = card({ kind: 'user', body: buffer });
+    // Pass the content-band width explicitly so the card sizes to the band
+    // (not rawCols) under AFK_CENTER_CONTENT. Existing callers that omit
+    // width get byte-identical output (renderUserCard falls back to
+    // getTerminalWidth() when width is undefined).
+    primary = card({ kind: 'user', body: buffer, width: cols });
   }
 
   if (summary === null) {

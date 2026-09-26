@@ -86,7 +86,10 @@ export function commitPhase3Band(
       wholeBlockPainted &&
       self.committedBand.length > 0 &&
       (self.committedBandBottomRow === newTopRow - 1 ||
-        self.committedBandBottomRow === phase1EffectiveFrameTop - 1);
+        self.committedBandBottomRow === phase1EffectiveFrameTop - 1 ||
+        // content-hug: the band hugs the PRE-commit frame top, while
+        // phase1EffectiveFrameTop is the (lower) bottom-pinned room top.
+        (geo.hugSlack > 0 && self.committedBandBottomRow === geo.frameTop - 1));
     const run = contiguousPriorBand ? [...self.committedBand, ...newLines] : newLines;
     // #540: the merged run's provenance, 1:1 with `run` (same merge decision,
     // same-order arrays — self.committedBandMeta is 1:1 with self.committedBand).

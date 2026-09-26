@@ -26,6 +26,14 @@ import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { buildResizeMarker } from './constants.js';
 
+/**
+ * Placement mode under test. The parent runs every scenario twice — legacy
+ * bottom-pinned and content-hug (the interactive REPL's mode) — passing
+ * AFK_PTY_CONTENT_HUG=1 into the pty child's env for the second run. Every
+ * scrollback expectation (exactly-once, order, no blank void) must hold in both.
+ */
+const CONTENT_HUG = process.env['AFK_PTY_CONTENT_HUG'] === '1';
+
 /** Runtime handed to a scenario's drive() from inside the pty child. */
 export interface PtyDriveCtx {
   stdout: NodeJS.WriteStream;
@@ -92,6 +100,13 @@ export interface PtyScenario {
   ref: string;
   drive(ctx: PtyDriveCtx): Promise<void> | void;
   expect: PtyExpect;
+  /**
+   * Expectations for the content-hug run, when the scenario's PRECONDITION is
+   * specific to bottom-pinned placement (e.g. content evicted by frame growth,
+   * which content-hug deliberately hides as pending instead). Defaults to
+   * {@link expect}.
+   */
+  hugExpect?: PtyExpect;
 }
 
 /** Let the frame's async spinner/flush settle before the next step. */
@@ -172,7 +187,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'terminal-compositor.multi-commit-gap.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireProductionFooter(stdout, 'STATUSMODELXYZ');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -219,7 +234,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: '#539 · terminal-compositor.collapse-void.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireStatusLine(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       statusLine.setExtraRows(1);
       c.setSpinner({ enabled: true });
@@ -262,7 +277,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'terminal-compositor.overflow-gap.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireStatusLine(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       statusLine.setExtraRows(2); // StatusLine + LoopStageBar + VerdictLedger
       c.setSpinner({ enabled: true });
@@ -316,7 +331,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         },
         getExtraRows(): number { return 0; },
       };
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
       await c.arm();
       const tall = Array.from({ length: 12 }, (_, i) => `stream line ${i}`).join('\n');
       c.setOverlay(tall);
@@ -361,7 +376,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       const MESSAGE = 'Reply with only the word ok and nothing else. DUPCHECK alpha bravo charlie delta echo foxtrot golf hotel india';
       for (let i = 0; i < BANNER_ROWS; i++) stdout.write(`BANNER_LINE_${i}\n`);
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: BANNER_ROWS + 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: BANNER_ROWS + 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       // Pre-submit chrome cycle: transient chrome then collapse back to idle.
@@ -426,7 +441,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -473,7 +488,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -520,7 +535,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -574,7 +589,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -612,6 +627,19 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // falsifiable: reverting step 2's emission to `committedBand.slice(0,
       // overflow)` (physical rows) makes this measure 4 and fail.
       logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
+    },
+    // content-hug hides growth-covered rows as pending rather than evicting
+    // them (terminal-compositor.content-hug.ts), so the eviction precondition
+    // never occurs: the whole run stays on screen, exactly once, in order, with
+    // no blank void before the frame. (On-screen band rows are not REJOINED on
+    // a widen in either mode — reflowBandSplit only splits — so the rejoin
+    // property is asserted only where the line reached scrollback.)
+    hugExpect: {
+      inViewport: ['LOGSTART', 'FILLER_09'],
+      exactlyOnce: ['LOGSTART', 'LOGEND', 'FILLER_00', 'FILLER_09'],
+      order: [['LOGEND', 'FILLER_00'], ['FILLER_00', 'FILLER_09']],
+      maxViewportBlankRun: 0,
+      contentAnchors: ['FILLER_09'],
     },
   },
 
@@ -658,7 +686,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // by a CUP-positioned frame that mis-measured the anchor row.
       const anchorRow = BANNER_ROWS + 3; // banner + 2 warnings + blank
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG,
         stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow,
       });
       await c.arm();
@@ -695,6 +723,172 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         ['SHADOWWARN', 'MCPWARN'],
         ['MCPWARN', 'FIRST_TURN_OUTPUT'],
       ],
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // sigwinch-mid-streaming (#1767): SIGWINCH arrives while the compositor is
+  // actively streaming — the overlay is held non-empty when requestResize
+  // fires, exactly mimicking a token-streaming LLM turn where the user resizes
+  // the terminal window. The onResize() path in StatusLine must call
+  // eraseReservedBand() (fixed by 2377337d) before repainting; without the
+  // fix, the full-screen scroll that repositions the frame drags the status
+  // line and LoopStageBar into the reserved footer band and leaves ghost copies
+  // between absoluteBottom and the newly painted status line.
+  //
+  // Regression guard (fixes 9d2aa8da / 2377337d): after the resize AND after
+  // turn completion (overlay collapsed, spinner off), the status-line model id
+  // must appear EXACTLY ONCE across the whole emulator buffer. Any additional
+  // copy is a ghost status-line left by the onResize() path.
+  // ─────────────────────────────────────────────────────────────────────────
+  'sigwinch-mid-streaming': {
+    description: 'SIGWINCH mid-streaming leaves no ghost status-line or footer-bar copies (9d2aa8da / 2377337d)',
+    cols: 100,
+    rows: 28,
+    ref: '#1767 · status-line.ts onResize() eraseReservedBand',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'STREAMMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      // Phase 1 — pre-resize streaming: push enough content to overflow the
+      // viewport under the tall overlay, so early commits land in scrollback
+      // and the scenario exercises a real full-screen scroll during onResize().
+      const streamingOverlay = Array.from({ length: 14 }, (_, i) => `streaming token ${i} …`).join('\n');
+      for (let k = 0; k < 22; k++) {
+        c.setOverlay(streamingOverlay);
+        c.commitAbove(`STREAM_PRE_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 2 — SIGWINCH arrives while the overlay is STILL SET (mid-stream).
+      // The overlay remains at `streamingOverlay`; requestResize fires which
+      // triggers node-pty → SIGWINCH → onResize() while the frame is tall.
+      // The pre-fix path omitted eraseReservedBand in onResize(), leaving ghost
+      // copies of the status line and LoopStageBar in the reserved footer band.
+      c.setOverlay(streamingOverlay);
+      await requestResize(ctx, 80, 28); // NARROW 100 → 80 mid-stream
+
+      // Phase 3 — post-resize streaming continues at the NEW width; the overlay
+      // is still active (simulating tokens still arriving).
+      for (let k = 22; k < 28; k++) {
+        c.setOverlay(streamingOverlay);
+        c.commitAbove(`STREAM_POST_${String(k).padStart(2, '0')}\n`);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 4 — turn completion: overlay collapses, spinner off, final repaint.
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('STREAM_DONE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle();
+    },
+    expect: {
+      // Turn output lands in the buffer exactly once — duplication is the
+      // ghost-status-line symptom (a second render of the model id string).
+      exactlyOnce: ['STREAM_DONE', 'STREAMMODELXYZ'],
+      // The final committed line must be present.
+      inViewport: ['STREAM_DONE'],
+      // Pre-resize content scrolled off screen.
+      inScrollback: ['STREAM_PRE_00'],
+      // 'STREAMMODELXYZ' as a contentAnchor keeps the blank-run scan from
+      // spilling into the live-frame chrome below the committed content.
+      contentAnchors: ['STREAM_POST_27', 'STREAM_DONE'],
+      maxViewportBlankRun: 1,
+    },
+  },
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // sigwinch-mid-tool-lanes (#1767): SIGWINCH arrives while multiple tool /
+  // subagent lanes are active — the compositor holds a tall overlay (each tool
+  // call is represented by one overlay line) and receives serial commitAbove
+  // calls for tool completions. The resize fires BETWEEN two tool completions,
+  // exactly as it does in production when a user resizes the terminal during a
+  // parallel tool-call phase.
+  //
+  // Exercises both the onResize() path (2377337d) and the subsequent rearm()
+  // path: after onResize() re-anchors DECSTBM, the compositor may call
+  // StatusLine.rearm() between turns — both must call eraseReservedBand() so
+  // no ghost copies survive into the final frame. Asserts the status-line model
+  // id appears exactly once and no spurious blank runs appear around the frame.
+  // ─────────────────────────────────────────────────────────────────────────
+  'sigwinch-mid-tool-lanes': {
+    description: 'SIGWINCH mid-tool-lanes leaves no ghost status-line or footer copies (9d2aa8da / 2377337d)',
+    cols: 120,
+    rows: 30,
+    ref: '#1767 · status-line.ts onResize() + rearm() eraseReservedBand',
+    async drive(ctx): Promise<void> {
+      const { stdout, stdin } = ctx;
+      const statusLine = wireProductionFooter(stdout, 'TOOLMODELXYZ');
+      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      await c.arm();
+      const ix = c as unknown as Repaintable;
+      c.setSpinner({ enabled: true });
+
+      // Simulate a parallel tool/subagent phase: a tall overlay representing
+      // N active lanes, with serial commitAbove calls as each lane completes.
+      const makeLaneOverlay = (activeLanes: number): string =>
+        Array.from({ length: activeLanes }, (_, i) => `  lane ${i}: running …`).join('\n');
+
+      // Phase 1 — first batch of tool completions (12 lanes active initially).
+      // Use enough commits so early output overflows into scrollback under the
+      // tall overlay (overflow requires committing more rows than the viewport
+      // minus the overlay height). 30 rows terminal - 3 footer - 12 overlay = 15
+      // available; commit 30 rows to ensure first ~15 land in scrollback.
+      let lanes = 12;
+      for (let t = 0; t < 30; t++) {
+        c.setOverlay(makeLaneOverlay(lanes));
+        c.commitAbove(`TOOL_BATCH1_${String(t).padStart(2, '0')} — done\n`);
+        lanes = Math.max(4, lanes - 1);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 2 — SIGWINCH arrives while the tool-lane overlay is still active
+      // (more lanes still running). The resize fires between two commitAbove
+      // calls, exactly as in production when the user drags the terminal window.
+      c.setOverlay(makeLaneOverlay(lanes));
+      await requestResize(ctx, 90, 30); // NARROW 120 → 90 mid-tool-phase
+
+      // Phase 3 — remaining tool completions continue at the new width.
+      for (let t = 6; t < 12; t++) {
+        c.setOverlay(makeLaneOverlay(Math.max(2, lanes - (t - 6))));
+        c.commitAbove(`TOOL_BATCH2_${String(t).padStart(2, '0')} — done\n`);
+      }
+      ix.repaint();
+      await settle();
+
+      // Phase 4 — rearm() is called between turns in production (e.g. after a
+      // slash command or log-update teardown). Call it explicitly to exercise
+      // the rearm() → eraseReservedBand() path fixed in 2377337d.
+      statusLine.rearm();
+      await settle();
+
+      // Phase 5 — end-of-turn: overlay collapses, spinner off, final rollup.
+      c.setSpinner({ enabled: false });
+      c.setOverlay('');
+      c.commitAbove('TOOL_PHASE_COMPLETE\n');
+      ix.repaint();
+      ix.repaint();
+      await settle();
+    },
+    expect: {
+      // The status-line model id must appear exactly once — any extra copy is a
+      // ghost left by the onResize() or rearm() path that missed eraseReservedBand.
+      exactlyOnce: ['TOOL_PHASE_COMPLETE', 'TOOLMODELXYZ'],
+      // Final rollup must be visible in the viewport.
+      inViewport: ['TOOL_PHASE_COMPLETE'],
+      // Earlier tool outputs scrolled into scrollback.
+      inScrollback: ['TOOL_BATCH1_00'],
+      contentAnchors: ['TOOL_BATCH2_11', 'TOOL_PHASE_COMPLETE'],
+      maxViewportBlankRun: 1,
     },
   },
 };

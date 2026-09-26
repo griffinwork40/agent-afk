@@ -187,11 +187,19 @@ export type CompositorInputMode = 'idle' | 'streaming' | 'picker';
  *   input stays at `absoluteBottom`; committed content and overlay grow
  *   upward into the viewport above it.
  *
- * Transition: `cursor-follow` → `bottom-pinned` fires once in `commitAbove`
- * when `hasCommitted` first becomes `true`. Reset to `cursor-follow` by
- * `resetState()` so each arm cycle starts fresh.
+ * - `'content-hug'` — opt-in replacement for `bottom-pinned`
+ *   ({@link TerminalCompositorOptions.contentHug}). The frame sits directly
+ *   below the committed content (`floor + committedBand.length`) and only
+ *   bottom-pins once content + frame fill the viewport. Any unused rows lie
+ *   BELOW the prompt, so a frame shrink never opens a blank gap between
+ *   committed content and the prompt, and blank rows never reach scrollback.
+ *   See terminal-compositor.content-hug.ts.
+ *
+ * Transition: `cursor-follow` → `bottom-pinned` (or `content-hug` when opted
+ * in) fires once in `commitAbove` when `hasCommitted` first becomes `true`.
+ * Reset to `cursor-follow` by `resetState()` so each arm cycle starts fresh.
  */
-export type FramePlacementMode = 'cursor-follow' | 'bottom-pinned';
+export type FramePlacementMode = 'cursor-follow' | 'bottom-pinned' | 'content-hug';
 
 /**
  * Picker controller — supplied by `enterPickerMode()` to delegate
@@ -440,6 +448,14 @@ export interface TerminalCompositorOptions {
    * Mutable post-construction via {@link TerminalCompositor.setAnchorRow}.
    */
   anchorRow?: number;
+  /**
+   * Opt into `'content-hug'` placement after the first commit (instead of
+   * `'bottom-pinned'`): the live frame follows the committed content and
+   * bottom-pins only once the viewport is full. Default `false` (legacy
+   * bottom-pinned). The interactive REPL enables it. See
+   * terminal-compositor.content-hug.ts.
+   */
+  contentHug?: boolean;
   /**
    * When provided, the compositor wires in ghost-text (fish-shell-style
    * inline completion) for the input line.

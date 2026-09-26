@@ -204,6 +204,14 @@ export function handleSubagentEvent(
         const renderer = ctx.streamingMarkdown.get(sourceId);
         if (renderer) renderer.commitPending();
         ctx.toolLane.addResult(chunk.toolUseId, chunk);
+        // Invariant: a dispatch refused BEFORE its child forks (depth
+        // ceiling, unknown agent_type, validation, fork throw) never emits a
+        // subagent 'error' event; this isError tool_result is its only
+        // failure signal, so it must bubble here too. propagateChildFailure
+        // ignores non-dispatch entries and is idempotent per entry, so the
+        // mid-run path (which already bubbled via settleSubagentError) is
+        // not double-counted. Runs AFTER addResult, same as the error path.
+        if (chunk.isError) ctx.toolLane.propagateChildFailure(chunk.toolUseId);
         // Route through the full composed frame so the orchestrator's live-
         // thinking paragraph is preserved. (Issue #389.)
         if (ctx.isTTY && ctx.orchestratorCtx) {
@@ -347,21 +355,7 @@ export function handleSubagentEvent(
       _thinkingTailLastUpdate.delete(parentId);
       // H2 fix: clean up the overlay throttle entry on the error path too.
       _overlayLastUpdate.delete(parentId);
-      {
-        const errorSummary = `error — ${event.error.message}`;
-        // Invariant: set BOTH `addResult` (the entry's own result) AND
-        // `setAgentResultSummary` (the rendered Done/error line under the
-        // Agent header). The done-path mirrors this in `finalizeSubagent`
-        // (see this file ~540). Without setAgentResultSummary, the Agent
-        // block renders WITHOUT a terminal summary line — the user sees
-        // the in-flight tool children but no indication of how the
-        // subagent ended. The scrollback commit on the renderer-side
-        // ('error' branch of StreamRenderer.process) reads
-        // agentResultSummary to render the block's bottom row, so the
-        // omission here was the visible-error-vanishes regression.
-        ctx.toolLane.setAgentResultSummary(parentId, errorSummary);
-        ctx.toolLane.addResult(parentId, syntheticResult(errorSummary, true));
-      }
+      settleSubagentError(ctx.toolLane, parentId, event.error.message);
       // Route through the full composed frame so the orchestrator's live-
       // thinking paragraph is preserved. (Issue #389.)
       if (ctx.isTTY && ctx.orchestratorCtx) {
@@ -407,6 +401,31 @@ export function handleSubagentEvent(
       // wrong one.
       return;
   }
+}
+
+/**
+ * Stamp a subagent's terminal error onto its Agent entry and bubble the
+ * failure to every NESTING ancestor.
+ *
+ * Invariant: set BOTH `addResult` (the entry's own result) AND
+ * `setAgentResultSummary` (the rendered Done/error line under the Agent
+ * header). The done-path mirrors this in {@link finalizeSubagent}. Without
+ * setAgentResultSummary, the Agent block renders WITHOUT a terminal summary
+ * line: the user sees the in-flight tool children but no indication of how
+ * the subagent ended. The scrollback commit on the renderer side ('error'
+ * branch of StreamRenderer.process) reads agentResultSummary to render the
+ * block's bottom row, so omitting it was the visible-error-vanishes
+ * regression.
+ *
+ * Invariant: `propagateChildFailure` runs AFTER `addResult` so the failed
+ * entry's result is stamped before the ancestor walk increments each
+ * ancestor's `failedChildCount` (rendered as the overlay's `⚠ N` badge).
+ */
+function settleSubagentError(toolLane: ToolLane, parentId: string, message: string): void {
+  const errorSummary = `error — ${message}`;
+  toolLane.setAgentResultSummary(parentId, errorSummary);
+  toolLane.addResult(parentId, syntheticResult(errorSummary, true));
+  toolLane.propagateChildFailure(parentId);
 }
 
 /**

@@ -120,6 +120,8 @@ export class AnthropicDirectProvider implements ModelProvider {
    */
   private readonly declaredSurface: string | undefined;
   private readonly readOnlyMemory: boolean;
+  /** When true, state_put/cas/delete are blocked independent of readOnlyMemory. */
+  private readonly readOnlyState: boolean;
   /** When true, the per-query dispatcher blocks mutating bash (read-only skill child). */
   private readonly readOnlyBash: boolean;
   /** When set, MCP tools are merged into `schemas` + dispatcher handlers per query. */
@@ -196,6 +198,7 @@ export class AnthropicDirectProvider implements ModelProvider {
     this.surface = opts.surface ?? 'cli';
     this.declaredSurface = opts.surface;
     this.readOnlyMemory = opts.readOnlyMemory === true;
+    this.readOnlyState = opts.readOnlyState === true;
     this.readOnlyBash = opts.readOnlyBash === true;
     this.customTools = opts.customTools ?? [];
     this.fastModeController = opts.fastModeController;
@@ -234,6 +237,7 @@ export class AnthropicDirectProvider implements ModelProvider {
         stateStore: this.stateStore,
         surface: this.surface,
         readOnlyMemory: this.readOnlyMemory,
+        readOnlyState: this.readOnlyState,
         readOnlyBash: this.readOnlyBash,
         customTools: this.customTools,
         mcpManager: this.mcpManager,
@@ -351,6 +355,7 @@ export class AnthropicDirectProvider implements ModelProvider {
       get surface() { return provider.surface; },
       get declaredSurface() { return provider.declaredSurface; },
       get readOnlyMemory() { return provider.readOnlyMemory; },
+      get readOnlyState() { return provider.readOnlyState; },
       get workspaceStore() { return provider.workspaceStore; },
       get mcpManager() { return provider.mcpManager; },
       get fastModeController() { return provider.fastModeController; },
