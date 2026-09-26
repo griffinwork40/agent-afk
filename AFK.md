@@ -90,6 +90,7 @@ Key layers under `src/`:
 | `src/service/` | macOS LaunchAgent install/manage for always-on telegram bot / daemon (`launchd.ts`). |
 | `src/improve/` | Self-improvement pipeline: telemetry scan → eval-gen → eval-run → propose. |
 | `src/insights/` | `afk insights` report: telemetry aggregators → recommendations → self-contained HTML → open-in-browser. Import via the `index.ts` barrel, not sub-paths. |
+| `src/whatif/` | What-if prediction engine: `afk whatif` / `/whatif`. ChangeSpec + operators, sandbox materialiser, NL compiler, episode runner, judge (Jev/Claude), stats, report. Docs: `docs/whatif.md`. |
 | `src/utils/` | Cross-cutting leaf helpers (diff, errors + classifiers, terminal-sanitize, envFile, cleanupRegistry). No layer imports upward from here. |
 | `src/paths.ts` | Every AFK path helper. Two scopes: user (`$AFK_HOME/`) and project (`<cwd>/.afk/`). Never hand-join AFK paths — call these. |
 | `src/bundled-plugins/` | Plugins shipped with the package (copied at install; `tests/copy-bundled-plugins.test.ts`). |
