@@ -108,12 +108,13 @@ export const CLAUDE_HAIKU_ID = 'claude-haiku-4-5-20251001';
 // STARTER_MODELS entry against it. So going back to Sonnet 5 is this one line
 // (plus the starter list's display copy, which is prose, not a wire id).
 export const CLAUDE_SONNET_ID = 'claude-sonnet-4-6';
-// Claude Opus 5 (GA 2026-07-24) — dateless wire id, itself a pinned snapshot
-// (post-4.6 naming convention). Bumped from claude-opus-4-8; the `opus`/`opus_1m`
-// aliases and the `large` tier default follow this constant. To roll back to 4.8,
-// revert this one line (and the matching model-limits.ts / resolve-params.ts /
-// pricing entries).
-export const CLAUDE_OPUS_ID = 'claude-opus-5';
+// Claude Opus 5.5 (released 2026-09-22) — dateless wire id, itself a pinned
+// snapshot (post-4.6 naming convention). Bumped from claude-opus-5 (which was
+// bumped from claude-opus-4-8); the `opus`/`opus_1m` aliases and the `large` tier
+// default follow this constant. To roll back to Opus 5, revert this one line:
+// model-limits.ts / resolve-params.ts / pricing keep entries for both wire ids,
+// and `claude-opus-5` stays reachable by its raw id either way.
+export const CLAUDE_OPUS_ID = 'claude-opus-5-5';
 /** Claude Opus 5.5 wire id (released 2026-09-22). */
 export const CLAUDE_OPUS_55_ID = 'claude-opus-5-5';
 /** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */

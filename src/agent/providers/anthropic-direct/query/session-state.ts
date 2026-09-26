@@ -50,7 +50,7 @@ export interface SessionState {
    * The model the caller *requested* — a short alias (`opus_1m`, `sonnet`, …)
    * or a full id. Distinct from `currentModel` because alias resolution is
    * lossy: `opus_1m` and `opus` both resolve to the same wire id
-   * (`claude-opus-5`). Opus 5 is natively 1M, so both now report the same
+   * (`claude-opus-5-5`). Opus 5.5 is natively 1M, so both now report the same
    * *window* — but the alias still selects the auto-compaction limit, because
    * the `_1m` suffix short-circuits the reduced working budget (base `opus`
    * compacts at 200k, `opus_1m` at the full 1M — see MODEL_AUTOCOMPACT_BUDGET

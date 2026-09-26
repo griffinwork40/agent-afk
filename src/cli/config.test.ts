@@ -103,8 +103,8 @@ describe('Config Loader', () => {
 
   describe('getModelId', () => {
     it('should return correct model IDs', () => {
-      expect(getModelId('opus')).toBe('claude-opus-5');
-      expect(getModelId('opus_1m')).toBe('claude-opus-5');
+      expect(getModelId('opus')).toBe('claude-opus-5-5');
+      expect(getModelId('opus_1m')).toBe('claude-opus-5-5');
       expect(getModelId('sonnet')).toBe('claude-sonnet-4-6');
       expect(getModelId('sonnet_1m')).toBe('claude-sonnet-4-6');
       expect(getModelId('haiku')).toBe('claude-haiku-4-5-20251001');
