@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.251.0] - 2026-09-26
+
+### Added
+- expose process-scoped hook registration to plugins (#2213) (3b4e3708)
+
+### Changed
+- extract maybeRestartServices and cover the isGlobalInstall call site (#2204) (7f4fdf18)
+
 ## [5.250.1] - 2026-09-26
 
 ### Fixed
