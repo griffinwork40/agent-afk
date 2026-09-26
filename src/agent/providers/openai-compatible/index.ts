@@ -43,7 +43,7 @@ import {
   skillTool,
   composeTool,
 } from '../../tools/schemas.js';
-import { MemoryStore, createMemoryHandlers, guardChildHotWrites, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
+import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSession, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
@@ -561,7 +561,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
-    const memoryHandlers = guardChildHotWrites(createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli'), this.providerOpts.readOnlyState === true);
+    const memoryHandlers = guardChildHotWrites(createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;
       handlers.set(name, handler);

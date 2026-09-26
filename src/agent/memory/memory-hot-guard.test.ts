@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { guardChildHotWrites, CHILD_HOT_WRITE_DENIED } from './memory-hot-guard.js';
+import { guardChildHotWrites, isForkedChildSession, CHILD_HOT_WRITE_DENIED } from './memory-hot-guard.js';
 import type { ToolHandler } from '../tools/types.js';
 
 function handlers(): { map: Map<string, ToolHandler>; inner: ReturnType<typeof vi.fn> } {
@@ -47,5 +47,21 @@ describe('guardChildHotWrites', () => {
   it('is a no-op when memory_update is absent (recon sessions)', () => {
     const map = new Map<string, ToolHandler>([['memory_search', (async () => ({ content: '[]' })) as ToolHandler]]);
     expect(guardChildHotWrites(map, true)).toBe(map);
+  });
+});
+
+describe('isForkedChildSession', () => {
+  it('is false for a top-level session (no signals)', () => {
+    expect(isForkedChildSession(undefined, undefined)).toBe(false);
+    expect(isForkedChildSession(false, {})).toBe(false);
+  });
+  it('is true on readOnlyState alone (createChildProviderFactory children)', () => {
+    expect(isForkedChildSession(true, {})).toBe(true);
+  });
+  it('is true on parentSessionId alone (e.g. buildSkillRestrictedProvider children)', () => {
+    expect(isForkedChildSession(false, { parentSessionId: 'p' })).toBe(true);
+  });
+  it('is true on subagentToolOutputCapBytes alone (stub-parent skill forks)', () => {
+    expect(isForkedChildSession(undefined, { subagentToolOutputCapBytes: 100_000 })).toBe(true);
   });
 });

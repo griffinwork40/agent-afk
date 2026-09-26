@@ -16,13 +16,31 @@
  * `memory_update` at all; this guard keeps that guarantee for target:"hot"
  * while allowing target:"fact".
  *
- * The child signal is `readOnlyState`, which `createChildProviderFactory`
- * (src/agent/tools/nesting.ts) sets on every child it builds.
+ * The child signal is {@link isForkedChildSession}: any ONE of `readOnlyState`
+ * (set by `createChildProviderFactory`), `parentSessionId`, or
+ * `subagentToolOutputCapBytes` (stamped by `SubagentManager.forkSubagent` on
+ * EVERY fork). No single flag is sufficient: `buildSkillRestrictedProvider`
+ * children carry no `readOnlyState`, and skill forks under a stub parent carry
+ * no `parentSessionId`.
  *
  * @module agent/memory/memory-hot-guard
  */
 
 import type { ToolHandler } from '../tools/types.js';
+
+/** Per-query dispatcher signals that identify a forked sub-agent session. */
+export interface ForkSignals {
+  parentSessionId?: string | undefined;
+  subagentToolOutputCapBytes?: number | undefined;
+}
+
+/**
+ * True when the session being dispatched is a forked sub-agent. Fails toward
+ * "child": any one signal is enough. Top-level sessions set none of them.
+ */
+export function isForkedChildSession(readOnlyState: boolean | undefined, opts: ForkSignals | undefined): boolean {
+  return readOnlyState === true || opts?.parentSessionId !== undefined || opts?.subagentToolOutputCapBytes !== undefined;
+}
 
 /** Returned to the model when a child session attempts a hot-memory write. */
 export const CHILD_HOT_WRITE_DENIED =

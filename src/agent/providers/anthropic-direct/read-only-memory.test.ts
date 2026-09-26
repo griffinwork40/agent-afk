@@ -35,7 +35,7 @@ import {
   AnthropicDirectProvider,
   __setAnthropicClientFactory,
 } from './index.js';
-import { createChildProviderFactory } from '../../tools/nesting.js';
+import { createChildProviderFactory, buildSkillRestrictedProvider, CHILD_ALLOWED_TOOLS } from '../../tools/nesting.js';
 import type OpenAI from 'openai';
 import { __setOpenAIClientFactory, type OpenAIClientFactory } from '../openai-compatible/query.js';
 import type { OpenAIChunk } from '../openai-compatible/translate.js';
@@ -587,5 +587,48 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     expect(toolResult).toBeDefined();
     expect(toolResult!.is_error).toBe(true);
     expect(JSON.stringify(toolResult!.content)).toContain('may not write target:\\"hot\\"');
+  });
+
+  it('skill-restricted child (no readOnlyState, no parentSessionId, no hook registry) cannot write hot', async () => {
+    // Regression for the #2093 third re-review: buildSkillRestrictedProvider builds
+    // children WITHOUT readOnlyState, and a skill fork under a stub parent carries no
+    // parentSessionId. forkSubagent still stamps subagentToolOutputCapBytes on every
+    // fork, so isForkedChildSession must catch it.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fromArray(
+          makeToolUseStream(
+            'tool_hot_skill',
+            'memory_update',
+            JSON.stringify({ target: 'hot', action: 'set', content: 'PWNED-SKILLRESTRICTED' }),
+          ),
+        );
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    const provider = buildSkillRestrictedProvider([...CHILD_ALLOWED_TOOLS], 'claude-sonnet-5');
+    const query = provider.query({
+      prompt: singleInput('please write to hot memory'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', subagentToolOutputCapBytes: 100_000 },
+    });
+    await drainQuery(query);
+
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+    const messages = (messagesCreateMock.mock.calls[1]![0] as {
+      messages?: Array<{ role: string; content: ContentBlockParam[] | string }>;
+    }).messages;
+    const lastUser = [...(messages ?? [])].reverse().find((m) => m.role === 'user');
+    const blocks = Array.isArray(lastUser!.content) ? (lastUser!.content as ContentBlockParam[]) : [];
+    const toolResult = blocks.find(
+      (b) =>
+        (b as { type?: string }).type === 'tool_result' &&
+        (b as { tool_use_id?: string }).tool_use_id === 'tool_hot_skill',
+    ) as { is_error?: boolean; content?: unknown } | undefined;
+
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.is_error).toBe(true);
   });
 });

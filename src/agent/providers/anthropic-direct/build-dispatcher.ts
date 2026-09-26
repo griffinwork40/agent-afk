@@ -43,7 +43,7 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import { createMemoryHandlers, guardChildHotWrites } from '../../memory/index.js';
+import { createMemoryHandlers, guardChildHotWrites, isForkedChildSession } from '../../memory/index.js';
 import { createGetRuntimeStateHandler } from '../../awareness/index.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import {
@@ -174,11 +174,11 @@ export function buildDispatcher(
   opts?: BuildDispatcherOptions,
 ): SessionToolDispatcher {
   const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
-  // Child sessions (readOnlyState) get memory_update with target:"hot" rejected
+  // Forked children (any fork signal) get memory_update with target:"hot" rejected
   // structurally by guardChildHotWrites — independent of any hook registry.
   const memoryHandlers = guardChildHotWrites(
     createMemoryHandlers(deps.memoryStore, undefined, deps.surface),
-    deps.readOnlyState,
+    isForkedChildSession(deps.readOnlyState, opts),
   );
   // Recon sessions (readOnlyMemory=true): register only `memory_search`.
   for (const [name, handler] of memoryHandlers) {
