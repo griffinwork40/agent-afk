@@ -23,9 +23,9 @@ pnpm audit:sdk:update-lock                         # add new symbols → .sdk-de
 pnpm audit:env:check                               # CI gate: no raw process.env reads outside src/config/env.ts
 pnpm scan:env:check                                # CI gate: docs/env-registry.{json,md} in sync with src/config/env.ts
 pnpm audit:chalk:check                             # CI gate: no raw chalk.<color> outside src/cli/palette.ts (--list to find sites)
-pnpm audit:filesize:check                          # CI gate: 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json
+pnpm audit:filesize:check                          # 350-code-line ceiling (comments/blanks excluded), ratcheted against .filesize-baseline.json — CI runs it but NON-blocking (`|| true`) until #2206 lands; treat a failure as yours to fix
 pnpm audit:filesize:update                         # regenerate the baseline after a split (NEVER hand-edit loc values)
-pnpm audit:funcsize:check                          # advisory: 200-line function ceiling, warns but never fails CI
+pnpm audit:funcsize:check                          # CI gate: 200-line function ceiling (AST-measured), ratcheted against .funcsize-baseline.json
 pnpm audit:funcsize:update                         # regenerate the function baseline after an extraction
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
@@ -141,12 +141,13 @@ The base system prompt is **layered**: the framework prompt (`system-prompt.md`,
 - **Three mandatory indirections — each has exactly one read/write point, and CI enforces it.** Env vars: never `process.env`; use the typed `env` object and register new vars in `ENV_REGISTRY` (`src/config/env.ts`; `audit:env:check` + `scan:env:check`). Styling: never `chalk.<color>()`; use the semantic palette (`src/cli/palette.ts`; `audit:chalk:check` — ~180 raw sites had crept back before this gate). Paths: never hand-join anything under `~/.afk/`; use `src/paths.ts` (user- vs project-scope differ and `$AFK_HOME`/`$AFK_STATE_DIR` override).
 - Build copies `*.md` prompt files from `src/` into `dist/` via `scripts/copy-prompts.js` — required for built skills to find their prompts.
 - Vendored agents under `src/skills/_agents/` must stay byte-equal to upstream, and bundled skills under `src/bundled-plugins/` are SHA-256 pinned in their test files. Editing either intentionally means running `pnpm fix:pins` to rewrite the pins (`pnpm fix:pins:check` is the CI gate); an unexplained pin failure means an edit you did not intend.
-- **Three agent-instruction files, different consumers**: this file is the AFK overlay; `CLAUDE.md` targets Claude Code and carries the same facts in longer form (incl. the long-comment audit recipe); `AGENTS.md` is generic operating protocol with no repo specifics. When architecture changes, `AFK.md` and `CLAUDE.md` both need the edit — they drifted apart once already on the provider layer.
+- **Two agent-instruction files, different consumers**: this file is the AFK overlay and the single home for repo-specific facts; `AGENTS.md` is generic operating protocol with no repo specifics. There is no tracked `CLAUDE.md` (removed in 4683427a) — when architecture changes, edit `AFK.md` (and `docs/` where the detail lives), not a parallel copy.
 
 ### The 350-code-line ceiling
 
 No source file under `src/` or `scripts/` exceeds **350 code lines** (non-blank,
-non-comment). Gate: `pnpm audit:filesize:check` (`scripts/check-file-size.ts`),
+non-comment). Gate: `pnpm audit:filesize:check` (`scripts/check-file-size.ts`;
+its CI steps currently end in `|| true`, so CI will not stop you — #2206),
 with a non-failing warn band at 316–350 code lines. Tests, `__fixtures__`,
 `__test-utils__`, and `.d.ts` are out of scope — a 3,000-line test file is a flat
 list of cases an agent greps into, not a file it must read whole to edit safely.
@@ -178,11 +179,12 @@ extracted sibling must be reachable from one of the three esbuild entrypoints or
 `build:dist` silently tree-shakes it with no CI signal. Campaign plan and
 per-wave protocol: `docs/file-size-ceiling.md`.
 
-### The 200-line function ceiling (advisory)
+### The 200-line function ceiling
 
-An advisory sibling of the file ceiling — **not implied by it**: `pnpm audit:funcsize:check`
-(`scripts/check-function-size.ts`) warns when any single function under `src/` or
-`scripts/` exceeds **200 lines**, but never fails CI. File size measures how much
+A CI-blocking sibling of the file ceiling — **not implied by it**: `pnpm audit:funcsize:check`
+(`scripts/check-function-size.ts`) fails when any single function under `src/` or
+`scripts/` exceeds **200 lines** and is not grandfathered (advisory until #1757
+promoted it; see the "CI-blocking" funcsize steps in `.github/workflows/ci.yml`). File size measures how much
 you must *read* to edit safely; function size measures how much you must *hold in
 mind* to change one behaviour. They diverge both ways — a flat 900-line registry
 has no large function, and a 700-line function hides inside a file that passes the
@@ -190,8 +192,9 @@ code-line ceiling only because siblings were extracted around it (#919: #829 shr
 and closed while `forkSubagent` never changed, and it has since grown to 586).
 
 The baseline ratchet and the never-hand-edit rule still apply, against
-`.funcsize-baseline.json` (54 grandfathered = 1.2% of 4,388 functions; regenerate
-with `pnpm audit:funcsize:update`). Measurement is AST-based, so **JSDoc is
+`.funcsize-baseline.json` (the grandfathered set is whatever that file holds — count
+its entries rather than trusting a number written here; regenerate with
+`pnpm audit:funcsize:update`). Measurement is AST-based, so **JSDoc is
 excluded** — same as the file metric, which also excludes comments and blanks.
 Both gates measure logic density, not documentation volume.
 
@@ -209,7 +212,21 @@ Any source-comment block ≥15 contiguous lines must open with one of:
 
 Choose the prefix before writing the body. When in doubt between `Invariant:` and `History:`, use `Invariant:` — false-shrink is a regression. JSDoc may carry the prefix in the body (`* Invariant: …`).
 
-**There is no linter gate for this** — `tsc` and CI will not catch a missing prefix, so it is review-enforced and self-checked. `CLAUDE.md` carries a ready-to-run grep+awk audit recipe for finding untagged ≥15-line blocks.
+**There is no linter gate for this** — `tsc` and CI will not catch a missing prefix, so it is review-enforced and self-checked. Audit recipe for untagged ≥15-line `//` blocks (approximate; a blank line splits a block):
+
+```bash
+grep -rn --include='*.ts' '^[[:space:]]*//' src/ \
+  | awk -F: '
+      {
+        f=$1; cur=int($2)
+        if (prev_f != f || cur != prev_l + 1) { run=0; tagged=0 }
+        prev_f=f; prev_l=cur
+        if ($0 ~ /\/\/ (Invariant|Contract|History):/) { tagged=1; next }
+        if (tagged) next
+        run++
+        if (run == 15) { print f ":" (cur-14) ": untagged ≥15-line block"; run=0 }
+      }'
+```
 
 ### Ordered-operation sequences
 
