@@ -170,7 +170,6 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
   // coordinator (e.g. entries registered after flushAll ran, or in
   // non-coordinator paths). This is the safety net; in normal operation
   // the coordinator drains all tool-lane commits before this point.
-  //
   // Invariant (TUI rhythm contract): the safety-net flush is an emitter
   // like any other, so it MUST own ONE trailing blank after its lines.
   // The post-dispose successor (verdict card, soft-stop notice, footer)
@@ -192,6 +191,7 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
         // prevents a phantom blank when hasPending() is true due to an
         // in-flight ancestor entry but flushCompletedRoots() returns [].
         commitBlockAbove(ctx.compositorRef.current, indentForScrollback(lines));
+        // Trailing blank — must be a dedicated call; '' inside the block is stripped by the compositor.
         ctx.compositorRef.current.commitAbove('');
       }
       if (ctx.overlayComposerRef.current) {
