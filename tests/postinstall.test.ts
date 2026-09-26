@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 
 const isWin32 = process.platform === 'win32';
 
@@ -351,7 +352,8 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
 // restarts. These tests exercise the extracted maybeRestartServices() helper
 // directly — without running the isMain block — so the guard is reachable
 // from a unit test. Removing the isGlobalInstall guard inside
-// maybeRestartServices makes at least one of these tests fail.
+// maybeRestartServices makes two of these tests fail: the
+// "npm_config_global is absent" case and the ".git marker is present" case.
 //
 // All tests inject platform, env, pkgRoot, existsFn, and restartFn so no real
 // filesystem or npm lifecycle environment leaks into the assertions.
@@ -426,19 +428,29 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
     expect(restartFn).not.toHaveBeenCalled();
   });
 
-  it('returns [] when called with no arguments (default pkgRoot, non-darwin or no global env)', () => {
+  it('uses the default pkgRoot (package root via fileURLToPath) when pkgRoot is omitted', () => {
     // Exercises the default-argument path: pkgRoot falls back to
     // fileURLToPath(new URL('..', import.meta.url)) rather than .pathname.
-    // On a non-darwin platform or without npm_config_global='true', the guard
-    // fires immediately and returns [] without touching restartFn.
-    const restartFn = vi.fn(() => [] as string[]);
+    // platform MUST be 'darwin' and npm_config_global 'true' — otherwise the
+    // platform/env guards return before the default pkgRoot is ever read.
+    // scripts/postinstall.mjs and this file are both one level below the
+    // package root, so the same relative URL resolves the expected root.
+    const expectedGitMarker = join(fileURLToPath(new URL('..', import.meta.url)), '.git');
+    const probed: string[] = [];
+    const existsFn = (p: string) => {
+      probed.push(p);
+      return false; // no .git → treated as a global install
+    };
+    const restartFn = vi.fn(() => ['com.afk.daemon']);
     const result = maybeRestartServices({
-      platform: 'linux',
-      env: {},
+      platform: 'darwin',
+      env: { npm_config_global: 'true' },
+      existsFn,
       restartFn,
     });
-    expect(result).toEqual([]);
-    expect(restartFn).not.toHaveBeenCalled();
+    expect(probed).toEqual([expectedGitMarker]);
+    expect(result).toEqual(['com.afk.daemon']);
+    expect(restartFn).toHaveBeenCalledOnce();
   });
 });
 // ─── isMainModule ─────────────────────────────────────────────────────────────
