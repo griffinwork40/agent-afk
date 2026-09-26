@@ -280,6 +280,13 @@ export function finalizeOrchestrator(
               // per-line commits desync band-hold under a tall overlay (a live
               // subagent's rows). See commit-block.ts.
               commitBlockAbove(compositor, indented);
+              // Explicit blank-row commit (TUI rhythm contract): the block
+              // commit above lands the tool content; this separate
+              // commitAbove('') paints exactly one trailing blank row.
+              // commitBlockAbove joins lines on '\n' and the compositor
+              // strips a lone trailing '\n' as a line terminator, so a ''
+              // left inside the block would be swallowed. The blank MUST be
+              // a dedicated call. See docs/tui-rhythm.md and commit-block.ts.
               compositor.commitAbove('');
               // Refresh the overlay from CURRENT lane state — in-flight
               // subagent rows that survived the selective flush must keep
