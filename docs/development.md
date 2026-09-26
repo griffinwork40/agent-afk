@@ -232,3 +232,39 @@ pnpm lint                   # type-check without emitting
 ```
 
 For more on the architecture (providers, hooks, subagents, abort graph), see [`architecture.md`](architecture.md). For the full env-var reference and slash-command taxonomy, see [`reference.md`](reference.md).
+
+## postinstall and pnpm 10
+
+`scripts/postinstall.mjs` ships in the tarball and runs as a lifecycle hook. It:
+
+1. Detects whether the npm bin directory is on `PATH` and prints a remediation hint if not.
+2. Restarts any running `afk daemon` launchd service so it picks up the new code — **only** on macOS and **only** when `npm_config_global === "true"` (genuine global install, not a local `pnpm install` inside a source checkout).
+
+**pnpm 10 blocks build scripts by default.** Running `pnpm add -g agent-afk` will print:
+
+```
+! Ignored build scripts: agent-afk@<version>.
+  Run "pnpm approve-builds -g" to pick which dependencies should be allowed to run scripts.
+```
+
+The postinstall hook is **silently skipped** — no PATH hint, no daemon restart.
+
+**Remedies for end-users:**
+
+| Method | Command |
+|---|---|
+| Approve after install | `pnpm approve-builds -g` (interactive picker, persists to global pnpm config) |
+| Per-install flag | `pnpm add -g --allow-build=agent-afk agent-afk` |
+| Use npm instead | `npm install -g agent-afk` (npm does not block build scripts) |
+
+If a launchd/systemd-supervised daemon is already running and pnpm skipped the hook, restart it manually:
+
+```bash
+afk service restart daemon
+```
+
+**Evidence** (pnpm 10.32.1, 2026-09-25, issue [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)):
+
+- `pnpm add -g <tarball>` — postinstall **skipped** (warning printed, marker file absent).
+- `pnpm add -g --allow-build=agent-afk <tarball>` — postinstall **runs**; `npm_config_global=true` confirmed in env.
+- `npm_config_global` is set to `"true"` whenever postinstall does run, so `isGlobalInstall()` correctly gates daemon restarts.

@@ -30,6 +30,8 @@ afk chat "hello"             # first real conversation
 
 That's it. You're in.
 
+**Using pnpm?** `pnpm add -g agent-afk` works, but pnpm 10 blocks build scripts by default and silently skips `postinstall` (see [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)). Run `pnpm approve-builds -g` after install to approve the hook, or use `npm install -g agent-afk` instead. If a launchd/systemd-supervised `afk daemon` is already running and pnpm skipped the hook, restart it manually with `afk service restart daemon`.
+
 **Try without installing:** `npx agent-afk chat "hello"` runs a one-shot turn with zero global install.
 
 **Already using Claude Code or Codex?** `afk login` will detect your existing credentials automatically. Run `afk migrate` to import your plugins, skills, and MCP servers too -- it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
