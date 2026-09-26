@@ -20,7 +20,7 @@ import {
 } from './terminal-compositor.band-reflow.js';
 import { boundLineToTerminal } from './render/bounded-line.js';
 import { contentMargin } from './render/measure.js';
-import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
+import { bannerScrollSequence, writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { decomposeCommitText } from './terminal-compositor.commit-text.js';
 import { snapshotCommitGeometry } from './terminal-compositor.commit-geometry.js';
 import { routeCommit } from './terminal-compositor.commit-route.js';
@@ -181,7 +181,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       self.logUpdate.clear(extraRows);
       const bannerRows = Math.min(self.anchorRow - 1, rows - 1);
       writeWithScrollGuard(self, () => {
-        self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bannerRows)}`);
+        self.stdout.write(bannerScrollSequence(rows, bannerRows, extraRows));
       });
     } finally {
       self.committing = false;
