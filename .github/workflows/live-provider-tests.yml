@@ -1,0 +1,102 @@
+name: Live Provider Tests
+
+# Nightly smoke test against real provider APIs.
+# NOT part of the regular PR gate — failures open/update a tracking issue
+# instead of blocking merges. See docs/development.md for manual run info.
+#
+# Cost note: each run is ~$0.0001 (gpt-4o-mini, two calls) + negligible
+# Anthropic usage (claude-sonnet-5, one call, maxOutputTokens=20). Nightly
+# cadence keeps monthly spend well under $0.01.
+#
+# Required repository secrets (Settings → Secrets → Actions):
+#   CLAUDE_CODE_OAUTH_TOKEN   – Anthropic Claude OAuth token
+#   OPENAI_API_KEY            – OpenAI API key (sk-...)
+
+on:
+  schedule:
+    # 02:00 UTC every day (low-traffic window, minimises API latency).
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+# No concurrent live runs — prevent duplicate billed calls if re-triggered
+# manually while the nightly is still running.
+concurrency:
+  group: live-provider-tests
+  cancel-in-progress: true
+
+# Opt JS-based actions into Node.js 24 ahead of the June 2026 default flip.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  # Needed to open / comment on the tracking issue on failure.
+  issues: write
+  # Default read-only for everything else.
+  contents: read
+
+jobs:
+  live-tests:
+    name: Live provider smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run live provider tests
+        env:
+          RUN_LIVE_API: '1'
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          pnpm exec vitest run \
+            src/agent/providers/anthropic-direct.live.test.ts \
+            src/agent/providers/openai-compatible/openai-compatible.live.test.ts
+
+      # On failure, open a new issue or add a comment to the existing open
+      # tracking issue (labelled "live-test-failure") rather than failing
+      # the PR gate.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LABEL="live-test-failure"
+          TITLE="ci: live provider tests failing (nightly)"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Find an existing open issue with the label.
+          EXISTING=$(gh issue list \
+            --label "$LABEL" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty' \
+            2>/dev/null)
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" \
+              --body "Live provider tests failed again: $RUN_URL"
+          else
+            printf 'Live provider tests are failing. See: %s\n\nThis issue is auto-managed by the `live-provider-tests` workflow.\nIt is opened on the first failure and updated with comments on subsequent failures.\nClose it once the tests are green again.' \
+              "$RUN_URL" > /tmp/issue-body.md
+            gh issue create \
+              --title "$TITLE" \
+              --label "$LABEL" \
+              --body-file /tmp/issue-body.md
+          fi
