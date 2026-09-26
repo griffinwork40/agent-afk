@@ -43,11 +43,11 @@ import {
   skillTool,
   composeTool,
 } from '../../tools/schemas.js';
-import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
+import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSession, memoryToolSchemas, memorySearchTool } from '../../memory/index.js';
 import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
-import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
+
 import { getStateDatabasePath } from '../../../paths.js';
 import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
@@ -66,6 +66,7 @@ import {
   registerPresenceLifecycle,
   resolveTopLevelSessionId,
 } from '../shared/presence-lifecycle.js';
+import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -74,7 +75,7 @@ const PROVIDER_NAME = 'openai-compatible';
  * Anthropic-specific knobs (client factory, OAuth keychain) — so callers
  * can build either provider with the same dependency bundle.
  */
-export interface OpenAICompatibleProviderOptions {
+export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
   /** Override the default `https://api.openai.com/v1` endpoint. */
   baseURL?: string;
   /**
@@ -205,7 +206,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } else {
       schemas.push(...memoryToolSchemas);
     }
-    if (opts.readOnlyMemory === true) {
+    if (isStateRestricted(opts.readOnlyMemory, opts.readOnlyState)) {
       schemas.push(...stateReadToolSchemas);
     } else {
       schemas.push(...stateToolSchemas);
@@ -417,7 +418,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
     // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
+    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState);
     // Invariant: kept in lockstep with anthropic-direct's call site.
     // `excludeName` omits the executing skill's own entry for a skill-dispatch
     // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
@@ -560,7 +561,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
-    const memoryHandlers = createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli');
+    const memoryHandlers = guardChildHotWrites(createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;
       handlers.set(name, handler);
@@ -573,7 +574,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
     // Read-only sessions get only state_get and state_query.
     for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
-      if (this.providerOpts.readOnlyMemory === true && name !== 'state_get' && name !== 'state_query') continue;
+      if (isStateRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
     if (opts.runtimeStateSource) {

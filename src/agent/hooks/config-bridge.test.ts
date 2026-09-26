@@ -372,13 +372,13 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
     const bundle = createDefaultHookRegistry();
     const { registry } = bundle;
-    // Built-in handlers exist for SubagentStop and SessionEnd, plus the FOUR
+    // Built-in handlers exist for SubagentStop and SessionEnd, plus the FIVE
     // always-on built-in PreToolUse handlers (the ask-question gate, the
-    // observe-only safe-destruct detector, the observe-only release-boundary
-    // detector, and the edit-preview hook), all registered unconditionally. No
-    // further PreToolUse hooks since we passed no hookConfig (path-approval
-    // disabled above).
-    expect(registry.count('PreToolUse')).toBe(4);
+    // child-memory hot-block hook, the observe-only safe-destruct detector,
+    // the observe-only release-boundary detector, and the edit-preview hook),
+    // all registered unconditionally. No further PreToolUse hooks since we
+    // passed no hookConfig (path-approval disabled above).
+    expect(registry.count('PreToolUse')).toBe(5);
     // addPreviewDiffRef must be present on the bundle so the StreamRenderer can
     // arm it each turn.
     expect(bundle).toHaveProperty('addPreviewDiffRef');
@@ -406,9 +406,10 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
       hookConfig,
       { cwd: projectCwd },
     );
-    // 4 built-ins (ask-question gate + safe-destruct detector + release-boundary
-    // detector + edit-preview hook) + 1 config hook
-    expect(registry.count('PreToolUse')).toBe(5);
+    // 5 built-ins (ask-question gate + child-memory hot-block hook +
+    // safe-destruct detector + release-boundary detector + edit-preview hook)
+    // + 1 config hook
+    expect(registry.count('PreToolUse')).toBe(6);
   });
 
   it('built-in SubagentStop handler still present when hookConfig is provided', () => {
