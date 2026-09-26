@@ -21,6 +21,7 @@
 
 import { debugLog } from '../../utils/debug.js';
 import { emitSessionPhase } from '../trace/emit.js';
+import { emitSessionIdAssigned } from './session-id-trace.js';
 import { resolveProvider, providerForModel } from '../providers/index.js';
 import { ProviderRouter } from '../providers/router/provider-router.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
@@ -71,7 +72,15 @@ export function buildProviderLifecycle(config: AgentConfig): ProviderLifecycleRe
   const resolvedModel = resolveModelId(config.model) ?? (config.model as string);
   const { sessionIdentity, metadata } = buildInitialState(config, resolvedModel);
 
-  const stateManager = new SessionStateManager(sessionIdentity, metadata);
+  const stateManager = new SessionStateManager(
+    sessionIdentity,
+    metadata,
+    // Emit a session_id_assigned trace event each time the provider-issued
+    // session id first becomes known or changes (e.g. resumed/forked session).
+    // Fire-and-forget: the callback must never propagate errors into
+    // updateSessionIdentity — see SessionStateManager for the try/catch.
+    (sid, prior) => void emitSessionIdAssigned(config.traceWriter, sid, prior),
+  );
   const inputStream = new QueryInputStream(() => stateManager.getSessionId());
 
   const promptIterable = inputStream.createIterable();
