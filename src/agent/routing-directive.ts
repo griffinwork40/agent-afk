@@ -131,15 +131,18 @@ Never end a turn mid-loop without one of these. The terminal-state heading must 
 
 /**
  * Identifies the surface assembling the prompt. Interactive surfaces (`repl`,
- * `telegram`) receive the end-of-turn protocol; non-interactive surfaces
- * (`one-shot`, `subagent`) do not, since their output is consumed
- * programmatically and a terminal-state heading would corrupt downstream
- * parsing.
+ * `telegram`) receive the end-of-turn protocol; the non-interactive `one-shot`
+ * surface does not, since its output is consumed programmatically and a
+ * terminal-state heading would corrupt downstream parsing.
+ *
+ * No subagent surface, by design: forked children never call this. They get
+ * the raw base prompt, and child-specific text is added at the fork choke
+ * point (`assembleChildConfig`, `subagent/fork-child-config.ts`).
  *
  * Default is `'one-shot'` — the safe, no-protocol choice — so callers that
  * don't pass a surface tag never silently break non-interactive output.
  */
-export type PromptSurface = 'repl' | 'telegram' | 'one-shot' | 'subagent';
+export type PromptSurface = 'repl' | 'telegram' | 'one-shot';
 
 const SURFACES_WITH_END_OF_TURN: ReadonlySet<PromptSurface> = new Set([
   'repl',
