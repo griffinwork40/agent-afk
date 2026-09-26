@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import { oneShotCompletion } from './oneshot.js';
+import { BILLING_HEADER_TEXT } from './auth.js';
 
 // ---------------------------------------------------------------------------
 // Minimal Anthropic client stub
@@ -195,7 +196,7 @@ describe('oneShotCompletion (T21 + T22)', () => {
     // Non-alias strings (already-full ids, custom proxy names) pass through
     // unchanged. Alias resolution only fires for known short names — see the
     // dedicated alias-resolution test below.
-    const captured: { model?: string; system?: string } = {};
+    const captured: { model?: string; system?: unknown } = {};
     await oneShotCompletion({
       token: 'sk-ant-oat01-test',
       model: 'claude-custom-model-v99',
@@ -208,6 +209,25 @@ describe('oneShotCompletion (T21 + T22)', () => {
       }),
     });
     expect(captured.model).toBe('claude-custom-model-v99');
+    // OAuth: the billing prefix block leads, the caller's system text follows.
+    expect(captured.system).toEqual([
+      { type: 'text', text: BILLING_HEADER_TEXT },
+      { type: 'text', text: 'custom system prompt text' },
+    ]);
+  });
+
+  it('(T22c) API-key tokens send the system prompt as a plain string with no billing prefix', async () => {
+    const captured: { system?: unknown } = {};
+    await oneShotCompletion({
+      token: 'sk-ant-api03-test',
+      model: 'claude-custom-model-v99',
+      system: 'custom system prompt text',
+      user: 'hello',
+      clientFactory: () => makeClient(async (params) => {
+        captured.system = params.system;
+        return { content: [{ type: 'text', text: 'ok' }] };
+      }),
+    });
     expect(captured.system).toBe('custom system prompt text');
   });
 
