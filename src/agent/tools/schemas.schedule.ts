@@ -66,6 +66,14 @@ export const createScheduleTool: AnthropicToolDef = {
         type: 'boolean',
         description: 'Whether to activate immediately. Default: true.',
       },
+      cwd: {
+        type: 'string',
+        description:
+          'Optional per-task working directory (absolute path or ~/…). ' +
+          'Pins this task\'s spawned session to a specific directory instead of the daemon-wide ' +
+          'AFK_DAEMON_CWD. Precedence: task cwd → AFK_DAEMON_CWD → process.cwd(). ' +
+          'Must be an existing directory. Tilde (~) is expanded at save time.',
+      },
     },
     required: ['name', 'command', 'cron'],
   },
@@ -126,6 +134,13 @@ export const updateScheduleTool: AnthropicToolDef = {
       enabled: {
         type: 'boolean',
         description: 'Whether the task should be active.',
+      },
+      cwd: {
+        type: 'string',
+        description:
+          'New per-task working directory (absolute path or ~/…). ' +
+          'Must be an existing directory. Tilde (~) is expanded at save time. ' +
+          'Omit to leave unchanged.',
       },
     },
     required: ['taskId'],

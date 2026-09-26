@@ -26,6 +26,7 @@ import {
   updateSchedule,
   toScheduledTask,
 } from '../../daemon/schedule-store.js';
+import { validateScheduleCwd } from '../../daemon/cwd-validator.js';
 import { getTelemetryPath } from '../../../paths.js';
 import {
   type DaemonSyncResult,
@@ -75,6 +76,20 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  // Validate per-task cwd when supplied.
+  const rawCwd = obj['cwd'];
+  let resolvedCwd: string | undefined;
+  if (rawCwd !== undefined) {
+    if (typeof rawCwd !== 'string' || !rawCwd) {
+      return { content: 'Invalid input: cwd must be a non-empty string', isError: true };
+    }
+    const cwdResult = validateScheduleCwd(rawCwd);
+    if (!cwdResult.ok) {
+      return { content: `Invalid input: ${cwdResult.error}`, isError: true };
+    }
+    resolvedCwd = cwdResult.resolved;
+  }
+
   const config = addSchedule({
     name: obj['name'] as string,
     command: obj['command'] as string,
@@ -84,6 +99,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       (obj['trigger'] as 'cron' | 'sessionstart' | 'both' | undefined) ?? 'cron',
     notifyOn: obj['notifyOn'] as 'failure' | 'always' | 'never' | undefined,
     ...(notifyChat !== undefined ? { notifyChat: notifyChat as number | string } : {}),
+    ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
     enabled: typeof obj['enabled'] === 'boolean' ? obj['enabled'] : true,
   });
 
@@ -100,6 +116,7 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
         trigger: config.trigger,
         notifyOn: config.notifyOn,
         ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
+        ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
       })
     : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
 
@@ -178,6 +195,20 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
     };
   }
 
+  // Validate per-task cwd when supplied.
+  const rawCwd = obj['cwd'];
+  let resolvedCwd: string | undefined;
+  if (rawCwd !== undefined) {
+    if (typeof rawCwd !== 'string' || !rawCwd) {
+      return { content: 'Invalid input: cwd must be a non-empty string', isError: true };
+    }
+    const cwdResult = validateScheduleCwd(rawCwd);
+    if (!cwdResult.ok) {
+      return { content: `Invalid input: ${cwdResult.error}`, isError: true };
+    }
+    resolvedCwd = cwdResult.resolved;
+  }
+
   // Build the patch from supplied fields only
   type Patch = Parameters<typeof updateSchedule>[1];
   const patch: Patch = {};
@@ -189,6 +220,7 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   if (notifyOn !== undefined) patch.notifyOn = notifyOn as Patch['notifyOn'];
   if (notifyChat !== undefined) patch.notifyChat = notifyChat as number | string;
   if (typeof obj['enabled'] === 'boolean') patch.enabled = obj['enabled'];
+  if (resolvedCwd !== undefined) patch.cwd = resolvedCwd;
 
   const updated = updateSchedule(taskId, patch);
   if (!updated) {
@@ -230,6 +262,7 @@ export const listSchedulesHandler: ToolHandler = async (_input, _signal) => {
         trigger: s.trigger,
         enabled: s.enabled,
         notifyOn: s.notifyOn,
+        ...(s.cwd !== undefined ? { cwd: s.cwd } : {}),
       })),
     ),
   };

@@ -583,3 +583,102 @@ describe('toScheduledTask', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+// ── per-task cwd ─────────────────────────────────────────────────────────────
+
+describe('schedule-store cwd field', () => {
+  let tmpDir: string;
+  let storePath: string;
+  let realDir: string;
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function setup() {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-cwd-'));
+    storePath = join(tmpDir, 'schedules.json');
+    realDir = tmpDir; // the tmpDir itself is a real existing dir
+  }
+
+  it('addSchedule stores cwd when provided', () => {
+    setup();
+    const config = addSchedule(
+      { name: 'Cwd Task', command: '/test', cron: '0 2 * * *', enabled: true, cwd: realDir },
+      storePath,
+    );
+    expect(config.cwd).toBe(realDir);
+    const loaded = loadSchedules(storePath);
+    expect(loaded[0]?.cwd).toBe(realDir);
+  });
+
+  it('addSchedule without cwd does not set the field', () => {
+    setup();
+    const config = addSchedule(
+      { name: 'No Cwd', command: '/test', cron: '0 2 * * *', enabled: true },
+      storePath,
+    );
+    expect(config.cwd).toBeUndefined();
+  });
+
+  it('updateSchedule patches cwd', () => {
+    setup();
+    const config = addSchedule(
+      { name: 'Patch Cwd', command: '/p', cron: '0 2 * * *', enabled: true },
+      storePath,
+    );
+    const updated = updateSchedule(config.id, { cwd: realDir }, storePath);
+    expect(updated?.cwd).toBe(realDir);
+  });
+
+  it('toScheduledTask includes cwd when present', () => {
+    setup();
+    const config: ScheduledTaskConfig = {
+      id: 'cwd-task',
+      name: 'Cwd Task',
+      command: '/test',
+      cron: '* * * * *',
+      enabled: true,
+      cwd: realDir,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect(task.cwd).toBe(realDir);
+  });
+
+  it('toScheduledTask omits cwd when absent', () => {
+    setup();
+    const config: ScheduledTaskConfig = {
+      id: 'no-cwd-task',
+      name: 'No Cwd Task',
+      command: '/test',
+      cron: '* * * * *',
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const task = toScheduledTask(config);
+    expect('cwd' in task).toBe(false);
+  });
+
+  it('existing schedules without cwd load and behave as before', () => {
+    setup();
+    const raw = JSON.stringify([
+      {
+        id: 'legacy',
+        name: 'Legacy',
+        command: '/legacy',
+        cron: '0 1 * * *',
+        enabled: true,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ]);
+    writeFileSync(storePath, raw, 'utf-8');
+    const loaded = loadSchedules(storePath);
+    expect(loaded[0]?.cwd).toBeUndefined();
+    const task = toScheduledTask(loaded[0]!);
+    expect('cwd' in task).toBe(false);
+  });
+});

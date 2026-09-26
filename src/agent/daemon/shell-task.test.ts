@@ -346,3 +346,33 @@ describe('runShellTask – telemetry write', () => {
     expect(col.records[0]?.durationMs).toBe(250);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-task cwd support
+// ---------------------------------------------------------------------------
+
+describe('runShellTask – per-task cwd', () => {
+  it('runs the command in task.cwd when set', async () => {
+    const col = makeTelemetryCollector();
+    // `pwd -P` resolves symlinks so macOS /tmp → /private/tmp is handled.
+    const { realpathSync } = require('node:fs');
+    const targetDir = realpathSync(require('node:os').tmpdir());
+    const result = await runShellTask(
+      { taskId: 'task-cwd', command: 'pwd -P', cwd: targetDir },
+      'cron',
+      { now: Date.now.bind(Date), writeTelemetry: col.writeTelemetry },
+    );
+    expect(result.status).toBe('success');
+    expect((result.responseExcerpt ?? '').trim()).toBe(targetDir);
+  });
+
+  it('runs without cwd when task.cwd is absent (backward compat)', async () => {
+    const col = makeTelemetryCollector();
+    const result = await runShellTask(
+      { taskId: 'task-no-cwd', command: 'echo ok' },
+      'cron',
+      { now: Date.now.bind(Date), writeTelemetry: col.writeTelemetry },
+    );
+    expect(result.status).toBe('success');
+  });
+});

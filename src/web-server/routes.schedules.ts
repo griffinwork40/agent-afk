@@ -21,6 +21,7 @@ import {
   updateSchedule,
   type ScheduledTaskConfig,
 } from '../agent/daemon/schedule-store.js';
+import { validateScheduleCwd } from '../agent/daemon/cwd-validator.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE, parsePortFile } from '../agent/daemon/http-client.js';
 import { getTelemetryPath, getDaemonStateDir } from '../paths.js';
 import { sendJson } from './routes.js';
@@ -109,12 +110,25 @@ export async function handleCreateSchedule(
   }
   const enabled = bool(body, 'enabled') ?? true;
 
+  // Validate optional per-task cwd.
+  const rawCwd = str(body, 'cwd');
+  let resolvedCwd: string | undefined;
+  if (rawCwd !== undefined) {
+    const cwdResult = validateScheduleCwd(rawCwd);
+    if (!cwdResult.ok) {
+      sendJson(res, 400, { error: 'bad_request', message: cwdResult.error });
+      return;
+    }
+    resolvedCwd = cwdResult.resolved;
+  }
+
   const config = addSchedule({
     name,
     command,
     cron,
     trigger: trigger as ScheduledTaskConfig['trigger'],
     notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'],
+    ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
     enabled,
   });
 
@@ -191,6 +205,18 @@ export async function handleUpdateSchedule(
     }
   }
 
+  // Validate optional per-task cwd.
+  const rawCwd = str(body, 'cwd');
+  let resolvedCwd: string | undefined;
+  if (rawCwd !== undefined) {
+    const cwdResult = validateScheduleCwd(rawCwd);
+    if (!cwdResult.ok) {
+      sendJson(res, 400, { error: 'bad_request', message: cwdResult.error });
+      return;
+    }
+    resolvedCwd = cwdResult.resolved;
+  }
+
   const updated = updateSchedule(id, {
     ...(name !== undefined ? { name } : {}),
     ...(command !== undefined ? { command } : {}),
@@ -200,6 +226,7 @@ export async function handleUpdateSchedule(
     ...(executor !== undefined ? { executor: executor as ScheduledTaskConfig['executor'] } : {}),
     ...(notifyChat !== undefined ? { notifyChat } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
+    ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
   });
   if (!updated) {
     sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });

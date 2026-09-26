@@ -77,6 +77,13 @@ export interface ScheduledTask {
    * WHETHER to notify; this decides WHERE).
    */
   notifyChat?: number | string;
+  /**
+   * Per-task working directory (absolute path). When set, the spawned session's
+   * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Shell tasks honor this too: execFile receives it as the `cwd` option.
+   */
+  cwd?: string;
 }
 
 /**

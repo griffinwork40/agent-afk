@@ -19,6 +19,7 @@ import {
   toggleScheduleEnabled,
   toScheduledTask,
 } from '../../agent/daemon/schedule-store.js';
+import { validateScheduleCwd } from '../../agent/daemon/cwd-validator.js';
 import { getTelemetryPath } from '../../paths.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE } from '../../agent/daemon/http-client.js';
 
@@ -35,6 +36,7 @@ export function registerScheduleCommand(program: Command): void {
     .option('--executor <type>', 'agent | shell (default: agent)', 'agent')
     .option('--trigger <mode>', 'cron | sessionstart | both', 'cron')
     .option('--notify <when>', 'failure | always | never', 'failure')
+    .option('--cwd <path>', 'Per-task working directory (absolute path or ~/…)')
     .option('--disabled', 'Add in disabled state', false)
     .action(
       async (opts: {
@@ -44,6 +46,7 @@ export function registerScheduleCommand(program: Command): void {
         executor: string;
         trigger: string;
         notify: string;
+        cwd?: string;
         disabled: boolean;
       }) => {
         try {
@@ -53,6 +56,16 @@ export function registerScheduleCommand(program: Command): void {
             process.exitCode = 1;
             return;
           }
+          let resolvedCwd: string | undefined;
+          if (opts.cwd !== undefined) {
+            const cwdResult = validateScheduleCwd(opts.cwd);
+            if (!cwdResult.ok) {
+              console.error(`Error: ${cwdResult.error}`);
+              process.exitCode = 1;
+              return;
+            }
+            resolvedCwd = cwdResult.resolved;
+          }
           const config = addSchedule({
             name: opts.name,
             command: opts.command,
@@ -60,6 +73,7 @@ export function registerScheduleCommand(program: Command): void {
             ...(executor !== 'agent' ? { executor } : {}),
             trigger: opts.trigger as 'cron' | 'sessionstart' | 'both',
             notifyOn: opts.notify as 'failure' | 'always' | 'never',
+            ...(resolvedCwd !== undefined ? { cwd: resolvedCwd } : {}),
             enabled: !opts.disabled,
           });
           // Mirror the create_schedule tool handler: enabled tasks are
@@ -74,6 +88,7 @@ export function registerScheduleCommand(program: Command): void {
                 ...(config.executor !== undefined ? { executor: config.executor } : {}),
                 trigger: config.trigger,
                 notifyOn: config.notifyOn,
+                ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
               })
             : await trySyncToDaemon('DELETE', `/tasks/${config.id}`);
           if (!syncAdd.synced) console.error(`⚠️  ${SYNC_FAILED_NOTE}`);

@@ -36,6 +36,13 @@ export interface ScheduledTaskConfig {
   /** 5- or 6-field cron expression, e.g. "0 2 * * *". */
   cron: string;
   /**
+   * Per-task working directory (absolute path). When set, the spawned session's
+   * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Must be an existing directory; tilde (~) is expanded at save time.
+   */
+  cwd?: string;
+  /**
    * Execution strategy. Default: `'agent'` (spawn an AgentSession).
    * `'shell'` runs the command as a raw shell command with no agent session.
    * Builtins are not user-creatable -- they are registered internally.
@@ -193,6 +200,7 @@ export function updateSchedule(
     ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
     ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+    ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
     updatedAt: new Date().toISOString(),
   };
   schedules[idx] = updated;
@@ -255,5 +263,6 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
+    ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
   };
 }

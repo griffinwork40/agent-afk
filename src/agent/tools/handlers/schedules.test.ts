@@ -608,3 +608,95 @@ describe('live-sync surface (daemonSynced)', () => {
     }
   });
 });
+
+// ── per-task cwd ─────────────────────────────────────────────────────────────
+
+describe('create_schedule handler — cwd field', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-cwd-handler-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('accepts and stores a valid existing directory', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Cwd Task', command: '/t', cron: '0 2 * * *', cwd: tmpDir },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    // The schedule was persisted
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    const schedules = loadSchedules();
+    expect(schedules[0]?.cwd).toBe(tmpDir);
+  });
+
+  it('returns isError for a missing directory', async () => {
+    const result = await createScheduleHandler(
+      { name: 'Bad Cwd', command: '/t', cron: '0 2 * * *', cwd: '/nonexistent/dir/abc' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/does not exist/);
+  });
+
+  it('returns isError for a path that is a file', async () => {
+    const { writeFileSync: wfs } = await import('node:fs');
+    const { join: pjoin } = await import('node:path');
+    const file = pjoin(tmpDir, 'notadir.txt');
+    wfs(file, 'x');
+    const result = await createScheduleHandler(
+      { name: 'File Cwd', command: '/t', cron: '0 2 * * *', cwd: file },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/not a directory/);
+  });
+});
+
+describe('update_schedule handler — cwd field', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-cwd-update-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('patches cwd on an existing schedule', async () => {
+    // Create a schedule first
+    await createScheduleHandler(
+      { name: 'Patchable', command: '/t', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'patchable', cwd: tmpDir },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const { loadSchedules } = await import('../../daemon/schedule-store.js');
+    expect(loadSchedules()[0]?.cwd).toBe(tmpDir);
+  });
+
+  it('returns isError for invalid cwd on update', async () => {
+    await createScheduleHandler(
+      { name: 'Update Bad', command: '/t', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'update-bad', cwd: '/nonexistent/abc' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/does not exist/);
+  });
+});

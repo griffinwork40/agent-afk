@@ -263,3 +263,56 @@ describe('buildDaemonSessionFactory', () => {
     }
   });
 });
+
+describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
+  // Verifies that wireExecutors receives config.cwd (the per-task cwd set by
+  // session-spawn.ts) rather than the fixed daemon-wide opts.cwd. This is the
+  // load-bearing fix: subagents, skills, and compose nodes inherit the task cwd.
+  let tmpAfkHome: string;
+
+  beforeAll(() => {
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'dsf-cwd-'));
+    process.env['AFK_HOME'] = tmpAfkHome;
+  });
+
+  afterAll(() => {
+    delete process.env['AFK_HOME'];
+    rmSync(tmpAfkHome, { recursive: true, force: true });
+  });
+
+  it('wireExecutors gets config.cwd when it differs from opts.cwd', () => {
+    const daemonWideCwd = tmpAfkHome; // the "daemon-wide" cwd
+    const taskCwd = join(tmpdir()); // the per-task cwd (a different, real dir)
+    const factory = buildDaemonSessionFactory({
+      model: 'sonnet',
+      apiKey: TEST_API_KEY,
+      cwd: daemonWideCwd,
+    });
+    // Simulate session-spawn.ts setting cwd to taskCwd on the config:
+    const config = makeConfig({ cwd: taskCwd });
+    const session = factory(config);
+    const internals = session as unknown as { config?: AgentConfig };
+    const provider = internals.config?.provider as AnthropicDirectProvider;
+    const subExec = readSubagentExecutor(provider) as { ctx?: { cwd?: string } };
+    // The subagentExecutor's cwd must be the per-task cwd, not the daemon-wide one
+    expect(subExec.ctx?.cwd).toBe(taskCwd);
+    void session.close().catch(() => undefined);
+  });
+
+  it('wireExecutors falls back to opts.cwd when config.cwd is absent', () => {
+    const daemonWideCwd = tmpAfkHome;
+    const factory = buildDaemonSessionFactory({
+      model: 'sonnet',
+      apiKey: TEST_API_KEY,
+      cwd: daemonWideCwd,
+    });
+    // config.cwd not set — represents a task with no per-task cwd
+    const config = makeConfig();
+    const session = factory(config);
+    const internals = session as unknown as { config?: AgentConfig };
+    const provider = internals.config?.provider as AnthropicDirectProvider;
+    const subExec = readSubagentExecutor(provider) as { ctx?: { cwd?: string } };
+    expect(subExec.ctx?.cwd).toBe(daemonWideCwd);
+    void session.close().catch(() => undefined);
+  });
+});

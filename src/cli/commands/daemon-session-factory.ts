@@ -91,7 +91,13 @@ export function buildDaemonSessionFactory(
       // wireExecutors) and forked children fall back to the handoff contract.
       ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
       ...(opts.openaiBaseUrl !== undefined ? { openaiBaseUrl: opts.openaiBaseUrl } : {}),
-      ...(opts.cwd !== undefined ? { cwd: opts.cwd, nestedCwd: opts.cwd } : {}),
+      // Use the per-session config.cwd (set by session-spawn.ts to the resolved
+      // per-task cwd) rather than the daemon-wide opts.cwd, so subagents,
+      // skills, and compose nodes forked from a task session inherit the
+      // task's working directory — the core requirement for fixing grep/glob
+      // timeouts in cron tasks that pin to a repo.
+      // Precedence (already resolved by session-spawn.ts): task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+      ...(config.cwd !== undefined ? { cwd: config.cwd, nestedCwd: config.cwd } : (opts.cwd !== undefined ? { cwd: opts.cwd, nestedCwd: opts.cwd } : {})),
       ...(config.traceWriter !== undefined
         ? { traceWriter: config.traceWriter, skillTraceWriter: config.traceWriter }
         : {}),
