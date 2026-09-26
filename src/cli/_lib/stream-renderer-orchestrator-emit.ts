@@ -154,7 +154,10 @@ export function commitThinkingPhase(source: SourceState, ctx: OrchestratorCtx): 
     // digest mode yields a multi-line block (paragraph + stat) — commit it
     // atomically (one geometry decision) via commitBlockAbove; other modes
     // are a single stat line and take the direct commitAbove path.
+    // AFK_SMOKE_TEXT: a single stat line fades in live first and commits
+    // once settled (or before any later commit); see thought-summary-hold.ts.
     if (lines.length > 1) commitBlockAbove(ctx.compositor, lines);
+    else if (ctx.thoughtHold) ctx.thoughtHold.hold(lines[0] ?? '');
     else ctx.compositor.commitAbove(lines[0] ?? '');
   } else {
     for (const line of lines) ctx.out.line(line);

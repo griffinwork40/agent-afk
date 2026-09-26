@@ -562,6 +562,9 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   commitInFlight = false;
 
+  // One-shot hook consumed by the next scrollback write. See setCommitBarrier.
+  private commitBarrier: (() => void) | null = null;
+
   private readonly debugCompositor: boolean = !!env.AFK_DEBUG_COMPOSITOR;
 
   // ── Ghost-text (inline suggestion) state ────────────────────────────────
@@ -827,6 +830,7 @@ export class TerminalCompositor {
    * unconditionally in the dispose pipeline.
    */
   endTurn(): void {
+    this.runCommitBarrier();
     Lifecycle.endTurnFlush(this);
   }
 
@@ -837,7 +841,29 @@ export class TerminalCompositor {
    * the drain-ordering and suggest-engine-dispose invariants.
    */
   disarm(): void {
+    this.runCommitBarrier();
     Lifecycle.disarm(this);
+  }
+
+  /**
+   * Invariant (append-only scrollback ordering): an overlay producer that is
+   * HOLDING content destined for scrollback (shown live first, committed
+   * later) registers a barrier here. The compositor runs it exactly once,
+   * before the next commitAbove / endTurn / disarm, so the held content
+   * always lands in scrollback ABOVE anything committed after it was shown.
+   * The barrier is cleared BEFORE it runs, so the barrier may itself call
+   * commitAbove without recursing. Pass null to withdraw it (the holder
+   * committed on its own). At most one barrier: setting replaces.
+   */
+  setCommitBarrier(fn: (() => void) | null): void {
+    this.commitBarrier = fn;
+  }
+
+  private runCommitBarrier(): void {
+    const barrier = this.commitBarrier;
+    if (!barrier) return;
+    this.commitBarrier = null;
+    barrier();
   }
 
   setOverlay(text: string): void {
@@ -884,6 +910,9 @@ export class TerminalCompositor {
   // test suite reaches into it; these delegators forward to the module.
 
   commitAbove(text: string): void {
+    // Held content (see setCommitBarrier) commits first, so it stays above
+    // this text in scrollback.
+    this.runCommitBarrier();
     // Materialize any pending coalesced keystroke frame FIRST: commitAbove
     // clears + re-tracks the live frame region, and the on-screen input line
     // must reflect the current buffer (not a mid-burst intermediate) before it

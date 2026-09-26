@@ -14,6 +14,7 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry, TextEntry, Entry, Glyphs } from './tool-lane-render.js';
+import type { ElementFade } from '../../smoke-fade.js';
 import {
   buildIndent,
   clampLineToTerminal,
@@ -92,6 +93,58 @@ function isSilencedNestingHeader(child: ToolEntry, childMap: Map<string, Entry[]
   return grandchildren.every((gc) => gc.kind === 'tool' && isSilencedNestingHeader(gc, childMap));
 }
 
+/**
+ * Push the rows of one COMPLETED child in the live overlay: its head line with
+ * outcome, and its diff when it succeeded.
+ *
+ * @param lead               Colored indent + connector for the head row.
+ * @param continuationIndent Spine-aware indent for outcome continuation and
+ *                           diff rows (the "past-connector" column).
+ */
+function pushCompletedChildRows(
+  lines: string[],
+  child: ToolEntry,
+  result: NonNullable<ToolEntry['result']>,
+  lead: string,
+  continuationIndent: string,
+  cols: number,
+): void {
+  // formatOutcome may return multi-line content (hiddenLineCount +
+  // tailPreview). pushOutcomeLines splits on \n so continuation lines
+  // carry the spine-aware indent instead of the bare 4-space indent
+  // that formatOutcome embeds.
+  const headLine = lead + child.prefix + palette.dim(' — ') + doneGlyph(result.isError, result.failureClass) + ' ';
+  const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
+  pushOutcomeLines(lines, headLine, formatOutcome(result, undefined, outcomeBudget, child.toolName), continuationIndent, cols);
+  if (child.diff && !result.isError) {
+    // Clamp each diff body line to terminal width. Diff lines are
+    // model-controlled (file content) and routinely exceed `cols`;
+    // without clamping the terminal soft-wraps the overflow to column 0
+    // with no spine gutter, orphaning a flush-left continuation between
+    // siblings (the same orphan-wrap bug every other row-producing path
+    // here guards against). In the live overlay an unclamped wrap also
+    // desyncs the compositor's logical-line row accounting from
+    // log-update's wrap-aware count, making the block flicker on each
+    // repaint. Mirrors the clamp on the root-overlay diff path in
+    // tool-lane.ts.
+    for (const line of formatDiffBlock(child.diff, 'overlay', continuationIndent)) {
+      lines.push(clampLineToTerminal(line, cols));
+    }
+  }
+}
+
+/**
+ * Stable fade key for one overlay sibling, or null for synthetic rows that
+ * must never fade (overflow `··· +N`, result summaries). A group inherits its
+ * FIRST member's id, so collapsing already-visible rows into a `×N` group
+ * line never re-fades rows the user has already seen settle.
+ */
+function siblingFadeKey(item: { kind: string; toolUseId?: string; entries?: ToolEntry[] }): string | null {
+  if (item.kind === 'group') return item.entries?.[0]?.toolUseId ?? null;
+  if (item.kind === 'tool') return item.toolUseId ?? null;
+  return null;
+}
+
 function renderOverlayChildren(
   children: Entry[],
   childMap: Map<string, Entry[]>,
@@ -118,6 +171,9 @@ function renderOverlayChildren(
   // entry (turn-root / Agent head row), where the parent's column is instead
   // derived from which child-subtree we descend into. See the recursion below.
   parentIsLast?: boolean,
+  // AFK_SMOKE_TEXT whole-element fade (smoke-fade.ts), keyed per sibling so a
+  // tool call that joins a live subagent fades in on its own; null = off.
+  fade: ElementFade | null = null,
 ): void {
   // Plain (no-ANSI) indent: lead + ancestor slots + active spine column.
   // `.length` measures display cells correctly (composed of 3-cell units).
@@ -149,6 +205,7 @@ function renderOverlayChildren(
     // ancestor-isLast vector for any recursive call. Compare against the
     // active glyph set's lastConnector (Unicode `'╰─ '` or ASCII `'\\- '`).
     const isLast = rawConnector === g.lastConnector;
+    const firstRow = lines.length;
 
     if (item.kind === 'overflow') {
       lines.push(clampLineToTerminal(indentColored + connector + palette.dim('··· ') + palette.chrome('+' + item.count) + (item.text ? palette.dim('  ' + item.text) : ''), cols));
@@ -217,7 +274,7 @@ function renderOverlayChildren(
         // `isLast` down as the NEW `parentIsLast` so `child` itself is tracked
         // correctly one level deeper. `g` keeps one glyph set for the frame.
         const parentSlot = parentIsLast ?? isLast;
-        renderOverlayChildren(grandchildren, childMap, lines, cols, [...ancestorIsLast, parentSlot], g, isLast);
+        renderOverlayChildren(grandchildren, childMap, lines, cols, [...ancestorIsLast, parentSlot], g, isLast, fade);
         // Render the thinking-tail AFTER the grandchildren so the in-flight
         // narration sits below the subagent's tool calls (mirrors text-child
         // ordering below; matches the temporal order the model emitted them).
@@ -263,30 +320,7 @@ function renderOverlayChildren(
         // child will draw its own connector row from the current parent's
         // indented spine column — exactly what the caller renders next.
       } else if (child.result) {
-        // formatOutcome may return multi-line content (hiddenLineCount +
-        // tailPreview). pushOutcomeLines splits on \n so continuation lines
-        // carry the spine-aware indent instead of the bare 4-space indent
-        // that formatOutcome embeds.
-        const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
-        const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
-        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
-        const outcomeText = formatOutcome(child.result, undefined, outcomeBudget, child.toolName);
-        pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
-        if (child.diff && !child.result.isError) {
-          // Clamp each diff body line to terminal width. Diff lines are
-          // model-controlled (file content) and routinely exceed `cols`;
-          // without clamping the terminal soft-wraps the overflow to column 0
-          // with no spine gutter, orphaning a flush-left continuation between
-          // siblings (the same orphan-wrap bug every other row-producing path
-          // here guards against). In the live overlay an unclamped wrap also
-          // desyncs the compositor's logical-line row accounting from
-          // log-update's wrap-aware count, making the block flicker on each
-          // repaint. Mirrors the clamp on the root-overlay diff path in
-          // tool-lane.ts.
-          for (const line of formatDiffBlock(child.diff, 'overlay', continuationIndent)) {
-            lines.push(clampLineToTerminal(line, cols));
-          }
-        }
+        pushCompletedChildRows(lines, child, child.result, indentColored + connector, indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ', cols);
       } else {
         // Live elapsed counter appended to the prefix line (same row as the
         // connector + tool name). Computed at repaint time from child.startedAt;
@@ -314,6 +348,8 @@ function renderOverlayChildren(
         }
       }
     }
+    const fadeKey = fade && siblingFadeKey(item);
+    if (fadeKey) fade?.fadeLines(fadeKey, lines, firstRow);
   }
 
   // Text-child narration renders AFTER all tool children. A subagent's

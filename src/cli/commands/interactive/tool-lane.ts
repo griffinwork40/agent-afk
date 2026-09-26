@@ -16,6 +16,8 @@ import {
   type Entry,
 } from './tool-lane-render.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
+import type { ElementFade } from '../../smoke-fade.js';
+import { trailingCompletedRootToolName } from './tool-lane.queries.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
 import {
   ancestorDepthOf as ancestorDepthIn,
@@ -84,6 +86,13 @@ export class ToolLane {
    * `null` on non-TTY surfaces (no overlay to repaint) and in tests.
    */
   flash: ToolLaneFlash | null = null;
+
+  /**
+   * Optional AFK_SMOKE_TEXT whole-element fade for live rows. Set by
+   * `armSmokeEffects` (stream-renderer-smoke.ts) only when smoke is enabled;
+   * `null` otherwise, so the overlay renders exactly as before.
+   */
+  fade: ElementFade | null = null;
 
   /**
    * When `true`, completed subagent blocks are flushed to scrollback in
@@ -478,21 +487,11 @@ export class ToolLane {
    * behavior untouched.
    */
   peekTrailingCompletedRootToolName(): string | undefined {
-    for (let i = this.order.length - 1; i >= 0; i--) {
-      const id = this.order[i]!;
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool') continue; // skip non-tool entries
-      if (entry.agentContext) continue;              // skip nested (non-root) entries
-      // First flat root from the tail decides the verdict:
-      if (entry.result === undefined) return undefined;        // in-flight → don't hold
-      if (NESTING_TOOLS.has(entry.toolName)) return undefined; // nesting → own commit path
-      return entry.toolName;
-    }
-    return undefined;
+    return trailingCompletedRootToolName(this.entries, this.order);
   }
 
   getOverlay(): string {
-    return renderToolLaneOverlay(this.entries, this.order, this.activeTools, this.flash, MAX_OVERLAY_ROOTS);
+    return renderToolLaneOverlay(this.entries, this.order, this.activeTools, this.flash, MAX_OVERLAY_ROOTS, this.fade);
   }
 
   /**
