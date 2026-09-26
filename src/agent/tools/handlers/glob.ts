@@ -17,15 +17,18 @@ import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { isReadDenied } from './read-denylist.js';
+import { splitAbsolutePattern } from './glob-absolute.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 /**
- * Directory basenames pruned from recursion by default: VCS metadata and
- * dependency stores that are large and rarely the intended search target.
+ * Directory basenames pruned from recursion by default: VCS metadata,
+ * dependency stores, and `.afk-worktrees/` (managed agent worktrees: full repo
+ * copies that can dwarf the repo itself and made cwd-rooted walks take
+ * minutes). All are large and rarely the intended search target.
  * A caller opts back into any of these by naming it as a literal (non-glob)
  * segment of the pattern (e.g. `node_modules/**\/*.js`).
  */
-const DEFAULT_PRUNE_DIRS = new Set(['node_modules', '.git', '.hg', '.svn']);
+const DEFAULT_PRUNE_DIRS = new Set(['node_modules', '.git', '.hg', '.svn', '.afk-worktrees']);
 
 /**
  * Extract the literal (no `*`/`?`) path segments of a glob pattern. These are
@@ -145,7 +148,7 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
         }
 
         // Recurse into directories to find deeper matches, but skip the
-        // default-pruned dirs (node_modules/.git/.hg/.svn) unless the caller
+        // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
         // named them literally in the pattern. The search root itself is
         // never pruned here (it is walked directly, not as a child entry).
         if (entry.isDirectory()) {
@@ -208,22 +211,29 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   }
 
   const obj = input as GlobInput;
-  const pattern = obj.pattern;
+  const rawPattern = obj.pattern;
   // Effective cwd priority:
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
   // 2. context?.cwd — per-call back-compat alias
   // 3. factory-level cwd — session worktree isolation
   // 4. process.cwd() fallback
-  const rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+  let rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
 
   // Validate required field
-  if (typeof pattern !== 'string') {
+  if (typeof rawPattern !== 'string') {
     return { content: 'Invalid input: pattern must be a string', isError: true };
   }
 
-  if (pattern.trim() === '') {
+  if (rawPattern.trim() === '') {
     return { content: 'Invalid input: pattern cannot be empty', isError: true };
   }
+
+  // An absolute pattern can never match the walker's relative entries; walk
+  // from its literal prefix instead (still containment-checked below) and
+  // report absolute paths so results stay unambiguous.
+  const absolute = splitAbsolutePattern(rawPattern);
+  const pattern = absolute ? absolute.pattern : rawPattern;
+  if (absolute) rawPath = absolute.base;
 
   // Validate optional field
   if (typeof rawPath !== 'string') {
@@ -248,12 +258,13 @@ export function createGlobHandler(cwd?: string): ToolHandler {
     }
 
     // Collect matching files
-    const matches = await collectMatches(basePath, pattern);
+    const relMatches = await collectMatches(basePath, pattern);
+    const matches = absolute ? relMatches.map((m) => path.join(basePath, m)) : relMatches;
 
     // No matches
     if (matches.length === 0) {
       return {
-        content: `No files matched pattern '${pattern}' in ${basePath}`,
+        content: `No files matched pattern '${rawPattern}' in ${basePath}`,
       };
     }
 
