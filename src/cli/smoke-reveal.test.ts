@@ -44,7 +44,14 @@ describe('segmentAnsi', () => {
     const segs = segmentAnsi(s);
     expect(segs.map((x) => x.text).join('')).toBe(s);
     const chars = segs.filter((x) => x.kind === 'char' && !x.ws).map((x) => x.text);
-    expect(chars).toEqual(['a', 'b', 'l', 'i', 'n', 'k', '😀', 'e']);
+    expect(chars).toEqual(['a', 'b', 'l', 'i', 'n', 'k', '😀', 'e\u0301']);
+  });
+
+  it('keeps multi-code-point grapheme clusters (ZWJ, skin tone, flags) as one segment', () => {
+    const s = 'a👩‍💻b👍🏽c👨‍👩‍👧🇺🇸';
+    const chars = segmentAnsi(s).filter((x) => x.kind === 'char').map((x) => x.text);
+    expect(chars).toEqual(['a', '👩‍💻', 'b', '👍🏽', 'c', '👨‍👩‍👧', '🇺🇸']);
+    expect(countVisible(s)).toBe(7);
   });
 
   it('swallows an unterminated OSC so URL bytes never count as visible', () => {
@@ -90,7 +97,7 @@ describe('SmokeReveal', () => {
   it('never changes the rendered column width at any point in the fade', () => {
     const c = clockAt();
     const r = new SmokeReveal(() => {}, c.now);
-    const text = 'wide 漢字 and emoji 😀 plus \u001b[1mbold\u001b[22m tail';
+    const text = 'wide 漢字 and emoji 😀 👩‍💻 👍🏽 👨‍👩‍👧 plus \u001b[1mbold\u001b[22m tail';
     r.record(stripAnsi(text));
     for (let t = 0; t <= SETTLED; t += 11) {
       expect(stringWidth(r.apply(text)), `t=${t}`).toBe(stringWidth(text));

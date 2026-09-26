@@ -7,9 +7,12 @@
  * Contract: `segmentAnsi(s)` returns segments that concatenate back to `s`
  * byte-for-byte. A `raw` segment is anything that occupies no cell of its
  * own (CSI/SGR escapes, OSC sequences such as OSC 8 hyperlinks, lone ESC
- * pairs, zero-width combining marks). A `char` segment is exactly one code
- * point that paints a cell; `ws` marks whitespace (spaces, newlines), which
- * the mask never animates and never counts.
+ * pairs, a stray zero-width mark). A `char` segment is exactly one GRAPHEME
+ * CLUSTER, never a bare code point: `👩‍💻`, `👍🏽`, and `é` (e + U+0301) are
+ * each one segment, so the mask reveals and width-reserves them as a unit
+ * (splitting a ZWJ sequence would make an unrevealed `👩‍💻` reserve 4 columns
+ * instead of 2). `ws` marks whitespace (spaces, newlines), which the mask
+ * never animates and never counts.
  *
  * @module cli/smoke-reveal.ansi
  */
@@ -23,8 +26,17 @@ const BEL = '\u0007';
 /** CSI: ESC [ params intermediates final-byte. */
 const CSI_RE = /^\u001b\[[0-?]*[ -/]*[@-~]/;
 /** Zero-width code points: combining marks, ZWJ/ZWNJ, variation selectors. */
-const ZERO_WIDTH_RE = /^[\p{M}\u200B-\u200D\uFE00-\uFE0F]$/u;
-const WS_RE = /^\s$/u;
+const ZERO_WIDTH_RE = /^[\p{M}\u200B-\u200D\uFE00-\uFE0F]+$/u;
+const WS_RE = /^\s+$/u;
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** Push the grapheme clusters of an escape-free text run onto `out`. */
+function pushText(out: AnsiSegment[], text: string): void {
+  for (const { segment } of graphemes.segment(text)) {
+    if (ZERO_WIDTH_RE.test(segment)) out.push({ kind: 'raw', text: segment });
+    else out.push({ kind: 'char', text: segment, ws: WS_RE.test(segment) });
+  }
+}
 
 /** Length of the escape sequence starting at `i` (which holds ESC). */
 function escapeLength(s: string, i: number): number {
@@ -45,31 +57,31 @@ function escapeLength(s: string, i: number): number {
   return next === undefined ? 1 : 2;
 }
 
-/** Segment `s` into escape/zero-width runs and single visible code points. */
+/** Segment `s` into escape runs and single visible grapheme clusters. */
 export function segmentAnsi(s: string): AnsiSegment[] {
   const out: AnsiSegment[] = [];
   let i = 0;
+  let textStart = 0;
   while (i < s.length) {
-    if (s[i] === ESC) {
-      const len = escapeLength(s, i);
-      out.push({ kind: 'raw', text: s.slice(i, i + len) });
-      i += len;
+    if (s[i] !== ESC) {
+      i++;
       continue;
     }
-    const cp = s.codePointAt(i) ?? 0;
-    const ch = String.fromCodePoint(cp);
-    i += ch.length;
-    if (ZERO_WIDTH_RE.test(ch)) out.push({ kind: 'raw', text: ch });
-    else out.push({ kind: 'char', text: ch, ws: WS_RE.test(ch) });
+    if (i > textStart) pushText(out, s.slice(textStart, i));
+    const len = escapeLength(s, i);
+    out.push({ kind: 'raw', text: s.slice(i, i + len) });
+    i += len;
+    textStart = i;
   }
+  if (textStart < s.length) pushText(out, s.slice(textStart));
   return out;
 }
 
-/** Number of non-whitespace code points in plain text (no escapes expected). */
+/** Number of non-whitespace grapheme clusters in plain text (no escapes expected). */
 export function countVisible(text: string): number {
   let n = 0;
-  for (const ch of text) {
-    if (!WS_RE.test(ch) && !ZERO_WIDTH_RE.test(ch)) n++;
+  for (const { segment } of graphemes.segment(text)) {
+    if (!WS_RE.test(segment) && !ZERO_WIDTH_RE.test(segment)) n++;
   }
   return n;
 }

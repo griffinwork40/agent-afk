@@ -113,6 +113,34 @@ describe('StreamingMarkdownRenderer with AFK_SMOKE_TEXT', () => {
     await r.flush();
   });
 
+  it('skips the mask on a height-truncated render (its end is not the newest text)', async () => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    const rowsDesc = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
+    Object.defineProperty(process.stdout, 'rows', { value: 6, configurable: true });
+    try {
+      // Far more text than 6 - 2 rows: the render keeps only the first rows.
+      const long = Array.from({ length: 12 }, (_, i) => `line ${i} of a long paragraph`).join('\n');
+      vi.stubEnv('AFK_SMOKE_TEXT', '');
+      const base = makeRenderer();
+      base.r.push(long);
+      await vi.advanceTimersByTimeAsync(5);
+      const baseline = base.overlays.at(-1);
+      base.r.dispose();
+
+      vi.stubEnv('AFK_SMOKE_TEXT', '1');
+      const { r, overlays } = makeRenderer();
+      r.push(long);
+      await vi.advanceTimersByTimeAsync(5);
+      expect(baseline, 'render must actually be truncated').toBeDefined();
+      expect((baseline ?? '').split('\n').length).toBe(4);
+      expect(overlays.at(-1), 'truncated render must be unmasked').toBe(baseline);
+      await r.flush();
+    } finally {
+      if (rowsDesc) Object.defineProperty(process.stdout, 'rows', rowsDesc);
+      else delete (process.stdout as { rows?: number }).rows;
+    }
+  });
+
   it('flush() and dispose() stop the settle driver', async () => {
     vi.stubEnv('AFK_SMOKE_TEXT', '1');
     const { r, overlays } = makeRenderer();

@@ -1,7 +1,7 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
-import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable } from './markdown-stream-format.js';
+import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable, pendingRowCap } from './markdown-stream-format.js';
 import { contentMargin } from './render/measure.js';
 import { SmokeReveal, isSmokeTextEnabled } from './smoke-reveal.js';
 import {
@@ -211,8 +211,11 @@ export class StreamingMarkdownRenderer {
     let formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
     // Smoke-text reveal: prose only. Code fences and table previews keep
     // their dimmed live view (the table's box-drawing would otherwise read
-    // as the "youngest" characters).
-    if (this.smoke && formatted && !inCode && !isInOpenTable(this.buffer)) {
+    // as the "youngest" characters). A height-truncated render is skipped
+    // too: it keeps only the first rows, so its end is NOT the newest text,
+    // and the distance-from-end mask would re-smoke settled on-screen text.
+    const truncated = formatted.split('\n').length >= pendingRowCap();
+    if (this.smoke && formatted && !inCode && !truncated && !isInOpenTable(this.buffer)) {
       formatted = this.smoke.apply(formatted);
     }
     // Content centering (AFK_CENTER_CONTENT): live pending prose is part of

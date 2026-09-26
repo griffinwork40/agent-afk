@@ -92,12 +92,22 @@ export function formatPendingBuffer(
   // can expand a single long line into multiple physical rows.
   // The per-branch caps in previewCodeFence/previewTable guard their own
   // content pre-wrap; this is the uniform post-wrap ceiling.
-  const viewportRows = Math.max(1, getTerminalHeight() - 2);
+  const viewportRows = pendingRowCap();
   const lines = wrapped.split('\n');
   if (lines.length > viewportRows) {
     return lines.slice(0, viewportRows).join('\n');
   }
   return wrapped;
+}
+
+/**
+ * Maximum physical rows the pending overlay may occupy (the viewport height
+ * minus the input/footer rows). `formatPendingBuffer` keeps only the FIRST
+ * this-many rows of an over-tall pending block, so callers that depend on the
+ * render ending with the newest text (the smoke-text mask) must check it.
+ */
+export function pendingRowCap(): number {
+  return Math.max(1, getTerminalHeight() - 2);
 }
 
 /**
