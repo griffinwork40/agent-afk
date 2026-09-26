@@ -470,7 +470,6 @@ export function scanAllPluginRoots(opts?: CollectSkillEntriesOptions): SdkPlugin
  * await from every surface bootstrap, a no-op for already-loaded entrypoints,
  * and non-fatal per plugin. A subagent inherits the parent process's registry,
  * so calling it again in a child is a safe no-op.
- *
  */
 export async function ensurePluginEntrypointsLoaded(): Promise<void> {
   // Inject the host's runtime API so a code-backed plugin's default-export

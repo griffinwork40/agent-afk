@@ -92,21 +92,59 @@ const pluginHooks = new Set<{
   options?: RegisterOptions;
 }>();
 
+/**
+ * Keys from {@link RegisterOptions} that a plugin is allowed to set.
+ * `longRunning: true` disables the per-handler timeout and is reserved for
+ * first-party handlers that await human input (e.g. path-approval). Plugins
+ * that set it would prevent session boot on a throw, violating the module
+ * invariant at :10-11. All other unknown future options are also stripped.
+ */
+const PLUGIN_REGISTER_OPTION_ALLOWLIST = ['longRunning'] as const satisfies ReadonlyArray<keyof RegisterOptions>;
+type PluginRegisterOptions = Omit<RegisterOptions, (typeof PLUGIN_REGISTER_OPTION_ALLOWLIST)[number]>;
+
+/**
+ * Filter plugin-supplied {@link RegisterOptions} to the allowed subset.
+ * `longRunning` is stripped: it disables the per-handler timeout and must
+ * never be set by untrusted plugin code.
+ */
+function sanitizePluginOptions(options: RegisterOptions | undefined): PluginRegisterOptions | undefined {
+  if (options === undefined) return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { longRunning: _stripped, ...safe } = options;
+  return Object.keys(safe).length > 0 ? safe : undefined;
+}
+
 /** Scoped capability injected into PluginApi at process boot. */
 export const registerPluginHook: NonNullable<PluginApi['registerHook']> = (event, handler, options) => {
-  const declaration = { event, handler, ...(options !== undefined ? { options } : {}) };
+  const safeOptions = sanitizePluginOptions(options);
+  const declaration = { event, handler, ...(safeOptions !== undefined ? { options: safeOptions } : {}) };
   pluginHooks.add(declaration);
   return () => { pluginHooks.delete(declaration); };
 };
 
-/** Install declarations on a newly built session registry before session construction. */
+/**
+ * Install declarations on a newly built session registry before session
+ * construction. Each plugin handler is wrapped in error isolation: a throw
+ * from a plugin hook is caught, logged, and treated as a no-op `{}` result.
+ * This upholds the module invariant (:10-11): a misbehaving plugin must never
+ * abort session boot.
+ */
 export function installPluginHooks(registry: HookRegistry): void {
   for (const { event, handler, options } of pluginHooks) {
-    registry.register(event, handler, options);
+    const isolated: typeof handler = async (ctx) => {
+      try {
+        return await (handler as (c: typeof ctx) => Promise<ReturnType<typeof handler>>)(ctx);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[plugin-hook] handler threw — degrading to no-op', err);
+        return {};
+      }
+    };
+    registry.register(event, isolated, options);
   }
 }
 
-/** Clear the loaded-entrypoint set. For tests and `/reload-plugins`. */
+/** Clear the loaded-entrypoint set and plugin-hook declarations. For tests only. */
 export function _resetLoadedEntrypoints(): void {
   loadedEntrypoints.clear();
   pluginHooks.clear();

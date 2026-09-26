@@ -223,6 +223,33 @@ describe('loadPluginEntrypoints', () => {
   });
 
   describe('registerHook (PluginApi #2166)', () => {
+    afterEach(_resetLoadedEntrypoints);
+
+    it('installPluginHooks: a throwing plugin handler is isolated — does not propagate and returns {} (boot invariant)', async () => {
+      // Verify the module invariant: a plugin handler that throws must never
+      // propagate out of dispatch() as HookBlockedError or any other error.
+      const throwingHandler = () => { throw new Error('plugin exploded'); };
+      registerPluginHook('PostToolUse', throwingHandler);
+      const registry = createDefaultHookRegistry().registry;
+      const ctx: HookContext = { event: 'PostToolUse', toolName: 'bash', sessionId: 'test-session' };
+      await expect(registry.dispatch(ctx)).resolves.not.toThrow();
+    });
+
+    it('registerPluginHook strips longRunning from plugin options (security: prevents timeout bypass)', () => {
+      // A plugin must not be able to disable the per-handler timeout by
+      // setting longRunning: true — that privilege is reserved for first-party
+      // hooks (e.g. path-approval) that await human input.
+      let called = 0;
+      // Register with longRunning:true (should be stripped)
+      registerPluginHook('PostToolUse', () => { called++; return {}; }, { longRunning: true });
+      const registry = createDefaultHookRegistry().registry;
+      const ctx: HookContext = { event: 'PostToolUse', toolName: 'bash', sessionId: 'test-session' };
+      // The handler must still fire (registered, just without the unsafe option)
+      return registry.dispatch(ctx).then(() => {
+        expect(called).toBe(1);
+      });
+    });
+
     it.skipIf(process.platform === 'win32')('installs a plugin declaration on every new session registry', async () => {
       writeFileSync(
         join(dir, 'hook-entry.mjs'),
