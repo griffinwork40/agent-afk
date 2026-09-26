@@ -67,7 +67,7 @@ export interface ViewportLayout {
  * Truncate an overlay to `budget` rows while preserving the head (root anchor
  * context) and tail (most recently active content).
  *
- * When the overlay fits in the budget it is returned unchanged. When it must
+ * When `lines.length <= budget` the array is returned unchanged. When it must
  * be shortened:
  *
  * - `budget <= 3`: fall back to a plain tail-slice (too little room to split).
@@ -85,10 +85,10 @@ export function truncateOverlayPreservingHead(lines: string[], budget: number): 
   if (budget <= 3) return budget === 0 ? [] : lines.slice(-budget);
   const headCount = Math.min(5, Math.max(1, Math.floor(budget * 0.25)));
   // 1 row for the indicator; rest goes to tail.
+  // tailCount >= 2 for any budget >= 4: headCount >= 1, so budget - 1 - 1 >= 2.
   const tailCount = budget - headCount - 1;
-  if (tailCount <= 0) return lines.slice(-budget);
   const hidden = lines.length - headCount - tailCount;
-  const indicator = palette.dim(`      ${hidden} earlier lines hidden`);
+  const indicator = palette.dim(`      ${hidden} earlier ${hidden === 1 ? 'line' : 'lines'} hidden`);
   return [...lines.slice(0, headCount), indicator, ...lines.slice(-tailCount)];
 }
 

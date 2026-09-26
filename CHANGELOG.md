@@ -11,6 +11,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.249.3] - 2026-09-25
+
+### Fixed
+- clean up non-blocking review findings from #2176 (#2201) (d1cecd53)
+- isMain fails on URL-encoded install paths; use fileURLToPath; comment cleanups (#2205) (fac6d59c)
+
+## [5.249.2] - 2026-09-25
+
+### Fixed
+- spine-continuation separator between compose/skill sibling bands (#2196) (931e368a)
+
+## [5.249.1] - 2026-09-25
+
+### Fixed
+- add GPT-5.6 and GPT-6 model prices (#2200) (789a5a0f)
+- only restart launchd services on global installs (#2195) (c91d81b1)
+
 ## [5.249.0] - 2026-09-25
 
 ### Added

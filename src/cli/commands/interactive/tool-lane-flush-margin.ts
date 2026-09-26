@@ -79,9 +79,22 @@ export function joinOverlayLines(lines: string[]): string {
  * the full margin.
  *
  * Returns the input array unchanged when centering is off.
+ *
+ * ### Per-line semantics
+ *
+ * Each element of `lines` may be a multi-line string (e.g. `childBlock` from
+ * `ToolLane.flushSource` joins an agent's tree rows with `\n`). The indent is
+ * applied to every non-empty physical LINE within each element — not to the
+ * element string as a whole — so that interior rows after the first also
+ * receive the indent. Empty lines (including standalone `''` separator
+ * elements at root depth) are passed through unchanged. The element count and
+ * element boundaries of the array are preserved so callers that rely on them
+ * (e.g. `commitSubagentBlock` peeling a trailing `''`) remain correct.
  */
 export function indentForScrollback(lines: readonly string[]): readonly string[] {
   if (contentMargin().length === 0) return lines;
-  return lines.map(l => l === '' ? l : TOOL_LANE_INDENT + l);
+  return lines.map(el =>
+    el.split('\n').map(l => l === '' ? l : TOOL_LANE_INDENT + l).join('\n'),
+  );
 }
 
