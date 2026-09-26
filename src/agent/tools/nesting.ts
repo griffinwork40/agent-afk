@@ -290,8 +290,8 @@ export function createChildProviderFactory(
     }
     // Child sessions may call memory_search AND memory_update (target:"fact").
     // Writing to target:"hot" (HOT.md, injected into every future session's system
-    // prompt) is blocked at runtime by the createChildMemoryHotBlockHook PreToolUse
-    // hook — so the schema can be present without opening the hot-write path.
+    // prompt) is rejected structurally by guardChildHotWrites (keyed on readOnlyState,
+    // no hook registry required); createChildMemoryHotBlockHook is a first-party backstop.
     return new AnthropicDirectProvider({
       ...providerOpts,
       ...(opts.workspaceStore !== undefined ? { workspaceStore: opts.workspaceStore } : {}),

@@ -43,7 +43,7 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import { createMemoryHandlers } from '../../memory/index.js';
+import { createMemoryHandlers, guardChildHotWrites } from '../../memory/index.js';
 import { createGetRuntimeStateHandler } from '../../awareness/index.js';
 import { resolveSessionHookRegistry } from '../../hooks.js';
 import {
@@ -174,15 +174,13 @@ export function buildDispatcher(
   opts?: BuildDispatcherOptions,
 ): SessionToolDispatcher {
   const handlers = createBuiltinHandlers(permissionMode, opts?.cwd);
-  const memoryHandlers = createMemoryHandlers(
-    deps.memoryStore,
-    undefined,
-    deps.surface,
+  // Child sessions (readOnlyState) get memory_update with target:"hot" rejected
+  // structurally by guardChildHotWrites — independent of any hook registry.
+  const memoryHandlers = guardChildHotWrites(
+    createMemoryHandlers(deps.memoryStore, undefined, deps.surface),
+    deps.readOnlyState,
   );
   // Recon sessions (readOnlyMemory=true): register only `memory_search`.
-  // Child sessions (readOnlyMemory=false) get all handlers — the hot-write
-  // guard is enforced at PreToolUse time by createChildMemoryHotBlockHook,
-  // not by omitting the handler.
   for (const [name, handler] of memoryHandlers) {
     if (deps.readOnlyMemory && name !== 'memory_search') continue;
     handlers.set(name, handler);

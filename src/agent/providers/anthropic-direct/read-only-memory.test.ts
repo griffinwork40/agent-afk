@@ -540,4 +540,52 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     // The hook blocks the hot write — the dispatcher must set is_error: true.
     expect(toolResult!.is_error).toBe(true);
   });
+
+  it('child hot write is rejected structurally even with NO hook registry (library-embedder path)', async () => {
+    // Regression for the #2093 re-review: the PreToolUse hook only runs when a
+    // hookRegistry reaches the dispatcher. Library embedders (query()/AgentSession)
+    // may omit it, so guardChildHotWrites must reject target:"hot" on its own.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fromArray(
+          makeToolUseStream(
+            'tool_hot_noreg',
+            'memory_update',
+            JSON.stringify({ target: 'hot', action: 'set', content: 'PWNED-BY-CHILD' }),
+          ),
+        );
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    const factory = createChildProviderFactory();
+    const provider = factory({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      childExecutor: { execute: vi.fn() } as any,
+    });
+    const query = provider.query({
+      prompt: singleInput('please write to hot memory'),
+      // No hookRegistry on purpose.
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', parentSessionId: 'parent-session-x' },
+    });
+    await drainQuery(query);
+
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+    const messages = (messagesCreateMock.mock.calls[1]![0] as {
+      messages?: Array<{ role: string; content: ContentBlockParam[] | string }>;
+    }).messages;
+    const lastUser = [...(messages ?? [])].reverse().find((m) => m.role === 'user');
+    const blocks = Array.isArray(lastUser!.content) ? (lastUser!.content as ContentBlockParam[]) : [];
+    const toolResult = blocks.find(
+      (b) =>
+        (b as { type?: string }).type === 'tool_result' &&
+        (b as { tool_use_id?: string }).tool_use_id === 'tool_hot_noreg',
+    ) as { is_error?: boolean; content?: unknown } | undefined;
+
+    expect(toolResult).toBeDefined();
+    expect(toolResult!.is_error).toBe(true);
+    expect(JSON.stringify(toolResult!.content)).toContain('may not write target:\\"hot\\"');
+  });
 });

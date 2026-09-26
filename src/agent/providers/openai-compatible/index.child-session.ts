@@ -40,15 +40,3 @@ export function isStateRestricted(
 ): boolean {
   return readOnlyMemory === true || readOnlyState === true;
 }
-
-/**
- * Returns true when the read-only memory-prompt variant should be used.
- * Child sessions (`readOnlyState`) can write facts but not hot memory, so
- * they receive the same constrained prompt as fully read-only sessions.
- */
-export function isMemoryRestricted(
-  readOnlyMemory: boolean | undefined,
-  readOnlyState: boolean | undefined,
-): boolean {
-  return (readOnlyMemory ?? false) || (readOnlyState ?? false);
-}
