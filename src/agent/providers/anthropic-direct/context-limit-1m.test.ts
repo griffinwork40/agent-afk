@@ -113,7 +113,7 @@ describe('getContextUsage — 1M-context aliases', () => {
     // The wire model surfaced to the Messages API must be the resolved id,
     // never the alias (which would 404).
     const info = await firstSessionInfo(query);
-    expect(info.model).toBe('claude-opus-5');
+    expect(info.model).toBe('claude-opus-5-5');
     expect((await query.getContextUsage()).maxTokens).toBe(1_000_000);
   });
 });
