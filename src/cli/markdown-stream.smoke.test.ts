@@ -141,6 +141,51 @@ describe('StreamingMarkdownRenderer with AFK_SMOKE_TEXT', () => {
     }
   });
 
+  it('discardPending() clears the overlay and allows new text to smoke independently', async () => {
+    // Verifies the observable contract of discardPending() in smoke mode:
+    //   1. After discard, the live overlay is cleared immediately.
+    //   2. New text pushed after the discard enters smoke from a clean state.
+    //   3. The new text eventually settles to smoke-free without a new push.
+    //
+    // Falsifiability note: smoke?.reset() cancels the SmokeReveal settle
+    // timer and clears burst history. However, through this integration
+    // surface it cannot be falsified by removing that single line because:
+    //   - executeRepaint() returns early when buffer is '' (so cancelled vs.
+    //     still-running timer produces identical overlay output);
+    //   - old bursts are naturally pruned by prune(t) once SETTLED ms pass,
+    //     leaving nextBirth in the past, so new text gets fresh birth times
+    //     regardless of reset().
+    // The observable assertions below verify what CAN be confirmed without
+    // private-field access: overlay cleared on discard, fresh smoke on new
+    // text, eventual settle.
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    const { r, overlays } = makeRenderer();
+
+    // Phase 1 — push first text; confirm smoke is live within the first tick.
+    r.push('First chunk of text before discard');
+    await vi.advanceTimersByTimeAsync(40);
+    expect(hasSmoke(overlays.at(-1) ?? ''), 'should be smoking before discard').toBe(true);
+
+    // Phase 2 — discard. The live overlay must be cleared (empty string pushed).
+    r.discardPending();
+    // discardPending() calls clearOverlay() synchronously, which calls
+    // compositor.setOverlay('') — so the last overlay entry is now ''.
+    expect(overlays.at(-1), 'overlay must be cleared synchronously on discard').toBe('');
+
+    // Phase 3 — advance well past the old burst's full settle window; then
+    // push new text. It must enter smoke on its own fresh timeline.
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS + LIFETIME_MS + 200);
+    r.push('Brand new text after discard');
+    await vi.advanceTimersByTimeAsync(40);
+    expect(hasSmoke(overlays.at(-1) ?? ''), 'new text must smoke independently').toBe(true);
+
+    // Phase 4 — settle the new text; the overlay must eventually become smoke-free.
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS + LIFETIME_MS + 200);
+    expect(hasSmoke(overlays.at(-1) ?? ''), 'new text must settle to smoke-free').toBe(false);
+
+    await r.flush();
+  });
+
   it('flush() and dispose() stop the settle driver', async () => {
     vi.stubEnv('AFK_SMOKE_TEXT', '1');
     const { r, overlays } = makeRenderer();

@@ -38,6 +38,23 @@ function pushText(out: AnsiSegment[], text: string): void {
   }
 }
 
+/**
+ * Scan forward from `j` (the first payload byte of an ST-terminated sequence)
+ * looking for the String Terminator `ESC \`. Returns the total sequence length
+ * from `i` (the ESC that opened the sequence). If unterminated, swallows the
+ * rest of the string so payload bytes never leak into the visible-char count.
+ *
+ * OSC also accepts BEL as an alternative terminator per xterm; all other
+ * ST-terminated types (DCS, SOS, PM, APC) use ST only.
+ */
+function swallowToST(s: string, i: number, j: number, acceptBEL: boolean): number {
+  for (; j < s.length; j++) {
+    if (acceptBEL && s[j] === BEL) return j - i + 1;
+    if (s[j] === ESC && s[j + 1] === '\\') return j - i + 2;
+  }
+  return s.length - i;
+}
+
 /** Length of the escape sequence starting at `i` (which holds ESC). */
 function escapeLength(s: string, i: number): number {
   const next = s[i + 1];
@@ -45,14 +62,11 @@ function escapeLength(s: string, i: number): number {
     const m = CSI_RE.exec(s.slice(i));
     return m ? m[0].length : 2;
   }
-  if (next === ']') {
-    // OSC runs until BEL or ST (ESC \). Unterminated: swallow the rest so a
-    // truncated hyperlink never leaks its URL bytes into the visible count.
-    for (let j = i + 2; j < s.length; j++) {
-      if (s[j] === BEL) return j - i + 1;
-      if (s[j] === ESC && s[j + 1] === '\\') return j - i + 2;
-    }
-    return s.length - i;
+  // OSC (ESC ]): terminated by BEL or ST per xterm.
+  if (next === ']') return swallowToST(s, i, i + 2, /* acceptBEL */ true);
+  // DCS (ESC P), SOS (ESC X), PM (ESC ^), APC (ESC _): terminated by ST only.
+  if (next === 'P' || next === 'X' || next === '^' || next === '_') {
+    return swallowToST(s, i, i + 2, /* acceptBEL */ false);
   }
   return next === undefined ? 1 : 2;
 }

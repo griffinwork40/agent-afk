@@ -59,6 +59,49 @@ describe('segmentAnsi', () => {
     expect(segs.filter((x) => x.kind === 'char').map((x) => x.text).join('')).toBe('ok');
   });
 
+  // DCS / APC / PM / SOS — terminated by ST (ESC \), not BEL.
+  it('DCS sequence forms one raw segment and contributes zero visible chars', () => {
+    // ESC P <payload> ESC \  surrounded by visible text.
+    const s = 'a\u001bPq#1oo!\u001b\\b';
+    const segs = segmentAnsi(s);
+    expect(segs.map((x) => x.text).join('')).toBe(s); // byte-for-byte round-trip
+    const rawTexts = segs.filter((x) => x.kind === 'raw').map((x) => x.text);
+    // The entire DCS block is a single raw segment.
+    expect(rawTexts).toContain('\u001bPq#1oo!\u001b\\');
+    const visible = segs.filter((x) => x.kind === 'char' && !x.ws).map((x) => x.text);
+    expect(visible).toEqual(['a', 'b']);
+  });
+
+  it('APC sequence forms one raw segment and contributes zero visible chars', () => {
+    const s = 'x\u001b_some apc data\u001b\\y';
+    const segs = segmentAnsi(s);
+    expect(segs.map((x) => x.text).join('')).toBe(s); // byte-for-byte round-trip
+    const rawTexts = segs.filter((x) => x.kind === 'raw').map((x) => x.text);
+    expect(rawTexts).toContain('\u001b_some apc data\u001b\\');
+    const visible = segs.filter((x) => x.kind === 'char' && !x.ws).map((x) => x.text);
+    expect(visible).toEqual(['x', 'y']);
+  });
+
+  it('unterminated DCS swallows the rest and round-trips', () => {
+    const s = 'hi\u001bPunterminated payload with no ST';
+    const segs = segmentAnsi(s);
+    expect(segs.map((x) => x.text).join('')).toBe(s); // byte-for-byte round-trip
+    const visible = segs.filter((x) => x.kind === 'char' && !x.ws).map((x) => x.text);
+    expect(visible).toEqual(['h', 'i']); // payload bytes must not be visible
+  });
+
+  it('DCS does NOT treat BEL as a terminator (only ST ends it)', () => {
+    // BEL inside a DCS payload should be swallowed, not terminate the sequence.
+    const s = '\u001bPdata\u0007more\u001b\\after';
+    const segs = segmentAnsi(s);
+    expect(segs.map((x) => x.text).join('')).toBe(s); // byte-for-byte round-trip
+    const rawTexts = segs.filter((x) => x.kind === 'raw').map((x) => x.text);
+    // The whole DCS including BEL and payload-after-BEL is one raw block.
+    expect(rawTexts).toContain('\u001bPdata\u0007more\u001b\\');
+    const visible = segs.filter((x) => x.kind === 'char' && !x.ws).map((x) => x.text);
+    expect(visible).toEqual(['a', 'f', 't', 'e', 'r']); // only chars after ST
+  });
+
   it('countVisible ignores whitespace and zero-width marks', () => {
     expect(countVisible('  ab c\n\td\u0301 ')).toBe(4);
   });
