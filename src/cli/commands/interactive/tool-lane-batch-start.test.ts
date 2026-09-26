@@ -25,10 +25,26 @@ function overlayLines(lane: ToolLane): string[] {
   return stripAnsi(lane.getOverlay()).split('\n').filter(Boolean);
 }
 
-/** Returns true if any overlay line contains a `∥i/N` badge where N === width. */
+/**
+ * Returns true if any overlay line contains a `∥i/N` badge where N === width.
+ * The trailing `(?!\d)` boundary keeps `∥1/20` from matching width 2, so a
+ * regression to a multi-digit total is not silently accepted.
+ */
 function hasBadge(lines: string[], width: number): boolean {
-  return lines.some((l) => new RegExp(`∥\\d+/${width}`).test(l));
+  return lines.some((l) => new RegExp(`∥\\d+/${width}(?!\\d)`).test(l));
 }
+
+describe('hasBadge helper', () => {
+  it('matches an exact-width badge', () => {
+    expect(hasBadge(['∥1/2'], 2)).toBe(true);
+    expect(hasBadge(['read_file ∥2/2 ("x.ts")'], 2)).toBe(true);
+  });
+
+  it('does not match a badge whose total only starts with the width', () => {
+    expect(hasBadge(['∥1/20'], 2)).toBe(false);
+    expect(hasBadge(['∥12/23'], 2)).toBe(false);
+  });
+});
 
 describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () => {
   it('shows ∥i/N on in-flight rows after notifyToolActivity(2)', () => {
@@ -53,7 +69,7 @@ describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () 
 
     const lines = overlayLines(lane);
     // The badge appears (at least once) for a and b (∥1/2 or ∥2/2)
-    const memberLines = lines.filter((l) => /∥\d+\/2/.test(l));
+    const memberLines = lines.filter((l) => /∥\d+\/2(?!\d)/.test(l));
     expect(memberLines.length).toBeGreaterThanOrEqual(1);
 
     // c's line must NOT have the badge
@@ -87,7 +103,7 @@ describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () 
     lane.addResult('id-a', makeResult('content-a'));
     // The badge must persist on id-b's row (dispatcher is authoritative, not addResult)
     const afterFirst = overlayLines(lane);
-    const bStillBadged = afterFirst.some((l) => l.includes('glob') && /∥\d+\/2/.test(l));
+    const bStillBadged = afterFirst.some((l) => l.includes('glob') && /∥\d+\/2(?!\d)/.test(l));
     expect(bStillBadged).toBe(true);
   });
 
