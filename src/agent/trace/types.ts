@@ -842,7 +842,19 @@ export type SessionPhaseName =
   // `metadata` keys: `safeCount` (tools gated in parallel), `unsafeCount`
   // (tools gated sequentially), `parallelGatesMs` (wall-clock for the parallel
   // gate wave, or 0 when there were no safe calls).
-  | 'gate_shape';
+  | 'gate_shape'
+  // Session-identity assignment event. Emitted whenever the provider-issued
+  // session id first becomes known (or changes — e.g. a resumed/forked session
+  // adopts its parent's id). The `sessionId` field on the payload carries the
+  // value; `prior` carries the previous id when this is a change rather than a
+  // first assignment. PURE OBSERVABILITY: this event exists solely so consumers
+  // (friction analyzer, `afk insights`, harvest) can join a trace file to its
+  // SessionFacet and ledger entry by session id without any side channel.
+  //
+  // Backward compat: old traces that predate this event simply lack it. Consumers
+  // must treat its absence as "id unknown from trace alone" — the ledger
+  // `traceLabel` bridge remains the fallback for those traces.
+  | 'session_id_assigned';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
@@ -887,6 +899,20 @@ export interface SessionPhasePayload {
    * `{ origin: 'telegram', actor: 'subagent' }`.
    */
   actor?: 'main' | 'subagent';
+  /**
+   * Provider-issued session id. Set ONLY on `session_id_assigned` events —
+   * the canonical durable bridge between a trace file (keyed by its directory
+   * label) and the session store / SessionFacet (keyed by this id). Absent on
+   * all other phase events and on older traces that predate this field.
+   */
+  sessionId?: string;
+  /**
+   * The previous session id, when this `session_id_assigned` event represents
+   * a change rather than a first assignment (e.g. a resumed or forked session
+   * adopting its parent's id). Absent on first-assignment events and on all
+   * other phase kinds.
+   */
+  priorSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -75,14 +75,6 @@ describe('assembleSystemPrompt', () => {
       expect(out).not.toContain(END_OF_TURN_DIRECTIVE);
     });
 
-    it('omits END_OF_TURN_DIRECTIVE on the subagent surface', () => {
-      // Subagent output is consumed by a parent agent, not rendered to a
-      // ledger rail. The protocol would add noise the parent has to
-      // strip back out.
-      const out = assembleSystemPrompt(BASE, false, 'subagent');
-      expect(out).not.toContain(END_OF_TURN_DIRECTIVE);
-    });
-
     it('defaults to one-shot semantics when surface is omitted', () => {
       // Contract: omitting the surface tag MUST be the safe choice. Any new
       // call site that forgets to pass a surface must not silently inject

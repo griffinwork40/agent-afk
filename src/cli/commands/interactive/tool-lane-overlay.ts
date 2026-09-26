@@ -33,6 +33,40 @@ import {
 } from './tool-lane-render.js';
 import { formatFlatRootCompletion } from './tool-lane-overlay-completion.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
+import type { ElementFade } from '../../smoke-fade.js';
+
+/**
+ * Collect root-level tool entries (those rendered at the top of the overlay),
+ * then apply the `maxOverlayRoots` sliding-window cap. The cap protects long
+ * multi-tool turns from filling the screen with completed rows. Active
+ * (no-result) roots are *always* kept so the user can see what is currently
+ * running — only the oldest *completed* roots are elided, summarized by the
+ * caller via a trailing "… +N done" line.
+ */
+export function selectVisibleRoots(
+  entries: Map<string, Entry>,
+  order: string[],
+  maxOverlayRoots: number,
+): { visibleRoots: ToolEntry[]; hiddenDoneCount: number } {
+  const rootEntries: ToolEntry[] = [];
+  for (const id of order) {
+    const entry = entries.get(id);
+    if (!entry || entry.kind !== 'tool' || entry.agentContext) continue;
+    rootEntries.push(entry);
+  }
+  if (rootEntries.length <= maxOverlayRoots) return { visibleRoots: rootEntries, hiddenDoneCount: 0 };
+  // Identify active (in-progress) roots — they bypass the cap.
+  const activeRoots = rootEntries.filter((e) => !e.result);
+  const doneRoots = rootEntries.filter((e) => e.result);
+  // Reserve all active slots; fill remaining slots from the *tail* of
+  // doneRoots (most recently completed), preserving original order.
+  const doneBudget = Math.max(0, maxOverlayRoots - activeRoots.length);
+  const visibleDoneSet = new Set(doneRoots.slice(-doneBudget));
+  return {
+    visibleRoots: rootEntries.filter((e) => !e.result || visibleDoneSet.has(e)),
+    hiddenDoneCount: doneRoots.length - visibleDoneSet.size,
+  };
+}
 
 /**
  * Render the live tool-lane overlay string.
@@ -47,6 +81,10 @@ import type { ToolLaneFlash } from './tool-lane-flash.js';
  * @param activeTools     Current parallel-activity snapshot, or `null`.
  * @param flash           Optional flash tracker for 150ms glyph pulses.
  * @param maxOverlayRoots Maximum number of root-level entries to show.
+ * @param fade            Optional AFK_SMOKE_TEXT whole-element fade. Each root
+ *                        entry's rows (its line, children, tails, diff) fade
+ *                        in together, keyed by `toolUseId`, on the frame that
+ *                        first shows them. Settled rows render unchanged.
  */
 export function renderToolLaneOverlay(
   entries: Map<string, Entry>,
@@ -54,6 +92,7 @@ export function renderToolLaneOverlay(
   activeTools: { activeCount: number; toolUseIds: Set<string>; toolIndex?: Map<string, number> } | null,
   flash: ToolLaneFlash | null,
   maxOverlayRoots: number,
+  fade: ElementFade | null = null,
 ): string {
   const childMap = buildChildMap(entries, order);
   const lines: string[] = [];
@@ -73,32 +112,7 @@ export function renderToolLaneOverlay(
   const cols = toolLaneWidth();
   const clamp = (line: string): string => truncateDisplayWidth(line, cols);
 
-  // Collect root-level tool entries (those rendered at the top of the
-  // overlay), then apply the maxOverlayRoots sliding-window cap. The cap
-  // protects long multi-tool turns from filling the screen with completed
-  // rows. Active (no-result) roots are *always* kept so the user can see
-  // what is currently running — only the oldest *completed* roots are
-  // elided, summarized via a trailing "… +N done" line.
-  const rootEntries: ToolEntry[] = [];
-  for (const id of order) {
-    const entry = entries.get(id);
-    if (!entry || entry.kind !== 'tool' || entry.agentContext) continue;
-    rootEntries.push(entry);
-  }
-
-  let visibleRoots: ToolEntry[] = rootEntries;
-  let hiddenDoneCount = 0;
-  if (rootEntries.length > maxOverlayRoots) {
-    // Identify active (in-progress) roots — they bypass the cap.
-    const activeRoots = rootEntries.filter((e) => !e.result);
-    const doneRoots = rootEntries.filter((e) => e.result);
-    // Reserve all active slots; fill remaining slots from the *tail* of
-    // doneRoots (most recently completed), preserving original order.
-    const doneBudget = Math.max(0, maxOverlayRoots - activeRoots.length);
-    const visibleDoneSet = new Set(doneRoots.slice(-doneBudget));
-    hiddenDoneCount = doneRoots.length - visibleDoneSet.size;
-    visibleRoots = rootEntries.filter((e) => !e.result || visibleDoneSet.has(e));
-  }
+  const { visibleRoots, hiddenDoneCount } = selectVisibleRoots(entries, order, maxOverlayRoots);
 
   // Invariant: when the overlay mixes a NESTING root (skill / Agent / compose
   // — each anchors a col-0 ◉ turn-root marker and a descendant spine drawn at
@@ -127,6 +141,7 @@ export function renderToolLaneOverlay(
   const flatRootLeadDone = hasNestingRoot ? palette.dimCompleted(g.turnRoot) : '   ';
 
   for (const entry of visibleRoots) {
+    const firstRow = lines.length;
     const children = childMap.get(entry.toolUseId);
 
     // Dispatch-tools (Agent/Task/agent/compose) own nested children — render
@@ -194,7 +209,7 @@ export function renderToolLaneOverlay(
         // + args) is already colorized by formatToolLine with color.bold(name).
         lines.push(clamp(palette.activeAgent(g.turnRoot) + entry.prefix + childFailureBadge(entry.failedChildCount)));
       }
-      renderOverlayChildren(children, childMap, lines, cols, undefined, g);
+      renderOverlayChildren(children, childMap, lines, cols, undefined, g, undefined, fade);
       // Render the thinking-tail AFTER the children so the subagent's
       // in-flight narration sits below its tool calls, not between the
       // Agent prefix and its first tool. Mirrors the text-child ordering
@@ -337,6 +352,7 @@ export function renderToolLaneOverlay(
         }
       }
     }
+    fade?.fadeLines(entry.toolUseId, lines, firstRow);
   }
 
   if (hiddenDoneCount > 0) {

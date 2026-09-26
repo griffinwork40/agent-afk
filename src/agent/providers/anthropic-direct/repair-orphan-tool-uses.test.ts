@@ -519,3 +519,58 @@ describe('repairOrphanToolUses', () => {
     expect(messages).toHaveLength(4);
   });
 });
+
+// ─── Regression: text-before-tool_result in persisted user turns ──────────────
+// Sidecars written by builds whose buildUserContentBlocks emitted
+// [text, tool_result, ...] made every resume 400 with "messages.N: tool_use ids
+// were found without tool_result blocks immediately after". The orphan pass
+// saw the ids as covered (presence-only check), so nothing healed them.
+describe('repairOrphanToolUses — tool_result ordering heal', () => {
+  it('hoists tool_result blocks ahead of text in a user message (real sidecar shape)', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'hey' },
+      { role: 'assistant', content: 'hi' },
+      { role: 'user', content: 'is there any way to slow the smoke text?' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'answer' },
+          { type: 'tool_use', id: 'tu_a', name: 'grep', input: {} },
+          { type: 'tool_use', id: 'tu_b', name: 'read_file', input: {} },
+        ] as ContentBlockParam[],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'do the quick local change' },
+          { type: 'tool_result', tool_use_id: 'tu_a', content: 'x' },
+          { type: 'tool_result', tool_use_id: 'tu_b', content: 'y' },
+        ] as ContentBlockParam[],
+      },
+      { role: 'assistant', content: 'done' },
+    ];
+
+    repairOrphanToolUses(messages);
+
+    // No synthetic messages were needed: the real results are kept.
+    expect(messages).toHaveLength(6);
+    const types = (messages[4]!.content as ContentBlockParam[]).map((b) =>
+      b.type === 'tool_result' ? `tool_result:${b.tool_use_id}` : b.type,
+    );
+    expect(types).toEqual(['tool_result:tu_a', 'tool_result:tu_b', 'text']);
+  });
+
+  it('leaves already-correct user messages untouched (same array reference)', () => {
+    const content = [
+      { type: 'tool_result', tool_use_id: 'tu_a', content: 'x' },
+      { type: 'text', text: 'after' },
+    ] as ContentBlockParam[];
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_a', name: 'bash', input: {} }] as ContentBlockParam[] },
+      { role: 'user', content },
+    ];
+    repairOrphanToolUses(messages);
+    expect(messages[2]!.content).toBe(content);
+  });
+});

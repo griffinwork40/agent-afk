@@ -265,15 +265,19 @@ describe('buildUserContentBlocks', () => {
     expect(buildUserContentBlocks('hello', pending)).toBeUndefined();
   });
 
-  it('builds text + tool_result blocks', () => {
+  it('builds tool_result blocks FIRST, then text (Messages API ordering contract)', () => {
     const toolEvents = [
       { toolName: 'bash', toolUseId: 'tu_1', input: 'ls', result: 'file.ts', isError: false },
+      { toolName: 'grep', toolUseId: 'tu_2', input: 'x', result: 'hit', isError: false },
     ];
     const blocks = buildUserContentBlocks('run it', toolEvents);
     expect(blocks).toBeDefined();
-    expect(blocks).toHaveLength(2);
-    expect(blocks![0]).toEqual({ type: 'text', text: 'run it' });
-    expect(blocks![1]).toEqual({ type: 'tool_result', tool_use_id: 'tu_1', content: 'file.ts' });
+    expect(blocks).toHaveLength(3);
+    // Text before a tool_result is rejected with HTTP 400 ("tool_use ids were
+    // found without tool_result blocks immediately after"), breaking resume.
+    expect(blocks![0]).toEqual({ type: 'tool_result', tool_use_id: 'tu_1', content: 'file.ts' });
+    expect(blocks![1]).toEqual({ type: 'tool_result', tool_use_id: 'tu_2', content: 'hit' });
+    expect(blocks![2]).toEqual({ type: 'text', text: 'run it' });
   });
 
   it('marks error tool results with is_error', () => {

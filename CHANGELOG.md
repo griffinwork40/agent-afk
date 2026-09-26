@@ -11,6 +11,29 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.254.2] - 2026-09-26
+
+### Fixed
+- prune .afk-worktrees and walk absolute patterns from their prefix (#2248) (507446a9)
+
+## [5.254.1] - 2026-09-26
+
+### Fixed
+- re-join on-screen committed-band rows on widen (#2234) (526179cf)
+
+### Changed
+- tighten compact scrollback renderer tests (#2236) (#2243) (8bc8f826)
+
+## [5.254.0] - 2026-09-26
+
+### Added
+- emit session_id_assigned event so traces are self-identifying (#2245) (f21a289a)
+
+## [5.253.1] - 2026-09-26
+
+### Fixed
+- scan OSC sequences past 254 bytes to their real terminator in smoke-reveal mask (#2250) (fd0c804d)
+
 ## [5.253.0] - 2026-09-26
 
 ### Added
