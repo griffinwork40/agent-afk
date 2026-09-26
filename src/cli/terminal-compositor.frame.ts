@@ -46,6 +46,7 @@ import {
 } from './terminal-compositor.frame.layout.js';
 import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
 import { computeFramePosition } from './terminal-compositor.frame.position.js';
+import { contentHugAnchor, contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame-composition functions
@@ -90,6 +91,10 @@ export interface FrameHost {
   /** Real unpadded frame top; written here by repaint(), read by commitAbove's
    *  routing. See the field doc on the class (terminal-compositor.ts). */
   lastMeasuredFrameTop: number;
+  /** Real frame bottom of the last repaint (content-hug commit geometry). */
+  lastMeasuredFrameBottom: number;
+  /** content-hug: post-commit band length during an in-flight commit, else null. */
+  pendingContentRows: number | null;
   committedBandPaintedRows: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
@@ -177,6 +182,7 @@ export function repaint(self: FrameHost): void {
   // hard upper bound for targetBottomRow in ALL branches below.
   const absoluteBottom = Math.max(1, (self.stdout.rows ?? 24) - 1 - layout.extraRows);
   const frame = frameLines.join('\n');
+  const hug = self.placementMode === 'content-hug';
   const { desiredTopRow, targetBottomRow } = computeFramePosition(
     frame,
     frameLines,
@@ -184,10 +190,12 @@ export function repaint(self: FrameHost): void {
     self.placementMode,
     self.anchorRow,
     self.logUpdate,
+    hug ? contentHugAnchor(self) : undefined,
   );
   // Record the real (unpadded) frame top for commitAbove's routing. This is the
   // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
   self.lastMeasuredFrameTop = desiredTopRow;
+  self.lastMeasuredFrameBottom = targetBottomRow;
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   // Capture the renderer's current top BEFORE render(): it is the first row
   // its erase pass will clear, which repositionCommittedBand() uses to detect
@@ -211,7 +219,14 @@ export function repaint(self: FrameHost): void {
       self.logUpdate.setEraseBottomOverride(absoluteBottom);
     }
   }
-  self.logUpdate.render(frame, targetBottomRow, self.anchorRow);
+  // Invariant (content-hug shrink pad): a hugging frame shrinks from the
+  // BOTTOM (its top stays pinned under the committed content). The renderer's
+  // shrink pad would otherwise prepend blank rows that climb ABOVE the frame
+  // top and blank the band's bottom rows; flooring the pad at the frame top
+  // keeps it at zero. A bottom-pinned (full-viewport) frame keeps the legacy
+  // anchorRow floor.
+  const renderFloor = hug && targetBottomRow < absoluteBottom ? desiredTopRow : self.anchorRow;
+  self.logUpdate.render(frame, targetBottomRow, renderFloor);
   self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
 }
 
@@ -259,9 +274,16 @@ function repaintPickerFrame(self: FrameHost): void {
   // Wrap-aware top row — CupFrameRenderer hard-wraps at stdout.columns; sizing
   // the band off the logical line count re-pins it inside a soft-wrapped frame
   // (review #592). See repaint() for the full rationale.
-  const desiredTopRow = self.logUpdate.measure
-    ? self.logUpdate.measure(frame, absoluteBottom).topRow
-    : Math.max(1, absoluteBottom - frameLines.length + 1);
+  // content-hug: the picker follows committed content like the normal frame
+  // (a bottom-pinned picker would re-pin the band away from floor and back
+  // again on close — two visible jumps). Other modes keep the bottom pin.
+  const physicalRows = self.logUpdate.measure
+    ? self.logUpdate.measure(frame, absoluteBottom).lineCount
+    : frameLines.length;
+  const bottomRow = self.placementMode === 'content-hug'
+    ? contentHugTargetBottom(contentHugAnchor(self), physicalRows, absoluteBottom)
+    : absoluteBottom;
+  const desiredTopRow = Math.max(1, bottomRow - physicalRows + 1);
   // Record the real (unpadded) frame top for commitAbove's routing, exactly as
   // the non-picker repaint() body does (see its `self.lastMeasuredFrameTop =
   // desiredTopRow;` above). Without this, a picker frame's row count differs
@@ -273,8 +295,13 @@ function repaintPickerFrame(self: FrameHost): void {
   // (e.g. a backgrounded job's completion notice) would then trust a stale
   // measured top for a frame shape that no longer exists.
   self.lastMeasuredFrameTop = desiredTopRow;
+  self.lastMeasuredFrameBottom = bottomRow;
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   const preRenderFrameTop = self.logUpdate.topRow ?? 0;
-  self.logUpdate.render(frame, absoluteBottom, self.anchorRow);
-  self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, absoluteBottom);
+  if (bottomRow < absoluteBottom && self.logUpdate.setEraseBottomOverride && (self.logUpdate.topRow ?? 0) > 0) {
+    self.logUpdate.setEraseBottomOverride(absoluteBottom);
+  }
+  const renderFloor = bottomRow < absoluteBottom ? desiredTopRow : self.anchorRow;
+  self.logUpdate.render(frame, bottomRow, renderFloor);
+  self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, bottomRow);
 }

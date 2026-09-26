@@ -155,7 +155,7 @@ export async function setupSurface(
     // evicts the deficit into scrollback if the frame would otherwise
     // climb above. Undefined on daemons / non-bootstrap callers — defaults
     // the compositor to pre-fix behavior (no protection).
-    ...(ctx.preArmAnchorRow !== undefined ? { anchorRow: ctx.preArmAnchorRow } : {}),
+    ...placementArmOpts(ctx.preArmAnchorRow),
     // Ghost-text wiring — context factory extracted to surface-setup.suggest-config.ts.
     // Returns `{ suggest: { engine, getContext } }` when enabled, `{}` when disabled.
     ...buildSuggestConfig({
@@ -379,4 +379,15 @@ export async function setupSurface(
   });
 
   return { installSoftStop };
+}
+
+/**
+ * Frame-placement options for the REPL compositor: the pre-arm anchor row
+ * (when the bootstrap measured one) plus content-hug placement, so the live
+ * frame follows committed output and a frame shrink never leaves a blank gap
+ * between content and the prompt or in scrollback
+ * (terminal-compositor.content-hug.ts).
+ */
+function placementArmOpts(preArmAnchorRow: number | undefined): { anchorRow?: number; contentHug: boolean } {
+  return { ...(preArmAnchorRow !== undefined ? { anchorRow: preArmAnchorRow } : {}), contentHug: true };
 }

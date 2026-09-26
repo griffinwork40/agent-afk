@@ -11,6 +11,7 @@
  */
 
 import type { LogUpdateFn, FramePlacementMode } from './terminal-compositor.types.js';
+import { contentHugTargetBottom } from './terminal-compositor.content-hug.js';
 
 export interface FramePosition {
   /** The physical terminal row where the frame's top line will be rendered. */
@@ -39,9 +40,11 @@ export interface FramePosition {
  * @param frame          Assembled frame string (lines joined with '\n').
  * @param frameLines     Logical lines array (used as fallback when measure absent).
  * @param absoluteBottom Hard row ceiling: compositor must never write below this.
- * @param placementMode  'cursor-follow' | 'bottom-pinned'.
+ * @param placementMode  'cursor-follow' | 'bottom-pinned' | 'content-hug'.
  * @param anchorRow      Optional upper anchor (cursor-follow only).
  * @param logUpdate      Log-update function with optional `measure()`.
+ * @param hugAnchor      content-hug only: the row directly below the committed
+ *                       content (see terminal-compositor.content-hug.ts).
  */
 export function computeFramePosition(
   frame: string,
@@ -50,6 +53,7 @@ export function computeFramePosition(
   placementMode: FramePlacementMode,
   anchorRow: number | undefined,
   logUpdate: LogUpdateFn,
+  hugAnchor?: number,
 ): FramePosition {
   // Invariant (wrap-aware frame height): physicalRows must reflect the
   // POST-wrap row count — not just frameLines.length (the logical count).
@@ -83,10 +87,14 @@ export function computeFramePosition(
   //   min(absoluteBottom, anchorRow + physicalRows - 1)
   // so a 1-line idle frame lands at anchorRow (right below the banner) while
   // a multi-line frame (dropdown open) extends downward toward absoluteBottom.
+  // content-hug: the same formula with the committed-content bottom as the
+  // anchor, so the frame follows committed output until the viewport fills.
   const targetBottomRow =
     placementMode === 'cursor-follow' && anchorRow !== undefined
       ? Math.min(absoluteBottom, (anchorRow - 1) + physicalRows)
-      : absoluteBottom;
+      : placementMode === 'content-hug' && hugAnchor !== undefined
+        ? contentHugTargetBottom(hugAnchor, physicalRows, absoluteBottom)
+        : absoluteBottom;
   // Wrap-aware top row: derived from the same physicalRows (lineCount) already
   // computed above — equivalent to measure().topRow but without a second wrap
   // pass. Stubs without measure() fall back to logical.
