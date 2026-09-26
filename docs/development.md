@@ -74,6 +74,29 @@ pnpm test:watch                             # watch
 pnpm test:coverage                          # with coverage
 ```
 
+### Live provider tests (`*.live.test.ts`)
+
+Live tests hit real provider APIs (billed). They are excluded from `pnpm test` by default.
+Opt in with `RUN_LIVE_API=1`:
+
+```bash
+# Anthropic direct provider (needs CLAUDE_CODE_OAUTH_TOKEN)
+RUN_LIVE_API=1 CLAUDE_CODE_OAUTH_TOKEN=<token> \
+  pnpm exec vitest run src/agent/providers/anthropic-direct.live.test.ts
+
+# OpenAI-compatible provider (needs OPENAI_API_KEY)
+RUN_LIVE_API=1 OPENAI_API_KEY=sk-... \
+  pnpm exec vitest run src/agent/providers/openai-compatible/openai-compatible.live.test.ts
+```
+
+The nightly `.github/workflows/live-provider-tests.yml` CI job runs both files
+automatically using repository secrets. On failure it opens (or comments on) a
+GitHub issue labelled `live-test-failure`; it does **not** block PR checks.
+
+Required repository secrets for the nightly workflow:
+- `CLAUDE_CODE_OAUTH_TOKEN` — Anthropic Claude OAuth token
+- `OPENAI_API_KEY` — OpenAI API key
+
 **What to test:**
 - New provider events and stream transitions
 - Hook lifecycle (SessionStart/End, SubagentStart/Stop, PreToolUse/PostToolUse)
