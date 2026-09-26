@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.252.0] - 2026-09-26
+
+### Added
+- unblock target:fact writes from subagents (#2093) (418cda94)
+
+### Changed
+- add real-PTY scenarios for SIGWINCH mid-active-turn (#2225) (348edc85)
+- stop a test from restarting the developer's real launchd services (#2233) (e1d123c8)
+
 ## [5.251.1] - 2026-09-26
 
 ### Fixed
