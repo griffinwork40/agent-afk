@@ -103,6 +103,27 @@ describe('glob handler — absolute patterns', () => {
     const result = await handler({ pattern: `${otherDir}/missing-dir/*.ts` }, signal());
     expect(result.isError).toBe(true);
   });
+
+  it('returns isError when an absolute pattern conflicts with an explicit path argument', async () => {
+    const handler = createGlobHandler(cwdDir);
+    const result = await handler({ pattern: `${otherDir}/**/*.ts`, path: cwdDir }, signal());
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toContain('conflicts with explicit path');
+  });
+
+  it('returns isError when absolute pattern base falls outside readRoots', async () => {
+    const handler = createGlobHandler(cwdDir);
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-outside-'));
+    await fs.writeFile(path.join(outsideDir, 'secret.ts'), '');
+    try {
+      // Simulate a confined session: readRoots only includes cwdDir
+      const context = { readRoots: [cwdDir], resolveBase: cwdDir, cwd: cwdDir };
+      const result = await handler({ pattern: `${outsideDir}/*.ts` }, signal(), context as any);
+      expect(result.isError).toBe(true);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('glob handler — .afk-worktrees pruning', () => {

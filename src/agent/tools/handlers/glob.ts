@@ -217,6 +217,7 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   // 2. context?.cwd — per-call back-compat alias
   // 3. factory-level cwd — session worktree isolation
   // 4. process.cwd() fallback
+  const explicitPath = obj.path !== undefined && obj.path !== null;
   let rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
 
   // Validate required field
@@ -233,7 +234,15 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   // report absolute paths so results stay unambiguous.
   const absolute = splitAbsolutePattern(rawPattern);
   const pattern = absolute ? absolute.pattern : rawPattern;
-  if (absolute) rawPath = absolute.base;
+  if (absolute) {
+    if (explicitPath) {
+      return {
+        content: `Invalid input: absolute pattern '${rawPattern}' conflicts with explicit path argument; omit path or use a relative pattern`,
+        isError: true,
+      };
+    }
+    rawPath = absolute.base;
+  }
 
   // Validate optional field
   if (typeof rawPath !== 'string') {
