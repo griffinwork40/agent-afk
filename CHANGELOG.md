@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.251.1] - 2026-09-26
+
+### Fixed
+- erase displaced footer after banner scroll; center the user echo (#2231) (19963445)
+
 ## [5.251.0] - 2026-09-26
 
 ### Added
