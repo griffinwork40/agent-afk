@@ -21,6 +21,11 @@ export interface DaemonSpawnOptions {
   sessionFactory?: (config: AgentConfig, ownedTraceWriter?: TraceWriter) => AgentSession;
   /** Propagated from the scheduler so pull-mode tasks keep ask_question. */
   trigger?: 'cron' | 'sessionstart' | 'pull';
+  /**
+   * Per-task working directory. Takes precedence over `sessionConfig.cwd`
+   * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? process.cwd().
+   */
+  taskCwd?: string;
 }
 
 /**
@@ -51,7 +56,8 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // suffix, so each tick gets its own label) so hook commands receive a
   // non-empty AFK_SESSION_ID and traces stay greppable by task name.
   const sessionId = daemonTraceLabel(taskId);
-  const agentCwd = options.sessionConfig?.cwd ?? process.cwd();
+  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd().
+  const agentCwd = options.taskCwd ?? options.sessionConfig?.cwd ?? process.cwd();
   // Witness layer: open a fresh trace per spawned daemon session so its
   // subagent + skill lifecycle events are durable on disk — the AFK
   // (away-from-keyboard) surface where post-hoc inspection matters most.
@@ -166,6 +172,11 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // sessionConfig may override permissionMode if the operator explicitly
     // wants a different mode for daemon tasks (intentional escape hatch).
     ...options.sessionConfig,
+    // Per-task cwd wins over sessionConfig.cwd (daemon-wide AFK_DAEMON_CWD).
+    // Placed AFTER the sessionConfig spread so the task-level value is never
+    // overwritten by the daemon-wide one. agentCwd already encodes the correct
+    // precedence (taskCwd ?? sessionConfig.cwd ?? process.cwd()).
+    cwd: agentCwd,
   };
   try {
     const traceOwner = options.sessionConfig?.traceWriter === undefined ? trace?.writer : undefined;

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ServerResponse } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   handleListSchedules,
   handleCreateSchedule,
@@ -10,6 +13,7 @@ import {
   handleDaemonStatus,
 } from './routes.schedules.js';
 import { trySyncToDaemon } from '../agent/daemon/http-client.js';
+import { addSchedule, updateSchedule } from '../agent/daemon/schedule-store.js';
 
 // ---- mocks -----------------------------------------------------------------
 
@@ -190,6 +194,63 @@ describe('routes.schedules', () => {
       const { res, json } = makeRes();
       await handleUpdateSchedule(res, 'bad id with spaces', { name: 'x' });
       expect(json().status).toBe(400);
+    });
+  });
+
+  describe('per-task cwd validation', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'afk-routes-cwd-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const base = { name: 'Test', command: '/test', cron: '0 * * * *' };
+    const missing = () => join(dir, 'does-not-exist');
+
+    it('create: accepts a valid cwd and persists the resolved path', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: dir });
+      expect(json().status).toBe(201);
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(expect.objectContaining({ cwd: dir }));
+    });
+
+    it('create: rejects a nonexistent cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: missing() });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('create: rejects an empty cwd with 400 (does not fall back to process.cwd())', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: '' });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update: accepts a valid cwd', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: dir });
+      expect(json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith(
+        'nightly-forge',
+        expect.objectContaining({ cwd: dir }),
+      );
+    });
+
+    it('update: rejects a nonexistent cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: missing() });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(updateSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update: rejects an empty cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: '' });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(updateSchedule)).not.toHaveBeenCalled();
     });
   });
 

@@ -978,3 +978,95 @@ describe('resolveWorktreePruneRoot', () => {
     expect(mock).toHaveBeenCalled();
   });
 });
+
+// ── per-task cwd ─────────────────────────────────────────────────────────────
+
+describe('CronScheduler — per-task cwd', () => {
+  let dir: string;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('task.cwd is passed as taskCwd to spawnDaemonSession, winning over sessionConfig.cwd', async () => {
+    // We capture the config that gets built by intercepting the sessionFactory.
+    let capturedCwd: string | undefined;
+    const taskCwd = dir; // real existing dir
+    const daemonWideCwd = '/some/other/path';
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionConfig: { cwd: daemonWideCwd },
+      sessionFactory: (config) => {
+        capturedCwd = config.cwd;
+        return makeSession({ response: 'done' });
+      },
+    });
+    scheduler.register({
+      taskId: 'cwd-wins',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      cwd: taskCwd,
+    });
+    await scheduler.tick('cwd-wins');
+    // The per-task cwd must override the daemon-wide sessionConfig.cwd
+    expect(capturedCwd).toBe(taskCwd);
+  });
+
+  it('falls back to sessionConfig.cwd when task.cwd is absent', async () => {
+    let capturedCwd: string | undefined;
+    const daemonWideCwd = dir;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionConfig: { cwd: daemonWideCwd },
+      sessionFactory: (config) => {
+        capturedCwd = config.cwd;
+        return makeSession({ response: 'done' });
+      },
+    });
+    scheduler.register({
+      taskId: 'fallback-cwd',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+    await scheduler.tick('fallback-cwd');
+    expect(capturedCwd).toBe(daemonWideCwd);
+  });
+
+  it('produces an error telemetry record when task.cwd has vanished', async () => {
+    // Create a dir, register a task pointing to it, then remove the dir.
+    const vanishingDir = join(dir, 'vanishing');
+    const { mkdirSync: mkdSync } = await import('node:fs');
+    mkdSync(vanishingDir);
+    const { rmSync: rmDSync } = await import('node:fs');
+    rmDSync(vanishingDir, { recursive: true });
+
+    let sessionSpawned = false;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: (config) => {
+        sessionSpawned = true;
+        return makeSession({ response: 'done', ...config });
+      },
+    });
+    scheduler.register({
+      taskId: 'vanished-cwd',
+      command: '/test',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      cwd: vanishingDir,
+    });
+    const record = await scheduler.tick('vanished-cwd');
+    expect(record.status).toBe('error');
+    expect(record.errorMessage).toMatch(/does not exist/);
+    // No session was spawned — we bailed before spawn
+    expect(sessionSpawned).toBe(false);
+  });
+});

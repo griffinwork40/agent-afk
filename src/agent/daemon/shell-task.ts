@@ -45,9 +45,14 @@ export interface ShellTaskOptions {
  * Uses `execFile('/bin/sh', ['-c', command])` -- no `shell: true` flag on
  * the spawn options, so the command goes through exactly one shell
  * interpretation (same pattern as worktree-prune-task.ts).
+ *
+ * When `task.cwd` is set it is passed as `cwd` to the child process, so the
+ * shell inherits the per-task working directory. Precedence mirrors the agent
+ * path: task.cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd() (the
+ * scheduler resolves the precedence before calling runShellTask).
  */
 export async function runShellTask(
-  task: { taskId: string; command: string; cronExpression?: string },
+  task: { taskId: string; command: string; cronExpression?: string; cwd?: string },
   trigger: TelemetryTrigger,
   options: ShellTaskOptions,
 ): Promise<TelemetryRecord> {
@@ -70,6 +75,7 @@ export async function runShellTask(
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024, // 1 MB
       env: process.env,
+      ...(task.cwd !== undefined ? { cwd: task.cwd } : {}),
     });
     const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
     const excerpt = combined.length > EXCERPT_CAP

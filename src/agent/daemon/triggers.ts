@@ -77,6 +77,13 @@ export interface ScheduledTask {
    * WHETHER to notify; this decides WHERE).
    */
   notifyChat?: number | string;
+  /**
+   * Per-task working directory (absolute path). When set, the spawned session's
+   * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Shell tasks honor this too: execFile receives it as the `cwd` option.
+   */
+  cwd?: string;
 }
 
 /**
@@ -101,5 +108,8 @@ export function validateScheduledTask(task: ScheduledTask): void {
     throw new Error(
       `task ${task.taskId}: unknown builtin '${task.command}' — known: ${KNOWN_BUILTINS.join(', ')}`,
     );
+  }
+  if (task.cwd !== undefined && (typeof task.cwd !== 'string' || !task.cwd)) {
+    throw new Error(`task ${task.taskId}: cwd must be a non-empty string when set`);
   }
 }

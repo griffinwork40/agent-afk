@@ -33,6 +33,7 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
 import { ScheduledTask, validateScheduledTask } from './triggers.js';
 import { runBuiltinTask } from './builtin-task.js';
 import { runShellTask } from './shell-task.js';
+import { checkTaskCwdAtRuntime } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
 import { spawnDaemonSession } from './session-spawn.js';
@@ -300,6 +301,27 @@ export class CronScheduler {
   }
 
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
+    // Runtime cwd guard: fail loudly when the pinned directory has vanished
+    // rather than silently falling back to $HOME (which would re-introduce the
+    // grep/glob timeout regression this feature was designed to fix).
+    if (task.cwd !== undefined) {
+      const cwdError = checkTaskCwdAtRuntime(task.cwd);
+      if (cwdError !== undefined) {
+        const triggeredAt = new Date(this.now());
+        const record: TelemetryRecord = {
+          taskId: task.taskId,
+          command: redactInlineSecrets(task.command),
+          trigger,
+          ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+          triggeredAt: triggeredAt.toISOString(),
+          durationMs: 0,
+          status: 'error',
+          errorMessage: redactInlineSecrets(cwdError),
+        };
+        this.writeTelemetry(record, task);
+        return record;
+      }
+    }
     // Dispatch by executor type -- default to 'agent' for backward compat.
     // History: single legacy compat point for un-migrated schedules.json entries
     // that predate executor: 'builtin'. Remove once all deployments have cycled
@@ -321,9 +343,15 @@ export class CronScheduler {
     if (executor === 'shell') {
       this.idleDetector.increment();
       try {
-        return await runShellTask(task, trigger, {
-          now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task),
-        });
+        // Resolve shell cwd: task.cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd().
+        // Passed as cwd in the execFile options so shell commands run in the
+        // correct directory without the grep/glob tool-timeout regression.
+        const shellCwd = task.cwd ?? this.options.sessionConfig?.cwd;
+        return await runShellTask(
+          shellCwd !== undefined ? { ...task, cwd: shellCwd } : task,
+          trigger,
+          { now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task) },
+        );
       } finally { this.idleDetector.decrement(); }
     }
 
@@ -348,7 +376,7 @@ export class CronScheduler {
     let handlerInstalled = false;
     this.idleDetector.increment();
     try {
-      const spawned = await this.spawnSession(task.taskId, trigger);
+      const spawned = await this.spawnSession(task, trigger);
       session = spawned.session;
       memoryStore = spawned.memoryStore;
       stateStore = spawned.stateStore;
@@ -449,8 +477,13 @@ export class CronScheduler {
     return record;
   }
 
-  private async spawnSession(taskId: string, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
-    return spawnDaemonSession(taskId, { ...this.options, trigger });
+  private async spawnSession(task: ScheduledTask, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
+    return spawnDaemonSession(task.taskId, {
+      ...this.options,
+      trigger,
+      // Per-task cwd takes precedence over the daemon-wide sessionConfig.cwd.
+      ...(task.cwd !== undefined ? { taskCwd: task.cwd } : {}),
+    });
   }
 
   private telemetryPath(): string {

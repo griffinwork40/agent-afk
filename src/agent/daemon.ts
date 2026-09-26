@@ -21,6 +21,7 @@ import type { ScheduledTask, TaskExecutor, TriggerMode } from './daemon/triggers
 import { getDaemonStateDir } from '../paths.js';
 import { listenWithRecovery, closeServer } from './daemon.listen.js';
 import { errorMessage } from '../utils/errors.js';
+import { validateScheduleCwd } from './daemon/cwd-validator.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -342,6 +343,22 @@ async function handleRequestAsync(
       );
       return;
     }
+    // Per-task cwd: validate with the same rules as every other surface so a
+    // live-synced task never registers with a missing/invalid working dir.
+    const cwdRaw = obj['cwd'];
+    let cwd: string | undefined;
+    if (cwdRaw !== undefined) {
+      const cwdResult =
+        typeof cwdRaw === 'string' && cwdRaw
+          ? validateScheduleCwd(cwdRaw)
+          : { ok: false as const, error: 'cwd must be a non-empty string' };
+      if (!cwdResult.ok) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: cwdResult.error }));
+        return;
+      }
+      cwd = cwdResult.resolved;
+    }
     const notifyChatRaw = obj['notifyChat'];
     const executorRaw = obj['executor'];
     const task: ScheduledTask = {
@@ -358,6 +375,7 @@ async function handleRequestAsync(
       ...(executorRaw === 'agent' || executorRaw === 'shell'
         ? { executor: executorRaw as TaskExecutor }
         : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
     };
     try {
       scheduler.register(task);
