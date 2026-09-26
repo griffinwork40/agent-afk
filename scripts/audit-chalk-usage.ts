@@ -69,6 +69,11 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
     reason: 'ASCII banner gradient — chalk.rgb per row over a truecolor stop ramp. Banner art, not chrome.',
   },
   {
+    file: 'src/cli/smoke-reveal.tones.ts',
+    reason:
+      'Smoke-text fade ramp: chalk.rgb over theme-aware truecolor stops (AFK_SMOKE_TEXT). A continuous gradient, same precedent as the banner.',
+  },
+  {
     file: 'src/cli/trusted-skill-badge.ts',
     reason: 'chalk.hex(entry.color) where the hex is a data-driven per-skill registry value resolved at runtime — no fixed role fits.',
   },

@@ -1,8 +1,9 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
-import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence } from './markdown-stream-format.js';
+import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable, pendingRowCap } from './markdown-stream-format.js';
 import { contentMargin } from './render/measure.js';
+import { SmokeReveal, isSmokeTextEnabled } from './smoke-reveal.js';
 import {
   type InputBufferState,
   type LogUpdateFunction,
@@ -113,6 +114,9 @@ export class StreamingMarkdownRenderer {
   private bufferMs: number;
   private inputState: InputBufferState;
 
+  /** Smoke-text reveal mask (AFK_SMOKE_TEXT). Null when the effect is off. */
+  private smoke: SmokeReveal | null = null;
+
   constructor(opts?: StreamingMarkdownRendererOptions) {
     this.out = opts?.out ?? process.stdout;
     this.throttleMs = opts?.throttleMs ?? 33;
@@ -128,6 +132,9 @@ export class StreamingMarkdownRenderer {
     // subscription is a no-op there — skip it to avoid the listener overhead.
     if (this.isTTY) {
       this.resizeUnsub = ResizeBus.subscribe(() => this.scheduleRepaint());
+      // Read once per renderer, like the other display settings: toggling
+      // AFK_SMOKE_TEXT mid-session applies to the next renderer, not this one.
+      if (isSmokeTextEnabled()) this.smoke = new SmokeReveal(() => this.scheduleRepaint());
     }
   }
 
@@ -203,7 +210,23 @@ export class StreamingMarkdownRenderer {
     const contentWidth = inCode
       ? calculateContentWidth(this.indent.length)
       : calculateProseContentWidth(this.indent.length);
-    const formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
+    let formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
+    // Smoke-text reveal: prose only. Code fences and table previews keep
+    // their dimmed live view (the table's box-drawing would otherwise read
+    // as the "youngest" characters). A height-truncated render is skipped
+    // too: it keeps only the first rows, so its end is NOT the newest text,
+    // and the distance-from-end mask would re-smoke settled on-screen text.
+    // The row count is evaluated last so the smoke-off path never pays for
+    // the split.
+    if (
+      this.smoke &&
+      formatted &&
+      !inCode &&
+      !isInOpenTable(this.buffer) &&
+      formatted.split('\n').length < pendingRowCap()
+    ) {
+      formatted = this.smoke.apply(formatted);
+    }
     // Content centering (AFK_CENTER_CONTENT): live pending prose is part of
     // the overlay frame, so it receives the centering margin here (the overlay
     // is never routed through commitAbove, which handles scrollback centering).
@@ -265,9 +288,13 @@ export class StreamingMarkdownRenderer {
    */
   private pushDirect(chunk: string): void {
     if (this.flushing) return;
+    this.smoke?.record(chunk);
     this.buffer = runParsePipeline(this.buffer, chunk, {
       onPreCommit: (newBuffer) => {
         this.buffer = newBuffer;
+        // Text is leaving the overlay's front: drop the smoke growth baseline
+        // BEFORE the sync repaints, or the shrink reads as consumed syntax.
+        this.smoke?.noteCommit();
         this.syncPendingOverlay();
       },
       onCommitBlock: (blockText) => this.commitBlock(blockText),
@@ -292,6 +319,7 @@ export class StreamingMarkdownRenderer {
     // Mark flushing so any in-flight repaint() bails out before painting,
     // and no further repaints are scheduled.
     this.flushing = true;
+    this.smoke?.dispose();
 
     // Composer mode: clear the markdown slot and flush so the overlay
     // re-renders without the pending block. This happens BEFORE committing
@@ -363,6 +391,7 @@ export class StreamingMarkdownRenderer {
     // so commitAbove() does not fire while the overlay still shows this block.
     // See syncPendingOverlay() / push() for the rationale (prevTopRow==1 drop).
     this.buffer = '';
+    this.smoke?.noteCommit();
     this.syncPendingOverlay();
     this.commitBlock(pending);
   }
@@ -390,6 +419,8 @@ export class StreamingMarkdownRenderer {
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     if (offset < 0 || offset >= this.buffer.length) return false;
     this.buffer = this.buffer.slice(0, offset).trimEnd();
+    // The stripped tail's bursts would otherwise remap onto the kept text.
+    this.smoke?.reset();
     return true;
   }
 
@@ -413,6 +444,7 @@ export class StreamingMarkdownRenderer {
     }
     this.lastPaintTime = 0;
     this.buffer = '';
+    this.smoke?.reset();
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
     // the screen, not just from the buffer.
@@ -429,6 +461,7 @@ export class StreamingMarkdownRenderer {
       this.throttleTimer = null;
     }
     this.lastPaintTime = 0;
+    this.smoke?.dispose();
 
     if (this.resizeUnsub) {
       this.resizeUnsub();

@@ -24,6 +24,7 @@ import { LoopStageBar } from '../../src/cli/commands/interactive/loop-stage.js';
 import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
+import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
 import { buildResizeMarker } from './constants.js';
 
 /**
@@ -171,6 +172,27 @@ const TABLE_MD = [
   '| 2 | load config from cwd | config-loader.ts | behavior |',
   '| 3 | thread cwd through daemon | daemon.ts | plumbing |',
 ].join('\n');
+
+/**
+ * Drive the REAL StreamingMarkdownRenderer through an armed compositor with
+ * AFK_SMOKE_TEXT on, pushing `text` in small token-sized chunks. The env var
+ * is set inside the pty child (drive() runs there), before the renderer
+ * reads it at construction.
+ */
+async function streamWithSmoke(ctx: PtyDriveCtx, text: string): Promise<StreamingMarkdownRenderer> {
+  process.env['AFK_SMOKE_TEXT'] = '1';
+  const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
+  await c.arm();
+  const md = new StreamingMarkdownRenderer({ out: ctx.stdout, compositor: c });
+  for (let i = 0; i < text.length; i += 12) {
+    md.push(text.slice(i, i + 12));
+    await settle(15);
+  }
+  return md;
+}
+
+const SMOKE_PARA_1 = 'SMOKEONE_START the first paragraph streams in and commits whole SMOKEONE_END';
+const SMOKE_PARA_2 = 'SMOKETWO_START the second paragraph stays live in the overlay';
 
 export const SCENARIOS: Record<string, PtyScenario> = {
   // ─────────────────────────────────────────────────────────────────────────
@@ -725,6 +747,53 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       ],
     },
   },
+  // ─────────────────────────────────────────────────────────────────────────
+  // smoke-text (AFK_SMOKE_TEXT): the reveal mask must never corrupt what
+  // reaches the terminal. Paragraph 1 crosses a \n\n boundary and commits
+  // (unmasked, exactly once). Paragraph 2 stays in the live overlay, and after
+  // the stream stops the settle driver alone must finish the fade, leaving
+  // real text with no smoke glyphs behind.
+  // ─────────────────────────────────────────────────────────────────────────
+  'smoke-text-settles': {
+    description: 'AFK_SMOKE_TEXT: committed prose is intact and the live tail settles to real text with no new pushes',
+    cols: 100,
+    rows: 24,
+    ref: 'src/cli/smoke-reveal.ts',
+    async drive(ctx): Promise<void> {
+      await streamWithSmoke(ctx, `${SMOKE_PARA_1}\n\n${SMOKE_PARA_2} SMOKETWO_END`);
+      await settle(900); // no pushes from here on: only the settle driver repaints
+    },
+    expect: {
+      exactlyOnce: ['SMOKEONE_START', 'SMOKEONE_END', 'SMOKETWO_START', 'SMOKETWO_END'],
+      order: [['SMOKEONE_END', 'SMOKETWO_START']],
+      absent: ['⠶', '⠢', '⠂'],
+    },
+  },
+
+  // Positive control for the scenario above: prove the mask is actually
+  // active through the real compositor, so 'smoke-text-settles' cannot pass
+  // just because the effect silently stayed off. The lead text settles. The
+  // final chunk is snapshotted ~40ms after arrival, while it is still smoke
+  // or not yet revealed, so its marker must not be readable yet.
+  'smoke-text-mid-fade': {
+    description: 'AFK_SMOKE_TEXT: text that just arrived is still smoke (the mask is live through the compositor)',
+    cols: 100,
+    rows: 24,
+    ref: 'src/cli/smoke-reveal.ts',
+    async drive(ctx): Promise<void> {
+      const md = await streamWithSmoke(ctx, SMOKE_PARA_2);
+      await settle(700);
+      md.push(' SMOKETWO_END');
+      await settle(40);
+    },
+    expect: {
+      exactlyOnce: ['SMOKETWO_START'],
+      // Deliberately no positive smoke-glyph assertion: at 40ms the chunk may
+      // still be an unrevealed blank placeholder rather than a glyph, so
+      // requiring a specific glyph races the fade and flaked on CI.
+      absent: ['SMOKETWO_END'],
+    },
+  },
 
   // ─────────────────────────────────────────────────────────────────────────
   // sigwinch-mid-streaming (#1767): SIGWINCH arrives while the compositor is
@@ -889,6 +958,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       inScrollback: ['TOOL_BATCH1_00'],
       contentAnchors: ['TOOL_BATCH2_11', 'TOOL_PHASE_COMPLETE'],
       maxViewportBlankRun: 1,
+
     },
   },
 };
