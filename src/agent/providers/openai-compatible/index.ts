@@ -66,7 +66,7 @@ import {
   registerPresenceLifecycle,
   resolveTopLevelSessionId,
 } from '../shared/presence-lifecycle.js';
-import { type ChildSessionOptions, isStateRestricted, isMemoryRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
+import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -418,7 +418,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
     // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    const memoryPrompt = resolveMemorySystemPrompt(isMemoryRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState));
+    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState);
     // Invariant: kept in lockstep with anthropic-direct's call site.
     // `excludeName` omits the executing skill's own entry for a skill-dispatch
     // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills

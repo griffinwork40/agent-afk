@@ -42,8 +42,10 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   if (opts.subagentExecutor) schemas.push(opts.subagentExecutor.describeAgentTool?.() ?? agentTool);
   if (opts.skillExecutor) schemas.push(skillTool);
   if (opts.composeExecutor) schemas.push(composeTool);
-  // Read-only memory child sessions get only `memory_search`; full sessions
-  // get the complete trio (search + update + procedure_write).
+  // Recon sessions (readOnlyMemory=true) get only `memory_search`. Child
+  // sessions (readOnlyMemory=false, readOnlyState=true) get search +
+  // memory_update; hot-write is blocked at hook time, not schema time. Full
+  // parent sessions get all three (search + update + procedure_write).
   if (opts.readOnlyMemory === true) {
     schemas.push(memorySearchTool);
   } else {

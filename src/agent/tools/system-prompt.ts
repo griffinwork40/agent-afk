@@ -132,14 +132,16 @@ Save reusable multi-step workflows the user teaches you or that you discover wor
 
 /**
  * Child-session variant of {@link MEMORY_SYSTEM_PROMPT}. Used by child
- * (subagent / skill) sessions. Children have `memory_search` AND
- * `memory_update` (target:"fact" only) — `target:"hot"` writes are blocked
- * at runtime by the `createChildMemoryHotBlockHook` PreToolUse hook.
- * `procedure_write` is not available. This variant omits hot-write guidance
- * and procedure_write so the model is not instructed to call tools or targets
- * that are blocked.
+ * (subagent / skill) sessions that have `memory_search` AND `memory_update`
+ * (target:"fact" only). `target:"hot"` writes are blocked at runtime by the
+ * `createChildMemoryHotBlockHook` PreToolUse hook. `procedure_write` is not
+ * available. This variant omits hot-write guidance and procedure_write so the
+ * model is not instructed to call tools or targets that are blocked.
+ *
+ * @see MEMORY_SYSTEM_PROMPT_SEARCH_ONLY for recon children that have only
+ *   `memory_search` and must not call `memory_update` at all.
  */
-export const MEMORY_SYSTEM_PROMPT_READONLY = `# Cross-Session Memory (read-only)
+export const MEMORY_SYSTEM_PROMPT_READONLY = `# Cross-Session Memory (child session)
 
 You have access to memory_search and memory_update (target:"fact" only). Hot memory writes (target:"hot") and procedure_write are not available in this child session — only the parent can write to hot memory or procedures.
 
@@ -154,6 +156,26 @@ Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.
 
 ## Persisting facts (memory_update, target:"fact" only)
 Store findings when you encounter non-obvious facts worth persisting: project conventions, key decisions, surprising learnings. Use target:"fact" — it goes to the searchable SQLite archive. Do NOT use target:"hot" (blocked in child sessions).`;
+
+/**
+ * Recon-child variant of {@link MEMORY_SYSTEM_PROMPT}. Used by read-only
+ * recon / skill-fallback sessions (those with `readOnlyMemory: true`) that
+ * have ONLY `memory_search` — `memory_update` and `procedure_write` are
+ * absent from the schema entirely. The prompt must not advertise tools the
+ * model cannot call.
+ */
+export const MEMORY_SYSTEM_PROMPT_SEARCH_ONLY = `# Cross-Session Memory (read-only)
+
+You have access to memory_search only. No memory-write tools are available in this session.
+
+## Reading memory
+On your first turn, decide whether to call memory_search based on the request:
+- Search when the task involves ongoing work, user preferences, project conventions, or prior context — e.g. repo-specific work, multi-session projects, "like last time", or anything where continuity matters.
+- Skip for clearly self-contained requests — one-off questions, simple lookups, or tasks with no plausible prior context.
+- If hot memory (shown in <cross-session-memory> tags above) already covers the relevant context, skip the search.
+- Search at most once per session for general context. Search again only if new information surfaces a specific topic worth querying.
+
+Use FTS5 syntax: "exact phrase", term1 AND term2, prefix*.`;
 
 /**
  * Resolve the tool-usage system prompt for a session — the single source of
@@ -177,13 +199,25 @@ export function resolveToolSystemPrompt(isSkillDispatch: boolean | undefined): s
 }
 
 /**
- * Resolve the memory system prompt for a session. Read-only child sessions
- * (subagents / skills that have only `memory_search`, never `memory_update` or
- * `procedure_write`) get the slimmed variant that omits write guidance for
- * tools they do not have. Shared by both providers to prevent drift.
+ * Resolve the memory system prompt for a session. Shared by both providers to
+ * prevent drift.
+ *
+ * Three tiers:
+ * - `readOnlyMemory=true`  → {@link MEMORY_SYSTEM_PROMPT_SEARCH_ONLY}: recon
+ *   children with only `memory_search` — `memory_update` is absent from the
+ *   schema so the prompt must not advertise it.
+ * - `readOnlyState=true` (and `readOnlyMemory` falsy) → {@link MEMORY_SYSTEM_PROMPT_READONLY}:
+ *   child sessions that have `memory_search` + `memory_update` (target:"fact")
+ *   but not hot-writes or `procedure_write`.
+ * - otherwise → {@link MEMORY_SYSTEM_PROMPT}: full parent session.
  */
-export function resolveMemorySystemPrompt(readOnly: boolean | undefined): string {
-  return readOnly ? MEMORY_SYSTEM_PROMPT_READONLY : MEMORY_SYSTEM_PROMPT;
+export function resolveMemorySystemPrompt(
+  readOnlyMemory: boolean | undefined,
+  readOnlyState?: boolean | undefined,
+): string {
+  if (readOnlyMemory) return MEMORY_SYSTEM_PROMPT_SEARCH_ONLY;
+  if (readOnlyState) return MEMORY_SYSTEM_PROMPT_READONLY;
+  return MEMORY_SYSTEM_PROMPT;
 }
 
 /**

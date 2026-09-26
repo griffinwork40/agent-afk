@@ -18,7 +18,7 @@
  * @module agent/memory/memory-hooks
  */
 
-import type { HookHandler } from '../hooks.js';
+import type { HookDecision, HookHandler } from '../hooks.js';
 import { MemoryStore } from './memory-store.js';
 import { deriveActor } from '../session/session-identity.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
@@ -40,13 +40,13 @@ import { isSubagentContext } from '../hooks/hook-utils.js';
  * unaffected.
  *
  * Returns:
- * - `{ block: true, injectContext }` for a sub-agent hot-write → the
- *   dispatcher returns `is_error: true` with an explanation that directs the
- *   model to use target:"fact" instead.
+ * - `{ decision: 'block', injectContext }` for a sub-agent hot-write → the
+ *   dispatcher throws HookBlockedError and returns `is_error: true` with an
+ *   explanation that directs the model to use target:"fact" instead.
  * - `{}` for anything else (non-subagent, non-memory_update, target:"fact").
  */
 export function createChildMemoryHotBlockHook(): HookHandler {
-  return (context) => {
+  return (context): HookDecision => {
     if (context.event !== 'PreToolUse') return {};
     if (context.toolName !== 'memory_update') return {};
     // Only apply to forked sub-agent sessions.
@@ -60,7 +60,8 @@ export function createChildMemoryHotBlockHook(): HookHandler {
 
     // Block the hot write and inject guidance.
     return {
-      block: true,
+      decision: 'block',
+      reason: 'Sub-agent sessions may not write to target:"hot".',
       injectContext:
         'Sub-agent sessions may not write to target:"hot" — hot memory rewrites HOT.md, ' +
         'which is injected into every future session\'s system prompt. ' +

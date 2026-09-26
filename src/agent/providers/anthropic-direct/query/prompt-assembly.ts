@@ -93,7 +93,7 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // being told about tools it does not have.
   // Child sessions (readOnlyState) can write facts but not hot memory — give
   // them the slimmed child-prompt variant that omits hot-write guidance.
-  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory || args.readOnlyState);
+  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory, args.readOnlyState);
   const workspacePrompt = resolveWorkspaceSystemPrompt(args.workspaceEnabled);
 
   // Awareness identity fields interleaved into the `# Environment` fragment

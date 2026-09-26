@@ -179,9 +179,10 @@ export function buildDispatcher(
     undefined,
     deps.surface,
   );
-  // Read-only memory: register `memory_search` only. The dispatcher's
-  // unknown-tool path produces a clear error if the model attempts
-  // `memory_update` / `procedure_write` despite the schema being absent.
+  // Recon sessions (readOnlyMemory=true): register only `memory_search`.
+  // Child sessions (readOnlyMemory=false) get all handlers — the hot-write
+  // guard is enforced at PreToolUse time by createChildMemoryHotBlockHook,
+  // not by omitting the handler.
   for (const [name, handler] of memoryHandlers) {
     if (deps.readOnlyMemory && name !== 'memory_search') continue;
     handlers.set(name, handler);

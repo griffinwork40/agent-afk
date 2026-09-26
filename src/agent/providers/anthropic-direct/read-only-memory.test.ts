@@ -23,6 +23,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createHookRegistry } from '../../hooks.js';
+import { createChildMemoryHotBlockHook } from '../../memory/memory-hooks.js';
 import type Anthropic from '@anthropic-ai/sdk';
 import type {
   ContentBlockParam,
@@ -469,5 +471,73 @@ describe('createChildProviderFactory — readOnlyMemory propagation', () => {
     // reject it with is_error. The tool handler may set is_error for other
     // reasons (e.g. missing MemoryStore), but the allowlist gate must not fire.
     expect(toolResult!.is_error).not.toBe(true);
+  });
+
+  it('hook blocks target:"hot" write from a child session — tool result carries is_error: true', async () => {
+    // Integration path: wire the createChildMemoryHotBlockHook into a real
+    // HookRegistry, pass it on the query config, and assert the dispatcher
+    // returns is_error: true when the model calls memory_update(target:"hot")
+    // from a child session (parentSessionId set). This proves the hook's
+    // `decision: 'block'` actually reaches the dispatcher — a unit test that
+    // only checks the hook's return value cannot catch a wrong field name.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return fromArray(
+          makeToolUseStream(
+            'tool_hot_1',
+            'memory_update',
+            JSON.stringify({ target: 'hot', action: 'set', content: 'bad hot write', category: 'preference' }),
+          ),
+        );
+      }
+      return fromArray(makeTextStream('done'));
+    });
+
+    // Registry with the real hot-block hook.
+    const hookRegistry = createHookRegistry();
+    hookRegistry.register('PreToolUse', createChildMemoryHotBlockHook());
+
+    const factory = createChildProviderFactory();
+    const provider = factory({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      childExecutor: { execute: vi.fn() } as any,
+    });
+
+    const query = provider.query({
+      prompt: singleInput('please write to hot memory'),
+      config: {
+        model: 'claude-sonnet-5',
+        apiKey: 'sk-ant-oat01-test',
+        // Signal a child session — the hook only blocks when parentSessionId is set.
+        parentSessionId: 'parent-session-x',
+        hookRegistry,
+      },
+    });
+    await drainQuery(query);
+
+    // Two messages.create calls: initial turn + tool-result follow-up.
+    expect(messagesCreateMock).toHaveBeenCalledTimes(2);
+
+    const secondCall = messagesCreateMock.mock.calls[1]!;
+    const messages = (secondCall[0] as {
+      messages?: Array<{ role: string; content: ContentBlockParam[] | string }>;
+    }).messages;
+    const lastUser = [...(messages ?? [])]
+      .reverse()
+      .find((m) => m.role === 'user');
+    const blocks = Array.isArray(lastUser!.content)
+      ? (lastUser!.content as ContentBlockParam[])
+      : [];
+    const toolResult = blocks.find(
+      (b) =>
+        (b as { type?: string }).type === 'tool_result' &&
+        (b as { tool_use_id?: string }).tool_use_id === 'tool_hot_1',
+    ) as { is_error?: boolean; content?: unknown } | undefined;
+
+    expect(toolResult).toBeDefined();
+    // The hook blocks the hot write — the dispatcher must set is_error: true.
+    expect(toolResult!.is_error).toBe(true);
   });
 });
