@@ -185,7 +185,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   const floorBanner = Math.max(self.anchorRow ?? 1, 1);
   const roomBanner = Math.max(0, desiredTopRow - floorBanner);
   const hasPendingBanner = self.committedBandPaintedRows < bandLenBanner;
-  const overlayCollapsedBanner = self.overlay.trim().length === 0;
+  const overlayCollapsedBanner = self.overlay.trim().length === 0 && contentHugFrameSettled(self);
   if (
     !self.commitInFlight &&
     hasPendingBanner &&
