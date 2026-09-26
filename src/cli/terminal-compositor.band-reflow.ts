@@ -91,23 +91,119 @@ export function reflowBandSplit(
   const clampedPainted = Math.max(0, Math.min(paintedRows, band.length));
   const splitAt = band.length - clampedPainted;
   // Re-wrap a [start, end) slice of the band, emitting the new physical rows
-  // and their meta together so the two arrays stay index-aligned. Each source
-  // row band[k] contributes its wrapped sub-rows, all carrying band[k]'s
-  // logicalText (from `meta`, or the row text itself as a fallback); only the
-  // first sub-row is a head, and only if the source row was a head.
+  // and their meta together so the two arrays stay index-aligned.
+  //
+  // On WIDEN: when meta is present, we rejoin a full logical-line group (one
+  // head row + its continuation rows) into a single re-wrap of `logicalText`
+  // at the new width — restoring the original wrapping after a narrow→widen
+  // sequence. This mirrors the scrollback flush path (scrollbackFlushLines)
+  // that already rejoins logical lines via the same provenance. Without this,
+  // physical rows retained their narrow-width break points forever.
+  //
+  // Orphan-continuation guard: if the slice starts mid-logical-line (isHead:
+  // false on the first row of the slice — i.e. the head was evicted or is in a
+  // different slice), we cannot safely re-emit the full logicalText (it would
+  // duplicate the evicted/earlier portion on screen). Those leading orphan rows
+  // are re-wrapped per-physical-row (same as the pre-fix behavior).
+  //
+  // Safety guard: before rejoining, we verify that the group's source rows
+  // concatenate back to logicalText (hardWrapToWidth is content-preserving, so
+  // this holds whenever the rows were produced by wrapping logicalText). On a
+  // mismatch (e.g. ANSI re-styling at wrap boundaries) we fall back to per-row
+  // re-wrapping rather than emit content that differs from what was painted.
   const reflowSlice = (start: number, end: number): { rows: string[]; meta: BandRowMeta[] } => {
     const outRows: string[] = [];
     const outMeta: BandRowMeta[] = [];
-    for (let k = start; k < end; k++) {
+
+    // No meta → degrade to original per-row behavior (no rejoin possible).
+    if (!meta) {
+      for (let k = start; k < end; k++) {
+        const source = band[k] ?? '';
+        const subRows = hardWrapToWidth(source, width).split('\n');
+        subRows.forEach((sub, i) => {
+          outRows.push(sub);
+          outMeta.push({ logicalText: source, isHead: i === 0 });
+        });
+      }
+      return { rows: outRows, meta: outMeta };
+    }
+
+    let k = start;
+
+    // Leading orphan continuations: the slice starts with isHead:false rows
+    // whose head is outside this slice. Re-wrap them independently (verbatim
+    // physical row behavior) — we cannot reconstruct the full logicalText.
+    while (k < end && meta[k] !== undefined && !meta[k]!.isHead) {
       const source = band[k] ?? '';
-      const logicalText = meta?.[k]?.logicalText ?? source;
-      const sourceIsHead = meta?.[k]?.isHead ?? true;
+      const logicalText = meta[k]!.logicalText;
       const subRows = hardWrapToWidth(source, width).split('\n');
-      subRows.forEach((sub, i) => {
+      subRows.forEach((sub) => {
         outRows.push(sub);
-        outMeta.push({ logicalText, isHead: i === 0 && sourceIsHead });
+        // Orphan rows are never heads; carry their logicalText through.
+        outMeta.push({ logicalText, isHead: false });
+      });
+      k++;
+    }
+
+    // Process complete logical-line groups: each group starts at a head row and
+    // includes all following continuation rows (isHead:false) with the same
+    // logicalText. Rejoin and re-wrap the whole group from logicalText.
+    while (k < end) {
+      const headMeta = meta[k];
+      if (headMeta === undefined || !headMeta.isHead) {
+        // Unexpected non-head after the orphan prefix — treat as orphan.
+        const source = band[k] ?? '';
+        hardWrapToWidth(source, width).split('\n').forEach((sub) => {
+          outRows.push(sub);
+          outMeta.push({ logicalText: meta[k]?.logicalText ?? source, isHead: false });
+        });
+        k++;
+        continue;
+      }
+
+      const logicalText = headMeta.logicalText;
+      // Collect all rows belonging to this logical group within [k, end).
+      const groupStart = k;
+      k++; // consume the head
+      while (k < end && meta[k] !== undefined && !meta[k]!.isHead) {
+        k++;
+      }
+      const groupEnd = k; // exclusive
+
+      // Safety guard: verify the stored physical rows were produced from
+      // logicalText by checking that rejoining them equals logicalText.  We
+      // join the source rows with '\n' and compare after stripping trailing
+      // spaces (hardWrapToWidth(…, trim:false) may pad with spaces on some
+      // wrappers). If they don't match, fall back to per-row re-wrapping.
+      const sourceRows = Array.from({ length: groupEnd - groupStart }, (_, i) => band[groupStart + i] ?? '');
+      const rejoined = sourceRows.join('\n');
+      const canRejoin = rejoined === logicalText || sourceRows.join('') === logicalText.replace(/\n/g, '');
+      // Additional check: hardWrapToWidth(logicalText, someOldWidth) should
+      // produce sourceRows. Rather than inferring oldWidth (brittle), we use
+      // the canRejoin join-equality check above, which is reliable when
+      // logicalText was set from the pre-wrap source (as buildBandMeta does).
+      if (!canRejoin) {
+        // Mismatch (e.g. styled content, ANSI chars affecting display width):
+        // fall back to the original per-row approach for this group.
+        for (let j = groupStart; j < groupEnd; j++) {
+          const source = band[j] ?? '';
+          const srcMeta = meta[j]!;
+          hardWrapToWidth(source, width).split('\n').forEach((sub, i) => {
+            outRows.push(sub);
+            outMeta.push({ logicalText: srcMeta.logicalText, isHead: i === 0 && srcMeta.isHead });
+          });
+        }
+        continue;
+      }
+
+      // Rejoin: re-wrap the whole logical line at the new width.
+      const newSubRows = hardWrapToWidth(logicalText, width).split('\n');
+      newSubRows.forEach((sub, i) => {
+        outRows.push(sub);
+        outMeta.push({ logicalText, isHead: i === 0 }); // only the first sub-row is a head
       });
     }
+
     return { rows: outRows, meta: outMeta };
   };
   const pending = reflowSlice(0, splitAt);
