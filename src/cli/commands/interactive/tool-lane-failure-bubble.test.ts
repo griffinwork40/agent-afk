@@ -14,15 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { ToolLane } from './tool-lane.js';
 import { childFailureBadge } from './tool-lane-format.js';
 import { stripAnsi } from '../../display.js';
-import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return { type: 'tool_result', toolUseId: 'unused', content, isError };
-}
-
-function makeError(content: string): ToolResultChunk {
-  return { type: 'tool_result', toolUseId: 'unused', content, isError: true };
-}
+import { makeResult, makeError } from './__fixtures__/tool-lane-render.fixtures.js';
 
 // ─── childFailureBadge unit tests ─────────────────────────────────────────────
 
