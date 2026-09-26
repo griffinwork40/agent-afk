@@ -845,6 +845,36 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(task?.cwd).toBe('/tmp');
   });
 
+  it('POST /tasks rejects a nonexistent cwd with 400 and does not register the task', async () => {
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'bad-cwd-task',
+        command: '/cmd',
+        cron: '* * * * *',
+        cwd: join(tmpdir(), 'afk-daemon-cwd-does-not-exist-9f3a'),
+      }),
+    });
+    expect(res.status).toBe(400);
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string }>;
+    expect(tasks.some((t) => t.taskId === 'bad-cwd-task')).toBe(false);
+  });
+
+  it('POST /tasks rejects an empty or non-string cwd with 400', async () => {
+    const h = await spinDaemon();
+    for (const cwd of ['', 42]) {
+      const res = await fetch(`http://localhost:${h.port}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: 'empty-cwd-task', command: '/cmd', cron: '* * * * *', cwd }),
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
   it('disable→re-enable regression: DELETE then POST re-registers the task in scheduler', async () => {
     // Regression path from PR #1879: disabling (DELETE) then re-enabling (POST)
     // a task must leave the task present and active in the scheduler.

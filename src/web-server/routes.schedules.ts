@@ -114,6 +114,10 @@ export async function handleCreateSchedule(
   const rawCwd = str(body, 'cwd');
   let resolvedCwd: string | undefined;
   if (rawCwd !== undefined) {
+    if (!rawCwd) {
+      sendJson(res, 400, { error: 'bad_request', message: 'cwd must be a non-empty string' });
+      return;
+    }
     const cwdResult = validateScheduleCwd(rawCwd);
     if (!cwdResult.ok) {
       sendJson(res, 400, { error: 'bad_request', message: cwdResult.error });
@@ -209,6 +213,10 @@ export async function handleUpdateSchedule(
   const rawCwd = str(body, 'cwd');
   let resolvedCwd: string | undefined;
   if (rawCwd !== undefined) {
+    if (!rawCwd) {
+      sendJson(res, 400, { error: 'bad_request', message: 'cwd must be a non-empty string' });
+      return;
+    }
     const cwdResult = validateScheduleCwd(rawCwd);
     if (!cwdResult.ok) {
       sendJson(res, 400, { error: 'bad_request', message: cwdResult.error });
