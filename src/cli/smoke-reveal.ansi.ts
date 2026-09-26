@@ -40,29 +40,19 @@ function pushText(out: AnsiSegment[], text: string): void {
 
 /**
  * Scan forward from `j` (the first payload byte of an ST-terminated sequence)
- * looking for the String Terminator `ESC \`. Returns the total sequence length
- * from `i` (the ESC that opened the sequence). If unterminated within the
- * allowed window, returns -1 to signal "cap hit, not terminated"; callers use
- * this to treat the opener as a 2-byte literal so following text is not
- * silently dropped. When no cap is provided (DCS/SOS/PM/APC), swallows the
- * rest of the string so payload bytes never leak into the visible-char count.
+ * looking for BEL (U+0007) or the String Terminator `ESC \`. Returns the
+ * total sequence length from `i` (the ESC that opened the sequence), or -1
+ * if no terminator is found anywhere in the rest of the string.
  *
  * OSC also accepts BEL as an alternative terminator per xterm; all other
  * ST-terminated types (DCS, SOS, PM, APC) use ST only.
- *
- * @param maxLen - Max payload bytes to scan before giving up (default Infinity).
  */
-function swallowToST(s: string, i: number, j: number, acceptBEL: boolean, maxLen = Infinity): number {
-  const limit = Math.min(j + maxLen, s.length);
-  for (; j < limit; j++) {
+function swallowToST(s: string, i: number, j: number, acceptBEL: boolean): number {
+  for (; j < s.length; j++) {
     if (acceptBEL && s[j] === BEL) return j - i + 1;
     if (s[j] === ESC && s[j + 1] === '\\') return j - i + 2;
   }
-  // No terminator found within the allowed window. Return -1 when a finite cap
-  // was supplied — the caller uses this to treat the opener as a 2-byte literal
-  // instead of silently swallowing the rest of the string. Without a cap
-  // (DCS/APC/PM/SOS), preserve the historic behaviour of swallowing to end.
-  return isFinite(maxLen) ? -1 : s.length - i;
+  return -1;
 }
 
 /** Length of the escape sequence starting at `i` (which holds ESC). */
@@ -72,17 +62,22 @@ function escapeLength(s: string, i: number): number {
     const m = CSI_RE.exec(s.slice(i));
     return m ? m[0].length : 2;
   }
-  // OSC (ESC ]): terminated by BEL or ST per xterm.
-  // Cap the scan at 254 payload bytes (256 total incl. ESC ]). If no terminator
-  // is found within the window, treat ESC ] as a 2-byte literal so the rest of
-  // the string is not silently dropped from the smoke animation.
+  // OSC (ESC ]): terminated by BEL or ST per xterm. Scan the full remaining
+  // string for the real terminator — no byte-count cap — so OSC payloads
+  // longer than 254 bytes (e.g. long OSC 8 URLs) are treated as a single raw
+  // segment rather than split at an arbitrary boundary. Only if no terminator
+  // exists anywhere (e.g. a streaming chunk boundary) do we fall back to a
+  // 2-byte literal so following text is not silently swallowed.
   if (next === ']') {
-    const len = swallowToST(s, i, i + 2, /* acceptBEL */ true, /* maxLen */ 254);
+    const len = swallowToST(s, i, i + 2, /* acceptBEL */ true);
     return len === -1 ? 2 : len;
   }
   // DCS (ESC P), SOS (ESC X), PM (ESC ^), APC (ESC _): terminated by ST only.
+  // When unterminated, swallow to end so payload bytes never leak into the
+  // visible-char count (historic behaviour preserved).
   if (next === 'P' || next === 'X' || next === '^' || next === '_') {
-    return swallowToST(s, i, i + 2, /* acceptBEL */ false);
+    const len = swallowToST(s, i, i + 2, /* acceptBEL */ false);
+    return len === -1 ? s.length - i : len;
   }
   // Any other ESC is a two-byte escape (ESC 7/8/c/=/>, SS2/SS3, ...) or a
   // lone trailing ESC. It is passed through unchanged as a zero-cell `raw`
