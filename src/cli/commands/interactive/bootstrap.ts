@@ -10,6 +10,7 @@ import type { SessionRef } from '../../../agent/session-ref.js';
 import type { CliOptions, InteractiveCtx } from './shared.js';
 import { ContextSampler } from '../../context-sampler.js';
 import { ensurePluginEntrypointsLoaded } from '../../../agent/tools/skill-bridge.js';
+import { installPluginHooks } from '../../../agent/plugins/load-entrypoints.js';
 import type { ResolvedResumeTarget } from '../../resume-session.js';
 import { emitSessionPhase } from '../../../agent/trace/emit.js';
 import { createDefaultTraceWriter } from '../../../agent/trace/factory.js';
@@ -31,6 +32,21 @@ import { setTasksIctx } from '../../slash/commands/tasks.js';
 // below) can resolve `buildAgentSession` from this module — the historical
 // import path every existing caller uses.
 export { buildAgentSession } from './bootstrap-session-builder.js';
+
+/**
+ * Load plugin JS entrypoints and install their hook declarations onto an
+ * already-built session registry. Extracted from {@link bootstrapSession} to
+ * keep that function within its baselined line-count ceiling.
+ *
+ * Idempotent: {@link ensurePluginEntrypointsLoaded} is process-scoped and
+ * skips already-loaded entrypoints. {@link installPluginHooks} is safe to
+ * call multiple times — the REPL registry is constructed before plugin
+ * activation, so hooks are applied retroactively here.
+ */
+async function activatePluginEntrypoints(hookRegistry: Parameters<typeof installPluginHooks>[0]): Promise<void> {
+  await ensurePluginEntrypointsLoaded();
+  installPluginHooks(hookRegistry);
+}
 
 /**
  * Build the session context from CLI options. Throws with a user-facing
@@ -152,11 +168,7 @@ export async function bootstrapSession(
     ...(options.provider !== undefined ? { explicitProvider: options.provider } : {}),
   });
 
-  // Import any plugin JS entrypoints (manifest `main`) before constructing the
-  // session: the skill manifest is assembled synchronously in the constructor,
-  // so a plugin's registerSkill() side-effects must already have run for its
-  // code-backed skills to appear. Idempotent + non-fatal; no-op without plugins.
-  await ensurePluginEntrypointsLoaded();
+  await activatePluginEntrypoints(hookRegistry);
 
   const session = buildAgentSession(sharedDeps);
   // Populate sessionRef (declared above deferredParent so the proxy works).

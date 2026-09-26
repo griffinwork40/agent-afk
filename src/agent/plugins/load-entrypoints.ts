@@ -16,6 +16,7 @@
 import { isAbsolute, resolve as resolvePath } from 'path';
 import { pathToFileURL } from 'url';
 import type { SdkPluginConfig } from '../types/sdk-types.js';
+import type { HarnessHookEvent, HookHandler, HookRegistry, RegisterOptions } from '../hooks.js';
 
 /**
  * Host runtime API injected into a plugin entrypoint's default-export function.
@@ -42,6 +43,10 @@ import type { SdkPluginConfig } from '../types/sdk-types.js';
  * still `import type { … } from 'agent-afk'` via a build-time devDependency. The
  * shape is derived via `typeof import(...)` so the injected signatures cannot
  * drift from their source modules.
+ *
+ * `registerHook` declares a handler once at process boot; the host installs it
+ * on each subsequently created session registry (and the already constructed
+ * REPL registry after activation). Only registration is exposed to plugins.
  */
 export type PluginApi = Pick<
   typeof import('../../skills/skill-registry.js'),
@@ -59,7 +64,20 @@ export type PluginApi = Pick<
   Pick<
     typeof import('../../paths.js'),
     'getAgentFrameworkDir' | 'getSkillsDir' | 'getSessionsDir'
-  >;
+  > & {
+    /**
+     * Declare a handler to be installed on each future session registry.
+     * Activation runs once per entrypoint path per process, not once per session;
+     * handlers should use their context for session-specific state. Returns a
+     * function removing the declaration from future registries. Optional for
+     * hosts without hook support.
+     */
+    registerHook?: (
+      event: HarnessHookEvent,
+      handler: HookHandler,
+      options?: RegisterOptions,
+    ) => () => void;
+  };
 
 /**
  * Resolved-entrypoint paths already imported in this process. Dynamic `import()`
@@ -68,9 +86,69 @@ export type PluginApi = Pick<
  */
 const loadedEntrypoints = new Set<string>();
 
-/** Clear the loaded-entrypoint set. For tests and `/reload-plugins`. */
+const pluginHooks = new Set<{
+  event: HarnessHookEvent;
+  handler: HookHandler;
+  options?: RegisterOptions;
+}>();
+
+/**
+ * Keys from {@link RegisterOptions} that are **denied** to plugins (denylist).
+ * `longRunning: true` disables the per-handler timeout and is reserved for
+ * first-party handlers that await human input (e.g. path-approval). Plugins
+ * that set it would prevent session boot on a throw, violating the module
+ * invariant at :10-11. Unknown future options are forwarded unless explicitly
+ * listed here.
+ */
+const PLUGIN_REGISTER_OPTION_ALLOWLIST = ['longRunning'] as const satisfies ReadonlyArray<keyof RegisterOptions>;
+type PluginRegisterOptions = Omit<RegisterOptions, (typeof PLUGIN_REGISTER_OPTION_ALLOWLIST)[number]>;
+
+/**
+ * Filter plugin-supplied {@link RegisterOptions} to the allowed subset.
+ * `longRunning` is stripped: it disables the per-handler timeout and must
+ * never be set by untrusted plugin code.
+ */
+function sanitizePluginOptions(options: RegisterOptions | undefined): PluginRegisterOptions | undefined {
+  if (options === undefined) return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { longRunning: _stripped, ...safe } = options;
+  return Object.keys(safe).length > 0 ? safe : undefined;
+}
+
+/** Scoped capability injected into PluginApi at process boot. */
+export const registerPluginHook: NonNullable<PluginApi['registerHook']> = (event, handler, options) => {
+  const safeOptions = sanitizePluginOptions(options);
+  const declaration = { event, handler, ...(safeOptions !== undefined ? { options: safeOptions } : {}) };
+  pluginHooks.add(declaration);
+  return () => { pluginHooks.delete(declaration); };
+};
+
+/**
+ * Install declarations on a newly built session registry before session
+ * construction. Each plugin handler is wrapped in error isolation: a throw
+ * from a plugin hook is caught, logged, and treated as a no-op `{}` result.
+ * This upholds the module invariant (:10-11): a misbehaving plugin must never
+ * abort session boot.
+ */
+export function installPluginHooks(registry: HookRegistry): void {
+  for (const { event, handler, options } of pluginHooks) {
+    const isolated: typeof handler = async (ctx, signal) => {
+      try {
+        return await handler(ctx, signal);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[plugin-hook] handler threw — degrading to no-op', err);
+        return {};
+      }
+    };
+    registry.register(event, isolated, options);
+  }
+}
+
+/** Clear the loaded-entrypoint set and plugin-hook declarations. For tests only. */
 export function _resetLoadedEntrypoints(): void {
   loadedEntrypoints.clear();
+  pluginHooks.clear();
 }
 
 export type LoadEntrypointsOptions = {

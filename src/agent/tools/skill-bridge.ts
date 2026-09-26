@@ -21,7 +21,7 @@ import { listSkills, getSkill, registerSkill, isSkillVisible, evictSkillsByOrigi
 import { loadSkillPrompts } from '../../skills/_lib/prompt-loader.js';
 import { scanSkillsFromDir } from '../../skills/user-skills.js';
 import { scanLocalPlugins } from '../plugins-scanner.js';
-import { loadPluginEntrypoints } from '../plugins/load-entrypoints.js';
+import { loadPluginEntrypoints, registerPluginHook } from '../plugins/load-entrypoints.js';
 import { extractPluginSkills, resolveKnownToolNames } from '../plugins/tool-injector.js';
 import { extractPluginCommands } from '../plugins/command-files.js';
 import { readPluginManifest } from '../plugins/plugin-manifest.js';
@@ -478,6 +478,8 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
   // discoverPluginSkillBodies, the session-facet substrate, the paths getters) WITHOUT a bare
   // `import 'agent-afk'` — which a marketplace-cloned plugin (no node_modules)
   // cannot resolve at all. See PluginApi for the full rationale.
+  //
+  // Declarations are installed on each session registry when it is created.
   await loadPluginEntrypoints(scanAllPluginRoots(), {
     pluginApi: {
       registerSkill,
@@ -495,6 +497,7 @@ export async function ensurePluginEntrypointsLoaded(): Promise<void> {
       listSessionIds,
       deriveSessionFacet,
       loadStoredSession,
+      registerHook: registerPluginHook,
     },
   });
 }
