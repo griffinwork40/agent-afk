@@ -27,6 +27,8 @@
  *                         relative to <ref> must come under the ceiling in that
  *                         same change.
  *   --list [n]            print the largest n functions (default 40).
+ *   --allow-growth        allow growth/new entries when running --update-baseline.
+ *   --reason "<text>"     required with --allow-growth; stamped on new entries.
  *
  * Baseline keys are `<path>::<qualified name>`, never line numbers — see the
  * naming invariant in `lib/function-extents.ts`.
@@ -206,7 +208,35 @@ function main(): void {
   const measured = scanAll();
 
   if (argv.includes('--update-baseline')) {
-    const { kept, dropped } = updateBaseline(RATCHET, measured.sizes);
+    const allowGrowth = argv.includes('--allow-growth');
+    const reasonIdx = argv.indexOf('--reason');
+    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+
+    if (allowGrowth && !reason) {
+      console.error('✗ check-function-size: --allow-growth requires --reason "<text>" (non-empty).');
+      process.exit(1);
+    }
+    if (reason.startsWith('--')) {
+      console.error('✗ check-function-size: --reason value looks like a flag. Did you mean: --reason "..." --allow-growth?');
+      process.exit(1);
+    }
+
+    const { kept, dropped, blocked } = updateBaseline(RATCHET, measured.sizes, { allowGrowth, reason });
+
+    if (blocked.length > 0) {
+      console.error(
+        `✗ check-function-size: ${blocked.length} function(s) grew or are new — refusing to update baseline (${BASELINE_REL}, ceiling ${LIMIT}) without --allow-growth:\n`,
+      );
+      for (const e of blocked) {
+        const delta = e.oldLoc === null ? `(new, ${e.newLoc})` : `${e.oldLoc} → ${e.newLoc} (+${e.newLoc - e.oldLoc})`;
+        console.error(`    ${e.key}  ${delta}`);
+      }
+      console.error(
+        `\nTo record a deliberate increase, re-run with:\n  pnpm audit:funcsize:update --allow-growth --reason "<why this growth is intentional>"\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);
