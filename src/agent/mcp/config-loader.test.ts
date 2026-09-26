@@ -414,3 +414,42 @@ describe('loadMcpConfig (layered)', () => {
     expect(result.mcpServers['ok']?.command).toBe('ok');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Episode mode: MCP disabled
+// ---------------------------------------------------------------------------
+
+describe('episode mode', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns empty config when AFK_WHATIF_EPISODE=1 is set', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    const result = loadMcpConfig();
+    expect(result.mcpServers).toEqual({});
+    expect(result.sources).toEqual([]);
+    expect(result.serverLayers).toEqual({});
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/disabled inside a what-if episode/);
+    expect(result.warnings[0]).toMatch(/AFK_WHATIF_ALLOW_MCP=1/);
+  });
+
+  it('allows MCP when AFK_WHATIF_ALLOW_MCP=1 is set alongside episode flag', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_ALLOW_MCP', '1');
+    // Should NOT return the episode empty-config (just normal load = no servers since no config file present)
+    const result = loadMcpConfig({ skipUserGlobal: true, pluginsRoot: null, skipProjectLocal: true });
+    // In this case it just returns whatever the normal load returns (no servers from empty config)
+    expect(result.warnings).not.toContain(
+      expect.stringMatching(/disabled inside a what-if episode/),
+    );
+  });
+
+  it('outside episode: normal load proceeds', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '');
+    const result = loadMcpConfig({ skipUserGlobal: true, pluginsRoot: null, skipProjectLocal: true });
+    // No episode-specific warning
+    expect(result.warnings.some((w) => /disabled inside a what-if episode/.test(w))).toBe(false);
+  });
+});

@@ -21,6 +21,7 @@ import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '
 import type { LoadedHooksConfig } from './config-loader.js';
 import { compileMatcher } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
+import { isWhatifEpisode } from '../whatif-episode-gate.js';
 
 export interface AgentConfigForBridge {
   cwd?: string;
@@ -47,6 +48,14 @@ export function loadAndRegisterConfigHooks(
   const agentCwd = agentConfig.cwd ?? process.cwd();
   const sessionId = agentConfig.sessionId;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
+
+  // Episode mode: allow only context-shaping hooks. Side-effect tails
+  // (notifications, external writes triggered by Stop/PostToolUse, etc.) must
+  // not fire during a sandboxed episode — the episode is a replay for observation,
+  // not a live session. SessionStart and UserPromptSubmit shape preamble/context,
+  // which IS necessary for the episode to see the correct prompt structure.
+  const episodeAllowedEvents = new Set<HarnessHookEvent>(['SessionStart', 'UserPromptSubmit']);
+  const inEpisode = isWhatifEpisode();
 
   const validEvents: HarnessHookEvent[] = [
     'SessionStart',
@@ -87,6 +96,10 @@ export function loadAndRegisterConfigHooks(
   }
 
   for (const event of validEvents) {
+    // In episode mode, skip events that are pure side-effect tails. Only
+    // SessionStart and UserPromptSubmit may run (they shape context / preamble).
+    if (inEpisode && !episodeAllowedEvents.has(event)) continue;
+
     const groups = hookConfig.hooks[event];
     if (groups === undefined || groups.length === 0) continue;
 

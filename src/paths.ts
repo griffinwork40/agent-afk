@@ -779,4 +779,18 @@ export function getEffectLedgerPath(): string {
   return join(getAfkStateDir(), 'effect-ledger.jsonl');
 }
 
+// ---------------------------------------------------------------------------
+// What-if state
+// ---------------------------------------------------------------------------
+
+/**
+ * Root directory for what-if engine state.
+ *
+ * Stores the calibration ledger (`ledger.jsonl`) and per-run outputs.
+ * Lives at `<getAfkStateDir()>/whatif`.
+ */
+export function getWhatifDir(): string {
+  return join(getAfkStateDir(), 'whatif');
+}
+
 

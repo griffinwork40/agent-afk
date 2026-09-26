@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**196 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**199 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -264,5 +264,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_WAVE_MANIFEST_TTL_HOURS` | number |  | `48` | `24` | Time-to-live for wave manifests in hours. Manifests older than this are deleted on reconciliation and by the witness sweep. Default 48 (two days). |
 | `AFK_WAVE_RESUME_UNATTENDED` | boolean |  | `0` | `1` | When set to 1, surface wave resumption offers even on non-interactive surfaces (daemon, one-shot chat). By default, offers are only made on interactive surfaces (REPL, Telegram). |
 | `AFK_WEB_ALLOW_PRIVATE_HOSTS` | boolean |  |  | `1` | Opt out of the web_scrape SSRF egress guard. When unset (default) the guard is ACTIVE: the markdown, raw, and headless-render paths refuse loopback (127/8, ::1), link-local (169.254/16 — including the 169.254.169.254 cloud instance-metadata endpoint), RFC1918 (10/8, 172.16/12, 192.168/16), carrier-grade NAT (100.64/10), IPv6 unique-local (fc00::/7), 0.0.0.0/8, and the IPv4-mapped/compatible IPv6 forms of all of those. Hostnames are resolved and the RESOLVED addresses are classified (DNS-rebinding guard), and the check is re-applied on every redirect hop. Set to 1/true to allow private-host access — needed only to scrape a local dev server. Enabling it restores a model-reachable SSRF path (issue #575). |
+| `AFK_WHATIF_ALLOW_MCP` | boolean |  |  | `1` | When set to "1" or "true" inside a what-if episode (AFK_WHATIF_EPISODE=1), keep MCP servers enabled. By default, MCP servers are disabled inside episodes to prevent side effects from spawning external processes. Set this flag only when the change under test specifically concerns MCP server behaviour. |
+| `AFK_WHATIF_EPISODE` | boolean |  |  | `1` | When set to "1" or "true", the process is a sandboxed what-if episode. The episode gate (src/agent/whatif-episode-gate.ts) intercepts every PreToolUse call: read-only tools execute normally; the first side-effecting action is RECORDED as the decision but NOT executed. Episode processes are spawned by `afk whatif --verify` as isolated subprocesses with their own AFK_HOME / AFK_STATE_DIR pointing at the sandbox. Do not set this manually in production — it disables delegation, MCP (unless AFK_WHATIF_ALLOW_MCP=1), and all write tools. |
+| `AFK_WHATIF_TOOL_LOG` | string |  |  | `/tmp/whatif-run-abc123/tool-log.jsonl` | Absolute path of a JSONL file the episode gate appends every tool request to (one JSON line per call). Each line has the shape `{"ts":<ms>,"tool":<name>,"input":<raw input>,"verdict":"executed"\|"recorded","subagent":<bool>}`. Ignored when AFK_WHATIF_EPISODE is not set. The file is created if absent; write errors are swallowed so a full disk never disrupts tool execution. |
 | `AFK_WRITE_DENYLIST` | string |  |  | `**/.env,**/secrets/**` | Comma-separated list of additional path globs that the write_file tool refuses to write to. |
 | `AFK_WRITE_DIFF` | boolean |  |  |  | Show a diff preview before each write_file tool call. Defaults provider-controlled when unset. |

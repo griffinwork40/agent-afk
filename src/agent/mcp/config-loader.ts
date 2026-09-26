@@ -36,6 +36,7 @@ import { sanitizeForDisplay } from '../../utils/terminal-sanitize.js';
 import type { McpServerConfig } from './types.js';
 import type { McpServerLayer } from './env-containment.js';
 import { errorMessage } from '../../utils/errors.js';
+import { isWhatifEpisode } from '../whatif-episode-gate.js';
 
 /** Shape of `~/.afk/config/mcp.json`. */
 export interface McpConfigFile {
@@ -390,6 +391,23 @@ function safeLabel(s: string, maxLen: number): string {
  * Do not reorder without updating the conflict-reporting logic below.
  */
 export function loadMcpConfig(opts: LoadMcpConfigOptions = {}): LoadedMcpConfig {
+  // Episode guard: MCP servers are disabled inside a what-if episode unless
+  // AFK_WHATIF_ALLOW_MCP is set. Spawning external processes (stdio servers)
+  // or connecting to external HTTP servers would introduce side effects that
+  // corrupt the sandbox's isolation guarantee. The allow-MCP flag exists only
+  // for changes that specifically concern MCP server behaviour.
+  if (isWhatifEpisode() && !(env.AFK_WHATIF_ALLOW_MCP === '1' || env.AFK_WHATIF_ALLOW_MCP === 'true')) {
+    return {
+      mcpServers: {},
+      sources: [],
+      serverLayers: {},
+      userAllowSecretEnv: {},
+      warnings: [
+        'mcp: disabled inside a what-if episode (set AFK_WHATIF_ALLOW_MCP=1 to keep servers)',
+      ],
+    };
+  }
+
   const layers: { path: string; loaded: LoadedMcpConfig; layer: McpServerLayer }[] = [];
   // Pre-warnings emitted during layer assembly (before allWarnings is declared).
   const preWarnings: string[] = [];

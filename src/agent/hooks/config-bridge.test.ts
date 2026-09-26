@@ -372,13 +372,13 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
   it('createDefaultHookRegistry without hookConfig → 0 config hooks registered', () => {
     const bundle = createDefaultHookRegistry();
     const { registry } = bundle;
-    // Built-in handlers exist for SubagentStop and SessionEnd, plus the FIVE
-    // always-on built-in PreToolUse handlers (the ask-question gate, the
-    // child-memory hot-block hook, the observe-only safe-destruct detector,
-    // the observe-only release-boundary detector, and the edit-preview hook),
-    // all registered unconditionally. No further PreToolUse hooks since we
-    // passed no hookConfig (path-approval disabled above).
-    expect(registry.count('PreToolUse')).toBe(5);
+    // Built-in handlers exist for SubagentStop and SessionEnd, plus the SIX
+    // always-on built-in PreToolUse handlers (the whatif-episode gate, the
+    // ask-question gate, the child-memory hot-block hook, the observe-only
+    // safe-destruct detector, the observe-only release-boundary detector, and
+    // the edit-preview hook), all registered unconditionally. No further
+    // PreToolUse hooks since we passed no hookConfig (path-approval disabled above).
+    expect(registry.count('PreToolUse')).toBe(6);
     // addPreviewDiffRef must be present on the bundle so the StreamRenderer can
     // arm it each turn.
     expect(bundle).toHaveProperty('addPreviewDiffRef');
@@ -406,10 +406,10 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
       hookConfig,
       { cwd: projectCwd },
     );
-    // 5 built-ins (ask-question gate + child-memory hot-block hook +
-    // safe-destruct detector + release-boundary detector + edit-preview hook)
-    // + 1 config hook
-    expect(registry.count('PreToolUse')).toBe(6);
+    // 6 built-ins (whatif-episode gate + ask-question gate + child-memory
+    // hot-block hook + safe-destruct detector + release-boundary detector +
+    // edit-preview hook) + 1 config hook
+    expect(registry.count('PreToolUse')).toBe(7);
   });
 
   it('built-in SubagentStop handler still present when hookConfig is provided', () => {
@@ -541,5 +541,55 @@ describe.skipIf(process.platform === 'win32')('plugin-tier hooks', () => {
       status: 'succeeded',
     });
     expect(result.injectContext).toBe(pluginRoot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Episode mode hook filter
+// ---------------------------------------------------------------------------
+
+describe('episode mode hook filter', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('outside episode: all valid events register hooks', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '');
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        SessionStart: [makeGroup([{ type: 'command', command: 'echo ss', timeoutMs: 1000 }])],
+        Stop: [makeGroup([{ type: 'command', command: 'echo stop', timeoutMs: 1000 }])],
+        PreToolUse: [makeGroup([{ type: 'command', command: 'echo pre', timeoutMs: 1000 }])],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    expect(registry.count('SessionStart')).toBe(1);
+    expect(registry.count('Stop')).toBe(1);
+    expect(registry.count('PreToolUse')).toBe(1);
+  });
+
+  it('inside episode: only SessionStart and UserPromptSubmit register', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        SessionStart: [makeGroup([{ type: 'command', command: 'echo ss', timeoutMs: 1000 }])],
+        UserPromptSubmit: [makeGroup([{ type: 'command', command: 'echo ups', timeoutMs: 1000 }])],
+        Stop: [makeGroup([{ type: 'command', command: 'echo stop', timeoutMs: 1000 }])],
+        PreToolUse: [makeGroup([{ type: 'command', command: 'echo pre', timeoutMs: 1000 }])],
+        SessionEnd: [makeGroup([{ type: 'command', command: 'echo end', timeoutMs: 1000 }])],
+        PostToolUse: [makeGroup([{ type: 'command', command: 'echo post', timeoutMs: 1000 }])],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    // Context-shaping events register.
+    expect(registry.count('SessionStart')).toBe(1);
+    expect(registry.count('UserPromptSubmit')).toBe(1);
+    // Side-effect tails are skipped.
+    expect(registry.count('Stop')).toBe(0);
+    expect(registry.count('PreToolUse')).toBe(0);
+    expect(registry.count('SessionEnd')).toBe(0);
+    expect(registry.count('PostToolUse')).toBe(0);
   });
 });
