@@ -53,6 +53,17 @@
  *   - Tools that return `isError: true` as an unclassified *signal* to the LLM
  *     (e.g. intentional "no results" responses) will still inflate the rate.
  *     Reviewers can suppress via card status: 'deferred'.
+ *   - **Co-occurring web_scrape + web_request failures** are a known
+ *     environment-connectivity false positive: when the runtime environment has
+ *     no outbound connectivity (or Node fetch fails on public URLs), subagents
+ *     often fall back from `web_scrape` to `web_request`, producing two
+ *     separate tool-failure cards at high severity — one per tool — even though
+ *     the root cause is a single environment condition, not two independent tool
+ *     bugs. A future improvement should detect sessions where both tools fail
+ *     together and emit a single `environment-connectivity` signal at `medium`
+ *     severity instead. Until then, reviewers should manually reclassify cards
+ *     whose evidence rows overlap heavily across sessions (`status: 'deferred'`,
+ *     note explaining the connectivity root cause). See issue #1917.
  *
  * @module improve/scan/detectors/tool-failure-density
  */

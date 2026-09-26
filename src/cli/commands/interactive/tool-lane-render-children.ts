@@ -1,3 +1,4 @@
+import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
 import { NESTING_TOOLS } from '../../tool-category.js';
 import { formatElapsed } from '../../terminal-compositor.scrollback.js';
@@ -9,6 +10,7 @@ import {
   formatPreviewDiffBlock,
   doneGlyph,
   sanitizeLabel,
+  shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry, TextEntry, Entry, Glyphs } from './tool-lane-render.js';
 import {
@@ -117,9 +119,9 @@ function renderOverlayChildren(
   parentIsLast?: boolean,
 ): void {
   // Plain (no-ANSI) indent: lead + ancestor slots + active spine column.
-  // `.length` measures display cells correctly (composed of 2-cell units).
+  // `.length` measures display cells correctly (composed of 3-cell units).
   const indent = buildIndent(ancestorIsLast, g);
-  const indentColored = colorizeIndent(indent, g);
+  const indentColored = colorizeIndent(indent, g, ancestorIsLast.length);
 
   // Last block wins: render any text children AFTER tool children (typically
   // at most one). Don't count text children against the tool overflow budget.
@@ -148,7 +150,7 @@ function renderOverlayChildren(
     const isLast = rawConnector === g.lastConnector;
 
     if (item.kind === 'overflow') {
-      lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.text), cols));
+      lines.push(clampLineToTerminal(indentColored + connector + palette.dim('··· ') + palette.chrome('+' + item.count) + (item.text ? palette.dim('  ' + item.text) : ''), cols));
     } else if (item.kind === 'group') {
       lines.push(clampLineToTerminal(indentColored + connector + formatGroupedSibling(item), cols));
     } else if (item.kind === 'resultSummary') {
@@ -230,8 +232,8 @@ function renderOverlayChildren(
           // `parentSlot` value above. Using the current frame's `indentColored`
           // ([...ancestorIsLast]) was one slot too shallow. `clampLineToTerminal`
           // → `truncateDisplayWidth` is ANSI-aware.
-          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g);
-          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇  ' + sanitizeLabel(child.thinkingTail)), cols));
+          const tailIndentColored = colorizeIndent(buildIndent([...ancestorIsLast, parentSlot], g), g, ancestorIsLast.length + 1);
+          lines.push(clampLineToTerminal(tailIndentColored + palette.thinking('⌇ ' + sanitizeLabel(child.thinkingTail)), cols));
         }
       } else if (NESTING_TOOLS.has(child.toolName) && child.headerEmitted) {
         // Invariant: committed labels live in scrollback; live overlay must
@@ -264,9 +266,10 @@ function renderOverlayChildren(
         // tailPreview). pushOutcomeLines splits on \n so continuation lines
         // carry the spine-aware indent instead of the bare 4-space indent
         // that formatOutcome embeds.
-        const outcomeText = formatOutcome(child.result, undefined, 60, child.toolName);
         const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
+        const outcomeText = formatOutcome(child.result, undefined, outcomeBudget, child.toolName);
         pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
         if (child.diff && !child.result.isError) {
           // Clamp each diff body line to terminal width. Diff lines are
@@ -327,8 +330,8 @@ function renderOverlayChildren(
   // Guard: only apply the `[...ancestorIsLast, true]` extension when tool
   // siblings were actually rendered — the appended `true` models a `╰─`
   // connector that was emitted. When no tool siblings rendered, no connector
-  // was emitted and the extension would add a phantom `spineClosed` slot (2
-  // cells), indenting text children 2 characters too wide.
+  // was emitted and the extension would add a phantom `spineClosed` slot (3
+  // cells), indenting text children 3 characters too wide.
   //
   // Clamp each emitted line: `renderTextChildLines` wraps with
   // `wrapToWidth(hard:false)`, which leaves unbroken tokens wider than
@@ -340,7 +343,7 @@ function renderOverlayChildren(
   // 767, 770, 784, 793, 795).
   const textIndent = calculateTextIndent(toolChildren.length, false, ancestorIsLast, g);
   for (const text of textChildren) {
-    for (const line of renderTextChildLines(text.text, textIndent, g)) {
+    for (const line of renderTextChildLines(text.text, textIndent, g, ancestorIsLast.length)) {
       lines.push(clampLineToTerminal(line, cols));
     }
   }
@@ -384,7 +387,7 @@ function renderFlushChildren(
   parentIsLast?: boolean,
 ): string[] {
   const indent = buildIndent(ancestorIsLast, g);
-  const indentColored = colorizeIndent(indent, g);
+  const indentColored = colorizeIndent(indent, g, ancestorIsLast.length);
   const lines: string[] = [];
 
   const textChildren = children.filter((c): c is TextEntry => c.kind === 'text');
@@ -405,7 +408,7 @@ function renderFlushChildren(
     const isLast = rawConnector === g.lastConnector;
 
     if (item.kind === 'overflow') {
-      lines.push(clampLineToTerminal(indentColored + connector + palette.dim(item.text), cols));
+      lines.push(clampLineToTerminal(indentColored + connector + palette.dim('··· ') + palette.chrome('+' + item.count) + (item.text ? palette.dim('  ' + item.text) : ''), cols));
     } else if (item.kind === 'resultSummary') {
       // LAST connector from assignConnectors — not a hardcoded '⎿' (that was Bug #5).
       // `.summary` is PRE-STYLED by summaryWithBatchBadge (dim base + self-dim
@@ -431,7 +434,7 @@ function renderFlushChildren(
         //       matching visual row for each slot (Bug B / orphan │ columns).
         if (child.headerEmitted) {
           const refLabel = child.toolInput
-            ? `${child.toolName} ${sanitizeLabel(child.toolInput)}`
+            ? `${child.toolName} ${shortenPaths(sanitizeLabel(child.toolInput))}`
             : child.toolName;
           lines.push(clampLineToTerminal(indentColored + connector + palette.dim('↳ ' + refLabel), cols));
         } else {
@@ -449,9 +452,10 @@ function renderFlushChildren(
       } else if (child.result) {
         // Mirror overlay path: pushOutcomeLines splits on \n so continuation
         // lines carry the spine-aware indent in scrollback.
-        const outcomeText = formatOutcome(child.result, homeDir, 60, child.toolName);
         const headLine = indentColored + connector + child.prefix + palette.dim(' — ') + doneGlyph(child.result.isError, child.result.failureClass) + ' ';
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
+        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
+        const outcomeText = formatOutcome(child.result, homeDir, outcomeBudget, child.toolName);
         pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
         if (child.diff && !child.result.isError) {
           // Clamp each diff body line to terminal width -- scrollback is
@@ -485,8 +489,8 @@ function renderFlushChildren(
   // Guard: only apply the `[...ancestorIsLast, true]` extension when tool
   // siblings were actually rendered — the appended `true` models a `╰─`
   // connector that was emitted. When no tool siblings rendered, no connector
-  // was emitted and the extension would add a phantom `spineClosed` slot (2
-  // cells), indenting text children 2 characters too wide.
+  // was emitted and the extension would add a phantom `spineClosed` slot (3
+  // cells), indenting text children 3 characters too wide.
   //
   // Clamp each emitted line: see the matching note at the overlay path
   // textChildren loop above for the wrapToWidth(hard:false) overflow
@@ -495,7 +499,7 @@ function renderFlushChildren(
   // 895, 906).
   const textIndent = calculateTextIndent(toolChildren.length, agentResultSummary != null, ancestorIsLast, g);
   for (const text of textChildren) {
-    for (const line of renderTextChildLines(text.text, textIndent, g)) {
+    for (const line of renderTextChildLines(text.text, textIndent, g, ancestorIsLast.length)) {
       lines.push(clampLineToTerminal(line, cols));
     }
   }

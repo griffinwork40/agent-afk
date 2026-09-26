@@ -1,4 +1,5 @@
 import type { ToolEvent } from './slash/types.js';
+import { shortenPaths } from './commands/interactive/tool-lane-format-args.js';
 
 /**
  * Deduplicate tool events by toolUseId (last-write-wins).
@@ -32,8 +33,11 @@ export function summarizeToolEvents(events: ToolEvent[] | undefined): string {
     const status = ev.isError ? '✗' : '✓';
     // Prefer the display-truncated input; fall back to inputRaw
     const raw = ev.input || ev.inputRaw || '';
-    // Truncate to keep the summary compact
-    const input = raw.length > 80 ? raw.slice(0, 77) + '…' : raw;
+    // Collapse long absolute paths to basenames before truncating so the
+    // resume summary shows `read_file(foo.ts)✓` instead of a clipped
+    // `/Users/me/Projects/repo/src/cli/comma…`.
+    const shortened = shortenPaths(raw);
+    const input = shortened.length > 80 ? shortened.slice(0, 77) + '…' : shortened;
     return `${ev.toolName}(${input})${status}`;
   });
   return `\n[Tools used: ${parts.join(', ')}]`;

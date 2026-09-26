@@ -21,6 +21,7 @@ import { resolveChildModel } from '../../agent/subagent/resolve-child-model.js';
 import type { AgentModelInput, IAgentSession } from '../../agent/types.js';
 import type { TraceSink } from '../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../agent/workspace/index.js';
+import type { DelegationBudget } from '../../agent/tools/delegation-budget.js';
 import {
   resolveChildManagerReadRoots,
   type ReadScopeInputs,
@@ -206,6 +207,9 @@ async function runPhasesAfterSpec(
   // this each phase re-derived what the previous one had already found.
   // Optional so resume/test paths degrade to no preamble, as before.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget (ctx.delegationBudget). Threaded to every
+  // phase so all inline forks count against the same budget. See issue #1899.
+  delegationBudget?: DelegationBudget,
 ): Promise<MintResult> {
   if (!parentSession.sessionId) {
     throw new Error('runPhasesAfterSpec requires parentSession.sessionId');
@@ -239,6 +243,7 @@ async function runPhasesAfterSpec(
       parentReadRoots,
       traceWriter,
       workspaceStore,
+      delegationBudget,
     );
     if (parallelizeResult.kind === 'plan') {
       state.waveOrchestrationPlan = parallelizeResult.plan;
@@ -289,6 +294,7 @@ async function runPhasesAfterSpec(
       parentReadRoots,
       traceWriter,
       workspaceStore,
+      delegationBudget,
     );
     appendHistory(state, 'build', JSON.stringify(state.buildResults));
 
@@ -303,6 +309,7 @@ async function runPhasesAfterSpec(
       parentReadRoots,
       traceWriter,
       workspaceStore,
+      delegationBudget,
     );
     appendHistory(state, 'verify', JSON.stringify(state.verifyResults));
 
@@ -326,6 +333,7 @@ async function runPhasesAfterSpec(
         parentReadRoots,
         traceWriter,
         workspaceStore,
+        delegationBudget,
       );
       state.healIterations = healResult.newHealIterations;
       state.verifyResults = healResult.newVerifyResults;
@@ -400,7 +408,7 @@ async function handler(
         'mint: no paused spec found for this session to continue. Run /mint <idea> first, then /mint --continue approved.',
       );
     }
-    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore);
+    const result = await runPhasesAfterSpec(resumeState, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
     return finalizeAfterSpec(parentSessionId, result);
   }
 
@@ -440,7 +448,7 @@ async function handler(
     return pausedResult;
   }
 
-  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore);
+  const result = await runPhasesAfterSpec(state, parentSession, skillCallId, defaultSubagentModel, ctx?.dispatchSkill, ctx?.getReadScopeInputs?.(), ctx?.traceWriter, ctx?.workspaceStore, ctx?.delegationBudget);
   return finalizeAfterSpec(parentSessionId, result);
 }
 

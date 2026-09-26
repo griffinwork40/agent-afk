@@ -232,6 +232,17 @@ export class BgResultNotifier {
     this.pendingNotifications = [];
   }
 
+  /**
+   * Whether the injection buffer holds at least one result waiting to be
+   * delivered. Used by the REPL loop's prompt-became-receptive callback to
+   * detect results that settled while the agent was mid-turn and re-trigger
+   * the auto-resume wake — closing the timing gap where `onInjectable`
+   * fired but `isAwaitingInput()` was false.
+   */
+  hasPendingInjections(): boolean {
+    return this.pendingInjections.length > 0;
+  }
+
   /** Unsubscribe from the registry. Idempotent. */
   dispose(): void {
     this.registry.off('settled', this.onSettled);

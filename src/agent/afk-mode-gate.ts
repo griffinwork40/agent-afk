@@ -22,7 +22,7 @@
  *     `chmod`/`chown`)
  *   - writes that escape the workspace, hit the write-denylist (`~/.ssh`,
  *     `/etc`, …), or target the `.git` object store
- *   - schedule mutations: `create_schedule` / `cancel_schedule` — modify the
+ *   - schedule mutations: `create_schedule` / `update_schedule` / `cancel_schedule` — modify the
  *     daemon cron store with potential immediate live-sync side-effects
  *   - MCP tools whose sub-name contains a destructive verb (the full list is
  *     `DESTRUCTIVE_VERBS` in `risk-classifier.ts` — the single source of truth;

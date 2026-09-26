@@ -28,7 +28,10 @@ interface StubQuery extends ProviderQuery {
   };
 }
 
-const AGENTS_STUB = [{ agentType: 'research-agent', source: 'plugin', tokens: 100 }];
+/** Raw shape the mock ProviderQuery returns (ProviderAgentInfo). */
+const PROVIDER_AGENTS_STUB = [{ name: 'research-agent', description: 'A research agent' }];
+/** What session.supportedAgents() returns after toAgentInfo mapping (AgentInfo). */
+const AGENTS_STUB = [{ name: 'research-agent', description: 'A research agent' }];
 const CONTEXT_STUB = {
   tools: [{ name: 'Bash', tokens: 1200 }],
   agents: [],
@@ -81,7 +84,7 @@ function createStubQuery(args: ProviderQueryArgs): StubQuery {
     supportedModels: vi.fn().mockResolvedValue([]),
     supportedAgents: vi.fn(async () => {
       calls.supportedAgents += 1;
-      return AGENTS_STUB as unknown as Awaited<ReturnType<ProviderQuery['supportedAgents']>>;
+      return PROVIDER_AGENTS_STUB as unknown as Awaited<ReturnType<ProviderQuery['supportedAgents']>>;
     }),
     getContextUsage: vi.fn(async () => {
       calls.getContextUsage += 1;

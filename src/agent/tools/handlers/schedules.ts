@@ -1,8 +1,8 @@
 /**
  * Handlers for schedule management tools.
  *
- * Four tools: create_schedule, list_schedules, get_schedule_history,
- * cancel_schedule. All call schedule-store.ts for persistence. Write ops
+ * Five tools: create_schedule, update_schedule, list_schedules,
+ * get_schedule_history, cancel_schedule. All call schedule-store.ts for persistence. Write ops
  * also attempt to live-sync to a running daemon via the port file and
  * surface the outcome as `daemonSynced`/`syncDetail` in the result — a
  * daemon that booted before the change will NOT see it until restarted,
@@ -23,6 +23,7 @@ import {
   removeSchedule,
   getSchedule,
   toggleScheduleEnabled,
+  updateSchedule,
   toScheduledTask,
 } from '../../daemon/schedule-store.js';
 import { getTelemetryPath } from '../../../paths.js';
@@ -108,6 +109,108 @@ export const createScheduleHandler: ToolHandler = async (input, _signal) => {
       name: config.name,
       cron: config.cron,
       enabled: config.enabled,
+      daemonSynced: sync.synced,
+      syncDetail: sync.detail,
+      ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),
+    }),
+  };
+};
+
+export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
+  if (!input || typeof input !== 'object') {
+    return { content: 'Invalid input: expected object', isError: true };
+  }
+  const obj = input as Record<string, unknown>;
+  if (typeof obj['taskId'] !== 'string' || !obj['taskId']) {
+    return { content: 'Invalid input: taskId required', isError: true };
+  }
+  const taskId = obj['taskId'] as string;
+
+  // Validate taskId is a slug-safe identifier before using it in daemon sync URLs
+  if (!/^[a-z0-9-]+$/.test(taskId)) {
+    return { content: 'Invalid input: taskId must be a valid slug (lowercase alphanumeric and hyphens)', isError: true };
+  }
+
+  // Validate optional fields when present
+  const cron = obj['cron'];
+  if (cron !== undefined) {
+    if (typeof cron !== 'string') {
+      return { content: 'Invalid input: cron must be a string', isError: true };
+    }
+    const cronParts = cron.trim().split(/\s+/);
+    if (cronParts.length !== 5 && cronParts.length !== 6) {
+      return {
+        content: 'Invalid input: cron must be a 5 or 6-field expression',
+        isError: true,
+      };
+    }
+  }
+
+  const executor = obj['executor'];
+  if (executor !== undefined && executor !== 'agent' && executor !== 'shell') {
+    return {
+      content: 'Invalid input: executor must be "agent" or "shell"',
+      isError: true,
+    };
+  }
+
+  const trigger = obj['trigger'];
+  if (trigger !== undefined && trigger !== 'cron' && trigger !== 'sessionstart' && trigger !== 'both') {
+    return {
+      content: 'Invalid input: trigger must be "cron", "sessionstart", or "both"',
+      isError: true,
+    };
+  }
+
+  const notifyOn = obj['notifyOn'];
+  if (notifyOn !== undefined && notifyOn !== 'failure' && notifyOn !== 'always' && notifyOn !== 'never') {
+    return {
+      content: 'Invalid input: notifyOn must be "failure", "always", or "never"',
+      isError: true,
+    };
+  }
+
+  const notifyChat = obj['notifyChat'];
+  if (notifyChat !== undefined && typeof notifyChat !== 'number' && typeof notifyChat !== 'string') {
+    return {
+      content: 'Invalid input: notifyChat must be a number (chat id) or string (chat id or alias name)',
+      isError: true,
+    };
+  }
+
+  // Build the patch from supplied fields only
+  type Patch = Parameters<typeof updateSchedule>[1];
+  const patch: Patch = {};
+  if (typeof obj['name'] === 'string' && obj['name']) patch.name = obj['name'];
+  if (typeof obj['command'] === 'string' && obj['command']) patch.command = obj['command'];
+  if (typeof cron === 'string') patch.cron = cron;
+  if (executor !== undefined) patch.executor = executor as Patch['executor'];
+  if (trigger !== undefined) patch.trigger = trigger as Patch['trigger'];
+  if (notifyOn !== undefined) patch.notifyOn = notifyOn as Patch['notifyOn'];
+  if (notifyChat !== undefined) patch.notifyChat = notifyChat as number | string;
+  if (typeof obj['enabled'] === 'boolean') patch.enabled = obj['enabled'];
+
+  const updated = updateSchedule(taskId, patch);
+  if (!updated) {
+    return { content: JSON.stringify({ error: 'task not found' }) };
+  }
+
+  // Daemon sync: if enabled, DELETE stale registration then re-register;
+  // if disabled, just DELETE.
+  let sync: DaemonSyncResult;
+  if (updated.enabled) {
+    await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+    sync = await trySyncToDaemon('POST', '/tasks', toScheduledTask(updated));
+  } else {
+    sync = await trySyncToDaemon('DELETE', `/tasks/${taskId}`);
+  }
+
+  return {
+    content: JSON.stringify({
+      id: updated.id,
+      name: updated.name,
+      cron: updated.cron,
+      enabled: updated.enabled,
       daemonSynced: sync.synced,
       syncDetail: sync.detail,
       ...(sync.synced ? {} : { syncNote: SYNC_FAILED_NOTE }),

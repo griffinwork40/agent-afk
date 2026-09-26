@@ -37,6 +37,11 @@ vi.mock('../agent/daemon/schedule-store.js', () => ({
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   })),
+  updateSchedule: vi.fn((id: string, patch: Record<string, unknown>) =>
+    id === 'nightly-forge'
+      ? { ...mockSchedules[0], ...patch, updatedAt: new Date().toISOString() }
+      : undefined,
+  ),
   removeSchedule: vi.fn((id: string) => id === 'nightly-forge'),
   getSchedule: vi.fn((id: string) =>
     id === 'nightly-forge' ? mockSchedules[0] : undefined,

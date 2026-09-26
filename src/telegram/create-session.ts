@@ -23,6 +23,7 @@ import { WorkspaceStore } from '../agent/workspace/workspace-store.js';
 import { env } from '../config/env.js';
 import { createTelegramTraceWriter } from './construct-session.js';
 import { loadTelegramMcpManager } from './mcp-session.js';
+import { pushIfConfigured } from './push.js';
 import { isOpenAiRoutedProvider, isXaiRoutedProvider } from './credentials.js';
 import { buildAnthropicTelegramSession } from './session-anthropic.js';
 import { buildOpenAiTelegramSession } from './session-openai.js';
@@ -93,8 +94,22 @@ export function createTelegramSessionFactory(
     // the MCP connect phase (mcp_server_start/done, mcp_connect_start/done) is
     // captured in the same session trace as the rest of the Telegram session.
     const traceWriter = createTelegramTraceWriter();
+    const chatId = sessionConfig.telegramChatId;
+    const threadId = sessionConfig.telegramThreadId;
     const mcpManager = await loadTelegramMcpManager(sessionCwd, {
       ...(traceWriter !== null ? { traceWriter } : {}),
+      // Surface MCP server connection failures to the originating chat so the
+      // operator learns about broken servers without having to check server logs.
+      // Falls back to `console.warn` inside `loadTelegramMcpManager` when
+      // `pushIfConfigured` returns null (no bot token / no resolvable chat id).
+      sendWarning: chatId !== undefined
+        ? (msg: string) => {
+            void pushIfConfigured(msg, {
+              target: chatId,
+              ...(threadId !== undefined ? { messageThreadId: threadId } : {}),
+            });
+          }
+        : undefined,
     });
 
     let returnedSession: AgentSession | undefined;

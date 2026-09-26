@@ -24,6 +24,7 @@ export {
   WorldChangesSchema,
   TokenBreakdownSchema,
   ParallelDispatchStatsSchema,
+  YieldTrackingSchema,
   type SessionFacet,
   type StoredSessionInput,
   type ToolEventInput,
@@ -32,6 +33,7 @@ export {
   type WorldChanges,
   type TokenBreakdown,
   type ParallelDispatchStats,
+  type YieldTracking,
 } from './schema.js';
 
 export { deriveSessionFacet, type DeriveOptions } from './derive.js';

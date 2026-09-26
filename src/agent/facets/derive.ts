@@ -23,6 +23,7 @@ import {
   type StoredSessionInput,
   type SubagentInvocation,
   type ToolEventInput,
+  type YieldTracking,
 } from './schema.js';
 
 export interface DeriveOptions {
@@ -269,10 +270,19 @@ export function deriveSessionFacet(
     ? [...evidencePaths, options.sourceSessionPath]
     : evidencePaths;
 
+  // Yield tracking: is_scheduled_session is mechanical (from source); produced_pr
+  // and pr_merged require async git/gh probes run by the session-end hook after
+  // teardown, so they start as null here and are written back by that hook.
+  const yieldTracking: YieldTracking = {
+    is_scheduled_session: source === 'daemon',
+    produced_pr: null,
+    pr_merged: null,
+  };
+
   const facet: SessionFacet = {
     facet_version: FACET_VERSION,
     session_id: sessionId,
-    source: source === 'telegram' ? 'telegram' : source === 'web' ? 'web' : 'cli',
+    source: source === 'telegram' ? 'telegram' : source === 'web' ? 'web' : source === 'daemon' ? 'daemon' : 'cli',
     model: session.model,
     derived_at: (options.derivedAt ?? new Date()).toISOString(),
     derived_from: 'afk-session',
@@ -314,6 +324,9 @@ export function deriveSessionFacet(
     },
 
     parallel_dispatch: computeParallelDispatch(turns),
+
+    // session yield tracking (#2016) — pr fields enriched asynchronously by session-end hook
+    yield_tracking: yieldTracking,
 
     decisions: [],
     evidence_pointers: evidencePointers,

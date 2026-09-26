@@ -82,7 +82,7 @@ export function applySharedChatOptions(
   return cmd
     .option(
       '-m, --model <model>',
-      'Model to use. Short aliases: opus|opus_1m|sonnet|sonnet_1m|haiku. ' +
+      'Model to use. Short aliases: opus|opus_1m|opus-5.5|opus-5.5_1m|sonnet|sonnet_1m|haiku. ' +
         'Any other value (e.g. `auto` for cursor-api-proxy, or a full `claude-*` ID) passes through to the SDK/proxy untouched.',
       getModel(),
     )

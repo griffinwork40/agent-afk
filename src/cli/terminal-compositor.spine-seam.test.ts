@@ -108,12 +108,25 @@ describe('commitAbove spine seam: committed descendant rows match the overlay (s
     //     skill later emits more waves (the prior ancestorIsLastOf approach).
     expect(readRow!.startsWith('│'), `Read row missing open │ at col-0 (seam — band/overlay diverged):\n${dump}`).toBe(true);
     expect(globRow!.startsWith('│'), `Glob row missing open │ at col-0 (seam — band/overlay diverged):\n${dump}`).toBe(true);
-    // The agent's own spine column is also present (two spine cols total: `│ │ `).
-    expect(/^│ │ /.test(readRow!), `Read row must start with │ │  (ancestor + agent spine):\n${dump}`).toBe(true);
+    // The agent's own spine column is also present (two spine cols total: `│  │  `).
+    expect(/^│  │  /.test(readRow!), `Read row must start with │  │  (ancestor + agent spine):\n${dump}`).toBe(true);
 
     // (2) FLOATING-SPINE INVARIANT (PR #642): the Agent HEADER keeps its incoming
     //     spine OPEN at col-0 (`│ ◉ …`) so it stays connected to the live skill.
     expect(agentHeader!.startsWith('│'), `Agent header lost its incoming spine (floated):\n${dump}`).toBe(true);
+
+    // (3) TRAILING SEPARATOR ROW (PR #2196): flushSource appends a non-empty
+    //     dim `│` spine separator as its last element (depth=1, one live
+    //     ancestor). Stripped of ANSI and trailing whitespace it must equal `│`
+    //     and appear in the committed band as the row immediately following the
+    //     Glob/Done rows — keeping the ancestor spine continuous in scrollback.
+    const stripAnsi = (s: string): string => s.replace(/\x1b\[[0-9;]*m/g, '');
+    const lastBandRow = bandLines[bandLines.length - 1];
+    expect(lastBandRow, 'flushSource must produce a non-empty trailing separator at depth 1').toBeDefined();
+    expect(
+      stripAnsi(lastBandRow!).trimEnd(),
+      'trailing separator row must be the open spine │ at col-0',
+    ).toBe('│');
 
     term.dispose(); statusLine.stop(); c.disarm();
   }, 15_000);

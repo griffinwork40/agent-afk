@@ -1,8 +1,20 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
-import { findBlockBoundary, calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, routeOverlayOutput, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence } from './markdown-stream-format.js';
-import { Lexer } from 'marked';
+import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence } from './markdown-stream-format.js';
+import { contentMargin } from './render/measure.js';
+import {
+  type InputBufferState,
+  type LogUpdateFunction,
+  createInputBufferState,
+  pushChunk,
+  drainInputBuffer,
+  discardInputBuffer,
+  runParsePipeline,
+  clearOverlay,
+  syncPendingOverlay,
+  executeRepaint,
+} from './markdown-stream-buffer.js';
 
 /**
  * Block boundary detection patterns.
@@ -51,11 +63,6 @@ interface StreamingMarkdownRendererOptions {
   overlayComposer?: OverlayComposer | null;
 }
 
-interface LogUpdateFunction {
-  (str: string): void;
-  clear: () => void;
-}
-
 /**
  * StreamingMarkdownRenderer
  *
@@ -101,13 +108,10 @@ export class StreamingMarkdownRenderer {
   private resizeUnsub: (() => void) | null = null;
 
   // -- Input micro-buffer (AFK_STREAM_BUFFER_MS) --------------------------
-  // Accumulates incoming push() chunks and flushes them as one batch to
-  // reduce per-token Lexer.lex() / findBlockBoundary() overhead.
-  // Leading+trailing pattern: first chunk after idle fires immediately.
+  // Delegates to markdown-stream-buffer.ts helpers. The state record is held
+  // here so the class owns the lifetime; the buffer helpers are stateless.
   private bufferMs: number;
-  private inputBuffer: string = '';
-  private inputBufferTimer: NodeJS.Timeout | null = null;
-  private lastInputFlushTime = 0;
+  private inputState: InputBufferState;
 
   constructor(opts?: StreamingMarkdownRendererOptions) {
     this.out = opts?.out ?? process.stdout;
@@ -117,9 +121,7 @@ export class StreamingMarkdownRenderer {
     this.isTTY = this.out.isTTY ?? false;
     this.compositor = opts?.compositor ?? null;
     this.overlayComposer = opts?.overlayComposer ?? null;
-
-    // Lazy-load log-update only if TTY
-    this.logUpdate = null;
+    this.inputState = createInputBufferState();
 
     // Subscribe to terminal-resize events so the pending buffer re-wraps at
     // the new column count. Non-TTY surfaces never paint an overlay, so the
@@ -129,17 +131,12 @@ export class StreamingMarkdownRenderer {
     }
   }
 
-  /**
-   * Initialize log-update if TTY (lazy-load to avoid unnecessary dependency)
-   */
-  private async initLogUpdate(): Promise<void> {
-    if (!this.isTTY || this.logUpdate !== null) {
-      return;
-    }
+  /** Lazy-load log-update; stores result on `this.logUpdate` and returns it. */
+  private async initLogUpdate(): Promise<LogUpdateFunction | null> {
+    if (!this.isTTY || this.logUpdate !== null) return this.logUpdate;
     this.logUpdate = (await initLogUpdateModule()) as LogUpdateFunction | null;
+    return this.logUpdate;
   }
-
-
 
   /**
    * Render and commit a completed block
@@ -207,7 +204,13 @@ export class StreamingMarkdownRenderer {
       ? calculateContentWidth(this.indent.length)
       : calculateProseContentWidth(this.indent.length);
     const formatted = formatPendingBuffer(this.buffer, contentWidth, this.isTTY && !this.flushing);
-    return applyIndent(formatted, this.indent);
+    // Content centering (AFK_CENTER_CONTENT): live pending prose is part of
+    // the overlay frame, so it receives the centering margin here (the overlay
+    // is never routed through commitAbove, which handles scrollback centering).
+    const pad = contentMargin();
+    const indented = applyIndent(formatted, this.indent);
+    if (!pad) return indented;
+    return indented.split('\n').map(l => l === '' ? l : pad + l).join('\n');
   }
 
   /**
@@ -227,44 +230,22 @@ export class StreamingMarkdownRenderer {
    * `flushing` is false. See terminal-compositor.ts commitAbove (band-hold path).
    */
   private syncPendingOverlay(): void {
-    if (this.overlayComposer) {
-      this.overlayComposer.markDirty('markdown-pending');
-      this.overlayComposer.flush();
-    } else if (this.compositor) {
-      this.compositor.setOverlay(this.renderPending());
-    }
+    syncPendingOverlay(this.overlayComposer, this.compositor, () => this.renderPending());
   }
 
   /**
    * Execute a single repaint of pending content
    */
   private async repaint(): Promise<void> {
-    if (this.flushing) {
-      return; // A flush is in progress; don't paint stale pending content
-    }
-
-    const indented = this.renderPending();
-    if (!indented) {
-      return;
-    }
-
-    if (routeOverlayOutput({
-      indented,
+    await executeRepaint({
+      flushing: this.flushing,
       overlayComposer: this.overlayComposer,
       compositor: this.compositor,
       logUpdate: this.logUpdate,
-    })) {
-      return;
-    }
-
-    // Log-update path: need to ensure logUpdate is initialized
-    if (!this.logUpdate) {
-      await this.initLogUpdate();
-    }
-    if (!this.logUpdate) return;
-    if (this.flushing) return;
-
-    this.logUpdate(indented);
+      renderPending: () => this.renderPending(),
+      initLogUpdate: () => this.initLogUpdate(),
+      onLogUpdateReady: (fn) => { this.logUpdate = fn; },
+    });
   }
 
   /**
@@ -274,44 +255,9 @@ export class StreamingMarkdownRenderer {
    */
   push(chunk: string): void {
     if (this.flushing) return;
-    if (this.bufferMs <= 0) {
-      this.pushDirect(chunk);
-      return;
-    }
-    this.inputBuffer += chunk;
-    const now = Date.now();
-    // Leading edge: enough time since last flush -- fire immediately.
-    if (now - this.lastInputFlushTime >= this.bufferMs) {
-      this.drainInputBuffer();
-      return;
-    }
-    // Trailing edge: schedule one deferred flush for the remaining window.
-    if (this.inputBufferTimer) clearTimeout(this.inputBufferTimer);
-    const remaining = this.bufferMs - (now - this.lastInputFlushTime);
-    this.inputBufferTimer = setTimeout(() => this.drainInputBuffer(), remaining);
-    this.inputBufferTimer.unref();
-  }
-
-  /** Flush accumulated input buffer to the parse pipeline. */
-  private drainInputBuffer(): void {
-    if (this.inputBufferTimer) {
-      clearTimeout(this.inputBufferTimer);
-      this.inputBufferTimer = null;
-    }
-    if (!this.inputBuffer) return;
-    const batched = this.inputBuffer;
-    this.inputBuffer = '';
-    this.lastInputFlushTime = Date.now();
-    this.pushDirect(batched);
-  }
-
-  /** Discard accumulated input buffer without flushing to the parse pipeline. */
-  private discardInputBuffer(): void {
-    if (this.inputBufferTimer) {
-      clearTimeout(this.inputBufferTimer);
-      this.inputBufferTimer = null;
-    }
-    this.inputBuffer = '';
+    pushChunk(this.inputState, chunk, this.bufferMs, {
+      onBatch: (batched) => this.pushDirect(batched),
+    });
   }
 
   /**
@@ -319,46 +265,14 @@ export class StreamingMarkdownRenderer {
    */
   private pushDirect(chunk: string): void {
     if (this.flushing) return;
-    this.buffer += chunk;
-
-    // Try to extract completed blocks
-    let boundary = findBlockBoundary(this.buffer);
-
-    while (boundary !== -1) {
-      // A completed table may be followed by a repeated-header continuation.
-      // Keep it pending until the next complete block reveals whether it is a
-      // continuation; formatter.ts can then merge all compatible table tokens
-      // before computing widths. This also avoids carrying fragile rendering
-      // state across separate commit calls.
-      while (boundary !== -1) {
-        const complete = Lexer.lex(this.buffer.slice(0, boundary))
-          .filter((token) => token.type !== 'space');
-        if (complete.at(-1)?.type !== 'table') break;
-        const nextBoundary = findBlockBoundary(this.buffer.slice(boundary));
-        if (nextBoundary === -1) {
-          boundary = -1;
-          break;
-        }
-        boundary += nextBoundary;
-      }
-      if (boundary === -1) break;
-      const blockText = this.buffer.slice(0, boundary);
-      // Slice buffer BEFORE commitBlock so any synchronous repaint
-      // triggered by compositor.commitAbove() sees only the remaining
-      // content, not the block that was just committed.
-      this.buffer = this.buffer.slice(boundary);
-      // Re-compose the overlay from the now-sliced buffer BEFORE committing, so
-      // commitAbove() does not fire while the overlay still shows this block
-      // (which would pin the frame to row 1 and risk dropping a multi-line
-      // block via the overflow path). See syncPendingOverlay().
-      this.syncPendingOverlay();
-      this.commitBlock(blockText);
-
-      boundary = findBlockBoundary(this.buffer);
-    }
-
-    // Schedule repaint of remaining pending content
-    this.scheduleRepaint();
+    this.buffer = runParsePipeline(this.buffer, chunk, {
+      onPreCommit: (newBuffer) => {
+        this.buffer = newBuffer;
+        this.syncPendingOverlay();
+      },
+      onCommitBlock: (blockText) => this.commitBlock(blockText),
+      onScheduleRepaint: () => this.scheduleRepaint(),
+    });
   }
 
   /**
@@ -367,7 +281,7 @@ export class StreamingMarkdownRenderer {
    */
   async flush(): Promise<void> {
     // Drain any micro-buffered input before finalizing.
-    this.drainInputBuffer();
+    drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
 
     // Cancel throttle timer
     if (this.throttleTimer) {
@@ -384,12 +298,7 @@ export class StreamingMarkdownRenderer {
     // the tail buffer so the final commitBlock → commitAbove → repaint cycle
     // doesn't re-render stale pending text between the just-committed scrollback
     // line and the input row.
-    if (this.overlayComposer) {
-      this.overlayComposer.markDirty('markdown-pending');
-      this.overlayComposer.flush();
-    } else if (this.compositor) {
-      this.compositor.setOverlay('');
-    }
+    clearOverlay(this.overlayComposer, this.compositor, null);
 
     // Commit any remaining buffer
     if (this.buffer.trim()) {
@@ -426,7 +335,7 @@ export class StreamingMarkdownRenderer {
    * O(1), no side effects.
    */
   hasEmitted(): boolean {
-    return this.inputBuffer.length > 0 || this.buffer.length > 0 || this.committed.length > 0;
+    return this.inputState.inputBuffer.length > 0 || this.buffer.length > 0 || this.committed.length > 0;
   }
 
   /**
@@ -435,7 +344,7 @@ export class StreamingMarkdownRenderer {
   getPendingBuffer(): string {
     // Drain the micro-buffer first so the returned string reflects all
     // pushed content — mirrors the pattern in commitPending() and flush().
-    this.drainInputBuffer();
+    drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     return this.buffer;
   }
 
@@ -447,7 +356,7 @@ export class StreamingMarkdownRenderer {
    * the turn — where it leaks into scrollback every time `commitAbove` repaints.
    */
   commitPending(): void {
-    this.drainInputBuffer();
+    drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     if (!this.buffer.trim()) return;
     const pending = this.buffer;
     // Empty the buffer and re-compose the overlay (now empty) BEFORE committing,
@@ -478,7 +387,7 @@ export class StreamingMarkdownRenderer {
   stripPendingFrom(offset: number): boolean {
     // Drain the micro-buffer first so the strip sees the full pending
     // content — mirrors the pattern in commitPending() and flush().
-    this.drainInputBuffer();
+    drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     if (offset < 0 || offset >= this.buffer.length) return false;
     this.buffer = this.buffer.slice(0, offset).trimEnd();
     return true;
@@ -497,7 +406,7 @@ export class StreamingMarkdownRenderer {
    * — only the in-progress pending block is recoverable.
    */
   discardPending(): void {
-    this.discardInputBuffer();
+    discardInputBuffer(this.inputState);
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
@@ -507,21 +416,14 @@ export class StreamingMarkdownRenderer {
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
     // the screen, not just from the buffer.
-    if (this.overlayComposer) {
-      this.overlayComposer.markDirty('markdown-pending');
-      this.overlayComposer.flush();
-    } else if (this.compositor) {
-      this.compositor.setOverlay('');
-    } else if (this.isTTY && this.logUpdate) {
-      this.logUpdate.clear();
-    }
+    clearOverlay(this.overlayComposer, this.compositor, this.isTTY ? this.logUpdate : null);
   }
 
   /**
    * Clean up resources: clear timers and release log-update state
    */
   dispose(): void {
-    this.discardInputBuffer();
+    discardInputBuffer(this.inputState);
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;

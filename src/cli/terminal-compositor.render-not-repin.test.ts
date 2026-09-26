@@ -181,4 +181,79 @@ describe('Stage 2 (#540) render-not-repin: stateless window re-render', () => {
     expect(lines.some((l) => l.includes('BANNER-LINE-2')), `banner row 2 erased:\n${dump}`).toBe(true);
     expect(lines.some((l) => l.includes('BAND-A row')), `band not rendered:\n${dump}`).toBe(true);
   });
+
+  it('caps blank gap on short terminals (#2182): a thin band on a 20-row terminal leaves at most ceil(20/3)=7 blank rows', async () => {
+    // Scenario: 20-row terminal, overlay collapsed, frame shrinks to 3 rows
+    // (input + spinner + gap). Geometry from the issue:
+    //   targetBottom=16, floor=1, maxFit=16, fit=3, newTop=14 (13 blank rows).
+    // Without the cap: 13 blank rows at top, band at rows 14-16.
+    // With the cap: MAX_BLANK_ROWS=ceil(20/3)=7, band paints at rows 8-10,
+    // rows 11-16 erased (gap erase), only 7 blank rows visible at top.
+    const SHORT_ROWS = 20;
+    const SHORT_COLS = 80;
+
+    const stdout = makeStdout();
+    // Override rows on the stream to simulate a 20-row terminal.
+    (stdout as unknown as { rows: number }).rows = SHORT_ROWS;
+    const all = collect(stdout);
+
+    const host = makeHost(stdout, {
+      committedBand: ['RESULT-A', 'RESULT-B', 'RESULT-C'],
+      committedBandTopRow: 0, // force a repaint (moved = true)
+      committedBandBottomRow: 0,
+      committedBandPaintedRows: 0,
+      anchorRow: 1, // floor = 1
+    });
+
+    // desiredTopRow=17 → targetBottom=16; floor=1 → maxFit=16 → fit=3 → newTop=14.
+    // Without cap: 13 blank rows. With cap: MAX_BLANK_ROWS=7, paintTop=8.
+    repositionCommittedBand(host, /* desiredTopRow */ 17, /* preRenderFrameTop */ 0, /* targetBottomRow */ 19);
+
+    const term = new HeadlessTerminal({
+      cols: SHORT_COLS,
+      rows: SHORT_ROWS,
+      scrollback: 100,
+      allowProposedApi: true,
+      convertEol: true,
+    });
+    await termWrite(term, all());
+    const lines = allLines(term);
+    const dump = lines
+      .map((l, i) => `[${String(i).padStart(2)}] ${JSON.stringify(l.replace(/\s+$/, ''))}`)
+      .join('\n');
+
+    // (1) Band content must be rendered somewhere in the viewport.
+    expect(lines.some((l) => l.includes('RESULT-A')), `band not rendered:\n${dump}`).toBe(true);
+    expect(lines.some((l) => l.includes('RESULT-C')), `band not rendered:\n${dump}`).toBe(true);
+
+    // (2) The blank gap above the band must be ≤ MAX_BLANK_ROWS (= 7).
+    const firstBandRow = lines.findIndex((l) => l.includes('RESULT-A'));
+    const blankRowsAboveBand = firstBandRow; // 0-based: blank rows from index 0 to firstBandRow-1
+    expect(
+      blankRowsAboveBand,
+      `blank gap (${blankRowsAboveBand} rows) exceeds the MAX_BLANK_ROWS cap:\n${dump}`,
+    ).toBeLessThanOrEqual(7);
+
+    // (3) Without the fix the gap would be 13 rows; verify we did better.
+    expect(
+      blankRowsAboveBand,
+      `blank gap (${blankRowsAboveBand} rows) was not reduced below uncapped 13:\n${dump}`,
+    ).toBeLessThan(13);
+
+    // (4) Tracking: committedBandTopRow is the capped paintTop (8, 1-indexed);
+    //     committedBandBottomRow remains targetBottom (16) so commit-path
+    //     contiguity checks (committedBandBottomRow === frameTop − 1) still work.
+    //     endTurnFlush uses committedBandTopRow for the erase start so it finds
+    //     the real painted rows even when the cap shifted them above newTop.
+    expect(host.committedBandTopRow).toBe(8);  // floor(1) + MAX_BLANK_ROWS(7) = 8
+    expect(host.committedBandBottomRow).toBe(16); // targetBottom (unchanged)
+    expect(host.committedBandPaintedRows).toBe(3);
+
+    // (5) The gap rows between band bottom and frame top must be blank.
+    //     Band bottom is at row paintTop+fit-1 = 10 (1-indexed).
+    //     targetBottom = 16. Rows 11..16 (0-based 10..15) should be blank.
+    for (let i = 10; i <= 15; i++) {
+      expect((lines[i] ?? '').trim(), `gap row ${i + 1} not blank:\n${dump}`).toBe('');
+    }
+  });
 });

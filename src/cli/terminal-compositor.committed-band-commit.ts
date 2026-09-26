@@ -19,6 +19,7 @@ import {
   reflowCommittedBandToWidth,
 } from './terminal-compositor.band-reflow.js';
 import { boundLineToTerminal } from './render/bounded-line.js';
+import { contentMargin } from './render/measure.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { decomposeCommitText } from './terminal-compositor.commit-text.js';
 import { snapshotCommitGeometry } from './terminal-compositor.commit-geometry.js';
@@ -89,7 +90,14 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     // so it is bounded here. The armed path below hard-wraps to `cols` as part
     // of its row accounting (line-count math depends on it) and must not be
     // pre-wrapped by this call.
-    const bounded = boundLineToTerminal(text, self.stdout);
+    // Content centering (AFK_CENTER_CONTENT): the band no longer stores
+    // padding (centering is a paint-time concern), so the disarmed path adds
+    // it here for the raw terminal write.
+    const pad = contentMargin();
+    const padded = pad
+      ? text.split('\n').map(l => l === '' ? l : pad + l).join('\n')
+      : text;
+    const bounded = boundLineToTerminal(padded, self.stdout);
     writeWithScrollGuard(self, () => {
       self.stdout.write(bounded + '\n');
     });
@@ -150,11 +158,27 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // comment in commit-geometry.ts). cursor-follow brought the need back.
   if (!self.hasCommitted && self.anchorRow !== undefined && self.anchorRow > 1) {
     const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-    self.logUpdate.clear(extraRows);
-    const bannerRows = Math.min(self.anchorRow - 1, rows - 1);
-    writeWithScrollGuard(self, () => {
-      self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bannerRows)}`);
-    });
+    // Guard the clear→write window with both flags, mirroring the main commit
+    // path (lines 184-185). Without these guards a re-entrant repaint() that
+    // fires during logUpdate.clear() (e.g. a SIGWINCH flushed mid-stack) could
+    // trigger repositionCommittedBand (commitInFlight) or a second frame paint
+    // on top of the just-cleared region (committing). try/finally guarantees
+    // both are reset even if logUpdate.clear() or stdout.write() throws.
+    // repaint() is called OUTSIDE the try/finally so that committing and
+    // commitInFlight are both false when the banner repaint fires — the
+    // compositor must accept re-entrant events from that repaint normally.
+    self.commitInFlight = true;
+    self.committing = true;
+    try {
+      self.logUpdate.clear(extraRows);
+      const bannerRows = Math.min(self.anchorRow - 1, rows - 1);
+      writeWithScrollGuard(self, () => {
+        self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bannerRows)}`);
+      });
+    } finally {
+      self.committing = false;
+      self.commitInFlight = false;
+    }
     self.anchorRow = 1;
     self.placementMode = 'bottom-pinned';
     self.hasCommitted = true;

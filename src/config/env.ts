@@ -46,6 +46,8 @@
  * the registry, preserving full autocomplete and `tsc --noEmit` type safety.
  */
 
+import { BROWSER_ENV_REGISTRY } from './env.browser.js';
+
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
 export type EnvVarCategory =
@@ -203,6 +205,20 @@ export const ENV_REGISTRY = [
     required: false,
     example: 'medium',
     category: 'model',
+  },
+  {
+    name: 'AFK_EVAL_STALENESS_DAYS',
+    description:
+      'Number of days without a completed eval-run before the ground-state pre-flight ' +
+      'surfaces a staleness warning. The guard reads the most recent timestamp from the ' +
+      'eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and ' +
+      'emits a warning finding when the gap exceeds this threshold. Default: 7. ' +
+      'Set to 0 to disable the guard.',
+    type: 'number',
+    required: false,
+    default: '7',
+    example: '14',
+    category: 'misc',
   },
   {
     name: 'AFK_MAX_BUDGET_USD',
@@ -834,6 +850,30 @@ export const ENV_REGISTRY = [
     secret: true,
   },
 
+  // ── Image generation ─────────────────────────────────────────────────────
+  {
+    name: 'AFK_IMAGE_API_KEY',
+    description: 'Dedicated OpenAI API key for the image_generate tool. Checked before OPENAI_API_KEY to keep image billing separate from chat completions. When unset, OPENAI_API_KEY is used as a fallback. Get a key from https://platform.openai.com/api-keys.',
+    type: 'string',
+    required: false,
+    category: 'auth',
+    secret: true,
+  },
+  {
+    name: 'AFK_IMAGE_SESSION_LIMIT',
+    description: 'Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10.',
+    type: 'string',
+    required: false,
+    category: 'misc',
+  },
+  {
+    name: 'AFK_IMAGE_ALLOW_DAEMON',
+    description: 'Set to "1" to allow image_generate in daemon/cron sessions. Blocked by default to prevent unattended API spend.',
+    type: 'string',
+    required: false,
+    category: 'misc',
+  },
+
   // ── Telegram ──────────────────────────────────────────────────────────────
   {
     name: 'TELEGRAM_BOT_TOKEN',
@@ -1000,6 +1040,20 @@ export const ENV_REGISTRY = [
     required: false,
     category: 'process',
   },
+  {
+    name: 'USER',
+    description: 'Unix login name of the current user. Used as a default approver identity in improve/approve.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
+  {
+    name: 'USERNAME',
+    description: 'Windows login name of the current user. Fallback after USER when identifying the approver.',
+    type: 'string',
+    required: false,
+    category: 'process',
+  },
 
   // ── Daemon ────────────────────────────────────────────────────────────────
   {
@@ -1039,7 +1093,7 @@ export const ENV_REGISTRY = [
   },
   {
     name: 'AFK_DAEMON_SHELL_TIMEOUT_MS',
-    description: 'Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 300000 (5 minutes). The child process is killed on timeout.',
+    description: 'Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 2700000 (45 minutes), matching the agent executor budget (AFK_SUBAGENT_TIMEOUT_MS). The child process is killed on timeout; the telemetry errorMessage will read "daemon shell timeout after NNNs" to distinguish a daemon-imposed kill from a process or network failure.',
     type: 'number',
     required: false,
     category: 'daemon',
@@ -1382,6 +1436,20 @@ export const ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_CENTER_CONTENT',
+    description:
+      'When set to "1" (or any truthy value), content surfaces (tool-lane overlay, ' +
+      'scrollback blocks, input line, spinner, and OODA stage rail) are horizontally ' +
+      'centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). ' +
+      'No-op when the terminal is at or below the content measure — the common 80–100 column case. ' +
+      'Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable.',
+    type: 'boolean',
+    required: false,
+    default: '',
+    example: '1',
+    category: 'display',
+  },
+  {
     name: 'COLORFGBG',
     description:
       'Terminal-set "foreground;background" color hint (e.g. "15;0"), read only for AFK_THEME=auto detection. ' +
@@ -1666,89 +1734,8 @@ export const ENV_REGISTRY = [
   },
 
   // ── Browser-control tools ────────────────────────────────────────────────
-  {
-    name: 'AFK_BROWSER_HEADLESS',
-    description:
-      'Override the default headless mode for native browser-control tools. ' +
-      '`1`/`true` forces headless; `0`/`false` forces headed. When unset the default is ' +
-      'headless on every AFK surface — the CLI entrypoint reports surface `afk`, which is ' +
-      'in the headless set — so watching the agent work in a visible window is opt-in via ' +
-      '`AFK_BROWSER_HEADLESS=0`, not implied by running the REPL. Note headed and headless ' +
-      'use different chromium downloads (`chromium-*` vs `chromium_headless_shell-*`).',
-    type: 'boolean',
-    required: false,
-    example: '1',
-    category: 'browser',
-  },
-  {
-    name: 'AFK_BROWSER_ALLOWED_DOMAINS',
-    description:
-      'Comma-separated allowlist of URL host globs. When set, browser_open and any ' +
-      'navigation that targets a host outside the list returns status: blocked_by_policy. ' +
-      'Unset means no allowlist (permissive). Patterns use simple `*` glob ' +
-      'matching against the URL host. Combines with AFK_BROWSER_BLOCKED_DOMAINS — block wins.',
-    type: 'string',
-    required: false,
-    example: 'github.com,*.atlassian.net',
-    category: 'browser',
-  },
-  {
-    name: 'AFK_BROWSER_BLOCKED_DOMAINS',
-    description:
-      'Comma-separated blocklist of URL host globs. Browser navigation that matches any ' +
-      'entry returns status: blocked_by_policy regardless of the allowlist.',
-    type: 'string',
-    required: false,
-    example: '*.ads.example.com',
-    category: 'browser',
-  },
-  {
-    name: 'AFK_BROWSER_DOM_SNAPSHOTS',
-    description:
-      'Phase 2 opt-in: when set to 1, every browser_act writes a gzipped DOM snapshot ' +
-      'sidecar under ~/.afk/state/witness/<sid>/browser/dom-snapshots/. Off by default ' +
-      'because snapshots are large; useful for post-mortem analysis of failed actions.',
-    type: 'boolean',
-    required: false,
-    example: '1',
-    category: 'browser',
-  },
-  {
-    name: 'AFK_BROWSER_BACKEND',
-    description:
-      'Browser provider backend: auto (default, prefer Agent Browser, fall back to Playwright), ' +
-      'agent-browser (require Agent Browser), or playwright (headless only).',
-    type: 'string',
-    required: false,
-    default: 'auto',
-    example: 'agent-browser',
-    category: 'browser',
-  },
-  {
-    name: 'AFK_BROWSER_CONFIG',
-    description:
-      'Absolute path to an alternate browser config file. Overrides the default ' +
-      '~/.afk/config/browser.json lookup. Useful for per-project overrides in CI.',
-    type: 'string',
-    required: false,
-    example: '/path/to/browser.json',
-    category: 'browser',
-  },
-  {
-    name: 'AFK_BROWSER_DEFAULT_PROFILE',
-    description:
-      'Name of the persistent session-vault profile the agent reuses for browser ' +
-      'sessions. The context restores its login from (and saves it back to) ' +
-      '~/.afk/state/browser/<profile>/storageState.json, so a human runs ' +
-      '`afk browser login --profile <name>` once and the agent reuses that ' +
-      'authenticated session across unattended runs. Unset defaults to `default` ' +
-      '(a fresh, empty profile — identical to pre-vault behavior). ' +
-      'Allowed charset: [A-Za-z0-9_-], max 128 chars.',
-    type: 'string',
-    required: false,
-    example: 'work',
-    category: 'browser',
-  },
+  // Entries live in env.browser.ts (extracted for the 350-line ceiling, #2206).
+  ...BROWSER_ENV_REGISTRY,
 
   // ── Filesystem ────────────────────────────────────────────────────────────
   {

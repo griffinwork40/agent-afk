@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createScheduleHandler,
+  updateScheduleHandler,
   listSchedulesHandler,
   getScheduleHistoryHandler,
   cancelScheduleHandler,
@@ -94,6 +95,135 @@ describe('create_schedule handler', () => {
     expect(result.isError).toBeUndefined();
     const parsed = JSON.parse(result.content as string) as { id: string };
     expect(parsed.id).toBe('silent-daemon');
+  });
+});
+
+describe('update_schedule handler', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedules-handler-'));
+    vi.stubEnv('AFK_HOME', tmpDir);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('updates cron on an existing schedule', async () => {
+    await createScheduleHandler(
+      { name: 'Update Test', command: '/test', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'update-test', cron: '0 4 * * *' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as { id: string; cron: string };
+    expect(parsed.id).toBe('update-test');
+    expect(parsed.cron).toBe('0 4 * * *');
+  });
+
+  it('updates multiple fields at once', async () => {
+    await createScheduleHandler(
+      { name: 'Multi Update', command: '/old', cron: '0 1 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'multi-update', command: '/new', cron: '30 3 * * *', enabled: false },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as {
+      id: string;
+      cron: string;
+      enabled: boolean;
+    };
+    expect(parsed.cron).toBe('30 3 * * *');
+    expect(parsed.enabled).toBe(false);
+  });
+
+  it('non-existent taskId returns task not found', async () => {
+    const result = await updateScheduleHandler(
+      { taskId: 'ghost', cron: '0 0 * * *' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as { error?: string };
+    expect(parsed.error).toBe('task not found');
+  });
+
+  it('missing taskId returns isError', async () => {
+    const result = await updateScheduleHandler({ cron: '0 0 * * *' }, fakeSignal);
+    expect(result.isError).toBe(true);
+  });
+
+  it('invalid cron (3 fields) returns isError', async () => {
+    await createScheduleHandler(
+      { name: 'Cron Test', command: '/cmd', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'cron-test', cron: '* * *' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/cron/i);
+  });
+
+  it('invalid executor returns isError', async () => {
+    await createScheduleHandler(
+      { name: 'Exec Test', command: '/cmd', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'exec-test', executor: 'invalid' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/executor/i);
+  });
+
+  it('invalid trigger returns isError', async () => {
+    await createScheduleHandler(
+      { name: 'Trigger Test', command: '/cmd', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'trigger-test', trigger: 'badvalue' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/trigger/i);
+  });
+
+  it('invalid notifyOn returns isError', async () => {
+    await createScheduleHandler(
+      { name: 'Notify Test', command: '/cmd', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'notify-test', notifyOn: 'badvalue' },
+      fakeSignal,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/notifyOn/i);
+  });
+
+  it('daemon not running reports daemonSynced: false', async () => {
+    await createScheduleHandler(
+      { name: 'Sync Test', command: '/cmd', cron: '0 2 * * *' },
+      fakeSignal,
+    );
+    const result = await updateScheduleHandler(
+      { taskId: 'sync-test', cron: '0 4 * * *' },
+      fakeSignal,
+    );
+    expect(result.isError).toBeUndefined();
+    const parsed = JSON.parse(result.content as string) as { daemonSynced: boolean };
+    expect(parsed.daemonSynced).toBe(false);
   });
 });
 

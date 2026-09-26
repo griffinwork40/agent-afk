@@ -21,7 +21,7 @@ import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './sub
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
 import { buildChildConfig } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
-import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js';
+import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
 import { createIsolatedWorktree } from './handlers/worktree-managed.js';
 import { lockWorktreeForBackground, teardownBackgroundWorktree } from './handlers/worktree-managed.background.js';
@@ -206,13 +206,9 @@ export class SubagentExecutor implements SubagentControl {
   supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
   hasPromotableForeground(): boolean { return this.supportsBackgroundJobs() && this.promotionTriggers.size > 0; }
   async cancelBackgroundJob(call: ToolCall): Promise<ToolResult> { return executeBackgroundCancel(this.ctx.backgroundRegistry, call); }
-  async sendMessageToAgent(call: ToolCall): Promise<ToolResult> {
-    return executeSendMessage(this.ctx.backgroundRegistry, call, this.ctx.parentSession.sessionId);
-  }
-
-  hasActiveForeground(): boolean {
-    return this.activeForegroundHandles.size > 0;
-  }
+  async sendMessageToAgent(call: ToolCall): Promise<ToolResult> { return executeSendMessage(this.ctx.backgroundRegistry, call, this.ctx.parentSession.sessionId); }
+  getBackgroundJobHealth(call: ToolCall): ToolResult { return executeBackgroundHealth(this.ctx.backgroundRegistry, call, this.ctx.parentSession.sessionId); }
+  hasActiveForeground(): boolean { return this.activeForegroundHandles.size > 0; }
 
   /**
    * Monotonic cancellation counter. Bumped on every `cancelActiveForeground()`
@@ -263,7 +259,11 @@ export class SubagentExecutor implements SubagentControl {
    * ISO 8601 to match the rest of the snapshot's timestamp convention.
    */
   getSubagentsLite(): ReturnType<typeof buildSubagentsLite> {
-    return buildSubagentsLite(this.ctx.subagentManager, this.ctx.backgroundRegistry);
+    return buildSubagentsLite(
+      this.ctx.subagentManager,
+      this.ctx.backgroundRegistry,
+      this.ctx.parentSession.sessionId,
+    );
   }
 
   /**
@@ -317,10 +317,7 @@ export class SubagentExecutor implements SubagentControl {
   ): Promise<ToolResult> {
     // If signal is already aborted, return immediately
     if (call.signal.aborted) {
-      return {
-        content: 'Agent tool call aborted',
-        isError: true,
-      };
+      return { content: 'Agent tool call aborted', isError: true };
     }
 
     let parsed: AgentInput;

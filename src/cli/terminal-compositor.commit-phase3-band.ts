@@ -4,6 +4,7 @@ import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { clearCommittedBand } from './terminal-compositor.committed-band-commit.js';
+import { contentMargin } from './render/measure.js';
 
 /**
  * Classic (non-band-hold) Phase 3 for newTopRow > 1: merge/cap/orphan-erase/paint
@@ -138,10 +139,15 @@ export function commitPhase3Band(
           out += eraseAndPaintRow(r);
         }
       }
+      // Content centering (AFK_CENTER_CONTENT): derive the margin from the
+      // CURRENT terminal width so painted rows adapt on resize. The band stores
+      // raw (unpadded) content; padding is applied at paint time only.
+      const pad = contentMargin();
       for (let i = 0; i < capped.length; i++) {
         const row = bandTop + i;
         if (row >= newTopRow) break; // Never overwrite the live frame.
-        out += eraseAndPaintRow(row, capped[i]);
+        const line = pad && capped[i] !== '' ? pad + capped[i] : capped[i];
+        out += eraseAndPaintRow(row, line);
       }
     } else {
       // Overflow (block taller than the above-frame region): Phase 1 already
@@ -155,12 +161,14 @@ export function commitPhase3Band(
       // The dropped top lines stay recoverable via the Phase-1 archive.
       // `capped` (== these same tail lines, via the tail-slice above) is the
       // band we track, so repositionCommittedBand repaints them on resize.
+      const pad = contentMargin();
       const room = Math.max(0, newTopRow - anchorFloor);
       const startIdx = Math.max(0, textLines.length - room);
       for (let i = startIdx; i < textLines.length; i++) {
         const row = anchorFloor + (i - startIdx);
         if (row >= newTopRow) break;
-        out += eraseAndPaintRow(row, textLines[i]);
+        const line = pad && textLines[i] !== '' ? pad + textLines[i] : textLines[i];
+        out += eraseAndPaintRow(row, line);
       }
     }
     if (out.length > 0) {

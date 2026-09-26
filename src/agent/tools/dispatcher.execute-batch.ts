@@ -214,17 +214,10 @@ export async function executeBatchImpl(
     replayObserveSuspectedLoopPostGate(calls[i]!, gateDeps);
   }
 
-  // Gate unsafe calls sequentially (may prompt on interactive surfaces).
-  for (const i of unsafeIndices) {
-    const gateResult = await deps.runPreDispatchGates(calls[i]!);
-    if (gateResult) {
-      results[i] = gateResult;
-      blocked.add(i);
-    }
-  }
-
   // Gate-shape telemetry (#1924): emit partition sizes + parallel-gate wall-clock
-  // after all Phase 1 gates settle. Fire-and-forget; no effect on dispatch.
+  // immediately after the parallel wave settles (before the sequential unsafe
+  // loop), so parallelGatesMs reflects only the parallel portion of Phase 1.
+  // Fire-and-forget; no effect on dispatch.
   void emitSessionPhase(deps.traceWriter, {
     phase: 'gate_shape',
     metadata: {
@@ -233,6 +226,15 @@ export async function executeBatchImpl(
       parallelGatesMs,
     },
   });
+
+  // Gate unsafe calls sequentially (may prompt on interactive surfaces).
+  for (const i of unsafeIndices) {
+    const gateResult = await deps.runPreDispatchGates(calls[i]!);
+    if (gateResult) {
+      results[i] = gateResult;
+      blocked.add(i);
+    }
+  }
 
   // Phase 2: partition non-blocked calls into batches and execute.
   const executableCalls: IndexedCall[] = calls

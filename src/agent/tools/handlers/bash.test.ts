@@ -831,23 +831,35 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
       expect(pidMatch).not.toBeNull();
       const grandchildPid = pidMatch![0];
 
-      // Give the OS a moment to fully reap every member of the killed process
-      // group before we probe.  100 ms is ample; the group kill is synchronous.
-      await new Promise<void>((r) => setTimeout(r, 100));
-
-      // `kill -0 <pid>` succeeds (exit 0) if the process exists, fails (exit 1)
-      // if it is gone.  We want it to be gone — any other result means the
-      // process-group kill missed the grandchild.
+      // Poll until the grandchild is gone, up to 2 s.
       //
-      // Risk: PID reuse — in pathological CI environments a new unrelated
-      // process could recycle this PID within the 100 ms window, causing a
-      // false-negative (test passes when grandchild leaked).  This is
-      // intentionally acceptable; the inverse false-positive (test fails when
-      // grandchild is gone) cannot occur because kill -0 is non-destructive.
-      const probe = spawnSync('kill', ['-0', grandchildPid]);
-      expect(probe.status).toBe(1); // exit 1 → process is gone (correctly reaped)
+      // Why a retry loop instead of a single sleep + probe:
+      // `kill -0 <pid>` returns exit 0 for zombie (Z-state) processes that are
+      // dead but not yet reaped. On macOS the grandchild is NOT a direct child
+      // of Node/libuv (libuv only reaps processes in its own handle list), so
+      // when the shell dies the grandchild is orphaned and reparented to launchd
+      // (PID 1). Launchd must receive SIGCHLD and call waitpid() to clear the
+      // zombie from the process table. On loaded GitHub Actions macOS runners
+      // this can take hundreds of milliseconds, well past the original 100 ms
+      // fixed wait, causing flaky failures (observed on PR #892, macos-latest).
+      // Linux is unaffected because systemd reaps orphaned zombies much faster.
+      //
+      // Risk: PID reuse — a new unrelated process could recycle this PID during
+      // the polling window, causing a false-negative (test passes when the
+      // grandchild leaked). This is intentionally acceptable; the inverse
+      // false-positive (test fails when grandchild is gone) cannot occur because
+      // kill -0 is non-destructive.
+      const deadline = Date.now() + 2000;
+      let probeStatus: number | null = 0;
+      while (Date.now() < deadline) {
+        const probe = spawnSync('kill', ['-0', grandchildPid]);
+        probeStatus = probe.status;
+        if (probeStatus !== 0) break; // gone — zombie reaped
+        await new Promise<void>((r) => setTimeout(r, 50));
+      }
+      expect(probeStatus).toBe(1); // exit 1 = process is gone (correctly reaped)
     },
-    5000, // vitest per-test timeout: 5 s (handler kills at 300 ms + 100 ms reap window + headroom)
+    10_000, // vitest timeout: handler kills at 300 ms + up to 2 s reap poll + headroom
   );
 });
 

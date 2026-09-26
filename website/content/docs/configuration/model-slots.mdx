@@ -109,7 +109,7 @@ pass:
 
 - A **tier name**: `local`, `small`, `medium`, `large`
 - A **custom name** you set in the binding's `name` field (case-insensitive)
-- An **identity alias**: `haiku`, `sonnet`/`sonnet_1m`, `opus`/`opus_1m`, `fable`
+- An **identity alias**: `haiku`, `sonnet`/`sonnet_1m`, `opus`/`opus_1m`, `opus-5.5`/`opus-5.5_1m`, `fable`
 - The `auto` sentinel (passthrough — picks the session model)
 - A raw concrete model ID
 
@@ -117,7 +117,7 @@ Resolution order (first match wins):
 
 1. Custom name (user-assigned `name` on a binding) → tier
 2. Neutral name (`local` | `small` | `medium` | `large`) → tier
-3. Identity alias (`haiku`/`sonnet`/`opus`/`fable`/`*_1m`) → its own fixed model ID — **never** a tier
+3. Identity alias (`haiku`/`sonnet`/`opus`/`opus-5.5`/`fable`/`*_1m`) → its own fixed model ID — **never** a tier
 4. Raw model ID or `auto` sentinel (passthrough)
 
 **Identity aliases are decoupled from capability tiers.** `sonnet` always names

@@ -31,6 +31,7 @@ import {
   scrollbackFlushLines,
 } from './terminal-compositor.scrollback.js';
 import { withAutowrapDisabled } from './terminal-compositor.band-reflow.js';
+import { contentMargin } from './render/measure.js';
 
 /**
  * Archive the oldest `overflow` rows of the committed band to native scrollback
@@ -118,8 +119,15 @@ export function archiveBandPrefixAndRepaintSurvivors(
   // ambiguous-width glyphs fabricating a phantom row).
   const survivors = self.committedBand.slice(overflow);
   if (survivors.length > 0) {
+    // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
+    // terminal width. The band stores raw (unpadded) content; padding is applied
+    // at paint time so the band adapts correctly on resize.
+    const pad = contentMargin();
     let paint = '';
-    for (let i = 0; i < survivors.length; i++) paint += eraseAndPaintRow(floor + i, survivors[i]);
+    for (let i = 0; i < survivors.length; i++) {
+      const line = pad && survivors[i] !== '' ? pad + survivors[i] : survivors[i];
+      paint += eraseAndPaintRow(floor + i, line);
+    }
     withAutowrapDisabled(self.stdout, () => {
       try {
         self.stdout.write(paint);

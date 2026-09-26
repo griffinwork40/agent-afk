@@ -28,7 +28,10 @@
  *     correct for a caller that never requests 1h — and `cache-policy.ts`
  *     defaults `AFK_PROMPT_CACHE_TTL` to `1h`, so the flat 1.25× that lived
  *     here understated the write component of every cached session by 37.5%.
- *  3. Cache READS are 0.1× the base input rate regardless of TTL.
+ *  3. Cache READS are 0.1× the base input rate by default; per-model overrides
+ *     are set directly on the row (e.g. Opus 5.5 uses 0.05× the base input
+ *     rate, so its `cacheReadPerMTok` is set explicitly on its pricing row
+ *     rather than derived from `CACHE_READ_MULTIPLIER`).
  *
  * The API reports the write split directly on `usage.cache_creation`
  * (`ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens`), so cost is
@@ -156,10 +159,10 @@ export interface SpeedPricingContext {
 const FAST_TIER_MULTIPLIER = 2;
 
 /**
- * Contract: only ANCHORED Opus 5 and Opus 4.8 are Fast-eligible — the two
+ * Contract: ANCHORED Opus 5, Opus 5.5, and Opus 4.8 are Fast-eligible — the
  * models Anthropic actually serves on the Fast tier. Matches both the dateless
- * key (`claude-opus-5`) and the dated wire id (`claude-opus-4-8-20260528`) via
- * the `(?:-|$)` boundary, which also stops `claude-opus-4-8` from matching a
+ * key (`claude-opus-5`, `claude-opus-5-5`) and dated wire ids via the
+ * `(?:-|$)` boundary, which also stops `claude-opus-4-8` from matching a
  * hypothetical `claude-opus-4-80`. Any other model asked to price as `fast`
  * falls through to its standard rates rather than being billed 2× for a tier
  * it was never served on.

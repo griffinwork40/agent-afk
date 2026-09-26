@@ -270,7 +270,7 @@ describe('SessionToolDispatcher', () => {
   it('hides cancel_background_job when no background-capable executor is wired', () => {
     const dispatcher = makeDispatcher({ permissions: undefined });
     expect(dispatcher.toolDefs).toEqual(
-      builtinToolSchemas.filter((schema) => schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent'),
+      builtinToolSchemas.filter((schema) => schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health'),
     );
   });
 
@@ -282,7 +282,7 @@ describe('SessionToolDispatcher', () => {
         // no permissions → undefined
       });
       expect(dispatcher.toolDefs).toEqual(
-        builtinToolSchemas.filter((schema) => schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent'),
+        builtinToolSchemas.filter((schema) => schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health'),
       );
     });
 

@@ -601,3 +601,67 @@ describe('schema migration — sessions.actor (v2 → v3)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// searchFacts — access tracking (issue #1848, step 1)
+// ---------------------------------------------------------------------------
+
+describe('searchFacts — access tracking', () => {
+  it('increments access_count and sets last_accessed on each retrieval', () => {
+    const id = store.storeFact({
+      category: 'preference',
+      content: 'prefers pnpm over npm',
+      source_surface: 'test',
+    });
+
+    // Confirm baseline: access_count starts at 0, last_accessed is null.
+    const before = store.getFact(id)!;
+    expect(before.access_count).toBe(0);
+    expect(before.last_accessed).toBeNull();
+
+    // Search that returns the fact.
+    const results = store.searchFacts('pnpm');
+    expect(results.some((r) => r.id === id)).toBe(true);
+
+    // After the search, access_count must be 1 and last_accessed must be set.
+    const after = store.getFact(id)!;
+    expect(after.access_count).toBe(1);
+    expect(typeof after.last_accessed).toBe('string');
+    // last_accessed must be a valid ISO-8601 timestamp.
+    expect(new Date(after.last_accessed!).getTime()).not.toBeNaN();
+  });
+
+  it('accumulates access_count across successive searches', () => {
+    const id = store.storeFact({
+      category: 'convention',
+      content: 'uses TypeScript strict mode',
+      source_surface: 'test',
+    });
+
+    store.searchFacts('TypeScript');
+    store.searchFacts('TypeScript strict');
+    store.searchFacts('strict mode');
+
+    const fact = store.getFact(id)!;
+    expect(fact.access_count).toBe(3);
+  });
+
+  it('leaves access_count unchanged for facts not returned by the search', () => {
+    const idA = store.storeFact({
+      category: 'preference',
+      content: 'prefers dark mode',
+      source_surface: 'test',
+    });
+    const idB = store.storeFact({
+      category: 'preference',
+      content: 'prefers TypeScript',
+      source_surface: 'test',
+    });
+
+    // Search only matches idB.
+    store.searchFacts('TypeScript');
+
+    expect(store.getFact(idA)!.access_count).toBe(0);
+    expect(store.getFact(idB)!.access_count).toBe(1);
+  });
+});

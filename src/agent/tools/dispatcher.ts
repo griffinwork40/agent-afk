@@ -571,7 +571,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ? this.schemas
       : this.schemas.filter(
           (schema) =>
-            schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent',
+            schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
         );
     const allowed = this.permissions?.allowedTools;
     if (!allowed) return available;

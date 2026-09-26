@@ -78,19 +78,6 @@ const definitions: readonly ConcurrencyDefinition[] = [
 
 const warnedKeys = new Set<ConcurrencyEnvKey>();
 
-/**
- * Test-only: clear the once-per-key warning latch so a suite can assert the
- * warning fires regardless of what ran (or didn't run) earlier in the file.
- *
- * Contract: production code must never call this. Without it, a "warns only
- * once" assertion would pass only when `warnedKeys` happened to still be
- * empty at that point in declaration order — an artifact of test order, not
- * a guarantee.
- */
-export function resetConcurrencyWarnings(): void {
-  warnedKeys.clear();
-}
-
 function rawValueFor(key: ConcurrencyEnvKey): string | undefined {
   return env[key];
 }

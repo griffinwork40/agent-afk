@@ -1281,17 +1281,17 @@ describe('StreamingMarkdownRenderer', () => {
       renderer.push('prose here ');
       // Within the buffer window — this chunk lands in inputBuffer, not yet in this.buffer.
       renderer.push('**Done**\n- What was done: fixed it');
-      expect((renderer as any).inputBuffer).toBe('**Done**\n- What was done: fixed it');
+      expect((renderer as any).inputState.inputBuffer).toBe('**Done**\n- What was done: fixed it');
 
       // getPendingBuffer() must drain inputBuffer first so the full content is visible.
       const pending = renderer.getPendingBuffer();
       expect(pending).toContain('**Done**');
-      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBuffer).toBe('');
 
       // stripPendingFrom() must also drain inputBuffer and successfully strip.
       // Push again to re-populate inputBuffer for a fresh stripPendingFrom() call.
       renderer.push('**Done**\n- second');
-      expect((renderer as any).inputBuffer).toBe('**Done**\n- second');
+      expect((renderer as any).inputState.inputBuffer).toBe('**Done**\n- second');
 
       const pending2 = renderer.getPendingBuffer();
       const offset = pending2.indexOf('**Done**');
@@ -1334,12 +1334,12 @@ describe('StreamingMarkdownRenderer', () => {
       // getPendingBuffer() now drains inputBuffer before returning, so it returns
       // the full 'ABC' and clears inputBuffer as a side-effect.
       expect(renderer.getPendingBuffer()).toBe('ABC');
-      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBuffer).toBe('');
 
       // After the trailing-edge timer fires, nothing new to flush.
       await new Promise((r) => setTimeout(r, 50));
       expect(renderer.getPendingBuffer()).toBe('ABC');
-      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBuffer).toBe('');
     });
 
     it('commitPending() drains the input buffer first', () => {
@@ -1347,11 +1347,11 @@ describe('StreamingMarkdownRenderer', () => {
       renderer.push('leading ');
       // Push more within window -- buffered.
       renderer.push('trailing');
-      expect((renderer as any).inputBuffer).toBe('trailing');
+      expect((renderer as any).inputState.inputBuffer).toBe('trailing');
 
       // commitPending should drain input buffer before committing.
       renderer.commitPending();
-      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBuffer).toBe('');
       expect(renderer.getCommittedOutput()).toContain('leading trailing');
     });
 
@@ -1359,10 +1359,10 @@ describe('StreamingMarkdownRenderer', () => {
       renderer = new StreamingMarkdownRenderer({ out: stream, bufferMs: 100 });
       renderer.push('leading ');
       renderer.push('buffered');
-      expect((renderer as any).inputBuffer).toBe('buffered');
+      expect((renderer as any).inputState.inputBuffer).toBe('buffered');
 
       renderer.discardPending();
-      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBuffer).toBe('');
       expect(renderer.getPendingBuffer()).toBe('');
     });
 
@@ -1371,7 +1371,7 @@ describe('StreamingMarkdownRenderer', () => {
       renderer.push('hello\n\n');
       // Push more within window.
       renderer.push('world\n\n');
-      expect((renderer as any).inputBuffer).toBe('world\n\n');
+      expect((renderer as any).inputState.inputBuffer).toBe('world\n\n');
 
       await renderer.flush();
       // Both blocks should be committed.
@@ -1386,8 +1386,8 @@ describe('StreamingMarkdownRenderer', () => {
       renderer.push('buffered');
 
       renderer.dispose();
-      expect((renderer as any).inputBuffer).toBe('');
-      expect((renderer as any).inputBufferTimer).toBeNull();
+      expect((renderer as any).inputState.inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBufferTimer).toBeNull();
     });
 
     it('hasEmitted() accounts for input buffer', () => {
@@ -1413,12 +1413,12 @@ describe('StreamingMarkdownRenderer', () => {
 
       // Subsequent push within the window — lands in inputBuffer only.
       renderer.push('second');
-      expect((renderer as any).inputBuffer).toBe('second');
+      expect((renderer as any).inputState.inputBuffer).toBe('second');
 
       // getPendingBuffer() must drain inputBuffer so caller sees full content.
       const pending = renderer.getPendingBuffer();
       expect(pending).toBe('first second');
-      expect((renderer as any).inputBuffer).toBe('');
+      expect((renderer as any).inputState.inputBuffer).toBe('');
 
       vi.useRealTimers();
     });

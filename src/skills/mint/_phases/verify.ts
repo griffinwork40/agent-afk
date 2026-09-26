@@ -13,6 +13,7 @@ import type { BuildResult } from './build.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
+import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 
 const VerifyModeOutputSchema = z.object({
   status: z.enum(['PASS', 'FAIL']),
@@ -53,6 +54,9 @@ async function forkVerifyMode(
   // test/lint/design-review see each other's findings at all. See spec.ts /
   // skills/index.ts SkillExecutionContext.workspaceStore.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget forwarded to the fork manager so this
+  // verify-mode subagent counts against the same budget. See issue #1899.
+  delegationBudget?: DelegationBudget,
 ): Promise<{ passed: boolean; issues?: string[] }> {
   // Propagate parent worktree — verify subagents run tests/lint/grep in
   // the right working tree.
@@ -61,6 +65,7 @@ async function forkVerifyMode(
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     ...(traceWriter !== undefined ? { traceWriter } : {}),
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...(delegationBudget !== undefined ? { delegationBudget } : {}),
   });
   const verifyHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },
@@ -127,6 +132,9 @@ export async function runVerifyPhase(
   // concurrent verify subagents read/publish against the SAME store and see one
   // another's findings. See forkVerifyMode's parameter for the full rationale.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget forwarded to each parallel forkVerifyMode.
+  // See issue #1899.
+  delegationBudget?: DelegationBudget,
 ): Promise<VerifyResult> {
   const prompts = loadSkillPrompts('mint');
   const verifyPrompt = prompts['verify.md'];
@@ -137,9 +145,9 @@ export async function runVerifyPhase(
 
   // Run test, lint, and design-review in parallel
   const [testResult, lintResult, designResult] = await Promise.all([
-    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore),
-    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore),
-    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore),
+    forkVerifyMode('test', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore, delegationBudget),
+    forkVerifyMode('lint', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore, delegationBudget),
+    forkVerifyMode('design-review', plan, buildResults, parentSessionId, verifyPrompt, parentCwd, skillCallId, defaultSubagentModel, parentReadRoots, traceWriter, workspaceStore, delegationBudget),
   ]);
 
   const allIssues: string[] = [];

@@ -13,7 +13,9 @@
  */
 
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFile = promisify(execFileCb);
 import { divider } from '../../render.js';
 import { formatDuration } from '../../format-utils.js';
 import { costTokenParts } from '../../render/session-summary.js';
@@ -237,7 +239,7 @@ export function printExitSummary(
     const stdout = execFileSync('git', ['diff', '--shortstat', 'HEAD'], {
       cwd,
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: 400,
     });
     const stat = stdout.trim();
     console.log(palette.dim(`  edits: ${stat || 'no files changed'}`));
@@ -281,18 +283,14 @@ export function printExitSummary(
  * Output goes to stderr so it doesn't corrupt any piped stdout stream and
  * is clearly distinguished from normal session output.
  */
-export function snapshotGitStateForCancelAll(cwd: string): void {
+export async function snapshotGitStateForCancelAll(cwd: string): Promise<void> {
   try {
-    const stat = execFileSync('git', ['diff', '--stat', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 2000,
-    }).trim();
-    const status = execFileSync('git', ['status', '--short'], {
-      cwd,
-      encoding: 'utf8',
-      timeout: 2000,
-    }).trim();
+    const [statResult, statusResult] = await Promise.all([
+      execFile('git', ['diff', '--stat', 'HEAD'], { cwd, encoding: 'utf8', timeout: 2000 }),
+      execFile('git', ['status', '--short'], { cwd, encoding: 'utf8', timeout: 2000 }),
+    ]);
+    const stat = statResult.stdout.trim();
+    const status = statusResult.stdout.trim();
     const lines: string[] = [
       '[afk] pre-cancelAll git snapshot (compare after session to detect half-applied edits):',
     ];

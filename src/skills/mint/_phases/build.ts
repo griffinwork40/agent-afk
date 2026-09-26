@@ -11,6 +11,7 @@ import { loadSkillPrompts } from '../../_lib/prompt-loader.js';
 import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
+import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 import { emitCard } from '../../_lib/emit-card.js';
 
 const BuildOutputSchema = z.object({
@@ -51,6 +52,10 @@ export async function runBuildPhase(
   // works without it; reading does not. See spec.ts / skills/index.ts
   // SkillExecutionContext.workspaceStore.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget (ctx.delegationBudget). Forwarded to the
+  // fork manager so this phase's subagent counts against the same budget as
+  // the agent-tool / compose / DAG paths. See issue #1899.
+  delegationBudget?: DelegationBudget,
 ): Promise<BuildResult> {
   const prompts = loadSkillPrompts('mint');
   const buildPrompt = prompts['build.md'];
@@ -67,6 +72,7 @@ export async function runBuildPhase(
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     ...(traceWriter !== undefined ? { traceWriter } : {}),
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...(delegationBudget !== undefined ? { delegationBudget } : {}),
   });
   const buildHandle = await manager.forkSubagent({
     parent: { sessionId: parentSessionId },

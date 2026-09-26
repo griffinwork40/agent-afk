@@ -23,6 +23,7 @@ import type {
 } from '../types.js';
 import { annotateFastError } from '../query/turn-request.js';
 import { getCacheTtl, isCacheEnabled, withMessagesBreakpoint } from '../cache-policy.js';
+import { repairOrphanToolUses } from '../query/repair-orphan-tool-uses.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import {
@@ -179,6 +180,19 @@ export async function* openRound({
   ttfbTimeoutMs,
   stallTimeoutMs,
 }: OpenRoundContext): AsyncGenerator<ProviderEvent, OpenRoundResult, void> {
+  // Invariant: last-resort orphan repair. The primary defense lives in
+  // query-turn-driver.ts (repairOrphanToolUses before each new user turn) and
+  // tool-round.ts (rollback splice on throw). This third site guards against
+  // any corruption path that evades both: a mid-turn abort between the
+  // assistant push and the tool_result commit where the rollback did not fire,
+  // a retry-layer replay that re-enters runTurn with stale history, or an
+  // auto-compaction / microcompaction edge that drops a tool_result without
+  // removing its paired tool_use. Runs before every messages.create, which is
+  // the only site that surfaces the 400 — so catching it here eliminates the
+  // entire class of orphan-induced request failures. The function is a no-op
+  // when history is healthy (single linear scan), so the overhead is negligible.
+  repairOrphanToolUses(input.messages);
+
   // Stamp a prompt-cache breakpoint on the last content block of the last
   // message before sending — non-mutating clone-and-stamp so the marker never
   // accumulates back into stored history. Cache lookup walks back over

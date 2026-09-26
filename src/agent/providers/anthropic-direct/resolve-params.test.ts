@@ -179,4 +179,74 @@ describe('resumeHistoryToMessages', () => {
     expect(t2User.role).toBe('user');
     expect(t2User.content).toEqual([{ type: 'text', text: 'turn 2 user' }]);
   });
+
+  // ---------------------------------------------------------------------------
+  // Skip-guard — issue #2112 (defense-in-depth: no silent user-message skip)
+  //
+  // When both `filterContentBlocks(turn.userContentBlocks)` and `turn.user`
+  // are empty, the user turn would previously be silently skipped.  If the
+  // assistant side of that same TurnRecord produces content this creates
+  // consecutive assistant messages that violate the Anthropic API's
+  // role-alternation contract.  The `else` fallback in resumeHistoryToMessages
+  // emits a minimal `{ role: 'user', content: '[resumed]' }` placeholder to
+  // prevent this.
+  // ---------------------------------------------------------------------------
+
+  it('emits a [resumed] placeholder when user is empty but assistant has text', () => {
+    // A turn with empty user text and no userContentBlocks, but a non-empty
+    // assistant text.  The skip-guard must emit '[resumed]' so the assistant
+    // message does not follow another assistant message.
+    const result = resumeHistoryToMessages([{ user: '', assistant: 'hello from assistant' }]);
+    expect(result).toBeDefined();
+    expect(result).toHaveLength(2);
+    expect(result![0]).toEqual({ role: 'user', content: '[resumed]' });
+    expect(result![1]).toEqual({ role: 'assistant', content: 'hello from assistant' });
+  });
+
+  it('emits a [resumed] placeholder when user is empty but assistant has structured blocks', () => {
+    // A turn with empty user fields, but assistantContentBlocks is non-empty.
+    // The skip-guard must fire when the assistant *blocks* would produce content,
+    // not only when the legacy text string is non-empty.
+    const assistantBlocks: ContentBlockParam[] = [{ type: 'text', text: 'block answer' }];
+    const result = resumeHistoryToMessages([
+      { user: '', assistant: '', assistantContentBlocks: assistantBlocks },
+    ]);
+    expect(result).toBeDefined();
+    expect(result).toHaveLength(2);
+    expect(result![0]).toEqual({ role: 'user', content: '[resumed]' });
+    expect(result![1]).toEqual({ role: 'assistant', content: assistantBlocks });
+  });
+
+  it('produces nothing when both user and assistant are empty (no consecutive-message violation)', () => {
+    // When the assistant side is also empty, skipping the user message is safe
+    // because no assistant message follows.  Both sides skip; the turn vanishes.
+    const result = resumeHistoryToMessages([{ user: '', assistant: '' }]);
+    expect(result).toBeUndefined();
+  });
+
+  it('does not produce consecutive assistant messages in a multi-turn history with one empty-user turn', () => {
+    // Three turns: a normal turn, a turn whose user is empty but assistant is
+    // non-empty, and another normal turn.  The skip-guard must fire on the middle
+    // turn so the output role sequence is: user, assistant, user, assistant,
+    // user, assistant — never assistant, assistant.
+    const result = resumeHistoryToMessages([
+      { user: 'first question', assistant: 'first answer' },
+      { user: '', assistant: 'middle answer' },
+      { user: 'third question', assistant: 'third answer' },
+    ]);
+
+    expect(result).toBeDefined();
+    expect(result).toHaveLength(6);
+
+    const roles = result!.map((m) => m.role);
+    expect(roles).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
+
+    // The '[resumed]' placeholder must be at index 2 (the middle user slot).
+    expect(result![2]).toEqual({ role: 'user', content: '[resumed]' });
+
+    // No consecutive same-role pairs anywhere in the sequence.
+    for (let i = 0; i < roles.length - 1; i++) {
+      expect(roles[i]).not.toBe(roles[i + 1]);
+    }
+  });
 });

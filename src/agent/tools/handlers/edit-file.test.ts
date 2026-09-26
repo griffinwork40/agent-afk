@@ -8,14 +8,10 @@ import { rm } from 'fs/promises';
 import { utimesSync, writeFileSync } from 'node:fs';
 import os from 'os';
 import path from 'path';
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import { editFileHandler } from './edit-file.js';
 import { createPatchApplyHandler } from './patch-apply.js';
-
-/** Compute SHA-256 hex digest for test assertions. */
-function sha256Hex(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex');
-}
+import { sha256Hex } from './patch-validate.js';
 
 // Invariant: this scratch dir must live OUTSIDE the repo working tree. Rooted
 // at `process.cwd()` it landed as `.test-temp-edit-file/` in whatever checkout

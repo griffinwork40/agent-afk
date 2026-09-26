@@ -66,6 +66,31 @@ Return: relevant facts with 1-line summaries, **plus the stores actually consult
 
 Read `SPINE.md` from the repo root (same directory as `AFK.md`). If the file does not exist or is empty, skip silently -- do not mention it in the snapshot. If it exists and has entries, extract its invariant (INV-*), rejected-pattern (REJ-*), and taste entries (TST-*) and include them in the snapshot so architectural constraints are visible before proposing changes.
 
+### Eval-pipeline recency survey *(bash — software domain only)*
+
+For software-domain sessions, check whether the eval-run pipeline is current. This guard catches silent regressions that accumulate when the pipeline goes unrun during high-velocity sprints.
+
+Run:
+```
+tail -1 ~/.afk/agent-framework/improve/eval-runs/.index.jsonl 2>/dev/null
+```
+
+Parse the `timestamp` field from the output. Then compute the age in days relative to today's date.
+
+**Threshold**: Read `AFK_EVAL_STALENESS_DAYS` from the environment (default: 7). If the env var is `0`, skip this check silently.
+
+**Surface as a warning finding when any of these are true:**
+- The index file does not exist → `⚠ Eval-pipeline has NEVER run. Run \`afk improve eval-run\` to establish a baseline.`
+- The file exists but the timestamp is absent or unparseable → `⚠ Eval-pipeline recency guard: index unreadable.`
+- Age in days ≥ threshold → `⚠ Eval-pipeline is STALE: last eval-run was N days ago (exceeds AFK_EVAL_STALENESS_DAYS=N threshold). Run \`afk improve eval-run\`.`
+
+Skip this check silently when:
+- Domain is not `software`, OR
+- Working directory has no `package.json` / `pyproject.toml` / `Cargo.toml` / `go.mod` at root level (heuristic that this is not a software project), OR
+- `AFK_EVAL_STALENESS_DAYS=0`.
+
+Include the result (fresh or warning) in the Implementation risks line of the snapshot.
+
 ## Synthesis
 
 Assemble the survey results into a ground-truth snapshot (6 lines minimum, 7 when SPINE.md has entries):
@@ -74,7 +99,7 @@ Assemble the survey results into a ground-truth snapshot (6 lines minimum, 7 whe
 - Infrastructure: CI present? package scripts? authoritative configs for this task
 - Memory hits: facts (1-line each) + which stores were consulted, or `none (consulted: …)`
 - Spine constraints *(only when SPINE.md exists with entries)*: INV-*, REJ-*, TST-* entries. Omit this line entirely when SPINE.md is absent or empty.
-- Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"
+- Implementation risks: e.g. "branch is `main`, don't edit directly"; "CI runs on push"; "memory says prior attempt used approach X"; include any eval-pipeline staleness warning here.
 - Epistemic confidence: `<high|medium|low>` — based on how much state could be verified. Flag if working directory is sparse, if domain is unfamiliar, or if key artifacts may be missing.
 
 Surface the snapshot and stop. The orchestrator then uses these verified facts — not assumptions — to decide the next step. This skill never edits files.

@@ -15,6 +15,7 @@ import {
   getSchedule,
   saveSchedules,
   toggleScheduleEnabled,
+  updateSchedule,
   toScheduledTask,
   type ScheduledTaskConfig,
 } from './schedule-store.js';
@@ -340,6 +341,117 @@ describe('toggleScheduleEnabled', () => {
     expect(result).toBeUndefined();
     // The real task must be untouched
     expect(loadSchedules(path)[0]?.enabled).toBe(true);
+  });
+});
+
+// ── updateSchedule ──────────────────────────────────────────────────────────
+
+describe('updateSchedule', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('patches a single field and preserves others', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule(
+      { name: 'Patch Me', command: '/cmd', cron: '0 2 * * *', enabled: true, notifyOn: 'always' },
+      path,
+    );
+
+    const result = updateSchedule('patch-me', { cron: '0 4 * * *' }, path);
+    expect(result).toBeDefined();
+    expect(result?.cron).toBe('0 4 * * *');
+    // Other fields preserved
+    expect(result?.name).toBe('Patch Me');
+    expect(result?.command).toBe('/cmd');
+    expect(result?.enabled).toBe(true);
+    expect(result?.notifyOn).toBe('always');
+
+    // Verify persisted
+    const loaded = loadSchedules(path);
+    expect(loaded[0]?.cron).toBe('0 4 * * *');
+  });
+
+  it('patches multiple fields at once', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule(
+      { name: 'Multi Patch', command: '/old', cron: '0 1 * * *', enabled: true },
+      path,
+    );
+
+    const result = updateSchedule('multi-patch', {
+      command: '/new',
+      cron: '30 3 * * *',
+      notifyOn: 'never',
+      executor: 'shell',
+    }, path);
+    expect(result?.command).toBe('/new');
+    expect(result?.cron).toBe('30 3 * * *');
+    expect(result?.notifyOn).toBe('never');
+    expect(result?.executor).toBe('shell');
+  });
+
+  it('returns undefined for unknown id (no-op)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ name: 'Real', command: '/cmd', cron: '* * * * *', enabled: true }, path);
+
+    const result = updateSchedule('nonexistent', { cron: '0 0 * * *' }, path);
+    expect(result).toBeUndefined();
+    // Original untouched
+    expect(loadSchedules(path)[0]?.cron).toBe('* * * * *');
+  });
+
+  it('does not change the id when name is patched', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ name: 'Original Name', command: '/cmd', cron: '* * * * *', enabled: true }, path);
+
+    const result = updateSchedule('original-name', { name: 'New Name' }, path);
+    expect(result?.id).toBe('original-name');
+    expect(result?.name).toBe('New Name');
+  });
+
+  it('stamps updatedAt without changing createdAt', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    // Seed with a known past timestamp so the update is guaranteed to differ
+    const config: ScheduledTaskConfig = {
+      id: 'time-test',
+      name: 'Time Test',
+      command: '/cmd',
+      cron: '* * * * *',
+      enabled: true,
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+    saveSchedules([config], path);
+
+    const result = updateSchedule('time-test', { command: '/new' }, path);
+    expect(result?.createdAt).toBe('2024-01-01T00:00:00.000Z');
+    expect(result?.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+  });
+
+  it('patches notifyChat with a numeric value', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ name: 'Chat Num', command: '/cmd', cron: '* * * * *', enabled: true }, path);
+
+    const result = updateSchedule('chat-num', { notifyChat: -1001234567890 }, path);
+    expect(result?.notifyChat).toBe(-1001234567890);
+  });
+
+  it('patches notifyChat with a string alias', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-'));
+    const path = join(tmpDir, 'schedules.json');
+    addSchedule({ name: 'Chat Alias', command: '/cmd', cron: '* * * * *', enabled: true }, path);
+
+    const result = updateSchedule('chat-alias', { notifyChat: 'ops' }, path);
+    expect(result?.notifyChat).toBe('ops');
   });
 });
 

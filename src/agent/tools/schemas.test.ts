@@ -6,17 +6,18 @@ import {
   clipboardWriteTool,
   clipboardReadTool,
 } from './schemas.js';
-import { cancelBackgroundJobTool, sendMessageToAgentTool } from './schemas.orchestration.js';
+import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 36 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(36);
+  it('contains exactly 40 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(40);
   });
 
   it('exports the expected tool names', () => {
     expect(BUILTIN_TOOL_NAMES).toEqual([
       'bash',
       'read_file',
+      'view_image',
       'extract_document',
       'write_file',
       'edit_file',
@@ -26,12 +27,15 @@ describe('builtinToolSchemas', () => {
       'send_telegram',
       'web_scrape',
       'web_request',
+      'image_generate',
       'create_schedule',
+      'update_schedule',
       'list_schedules',
       'get_schedule_history',
       'cancel_schedule',
       'cancel_background_job',
       'send_message_to_agent',
+      'get_background_job_health',
       'read_witness',
       'search_witness',
       'worktree',
@@ -109,6 +113,15 @@ describe('builtinToolSchemas', () => {
     expect(read.input_schema.properties).toHaveProperty('file_path');
     expect(read.input_schema.properties).toHaveProperty('offset');
     expect(read.input_schema.properties).toHaveProperty('limit');
+  });
+
+  it('view_image tool has correct params', () => {
+    const tool = builtinToolSchemas.find((t) => t.name === 'view_image')!;
+    expect(tool).toBeDefined();
+    expect(tool.input_schema.required).toEqual(['file_path']);
+    expect(tool.input_schema.properties).toHaveProperty('file_path');
+    expect(tool.category).toBe('read');
+    expect(tool.concurrencySafe).toBe(true);
   });
 
   it('write_file tool has correct params', () => {
@@ -206,5 +219,28 @@ describe('sendMessageToAgentTool', () => {
 
   it('is included in BUILTIN_TOOL_NAMES', () => {
     expect(BUILTIN_TOOL_NAMES).toContain('send_message_to_agent');
+  });
+});
+
+describe('getBackgroundJobHealthTool', () => {
+  it('requires only jobId', () => {
+    expect(getBackgroundJobHealthTool.input_schema.required).toEqual(['jobId']);
+  });
+
+  it('describes health / activity signals', () => {
+    expect(getBackgroundJobHealthTool.description).toMatch(/health/i);
+    expect(getBackgroundJobHealthTool.description).toMatch(/activity/i);
+  });
+
+  it('has category "subagent"', () => {
+    expect(getBackgroundJobHealthTool.category).toBe('subagent');
+  });
+
+  it('is marked concurrencySafe', () => {
+    expect(getBackgroundJobHealthTool.concurrencySafe).toBe(true);
+  });
+
+  it('is included in BUILTIN_TOOL_NAMES', () => {
+    expect(BUILTIN_TOOL_NAMES).toContain('get_background_job_health');
   });
 });

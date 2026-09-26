@@ -668,8 +668,12 @@ async function createWorktreeAt(
       }
 
       let status: { stdout: string; stderr: string };
+      let ignoredProbeEarly: Awaited<ReturnType<typeof probeNonRebuildableIgnoredFiles>> | undefined;
       try {
-        status = await execFile('git', ['-C', currentPath, 'status', '--porcelain']);
+        [status, ignoredProbeEarly] = await Promise.all([
+          execFile('git', ['-C', currentPath, 'status', '--porcelain']),
+          probeNonRebuildableIgnoredFiles(execFile, currentPath),
+        ]);
       } catch (err) {
         const message = isExecError(err) ? (err.message || err.stderr || '') : String(err);
         // eslint-disable-next-line no-console
@@ -725,7 +729,9 @@ async function createWorktreeAt(
       // did not exist while the real cause — leftover test detritus, a
       // scratch dir — stayed invisible and the tree was preserved on every
       // single exit with nothing in the message to explain why.
-      const ignoredProbe = await probeNonRebuildableIgnoredFiles(execFile, currentPath);
+      // ignoredProbeEarly was fetched concurrently with the status check above.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const ignoredProbe = ignoredProbeEarly!;
       if (ignoredProbe.protect) {
         preserveWorktree(
           ignoredProbe.because === 'git-failed'

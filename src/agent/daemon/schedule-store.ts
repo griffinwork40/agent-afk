@@ -161,6 +161,45 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
   return loadSchedules(path).find((s) => s.id === id);
 }
 
+/** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt'>>;
+
+/**
+ * Patch one or more fields on an existing schedule. Atomically loads,
+ * merges only the supplied fields, stamps `updatedAt`, and saves.
+ *
+ * Returns the updated config, or undefined if the ID is not found.
+ *
+ * This is the canonical update primitive — the agent tool handler, the
+ * web-server PATCH route, and `toggleScheduleEnabled` all delegate here
+ * so field-merge logic stays in one place.
+ */
+export function updateSchedule(
+  id: string,
+  patch: SchedulePatch,
+  path?: string,
+): ScheduledTaskConfig | undefined {
+  const schedules = loadSchedules(path);
+  const idx = schedules.findIndex((s) => s.id === id);
+  if (idx === -1) return undefined;
+  const existing = schedules[idx]!;
+  const updated: ScheduledTaskConfig = {
+    ...existing,
+    ...(patch.name !== undefined ? { name: patch.name } : {}),
+    ...(patch.command !== undefined ? { command: patch.command } : {}),
+    ...(patch.cron !== undefined ? { cron: patch.cron } : {}),
+    ...(patch.executor !== undefined ? { executor: patch.executor } : {}),
+    ...(patch.trigger !== undefined ? { trigger: patch.trigger } : {}),
+    ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
+    ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
+    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  schedules[idx] = updated;
+  saveSchedules(schedules, path);
+  return updated;
+}
+
 /**
  * Toggle a schedule's enabled state. Atomically loads, updates, and saves.
  *
@@ -175,13 +214,7 @@ export function toggleScheduleEnabled(
   enabled: boolean,
   path?: string,
 ): ScheduledTaskConfig | undefined {
-  const schedules = loadSchedules(path);
-  const idx = schedules.findIndex((s) => s.id === id);
-  if (idx === -1) return undefined;
-  const updated = { ...schedules[idx]!, enabled, updatedAt: new Date().toISOString() };
-  schedules[idx] = updated;
-  saveSchedules(schedules, path);
-  return updated;
+  return updateSchedule(id, { enabled }, path);
 }
 
 /**

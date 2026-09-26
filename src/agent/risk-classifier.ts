@@ -392,7 +392,7 @@ export function classifyRisk(
   // could run before the operator notices — so they are 'high', gated behind
   // explicit approval in AFK mode. list_schedules and get_schedule_history are
   // read-only and fall through to the 'safe' default below.
-  if (tool === 'create_schedule' || tool === 'cancel_schedule') {
+  if (tool === 'create_schedule' || tool === 'update_schedule' || tool === 'cancel_schedule') {
     return 'high';
   }
 

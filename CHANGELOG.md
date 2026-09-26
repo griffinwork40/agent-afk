@@ -11,6 +11,359 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.249.3] - 2026-09-25
+
+### Fixed
+- clean up non-blocking review findings from #2176 (#2201) (d1cecd53)
+- isMain fails on URL-encoded install paths; use fileURLToPath; comment cleanups (#2205) (fac6d59c)
+
+## [5.249.2] - 2026-09-25
+
+### Fixed
+- spine-continuation separator between compose/skill sibling bands (#2196) (931e368a)
+
+## [5.249.1] - 2026-09-25
+
+### Fixed
+- add GPT-5.6 and GPT-6 model prices (#2200) (789a5a0f)
+- only restart launchd services on global installs (#2195) (c91d81b1)
+
+## [5.249.0] - 2026-09-25
+
+### Added
+- split active vs. completed dimming for readable agent rows (dc2bf885)
+
+### Fixed
+- address review feedback (061847bc)
+
+### Changed
+- add .afk/generated-images/ to ignore list (70a75347)
+- Merge pull request #2172 from griffinwork40/afk/tui-contrast-split (6ef88a6f)
+- sync funcsize baseline after rebase (681dace0)
+
+## [5.248.1] - 2026-09-25
+
+### Fixed
+- restore strict assertions in 2 DAG isolation tests (8e183b1f)
+
+### Changed
+- Merge pull request #2178 from griffinwork40/afk/iso-agent-tool-1-6jr39a (6f3fb823)
+- add 4 missing DAG isolation edge-case tests (087d4762)
+
+## [5.248.0] - 2026-09-25
+
+### Added
+- surface task responsibility labels on agent rows (#2173) (2e1c4830)
+- add placeholder prevention SessionStart hook (Layer 1) (8fbb3008)
+
+### Fixed
+- gracefully handle shallow-checkout diff failure in changedSince() (a2a30fa2)
+- update SessionStart hook count assertion to 2 (placeholder-prevent built-in) (e1f1baab)
+- cap blank gap above committed band on short terminals (#2182) (a3428c82)
+
+### Changed
+- Merge pull request #2179 from griffinwork40/afk/iso-agent-tool-2-05vah6 (239cc28c)
+- update stale hash pins after rebase on main (df3d2e57)
+- sync baseline after rebase on main (createDefaultHookRegistry 240→250) (b993f072)
+- promote funcsize gate to CI-blocking (fa94f211)
+- Merge pull request #2192 from griffinwork40/afk/iso-agent-tool-1-bo5jkl (bd5898f2)
+- Merge pull request #2189 from griffinwork40/afk/iso-agent-tool-3-2a5ujd (bfa99f3f)
+
+## [5.247.2] - 2026-09-25
+
+### Fixed
+- remove setTimeout race conditions in lifecycle module (b062de37)
+- thread resolved sessionId into tool dispatcher for fresh sessions (beeee004)
+- gate compactScrollback on captureMode (f8c78b76)
+- view_image non-blocking follow-ups from review (8f74c792)
+
+### Changed
+- Merge pull request #2190 from griffinwork40/afk/iso-agent-tool-2-c2aqyb (503cf42b)
+- Merge pull request #2188 from griffinwork40/fix/image-generate-sessionid-wiring (9dfc9c80)
+- Merge pull request #2187 from griffinwork40/afk/iso-agent-tool-1-thtbyl (2ada9857)
+- Merge pull request #2186 from griffinwork40/afk/iso-agent-tool-2-hdzwj1 (52ef1aaf)
+- Merge pull request #2185 from griffinwork40/afk/iso-agent-tool-5-1qs2bs (9b360bac)
+- add 4 missing DAG isolation edge-case tests (#2183) (19fb251d)
+- improve colorize test coverage (#2184) (a75de197)
+- harden colorize regex patterns (068bbe21)
+
+## [5.247.1] - 2026-09-25
+
+### Fixed
+- preserve spine root anchor on short-terminal overlay truncation (#2176) (b25115e5)
+
+## [5.247.0] - 2026-09-25
+
+### Added
+- collapse completed agent subtrees in scrollback (#2174) (0efa2c8a)
+
+## [5.246.0] - 2026-09-25
+
+### Added
+- add proposal/eval-case promotion workflow (0bcd564e)
+- track human vs agent review coverage at merge time (a4dc600a)
+
+### Fixed
+- route USER/USERNAME through env registry; always validate --status (be50b56a)
+- address review feedback — parsePrNumber, ExecFn import, SKILL.md body-append, hash pins (a59f82ff)
+- windows production code gaps blocking test skips (fa467349)
+
+### Changed
+- Merge pull request #2105 from griffinwork40/refactor/2064-cast-removal (518d1441)
+- Merge pull request #2101 from griffinwork40/afk/fix-of-fix-detector-2012 (dcf9fcc7)
+- Merge pull request #2089 from griffinwork40/feat/1916-approve-promotion-workflow (2be8d9bf)
+- Merge pull request #2150 from griffinwork40/afk/iso-issue-1941-8-qn5otw (e6c5fc48)
+- remove type-assertion casts in AgentSession provider delegations (6e59e0a2)
+- regenerate env-registry docs (USER, USERNAME added) (c4b2c09a)
+
+## [5.245.0] - 2026-09-25
+
+### Added
+- add view_image tool for inline local image inspection (#2169) (7ec3dd1a)
+
+## [5.244.1] - 2026-09-25
+
+### Added
+- visual redesign — depth dimming, spacing, centering (#2141) (fa30684a)
+
+### Fixed
+- make Google results clearly show this is docs (#2170) (c5c6dac0)
+
+## [5.244.0] - 2026-09-25
+
+### Added
+- add opt-in vision context for image_generate (1c6bb0fb)
+- add system prompt instruction to prevent placeholder generation (bb278a77)
+
+### Fixed
+- add writeRoots + isolation mutual exclusion guard to compose parser (d4d0ac7d)
+- raise daemon shell executor timeout to 45min, surface timeout source (ea59c3d3)
+
+### Changed
+- Merge pull request #2153 from griffinwork40/afk/iso-agent-tool-4-p7d75e (66db8f72)
+- Merge pull request #2156 from griffinwork40/afk/iso-agent-tool-2-0sp802 (e8f8f8c3)
+- Merge pull request #2159 from griffinwork40/afk/iso-agent-tool-1-9dym94 (3d8facb3)
+- Merge pull request #2155 from griffinwork40/afk/iso-agent-tool-5-gghkjn (de537c9d)
+- Merge pull request #2158 from griffinwork40/afk/iso-agent-tool-6-qt40zz (08f15829)
+- Merge pull request #2163 from griffinwork40/afk/iso-agent-tool-2-zd7h0w (5aa5e36c)
+- Merge pull request #2162 from griffinwork40/afk/iso-agent-tool-4-gonjmv (71753331)
+- follow-up cleanup from recentActivity review (f09dfe38)
+- add isolation test coverage for compose DAG executor (394c8b87)
+- compose isolation minor follow-ups (88cff1ec)
+
+## [5.243.0] - 2026-09-25
+
+### Added
+- route ChatGPT subscription through Codex Responses endpoint (3f3a2911)
+- add image_generate tool with gated opt-in safety (#1421) (33643935)
+
+### Fixed
+- remove dag-subagent.isolation.test.ts (belongs to PR #2156, not this branch) (6c2b373a)
+- update test expectations + categorizer for post-rebase tool count (75fc197b)
+- address 4 blocking security/correctness findings from code review (8670fc00)
+- parse response.output_item.done SSE event for ChatGPT backend (04681585)
+
+### Changed
+- Merge pull request #2140 from griffinwork40/feat/image-generate (d69105a1)
+
+## [5.242.1] - 2026-09-25
+
+### Added
+- add get_background_job_health tool for parent-owned job inspection (e0e4044b)
+
+### Fixed
+- replace fixed 100ms reap wait with retry loop in SIGKILL process-group test (ccd4741e)
+- add last-resort orphan tool_use repair before every messages.create (7d703eb9)
+
+### Changed
+- Merge pull request #2139 from griffinwork40/afk/bg-job-health-snapshot (69689e26)
+- Merge pull request #2135 from griffinwork40/afk/fix-orphan-tool-use-400 (37a00e72)
+- Merge pull request #2138 from griffinwork40/afk/investigate-macos-bash-sigkill (63e0edcd)
+
+## [5.242.0] - 2026-09-25
+
+### Added
+- add semantic coloring to bash tail previews (#2152) (cfff19a9)
+
+## [5.241.1] - 2026-09-24
+
+### Changed
+- Merge pull request #2151 from griffinwork40/perf/issue-2100-session-close-timeout (5f825cc6)
+- add timeout guard to session.current.close() in teardown (e3e10723)
+
+## [5.241.0] - 2026-09-24
+
+### Added
+- add session yield rate tracking via facet enrichment (046ef91d)
+
+### Fixed
+- address review feedback — cwd threading, branch injection guard, patchYieldFields test, gh error distinction (18af1717)
+- update AGENTS_STUB to match AgentInfo shape (13025ffa)
+
+### Changed
+- Merge pull request #2113 from griffinwork40/afk/issue-2016-yield (64587f68)
+- Merge pull request #2128 from griffinwork40/afk/iso-agent-tool-5-fc02dr (3d895ced)
+- remove type-assertion casts in AgentSession provider delegations (aac92372)
+
+## [5.240.2] - 2026-09-24
+
+### Added
+- surface recentActivity on background job snapshots for parent steering (#2134) (031e2151)
+- enforce delegation budget in SubagentManager.forkSubagent (ff15f46f)
+
+### Fixed
+- move onAwaitingInput after compositor setup; gate to turn-boundary readLine only (21618188)
+- auto-wake REPL when background results settle mid-turn (878c1daa)
+- guard against silent user-message skip in resumeHistoryToMessages (15d8b0c6)
+- repair role-alternation violations in resumed/forked session history (0d24a7fd)
+
+### Changed
+- Merge pull request #2115 from griffinwork40/afk/issue-1899-budget (d1b0ef44)
+- Merge pull request #2114 from griffinwork40/fix/resume-history-skip-guard (cfc971ce)
+- Merge pull request #2112 from griffinwork40/afk/fix-resume-role-alternation (b4264dd3)
+- Merge pull request #2130 from griffinwork40/afk/wake-up-consistency-issue (66c0e226)
+- trigger CI run for PR #2130 (4ffb1d58)
+
+## [5.240.1] - 2026-09-24
+
+### Changed
+- split cup-frame-renderer.ts (#2127) (73eaca36)
+
+## [5.240.0] - 2026-09-24
+
+### Added
+- add update_schedule tool for editing daemon schedules (54a46c5c)
+
+### Fixed
+- address review feedback — slug validation, mock update, handler count, toggleScheduleEnabled delegation (3be6498e)
+
+### Changed
+- Merge pull request #2132 from griffinwork40/afk/20260924-143115-1c8cba (a7b9a200)
+
+## [5.239.1] - 2026-09-24
+
+### Changed
+- Merge pull request #2133 from griffinwork40/afk/iso-agent-tool-3-1locyd (9837b072)
+- Merge pull request #2131 from griffinwork40/afk/iso-agent-tool-4-7bm6ck (07bdf860)
+- Merge pull request #2129 from griffinwork40/afk/iso-agent-tool-2-s07lrt (002d5fdc)
+- split markdown-stream.ts into concern-based siblings (ed20a3b0)
+- split terminal-compositor.lifecycle.ts into concern-based siblings (421657d7)
+- split terminal-compositor.frame.ts into concern-based siblings (1503edb6)
+
+## [5.239.0] - 2026-09-24
+
+### Added
+- detect unresolved placeholders in agent output (300027a5)
+- activate access tracking in memory fact archive (a11d9e5e)
+
+### Fixed
+- tighten screaming-snake prefix set to eliminate env-var false positives (a87d7d9d)
+- reclassify tool-failure-web-request as environment connectivity (ecf22b7e)
+
+### Changed
+- Merge pull request #2123 from griffinwork40/afk/agent-placeholder-validation (7b972b9c)
+- Merge pull request #2096 from griffinwork40/fix/1917-reclassify-web-request-card (75cd5cdb)
+- use code-block register instead of lastAssistantText (bb0ea456)
+- Merge branch 'main' into fix/1917-reclassify-web-request-card (3d087553)
+
+## [5.238.0] - 2026-09-24
+
+### Added
+- activate access tracking in memory fact archive (b8197def)
+- per-node delegation budget tracking in compose DAG executor (63c68c26)
+
+### Fixed
+- restore suspected-loop telemetry and add gate-shape tracing (411709aa)
+
+### Changed
+- Merge pull request #2095 from griffinwork40/afk/issue-1924-fix (435beb47)
+- Merge pull request #2088 from griffinwork40/feat/1896-per-node-delegation-budget (795f3955)
+- Merge pull request #2087 from griffinwork40/chore/1820-mcp-failed-servers-warnings (f5d3a87e)
+- surface MCP failedServers warnings on Telegram and web-server (75e72cb8)
+
+## [5.237.3] - 2026-09-24
+
+### Fixed
+- rename turn-handler.subagent-promotion to bg-promotion to satisfy boundary test (7ead56e8)
+
+### Changed
+- Merge pull request #2121 from griffinwork40/afk/20260924-115004-572602 (4185f5a1)
+- Merge remote-tracking branch 'origin/main' into afk/20260924-115004-572602 (8672193e)
+- split runTurn god-function into concern modules (issue #2107) (7cf5e522)
+
+## [5.237.2] - 2026-09-24
+
+### Fixed
+- make prefillInput delegation consistent with sibling functions (#2122) (7797f983)
+
+## [5.237.1] - 2026-09-24
+
+### Changed
+- extract thin-facade API methods to terminal-compositor.api.ts (#2119) (c093dd1e)
+
+## [5.237.0] - 2026-09-24
+
+### Added
+- add per-node worktree isolation to compose DAG executor (a2b82b11)
+
+### Changed
+- Merge pull request #2104 from griffinwork40/feat/1939-compose-worktree-isolation (6f32cb66)
+
+## [5.236.1] - 2026-09-24
+
+### Fixed
+- add 2s timeout guard to session.close() in REPL teardown (17c19ad7)
+
+## [5.236.0] - 2026-09-24
+
+### Added
+- add eval pipeline staleness guard (d9444d97)
+- add fix-of-fix cross-reference detector at merge time (e2fd4522)
+
+### Fixed
+- handle URL-form currentPrNumber in self-reference guard + update ship pin (8bd777e2)
+
+### Changed
+- Merge pull request #2102 from griffinwork40/afk/2012-fix-of-fix-detector (eb36c4cd)
+- Merge pull request #2103 from griffinwork40/afk/issue-2010-eval-staleness (a4fdea04)
+- regenerate env-registry docs for AFK_EVAL_STALENESS_DAYS (2fdfeefb)
+
+## [5.235.1] - 2026-09-24
+
+### Fixed
+- unskip detectPathGap test from .mjs import guard (d8704fa2)
+
+### Changed
+- Merge pull request #2097 from griffinwork40/fix/issue-1940-unskip-detectpathgap (2c54ddc3)
+- Merge pull request #2099 from griffinwork40/fix/quit-teardown-latency (26365d73)
+- reduce /quit teardown latency from 10s+ to ~4s (71a4fcef)
+
+## [5.235.0] - 2026-09-23
+
+### Added
+- implement replay infrastructure for repeated-tool-use pattern (#2091) (d8883477)
+
+## [5.234.1] - 2026-09-23
+
+### Fixed
+- add commitInFlight/committing guards to banner-scroll block (12d90a2c)
+- scope disabled-thinking rejection to Opus 5.5 only (ebee93fa)
+- Opus 5.5 follow-up hygiene: comments, discoverability, golden tests (b8ecb67c)
+- throw before first request when disabled thinking is unsupported (d2e94837)
+- simplify partial_failure guard, update schema prose, add tests (538643c2)
+
+### Changed
+- Merge pull request #2085 from griffinwork40/afk/issue-1828-fix (7f76b367)
+- Merge pull request #2084 from griffinwork40/afk/fix-1906-concurrency-test-boundary (6e16fbc0)
+- Merge pull request #2082 from griffinwork40/afk/iso-agent-tool-2-2ozuic (8f86a699)
+- Merge pull request #2081 from griffinwork40/afk/iso-agent-tool-1-u5s78k (09c98502)
+- Merge pull request #2080 from griffinwork40/afk/iso-agent-tool-3-an5zuy (5cf8aca4)
+- Merge pull request #2079 from griffinwork40/afk/iso-agent-tool-5-naicb7 (8e7f41d9)
+- Merge pull request #2078 from griffinwork40/afk/iso-agent-tool-4-t2w52r (fada59e2)
+- enforce test-only boundary for resetConcurrencyWarnings (66bbb350)
+- update resumeHistoryToMessages JSDoc after pairing-guard removal (ccb17950)
+- consolidate duplicate sha256Hex (ca52ed00)
+
 ## [5.234.0] - 2026-09-23
 
 ### Added

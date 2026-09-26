@@ -4,6 +4,7 @@ import { MAX_VISIBLE_CHILDREN, batchBadge } from './tool-lane-format.js';
 import type { ToolEntry, Entry } from './tool-lane-render.js';
 import { getGlyphs, clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
 import { renderFlushChildren } from './tool-lane-render-children.js';
+import { renderCompactFlushChildren } from './tool-lane-render-compact.js';
 
 /**
  * Compose a NESTING root's committed-scrollback closer — the `Done (…)` line —
@@ -47,7 +48,7 @@ import { renderFlushChildren } from './tool-lane-render-children.js';
  */
 function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
   return agent.agentResultSummary
-    ? palette.dim(agent.agentResultSummary) + batchBadge(agent.result)
+    ? agent.agentResultSummary + batchBadge(agent.result)
     : agent.agentResultSummary;
 }
 
@@ -56,8 +57,8 @@ function summaryWithBatchBadge(agent: ToolEntry): string | undefined {
  * block.
  *
  * `extraDepth` shifts the entire block right by N additional spine columns
- * (2 cells per level — the same width as a depth-1 spine slot). Default 0
- * = root-level Agent rendering (one `◉ ` marker at col 0). Callers pass
+ * (3 cells per level — the same width as a depth-1 spine slot). Default 0
+ * = root-level Agent rendering (one `◉  ` marker at col 0). Callers pass
  * `extraDepth > 0` when the Agent sits under a still-in-flight ancestor
  * (e.g. a `skill` parent that hasn't yet completed) so the committed
  * scrollback block visually aligns with the live overlay's nesting instead
@@ -80,6 +81,7 @@ function formatAgentSummary(
   childMap: Map<string, Entry[]>,
   homeDir?: string,
   ancestorIsLast: readonly boolean[] = [],
+  compact = false,
 ): string {
   const g = getGlyphs();
   const toolChildren = children.filter((c): c is ToolEntry => c.kind === 'tool');
@@ -99,17 +101,17 @@ function formatAgentSummary(
   // Invariant: the HEAD row keeps every ancestor column OPEN; only DESCENDANT
   // rows close a last-child ancestor's column.
   //
-  // The Agent's head row gets the `◉ ` marker (2 cells, same width as a spine
-  // slot). `ancestorPrefix` draws one OPEN `g.spine` (`│ `) per live ancestor
+  // The Agent's head row gets the `◉  ` marker (3 cells, same width as a spine
+  // slot). `ancestorPrefix` draws one OPEN `g.spine` (`│  `) per live ancestor
   // — UNCONDITIONALLY, regardless of last-ness — so the head row's incoming
   // spine stays connected to its still-in-flight parent above (PR #642
   // floating-spine invariant: a committed ancestor header must never float
   // disconnected from its children). This matches the live overlay, where an
-  // agent's OWN row is `│ ╰─ …` (parent column open via the active spine).
+  // agent's OWN row is `│  ╰─ …` (parent column open via the active spine).
   //
   // DESCENDANT rows, by contrast, must CLOSE the column of any ancestor that
   // is currently the last sibling at its level — the overlay draws `╰─` there
-  // and closes the column to `g.spineClosed` (`  `) below it. `ancestorIsLast`
+  // and closes the column to `g.spineClosed` (`   `) below it. `ancestorIsLast`
   // (resolved by the caller at commit time via `ToolLane.ancestorIsLastOf`)
   // carries that per-column last-ness into `renderFlushChildren`. Pre-fix this
   // was an all-`false` vector (open `│` everywhere), so committed descendant
@@ -118,10 +120,13 @@ function formatAgentSummary(
   //
   // Pattern card alignment: ordered-sequences governed by append-only
   // scrollback — both depth and last-ness must be resolved at commit time.
-  const ancestorPrefix = palette.dim(g.spine.repeat(ancestorIsLast.length));
+  // Committed scrollback: these are completed agents. Use dimCompleted for
+  // all structural chrome (ancestor spines, turn-root marker, stats suffix)
+  // so finished rows recede behind active overlay content.
+  const ancestorPrefix = palette.dimCompleted(g.spine.repeat(ancestorIsLast.length));
   const externalAncestors: readonly boolean[] = ancestorIsLast;
 
-  const head = palette.dim(g.turnRoot);
+  const head = palette.dimCompleted(g.turnRoot);
   // Invariant: ONE width read per render frame, shared by the head row below
   // and the recursive child frame. Two reads could straddle a resize and emit
   // a head row clamped to the old width above children clamped to the new one.
@@ -135,29 +140,34 @@ function formatAgentSummary(
   // matching how the live overlay clamps the same row.
   const agentLine = clampLineToTerminal(
     stats.length > 0
-      ? ancestorPrefix + head + agent.prefix + palette.dim(' — ' + stats.join(' · '))
+      ? ancestorPrefix + head + agent.prefix + palette.dimCompleted(' — ' + stats.join(' · '))
       : ancestorPrefix + head + agent.prefix,
     cols,
   );
 
-  // Pass agentResultSummary into renderFlushChildren so it is added as a
-  // synthetic sibling BEFORE assignConnectors runs — ensuring the Done line
-  // receives the correct LAST connector (not a hardcoded '⎿', which was Bug #5).
-  // Thread `g` so the head row and child rows share one glyph set, and `cols`
-  // (read once above) so the head row and the recursive flush frame agree on
-  // width. `externalAncestors` extends the spine column-set leftward by
-  // `extraDepth` so descendant rows align under the head row's ancestor spines.
-  const childLines = renderFlushChildren(
-    children,
-    childMap,
-    homeDir,
-    // #532: badge the closer (Done line) when this NESTING root ran in a
-    // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
-    summaryWithBatchBadge(agent),
-    cols,
-    externalAncestors,
-    g,
-  );
+  // Choose compact vs full child rendering.
+  //
+  // Compact path (approach A — feat: collapse completed agent subtrees):
+  //   When `compact=true` (set by the TTY stream renderer) AND the agent
+  //   completed successfully (not an error), the full tool-call tree is
+  //   suppressed. The details were already visible in the live overlay while
+  //   the agent ran; only the Done summary needs to persist in scrollback.
+  //   renderCompactFlushChildren emits: errored tool children (per acceptance
+  //   criterion "failures must never be hidden") + the Done summary line.
+  //
+  // Full path (all other cases):
+  //   - compact=false (non-TTY: logs, CI) — scrollback is the only output.
+  //   - Agent-level error (agent result.isError === true, e.g. Ctrl-C/abort):
+  //     the whole tree is failure evidence and must be visible.
+  //
+  // #532: badge the closer (Done line) when this NESTING root ran in a
+  // parallel wave. See summaryWithBatchBadge for why the closer, not the head.
+  const badge = summaryWithBatchBadge(agent);
+  const agentErrored = agent.result?.isError === true;
+  const useCompact = compact && !agentErrored;
+  const childLines = useCompact
+    ? renderCompactFlushChildren(children, childMap, homeDir, badge, cols, externalAncestors, g)
+    : renderFlushChildren(children, childMap, homeDir, badge, cols, externalAncestors, g);
 
   return [agentLine, ...childLines].join('\n');
 }
@@ -189,9 +199,9 @@ function formatAgentSummary(
  * head row to `getTerminalWidth()`, so a row that overflows is elided
  * identically no matter which path committed it.
  *
- * Width invariant matches formatAgentSummary: `g.spine` is 2 cells,
- * `g.turnRoot` is 2 cells, so the total head-row indent is
- * `2 * (ancestorIsLast.length + 1)` cells before `agent.prefix` — exactly the
+ * Width invariant matches formatAgentSummary: `g.spine` is 3 cells,
+ * `g.turnRoot` is 3 cells, so the total head-row indent is
+ * `3 * (ancestorIsLast.length + 1)` cells before `agent.prefix` — exactly the
  * same column position renderFlushChildren expects for its child rows.
  *
  * `ancestorIsLast` mirrors the same parameter contract as
@@ -202,8 +212,13 @@ function formatAgentSummary(
  */
 function formatAgentHeader(agent: ToolEntry, ancestorIsLast: readonly boolean[] = []): string {
   const g = getGlyphs();
-  const ancestorPrefix = palette.dim(g.spine.repeat(ancestorIsLast.length));
-  const head = palette.dim(g.turnRoot);
+  // Eagerly-committed ancestor header: this entry is an ancestor of a child
+  // that just completed. Its own status (active or completed) may be unknown
+  // at commit time, but the header lands in committed scrollback and will be
+  // followed by child rows — use dimCompleted for the structural chrome to
+  // keep the topology readable without competing with active overlay content.
+  const ancestorPrefix = palette.dimCompleted(g.spine.repeat(ancestorIsLast.length));
+  const head = palette.dimCompleted(g.turnRoot);
   // The terminal-width clamp is part of the shared head-row encoding — see the
   // encoding constraint above. formatAgentSummary clamps its head row, so this
   // one must too, or the same entry committed through the two paths would
@@ -231,11 +246,12 @@ function formatAgentChildren(
   childMap: Map<string, Entry[]>,
   homeDir?: string,
   ancestorIsLast: readonly boolean[] = [],
+  compact = false,
 ): string[] {
   // Mirror formatAgentSummary's DESCENDANT-row encoding: thread the per-column
   // last-ness vector into renderFlushChildren so each ancestor column draws an
-  // open `g.spine` (`│ `) when that ancestor is NOT its level's last sibling,
-  // and a closed `g.spineClosed` (`  `) when it IS — matching the live overlay
+  // open `g.spine` (`│  `) when that ancestor is NOT its level's last sibling,
+  // and a closed `g.spineClosed` (`   `) when it IS — matching the live overlay
   // (which closes a `╰─`'d ancestor's column below it). Pre-fix this was an
   // all-`false` vector (open `│` everywhere), diverging from the overlay on
   // committed scrollback descendant rows (the severed-spine seam). The header
@@ -244,19 +260,15 @@ function formatAgentChildren(
   // PR #642). `getGlyphs()` is read once so the block shares one glyph set.
   const g = getGlyphs();
   const externalAncestors: readonly boolean[] = ancestorIsLast;
-  return renderFlushChildren(
-    children,
-    childMap,
-    homeDir,
-    // #532: badge the closer (Done line) when this NESTING root ran in a
-    // parallel wave. In this (headerEmitted) path the head row was already
-    // committed eagerly by formatAgentHeader without the badge (batchSize was
-    // unknown then), so the closer is the only completion-time anchor.
-    summaryWithBatchBadge(agent),
-    toolLaneWidth(),
-    externalAncestors,
-    g,
-  );
+  const badge = summaryWithBatchBadge(agent);
+  // Compact path (approach A): mirrors the guard in formatAgentSummary.
+  // compact=true (TTY) AND no agent-level error → compact children.
+  // compact=false (non-TTY) OR agent errored → full tree.
+  const agentErrored = agent.result?.isError === true;
+  const useCompact = compact && !agentErrored;
+  return useCompact
+    ? renderCompactFlushChildren(children, childMap, homeDir, badge, toolLaneWidth(), externalAncestors, g)
+    : renderFlushChildren(children, childMap, homeDir, badge, toolLaneWidth(), externalAncestors, g);
 }
 
 

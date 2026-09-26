@@ -16,7 +16,7 @@ import type { ModelProvider } from './provider.js';
 import type { SubagentManager } from './subagent.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
 import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
-import { TimeoutError } from '../utils/errors.js';
+import { TimeoutError, errorMessage } from '../utils/errors.js';
 import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { resolveSubagentTimeoutMs } from './subagent/constants.js';
 import { isTooBroadRoot, ungatedSensitiveRoot } from './tools/subagent/root-validation.js';
@@ -24,6 +24,9 @@ import { realpathSafe } from './tools/handlers/_cwd-utils.js';
 import type { DelegationBudget, SpawnReceipt } from './tools/delegation-budget.js';
 import type { ImageBlockAttachment } from './content/image-blocks.js';
 import { appendImageBlocks } from './content/image-blocks.js';
+import { createIsolatedWorktree } from './tools/handlers/worktree-managed.js';
+import { teardownBackgroundWorktree } from './tools/handlers/worktree-managed.background.js';
+import { debugLog } from '../utils/debug.js';
 
 export interface SubagentDAGNode {
   id: string;
@@ -85,6 +88,15 @@ export interface SubagentDAGNode {
    * Corresponds to `AgentConfig.writeRoots`.
    */
   writeRoots?: string[];
+  /**
+   * Filesystem isolation for this node. "none" (default) runs the node in
+   * the shared parent tree. "worktree" creates a fresh managed git worktree
+   * before forking so this node's writes/tests never collide with sibling
+   * nodes. The worktree is torn down in the finally block after the node
+   * finishes — dirty or commits-ahead trees are preserved and locked.
+   * Mutually exclusive with `cwd` — enforced at parse time by compose-input-parse.ts.
+   */
+  isolation?: 'none' | 'worktree';
   /**
    * Per-node API key. When set, forwarded directly into the node's fork
    * config so the node's subagent authenticates with its own credential
@@ -175,6 +187,14 @@ export interface SubagentDAGOptions {
    * parent session's `sessionId`.
    */
   delegationBudget?: DelegationBudget;
+  /**
+   * Working directory used as the anchor when creating isolated worktrees for
+   * nodes with `isolation:"worktree"`. Passed as `cwd` to
+   * {@link createIsolatedWorktree} so the worktree is created relative to the
+   * git repo that owns the parent session. Defaults to `process.cwd()` when
+   * absent. Seeded by the compose executor from its own `currentCwd`.
+   */
+  anchorCwd?: string;
 }
 
 /**
@@ -224,8 +244,14 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
 }
 
 export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRunResult> {
-  const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs, delegationBudget } = options;
+  const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs, delegationBudget, anchorCwd } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
+  // Supplementary counter included in isolated-worktree slug hints for
+  // human-readable ordering. The 6-char random suffix (1 in 2.2B per pair)
+  // is the actual collision-resistance mechanism — this counter is NOT a
+  // uniqueness guarantee under parallel execution because concurrent run()
+  // bodies increment it non-atomically.
+  let dagIsolationCounter = 0;
 
   // Soft deadline for every node in this DAG (see the arming comment in the
   // fork config below). Computed once — it is the same for every node.
@@ -242,9 +268,11 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
   const softDeadlineForNode =
     nodeBudgets.length > 0 ? resolveSoftDeadlineMs(Math.min(...nodeBudgets)) : 0;
 
-  const dagNodes: DAGNode[] = nodes.map((spec) => ({
-    id: spec.id,
+  const dagNodes: DAGNode[] = nodes.map((originalSpec) => ({
+    id: originalSpec.id,
     async run(inputs: Record<string, unknown>, nodeSignal: AbortSignal): Promise<unknown> {
+      // Mutable copy so isolation can override spec.cwd with the worktree path.
+      let spec = originalSpec;
       // Invariant (#982): validate roots BEFORE forkSubagent — this is the
       // only guard on the DAG path. parseAgentInput guards the agent-tool path;
       // this guards the library-API path. Without it, a caller that derives a
@@ -267,6 +295,36 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
           );
         }
         dagNodeBudgetReceipt = delegationBudget.recordSpawn(parentSession.sessionId ?? '');
+      }
+
+      // isolation:"worktree" — create a fresh managed git worktree before
+      // forking so this node's writes/tests never collide with siblings sharing
+      // the parent tree. Mirrors the isolation pipeline in subagent-executor.ts.
+      // Foreground compose nodes (the only mode on the DAG path) tear down in the
+      // finally block below. Dirty / commits-ahead trees are preserved and locked.
+      let isolationTeardown: { repoRoot: string; worktreePath: string } | undefined;
+      if (spec.isolation === 'worktree') {
+        const effectiveCwd = anchorCwd ?? process.cwd();
+        try {
+          const iso = await createIsolatedWorktree({
+            cwd: effectiveCwd,
+            slugHint: `iso-compose-${spec.id}-${++dagIsolationCounter}-${Math.random().toString(36).slice(2, 8)}`,
+          });
+          // Override the node's cwd with the worktree path so the fork runs there.
+          // Mutually-exclusive with spec.cwd — enforced at parse time.
+          spec = { ...spec, cwd: iso.path };
+          isolationTeardown = { repoRoot: iso.repoRoot, worktreePath: iso.path };
+        } catch (err) {
+          // Fail loud: never silently fall back to the shared tree — that
+          // reintroduces the cross-contamination bug isolation exists to prevent.
+          const message = errorMessage(err);
+          dagNodeBudgetReceipt?.rollback();
+          dagNodeBudgetReceipt = undefined;
+          throw new Error(
+            `Failed to create isolated worktree for DAG node "${spec.id}": ${message}. ` +
+            `isolation:"worktree" requires the session to run inside a git repository.`,
+          );
+        }
       }
 
       let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
@@ -322,6 +380,12 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         // never ran, so total and concurrentChildrenByAgent must not reflect this spawn.
         dagNodeBudgetReceipt?.rollback();
         dagNodeBudgetReceipt = undefined;
+        // Tear down any isolated worktree that was created but never used.
+        if (isolationTeardown) {
+          await teardownBackgroundWorktree(isolationTeardown).catch((teardownErr) => {
+            debugLog(`[dag-subagent] teardown failed for worktree ${isolationTeardown?.worktreePath ?? '?'} (fork error path):`, teardownErr);
+          });
+        }
         throw forkErr;
       }
 
@@ -413,6 +477,15 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         // The fork succeeded, so use release() — total and concurrentChildrenByAgent
         // correctly reflect a real spawn even if the run aborted mid-flight.
         dagNodeBudgetReceipt?.release();
+        // Tear down the isolated worktree when the node finishes. Dirty /
+        // commits-ahead trees are preserved and locked by teardownBackgroundWorktree
+        // so work is never silently discarded. Mirrors the foreground teardown
+        // path in subagent-executor.ts (the DAG path is always foreground).
+        if (isolationTeardown) {
+          await teardownBackgroundWorktree(isolationTeardown).catch((teardownErr) => {
+            debugLog(`[dag-subagent] teardown failed for worktree ${isolationTeardown?.worktreePath ?? '?'} (finally path):`, teardownErr);
+          });
+        }
       }
     },
   }));

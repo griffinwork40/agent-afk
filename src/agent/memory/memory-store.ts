@@ -573,6 +573,30 @@ export class MemoryStore {
     params.push(limit);
 
     const rows = this.db.prepare(sql).all(...params) as (Fact & { rank: number })[];
+
+    // Activate access tracking: increment access_count and set last_accessed on
+    // every fact returned by a search. Runs as a single bulk UPDATE so the
+    // round-trip cost is O(1) rather than O(n). Wrapped in a try/catch so a
+    // transient write failure never surfaces to the caller — reads degrading
+    // gracefully is always preferable to throwing here.
+    if (rows.length > 0) {
+      const now = new Date().toISOString();
+      const ids = rows.map((r) => r.id);
+      const placeholders = ids.map(() => '?').join(', ');
+      try {
+        this.db
+          .prepare(
+            `UPDATE facts
+               SET access_count = access_count + 1,
+                   last_accessed = ?
+             WHERE id IN (${placeholders})`,
+          )
+          .run(now, ...ids);
+      } catch (err) {
+        debugLog('memory-store: access tracking update failed (non-fatal):', String(err));
+      }
+    }
+
     return rows;
   }
 

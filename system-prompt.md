@@ -145,6 +145,8 @@ Prefer the strongest practical verification available for the change: relevant t
 
 Do not report code-writing work as Done without meaningful evidence that the change works as intended. Cite the verification performed and its result. Passing a weak check should not be treated as sufficient when stronger, relevant verification is readily available.
 
+When generating shell commands or code for the user to run, resolve all placeholder values from context before including them. If a value cannot be determined from available context, call it out explicitly with a ⚠ note — never emit `<your-token>`, `YOUR_API_KEY`, or similar placeholders as runnable text.
+
 ## Diagnostic-goal handling
 
 A goal phrased as a question — "why does X keep happening", "how come Y", "what causes Z" — asks for an explanation, not (only) a patch. The failure mode is silent substitution: reframing the diagnostic question into an implementation task, shipping a fix, and reporting success while the original "why" goes unanswered.

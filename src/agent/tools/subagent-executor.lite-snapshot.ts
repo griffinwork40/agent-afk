@@ -22,29 +22,74 @@ export interface SubagentsLite {
     status: 'running' | 'completed' | 'failed' | 'cancelled';
     startedAt: string;
     label: string | null;
+    /**
+     * Rolling tail of the child's output text (~4 KB cap). Only populated for
+     * jobs owned by the calling session (parentSessionId match). Absent for
+     * user-promoted jobs (Ctrl+B) whose transcript was not captured, and for
+     * jobs owned by a different session.
+     */
+    recentActivity?: string;
+    /** ISO 8601 timestamp of last observed activity. Only for running jobs. */
+    lastActivityAt?: string;
+    /** Milliseconds since last observed activity. Computed at snapshot time. Only for running jobs. */
+    idleSinceMs?: number;
   }>;
 }
+
+/** Maximum chars (UTF-16 code units) of transcript tail surfaced in the lite snapshot. */
+const MAX_ACTIVITY_SNAPSHOT_CHARS = 2048;
 
 /**
  * Build a lite snapshot of active subagents and background jobs. Pulls fresh
  * from the manager + registry on every call so live counts are visible.
  * Background `startedAt` is converted from epoch-ms to ISO 8601 to match the
  * rest of the snapshot's timestamp convention.
+ *
+ * When `callerSessionId` is provided, running jobs owned by that session
+ * include a `recentActivity` field with the last ~2 KB of output text.
  */
 export function buildSubagentsLite(
   subagentManager: SubagentManager,
   backgroundRegistry: BackgroundAgentRegistry | undefined,
+  callerSessionId?: string,
 ): SubagentsLite {
   const active = subagentManager
     .list()
     .map((h) => ({ id: h.id, status: h.status }));
+  const now = Date.now();
   const backgroundJobs = backgroundRegistry
-    ? backgroundRegistry.list().map((j) => ({
-        jobId: j.jobId,
-        status: j.status,
-        startedAt: new Date(j.startedAt).toISOString(),
-        label: j.label.length > 0 ? j.label : null,
-      }))
+    ? backgroundRegistry.list().map((j) => {
+        const base = {
+          jobId: j.jobId,
+          status: j.status,
+          startedAt: new Date(j.startedAt).toISOString(),
+          label: j.label.length > 0 ? j.label : null,
+        };
+        // Surface activity timestamps only for running jobs (terminal jobs have endedAt).
+        if (j.status === 'running' && j.lastActivityAt !== undefined) {
+          (base as Record<string, unknown>)['lastActivityAt'] = new Date(j.lastActivityAt).toISOString();
+          (base as Record<string, unknown>)['idleSinceMs'] = now - j.lastActivityAt;
+        }
+        // Only surface transcript for the caller's own running model-dispatched jobs.
+        // User-promoted (Ctrl+B) jobs are excluded structurally via the provenance
+        // guard; their transcripts are also empty in practice (background-registry.ts:284)
+        // but relying on that is incidental.
+        if (
+          callerSessionId &&
+          j.parentSessionId === callerSessionId &&
+          j.status === 'running' &&
+          j.provenance === 'model'
+        ) {
+          const tail = backgroundRegistry.getTranscript(j.jobId);
+          if (tail && tail.length > 0) {
+            const trimmed = tail.length > MAX_ACTIVITY_SNAPSHOT_CHARS
+              ? tail.slice(tail.length - MAX_ACTIVITY_SNAPSHOT_CHARS)
+              : tail;
+            return { ...base, recentActivity: trimmed };
+          }
+        }
+        return base;
+      })
     : [];
   return { active, backgroundJobs };
 }

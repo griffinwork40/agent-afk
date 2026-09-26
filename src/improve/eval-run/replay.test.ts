@@ -197,10 +197,10 @@ describe('replayRepeatedToolUse', () => {
   });
 
   it('skips (does not fail) when the fixture no longer reproduces the pattern', async () => {
-    // 3 repeats < detector threshold (4) → no finding. The bytes are intact
+    // 1 repeat < detector threshold (2) → no finding. The bytes are intact
     // (integrity is checked upstream), so this is an eval-case quality gap,
     // not a code regression: skip rather than fail.
-    const bytes = Buffer.from(loopContent(3), 'utf8');
+    const bytes = Buffer.from(loopContent(1), 'utf8');
     const probe = await handler!.run(makeReplayEvalCase(), bytes, {});
 
     const reproduces = check(probe.checks, REPLAY_CHECK_REPRODUCES);

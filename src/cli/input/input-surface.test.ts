@@ -863,5 +863,66 @@ describe('InputSurface', () => {
       expect(surface.bufferIsEmpty()).toBe(true);
       expect(() => surface.abortPendingRead()).not.toThrow();
     });
+
+    it('onAwaitingInput fires for turn-boundary readLine (primePromptSuggestion=true), after compositor setup', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk > ', onCancel: () => {}, stdout, stdin });
+      const compositor = surface.getCompositor()!;
+
+      const callOrder: string[] = [];
+      // Spy on setOnSubmit to confirm the handler is installed before the callback fires.
+      const origSetOnSubmit = compositor.setOnSubmit.bind(compositor);
+      vi.spyOn(compositor, 'setOnSubmit').mockImplementation((h) => {
+        if (h !== null) callOrder.push('setOnSubmit');
+        origSetOnSubmit(h);
+      });
+      surface.onAwaitingInput = () => { callOrder.push('onAwaitingInput'); };
+
+      const readPromise = surface.readLine({ promptFn: () => 'afk > ', primePromptSuggestion: true });
+      // onAwaitingInput must fire AFTER setOnSubmit so that if the callback
+      // calls abortPendingRead(), it does not leave a stale submit handler
+      // installed on an already-resolved Promise (the F1 constructor-sequencing fix).
+      expect(callOrder[0]).toBe('setOnSubmit');
+      expect(callOrder[1]).toBe('onAwaitingInput');
+
+      surface.abortPendingRead();
+      await readPromise;
+      await surface.dispose();
+    });
+
+    it('onAwaitingInput does NOT fire for sub-prompt readLine (primePromptSuggestion omitted)', async () => {
+      const stdout = makeMockStdout();
+      const stdin = makeMockStdin();
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      await surface.armCompositor({ promptFn: () => 'afk > ', onCancel: () => {}, stdout, stdin });
+
+      const spy = vi.fn();
+      surface.onAwaitingInput = spy;
+
+      // Sub-prompt: primePromptSuggestion omitted — callback must stay silent.
+      const readPromise = surface.readLine({ promptFn: () => 'Continue? [y/N] ' });
+      expect(spy).not.toHaveBeenCalled();
+
+      surface.abortPendingRead();
+      await readPromise;
+      await surface.dispose();
+    });
+
+    it('onAwaitingInput does NOT fire on non-TTY (no compositor) surface', () => {
+      const surface = new InputSurface({ rl: makeRl(), history: makeHistory() });
+      // No armCompositor — non-TTY path. The callback is only fired on the
+      // compositor branch, so it must stay silent here. Verify via the
+      // isAwaitingInput() gate which is permanently false on non-TTY.
+      const spy = vi.fn();
+      surface.onAwaitingInput = spy;
+
+      // No compositor armed, so isAwaitingInput() is always false and the
+      // callback is structurally unreachable (only fired inside the
+      // compositor-path Promise constructor in readLine). Verify the seam.
+      expect(surface.isAwaitingInput()).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    });
   });
 });

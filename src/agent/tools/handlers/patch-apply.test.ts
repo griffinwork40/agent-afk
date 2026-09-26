@@ -2,7 +2,7 @@
  * End-to-end tests for patch-apply.ts (the ToolHandler integration layer).
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { writeFile, readFile, mkdir, rm } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -392,5 +392,73 @@ describe('patch_apply — stale-context re-read warning (#2028)', () => {
     expect(parsed.status).toBe('validation_failed');
     // No warning — the patch failed, disk was not touched.
     expect(parsed).not.toHaveProperty('_reread_warning');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2065: _reread_warning on partial_failure
+// ---------------------------------------------------------------------------
+
+describe('patch_apply — _reread_warning on partial_failure (#2065)', () => {
+  it('includes _reread_warning on partial_failure with non-empty files_changed', async () => {
+    // Trigger a real partial_failure by writing a file that passes validation
+    // and then mocking the engine via spyOn at the module level.
+    //
+    // Strategy: create a real file so validatePatchChanges passes, but make
+    // applyPatch return a partial_failure result (simulating a rename failure
+    // where some files were already written to disk).
+    const filePath = await writeTemp('partial-warn.txt', 'original\n');
+
+    const engineMod = await import('./patch-apply-engine.js');
+    const applyPatchSpy = vi.spyOn(engineMod, 'applyPatch').mockResolvedValueOnce({
+      status: 'partial_failure',
+      diff: '--- a\n+++ b\n',
+      files_changed: [{ path: filePath, before_hash: 'sha256:aaa', after_hash: 'sha256:bbb' }],
+      errors: [{ path: filePath, error: 'rename_failed', detail: 'EACCES' }],
+    });
+
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: 'new\n' }] },
+      signal,
+      makeCtx(),
+    );
+
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('partial_failure');
+    // Files were written to disk — warning must be present and list the path.
+    expect(parsed).toHaveProperty('_reread_warning');
+    expect(typeof parsed._reread_warning).toBe('string');
+    expect(parsed._reread_warning).toContain('IMPORTANT');
+    expect(parsed._reread_warning).toContain(filePath);
+
+    applyPatchSpy.mockRestore();
+  });
+
+  it('omits _reread_warning on partial_failure with empty files_changed', async () => {
+    // Simulate a partial_failure where no files were written (all temp writes failed).
+    const filePath = await writeTemp('partial-no-warn.txt', 'original\n');
+
+    const engineMod = await import('./patch-apply-engine.js');
+    const applyPatchSpy = vi.spyOn(engineMod, 'applyPatch').mockResolvedValueOnce({
+      status: 'partial_failure',
+      diff: '',
+      files_changed: [],
+      errors: [{ path: filePath, error: 'temp_write_failed', detail: 'ENOSPC' }],
+    });
+
+    const handler = createPatchApplyHandler(tempDir);
+    const result = await handler(
+      { changes: [{ path: filePath, content: 'new\n' }] },
+      signal,
+      makeCtx(),
+    );
+
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('partial_failure');
+    // No files written to disk — warning must be absent.
+    expect(parsed).not.toHaveProperty('_reread_warning');
+
+    applyPatchSpy.mockRestore();
   });
 });

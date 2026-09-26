@@ -258,6 +258,9 @@ export class BackgroundStatusBar {
     const startRow = Math.max(1, totalRows - newRowCount - adjacentRows);
     this.lastPaintStartRow = startRow;
 
+    // Background-status bar stays full-width (design doc §3.10.3, Appendix B:
+    // "Background-status bar rows — No — full-width informational"). Centering
+    // would reduce the field count and trigger field-shedding on wide terminals.
     this.stream.write('\x1b[s');
     for (let i = 0; i < newRowCount; i++) {
       const item = items[i]!;

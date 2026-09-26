@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**188 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**195 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -74,6 +74,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_IMAGE_API_KEY` | string |  |  |  | Dedicated OpenAI API key for the image_generate tool. Checked before OPENAI_API_KEY to keep image billing separate from chat completions. When unset, OPENAI_API_KEY is used as a fallback. Get a key from https://platform.openai.com/api-keys. |
 | `AFK_LOCAL_API_KEY` | string |  | `local` | `local` | Placeholder API key for local Anthropic-compatible servers (vllm-mlx, etc.). Set when AFK_LOCAL_BASE_URL is configured. |
 | `ANTHROPIC_API_KEY` | string |  |  |  | Anthropic API key. Tier-1 credential — overrides keychain OAuth and CLAUDE_CODE_OAUTH_TOKEN. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | string |  |  |  | Claude Code OAuth token. Tier-2 credential — used when ANTHROPIC_API_KEY is unset; falls back to keychain. |
@@ -112,7 +113,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 |------|------|----------|---------|---------|-------------|
 | `AFK_DAEMON_CWD` | string |  |  |  | Working directory used by the daemon process for spawned agent sessions. |
 | `AFK_DAEMON_HOST` | string |  |  |  | Bind address for the daemon control HTTP surface. Defaults to 127.0.0.1 (loopback only). The control surface is unauthenticated, so bind a non-loopback address such as 0.0.0.0 only on a trusted or firewalled network. Overridden by the --host flag. |
-| `AFK_DAEMON_SHELL_TIMEOUT_MS` | number |  |  |  | Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 300000 (5 minutes). The child process is killed on timeout. |
+| `AFK_DAEMON_SHELL_TIMEOUT_MS` | number |  |  |  | Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 2700000 (45 minutes), matching the agent executor budget (AFK_SUBAGENT_TIMEOUT_MS). The child process is killed on timeout; the telemetry errorMessage will read "daemon shell timeout after NNNs" to distinguish a daemon-imposed kill from a process or network failure. |
 | `AFK_DAEMON_TASK` | string |  |  |  | Default task description for the daemon. Falls back to afk.config.json daemon.task. |
 | `AFK_DAEMON_TASK_ID` | string |  |  |  | Task identifier the daemon uses to scope its state directory and telemetry. |
 | `AFK_SESSIONSTART_COOLDOWN_MS` | number |  |  |  | Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts. |
@@ -164,6 +165,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
+| `AFK_CENTER_CONTENT` | boolean |  |  | `1` | When set to "1" (or any truthy value), content surfaces (tool-lane overlay, scrollback blocks, input line, spinner, and OODA stage rail) are horizontally centered by prepending a left margin equal to Math.floor((terminalWidth - contentMeasure) / 2). No-op when the terminal is at or below the content measure — the common 80–100 column case. Default off (empty string). Opt-in: set AFK_CENTER_CONTENT=1 to enable. |
 | `AFK_STREAM_BUFFER_MS` | number |  | `0` | `16` | Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50. |
 
 ## Debug
@@ -220,6 +222,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
+| `USER` | string |  |  |  | Unix login name of the current user. Used as a default approver identity in improve/approve. |
+| `USERNAME` | string |  |  |  | Windows login name of the current user. Fallback after USER when identifying the approver. |
 | `USERPROFILE` | string |  |  |  | Windows %USERPROFILE%. Used for credential denylist paths (.ssh, .aws, .gnupg) on win32. |
 | `VISUAL` | string |  |  | `nvim` | Standard POSIX env var naming the user's preferred full-screen editor (with optional flags). Consulted FIRST by the /editor slash command (and its key chord) to compose a long prompt externally; takes precedence over EDITOR. No fallback editor is assumed — if neither VISUAL nor EDITOR is set, /editor prints a hint instead of guessing. |
 | `VITEST` | string |  |  |  | Set automatically by Vitest. Used at runtime to short-circuit code paths that should not fire in tests. |
@@ -235,8 +239,11 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_DEMO_CLEAN` | boolean |  |  | `1` | Explicit opt-in to capture-mode. When set to 1, suppresses high-frequency repaint drivers (spinner ticker, live thinking-preview) so recorded artifacts contain each state once instead of once per timer tick. |
 | `AFK_DIFF_LINES` | number |  |  | `50` | Maximum number of diff lines shown in the inline diff render during write_file tool calls. Set to 0 for no cap. Non-integer values are silently ignored and the default applies. |
 | `AFK_DISABLE_SPINE_UPDATE` | boolean |  | `0` | `1` | Disable the SPINE.md SessionEnd hook when set to 1. The hook runs a single LLM call at the end of each top-level session to classify architectural signals in the git diff against SPINE.md. Set to 1 to opt out globally (useful in CI or when the LLM call is unwanted). |
+| `AFK_EVAL_STALENESS_DAYS` | number |  | `7` | `14` | Number of days without a completed eval-run before the ground-state pre-flight surfaces a staleness warning. The guard reads the most recent timestamp from the eval-runs index ($AFK_HOME/agent-framework/improve/eval-runs/.index.jsonl) and emits a warning finding when the gap exceeds this threshold. Default: 7. Set to 0 to disable the guard. |
 | `AFK_GOBLIN_MASCOT` | boolean |  |  | `1` | Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in. |
 | `AFK_GOBLIN_SPINNER` | boolean |  |  | `0` | Goblin-themed working spinner (olive frames + goblin verbs) while the agent runs tools. 1 = on (default), 0 = classic dim spinner. |
+| `AFK_IMAGE_ALLOW_DAEMON` | string |  |  |  | Set to "1" to allow image_generate in daemon/cron sessions. Blocked by default to prevent unattended API spend. |
+| `AFK_IMAGE_SESSION_LIMIT` | string |  |  |  | Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10. |
 | `AFK_LEASE_TTL_MS` | number |  |  | `600000` | Lease TTL in milliseconds for durable task execution (issue #1411). A leased task whose lease expires before it completes is recovered and re-enqueued (or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes). |
 | `AFK_MEMORY_EVIDENCE_GATE` | boolean |  | `1` | `0` | Evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an evidence citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. On by default. Set to 0 to disable. |
 | `AFK_NOTIFY` | boolean |  |  | `1` | Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only. |

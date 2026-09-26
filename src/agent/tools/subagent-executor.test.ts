@@ -2024,6 +2024,7 @@ describe('SubagentExecutor', () => {
         prompt: 'known',
         model: 'sonnet',
         provenance: 'model',
+        parentSessionId: 'parent-session-id',
       });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,
@@ -2171,12 +2172,14 @@ describe('SubagentExecutor', () => {
         prompt: 'model work',
         model: 'sonnet',
         provenance: 'model',
+        parentSessionId: 'parent-session-id',
       });
       registry.register({
         handle: userHandle.handle,
         prompt: 'user work',
         model: 'sonnet',
         provenance: 'user',
+        parentSessionId: 'parent-session-id',
       });
       const bgExecutor = new SubagentExecutor({
         subagentManager: mockSubagentMgr as any,

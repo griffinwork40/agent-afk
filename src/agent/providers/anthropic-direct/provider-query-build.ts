@@ -144,7 +144,7 @@ export function buildProviderQuery(
     systemPrefix,
     tokenRefresher,
     ...(config.thinking !== undefined
-      ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model) }
+      ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort) }
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
     ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),

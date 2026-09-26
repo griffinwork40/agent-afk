@@ -257,6 +257,37 @@ describe('BgResultNotifier', () => {
     registry.register({ handle, prompt: 'no hook', model: 'sonnet' });
     expect(() => fireTerminal(succeed('sub-n', 'ok'))).not.toThrow();
   });
+
+  // ── hasPendingInjections (prompt-became-receptive re-check) ──────────────
+  // The REPL's onAwaitingInput callback uses this to detect results that
+  // settled mid-turn and re-trigger auto-resume when the prompt opens.
+
+  it('hasPendingInjections returns false when buffer is empty', () => {
+    expect(notifier.hasPendingInjections()).toBe(false);
+  });
+
+  it('hasPendingInjections returns true after an injectable job settles', () => {
+    const { handle, fireTerminal } = makeBgHandle('sub-p');
+    registry.register({ handle, prompt: 'pending check', model: 'sonnet' });
+    fireTerminal(succeed('sub-p', 'buffered'));
+    expect(notifier.hasPendingInjections()).toBe(true);
+  });
+
+  it('hasPendingInjections returns false after drain', () => {
+    const { handle, fireTerminal } = makeBgHandle('sub-q');
+    registry.register({ handle, prompt: 'drain check', model: 'sonnet' });
+    fireTerminal(succeed('sub-q', 'will drain'));
+    notifier.drainInjections();
+    expect(notifier.hasPendingInjections()).toBe(false);
+  });
+
+  it('hasPendingInjections returns false for cancelled jobs (notice-only)', async () => {
+    const { handle, fireTerminal } = makeBgHandle('sub-r2');
+    const job = registry.register({ handle, prompt: 'cancel pending', model: 'sonnet' });
+    await registry.cancelJob(job.jobId);
+    fireTerminal({ id: 'sub-r2', status: 'cancelled' } as SubagentResult);
+    expect(notifier.hasPendingInjections()).toBe(false);
+  });
 });
 
 describe('isAutoDeliverEnabled', () => {

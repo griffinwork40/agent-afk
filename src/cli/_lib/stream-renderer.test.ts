@@ -1157,6 +1157,29 @@ describe('StreamRenderer — capture-mode', () => {
     expect(lines.filter((l) => l === 'verbatim')).toHaveLength(5);
     expect(lines.some((l) => /repeated/.test(l))).toBe(false);
   });
+
+  it('captureMode=true: compactScrollback is false even when isTTY would be true', async () => {
+    // Regression guard for issue #2180: a pseudoTTY test harness (e.g. PTY
+    // recording infrastructure) can produce isTTY = true while capture mode
+    // is active. In that case compactScrollback must remain false so the full
+    // tool-call tree is preserved in the captured artifact — same principle
+    // as the thinkingMode downgrade above.
+    //
+    // forceNonTty overrides the TTY detection, but the compactScrollback
+    // guard is evaluated independently. We verify the field directly through
+    // the private toolLane reference.
+    const { writer } = makeWriter();
+    const r = new StreamRenderer({
+      out: writer,
+      captureMode: true,
+      forceNonTty: true,
+    });
+    // Access the private toolLane to inspect the field set by the constructor.
+    type RendererInternals = { toolLane: { compactScrollback: boolean } };
+    const { toolLane } = r as unknown as RendererInternals;
+    expect(toolLane.compactScrollback).toBe(false);
+    await r.dispose();
+  });
 });
 
 describe('StreamRenderer — subagent thinking cascade', () => {

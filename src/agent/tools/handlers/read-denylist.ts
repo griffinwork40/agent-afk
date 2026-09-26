@@ -51,6 +51,16 @@ import { pathIsWithin } from '../fs-case.js';
 import { expandHome } from '../../plugins/source.js';
 
 /**
+ * Canonical home directory, resolved through `safeRealpath` so Windows 8.3
+ * short-path forms (`C:\Users\GRIF~1`) are normalised to their long-path
+ * equivalents (`C:\Users\Griffin`) before being embedded in denylist/allowlist
+ * entries. On POSIX and on Windows where no 8.3 form is in use, this is
+ * identical to `homedir()`. Computed once at import time — `homedir()` itself
+ * is stable within a process.
+ */
+const HOME = safeRealpath(homedir());
+
+/**
  * Paths that `read_file` / `grep` / `glob` / `list_directory` must never read —
  * credential stores and secret files. Each entry is matched against the real
  * (symlink-resolved) target path as a prefix.
@@ -61,10 +71,10 @@ import { expandHome } from '../../plugins/source.js';
  * is intentionally no way to remove a built-in via env.
  */
 export const BUILTIN_READ_DENYLIST: readonly string[] = [
-  `${homedir()}/.ssh`,
-  `${homedir()}/.aws`,
-  `${homedir()}/.gnupg`,
-  `${homedir()}/.config/gcloud`,
+  `${HOME}/.ssh`,
+  `${HOME}/.aws`,
+  `${HOME}/.gnupg`,
+  `${HOME}/.config/gcloud`,
   // AFK's own credential/config tree (afk.env API keys, afk.config.json —
   // which may carry a literal `apiKey`, see cli/config/types.ts). Floored as a
   // WHOLE DIR on purpose: the dir also accumulates operator backups
@@ -74,19 +84,19 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   // Invariant: only `.../config` — NEVER `.../state`, which forked sub-agents
   // must be able to read (skill-preflight inputs, todos, transcripts). Adding
   // `.../state` here would re-break #544/#547/#554.
-  `${homedir()}/.afk/config`,
+  `${HOME}/.afk/config`,
   // npm publish tokens and Docker registry credentials.
-  `${homedir()}/.npmrc`,
-  `${homedir()}/.docker/config.json`,
+  `${HOME}/.npmrc`,
+  `${HOME}/.docker/config.json`,
   // Git/HTTP credential stores and CLI OAuth tokens. This agent does heavy
   // git/gh work, so a leaked token here would let an exfiltrator push to the
   // operator's repos — highest-value reads to floor. File-level (not whole-dir)
   // so ordinary reads of sibling non-secret config (~/.kube/cache, gh config.yml)
   // still work; extend via AFK_READ_DENYLIST for non-default token locations.
-  `${homedir()}/.git-credentials`,
-  `${homedir()}/.netrc`,
-  `${homedir()}/.config/gh/hosts.yml`,
-  `${homedir()}/.kube/config`,
+  `${HOME}/.git-credentials`,
+  `${HOME}/.netrc`,
+  `${HOME}/.config/gh/hosts.yml`,
+  `${HOME}/.kube/config`,
   // Classic system secret stores. Enumerated individually (not the whole /etc)
   // so ordinary /etc reads still work; these are usually root-only anyway.
   '/etc/shadow',
@@ -98,7 +108,7 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   // previously a bash-only root (`builtinBashSensitiveRoots` in
   // bash-restriction-hook.ts) — blocked for `cat`, wide open for `read_file` /
   // `grep` / `glob`. Adding it here is what closes that reverse gap.
-  `${homedir()}/.password-store`,
+  `${HOME}/.password-store`,
   // Invariant: browser SECRET TREES, deliberately NOT the whole `~/Library/
   // Application Support` the bash hook floors (`builtinBashSensitiveRoots`).
   // The two floors differ in liftability, and that difference is why their
@@ -139,12 +149,12 @@ export const BUILTIN_READ_DENYLIST: readonly string[] = [
   // OUTSIDE Application Support entirely (`~/Library/Safari`,
   // `~/Library/Cookies`) — neither this list nor the bash hook covers them
   // today.
-  `${homedir()}/Library/Application Support/Google/Chrome`,
-  `${homedir()}/Library/Application Support/Chromium`,
-  `${homedir()}/Library/Application Support/BraveSoftware`,
-  `${homedir()}/Library/Application Support/Microsoft Edge`,
-  `${homedir()}/Library/Application Support/Arc`,
-  `${homedir()}/Library/Application Support/Firefox`,
+  `${HOME}/Library/Application Support/Google/Chrome`,
+  `${HOME}/Library/Application Support/Chromium`,
+  `${HOME}/Library/Application Support/BraveSoftware`,
+  `${HOME}/Library/Application Support/Microsoft Edge`,
+  `${HOME}/Library/Application Support/Arc`,
+  `${HOME}/Library/Application Support/Firefox`,
   // S4-win32: Windows credential/config trees. Gated on both process.platform
   // and the env var: on POSIX, USERPROFILE/APPDATA/LOCALAPPDATA may be set in
   // CI/Docker but the backslash paths would resolve incorrectly — the platform
@@ -215,11 +225,11 @@ export const READ_ALLOWLIST_REL: readonly string[] = [
   '.ssh/known_hosts',
 ];
 
-const DEFAULT_AFK_CONFIG = `${homedir()}/.afk/config`;
+const DEFAULT_AFK_CONFIG = `${HOME}/.afk/config`;
 
 /** {@link READ_ALLOWLIST_REL} resolved against the real home directory. */
 export const BUILTIN_READ_ALLOWLIST: readonly string[] = READ_ALLOWLIST_REL.map(
-  (rel) => join(homedir(), rel),
+  (rel) => join(HOME, rel),
 );
 
 /**
@@ -413,7 +423,7 @@ function resolveLists(): {
         ...gateStaticCarveOuts(
           READ_ALLOWLIST_REL.map((rel) => ({
             rel,
-            resolved: resolveExceptionEntry(`${homedir()}/${rel}`),
+            resolved: resolveExceptionEntry(`${HOME}/${rel}`),
           })),
           resolvedBuiltinEntries,
         ),

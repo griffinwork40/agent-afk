@@ -80,7 +80,7 @@ function cardBorder(kind: Exclude<CardKind, 'user'>): ChalkInstance {
 const CARD_DEFAULT_TITLE: Record<Exclude<CardKind, 'user'>, string> = {
   plan: 'PLAN',
   status: 'STATUS',
-  checkpoint: '✅ CHECKPOINT',
+  checkpoint: 'CHECKPOINT',
   diagnosis: 'DIAGNOSIS',
 };
 

@@ -198,8 +198,9 @@ async function loadWebMcpManager(
     phase: 'mcp_connect_start',
     metadata: { serverCount: enabledCount },
   });
+  let manager: McpManager;
   try {
-    return await McpManager.fromConfig(loaded.mcpServers, {
+    manager = await McpManager.fromConfig(loaded.mcpServers, {
       warnings: loaded.warnings,
       serverLayers: loaded.serverLayers,
       userAllowSecretEnv: loaded.userAllowSecretEnv,
@@ -212,4 +213,15 @@ async function loadWebMcpManager(
       metadata: { serverCount: enabledCount },
     });
   }
+
+  // Surface non-alwaysLoad server connection failures to stderr so operators
+  // learn about broken MCP servers without having to parse structured logs.
+  // Mirrors the REPL's `connectReplMcp` pattern (bootstrap-mcp.ts).
+  for (const s of manager.getServerStates()) {
+    if (s.status === 'error') {
+      console.warn(`[mcp] server "${s.serverName}" failed to connect: ${s.error ?? 'unknown error'}`);
+    }
+  }
+
+  return manager;
 }

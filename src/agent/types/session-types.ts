@@ -7,10 +7,8 @@ import type {
   AccountInfo,
   AgentInfo,
   ApiKeySource,
-  McpServerStatus,
   ModelInfo,
   PermissionMode,
-  SDKControlGetContextUsageResponse,
   SDKStatus,
 } from './sdk-types.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
@@ -26,6 +24,8 @@ import type {
 import type {
   ProviderCommandInfo,
   ProviderCompactResult,
+  ProviderContextUsage,
+  ProviderMcpServerStatus,
   ProviderQuery,
   ProviderRewindConversationResult,
   RewindTarget,
@@ -370,8 +370,8 @@ export interface IAgentSession {
   supportedCommands(): Promise<ProviderCommandInfo[]>;
   supportedModels(): Promise<ModelInfo[]>;
   supportedAgents(): Promise<AgentInfo[]>;
-  getContextUsage(): Promise<SDKControlGetContextUsageResponse>;
-  mcpServerStatus(): Promise<McpServerStatus[]>;
+  getContextUsage(): Promise<ProviderContextUsage>;
+  mcpServerStatus(): Promise<ProviderMcpServerStatus[]>;
   accountInfo(): Promise<AccountInfo>;
 
   /** Rewind files to a prior user message (when file checkpointing is enabled). */

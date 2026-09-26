@@ -154,6 +154,12 @@ export interface SessionEndContext {
    * trace after SessionEnd. Absent when tracing is disabled.
    */
   tracePath?: string;
+  /**
+   * Effective working directory for the session, from AgentConfig.cwd.
+   * Threaded so yield-probe git/gh calls run against the session's repo,
+   * not process.cwd().
+   */
+  cwd?: string;
 }
 
 export interface SubagentStartContext {

@@ -9,6 +9,7 @@
 import type { ResponseMetadata, ToolResultChunk } from '../../agent/types/message-types.js';
 import { ThinkingLane } from '../commands/interactive/thinking-lane.js';
 import { formatDuration, formatTokens, formatToolCallStat } from '../format-utils.js';
+import { palette } from '../palette.js';
 
 const ORCHESTRATOR_SOURCE_KEY = '__main__';
 
@@ -125,7 +126,6 @@ function syntheticResult(content: string, isError: boolean): ToolResultChunk {
 }
 
 function formatDoneSummary(source: SourceState): string {
-  const parts: string[] = ['Done'];
   const stats: string[] = [];
   // Reads source.stats.toolUses — the increment-only authoritative counter.
   // Never reads progressReportedToolUses (advisory only). Post-2c invariant.
@@ -155,8 +155,9 @@ function formatDoneSummary(source: SourceState): string {
   // other stats so the Done row stays one line.
   const thinkingNote = source.thinkingLane?.inlineSummary();
   if (thinkingNote) stats.push(thinkingNote);
-  if (stats.length > 0) parts.push(`(${stats.join(' · ')})`);
-  return parts.join(' ');
+  const statsStr = stats.join(' · ');
+  // C-6: ✓ Done  stats (no parentheses, ✓ prefix in success tone)
+  return palette.success('✓') + palette.dim(statsStr ? ` Done  ${statsStr}` : ' Done');
 }
 
 export {

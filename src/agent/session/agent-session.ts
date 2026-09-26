@@ -73,6 +73,7 @@ import { resetSession } from './session-reset.js';
 import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
 import * as sc from './session-config.js';
+import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -417,10 +418,10 @@ export class AgentSession implements IAgentSession {
   getQuery(): ProviderQuery { return this.providerQuery; }
 
   supportedCommands(): Promise<ProviderCommandInfo[]> { return this.providerQuery.supportedCommands(); }
-  supportedModels(): Promise<ModelInfo[]> { return this.providerQuery.supportedModels() as Promise<ModelInfo[]>; }
-  supportedAgents(): Promise<AgentInfo[]> { return this.providerQuery.supportedAgents() as Promise<AgentInfo[]>; }
-  getContextUsage(): Promise<SDKControlGetContextUsageResponse> { return this.providerQuery.getContextUsage() as Promise<SDKControlGetContextUsageResponse>; }
-  mcpServerStatus(): Promise<McpServerStatus[]> { return this.providerQuery.mcpServerStatus() as Promise<McpServerStatus[]>; }
+  supportedModels(): Promise<ModelInfo[]> { return this.providerQuery.supportedModels().then((ms) => ms.map(toModelInfo)); }
+  supportedAgents(): Promise<AgentInfo[]> { return this.providerQuery.supportedAgents().then((as_) => as_.map(toAgentInfo)); }
+  getContextUsage(): Promise<SDKControlGetContextUsageResponse> { return this.providerQuery.getContextUsage().then(toContextUsageResponse); }
+  mcpServerStatus(): Promise<McpServerStatus[]> { return this.providerQuery.mcpServerStatus().then((ms) => ms.map(toMcpServerStatus)); }
   accountInfo(): Promise<AccountInfo> { return this.providerQuery.accountInfo(); }
   rewindFiles(userMessageId: string, options?: { dryRun?: boolean }): Promise<RewindFilesResult> { return this.providerQuery.rewindFiles(userMessageId, options); }
   compact(): Promise<ProviderCompactResult> { return compact.compactSession(this.makeCompactDeps()); }

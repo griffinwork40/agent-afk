@@ -709,6 +709,11 @@ export class ComposeExecutor {
           ...(n.cwd !== undefined ? { cwd: n.cwd } : {}),
           ...(n.readRoots !== undefined ? { extraReadRoots: n.readRoots } : {}),
           ...(n.writeRoots !== undefined ? { writeRoots: n.writeRoots } : {}),
+          // Per-node isolation: thread through so dag-subagent creates a fresh
+          // managed worktree for nodes that declare isolation:"worktree". Only
+          // forwarded when present and not "none" — "none" is the default and
+          // forwarding it would be a no-op at the cost of a property on every node.
+          ...(n.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
           // Workspace-enabled provider (see compose-node-provider.ts).
           ...resolveComposeNodeProvider(nodeModel, this.ctx.workspaceStore, this.ctx.openaiBaseUrl),
           // Per-node resolved attachments (undefined = no attachments, preserves
@@ -805,6 +810,10 @@ export class ComposeExecutor {
         nodeTimeoutMs: parsed.node_timeout_ms,
         // Item 2: thread the budget so every DAG node is counted individually.
         ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
+        // Anchor isolated worktrees to the compose executor's current cwd so
+        // nodes with isolation:"worktree" create their worktrees relative to
+        // the git repo that owns this session, not process.cwd().
+        ...(this.currentCwd !== undefined ? { anchorCwd: this.currentCwd } : {}),
       });
       // Merge pre-failed attachment-error nodes into the DAG result so they
       // appear in the formatted output alongside runtime failures. Prepend so

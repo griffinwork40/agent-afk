@@ -178,6 +178,7 @@ describe('RECON_ALLOWED_TOOLS (read-only skill child allowlist)', () => {
       'browser_open',
       'browser_act',
       'create_schedule',
+      'update_schedule',
       'cancel_schedule',
     ]) {
       expect(RECON_ALLOWED_TOOLS).not.toContain(t);

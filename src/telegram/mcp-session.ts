@@ -23,6 +23,15 @@ export interface LoadTelegramMcpManagerOptions {
    * `mcp_server_start`/`mcp_server_done` events are also captured.
    */
   traceWriter?: TraceWriter;
+  /**
+   * Optional callback for surfacing per-server connection failures to the
+   * operator. When provided, called once per failed server after
+   * `McpManager.fromConfig` completes. Falls back to `console.warn` when
+   * omitted. Callers on the Telegram surface pass a closure that sends the
+   * warning to the originating chat (mirroring how the REPL routes failures
+   * through `recordBootWarning`).
+   */
+  sendWarning?: (msg: string) => void;
 }
 
 export async function loadTelegramMcpManager(
@@ -52,8 +61,9 @@ export async function loadTelegramMcpManager(
     phase: 'mcp_connect_start',
     metadata: { serverCount: enabledCount },
   });
+  let manager: McpManager;
   try {
-    return await McpManager.fromConfig(loaded.mcpServers, {
+    manager = await McpManager.fromConfig(loaded.mcpServers, {
       warnings: loaded.warnings,
       serverLayers: loaded.serverLayers,
       userAllowSecretEnv: loaded.userAllowSecretEnv,
@@ -66,6 +76,19 @@ export async function loadTelegramMcpManager(
       metadata: { serverCount: enabledCount },
     });
   }
+
+  // Surface non-alwaysLoad server connection failures as operator-visible
+  // warnings (mirrors the REPL's `connectReplMcp` pattern). Callers that
+  // supply `sendWarning` route these to the Telegram chat; others fall back
+  // to stderr so failures are never silently discarded.
+  const warn = opts.sendWarning ?? ((msg: string) => console.warn(msg));
+  for (const s of manager.getServerStates()) {
+    if (s.status === 'error') {
+      warn(`[mcp] server "${s.serverName}" failed to connect: ${s.error ?? 'unknown error'}`);
+    }
+  }
+
+  return manager;
 }
 
 export function attachMcpCleanup<T extends IAgentSession>(session: T, mcpManager: McpManager | undefined): T {

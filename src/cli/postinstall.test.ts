@@ -27,7 +27,10 @@ beforeAll(async () => {
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
 });
 
-describe.skipIf(isWin32)('detectPathGap', () => {
+// detectPathGap is a pure function (string → string) with zero platform calls.
+// The .mjs import guard (skipIf isWin32) protects restartLaunchdServices below,
+// but detectPathGap is platform-independent and runs everywhere.
+describe('detectPathGap', () => {
   it('returns onPath: true when binDir is already on PATH', () => {
     const result = detectPathGap('/usr/local', '/usr/local/bin:/usr/bin:/bin');
     expect(result.onPath).toBe(true);

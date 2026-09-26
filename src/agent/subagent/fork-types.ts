@@ -283,4 +283,17 @@ export interface SubagentManagerOptions {
    * setter when the session is not available at manager construction time.
    */
   outputEventSink?: (event: OutputEvent) => void;
+  /**
+   * Tree-wide delegation budget. When provided, `forkSubagent` calls
+   * `canSpawn` before forking and throws if the budget is exhausted.
+   * `recordSpawn` is called on admission; `release` is called when the child
+   * reaches a terminal state; `rollback` is called when fork construction
+   * itself throws before the child ever runs.
+   *
+   * Opt-in: `undefined` disables all budget enforcement (the common case
+   * when no `AFK_MAX_*` env vars are set). Pass the same `DelegationBudget`
+   * instance that the agent-tool / compose / DAG paths share so inline skill
+   * phase forks count against the same tree-wide counters.
+   */
+  delegationBudget?: import('../tools/delegation-budget.js').DelegationBudget;
 }

@@ -10,12 +10,26 @@
  *
  * Covers the grace-period gate (nothing rendered before ELAPSED_GRACE_MS),
  * the seconds-only vs. minutes+seconds format switch at the 60s boundary,
- * and the padStart zero-padding on the seconds remainder.
+ * the padStart zero-padding on the seconds remainder, and the C-2 adaptive
+ * color thresholds (dim -> amber). Red is no longer used for elapsed time —
+ * it is reserved for actual error conditions (failures, blocked states).
  */
 
+import type { ChalkInstance } from 'chalk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { formatElapsed, ELAPSED_GRACE_MS } from './terminal-compositor.scrollback.js';
+import { formatElapsed, ELAPSED_GRACE_MS, ELAPSED_AMBER_SEC, ELAPSED_RED_SEC, ELAPSED_AMBER_MAX_SEC } from './terminal-compositor.scrollback.js';
 import { stripAnsi } from './display.js';
+import { palette } from './palette.js';
+
+/**
+ * A stand-in `ChalkInstance` that renders `TAG:text` uncolored. Used to
+ * verify which palette role `elapsedTone` selected without relying on
+ * Chalk's ANSI output (which auto-disables under NO_COLOR / non-TTY).
+ * Matches the sentinelChalk pattern in tool-lane-format.test.ts.
+ */
+function sentinelChalk(tag: string): ChalkInstance {
+  return ((...text: unknown[]) => `${tag}:${text.join(' ')}`) as ChalkInstance;
+}
 
 describe('formatElapsed', () => {
   beforeEach(() => {
@@ -71,5 +85,83 @@ describe('formatElapsed', () => {
       expect(raw.length).toBeGreaterThan(stripAnsi(raw).length);
     }
     expect(stripAnsi(raw)).toBe(' 5s');
+  });
+
+  // C-2 adaptive color threshold tests (sentinel pattern avoids NO_COLOR vacuous passes).
+
+  it('uses palette.dim below the amber threshold', () => {
+    const savedDim = palette.dim;
+    const savedWarning = palette.warning;
+    const savedError = palette.error;
+    try {
+      palette.dim = sentinelChalk('DIM');
+      palette.warning = sentinelChalk('WARN');
+      palette.error = sentinelChalk('ERR');
+      const startedAt = Date.now() - 5_000; // 5s, below ELAPSED_AMBER_SEC (10)
+      const raw = formatElapsed(startedAt);
+      expect(raw).toContain('DIM:');
+      expect(raw).not.toContain('WARN:');
+      expect(raw).not.toContain('ERR:');
+    } finally {
+      palette.dim = savedDim;
+      palette.warning = savedWarning;
+      palette.error = savedError;
+    }
+  });
+
+  it('switches to palette.warning at exactly ELAPSED_AMBER_SEC', () => {
+    const savedDim = palette.dim;
+    const savedWarning = palette.warning;
+    const savedError = palette.error;
+    try {
+      palette.dim = sentinelChalk('DIM');
+      palette.warning = sentinelChalk('WARN');
+      palette.error = sentinelChalk('ERR');
+
+      // Exactly at amber threshold (10s)
+      const atAmber = Date.now() - ELAPSED_AMBER_SEC * 1_000;
+      const rawAmber = formatElapsed(atAmber);
+      expect(rawAmber).toContain('WARN:');
+      expect(rawAmber).not.toContain('DIM:');
+      expect(rawAmber).not.toContain('ERR:');
+
+      // One second before: still dim
+      const beforeAmber = Date.now() - (ELAPSED_AMBER_SEC - 1) * 1_000;
+      const rawBefore = formatElapsed(beforeAmber);
+      expect(rawBefore).toContain('DIM:');
+      expect(rawBefore).not.toContain('WARN:');
+    } finally {
+      palette.dim = savedDim;
+      palette.warning = savedWarning;
+      palette.error = savedError;
+    }
+  });
+
+  it('stays on palette.warning at and beyond ELAPSED_AMBER_MAX_SEC (60s) — red reserved for errors', () => {
+    const savedWarning = palette.warning;
+    const savedError = palette.error;
+    try {
+      palette.warning = sentinelChalk('WARN');
+      palette.error = sentinelChalk('ERR');
+
+      // Exactly at the 60s threshold: still warning (not error)
+      const atMax = Date.now() - ELAPSED_AMBER_MAX_SEC * 1_000;
+      const rawAtMax = formatElapsed(atMax);
+      expect(rawAtMax).toContain('WARN:');
+      expect(rawAtMax).not.toContain('ERR:');
+
+      // Well past 60s (e.g. 5 minutes): still warning, never red
+      const pastMax = Date.now() - 300_000;
+      const rawPast = formatElapsed(pastMax);
+      expect(rawPast).toContain('WARN:');
+      expect(rawPast).not.toContain('ERR:');
+
+      // ELAPSED_RED_SEC is kept as a deprecated alias — its numeric value (60)
+      // matches ELAPSED_AMBER_MAX_SEC, so the threshold math is unchanged.
+      expect(ELAPSED_RED_SEC).toBe(ELAPSED_AMBER_MAX_SEC);
+    } finally {
+      palette.warning = savedWarning;
+      palette.error = savedError;
+    }
   });
 });

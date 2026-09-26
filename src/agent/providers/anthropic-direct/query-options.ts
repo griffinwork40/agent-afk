@@ -40,6 +40,11 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Highest-capability Claude for agentic coding',
   },
   {
+    value: 'claude-opus-5-5',
+    displayName: 'Claude Opus 5.5',
+    description: 'Faster, cheaper Opus — extended thinking, adaptive by default',
+  },
+  {
     value: 'claude-haiku-4-5-20251001',
     displayName: 'Claude Haiku 4.5',
     description: 'Fastest, cheapest Claude',

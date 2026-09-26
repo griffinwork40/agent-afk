@@ -1,11 +1,9 @@
 import type { AgentSession } from '../../../agent/session.js';
 import type { SessionStats, ToolEvent } from '../../slash/types.js';
-import type { ResponseMetadata } from '../../../agent/types/message-types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { describeForHistory, type ImageAttachment } from '../../input/attachments.js';
 import type { InputSurfaceRefs } from '../../input/input-surface.js';
-import { recordTurn } from '../../slash/session-stats.js';
 import { palette } from '../../palette.js';
 import { isDebugEnabled } from '../../../utils/debug.js';
 import { classifyError, presentError } from '../../errors/index.js';
@@ -13,102 +11,30 @@ import { type CompletionWriter, type ThinkingUiMode, type TurnHandles } from './
 import { StreamRenderer } from '../../_lib/stream-renderer.js';
 import { createConsoleWriter } from '../../slash/writer.js';
 import {
-  ringBellIfEnabled,
   setTerminalTitleIfEnabled,
-  notifyIfEnabled,
   formatTerminalTitle,
 } from '../../_lib/capture-mode.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
-import { parseTerminalState, findTerminalStateHeadingOffset, type TerminalState } from './terminal-state.js';
-import { joinAtRoundSeam } from './turn-text-seam.js';
-import { renderVerdictCard } from './verdict-card.js';
-import { pushTerminalStateToTelegram, doneHasCorroboratingEvidence, classifyDoneEvidence } from './afk-push.js';
-import { loadTelegramConfig } from '../../config.js';
 import { createTaskViewHandler } from './task-view-mid-turn.js';
-import { printTurnFooter, printTurnSeparator } from './turn-handler.footer.js';
 import { buildUserPayload } from '../../slash/_lib/user-payload.js';
 import { expandAtFileTokens } from './at-file-inject.js';
-import { promoteWithQueuedFlush, previewOneLine } from './queued-flush.js';
-import { createTurnTtfbState, emitPlainTtfbWaiting, observeFirstContent, ttfbRendererOptions } from './turn-handler.ttfb.js';
-import { tickContextProgress } from './turn-handler.context-progress.js';
-import { handlePausedEvent, type PausedPickerRef } from './turn-handler.paused.js';
+import { makeHandleBackgroundKey, installSubagentPromotion } from './turn-handler.bg-promotion.js';
+import { createTurnTtfbState, emitPlainTtfbWaiting, ttfbRendererOptions } from './turn-handler.ttfb.js';
+import { type PausedPickerRef } from './turn-handler.paused.js';
+import { processStreamEvent, type StreamEventState, type StreamEventContext } from './turn-handler.stream-events.js';
+import {
+  handleTurnCompletion,
+  buildAssistantContentBlocks,
+  buildUserContentBlocks,
+} from './turn-handler.completion.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
-/**
- * Build `ContentBlockParam[]` for the assistant message from the accumulated
- * response text and tool events.
- *
- * Only emitted when meaningful — i.e. the turn has tool_use blocks (so the
- * structured path carries semantic value beyond plain text). Text-only turns
- * skip blocks entirely to keep sidecar size reasonable.
- *
- * Structure per the Anthropic Messages API:
- *   - One `text` block (when responseText is non-empty)
- *   - One `tool_use` block per completed tool event (no pending tools)
- *
- * The corresponding `tool_result` blocks belong in the NEXT user message, not
- * here. `resumeHistoryToMessages` will read the next TurnRecord's
- * `userContentBlocks` to satisfy that side of the pairing.
- */
-export function buildAssistantContentBlocks(
-  responseText: string,
-  toolEvents: ToolEvent[],
-): ContentBlockParam[] | undefined {
-  const completedToolUses = toolEvents.filter((te) => te.result !== undefined);
-  // Only emit blocks when there are tool_use calls — preserves sidecar brevity
-  // for simple text turns while capturing the semantically rich mixed turns.
-  if (completedToolUses.length === 0) return undefined;
-
-  const blocks: ContentBlockParam[] = [];
-  if (responseText.trim().length > 0) {
-    blocks.push({ type: 'text', text: responseText });
-  }
-  for (const te of completedToolUses) {
-    let parsedInput: Record<string, unknown> = {};
-    if (te.inputRaw) {
-      try { parsedInput = JSON.parse(te.inputRaw) as Record<string, unknown>; } catch { /* leave empty */ }
-    } else if (te.input) {
-      try { parsedInput = JSON.parse(te.input) as Record<string, unknown>; } catch { /* leave empty */ }
-    }
-    blocks.push({ type: 'tool_use', id: te.toolUseId, name: te.toolName, input: parsedInput });
-  }
-  return blocks.length > 0 ? blocks : undefined;
-}
-
-/**
- * Build `ContentBlockParam[]` for the user message when the turn included
- * tool results from the previous assistant turn's tool_use blocks.
- *
- * In a tool-use turn, the *user* side of the exchange carries `tool_result`
- * blocks corresponding to each tool_use the assistant emitted. These are
- * stored on the TurnRecord that *follows* the tool_use turn, which is why
- * callers must pass in the tool events from the preceding assistant turn.
- *
- * For turns with no tool results (plain text exchange), returns `undefined`
- * so the text fallback path is used instead.
- */
-export function buildUserContentBlocks(
-  userText: string,
-  toolEvents: ToolEvent[],
-): ContentBlockParam[] | undefined {
-  const completedToolUses = toolEvents.filter((te) => te.result !== undefined);
-  if (completedToolUses.length === 0) return undefined;
-
-  const blocks: ContentBlockParam[] = [];
-  if (userText.trim().length > 0) {
-    blocks.push({ type: 'text', text: userText });
-  }
-  for (const te of completedToolUses) {
-    blocks.push({
-      type: 'tool_result',
-      tool_use_id: te.toolUseId,
-      content: te.result ?? '',
-      ...(te.isError ? { is_error: true } : {}),
-    });
-  }
-  return blocks.length > 0 ? blocks : undefined;
-}
+// buildAssistantContentBlocks and buildUserContentBlocks are defined in
+// turn-handler.completion.ts (where they feed handleTurnCompletion directly)
+// and re-exported here so existing callers that import from this module
+// continue to compile without changes.
+export { buildAssistantContentBlocks, buildUserContentBlocks } from './turn-handler.completion.js';
 
 // InputSurfaceRefs moved to `src/cli/input/input-surface.ts` alongside
 // the InputSurface class that owns these refs. Re-exported here so
@@ -136,56 +62,30 @@ export async function runTurn(
 
   h.setInFlight(true);
 
-  // Capture turn-start time for the TTFB elapsed timer. Used by StreamRenderer
-  // to show "waiting for response… Ns" in the progress-banner overlay slot
-  // between prompt submission and the first streaming content token. Captured
-  // here (before any async I/O) so the timer starts at the moment the user
-  // submitted the prompt, not at first-event arrival.
   const turnStartedAt = Date.now();
   const turnTtfb = createTurnTtfbState(turnStartedAt);
-
   emitPlainTtfbWaiting(completionWriter, process.stdout, turnTtfb);
-
-  // Terminal title (OSC 2): flip to the running state as the turn starts, so a
-  // backgrounded/inactive tab reads "afk — <cwd> · running". Reset to idle at
-  // turn end (below, beside the bell). TTY-gated + AFK_TERM_TITLE-gated inside
-  // the helper; a no-op otherwise. Zero-width/cursor-neutral escape, so it is
-  // frame-safe against the persistent compositor even though it is armed here.
+  // OSC 2 terminal title: show "· running" while the turn is in flight.
   setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), true));
 
-  let responseText = '';
-  // Byte length of `responseText` at the start of the current tool-use round,
-  // refreshed each time a tool_result lands (= the boundary after which the
-  // next round's text begins). On a mid-stream overload retry (`stream_retry`)
-  // the current round re-streams from scratch, so we truncate `responseText`
-  // back to this checkpoint to keep the recorded turn + verdict parse free of
-  // the duplicated partial text. Prior rounds (before the checkpoint) are
-  // untouched — the retry is per-round, not per-turn.
-  let roundStartResponseLen = 0;
-  // Set when a tool_result closes a round, consumed by the next content chunk:
-  // that chunk opens a NEW assistant text block, so it joins across a round
-  // seam (paragraph break) rather than concatenating verbatim like an
-  // intra-round delta. See {@link joinAtRoundSeam}.
-  let pendingRoundSeam = false, streamingStarted = false;
-  let streamErrorRendered = false;
-  let rendererDisposed = false;
-  let doneFired = false;
-  let doneMeta: ResponseMetadata | undefined;
-  let softStopRequested = false;
-  // Set when the user submits a line DURING a usage-limit pause: the
-  // pause-interrupt handler (installed below) ends the auto-resume wait so the
-  // queued buffer flushes as the next turn. Like softStopRequested, it ends the
-  // turn without a `done` event, so recordTurn is naturally skipped.
-  let pauseInterruptRequested = false;
-  // AbortController for the interactive usage-limit picker (C). Created when
-  // the picker is shown (TTY + autoResume=true); aborted on resumed / pause-
-  // interrupt / turn-end so the picker tears down cleanly on every exit path.
-  // Stored in an object (not a bare `let`) so TypeScript's control-flow
-  // narrowing does not collapse the type to `never` in the finally block after
-  // the async .then() assignment — a synchronous read in finally always sees
-  // the latest write even though the assignment happens in a microtask.
+  // Mutable turn state — mutated in place by processStreamEvent.
+  // See turn-handler.stream-events.ts for the StreamEventState type.
+  const state: StreamEventState = {
+    responseText: '',
+    roundStartResponseLen: 0,
+    pendingRoundSeam: false,
+    streamingStarted: false,
+    streamErrorRendered: false,
+    doneFired: false,
+    doneMeta: undefined,
+    softStopRequested: false,
+    pauseInterruptRequested: false,
+    lastContextProgressMs: 0,
+    rendererDisposed: false,
+  };
+  // Stored in an object so TypeScript's control-flow narrowing doesn't collapse
+  // the type to `never` in the finally block after the async .then() assignment.
   const pickerRef: PausedPickerRef = { abort: null };
-  let lastContextProgressMs = 0;
   const toolEvents: ToolEvent[] = [];
   const pendingTools = new Map<string, ToolEvent>();
 
@@ -193,62 +93,16 @@ export async function runTurn(
     ? input.text.split(/[\s:]/)[0]?.slice(1)
     : undefined;
 
-  // Ctrl+B handler. Backgrounds the running foreground subagent and nothing
-  // else: if a subagent dispatched by THIS turn is running and promotable, it
-  // is detached into a /bgsub job and the main turn keeps streaming in the
-  // foreground. When no subagent is promotable, Ctrl+B is a deliberate no-op —
-  // there is intentionally NO whole-turn detach (the prior behavior was removed
-  // per operator decision; the main agent run is never backgrounded wholesale).
-  // Promotion is async; we fire-and-forget and commit a confirmation line above
-  // the live overlay via completionWriter when each job is adopted.
-  //
-  // Any typed-ahead message queued at keypress time rides along: the promotion
-  // tool_result is the one carrier that reaches this turn while it is still
-  // running, so flushing there beats waiting for the next-turn drain. The flush
-  // is confirm-then-drain (see queued-flush.ts) — an unpromotable or capped
-  // press leaves the queue untouched rather than eating the message.
-  const handleBackgroundKey = (): void => {
-    const control = h.subagentControl;
-    if (!control?.hasPromotableForeground()) return;
-    void promoteWithQueuedFlush(control, borrowedCompositor, h.onQueuedUserMessage)
-      .then(({ jobs, flushedText, flushedPreview }) => {
-        const write = (completionWriter ?? { fn: console.log }).fn;
-        for (const job of jobs) { write(palette.dim(`  → subagent backgrounded as ${job.jobId}: ${job.label}`)); }
-        // Warn when a promoted child shares the parent's worktree — edits may conflict. See #1513.
-        if (jobs.some((j) => j.sharesWorktree)) write(palette.warning('⚠ Background child is writing to your worktree — edits may conflict until it finishes'));
-        if (flushedText !== undefined) {
-          write(palette.dim(`  → queued message sent to this turn: ${previewOneLine(flushedPreview ?? flushedText)}`));
-        }
-      })
-      .catch(() => { /* best-effort UI note; promotion itself already happened */ });
-  };
-
-  // Stage 3e: borrow the REPL's persistent compositor when available.
-  // The renderer's borrow path skips constructing/disarming its own
-  // compositor — instead it flips the borrowed one to streaming mode
-  // at arm() and back to idle at dispose() (which also flushes any
-  // queued mid-turn submission via the surface's onSubmit handler).
-  //
-  // When `getCompositor()` returns null — non-TTY, daemon, surfaces
-  // that don't arm — the renderer falls back to constructing its own
-  // per-turn compositor with the legacy options bag below.
+  // Borrow the REPL's persistent compositor when available; fall back to
+  // per-turn compositor construction for non-TTY / legacy paths.
   const borrowedCompositor = h.getCompositor ? h.getCompositor() : null;
 
-  // Factory so we can rebuild a fresh renderer mid-turn after a paused→resumed
-  // hot-swap. The provider's auto-resume path replays the entire turn within
-  // the same stream (retry-layer.ts: `yield* turnWithAuthRetry(...)`), so the
-  // post-resume events must render against a fresh source state — the original
-  // renderer was disposed when we printed the "Usage paused" panel above the
-  // live overlay, and a disposed renderer's `process()` is a no-op (which
-  // would otherwise drop the entire replay silently).
+  // Ctrl+B subagent-promotion handler (foreground subagent detach only).
+  const handleBackgroundKey = makeHandleBackgroundKey({ h, borrowedCompositor, completionWriter });
+
+  // Factory so the paused→resumed path can swap in a fresh renderer mid-turn
+  // (the original renderer is disposed at "Usage paused" and its process() is a no-op).
   const buildRenderer = (): StreamRenderer => new StreamRenderer({
-    // Route the StreamRenderer's non-TTY fallback writer through
-    // `completionWriter` so when the compositor is armed mid-turn (and
-    // completionWriter.fn === compositor.commitAbove — see armAndWire below),
-    // any always-emitted line from the renderer commits above the overlay
-    // instead of tearing it. In TTY mode the compositor takes over rendering
-    // anyway, so this is a defensive belt-and-suspenders against future
-    // renderer paths that bypass the compositor.
     out: createConsoleWriter(completionWriter),
     thinkingMode: thinkingUi,
     ...(activeSkillName ? { activeSkillName } : {}),
@@ -259,143 +113,78 @@ export async function runTurn(
         }
       });
     },
-    ...(h.subagentControl ? {
-      onBackground: handleBackgroundKey,
-    } : {}),
+    ...(h.subagentControl ? { onBackground: handleBackgroundKey } : {}),
     ...(inputSurface?.history ? { history: inputSurface.history } : {}),
     ...(inputSurface?.autocompleteState ? { autocompleteState: inputSurface.autocompleteState } : {}),
     ...(inputSurface?.promptText !== undefined ? { promptText: inputSurface.promptText } : {}),
-    // Threads StatusLine.withFullScrollRegion into the compositor so
-    // commitAbove's scrollback writes don't get clipped by the persistent
-    // DECSTBM sub-region (see terminal-compositor.ts:commitAbove for the
-    // contract and ./repl-loop.ts:runTurn-call-site for the wiring).
     ...(h.scrollRegion ? { scrollRegion: h.scrollRegion } : {}),
     ...(borrowedCompositor ? { compositor: borrowedCompositor } : {}),
-    // Thread the REPL's LoopStageBar repaint callback so the reserved footer
-    // row updates on every stage transition without coupling the bar to the
-    // overlay compositor. h.onStageChange is absent on non-REPL callers.
     ...(h.onStageChange ? { onStageChange: h.onStageChange } : {}),
-    // TTFB elapsed timer: pass the turn-start timestamp so the renderer can
-    // show "waiting for response… Ns" in the progress-banner overlay slot
-    // before the first streaming content token arrives. The renderer clears
-    // the line automatically when notifyFirstContent() is called below.
     ...ttfbRendererOptions(turnTtfb),
     ...(h.addPreviewDiffRef ? { addPreviewDiffRef: h.addPreviewDiffRef } : {}),
   });
 
-  // `let` (not `const`) so the resumed-event handler can swap in a fresh
-  // renderer. All downstream references — disposeRendererOnce, the ambient
-  // sink, the post-stream queued-buffer capture — go through this binding.
+  // `let` so the resumed-event handler can swap in a fresh renderer.
   let renderer = buildRenderer();
 
-  // Bridge the session-scoped bashOutputTailReporter factory to this turn's
-  // ToolLane (issue #1506). Cleared on dispose so stale callbacks are no-ops.
+  // Bridge the session-scoped bashOutputTailReporter to this turn's ToolLane.
   if (h.bashTailSetter) {
     h.bashTailSetter.current = (id, tail) => renderer.setBashOutputTail(id, tail);
   }
 
   const disposeRendererOnce = async (): Promise<void> => {
-    if (rendererDisposed) return;
-    rendererDisposed = true;
+    if (state.rendererDisposed) return;
+    state.rendererDisposed = true;
     if (h.bashTailSetter) h.bashTailSetter.current = undefined;
     try { await renderer.dispose(); } catch { /* best-effort */ }
   };
 
-  // Hoisted "arm + wire" so both the initial setup and the post-resume swap
-  // re-publish the active compositor to completionWriter + SIGINT routing.
-  // Without this, after a hot-swap the slash completionWriter would still
-  // point at the disposed compositor's commitAbove and SIGINT would fall
-  // back to console.log (racing the new compositor's clear/repaint).
+  // Hoisted so both initial setup and post-resume swap re-publish the
+  // active compositor to completionWriter + SIGINT routing.
   const armAndWire = async (): Promise<void> => {
     await renderer.arm();
     const armedCompositor = renderer.getCompositor();
     if (completionWriter && armedCompositor) {
       const c = armedCompositor;
       completionWriter.fn = (line) => c.commitAbove(line);
-      // A live overlay now owns subagent rendering (the ToolLane commits the
-      // → Agent(…) Done tree). Suppress the redundant SubagentStop completion
-      // line so its uncoordinated commitAbove can't race the OverlayComposer
-      // and corrupt the compositor's row-accounting (ghost markers + swallowed
-      // committed lines). Reset in the finally below. See CompletionWriter.
+      // Suppress the redundant SubagentStop line while the overlay is live.
       completionWriter.suppressSubagentCompletion = true;
     }
     h.setActiveCompositor?.(armedCompositor);
-    // Publish a notifier so the SIGINT handler can toggle the live
-    // "interrupting…" overlay affordance on the CURRENT renderer. The closure
-    // dereferences `renderer` (reassigned on paused→resumed swap), so it always
-    // targets the live renderer; cleared in the finally below.
+    // Notifier follows the live renderer across paused→resumed hot-swaps.
     h.setInterruptNotifier?.((active) => renderer.setInterrupting(active));
     h.rearmStatus?.();
   };
 
   try {
     // Blank line separating user input from agent output.
-    //
-    // Two paths — both honor the same external constraint:
-    // a raw stdout write into a log-update-tracked region shifts the
-    // cursor without updating log-update's line tracker, stranding the
-    // previous frame in scrollback (the "ghost spinner" / "stacked
-    // prompt" duplication bug).
-    //
-    // Stage 3e (borrowed compositor): the surface's TerminalCompositor
-    // is already armed at REPL startup and stays armed across turns.
-    // `renderer.arm()` only flips its input mode — it does NOT (re-)arm
-    // log-update. So the pre-arm-vs-post-arm distinction no longer
-    // protects us; the compositor's log-update has been tracking stdout
-    // continuously since `surface.armCompositor()` ran. Route the blank
-    // line through `commitAbove` so it lands above the live overlay and
-    // log-update's line count stays consistent.
-    //
-    // Legacy (own-compositor): `renderer.arm()` constructs and arms a
-    // fresh compositor mid-call. A raw `console.log()` BEFORE arm() is
-    // safe — no log-update is tracking yet. After arm() it would race
-    // the freshly-installed log-update. Keep the original ordering.
+    // Borrowed compositor: route through commitAbove so log-update's line
+    // tracker stays consistent (arm() flips input mode but doesn't re-arm
+    // log-update, so a raw console.log would stray its cursor tracking).
+    // Legacy own-compositor: arm() constructs its compositor mid-call, so
+    // a raw console.log() BEFORE arm() is safe — no log-update tracking yet.
     if (borrowedCompositor) {
       borrowedCompositor.commitAbove('');
     } else {
       console.log();
     }
 
-    // Install the per-turn ESC soft-stop handler BEFORE arm() so there is
-    // no window between arm()'s setInputMode('streaming') — which resets
-    // softStopped=false — and handler installation where an ESC press would
-    // fire against a null softStopHandler and silently consume the once-only
-    // guard. By wiring the handler first, any ESC that arrives during or
-    // after arm() correctly sets softStopRequested=true.
+    // Install the per-turn ESC soft-stop handler BEFORE arm() to close the
+    // window between arm()'s setInputMode('streaming') and handler installation.
     if (h.setSoftStopHandler) {
       h.setSoftStopHandler(() => {
-        softStopRequested = true;
-        // Immediate visible feedback: flip the live progress banner to its
-        // "stopping…" state on the SAME frame this handler runs, so the user
-        // sees the ESC was accepted before teardown completes (which can take
-        // seconds while subagents cancel). setSoftStopping recomposes the
-        // overlay once (mirrors the Ctrl+C setInterrupting affordance). The
-        // closure dereferences `renderer` so it targets the live renderer even
-        // after a paused→resumed hot-swap; a no-op if the renderer is disposed.
+        state.softStopRequested = true;
+        // Immediate banner feedback; closure follows the live renderer post-swap.
         renderer.setSoftStopping(true);
-        // Fire interrupt() synchronously on ESC instead of waiting for the
-        // for-await loop below to observe `softStopRequested`. During a long
-        // tool call the loop is blocked awaiting the stream's next event, so a
-        // deferred interrupt would not fire until another token arrived —
-        // making ESC look dead for seconds (the "ESC does nothing" symptom).
-        // interrupt() is idempotent (AgentSession returns early once state
-        // leaves streaming/processing), so the loop's break-path interrupt
-        // below remains a safe no-op.
+        // Fire interrupt() synchronously — deferred fire via the for-await loop
+        // would block during long tool calls (the "ESC does nothing" bug).
         session.interrupt().catch((err) => {
           if (isDebugEnabled()) {
             console.error('  ' + palette.error('soft-stop session.interrupt() failed:'), err);
           }
         });
-        // A turn suspended on a subagent `await` (the parent tool-use loop is
-        // parked awaiting the subagent tool_result) cannot be halted by
-        // session.interrupt() alone — the parent stream is not what's blocked.
-        // Cancel any in-flight foreground subagent so its runToResult resolves,
-        // the tool_result flows back, and the for-await loop wakes to observe
-        // softStopRequested and stop cleanly — returning the user to the prompt
-        // with context intact. Without this, ESC / Ctrl+C are dead for the
-        // entire subagent run (up to the 2h usage-limit cap): the "stuck
-        // mid-subagent, have to fork the session" bug. Fire-and-forget; the
-        // cancel resolves the await that unblocks the loop.
+        // A turn parked on a subagent await cannot be halted by interrupt() alone;
+        // cancel the foreground subagent so it resolves and the loop can break.
         const ctrl = h.subagentControl;
         if (ctrl?.hasActiveForeground()) {
           void ctrl.cancelActiveForeground().catch((err) => {
@@ -407,15 +196,10 @@ export async function runTurn(
       });
     }
 
-    // Install the per-turn pause-interrupt handler. When the user submits a
-    // line while the turn is parked in a usage-limit pause (compositor
-    // `paused === true`, toggled by setPausedState on the paused/resumed events
-    // below), end the auto-resume wait so the just-queued buffer flushes as the
-    // next turn. Mirrors the ESC soft-stop interrupt; session.interrupt() is
-    // idempotent, so a double Enter during the pause is a safe no-op.
+    // Install the per-turn pause-interrupt handler (usage-limit pause → next turn).
     if (h.setPauseInterruptHandler) {
       h.setPauseInterruptHandler(() => {
-        pauseInterruptRequested = true;
+        state.pauseInterruptRequested = true;
         session.interrupt().catch((err) => {
           if (isDebugEnabled()) {
             console.error('  ' + palette.error('pause-interrupt session.interrupt() failed:'), err);
@@ -426,18 +210,8 @@ export async function runTurn(
 
     await armAndWire();
 
-    // Install the per-turn Ctrl+B handler on the surface's persistent
-    // compositor (Stage 3e). The surface's armCompositor closure
-    // dereferences this ref on every Ctrl+B press, so this takes effect
-    // immediately. Cleared in finally so Ctrl+B between turns is a no-op.
-    // Installed only when the promotion seam is available (`subagentControl`):
-    // Ctrl+B exclusively backgrounds a running foreground subagent — there is
-    // no whole-turn detach path anymore.
-    if (h.setBackgroundHandler && h.subagentControl) {
-      h.setBackgroundHandler(handleBackgroundKey);
-    }
-
-    // Install the per-turn Tab task-view handler (mid-turn subagent peek).
+    // Per-turn Ctrl+B (foreground subagent promotion) and Tab (task view).
+    installSubagentPromotion({ h, borrowedCompositor, completionWriter });
     h.setTaskViewHandler?.(createTaskViewHandler(h));
 
     // Expand `@<path>` tokens in the user's text into file-content blocks
@@ -459,494 +233,88 @@ export async function runTurn(
         : input.text;
     const stream = session.sendMessageStream(payload);
 
-    // Install a stable ambient sink that dereferences the CURRENT renderer
-    // each call, so any mid-turn subagent (forked via the Skill or Agent
-    // tool → SubagentManager.forkSubagent) keeps routing into whichever
-    // renderer is live — including after a paused→resumed swap. Subagent
-    // events render under synthetic `Agent(<label>)` ToolLane entries; the
-    // renderer routes them via meta.subagentId.
+    // Ambient sink: dereferences the live renderer so mid-turn subagents route
+    // into whichever renderer is current (including after a paused→resumed swap).
     const ambientSink = (event: OutputEvent, meta?: SubagentProgressMeta): void => {
       renderer.process(event, meta);
       if (meta) turnTtfb.plainHooks?.onSubagentEvent(event, meta);
     };
+    const streamCtx: StreamEventContext = {
+      state,
+      pickerRef,
+      toolEvents,
+      pendingTools,
+      getRenderer: () => renderer,
+      setRenderer: (r) => { renderer = r; },
+      turnTtfb,
+      h,
+      session,
+      completionWriter,
+      borrowedCompositor,
+      disposeRendererOnce,
+      armAndWire,
+      buildRenderer,
+    };
+
     await runWithSink(ambientSink, async () => {
       for await (const event of stream) {
-        // Invariant: soft-stop stream halt MUST happen before any
-        // tool-call flush into session state. Reverse order (flush
-        // then halt) risks writing partial state to disk — the stream
-        // may still be delivering tool_result chunks, so tool events
-        // accumulated so far would be incomplete. The soft-stop handler
-        // (installed above) calls session.interrupt() synchronously on
-        // ESC, so the pump is already halting before this loop breaks and
-        // before the post-stream recordTurn runs. This ordering is
-        // externally governed by the event-loop boundary between the HTTP
-        // stream pump and the state writer in turn-handler.ts.
-        //
-        // Implementation: interrupt fires in the handler, NOT here — if it
-        // were deferred to this for-await, a long-running tool call (during
-        // which this loop is blocked awaiting the next event) would not halt
-        // until the next token arrived, making ESC look dead for seconds
-        // (the "ESC does nothing" bug). Here we only break: interrupt() was
-        // already initiated in the handler, the stream's async iterator
-        // terminates naturally (no throw), and the post-stream block detects
-        // softStopRequested to render the notice and suppress recordTurn.
-        //
-        // History consistency: breaking mid-tool-use (e.g. after
-        // cancelActiveForeground() resolves a stuck subagent's tool_result)
-        // can leave the provider's running history terminating in an assistant
-        // `tool_use` whose `tool_result` was never appended — anthropic-direct
-        // pushes the assistant turn (loop.ts) BEFORE yielding tool output and
-        // appends the tool_result only after. That transient orphan is healed
-        // before the NEXT request: repairOrphanToolUses (anthropic-direct
-        // query.ts) runs before every new-user-turn append and synthesizes
-        // is_error tool_result placeholders, and the abort-path rollback in
-        // loop.ts covers the throw case — so the following turn never 400s with
-        // "tool_use ids ... without tool_result blocks". The OpenAI-compatible
-        // provider appends assistant{tool_calls} + results together (one
-        // synchronous block after the yield loop), so it has no orphan window.
-        // See PR #400 review + query/repair-orphan-tool-uses.ts.
-        if (softStopRequested || pauseInterruptRequested) {
+        // Invariant: interrupt fires in the ESC/pause handler, not here.
+        // The loop only breaks — no interrupt() call — so a long-running
+        // tool call that blocks this loop does not create a dead-ESC window.
+        // Orphaned tool_use records from a mid-loop break are healed by
+        // repairOrphanToolUses before the next request (see query.ts).
+        if (state.softStopRequested || state.pauseInterruptRequested) {
           break;
         }
-
-        const isFirstContentEvent = observeFirstContent(turnTtfb, event, streamingStarted);
-
-        if (event.type === 'chunk' && event.chunk.type === 'content') {
-          responseText = pendingRoundSeam
-            ? joinAtRoundSeam(responseText, event.chunk.content)
-            : responseText + event.chunk.content;
-          pendingRoundSeam = false;
-          // Remember this before flipping streamingStarted; TTFB is cleared
-          // only after renderer.process below has staged the content repaint.
-          // That lets the content and waiting-line removal share one flush,
-          // rather than briefly painting an empty intermediate frame.
-          streamingStarted = true;
-          // Feed the momentum ticker so it can compute a live tok/s rate.
-          // Best-effort: absent on non-TTY surfaces and non-interactive callers.
-          h.onTextDelta?.(event.chunk.content.length);
-        } else if (event.type === 'message' && !streamingStarted) {
-          responseText = event.message.content;
-        }
-
-        if (event.type === 'stream_retry') {
-          // Mid-stream overload re-drive: the current round re-streams from
-          // scratch, so drop its partial text to keep the recorded turn +
-          // verdict free of the duplicate. Falls through (no `continue`) to
-          // renderer.process(event) below, which resets the live display via
-          // handleOrchestratorEvent's `stream_retry` case.
-          responseText = responseText.slice(0, roundStartResponseLen);
-          // Truncating back to the round checkpoint also removes the seam break
-          // this round's first chunk inserted, so re-arm it: the re-streamed
-          // round is still a new text block after the prior round's text.
-          pendingRoundSeam = responseText.length > 0;
-        }
-
-        if (event.type === 'chunk' && event.chunk.type === 'tool_use_detail') {
-          const c = event.chunk;
-          const te: ToolEvent = { toolName: c.toolName, toolUseId: c.toolUseId, input: c.toolInput, ...(c.toolInputRaw !== undefined && { inputRaw: c.toolInputRaw }) };
-          pendingTools.set(c.toolUseId, te);
-          toolEvents.push(te);
-          turnTtfb.plainHooks?.onToolStart(c);
-        } else if (event.type === 'chunk' && event.chunk.type === 'tool_result') {
-          const c = event.chunk;
-          // Round boundary: the next round's text appends after this point.
-          // Checkpoint so a `stream_retry` truncates back to here, not to 0.
-          roundStartResponseLen = responseText.length;
-          // This tool_result closes a round: the next content chunk starts a new
-          // assistant text block and must join across the seam, not fuse.
-          pendingRoundSeam = true;
-          const pending = pendingTools.get(c.toolUseId);
-          if (pending) {
-            pending.result = c.content;
-            pending.isError = c.isError;
-            pendingTools.delete(c.toolUseId);
-          }
-          turnTtfb.plainHooks?.onToolResult(c, pending?.toolName);
-          lastContextProgressMs = await tickContextProgress(h.onContextProgress, lastContextProgressMs);
-        }
-
-        if (event.type === 'paused') {
-          await handlePausedEvent({
-            event,
-            session,
-            borrowedCompositor,
-            pickerRef,
-            completionWriter,
-            disposeRendererOnce,
-            setPausedState: h.setPausedState,
-            onPauseInterrupt: () => { pauseInterruptRequested = true; },
-          });
-          continue;
-        }
-
-        if (event.type === 'resumed') {
-          // Pause is over (auto-resume / hot-swap). Clear the paused flag so a
-          // line typed during the replayed turn queues normally (type-ahead)
-          // rather than firing the pause-interrupt.
-          h.setPausedState?.(false);
-          // Tear down the picker if it's still open — the wait resolved
-          // without user intervention (auto-resume / hot-swap won the race).
-          pickerRef.abort?.abort();
-          pickerRef.abort = null;
-          // External constraint: the retry layer replays the ENTIRE turn
-          // after this event (retry-layer.ts: `yield* turnWithAuthRetry`),
-          // re-streaming all content + tool calls from scratch. We must:
-          //   1. Print the resume note before constructing the new renderer
-          //      so it lands in scrollback above the fresh compositor.
-          //   2. Build + arm a fresh renderer so replay events render visibly
-          //      — the original renderer is disposed and its `process()` is a
-          //      no-op after dispose, which would have made the replay silent.
-          //   3. Reset per-turn accumulators so the responseText, tool events,
-          //      and done state reflect ONLY the replay (not the partial
-          //      pre-pause turn, which would otherwise double-accumulate).
-          // The ambient sink dereferences `renderer` each call, so swapping
-          // the binding here automatically reroutes any mid-turn subagent
-          // events to the new renderer.
-          const note = event.hotSwapped && event.accountId
-            ? `▶ Resumed on ${event.accountId}`
-            : '▶ Resumed';
-
-          // Reset per-turn accumulators FIRST so the new renderer starts
-          // clean. The new compositor + new completionWriter routing
-          // (rewired by armAndWire below) ensures the resume note lands
-          // above the freshly-armed overlay, not the disposed one.
-          responseText = '';
-          roundStartResponseLen = 0;
-          pendingRoundSeam = false;
-          streamingStarted = false;
-          toolEvents.length = 0;
-          pendingTools.clear();
-          doneFired = false;
-          doneMeta = undefined;
-          streamErrorRendered = false;
-
-          // Build + arm a fresh renderer for the replayed turn. armAndWire
-          // re-points completionWriter.fn at the NEW compositor's
-          // commitAbove (the old one was disposed when we printed the
-          // "Usage paused" panel above).
-          renderer = buildRenderer();
-          rendererDisposed = false;
-          await armAndWire();
-
-          // Write the resume note AFTER armAndWire so it routes through
-          // the freshly-wired completionWriter — which now points at the
-          // new compositor's commitAbove and stacks above the live
-          // overlay correctly. Writing it before armAndWire would route
-          // via the just-disposed compositor's stale commitAbove.
-          (completionWriter ?? { fn: console.log }).fn(palette.success(note));
-          continue;
-        }
-
-        if (event.type === 'error') {
-          // Disarm before raw console output so the error box doesn't tear
-          // the live overlay. Skip renderer.process (would also emit an
-          // errorCard via the writer — duplicate).
-          await disposeRendererOnce();
-          presentError(classifyError(event.error));
-          streamErrorRendered = true;
-          continue;
-        }
-
-        renderer.process(event);
-
-        if (isFirstContentEvent) {
-          turnTtfb.plainHooks?.onFirstContent(process.stdout);
-          // Deliberately follows process(): notifyFirstContent marks the
-          // progress-banner slot dirty so the TTFB waiting line disappears
-          // on the next overlay repaint (triggered by the content event's
-          // own markdown-pending / tool-lane flush — no eager flush here).
-          renderer.notifyFirstContent();
-        }
-
-        if (event.type === 'done') {
-          doneFired = true;
-          doneMeta = event.metadata;
-        }
+        await processStreamEvent(event, streamCtx);
       }
     });
 
-    // Invariant: strip the terminal-state prose from the pending buffer
-    // BEFORE dispose flushes it — the verdict card is the sole rendering.
-    //
-    // History: when the model emits trailing \n\n after the terminal-state
-    // block, the markdown renderer detects a block boundary during streaming
-    // and commits that block to scrollback before this strip runs. In that
-    // case getPendingBuffer() returns '' and findTerminalStateHeadingOffset
-    // returns -1 — the strip is skipped, but the prose is already in
-    // scrollback. The verdict card would then render on top of the committed
-    // prose, producing a double render. The else branch below catches that
-    // case: if the pending buffer had nothing to strip but responseText still
-    // contains a terminal-state block, the committed prose IS the sole output
-    // — suppress the verdict card to avoid duplication. See #1407.
-    let suppressVerdictCard = false;
-    if (doneFired && !softStopRequested && !pauseInterruptRequested) {
-      const off = findTerminalStateHeadingOffset(renderer.getPendingBuffer());
-      if (off >= 0) {
-        renderer.stripPendingTerminalState(off);
-      } else if (parseTerminalState(responseText) !== null) {
-        // Block was already committed to scrollback — prose is the sole output.
-        suppressVerdictCard = true;
-      }
-    }
+    // Pre-compute content blocks for the sidecar (structured resume path).
+    // See turn-handler.completion.ts: buildAssistantContentBlocks / buildUserContentBlocks.
+    const assistantBlocks = buildAssistantContentBlocks(state.responseText, toolEvents);
+    const prevTurnToolEvents = stats.turns.at(-1)?.toolEvents ?? [];
+    const userBlocks = Array.isArray(payload)
+      ? (payload as ContentBlockParam[])
+      : buildUserContentBlocks(historyText, prevTurnToolEvents);
 
-    // Stage 3e — mid-stream queued buffer is now handled natively by the
-    // persistent compositor: dispose() flips to idle mode, which (per
-    // the widened setInputMode flush invariant) fires the surface's
-    // onSubmit handler when one is installed at next readLine. No
-    // explicit queue-text capture needed here. For the legacy
-    // renderer-owns-compositor path (non-TTY, no surface borrow), the
-    // queued state lives only on the about-to-be-disarmed compositor —
-    // those callers don't observe mid-stream queuing anyway because
-    // there's no input row in non-TTY mode.
-    await disposeRendererOnce();
-
-    // Invariant: ESC soft-stop intent OVERRIDES stream completion. Two
-    // cases reach this guard:
-    //   (a) Mid-stream ESC: the for-await loop broke at line 225 after
-    //       session.interrupt(), doneFired=false. Classic soft-stop.
-    //   (b) Late-ESC race: ESC fires AFTER the done event was processed
-    //       (doneFired=true) but BEFORE this guard runs — e.g., during
-    //       `await disposeRendererOnce()` above, or as a microtask
-    //       scheduled by the keypress callback after the done yield.
-    //       The for-await loop terminated naturally; doneFired=true and
-    //       softStopRequested=true simultaneously.
-    // Both cases honor the user's stop intent: render the notice and
-    // suppress the completed-turn path (gated below by
-    // `!softStopRequested`). Without the gate, late-ESC would silently
-    // commit the turn as completed — visible-success-with-silent-stop,
-    // exactly the failure mode the soft-stop UX exists to prevent.
-    // The SDK's server-side session store preserves the response even
-    // when we skip local recordTurn; the REPL session stays live, so the
-    // user continues simply by sending the next message — no resume needed.
-    // (/resume and --resume operate on *other* saved sessions, not the
-    // live one that was just soft-stopped, so they must NOT be advertised
-    // here; doing so sent users down a dead-end. See the onSoftStop doc in
-    // terminal-compositor.types.ts: "next Enter starts a new turn in the
-    // same session.")
-    // Shared writer for soft-stop and pause-interrupt notices below.
-    const writeNotice = completionWriter ? completionWriter.fn : console.log;
-
-    if (softStopRequested) {
-      // Surface how many type-ahead messages are still queued (Enter-committed
-      // pendingSubmissions preserved across the soft-stop per the ESC contract).
-      // The authoritative count is the persistent compositor's getPendingCount()
-      // — `borrowedCompositor` is the same instance the input dispatcher queues
-      // into; null on non-TTY surfaces, where there's no input row to type-ahead
-      // into, so the suffix is simply omitted. Singular/plural handled.
-      const queuedCount = borrowedCompositor ? borrowedCompositor.getPendingCount() : 0;
-      const queuedSuffix = queuedCount > 0
-        ? ` · ${queuedCount} queued`
-        : '';
-      // Invariant (TUI rhythm contract): the soft-stop notice owns ONE
-      // trailing blank line. The predecessor (last committed paragraph
-      // or tool block) already emitted its own trailing blank, so a
-      // leading blank here would double-up. See docs/tui-rhythm.md.
-      writeNotice(palette.warning(`⏸ Stopped${queuedSuffix} — work so far kept.`) +
-        palette.dim('  Send a message to continue.'));
-      writeNotice('');
-    }
-
-    // Pause-interrupt: the user submitted a line during a usage-limit pause to
-    // end the wait. The queued buffer flushes as the next turn at the next
-    // readLine (idle-transition flush). Gentle note, distinct from ESC's stop.
-    if (pauseInterruptRequested) {
-      // Owns one trailing blank (TUI rhythm contract — see docs/tui-rhythm.md).
-      writeNotice(palette.dim('▶ Ending wait — running your next command…'));
-      writeNotice('');
-    }
-
-    if (doneFired && !softStopRequested && !pauseInterruptRequested) {
-      // Build structured content blocks for the sidecar so the resume path
-      // can use the structured API path (preserving tool_use/tool_result
-      // semantics) instead of falling back to plain text.
-      const assistantBlocks = buildAssistantContentBlocks(responseText, toolEvents);
-      // User blocks for THIS turn represent the user's message that INITIATED
-      // this turn. When the payload was structured (attachments / @-file blocks),
-      // use it directly. Otherwise, the user turn's content-block array should
-      // include any tool_result blocks that PAIRED with the PREVIOUS turn's
-      // tool_use blocks: on resume, resumeHistoryToMessages emits one user
-      // message and one assistant message per TurnRecord, so:
-      //   - Turn[N].userContentBlocks   → messages[2N]   (user, initiating turn N)
-      //   - Turn[N].assistantContentBlocks → messages[2N+1] (assistant, including tool_use)
-      //   - Turn[N+1].userContentBlocks  → messages[2N+2] (user, with tool_result covering N's tool_use)
-      // Without this, Turn[N].assistantContentBlocks would carry tool_use blocks
-      // with no matching tool_result in Turn[N+1].userContentBlocks, triggering
-      // repairOrphanToolUses on resume and replacing all prior tool output with
-      // synthetic error placeholders.
-      const prevTurnToolEvents = stats.turns.at(-1)?.toolEvents ?? [];
-      const userBlocks = Array.isArray(payload)
-        ? (payload as ContentBlockParam[])
-        : buildUserContentBlocks(historyText, prevTurnToolEvents);
-      recordTurn(stats, historyText, responseText, doneMeta, toolEvents, userBlocks, assistantBlocks);
-
-      await h.onTurnComplete?.(historyText, responseText).catch(() => { /* best-effort */ });
-
-      // Ring the terminal bell on turn completion when enabled (AFK_BELL=1,
-      // TTY-only) — an away-from-keyboard completion cue. No-op otherwise.
-      ringBellIfEnabled(process.stdout);
-
-      // Desktop completion notification (OSC 9): opt-in (AFK_NOTIFY=1, TTY-only)
-      // sibling of the bell for terminals that surface OSC 9 as a system banner
-      // (iTerm2 / kitty / WezTerm). No-op otherwise. Same disposed-renderer
-      // lifecycle point as the bell; zero-width escape. Intentionally
-      // clean-completion-only (unlike the title reset, which now lives in the
-      // `finally` block below and fires on EVERY exit path) — a "turn
-      // complete" desktop banner would be misleading after a soft-stop,
-      // pause-interrupt, or error, none of which mean the turn is done.
-      notifyIfEnabled(process.stdout, 'afk: turn complete');
-
-      // Stage 3e — post-stream writes between `disposeRendererOnce()` and
-      // the finally block run while the borrowed persistent compositor is
-      // STILL armed (dispose only flipped it back to idle; the surface
-      // owns disarm). Route through `completionWriter.fn`, which the arm
-      // path above wired to `compositor.commitAbove` (line ~131) and the
-      // finally block restores to `console.log`. For the legacy
-      // own-compositor path, `dispose()` already disarmed log-update so
-      // raw `console.log` is safe; the writer remains console-bound there
-      // either way.
-      const writeAbove = (line: string): void => {
-        if (completionWriter) {
-          completionWriter.fn(line);
-        } else {
-          console.log(line);
-        }
-      };
-
-      // Invariant (TUI rhythm contract): under single-owner trailing
-      // rhythm, the predecessor block (last streamed paragraph via
-      // markdown-stream's `trimmed + '\n\n'`, or the done-time tool
-      // flush's trailing blank) already owns its trailing blank. The
-      // explicit `writeAbove('\n')` spacer that used to live here would
-      // double-up, producing two blank rows between content and the
-      // verdict/footer. See docs/tui-rhythm.md.
-
-      // Verdict card. AFK's prompt mandates that every turn end in a named
-      // terminal state (Done / Blocked / Asking / Interrupted) with a
-      // structured rationale. We parse that out of the assistant text and,
-      // when found, render it as a first-class card BEFORE the cost/token
-      // footer — the footer is metadata about the turn, the card is the
-      // commitment of the turn. Conservative parser: silently skips when
-      // the format doesn't match, so the worst case is the previous status
-      // quo (just the prose).
-      const verdict: TerminalState | null = parseTerminalState(responseText);
-      if (verdict && !suppressVerdictCard) {
-        writeAbove(renderVerdictCard(verdict, {
-          durationMs: doneMeta?.durationMs,
-          totalCostUsd: doneMeta?.totalCostUsd,
-          toolCount: toolEvents.length,
-        }));
-        writeAbove('');
-        // Evidence: two values, two consumers. The boolean (did evidence back
-        // this Done?) drives the Telegram push relabel. The three-state code
-        // classifier (was changed code verified?) drives the terminal-state
-        // gate's correction injection. Both forward onto StopContext.
-        const evidenceClassification = classifyDoneEvidence(toolEvents);
-        const hasCorroboratingEvidence = doneHasCorroboratingEvidence(toolEvents);
-        if (h.onTerminalState) {
-          try {
-            h.onTerminalState(verdict, { doneHasCorroboratingEvidence: hasCorroboratingEvidence, doneEvidenceClassification: evidenceClassification });
-          } catch { /* ledger update is best-effort */ }
-        }
-        // AFK mode: the operator is away and the transcript is unwatched, so
-        // surface the terminal state to them over Telegram. Scrubbed + rate-
-        // limited (afk-push.ts); no-ops when Telegram is unconfigured.
-        // Fire-and-forget — outbound notification must never block the turn.
-        if (stats.permissionMode === 'autonomous') {
-          // Opt-in (telegram.verifyDone): when the turn self-certifies `Done`
-          // but produced no corroborating evidence this turn (a successful file
-          // write/edit or command — see doneHasCorroboratingEvidence), label the
-          // push "⚠️ Done (unverified)" so the away operator isn't pinged a
-          // confident "finished" with nothing behind it. Default off; never blocks.
-          const unverified =
-            verdict.kind === 'done' &&
-            loadTelegramConfig().verifyDone === true &&
-            !hasCorroboratingEvidence;
-          void pushTerminalStateToTelegram(verdict, undefined, { unverified });
-        }
-      }
-
-      printTurnFooter(doneMeta, stats, writeAbove);
-      printTurnSeparator(writeAbove, process.stdout);
-
-      if (h.onAfterTurn) {
-        const result = h.onAfterTurn();
-        if (result instanceof Promise) {
-          await result.catch(() => { /* best-effort */ });
-        }
-      }
-    }
+    await handleTurnCompletion({
+      state,
+      stats,
+      h,
+      toolEvents,
+      historyText,
+      assistantBlocks,
+      userBlocks,
+      completionWriter,
+      borrowedCompositor,
+      renderer,
+      disposeRendererOnce,
+    });
   } catch (error) {
     await disposeRendererOnce();
-    if (!streamErrorRendered) {
+    if (!state.streamErrorRendered) {
       presentError(classifyError(error));
     }
   } finally {
     await disposeRendererOnce();
-    // Terminal title (OSC 2): drop the "· running" badge on EVERY exit path —
-    // clean completion, soft-stop, pause-interrupt, or a thrown error (PR #647
-    // review finding M1: the title previously reset only inside the
-    // doneFired-and-clean block, so ESC / errors left the tab stuck reading
-    // "· running" indefinitely). `disposeRendererOnce()` immediately above is
-    // idempotent and has already run at least once on every path into this
-    // block (inline in the try's normal flow, or in the `catch` handler), so
-    // this write matches the same post-dispose, frame-safe lifecycle point the
-    // bell and the (now turn-start-only) running-title set already rely on.
-    // TTY + AFK_TERM_TITLE gated inside the helper; a no-op otherwise.
+    // OSC 2 title: reset "· running" on EVERY exit path (clean, ESC, error).
     setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));
-    // Restore the IDLE sink — NOT a hardcoded `console.log`.
-    //
-    // For the borrowed/persistent compositor path (Stage 3e, set up by
-    // `runReplLoop` after `armCompositor`), `idleFn` routes through
-    // `compositor.commitAbove`. Between-turn slash output (e.g. `/model
-    // foo` → "Unknown model" warning) MUST commit above the live idle
-    // overlay rather than write raw at the input row's current cursor
-    // position. The previous unconditional `fn = console.log` reset
-    // here was the root cause of the `/model claude-opus-4-8` repro:
-    // the warning rendered inline at the tail of the echoed input row.
-    //
-    // For the legacy own-compositor / non-TTY path, `idleFn` stays
-    // `console.log` (set at bootstrap and never mutated) — the reset
-    // is identical to the old behavior.
     if (completionWriter) {
+      // Restore the idle sink (routes through compositor.commitAbove on the
+      // borrowed path — must NOT be hardcoded to console.log; see PR /model bug).
       completionWriter.fn = completionWriter.idleFn;
-      // Turn over: the live overlay is gone, so a subagent that completes
-      // between turns (e.g. a backgrounded job) has no ToolLane tree and no
-      // overlay to race — let its completion line surface again. Pairs with
-      // the armAndWire set above.
+      // Let backgrounded subagent completions surface again between turns.
       completionWriter.suppressSubagentCompletion = false;
     }
-    // setActiveCompositor's "active turn" flag is still cleared. For
-    // the legacy renderer-own-compositor path, the renderer just
-    // disposed its compositor — the SIGINT handler must fall back to
-    // its non-compositor branch (prints to console) between turns.
-    // For the borrowed (persistent) path, the surface's compositor is
-    // still alive but flipped back to idle; clearing the published ref
-    // expresses the "no active turn" state, not "no compositor armed."
-    // Between turns, handleSigint takes the non-compositor branch and
-    // prints to console — correct because no overlay-clear race exists
-    // in idle mode.
+    // Clear all per-turn handles so between-turn presses are no-ops.
     h.setActiveCompositor?.(null);
-    // Clear the interrupt notifier so between-turn Ctrl+C presses don't toggle
-    // an affordance on a disposed renderer.
     h.setInterruptNotifier?.(null);
-    // Per-turn Ctrl+B handler is cleared so between-turn presses don't
-    // re-trigger backgrounding into a no-longer-existing turn.
     h.setBackgroundHandler?.(null);
-    // Per-turn Tab task-view handler is cleared so Tab between turns
-    // retains its normal autocomplete/ghost-accept behavior.
     h.setTaskViewHandler?.(null);
-    // Per-turn ESC soft-stop handler is cleared so between-turn ESC
-    // presses are a no-op (compositor mode gate already drops them in
-    // idle; this is a defense-in-depth clear).
     h.setSoftStopHandler?.(null);
-    // Clear the pause flag + pause-interrupt handler so a line submitted
-    // between turns queues normally (type-ahead) instead of firing the
-    // interrupt against a no-longer-paused turn.
     h.setPausedState?.(false);
     h.setPauseInterruptHandler?.(null);
-    // Abort the usage-limit picker if still open (e.g. turn ended via error
-    // or soft-stop before the user made a choice). Idempotent — safe to call
-    // even when the picker already resolved or was never shown.
     pickerRef.abort?.abort();
     pickerRef.abort = null;
     h.setInFlight(false);

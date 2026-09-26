@@ -229,16 +229,15 @@ export function hasValidToolUsePairing(
 }
 
 /**
- * Rebuild a `MessageParam[]` from persisted `ResumeHistoryTurn` records.
+ * Contract: Rebuild a `MessageParam[]` from persisted `ResumeHistoryTurn` records.
  *
  * Two paths:
  *   - **Structured path** (new sidecars, v5.226+): when `assistantContentBlocks`
  *     or `userContentBlocks` is present on the turn, the full typed block array
- *     is used as the message `content`. This preserves `tool_use`, `thinking`,
- *     `tool_result`, and `text` blocks so a resumed session can satisfy the
- *     Anthropic API's structural constraints. Blocks are used as-is — no
- *     `summarizeToolEvents` append is needed because the structured blocks already
- *     contain the tool information.
+ *     is used as the message `content`. Blocks (`tool_use`, `thinking`,
+ *     `tool_result`, `text`) are passed through as-is. No `summarizeToolEvents`
+ *     append is needed because the structured blocks already contain the tool
+ *     information. **Pairing is not validated here** (see note below).
  *   - **Text fallback** (pre-v5.226 sidecars): turns with no content-block
  *     fields fall back to the legacy `{ role, content: string }` path so
  *     backward compatibility is preserved across upgrades.
@@ -247,28 +246,52 @@ export function hasValidToolUsePairing(
  * before being forwarded to the API. Blocks with unknown or missing `type`
  * fields are dropped to prevent replay of attacker-crafted blocks (#2003).
  *
- * **Pairing contract (issue #2007):** PR #1996 removed `hasValidToolUsePairing`
- * from this function. Orphan `tool_use` blocks in `assistantContentBlocks` —
- * i.e., blocks with no corresponding `tool_result` in the following user turn —
- * are passed through **unchanged**. It is the caller's responsibility to detect
- * and heal any such gaps before the history is forwarded to the Anthropic API.
- * `repairOrphanToolUses` in `query-turn-driver.ts` fulfils that role; it now
- * scans all assistant messages, not just the tail, to cover the multi-turn
- * resume case (see `repair-orphan-tool-uses.ts` for details).
+ * **Pairing note (#2008):** PR #1996 removed `hasValidToolUsePairing` from this
+ * function. Orphan `tool_use` blocks in `assistantContentBlocks`, i.e. blocks
+ * with no corresponding `tool_result` in the following user turn, are passed
+ * through **unchanged**. Pairing is not validated here. The caller is
+ * responsible for detecting and healing any such gaps before the history is
+ * forwarded to the Anthropic API. `repairOrphanToolUses` in
+ * `query-turn-driver.ts` fulfils that role; it scans all assistant messages,
+ * not just the tail, to cover the multi-turn resume case (see
+ * `repair-orphan-tool-uses.ts` for details).
+ *
+ * **Skip-guard (#2112):** When both `filterContentBlocks(turn.userContentBlocks)`
+ * and `turn.user` are empty, the user turn would silently be skipped. If the
+ * assistant turn for the same `ResumeHistoryTurn` would produce content, this
+ * creates consecutive assistant messages that violate the Anthropic API's
+ * role-alternation contract. The `else` fallback below emits a minimal
+ * `{ role: 'user', content: '[resumed]' }` placeholder in that case, preventing
+ * the violation from being constructed here. `repairOrphanToolUses` /
+ * `repairRoleAlternation` (PR #2112) remain the downstream safety net for any
+ * violations that reach the API layer.
  */
 export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined): MessageParam[] | undefined {
   if (!history || history.length === 0) return undefined;
   const messages: MessageParam[] = [];
   for (const turn of history) {
+    // Compute assistant content first so the skip-guard below can inspect it
+    // before deciding whether to emit a placeholder user message.
+    const assistantBlocks = filterContentBlocks(turn.assistantContentBlocks);
+
     // User turn —— prefer structured blocks when present, else text fallback.
     const userBlocks = filterContentBlocks(turn.userContentBlocks);
     if (userBlocks.length > 0) {
       messages.push({ role: 'user', content: userBlocks });
     } else if (turn.user.length > 0) {
       messages.push({ role: 'user', content: turn.user });
+    } else {
+      // Defense-in-depth: never skip a user message when the assistant turn
+      // would produce content, which would create consecutive assistant messages
+      // violating the Anthropic API's role-alternation contract. The downstream
+      // repairRoleAlternation pass in repairOrphanToolUses is the primary guard;
+      // this prevents the violation from being constructed in the first place.
+      if (assistantBlocks.length > 0 || turn.assistant.length > 0) {
+        messages.push({ role: 'user', content: '[resumed]' });
+      }
     }
+
     // Assistant turn —— prefer structured blocks when present, else text fallback.
-    const assistantBlocks = filterContentBlocks(turn.assistantContentBlocks);
     if (assistantBlocks.length > 0) {
       messages.push({ role: 'assistant', content: assistantBlocks });
     } else if (turn.assistant.length > 0) {
@@ -277,6 +300,19 @@ export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined
   }
   return messages.length > 0 ? messages : undefined;
 }
+
+/** Effort levels at which Opus 5 rejects `{type:'disabled'}` thinking. */
+const OPUS5_DISABLED_FORBIDDEN_EFFORTS = new Set<string>(['xhigh', 'max']);
+
+/**
+ * Models where `{type:'disabled'}` thinking is unconditionally forbidden: the
+ * API returns HTTP 400 at every effort level. Only Claude Opus 5.5 is documented
+ * this way. This is deliberately NOT `requiresAdaptiveThinking`: that predicate
+ * means "rejects `enabled`", which does not imply "rejects `disabled`" (Opus
+ * 4.7/4.8 and Sonnet 5 accept `disabled`). Claude Opus 5 rejects `disabled` only
+ * at xhigh/max and is handled separately via OPUS5_DISABLED_FORBIDDEN_EFFORTS.
+ */
+const isAlwaysAdaptiveModel = (model: string): boolean => /(claude-)?opus-5[-.]5/.test(model);
 
 /**
  * Translate our internal {@link ThinkingConfig} into the Anthropic SDK wire
@@ -287,21 +323,33 @@ export function resumeHistoryToMessages(history: ResumeHistoryTurn[] | undefined
  *  - `{type: 'enabled'}` is rejected by the API; auto-route to `'adaptive'`.
  *    Callers that explicitly request `enabled` on these models get adaptive
  *    behaviour so the request still clears the API's validation.
+ *  - `{type: 'disabled'}` is rejected by the API on adaptive-only models
+ *    (HTTP 400 at every effort level). A legible agent-afk error is thrown
+ *    before the first request rather than forwarding an invalid wire shape.
+ *    For Claude Opus 5 specifically, `disabled` is only forbidden at
+ *    `xhigh`/`max` effort; lower efforts are allowed through (#2073).
  *  - `display: 'summarized'` is always injected on adaptive/enabled configs.
  *    On 4.7+ the default display mode is `'omitted'` (thinking blocks are
  *    produced server-side but stripped before delivery), so this field is
  *    *required* to surface visible reasoning.  On earlier models it is
  *    harmless — the server already defaults to visible delivery.
  *
+ * @param effort The effective effort level resolved for this request (used to
+ *   determine whether Opus 5 rejects `disabled` at this effort level).
+ *
  * @throws when thinking resolves to `enabled` (non-adaptive model) and
  *   `maxTokens <= 1024`: no `budget_tokens` can satisfy the API's
  *   `1024 <= budget < max_tokens`, so the request is unsatisfiable and we fail
  *   fast with a legible message rather than taking a per-turn HTTP 400 (#951).
+ * @throws when thinking is `disabled` on an adaptive-only model, or on
+ *   Claude Opus 5 at `xhigh`/`max` effort, where the API rejects the
+ *   combination with HTTP 400 (#2073).
  */
 export function resolveThinkingParam(
   tc: ThinkingConfig,
   maxTokens: number,
   model?: string,
+  effort?: string,
 ): ThinkingConfigParam {
   switch (tc.type) {
     case 'adaptive':
@@ -310,8 +358,31 @@ export function resolveThinkingParam(
       // pulling in a beta-SDK type across the module boundary.
       return { type: 'adaptive', display: 'summarized' } as ThinkingConfigParam;
 
-    case 'disabled':
+    case 'disabled': {
+      const m = typeof model === 'string' ? model : '';
+      // Unconditionally adaptive-only models (opus-5-5, sonnet-5, opus-4-7+):
+      // the API rejects {type:'disabled'} at every effort level.
+      if (m.length > 0 && isAlwaysAdaptiveModel(m)) {
+        throw new Error(
+          `[afk] ${m} uses adaptive thinking that cannot be disabled. ` +
+            `Remove --thinking disabled / AFK_THINKING=disabled, or use a model ` +
+            `that supports extended thinking control.`,
+        );
+      }
+      // Claude Opus 5: rejects {type:'disabled'} at xhigh/max effort only.
+      if (
+        m.length > 0 &&
+        /(claude-)?opus-5(?![-.]5)/.test(m) &&
+        effort !== undefined &&
+        OPUS5_DISABLED_FORBIDDEN_EFFORTS.has(effort)
+      ) {
+        throw new Error(
+          `[afk] ${m} rejects thinking: {type: 'disabled'} at effort '${effort}'. ` +
+            `Lower the effort (e.g. --effort high) or remove --thinking disabled.`,
+        );
+      }
       return { type: 'disabled' };
+    }
 
     case 'enabled': {
       if (typeof model === 'string' && requiresAdaptiveThinking(model)) {

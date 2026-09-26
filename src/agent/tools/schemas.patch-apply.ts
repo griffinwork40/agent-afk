@@ -25,8 +25,9 @@ export const patchApplyTool: AnthropicToolDef = {
     'When `dry_run: true`, returns the unified diff without modifying anything. ' +
     'Writes use temp-file + rename for atomicity; a partial failure triggers best-effort ' +
     'rollback of already-written files. ' +
-    'On successful apply, the result includes a `_reread_warning` field listing modified ' +
-    'paths — callers should re-read those files before any subsequent `edit_file` call.',
+    'When files are written to disk (status `applied` or `partial_failure`), the result ' +
+    'includes a `_reread_warning` field listing modified paths — callers should re-read ' +
+    'those files before any subsequent `edit_file` call.',
   input_schema: {
     type: 'object',
     properties: {

@@ -193,6 +193,9 @@ function makeUserSkillHandler(parsed: ParsedSkillMd): SkillMetadata['handler'] {
       // ability to publish into a store it cannot read. See skills/index.ts
       // SkillExecutionContext.workspaceStore.
       ...(ctx?.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
+      // Delegation budget: forwarded so user-skill forks count against the
+      // same tree-wide counters as agent-tool / compose / DAG paths. See #1899.
+      ...(ctx?.delegationBudget !== undefined ? { delegationBudget: ctx.delegationBudget } : {}),
     });
 
     // `parentId: ctx.callId` (when present) anchors the synthesized

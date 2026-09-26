@@ -5,6 +5,12 @@
  * mutate the narrow {@link LifecycleHost} slice passed as `self`. arm()'s
  * keypress listener calls `InputDispatch.dispatchKey(self, …)` directly so
  * `dispatchKey` stays private on the class.
+ *
+ * This file is the state-machine skeleton. Concern-specific logic lives in
+ * sibling files (see #2108 decomposition):
+ *   • terminal-compositor.lifecycle.resize.ts  — SIGWINCH / disarm-window resize
+ *   • terminal-compositor.lifecycle.mode.ts    — raw-mode + bracketed-paste transitions
+ *   • terminal-compositor.lifecycle.teardown.ts — band flush (endTurnFlush, flushPending)
  */
 
 import { CupFrameRenderer } from './cup-frame-renderer.js';
@@ -20,9 +26,14 @@ import type {
   KeyInfo,
   LogUpdateFn,
 } from './terminal-compositor.types.js';
-import { scrollbackFlushLines, buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import type { KeyDispatchHost } from './terminal-compositor.input-dispatch.js';
+import { handleResizeImmediate, handleDisarmWindowResize } from './terminal-compositor.lifecycle.resize.js';
+import { enterRawMode, exitRawMode, enableBracketedPasteAndScrollKey, disableBracketedPasteAndScrollKey } from './terminal-compositor.lifecycle.mode.js';
+import { flushPendingCommittedBand } from './terminal-compositor.lifecycle.teardown.js';
+
+// Re-export for callers that imported endTurnFlush from this module directly.
+export { endTurnFlush } from './terminal-compositor.lifecycle.teardown.js';
 
 /**
  * Narrowest TerminalCompositor state slice the lifecycle functions touch.
@@ -171,7 +182,7 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
 
   self.wasRaw = self.stdin.isRaw ?? false;
   try {
-    self.stdin.setRawMode(true);
+    enterRawMode(self);
   } catch {
     // setRawMode failed — release the claim so it doesn't leak, then bail.
     self.stdinClaim?.release();
@@ -189,24 +200,7 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // detect "inside a paste window" and insert a literal `\n` instead.
   // Disabled in disarm() so a non-bracketed-paste-aware caller picking
   // up the TTY after us doesn't see literal `~`-bracketed sequences.
-  try {
-    // Enable bracketed paste + scroll-to-bottom-on-keypress in one write.
-    // \x1b[?2004h  = bracketed-paste mode (see above).
-    // \x1b[?1011h  = rxvt scrollKey — tells the terminal to snap the
-    //   viewport to the bottom of scrollback whenever the user presses a
-    //   key. Default-on in every major terminal (iTerm2, kitty, Terminal.app,
-    //   WezTerm, Alacritty, Ghostty, GNOME Terminal), so this is a no-op for
-    //   most users; it covers the edge case where the terminal or the user's
-    //   config has the mode off (xterm scrollKey resource, Ghostty
-    //   `scroll-to-bottom` setting). Without it, a user scrolled up into
-    //   history can type without the viewport snapping back to the input line.
-    //   Disabled in disarm() to restore the prior terminal state.
-    self.stdout.write('\x1b[?2004h\x1b[?1011h');
-  } catch {
-    /* best-effort — terminals that don't support DEC private modes
-       silently drop unknown set/reset sequences, so a thrown write
-       likely means stdout was closed mid-arm. */
-  }
+  enableBracketedPasteAndScrollKey(self);
   self.stdin.resume();
   // Lone ESC must register on the first press — it is the soft-stop
   // affordance. emitKeypressEventsImmediateEscape sets a small sub-perception
@@ -283,65 +277,7 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // skips its stale-erase pass and paints fresh at the new geometry.
   self.resizeImmediateUnsub = ResizeBus.subscribeImmediate(() => {
     if (!self.armed) return;
-    // Invariant (SIGWINCH ghost-erase, expand-only): on EXPAND the terminal
-    // keeps existing content anchored at the top and opens blank rows at the
-    // new bottom, so the old live-frame AND committed-band rows freeze at
-    // their pre-resize absolute positions while the next render paints a fresh
-    // frame at the new (lower) bottom — orphaning the old rows as on-screen
-    // ghosts (resetGeometry() below makes the render's erase pass a no-op, and
-    // the band is no longer cleared here). Snapshot that footprint so the next
-    // repaint() can physically erase it. This is side-effect-only (no I/O),
-    // honoring the subscribeImmediate "no I/O, no rendering" contract
-    // (terminal-size.ts) — the actual erase happens in repaint().
-    //
-    // On SHRINK the terminal scrolls content up, so those absolute rows now
-    // hold reflowed content and must NOT be erased; skip the snapshot and let
-    // the fresh repaint + band re-pin settle the new geometry. A SHRINK must
-    // also DROP any snapshot armed by an earlier EXPAND in the same
-    // pre-repaint window (a drag that overshoots larger then settles smaller
-    // than it started): lastKnownRows only advances on repaint(), so a stale
-    // snapshot would otherwise survive and flushResizeGhostErase would clamp
-    // its old `bottom` into the new viewport and wipe live rows — including
-    // the reserved status-line region — that the next frame repaint never
-    // restores. See terminal-compositor.resize-ghost.test.ts ("EXPAND then
-    // SHRINK before a repaint").
-    const newRows = self.stdout.rows ?? 24;
-    if (self.lastKnownRows > 0 && newRows > self.lastKnownRows) {
-      const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-      const frameTop = self.logUpdate?.topRow ?? 0;
-      const bandTop = self.committedBand.length > 0 ? self.committedBandTopRow : 0;
-      const tops = [frameTop, bandTop].filter((r) => r > 0);
-      const top = tops.length > 0 ? Math.min(...tops) : 0;
-      // The frame is always bottom-anchored at the OLD targetBottomRow.
-      const bottom = Math.max(1, self.lastKnownRows - 1 - extraRows);
-      if (top > 0 && top <= bottom) {
-        self.pendingResizeErase = { top, bottom };
-      }
-    } else {
-      // Net SHRINK or net-zero resize: any snapshot armed by a prior EXPAND
-      // in this same pre-repaint window is now stale (see above) — drop it so
-      // the clamped flush cannot wipe post-shrink reflowed/status rows.
-      self.pendingResizeErase = null;
-    }
-    self.logUpdate?.resetGeometry?.();
-    // NOTE: the committed band is intentionally NOT cleared here. Preserving
-    // its content lets repositionCommittedBand() re-pin it directly above the
-    // frame at the NEW geometry on the next repaint (it recomputes the band's
-    // rows from the new frame top; the stale committedBandTopRow is only read
-    // for a redundant vacated-gap erase, never a stale paint). The old
-    // on-screen band copy is cleared via pendingResizeErase above on EXPAND,
-    // or scrolled by the terminal on SHRINK.
-    //
-    // F2 (fail-safe commit mode on stale geometry): mark the band's row
-    // geometry stale ALONGSIDE the logUpdate reset above — a commit that
-    // lands in the window between this immediate handler and the next
-    // debounced repaint (below) must not trust committedBandBottomRow as a
-    // floor for prevTopRow (see the field doc on bandGeometryStale,
-    // terminal-compositor.ts, and the prevTopRow site in
-    // terminal-compositor.committed-band-commit.ts). Cleared by
-    // repositionCommittedBand once it re-pins the band against real
-    // post-resize geometry.
-    self.bandGeometryStale = true;
+    handleResizeImmediate(self);
   });
 
   // Intentionally NOT calling `updateAutocomplete()` here. The compositor's
@@ -365,26 +301,7 @@ export async function arm(self: LifecycleHost & KeyDispatchHost): Promise<void> 
   // No ResizeBus subscription is needed between turns — comparing two
   // integers at arm-time is O(1) and avoids the listener-leak that a
   // surviving subscriber would cause on final disarm (disposal).
-  const liveRows = self.stdout.rows ?? 24;
-  if (self.disarmRows > 0 && liveRows !== self.disarmRows) {
-    self.logUpdate?.resetGeometry?.();
-    // Mirror the EXPAND ghost-erase snapshot from the live immediate handler:
-    // if the terminal expanded while disarmed, the old frame rows are frozen
-    // on screen at their pre-resize positions. Snapshot the footprint so the
-    // first repaint can erase them.
-    if (liveRows > self.disarmRows) {
-      const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-      const bottom = Math.max(1, self.disarmRows - 1 - extraRows);
-      // Frame top is unknown post-disarm (logUpdate was cleared); use row 1
-      // as the conservative top so the erase covers the full old footprint.
-      const top = 1;
-      if (top <= bottom) {
-        self.pendingResizeErase = { top, bottom };
-      }
-    }
-    self.bandGeometryStale = true;
-    self.disarmRows = 0;
-  }
+  handleDisarmWindowResize(self);
 
   self.repaint();
 
@@ -455,18 +372,8 @@ export function disarm(self: LifecycleHost): void {
     // terminal in bracketed-paste mode after the process exits (subsequent
     // shell commands see literal `\x1b[200~`/`\x1b[201~` around clipboard
     // pastes). Mirrors the single-drain ordering in raw-mode.ts.
-    // \x1b[?1011l restores the terminal's scroll-key mode to its prior
-    // state (see the enable in arm()).
-    try {
-      self.stdout.write('\x1b[?2004l\x1b[?1011l');
-    } catch {
-      /* stdout may have been closed */
-    }
-    try {
-      self.stdin.setRawMode(self.wasRaw);
-    } catch {
-      /* noop */
-    }
+    disableBracketedPasteAndScrollKey(self);
+    exitRawMode(self);
   }
 
   // Release the stdin claim before marking as unarmed so a subscriber
@@ -492,145 +399,4 @@ export function disarm(self: LifecycleHost): void {
   // buffer-identity guard in updateGhost's resolve handler will then
   // silently drop any result that arrives after this point.
   self.ghostEngine?.dispose();
-}
-
-/**
- * Stage 3 (#540 — single end-of-turn flush): commit the ENTIRE retained band
- * (painted rows + pending rows) to native scrollback as one contiguous write
- * at turn finalization, while geometry is stable (overlay cleared, spinner off).
- *
- * Unlike {@link flushPendingCommittedBand} (which only archives the in-model
- * prefix that was never painted), this function also handles the on-screen
- * PAINTED suffix — erasing it from the viewport (CUP+EL, no scroll, C1-safe)
- * before archiving the whole band, so the terminal's scrollback holds one
- * clean, complete, contiguous copy of all committed content from this turn.
- *
- * After the flush, `clearCommittedBand()` zeros the band state, making
- * `flushPendingCommittedBand` in `disarm()` a guaranteed no-op.
- *
- * Ordering: MUST be called before `disarm()` — disarm's `logUpdate.clear()`
- * will erase the live frame; endTurnFlush must run before that so the painted
- * band rows are explicitly archived (not silently erased) and `clearCommittedBand`
- * zeros the state before `flushPendingCommittedBand` checks it.
- *
- * C1 (scrollback is append-only) contract:
- *   • Painted rows are in the VIEWPORT, not scrollback — erasing them (CUP+EL)
- *     does NOT touch C1; the archive write is the first and only scrollback
- *     operation for these rows.
- *   • Pending rows were never painted — archive is their first and only write.
- *   • The archive uses `buildScrollbackArchiveEscape` (paint-at-floor + scroll),
- *     which is C1-safe by construction (same as Phase-1 and frame-preserve paths).
- *
- * No-op when: not armed, no logUpdate, or band is empty. Best-effort on
- * stdout write failure (terminal may have closed during teardown).
- */
-export function endTurnFlush(self: LifecycleHost): void {
-  if (!self.armed || !self.logUpdate || self.committedBand.length === 0) return;
-  // Stale-guard: skip the redraw entirely when no commit has landed since the
-  // last flush. Mirrors the bandGeometryStale check in commit-geometry.ts:109.
-  if (!self.lifecycleStateDirty) return;
-
-  const rows = Math.max(1, self.stdout.rows ?? 24);
-  const cols = Math.max(1, self.stdout.columns ?? 80);
-  const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
-  const bandLen = self.committedBand.length;
-
-  // Step 1: Erase the on-screen painted suffix (CUP+EL, NO \n — C1-safe).
-  // The painted suffix occupies rows [paintedTop, committedBandBottomRow].
-  // Only fired when there IS a painted suffix (paintedCount > 0 and a known
-  // screen position). Without this, the archive below would write the same
-  // content to scrollback while it is also on-screen, violating the
-  // single-copy invariant on the NEXT turn's eviction pass — the on-screen
-  // copy would scroll into scrollback AGAIN when the next commit's
-  // preserveRowsBeforeFrameRender runs.
-  const paintedCount = self.committedBandPaintedRows;
-  if (paintedCount > 0 && self.committedBandBottomRow > 0) {
-    const paintedTop = self.committedBandBottomRow - paintedCount + 1;
-    let eraseOut = '\x1b[?25l';
-    for (let r = Math.max(1, paintedTop); r <= self.committedBandBottomRow; r++) {
-      eraseOut += eraseAndPaintRow(r); // CUP+EL, no line content, no \n
-    }
-    try {
-      self.stdout.write(eraseOut);
-    } catch {
-      /* terminal closed mid-erase — carry on to archive so nothing is lost */
-    }
-  }
-
-  // Step 2: Archive the FULL band (all rows, painted + pending) to scrollback
-  // as soft-wrappable logical lines via the shared archive path. `scrollbackFlushLines`
-  // with count === bandLen emits the whole band; `buildScrollbackArchiveEscape`
-  // paints it top-aligned at anchorFloor and scrolls it into scrollback.
-  const allLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, bandLen);
-  const archiveEscape = buildScrollbackArchiveEscape(allLines, anchorFloor, rows, cols);
-  if (archiveEscape.length > 0) {
-    const write = (): void => { self.stdout.write(archiveEscape); };
-    try {
-      if (self.scrollRegion) {
-        self.scrollRegion.withFullScrollRegion(write);
-      } else {
-        write();
-      }
-    } catch {
-      /* stdout closed mid-archive — disarm will clean up from here */
-    }
-  }
-
-  // Step 3: Zero the band state. flushPendingCommittedBand in disarm() is now
-  // a no-op (pendingCount = 0 - 0 = 0); repositionCommittedBand will not fire
-  // (band empty); evict-on-growth in preserveRowsBeforeFrameRender will not
-  // treat viewport rows as band content.
-  self.clearCommittedBand();
-}
-
-/**
- * Flush the genuinely-unpainted prefix of the committed band to scrollback as
- * REAL content, so a disarm before repositionCommittedBand materializes a
- * band-hold model does not lose the committed block from screen AND history.
- *
- * Pending rows are the PREFIX `committedBand[0 .. length - committedBandPaintedRows)`
- * (every paint site materializes the BOTTOM suffix — see committedBandPaintedRows
- * on the class). When all rows are painted (the common teardown: overlay
- * collapsed → repositionCommittedBand painted everything → painted === length)
- * this is a no-op and the on-screen rows are left exactly as they are — never
- * re-emitted (HARD CONSTRAINT #1: no duplicate in scrollback).
- *
- * Mechanism (#540 axis-2 logical-line flush): the pending prefix is archived as
- * SOFT-WRAPPABLE logical lines, not pre-hard-wrapped physical rows, so a later
- * width resize reflows this scrolled-off content cleanly. scrollbackFlushLines
- * maps the `pendingCount` physical rows to logical lines — reading the FULL
- * band + meta (not just the prefix) so a logical line STRADDLING the
- * pending/painted boundary emits its pending rows verbatim rather than
- * duplicating the on-screen (painted) tail. buildScrollbackArchiveEscape writes
- * each line at the physical bottom margin with autowrap ON + a trailing `\n`,
- * so the TERMINAL owns the wrap and the `\n` scrolls it into history; the
- * terminal re-derives the same per-line physical-row count, so a pending run
- * taller than the terminal still archives every row (each line scrolls at the
- * bottom margin independently). Wrapped in `withFullScrollRegion` (no-op when no
- * status line is started) so the `\n` produces a FULL-screen scroll that enters
- * scrollback rather than a DECSTBM sub-region scroll that silently drops the
- * displaced top line. Best-effort: a throwing stdout means the process is
- * exiting anyway and the next teardown step tears us down.
- */
-function flushPendingCommittedBand(self: LifecycleHost): void {
-  const pendingCount = self.committedBand.length - self.committedBandPaintedRows;
-  if (pendingCount <= 0) return;
-  const rows = Math.max(1, self.stdout.rows ?? 24);
-  const cols = Math.max(1, self.stdout.columns ?? 80);
-  const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
-  const archiveLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, pendingCount);
-  const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);
-  if (escape.length === 0) return;
-  const write = (): void => {
-    self.stdout.write(escape);
-  };
-  try {
-    if (self.scrollRegion) {
-      self.scrollRegion.withFullScrollRegion(write);
-    } else {
-      write();
-    }
-  } catch {
-    /* stdout closed mid-flush (process exiting) — nothing more we can do */
-  }
 }

@@ -45,6 +45,13 @@ export interface ComposeNodeInput {
    * as multimodal `ContentBlockParam[]` blocks via `appendImageBlocks`.
    */
   attachments?: string[];
+  /**
+   * Filesystem isolation for this node. "none" (default) runs the node in
+   * the shared parent tree. "worktree" creates a fresh managed git worktree
+   * for this node so its writes/tests never collide with sibling nodes.
+   * Mutually exclusive with cwd — the worktree path IS the node's cwd.
+   */
+  isolation?: 'none' | 'worktree';
 }
 
 export interface ComposeInput {
@@ -155,8 +162,6 @@ function parseNodePaths(n: Record<string, unknown>, id: string): {
   }
 
   const readRoots = parseRootArray(n, id, 'readRoots');
-  // Contract: writeRoots is mutually exclusive with isolation:"worktree"
-  // when that lands on compose nodes (#1939). The guard belongs here.
   const writeRoots = parseRootArray(n, id, 'writeRoots');
 
   return { cwd, readRoots, writeRoots };
@@ -315,6 +320,37 @@ export function parseComposeInput(input: unknown): ParseResult {
       if (atts.length > 0) nodeAttachments = atts;
     }
 
+    let nodeIsolation: 'none' | 'worktree' | undefined;
+    if (n['isolation'] !== undefined) {
+      if (n['isolation'] !== 'none' && n['isolation'] !== 'worktree') {
+        throw new Error(`Node "${id}" isolation must be "none" or "worktree" (got ${JSON.stringify(n['isolation'])})`);
+      }
+      nodeIsolation = n['isolation'];
+      // isolation:"worktree" is mutually exclusive with cwd — the worktree
+      // path IS the node's cwd. Allowing both would ambiguously combine an
+      // explicit cwd pin with worktree creation, making the effective cwd
+      // unpredictable. Callers that need a specific directory should omit
+      // isolation and manage their own worktree, or use isolation and let
+      // the runtime derive the worktree path automatically.
+      if (nodeIsolation === 'worktree' && cwd !== undefined) {
+        throw new Error(
+          `Node "${id}" cannot set both cwd and isolation:"worktree". ` +
+          `The worktree path IS the node's cwd — omit cwd to use isolation, ` +
+          `or omit isolation to pin a specific cwd.`,
+        );
+      }
+      if (nodeIsolation === 'worktree' && writeRoots !== undefined) {
+        throw new Error(
+          `Node "${id}" cannot set both writeRoots and isolation:"worktree". ` +
+          `Isolation confines writes to the worktree; explicit writeRoots would ` +
+          `punch holes in that boundary.`,
+        );
+      }
+      // Normalize isolation:"none" to undefined so the output interface is
+      // consistent with the agent-tool parser, which never emits isolation:"none".
+      if (nodeIsolation === 'none') nodeIsolation = undefined;
+    }
+
     parsed.push({
       id,
       prompt,
@@ -326,6 +362,7 @@ export function parseComposeInput(input: unknown): ParseResult {
       ...(nodeMaxTurns !== undefined ? { max_turns: nodeMaxTurns } : {}),
       ...(nodeAgentType !== undefined ? { agent_type: nodeAgentType } : {}),
       ...(nodeAttachments !== undefined ? { attachments: nodeAttachments } : {}),
+      ...(nodeIsolation !== undefined ? { isolation: nodeIsolation } : {}),
     });
   }
 

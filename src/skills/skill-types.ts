@@ -121,6 +121,18 @@ export interface SkillExecutionContext {
    * store and no preamble is injected — the pre-workspace behavior, unchanged.
    */
   workspaceStore?: import('../agent/workspace/index.js').WorkspaceStore;
+  /**
+   * Tree-wide delegation budget. Inline handlers that fork sub-agents via
+   * their OWN new SubagentManager MUST forward it so those forks count
+   * against the same tree-wide counters (maxChildrenPerAgent,
+   * maxConcurrentAgents, maxTotalAgents) as the agent-tool / compose / DAG
+   * paths. Without it the forks are invisible to the budget.
+   *
+   * Optional: callers must handle undefined (budget enforcement disabled
+   * when no AFK_MAX_* env vars are set, or older SkillExecutor versions /
+   * test stubs that do not provide it).
+   */
+  delegationBudget?: import('../agent/tools/delegation-budget.js').DelegationBudget;
 }
 
 export interface SkillMetadata {

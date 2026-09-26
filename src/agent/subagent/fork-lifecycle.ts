@@ -114,3 +114,34 @@ export async function appendForkTelemetry(args: AppendForkTelemetryArgs): Promis
     resolved_agent_type: effectiveResolvedAgentType,
   });
 }
+
+export interface EmitSubagentStartedEventArgs {
+  subagentId: string;
+  effectiveChildModel: AgentModelInput;
+  effectiveAgentType: string | undefined;
+  promptHead: string | undefined;
+  parentId: string | undefined;
+}
+
+/**
+ * Push a subagent_lifecycle 'started' event into the parent output stream
+ * so live surfaces (web-UI SSE, CLI) see the fork without scraping the
+ * witness trace. Extracted from forkSubagent to keep that method within
+ * the code-line ceiling (#1899).
+ */
+export function emitSubagentStartedEvent(
+  sink: ((event: import('../types/session-types.js').OutputEvent) => void) | undefined,
+  args: EmitSubagentStartedEventArgs,
+): void {
+  if (!sink) return;
+  const { subagentId, effectiveChildModel, effectiveAgentType, promptHead, parentId } = args;
+  sink({
+    type: 'subagent_lifecycle',
+    subagentId,
+    status: 'started',
+    ...(effectiveChildModel !== undefined ? { model: String(effectiveChildModel) } : {}),
+    ...(effectiveAgentType !== undefined ? { agentType: effectiveAgentType } : {}),
+    ...(promptHead !== undefined ? { promptHead } : {}),
+    ...(parentId ? { parentToolUseId: parentId } : {}),
+  });
+}

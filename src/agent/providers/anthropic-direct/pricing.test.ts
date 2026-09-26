@@ -159,6 +159,22 @@ describe('deriveCallCostUsd — published rate goldens', () => {
     expect(deriveCallCostUsd('claude-opus-5', M, M, 0, 0)).toBeCloseTo(30.0, 8);
   });
 
+  it('opus-5.5 standard: 1M in + 1M out = $24.00, 1M cache read = $0.20', () => {
+    // Rates: $4.00 input / $20.00 output / $0.20 cache read per MTok.
+    expect(deriveCallCostUsd('claude-opus-5-5', M, M, 0, 0)).toBeCloseTo(24.0, 8);
+    expect(deriveCallCostUsd('claude-opus-5-5', 0, 0, M, 0)).toBeCloseTo(0.20, 8);
+  });
+
+  it('opus-5.5 fast: 1M in + 1M out = $48.00, 1M cache read = $0.40', () => {
+    // Fast tier doubles every rate. $4.00 → $8.00, $20.00 → $40.00, $0.20 → $0.40.
+    expect(
+      deriveCallCostUsd('claude-opus-5-5', M, M, 0, 0, undefined, { requestSpeed: 'fast' }),
+    ).toBeCloseTo(48.0, 8);
+    expect(
+      deriveCallCostUsd('claude-opus-5-5', 0, 0, M, 0, undefined, { requestSpeed: 'fast' }),
+    ).toBeCloseTo(0.40, 8);
+  });
+
   it('returns undefined for an unknown model rather than zero', () => {
     expect(deriveCallCostUsd('claude-unknown-99', 1000, 500, 0, 0)).toBeUndefined();
   });

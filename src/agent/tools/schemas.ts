@@ -10,7 +10,7 @@
 
 import type { AnthropicToolDef } from './types.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
-import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool } from './schemas.orchestration.js';
+import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { waitForTool } from './schemas.wait-for.js';
 export { waitForTool } from './schemas.wait-for.js';
 import { testRunTool } from './schemas.test-run.js';
@@ -76,6 +76,33 @@ export const readFileTool: AnthropicToolDef = {
       limit: {
         type: 'number',
         description: 'Maximum number of lines to read. Defaults to 2000.',
+      },
+    },
+    required: ['file_path'],
+  },
+};
+
+export const viewImageTool: AnthropicToolDef = {
+  name: 'view_image',
+  category: 'read',
+  concurrencySafe: true,
+  description:
+    'Read an image file from the filesystem and return it as a viewable image attached ' +
+    'to the tool result — you can see it directly. Supports .png, .jpg/.jpeg, .gif, .webp. ' +
+    'Use when you need to inspect a local image: design diagrams, saved screenshots, charts, photos.\n\n' +
+    'WARNING: each inline image consumes ~333K–484K context tokens (≈$1–3 at current rates ' +
+    'for Anthropic models). Use for genuine visual inspection only; do not call in a loop. ' +
+    'Images exceeding 8000px in either dimension or 2 MiB base64 are returned as text-only ' +
+    '(imageOmitted key in the JSON result explains why). On OpenAI-compatible providers the ' +
+    'image pixel data is silently dropped but text metadata is still returned.\n\n' +
+    'Security: subject to the same read-root policy as read_file — paths outside the session\'s ' +
+    'allowed read roots are rejected. Protected credential paths (SSH keys, etc.) are always denied.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Absolute path to the image file to view. Must be .png, .jpg, .jpeg, .gif, or .webp.',
       },
     },
     required: ['file_path'],
@@ -431,6 +458,69 @@ export const webRequestTool: AnthropicToolDef = {
   },
 };
 
+export const imageGenerateTool: AnthropicToolDef = {
+  name: 'image_generate',
+  category: 'web',
+  concurrencySafe: false,
+  riskClass: 'caution',
+  description:
+    'Generate an image from a text prompt using the OpenAI Images API (GPT Image models). ' +
+    'The generated image is saved to disk and the file path is returned. ' +
+    'Uses AFK_IMAGE_API_KEY when set (keeps image billing separate from chat completions); ' +
+    'falls back to the full OpenAI auth chain (OPENAI_API_KEY, Codex CLI, ChatGPT OAuth). ' +
+    'Each generation costs real money via the OpenAI API.\n\n' +
+    'By default the image is NOT returned inline in the tool result to avoid consuming ~300K-500K context tokens per image. ' +
+    'To inspect the generated image in the same turn, set inspect:true (see below). ' +
+    'Otherwise, read the file at the returned path in a follow-up turn.\n\n' +
+    'Safety: blocked in daemon/cron sessions unless AFK_IMAGE_ALLOW_DAEMON=1. ' +
+    'Per-session generation cap controlled by AFK_IMAGE_SESSION_LIMIT (default 10); ' +
+    'with inspect:true each image is substantially more expensive so the cap matters more. ' +
+    'Every call is recorded in the effect ledger for audit.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      prompt: {
+        type: 'string',
+        description: 'Text description of the image to generate. Be specific about style, composition, colors, and details.',
+      },
+      model: {
+        type: 'string',
+        enum: ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'],
+        description: 'Image model to use. gpt-image-1 (default) has strong text rendering; gpt-image-2 is flagship; gpt-image-1-mini is cheapest.',
+      },
+      size: {
+        type: 'string',
+        enum: ['1024x1024', '1024x1536', '1536x1024', 'auto'],
+        description: 'Image dimensions. Default: 1024x1024. Use 1024x1536 for portrait, 1536x1024 for landscape.',
+      },
+      quality: {
+        type: 'string',
+        enum: ['low', 'medium', 'high', 'auto'],
+        description: 'Generation quality. Higher quality costs more. Default: auto.',
+      },
+      output_format: {
+        type: 'string',
+        enum: ['png', 'webp', 'jpeg'],
+        description: 'Output image format. Default: png.',
+      },
+      output_path: {
+        type: 'string',
+        description: 'Optional file path to save the image to. When omitted, saves to <cwd>/.afk/generated-images/<id>.<format>.',
+      },
+      inspect: {
+        type: 'boolean',
+        description:
+          'When true, the generated image is returned inline in ToolResult.image so you can see it in the same turn. ' +
+          'WARNING: this consumes ~333K-484K context tokens per image (≈$1-3 extra per call at current rates). ' +
+          'Use only for generate→inspect→iterate workflows where same-turn vision feedback is required. ' +
+          'Images exceeding 8000px in either dimension or 2 MB base64 are saved to disk only (inspect:true is silently degraded). ' +
+          'Default: false.',
+      },
+    },
+    required: ['prompt'],
+  },
+};
+
 export const agentTool: AnthropicToolDef = {
   name: 'agent',
   category: 'subagent',
@@ -652,6 +742,7 @@ export const composeTool: AnthropicToolDef = {
             max_turns: { type: 'number', description: 'Per-node turn budget. Positive integer.' },
             agent_type: { type: 'string', description: 'Named agent type for this node (e.g. "research-agent"). The compose executor resolves the agent definition from the registry and applies its system prompt, tool allowlist, and model defaults — identical to the `agent` tool\'s agent_type resolution. Fails with a clear error naming available types when the type is unknown.' },
             attachments: { type: 'array', items: { type: 'string' }, maxItems: 8, description: 'Optional inbound image ids shown as [image img_xxxxxx · …] or absolute image paths. Bytes are resolved by the runtime — NEVER paste base64 into the tool call.' },
+            isolation: { type: 'string', enum: ['none', 'worktree'], description: 'Filesystem isolation for this node. "none" (default) runs the node in the shared parent tree. "worktree" creates a fresh managed git worktree for this node so its writes/tests never collide with sibling nodes. Mutually exclusive with cwd — a node cannot pin a cwd and also request an isolated worktree (the worktree path IS the cwd).' },
           }, required: ['id', 'prompt'], additionalProperties: false,
         },
         description: 'Subagent tasks to execute.',
@@ -708,124 +799,21 @@ export const composeTool: AnthropicToolDef = {
   },
 };
 
-export const createScheduleTool: AnthropicToolDef = {
-  name: 'create_schedule',
-  category: 'schedule',
-  concurrencySafe: false,
-  description:
-    'Create a new scheduled task that the daemon will run on a cron expression. ' +
-    'The task is saved to ~/.afk/config/schedules.json and live-synced to the running daemon if available. ' +
-    'Returns the new task ID (slug) on success, plus daemonSynced/syncDetail — when daemonSynced is false, ' +
-    'no running daemon picked up the change and it applies on the next daemon (re)start.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      name: {
-        type: 'string',
-        description: 'Human-readable label, e.g. "Nightly cleanup".',
-      },
-      command: {
-        type: 'string',
-        description:
-          'Command to run. For executor "agent" (default): a prompt or slash command, e.g. "/my-skill --auto". ' +
-          'For executor "shell": a shell command, e.g. "pg_dump mydb > /backups/nightly.sql".',
-      },
-      cron: {
-        type: 'string',
-        description: '5-field cron expression, e.g. "0 2 * * *".',
-      },
-      executor: {
-        type: 'string',
-        enum: ['agent', 'shell'],
-        description:
-          'Execution strategy. "agent" (default) spawns an AgentSession and sends the command as a user message. ' +
-          '"shell" runs the command as a raw shell command via /bin/sh, skipping the agent session entirely -- ' +
-          'use for simple jobs like backups, health checks, or log rotation.',
-      },
-      trigger: {
-        type: 'string',
-        enum: ['cron', 'sessionstart', 'both'],
-        description: 'Trigger mode. Default: cron.',
-      },
-      notifyOn: {
-        type: 'string',
-        enum: ['failure', 'always', 'never'],
-        description: 'When to push Telegram notifications. Default: failure.',
-      },
-      notifyChat: {
-        type: ['number', 'string'],
-        description:
-          'Optional. Route this task\'s completion notification to a SPECIFIC chat instead of ' +
-          'the default primary target. A number (or numeric string) is a raw Telegram chat id; ' +
-          'a non-numeric string is a chat alias name from afk.config.json `telegram.chatAliases`. ' +
-          'The resolved chat must be allowlisted (AFK_TELEGRAM_ALLOWED_CHAT_IDS) — otherwise the ' +
-          'daemon ignores the override and uses the default target. Omit for default routing.',
-      },
-      enabled: {
-        type: 'boolean',
-        description: 'Whether to activate immediately. Default: true.',
-      },
-    },
-    required: ['name', 'command', 'cron'],
-  },
-};
-
-export const listSchedulesTool: AnthropicToolDef = {
-  name: 'list_schedules',
-  category: 'schedule',
-  concurrencySafe: true,
-  description:
-    'List all scheduled tasks with their IDs, cron expressions, enabled status, and notify settings. ' +
-    'Returns a JSON array of task configs.',
-  input_schema: {
-    type: 'object',
-    properties: {},
-    required: [],
-  },
-};
-
-export const getScheduleHistoryTool: AnthropicToolDef = {
-  name: 'get_schedule_history',
-  category: 'schedule',
-  concurrencySafe: true,
-  description:
-    'Retrieve recent execution history for a scheduled task from forge-telemetry.jsonl. ' +
-    'Returns records in chronological order (oldest first), up to `limit` entries.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      taskId: {
-        type: 'string',
-        description: 'The task ID (slug) to look up.',
-      },
-      limit: {
-        type: 'number',
-        description: 'Max records to return (default: 10, max: 50).',
-      },
-    },
-    required: ['taskId'],
-  },
-};
-
-export const cancelScheduleTool: AnthropicToolDef = {
-  name: 'cancel_schedule',
-  category: 'schedule',
-  concurrencySafe: false,
-  description:
-    'Disable, re-enable, or permanently remove a scheduled task. ' +
-    'Default (no flags): sets enabled: false. enable: true re-enables and re-registers with the daemon. ' +
-    'permanent: true removes from the store entirely (takes precedence over enable). ' +
-    'The result includes daemonSynced/syncDetail — when daemonSynced is false, the running daemon ' +
-    'did not pick up the change and will apply it on next restart.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      taskId: { type: 'string', description: 'The task ID (slug) to operate on.' },
-      permanent: { type: 'boolean', description: 'If true, remove from store entirely.' },
-      enable: { type: 'boolean', description: 'If true, re-enable a disabled task and register it with the daemon.' },
-    },
-    required: ['taskId'],
-  },
+// Schedule tool schemas extracted to schemas.schedule.ts — re-exported here to
+// keep the public surface unchanged while respecting the 350-code-line ceiling.
+import {
+  createScheduleTool,
+  updateScheduleTool,
+  listSchedulesTool,
+  getScheduleHistoryTool,
+  cancelScheduleTool,
+} from './schemas.schedule.js';
+export {
+  createScheduleTool,
+  updateScheduleTool,
+  listSchedulesTool,
+  getScheduleHistoryTool,
+  cancelScheduleTool,
 };
 
 export const worktreeTool: AnthropicToolDef = {
@@ -1453,6 +1441,7 @@ export const clipboardReadTool: AnthropicToolDef = {
 export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   bashTool,
   readFileTool,
+  viewImageTool,
   extractDocumentTool,
   writeFileTool,
   editFileTool,
@@ -1462,10 +1451,12 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   sendTelegramTool,
   webScrapeTool,
   webRequestTool,
+  imageGenerateTool,
   createScheduleTool,
+  updateScheduleTool,
   listSchedulesTool,
   getScheduleHistoryTool,
-  cancelScheduleTool, cancelBackgroundJobTool, sendMessageToAgentTool,
+  cancelScheduleTool, cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool,
   readWitnessTool, searchWitnessTool,
   worktreeTool, terminalFontSizeTool,
   configGetTool, configSetTool,

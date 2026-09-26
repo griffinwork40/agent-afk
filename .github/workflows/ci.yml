@@ -81,26 +81,34 @@ jobs:
         # a baselined path that no longer exists — so the baseline can shrink but
         # never silently slacken into a parking lot. Regenerate with
         # `pnpm audit:filesize:update`; never hand-edit it.
-        run: pnpm audit:filesize:check || true
+        # CI-blocking — the advisory `|| true` was dropped in #2206 after main
+        # silently regressed past its own ratchet while the gate could not fail.
+        run: pnpm audit:filesize:check
 
       - name: Audit the 350-line ceiling on files this PR touches
         # Touch-trigger: a change that modifies a still-oversized baselined file
-        # must bring it under the ceiling. Every one of the 136 grandfathered
-        # files was touched within 90 days, so this retires the backlog through
-        # ordinary feature work even if no dedicated refactor wave runs.
-        # Advisory for now (`|| true`) — flip to blocking once the god-object
-        # waves land, so the campaign is not fighting its own gate. See
-        # .afk/plans/enforce-350-line-ceiling.md.
-        run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
+        # must bring it under the ceiling. The grandfathered set is whatever
+        # `.filesize-baseline.json` holds today (count it there, don't cache it
+        # here); touching any of them forces the split, so the backlog retires
+        # through ordinary feature work even if no dedicated refactor wave runs.
+        # `|| true` dropped in #2206 (it was advisory while the god-object waves
+        # landed). Caveat: the default shallow checkout has no `origin/<base>`
+        # ref, so `changedSince` falls back to an empty touch-set and this step
+        # currently enforces only what the full-scan step above already does.
+        # Activating TOUCHED needs a deeper fetch — a separate policy call.
+        # See docs/file-size-ceiling.md.
+        run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }}
 
-      - name: Audit the 200-line function ceiling (advisory)
-        # Advisory — warns on violations but never fails CI. The baseline ratchet
-        # still tracks which functions are over; run `pnpm audit:funcsize:update`
-        # to regenerate it after an extraction.
-        run: pnpm audit:funcsize:check || true
+      - name: Audit the 200-line function ceiling (CI-blocking)
+        # CI-blocking — fails on any violation not in the grandfathered baseline.
+        # The baseline ratchet tracks which functions are over; run
+        # `pnpm audit:funcsize:update` to regenerate it after an extraction.
+        # Promoted from advisory to CI-blocking in issue #1757 once the baseline
+        # shrank to a manageable size. Baseline: .funcsize-baseline.json.
+        run: pnpm audit:funcsize:check
 
-      - name: Audit the 200-line function ceiling on functions this PR touches (advisory)
-        run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }} || true
+      - name: Audit the 200-line function ceiling on functions this PR touches
+        run: pnpm audit:funcsize:check --changed-vs origin/${{ github.base_ref || 'main' }}
 
       - name: Audit module-scope state duplication across sibling families
         # A split that re-declares a module-scope singleton or a process.on
@@ -149,18 +157,19 @@ jobs:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Cross-platform matrix (see issue #703 for the Windows-compat effort).
-    # ubuntu-latest is the REQUIRED gate; macos-latest runs for SIGNAL but does not
-    # block merges yet — `continue-on-error` keeps it advisory. It has been green
-    # since the matrix landed, so promoting it to required is a live follow-up.
-    # `fail-fast: false` so one OS failing never cancels the other. Public repos get
-    # unlimited free GitHub-hosted minutes on both runners.
-    # windows-latest is NOT in this matrix — it runs in `test-windows` below, which
-    # is trigger-scoped because it is uniformly red today. See that job's comment.
+    # Both ubuntu-latest and macos-latest are REQUIRED gates (issue #2209).
+    # macos-latest was advisory under `continue-on-error` while compat was
+    # validated; it passed 13/14 completed runs on main (the one failure was a
+    # general Lint & Build failure, not macOS-specific), so it is promoted here.
+    # `fail-fast: false` so one OS failing never cancels the other. Public repos
+    # get unlimited free GitHub-hosted minutes on both runners.
+    # windows-latest is NOT in this matrix — it runs in `test-windows` below,
+    # which is trigger-scoped because it is uniformly red today. See that job's
+    # comment.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Checkout

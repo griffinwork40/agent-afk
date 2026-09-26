@@ -4,6 +4,7 @@ import {
   capToProseMeasure,
   resolveTextMeasure,
   resolveProseMeasure,
+  contentMargin,
   DEFAULT_TEXT_MEASURE,
   DEFAULT_PROSE_MEASURE,
   MIN_TEXT_MEASURE,
@@ -252,4 +253,144 @@ describe('adjacency — unbordered surfaces respect their tier measure', () => {
       );
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// contentMargin — AFK_CENTER_CONTENT centering tests
+// ---------------------------------------------------------------------------
+
+/** Run `fn` with `AFK_CENTER_CONTENT` set (or cleared), restoring it after. */
+function withCenterEnv<T>(value: string | undefined, fn: () => T): T {
+  const prev = process.env['AFK_CENTER_CONTENT'];
+  if (value === undefined) delete process.env['AFK_CENTER_CONTENT'];
+  else process.env['AFK_CENTER_CONTENT'] = value;
+  try {
+    return fn();
+  } finally {
+    if (prev === undefined) delete process.env['AFK_CENTER_CONTENT'];
+    else process.env['AFK_CENTER_CONTENT'] = prev;
+  }
+}
+
+describe('contentMargin', () => {
+  // (a) Returns '' when AFK_CENTER_CONTENT is unset.
+  it('(a) returns empty string when AFK_CENTER_CONTENT is unset', () => {
+    withCenterEnv(undefined, () => {
+      expect(contentMargin()).toBe('');
+    });
+  });
+
+  // Returns '' when AFK_CENTER_CONTENT is empty string.
+  it('returns empty string when AFK_CENTER_CONTENT is empty string', () => {
+    withCenterEnv('', () => {
+      expect(contentMargin()).toBe('');
+    });
+  });
+
+  // (b) Returns '' when terminal width ≤ measure (no room to center).
+  it('(b) returns empty string when terminal width ≤ DEFAULT_TEXT_MEASURE (no centering room)', () => {
+    withCenterEnv('1', () =>
+      withCols(DEFAULT_TEXT_MEASURE, () => {
+        // capToMeasure(100) = 100, tw=100, margin = floor((100-100)/2) = 0 → ''
+        expect(contentMargin()).toBe('');
+      }),
+    );
+  });
+
+  it('(b) returns empty string when terminal is narrower than measure', () => {
+    withCenterEnv('1', () =>
+      withCols(60, () => {
+        // capToMeasure(60) = 60 (min(60, 100)=60), margin = floor((60-60)/2)=0 → ''
+        expect(contentMargin()).toBe('');
+      }),
+    );
+  });
+
+  // (c) Returns correct space count when centering is active.
+  it('(c) returns the correct left margin on a wide terminal', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('1', () =>
+        withCols(200, () => {
+          // capToMeasure(200) = min(200, 100) = 100 (DEFAULT_TEXT_MEASURE)
+          // margin = floor((200 - 100) / 2) = 50 spaces
+          const margin = contentMargin();
+          expect(margin).toBe(' '.repeat(50));
+          expect(margin.length).toBe(50);
+        }),
+      ),
+    );
+  });
+
+  it('(c) accepts explicit termWidth argument (skips process.stdout.columns)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('1', () => {
+        // Pass termWidth=200 directly; should yield 50 spaces.
+        const margin = contentMargin(200);
+        expect(margin).toBe(' '.repeat(50));
+      }),
+    );
+  });
+
+  // (d) Returns '' for value '0' or 'false' (falsy string — not truthy opts).
+  it('(d) returns empty string for AFK_CENTER_CONTENT=0 (falsy string)', () => {
+    withCenterEnv('0', () => {
+      // '0' is truthy in JS, but the implementation checks v === '1' || v === 'true'.
+      // The fix should treat '0' and 'false' as disabled.
+      expect(contentMargin()).toBe('');
+    });
+  });
+
+  it('(d) returns empty string for AFK_CENTER_CONTENT=false (falsy string)', () => {
+    withCenterEnv('false', () => {
+      expect(contentMargin()).toBe('');
+    });
+  });
+
+  it('(d) returns empty string for AFK_CENTER_CONTENT=no', () => {
+    withCenterEnv('no', () => {
+      expect(contentMargin()).toBe('');
+    });
+  });
+
+  // '1', 'true', 'yes', 'on' (case-insensitive) activate centering
+  // — matching isExplicitlyEnabled() from env-helpers.
+  it('enables centering for AFK_CENTER_CONTENT=true (wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('true', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it('enables centering for AFK_CENTER_CONTENT=yes (wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('yes', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it('enables centering for AFK_CENTER_CONTENT=on (wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('on', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+
+  it('enables centering for AFK_CENTER_CONTENT=YES (uppercase, wide terminal)', () => {
+    withMeasureEnv(undefined, () =>
+      withCenterEnv('YES', () =>
+        withCols(200, () => {
+          expect(contentMargin().length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
 });

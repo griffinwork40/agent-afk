@@ -281,7 +281,7 @@ export function registerInteractiveCommand(program: Command): void {
         const compositor = canPrompt ? ctx.slashCtx.getCompositor?.() ?? null : null;
         dispositionResolution = resolveWorktreeDisposition({
           ...(compositor !== null
-            ? { picker: (o) => runPicker(compositor, { ...o, signal: pickerAbort.signal }) }
+            ? { picker: (o) => runPicker(compositor, { ...o, signal: AbortSignal.any([pickerAbort.signal, AbortSignal.timeout(30_000)]) }) }
             : {}),
           isTTY: canPrompt && Boolean(process.stdout.isTTY),
           policy: worktreeExitPolicy,
@@ -299,9 +299,15 @@ export function registerInteractiveCommand(program: Command): void {
         elicitationRouter.uninstall();
         ctx.bgSummarizer?.stop();
         const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
-        if (runningJobs.length > 0) snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
+        if (runningJobs.length > 0) await snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
         await ctx.backgroundRegistry.cancelAll().catch(() => { /* best-effort */ });
-        await ctx.session.current.close();
+        await Promise.race([
+          ctx.session.current.close(),
+          new Promise<void>(resolve => {
+            const t = setTimeout(resolve, 2000);
+            t.unref();
+          }),
+        ]);
         if (ctx.mcpManager) await ctx.mcpManager.disconnectAll();
         ctx.memoryStore.close();
         if (worktreeHandle !== undefined) {

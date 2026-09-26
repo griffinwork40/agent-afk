@@ -22,6 +22,7 @@ import { resolveCredentialForModel } from '../../../agent/auth/credential-resolv
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
+import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 export type ParallelizeDispatchResult =
@@ -75,6 +76,9 @@ export async function runParallelizeDispatch(
   // sibling-findings preamble (injectWorkspacePreamble), the workspace READ
   // channel. See spec.ts / skills/index.ts SkillExecutionContext.workspaceStore.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget forwarded to the fork manager (plugin-body
+  // path) and the handler context (registry path). See issue #1899.
+  delegationBudget?: DelegationBudget,
 ): Promise<ParallelizeDispatchResult> {
   const fileCount = countFileReferences(plan);
 
@@ -99,6 +103,7 @@ export async function runParallelizeDispatch(
       // forks its own manager, so it needs the store as context data exactly
       // like the mint handler did — see SkillExecutionContext.workspaceStore.
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+      ...(delegationBudget !== undefined ? { delegationBudget } : {}),
     };
     const waveOrchestration = await parallelize.handler(
       { plan },
@@ -136,6 +141,7 @@ export async function runParallelizeDispatch(
       ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
       ...(traceWriter !== undefined ? { traceWriter } : {}),
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+      ...(delegationBudget !== undefined ? { delegationBudget } : {}),
     });
     try {
       // PLUGIN_ROOT injection mirrors `executePluginSkill` — see

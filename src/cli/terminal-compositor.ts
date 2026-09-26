@@ -48,6 +48,7 @@ import * as InputDispatch from './terminal-compositor.input-dispatch.js';
 import * as Lifecycle from './terminal-compositor.lifecycle.js';
 import * as Reset from './terminal-compositor.reset.js';
 import * as QueuedAccess from './terminal-compositor.queued-access.js';
+import * as Api from './terminal-compositor.api.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
@@ -701,9 +702,7 @@ export class TerminalCompositor {
    * the today-behavior (queue in streaming mode; no-op in idle mode
    * since there is no handler to resolve).
    */
-  setOnSubmit(handler: ((payload: SubmissionPayload) => void) | null): void {
-    this.onSubmit = handler ?? undefined;
-  }
+  setOnSubmit(handler: ((payload: SubmissionPayload) => void) | null): void { Api.setOnSubmit(this, handler); }
 
   /**
    * Install or clear the cancel handler — see
@@ -711,9 +710,7 @@ export class TerminalCompositor {
    * InputSurface uses this to swap between `handleSigint` (idle) and
    * `() => session.interrupt()` (mid-stream) at turn boundaries.
    */
-  setOnCancel(handler: (() => void) | null): void {
-    this.onCancel = handler ?? undefined;
-  }
+  setOnCancel(handler: (() => void) | null): void { Api.setOnCancel(this, handler); }
 
   /**
    * Read the currently-installed cancel handler. Used by borrow-style
@@ -726,22 +723,16 @@ export class TerminalCompositor {
    * with `onCancel === undefined`, which silently no-ops Ctrl+C in idle
    * mode (terminal-compositor.ts:1106-1108).
    */
-  getOnCancel(): (() => void) | undefined {
-    return this.onCancel;
-  }
+  getOnCancel(): (() => void) | undefined { return Api.getOnCancel(this); }
 
   /**
    * Install or clear the double-Esc rewind handler (the "edit a previous
    * message" trigger). Wired once by the persistent InputSurface at REPL arm
    * time; fired from `handleEscape` on a double-Esc at an empty idle prompt.
    */
-  setOnRewindRequest(handler: (() => void) | null): void {
-    this.onRewindRequest = handler ?? undefined;
-  }
+  setOnRewindRequest(handler: (() => void) | null): void { Api.setOnRewindRequest(this, handler); }
 
-  setOnIdleEscape(handler: (() => void) | null): void {
-    this.onIdleEscape = handler ?? undefined;
-  }
+  setOnIdleEscape(handler: (() => void) | null): void { Api.setOnIdleEscape(this, handler); }
 
   /**
    * Install or clear the Ctrl+O "open $EDITOR" handler — see
@@ -749,9 +740,7 @@ export class TerminalCompositor {
    * persistent InputSurface installs this once at REPL start (the editor
    * handoff is REPL-global, not per-turn).
    */
-  setOnOpenEditor(handler: (() => void) | null): void {
-    this.onOpenEditor = handler ?? undefined;
-  }
+  setOnOpenEditor(handler: (() => void) | null): void { Api.setOnOpenEditor(this, handler); }
 
   /**
    * Rent the input region to a picker overlay — see
@@ -761,9 +750,7 @@ export class TerminalCompositor {
    * @throws if a picker is already active (callers must `exitPickerMode`
    * before installing a new controller).
    */
-  enterPickerMode(controller: PickerController): void {
-    InputMode.enterPickerMode(this, controller);
-  }
+  enterPickerMode(controller: PickerController): void { Api.enterPickerMode(this, controller); }
 
   /**
    * Exit picker mode and restore the previous input mode. Body extracted to
@@ -772,9 +759,7 @@ export class TerminalCompositor {
    * No-op when no picker is active (idempotent — safe to call from
    * cleanup paths that don't know whether `enterPickerMode` was reached).
    */
-  exitPickerMode(): void {
-    InputMode.exitPickerMode(this);
-  }
+  exitPickerMode(): void { Api.exitPickerMode(this); }
 
   /**
    * Force a repaint while the picker is active. Body extracted to
@@ -783,14 +768,10 @@ export class TerminalCompositor {
    * No-op when no picker is active (defence-in-depth — a late repaint
    * from a cancelled picker won't double-render the input row).
    */
-  repaintPicker(): void {
-    InputMode.repaintPicker(this);
-  }
+  repaintPicker(): void { Api.repaintPicker(this); }
 
   /** Current terminal height used to size transient picker overlays. */
-  terminalRows(): number {
-    return Math.max(1, this.stdout.rows ?? 24);
-  }
+  terminalRows(): number { return Api.terminalRows(this); }
 
   /**
    * Transition input mode. Default is `'streaming'`; the persistent
@@ -799,24 +780,14 @@ export class TerminalCompositor {
    * terminal-compositor.input-mode.ts — see {@link InputMode.setInputMode}
    * for the full ordered-operation and flush-semantics invariants.
    */
-  setInputMode(mode: CompositorInputMode): void {
-    // A mode transition is a lifecycle boundary: the → idle drain hands a
-    // payload to a (potentially reentrant, await-crossing) onSubmit, and turn
-    // arm/teardown callers expect the on-screen frame to be current. Flush any
-    // pending coalesced keystroke paint synchronously first so no deferred
-    // edit-frame is stranded behind the transition. No-op when nothing pends.
-    this.flushPendingRepaint();
-    InputMode.setInputMode(this, mode);
-  }
+  setInputMode(mode: CompositorInputMode): void { Api.setInputMode(this, mode); }
 
   /**
    * Current input mode. Surfaced for tests + the InputSurface idle
    * check. Body extracted to terminal-compositor.input-mode.ts —
    * see {@link InputMode.getInputMode}.
    */
-  getInputMode(): CompositorInputMode {
-    return InputMode.getInputMode(this);
-  }
+  getInputMode(): CompositorInputMode { return Api.getInputMode(this); }
 
   /**
    * Acquire raw mode + keypress listener + resize subscribers and render
@@ -908,6 +879,14 @@ export class TerminalCompositor {
     // is captured/re-pinned. flushPendingRepaint is a no-op when nothing is
     // pending, so this is free on the common (non-typing) commit path.
     this.flushPendingRepaint();
+    // Content centering (AFK_CENTER_CONTENT): centering is applied at PAINT
+    // TIME (repositionCommittedBand, commitPhase3Band, scrollback flush),
+    // NOT baked into the stored text. Baking margin spaces into the committed
+    // band causes wrapping chaos on terminal resize (tmux split, window drag):
+    // 40 padding spaces computed at 180 cols are still in every line after a
+    // resize to 90 cols, eating half the width and triggering re-wrap havoc.
+    // Storing raw (unpadded) content lets reflow and paint derive the correct
+    // margin from the CURRENT width.
     CommittedBand.commitAbove(this, text);
   }
 
@@ -956,18 +935,14 @@ export class TerminalCompositor {
    * Body extracted to terminal-compositor.paste.ts — see {@link Paste.getBuffer}
    * for the placeholder-expansion semantics and the post-submit caution.
    */
-  getBuffer(): { text: string; queued: boolean } {
-    return Paste.getBuffer(this);
-  }
+  getBuffer(): { text: string; queued: boolean } { return Api.getBuffer(this); }
 
   /**
    * Number of messages queued for submission — typed + Entered during a
    * streaming turn and not yet drained. 0 between turns once the queue
    * empties. Surfaced for tests and any caller that wants to show queue depth.
    */
-  getPendingCount(): number {
-    return this.pendingSubmissions.length;
-  }
+  getPendingCount(): number { return Api.getPendingCount(this); }
 
   /**
    * Snapshot of every queued message (FIFO, newline-joined) without
@@ -976,26 +951,18 @@ export class TerminalCompositor {
    * Paired with {@link dropQueued} for the Ctrl+B flush: peek, deliver, then
    * drop only once delivery is confirmed.
    */
-  peekQueuedText(): QueuedAccess.QueuedSnapshot | undefined {
-    return QueuedAccess.peekQueuedText(this);
-  }
+  peekQueuedText(): QueuedAccess.QueuedSnapshot | undefined { return Api.peekQueuedText(this); }
 
-  reserveQueued(snapshot: QueuedAccess.QueuedSnapshot): void {
-    QueuedAccess.reserveQueued(this, snapshot);
-  }
+  reserveQueued(snapshot: QueuedAccess.QueuedSnapshot): void { Api.reserveQueued(this, snapshot); }
 
-  releaseQueued(snapshot: QueuedAccess.QueuedSnapshot): void {
-    QueuedAccess.releaseQueued(this, snapshot);
-  }
+  releaseQueued(snapshot: QueuedAccess.QueuedSnapshot): void { Api.releaseQueued(this, snapshot); }
 
   /**
    * Drop the snapshotted queued messages after their text was delivered out-of-band.
    * Returns the number dropped. Maintains the `queued` mirror and clears the
    * post-ESC coalesce epoch — see the invariant on the underlying helper.
    */
-  dropQueued(snapshot: QueuedAccess.QueuedSnapshot): number {
-    return QueuedAccess.dropQueued(this, snapshot);
-  }
+  dropQueued(snapshot: QueuedAccess.QueuedSnapshot): number { return Api.dropQueued(this, snapshot); }
 
   /**
    * Snapshot the current attachment list. Returned array is a shallow
@@ -1003,9 +970,7 @@ export class TerminalCompositor {
    * compositor's internal state. Empty when no bracketed-paste /
    * Ctrl+V probe has fired since the last submission.
    */
-  getAttachments(): ImageAttachment[] {
-    return [...this.attachments];
-  }
+  getAttachments(): ImageAttachment[] { return Api.getAttachments(this); }
 
   /**
    * Whether the caret glyph is in its visible phase this frame. Read by the
@@ -1019,9 +984,7 @@ export class TerminalCompositor {
 
   // Body extracted to terminal-compositor.render.ts (free-functions-on-host).
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
-  renderInputLine(): string {
-    return Render.renderInputLine(this);
-  }
+  renderInputLine(): string { return Api.renderInputLine(this); }
 
   /**
    * Recompute autocomplete candidates from the current buffer/cursor and
@@ -1031,9 +994,7 @@ export class TerminalCompositor {
    */
   // Body extracted to terminal-compositor.autocomplete.ts (free-functions-on-host).
   /** @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost). */
-  updateAutocomplete(): void {
-    Autocomplete.updateAutocomplete(this);
-  }
+  updateAutocomplete(): void { Api.updateAutocomplete(this); }
 
   /**
    * Update the active ghost text for the current buffer state. Body extracted
@@ -1041,9 +1002,7 @@ export class TerminalCompositor {
    * keystroke-path and stale-async-guard invariants.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  updateGhost(): void {
-    Ghost.updateGhost(this);
-  }
+  updateGhost(): void { Api.updateGhost(this); }
 
   /**
    * Ask the suggestion engine for an empty-prompt proposal for the turn now
@@ -1052,9 +1011,7 @@ export class TerminalCompositor {
    * @internal Called by InputSurface.readLine at the per-turn prompt handoff,
    * and only when that read opts in (`primePromptSuggestion: true`).
    */
-  primePromptGhost(): void {
-    Ghost.primePromptGhost(this);
-  }
+  primePromptGhost(): void { Api.primePromptGhost(this); }
 
   /**
    * Drop a primed empty-prompt suggestion so it does not reappear (ESC at an
@@ -1062,9 +1019,7 @@ export class TerminalCompositor {
    * Body in terminal-compositor.ghost.ts.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  dismissPromptGhost(): boolean {
-    return Ghost.dismissPromptGhost(this);
-  }
+  dismissPromptGhost(): boolean { return Api.dismissPromptGhost(this); }
 
   /**
    * Render autocomplete dropdown rows for the compositor frame. Body extracted
@@ -1073,9 +1028,7 @@ export class TerminalCompositor {
    *
    * @internal Relaxed from `private` for the frame module (FrameHost).
    */
-  renderDropdownRows(): string[] {
-    return Render.renderDropdownRows(this);
-  }
+  renderDropdownRows(): string[] { return Api.renderDropdownRows(this); }
 
   /**
    * Render the selected-candidate `↳ <when-to-use>` hint row. Body extracted
@@ -1085,9 +1038,7 @@ export class TerminalCompositor {
    *
    * @internal Relaxed from `private` for the frame module (FrameHost).
    */
-  renderHintRow(): string | null {
-    return Render.renderHintRow(this);
-  }
+  renderHintRow(): string | null { return Api.renderHintRow(this); }
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {
@@ -1197,9 +1148,7 @@ export class TerminalCompositor {
    * for the bracketed-paste per-character suppression guard.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  applyEdit(next: InputCoreState): boolean {
-    return InputDispatch.applyEdit(this, next);
-  }
+  applyEdit(next: InputCoreState): boolean { return Api.applyEdit(this, next); }
 
   /**
    * Seed the editable input buffer with `text` (cursor at end), as if the
@@ -1208,9 +1157,7 @@ export class TerminalCompositor {
    * prompt. Routes through {@link applyEdit} so autocomplete/ghost/repaint
    * refresh exactly like history recall (input-dispatch's `InputCore.seed`).
    */
-  prefillInput(text: string): void {
-    this.applyEdit(InputCore.seed(text));
-  }
+  prefillInput(text: string): void { Api.prefillInput(this, text); }
 
   /**
    * Apply the currently highlighted dropdown candidate to the buffer. Body
@@ -1219,9 +1166,7 @@ export class TerminalCompositor {
    * candidate was applied, `false` when the dropdown is closed/empty.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  applyDropdownSelection(): boolean {
-    return Autocomplete.applyDropdownSelection(this);
-  }
+  applyDropdownSelection(): boolean { return Api.applyDropdownSelection(this); }
 
   /**
    * Accept ghost text -- full or one word.
@@ -1234,7 +1179,7 @@ export class TerminalCompositor {
    *
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
-  applyGhostAccept(): boolean { return Ghost.applyGhostAccept(this); }
-  applyGhostWordAccept(): boolean { return Ghost.applyGhostWordAccept(this); }
+  applyGhostAccept(): boolean { return Api.applyGhostAccept(this); }
+  applyGhostWordAccept(): boolean { return Api.applyGhostWordAccept(this); }
 
 }

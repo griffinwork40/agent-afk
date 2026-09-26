@@ -104,7 +104,7 @@ export function keyRowLabel(
   pad: number,
   suffix?: string,
 ): string {
-  const lock = spec.tier === 'human' ? '🔒 ' : '   ';
+  const lock = spec.tier === 'human' ? '* ' : '  ';
   const tail = suffix ? `  ${palette.warning(suffix)}` : '';
   return `${lock}${spec.path.padEnd(pad)}  ${formatValue(current)}  (${spec.type})${tail}`;
 }

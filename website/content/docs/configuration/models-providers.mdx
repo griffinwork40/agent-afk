@@ -14,7 +14,7 @@ name — no global `AFK_PROVIDER` needed in the common case.
 Wraps the `@anthropic-ai/sdk` Messages API. Selected automatically for:
 
 - `claude-*` model IDs
-- Identity aliases (fixed): `opus`/`opus_1m`, `sonnet`/`sonnet_1m`, `haiku`, `fable`
+- Identity aliases (fixed): `opus`/`opus_1m`, `opus-5.5`/`opus-5.5_1m`, `sonnet`/`sonnet_1m`, `haiku`, `fable`
 - `'anthropic'` (silent alias)
 
 ### openai-compatible
@@ -153,6 +153,7 @@ router pick automatically per model.
 |-------|-----------|----------|
 | `fable` | Most capable — Claude Fable 5 (Mythos-class), 1M context | anthropic-direct |
 | `opus` / `opus_1m` | Complex reasoning, multi-step planning, long contexts | anthropic-direct |
+| `opus-5.5` / `opus-5.5_1m` | Opus 5.5 — faster, cheaper Opus; extended thinking, adaptive by default | anthropic-direct |
 | `sonnet` / `sonnet_1m` | Balanced — the `medium` tier's default model | anthropic-direct |
 | `haiku` | Fast and cheap, best for simple tasks | anthropic-direct |
 | `grok` | Current Grok flagship — resolves to `grok-4.6` | xai |

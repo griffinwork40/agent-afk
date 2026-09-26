@@ -36,6 +36,7 @@ export async function sendMessageToAgent(
   if (!job) {
     const known = registry.list()
       .filter((item) => item.provenance === 'model')
+      .filter((item) => !callerSessionId || item.parentSessionId === callerSessionId)
       .map((item) => item.jobId);
     return {
       content: `Background job not found: "${jobId}". Currently-known job ids: ${known.length > 0 ? known.join(', ') : '(none)'}.`,

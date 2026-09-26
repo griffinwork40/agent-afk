@@ -83,7 +83,12 @@ const SCAN_ROOTS = ['src', 'scripts'] as const;
  * declarations are not authored prose or logic.
  */
 const EXCLUDED_SUFFIXES = ['.test.ts', '.spec.ts', '.d.ts'] as const;
-const EXCLUDED_DIRS = ['__fixtures__', '__test-utils__', 'node_modules', 'dist'] as const;
+/**
+ * `web-ui-assets` is the gitignored Vite bundle output (`src/web-ui-assets/`,
+ * see .gitignore) — generated, never authored, and never seen by CI. Excluding
+ * it keeps a local run clean after `pnpm build` (#2206).
+ */
+const EXCLUDED_DIRS = ['__fixtures__', '__test-utils__', 'node_modules', 'dist', 'web-ui-assets'] as const;
 const INCLUDED_EXTENSIONS = ['.ts', '.tsx', '.mjs', '.js'] as const;
 
 const RATCHET: RatchetConfig = {

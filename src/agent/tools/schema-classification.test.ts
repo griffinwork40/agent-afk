@@ -114,6 +114,7 @@ describe('schema-as-source-of-truth: category field agrees with categorizeTool',
 describe('schema-as-source-of-truth: schedule tools', () => {
   const scheduleNames = [
     'create_schedule',
+    'update_schedule',
     'list_schedules',
     'get_schedule_history',
     'cancel_schedule',

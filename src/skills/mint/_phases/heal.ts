@@ -7,6 +7,7 @@
 import type { AgentModelInput, IAgentSession } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
+import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 import { SubagentManager } from '../../../agent/subagent.js';
 import { describeFailure, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { resolveCredentialForModel } from '../../../agent/auth/credential-resolver.js';
@@ -47,6 +48,9 @@ export async function runHealPhase(
   // published rather than re-deriving the failure. See spec.ts / skills/index.ts
   // SkillExecutionContext.workspaceStore.
   workspaceStore?: WorkspaceStore,
+  // Tree-wide delegation budget forwarded to the heal fork manager AND to the
+  // re-run verify phase. See issue #1899.
+  delegationBudget?: DelegationBudget,
 ): Promise<{
   healed: boolean;
   newHealIterations: number;
@@ -111,6 +115,7 @@ export async function runHealPhase(
       ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
       ...(traceWriter !== undefined ? { traceWriter } : {}),
       ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+      ...(delegationBudget !== undefined ? { delegationBudget } : {}),
     });
     const healHandle = await manager.forkSubagent({
       parent: { sessionId: parentSession.sessionId },
@@ -180,6 +185,7 @@ export async function runHealPhase(
       parentReadRoots,
       traceWriter,
       workspaceStore,
+      delegationBudget,
     );
 
     return {

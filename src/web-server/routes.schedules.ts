@@ -18,6 +18,7 @@ import {
   removeSchedule,
   saveSchedules,
   toScheduledTask,
+  updateSchedule,
   type ScheduledTaskConfig,
 } from '../agent/daemon/schedule-store.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE, parsePortFile } from '../agent/daemon/http-client.js';
@@ -143,19 +144,12 @@ export async function handleUpdateSchedule(
     sendJson(res, 400, { error: 'bad_request', message: 'invalid schedule id format' });
     return;
   }
-  const schedules = loadSchedules();
-  const idx = schedules.findIndex((s) => s.id === id);
-  if (idx === -1) {
-    sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
-    return;
-  }
-
-  const existing = schedules[idx] as ScheduledTaskConfig;
   const name = str(body, 'name');
   const command = str(body, 'command');
   const cron = str(body, 'cron');
   const trigger = str(body, 'trigger');
   const notifyOn = str(body, 'notifyOn');
+  const executor = str(body, 'executor');
   const enabled = bool(body, 'enabled');
 
   if (trigger !== undefined && !VALID_TRIGGERS.has(trigger)) {
@@ -172,6 +166,13 @@ export async function handleUpdateSchedule(
     });
     return;
   }
+  if (executor !== undefined && executor !== 'agent' && executor !== 'shell') {
+    sendJson(res, 400, {
+      error: 'bad_request',
+      message: 'executor must be one of: agent, shell',
+    });
+    return;
+  }
 
   if (cron !== undefined && !isValidCron(cron)) {
     sendJson(res, 400, {
@@ -181,19 +182,29 @@ export async function handleUpdateSchedule(
     return;
   }
 
-  const updated: ScheduledTaskConfig = {
-    ...existing,
+  // Collect notifyChat — supports both number and string
+  let notifyChat: number | string | undefined;
+  if (isRecord(body) && body['notifyChat'] !== undefined) {
+    const nc = body['notifyChat'];
+    if (typeof nc === 'number' || typeof nc === 'string') {
+      notifyChat = nc;
+    }
+  }
+
+  const updated = updateSchedule(id, {
     ...(name !== undefined ? { name } : {}),
     ...(command !== undefined ? { command } : {}),
     ...(cron !== undefined ? { cron } : {}),
     ...(trigger !== undefined ? { trigger: trigger as ScheduledTaskConfig['trigger'] } : {}),
     ...(notifyOn !== undefined ? { notifyOn: notifyOn as ScheduledTaskConfig['notifyOn'] } : {}),
+    ...(executor !== undefined ? { executor: executor as ScheduledTaskConfig['executor'] } : {}),
+    ...(notifyChat !== undefined ? { notifyChat } : {}),
     ...(enabled !== undefined ? { enabled } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-
-  schedules[idx] = updated;
-  saveSchedules(schedules);
+  });
+  if (!updated) {
+    sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
+    return;
+  }
 
   // Sync: if enabled, re-register; if disabled, unregister.
   let daemonSynced = false;

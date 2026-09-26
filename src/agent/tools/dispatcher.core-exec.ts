@@ -109,6 +109,7 @@ export function isRegisteredTool(toolName: string, deps: CoreExecDeps): boolean 
     (toolName === 'agent' && deps.subagentExecutor !== undefined) ||
     (toolName === 'cancel_background_job' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
     (toolName === 'send_message_to_agent' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
+    (toolName === 'get_background_job_health' && deps.subagentExecutor?.supportsBackgroundJobs?.() === true) ||
     (toolName === 'skill' && deps.skillExecutor !== undefined) ||
     (toolName === 'compose' && deps.composeExecutor !== undefined)
   );

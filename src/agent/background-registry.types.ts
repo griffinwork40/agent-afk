@@ -15,4 +15,6 @@ export interface BackgroundJob {
   readonly endedAt?: number;
   /** Session that created this job. Used for cross-session ownership checks. */
   readonly parentSessionId?: string;
+  /** Epoch-ms of the most recent observable activity (tool call, content chunk, progress event). */
+  readonly lastActivityAt?: number;
 }

@@ -22,6 +22,7 @@ import type { CommitCoordinator } from './commit-coordinator.js';
 import type { StreamingMarkdownRenderer } from '../markdown-stream.js';
 import type { DedupingLineWriter } from './dedup-line-writer.js';
 import { commitBlockAbove } from './commit-block.js';
+import { indentForScrollback } from '../commands/interactive/tool-lane-flush-margin.js';
 
 /**
  * Context bag passed to disposeRenderer — contains all mutable state needed
@@ -190,7 +191,7 @@ export async function disposeRenderer(ctx: DisposeCtx): Promise<void> {
         // commit + trailing blank when there are actual lines to emit —
         // prevents a phantom blank when hasPending() is true due to an
         // in-flight ancestor entry but flushCompletedRoots() returns [].
-        commitBlockAbove(ctx.compositorRef.current, lines);
+        commitBlockAbove(ctx.compositorRef.current, indentForScrollback(lines));
         ctx.compositorRef.current.commitAbove('');
       }
       if (ctx.overlayComposerRef.current) {

@@ -361,7 +361,7 @@ async function handler(
     // `ctx.defaultModel` — so that model is the provider source of truth for
     // the fork-time credential fallback (see SubagentManager.parentProvider).
     ...(ctx?.defaultModel !== undefined ? { parentModel: ctx.defaultModel } : {}),
-    ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}), ...(ctx?.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
+    ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}), ...(ctx?.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}), ...(ctx?.delegationBudget !== undefined ? { delegationBudget: ctx.delegationBudget } : {}),
   });
   // Invariant: the gate receives AFK snake_case runtime tool names (read_file,
   // grep, …), but researchAgent.allowedTools is upstream PascalCase (Read,

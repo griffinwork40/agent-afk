@@ -19,8 +19,11 @@ import { listDirectoryHandler, createListDirectoryHandler } from './list-directo
 import { sendTelegramHandler } from './send-telegram.js';
 import { webScrapeHandler } from './web-scrape.js';
 import { webRequestHandler } from './web-request.js';
+import { imageGenerateHandler } from './image-generate.js';
+import { viewImageHandler, createViewImageHandler } from './view-image.js';
 import {
   createScheduleHandler,
+  updateScheduleHandler,
   listSchedulesHandler,
   getScheduleHistoryHandler,
   cancelScheduleHandler,
@@ -82,6 +85,7 @@ export function createBuiltinHandlers(
   // (issue #434) — parity with glob/grep. No-op on the dispatcher path, where
   // context.resolveBase already carries this same value.
   const readFile = cwd !== undefined ? createReadFileHandler(cwd) : readFileHandler;
+  const viewImage = cwd !== undefined ? createViewImageHandler(cwd) : viewImageHandler;
   const extractDocument = cwd !== undefined ? createExtractDocumentHandler(cwd) : extractDocumentHandler;
   const writeFile = cwd !== undefined ? createWriteFileHandler(cwd) : writeFileHandler;
   const editFile = cwd !== undefined ? createEditFileHandler(cwd) : editFileHandler;
@@ -93,6 +97,7 @@ export function createBuiltinHandlers(
   return new Map<string, ToolHandler>([
     ['bash', bash],
     ['read_file', readFile],
+    ['view_image', viewImage],
     ['extract_document', extractDocument],
     ['write_file', writeFile],
     ['edit_file', editFile],
@@ -102,7 +107,9 @@ export function createBuiltinHandlers(
     ['send_telegram', sendTelegramHandler],
     ['web_scrape', webScrapeHandler],
     ['web_request', webRequestHandler],
+    ['image_generate', imageGenerateHandler],
     ['create_schedule', createScheduleHandler],
+    ['update_schedule', updateScheduleHandler],
     ['list_schedules', listSchedulesHandler],
     ['get_schedule_history', getScheduleHistoryHandler],
     ['cancel_schedule', cancelScheduleHandler],
@@ -140,7 +147,11 @@ export {
   sendTelegramHandler,
   webScrapeHandler,
   webRequestHandler,
+  imageGenerateHandler,
+  viewImageHandler,
+  createViewImageHandler,
   createScheduleHandler,
+  updateScheduleHandler,
   listSchedulesHandler,
   getScheduleHistoryHandler,
   cancelScheduleHandler,

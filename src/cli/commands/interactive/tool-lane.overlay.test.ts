@@ -57,7 +57,7 @@ describe('Spine renderer scenarios', () => {
     // The spine column sits directly under the turn-root.
     expect(output.split('\n')[1]).toMatch(/^│ /);
     // Last sibling uses the rounded corner.
-    expect(output.split('\n').slice(-1)[0]).toMatch(/^│ ╰─ /);
+    expect(output.split('\n').slice(-1)[0]).toMatch(/^│  ╰─ /);
     expect(output).toMatchSnapshot();
   });
 
@@ -77,7 +77,7 @@ describe('Spine renderer scenarios', () => {
       });
     }
     const output = stripAnsi(lane.flush().join('\n'));
-    const turnRootRows = output.split('\n').filter((l) => l.startsWith('◉ '));
+    const turnRootRows = output.split('\n').filter((l) => l.startsWith('◉  '));
     // Three subagent dispatches → three turn-root markers.
     expect(turnRootRows).toHaveLength(3);
     // Each turn-root row labels its agent by name.
@@ -112,12 +112,12 @@ describe('Spine renderer scenarios', () => {
     // outer's `│ ` then the connector for the inner block.
     const innerHead = output.split('\n').find((l) => l.includes('gather'));
     expect(innerHead).toBeDefined();
-    expect(innerHead!).toMatch(/^│ ├─ /);
+    expect(innerHead!).toMatch(/^│  ├─ /);
     // Grandchildren of the outer (inner's tool calls) carry TWO spine cols:
-    // outer's `│ ` (cols 0-1) + inner's `│ ` (cols 2-3) + connector.
+    // outer's `│  ` (cols 0-2) + inner's `│  ` (cols 3-5) + connector.
     const innerFirstChild = output.split('\n').find((l) => l.includes('cron.ts'));
     expect(innerFirstChild).toBeDefined();
-    expect(innerFirstChild!).toMatch(/^│ │ ├─ /);
+    expect(innerFirstChild!).toMatch(/^│  │  ├─ /);
     expect(output).toMatchSnapshot();
   });
 
@@ -145,7 +145,7 @@ describe('Spine renderer scenarios', () => {
     // No Done synthetic since setAgentResultSummary was never called —
     // the last row is the Read sibling, with the LAST connector promoting it.
     expect(output).not.toContain('Done');
-    expect(output.split('\n').slice(-1)[0]).toMatch(/^│ ╰─ /);
+    expect(output.split('\n').slice(-1)[0]).toMatch(/^│  ╰─ /);
     expect(output).toMatchSnapshot();
   });
 
@@ -167,7 +167,7 @@ describe('Spine renderer scenarios', () => {
       const output = stripAnsi(lane.flush().join('\n'));
       // ASCII glyphs present at the topology positions.
       expect(output.split('\n')[0]).toMatch(/^o /);
-      expect(output.split('\n')[1]).toMatch(/^\| /);
+      expect(output.split('\n')[1]).toMatch(/^\|  /);
       expect(output).toContain('+- ');
       expect(output).toContain('\\- ');
       // Box-drawing glyphs must NOT leak through.
@@ -237,17 +237,17 @@ describe('Spine renderer scenarios', () => {
     // So inner's row starts with: '│ ' + '╰─ ' = '│ ╰─ '.
     const innerHead = lines.find((l) => l.includes('inner-last'));
     expect(innerHead).toBeDefined();
-    expect(innerHead!).toMatch(/^│ ╰─ /);
+    expect(innerHead!).toMatch(/^│  ╰─ /);
 
     // Grandchild (leaf Read) carries the ancestorIsLast=[true] vector:
-    //   buildIndent([true], g) → spineClosed ('  ') + g.spine ('│ ') = '  │ '
-    // So leaf's row starts with '  │ ', NOT '│ │ ' (which would mean inner's
+    //   buildIndent([true], g) → spineClosed ('   ') + g.spine ('│  ') = '   │  '
+    // So leaf's row starts with '   │  ', NOT '│  │  ' (which would mean inner's
     // isLast was false and the outer spine slot remained open).
     const leafLine = lines.find((l) => l.includes('leaf.ts'));
     expect(leafLine).toBeDefined();
-    expect(leafLine!).toMatch(/^  │ /);
-    // Negative: '│ │ ' would mean the ancestor slot was NOT closed.
-    expect(leafLine!).not.toMatch(/^│ │ /);
+    expect(leafLine!).toMatch(/^   │  /);
+    // Negative: '│  │  ' would mean the ancestor slot was NOT closed.
+    expect(leafLine!).not.toMatch(/^│  │  /);
   });
 
   /**
@@ -284,9 +284,9 @@ describe('Spine renderer scenarios', () => {
     const narrationLine = output.split('\n').find((l) => l.includes('narration after the last tool'));
     expect(narrationLine).toBeDefined();
     // Closed parent-spine slot at cols 0-1 ('  '), then text gutter `│ ` at
-    // cols 2-3. Pre-fix output was `│ │ narration…` (parent reopened).
-    expect(narrationLine!).toMatch(/^  │ /);
-    expect(narrationLine!).not.toMatch(/^│ │ /);
+    // cols 3-5. Pre-fix output was `│  │  narration…` (parent reopened).
+    expect(narrationLine!).toMatch(/^   │  /);
+    expect(narrationLine!).not.toMatch(/^│  │  /);
   });
 
   /**
@@ -317,10 +317,10 @@ describe('Spine renderer scenarios', () => {
     );
     expect(narrationLine).toBeDefined();
     // Closed parent-spine slot at cols 0-1 ('  '), then text gutter `│ ` at
-    // cols 2-3. Pre-fix output was `│ │ narration…` (parent spine re-opened).
+    // cols 3-5. Pre-fix output was `│  │  narration…` (parent spine re-opened).
     // Pins the overlay path of renderOverlayChildren textChildren indent.
-    expect(narrationLine!).toMatch(/^  │ /);
-    expect(narrationLine!).not.toMatch(/^│ │ /);
+    expect(narrationLine!).toMatch(/^   │  /);
+    expect(narrationLine!).not.toMatch(/^│  │  /);
   });
 
   /**
@@ -369,7 +369,7 @@ describe('Spine renderer scenarios', () => {
    *
    * The fallback branch (`: indent`) applies when an Agent has no rendered
    * tool siblings — only text children. Without this branch, the text-row
-   * indent would be extended by a phantom `spineClosed` slot (2 cells) and
+   * indent would be extended by a phantom `spineClosed` slot (3 cells) and
    * the narration would shift two columns to the right of where its
    * parent's spine connector sits.
    *
@@ -391,10 +391,10 @@ describe('Spine renderer scenarios', () => {
     // Fallback path: textIndent === indent (no `[..., true]` extension).
     // For a root-level Agent, `indent === ''`, so the narration row starts
     // with the text-prefix gutter `│ ` directly at col 0 — NOT shifted
-    // right by an extra `  ` from the phantom spineClosed slot.
+    // right by an extra `   ` from the phantom spineClosed slot.
     expect(narrationLine!).toMatch(/^│ /);
     // Defensive: must not start with the would-be phantom-indented form.
-    expect(narrationLine!).not.toMatch(/^  │ /);
+    expect(narrationLine!).not.toMatch(/^   │  /);
   });
 
   /**
@@ -417,7 +417,7 @@ describe('Spine renderer scenarios', () => {
     // Same invariant as the flush test above: base-indent path, no phantom
     // spineClosed extension.
     expect(narrationLine!).toMatch(/^│ /);
-    expect(narrationLine!).not.toMatch(/^  │ /);
+    expect(narrationLine!).not.toMatch(/^   │  /);
   });
 
   /**
@@ -533,15 +533,15 @@ describe('Spine renderer scenarios', () => {
     expect(tailLine).toBeDefined();
     // Grandchild-frame indent: buildIndent([true], g) = '  │ ' — the inner Agent
     // is the outer's last child, so its `╰─` CLOSES col-0 beneath it (isLast).
-    // ANSI-stripped: '  │ ⌇  reviewing…' — blank col 0, │ at col 2, ⌇ at col 4.
-    expect(tailLine!).toMatch(/^  │ ⌇  /);
-    // Buggy form: current frame's shallow indent (buildIndent([], g) = '│ ')
-    // would produce '│ ⌇  …' — missing the grandchild depth slot.
-    expect(tailLine!).not.toMatch(/^│ ⌇/);
+    // ANSI-stripped: '   │  ⌇ reviewing…' — blank cols 0–2, │ at col 3, ⌇ at col 6.
+    expect(tailLine!).toMatch(/^   │  ⌇ /);
+    // Buggy form: current frame's shallow indent (buildIndent([], g) = '│  ')
+    // would produce '│  ⌇ …' — missing the grandchild depth slot.
+    expect(tailLine!).not.toMatch(/^│  ⌇/);
     // The leaf-tool continuation path (continuationIndent + '⌇') produces
-    // '│     ⌇' (5 chars before '⌇'). Negative pin confirms the grandchild
+    // '│     ⌇' (chars before '⌇'). Negative pin confirms the grandchild
     // path fired rather than the fallback.
-    expect(tailLine!).not.toMatch(/^│     ⌇/);
+    expect(tailLine!).not.toMatch(/^│      ⌇/);
   });
 
   /**
@@ -552,7 +552,7 @@ describe('Spine renderer scenarios', () => {
    * as a broken spine when both rows were on screen together.
    *
    * Post-fix prefix is `dim(g.spine) + '⌇  '` (5 cells): `│` at col 0,
-   * `⌇` at col 2 (parallel to `├` / `╰`), content at col 5 (parallel to
+   * `⌇` at col 3 (parallel to `├` / `╰`), content at col 6 (parallel to
    * child content). Regression sentinel against any future change that
    * re-introduces the `g.spineClosed` cushion at this site.
    */
@@ -574,20 +574,20 @@ describe('Spine renderer scenarios', () => {
     expect(childLine).toBeDefined();
     expect(tailLine).toBeDefined();
 
-    // Both rows: `│ <connector><pad><content>`. The connector + pad spans
-    // 3 cells (`╰─ ` for child, `⌇  ` for tail), placing content at col 5
-    // in both. The 1-col drift pre-fix had tail content at col 6.
+    // Both rows: `│  <connector><pad><content>`. The connector + pad spans
+    // 3 cells (`╰─ ` for child, `⌇  ` for tail), placing content at col 6
+    // in both. The 1-col drift pre-fix had tail content at col 7.
     const childContentCol = childLine!.indexOf('▸ bash');
     const tailContentCol = tailLine!.indexOf('narration content');
-    expect(childContentCol).toBe(5);
-    expect(tailContentCol).toBe(5);
+    expect(childContentCol).toBe(6);
+    expect(tailContentCol).toBe(6);
 
     // Glyph alignment: `⌇` sits at the same column as the `╰` connector
     // glyph in the child row above, signaling the row's structural slot.
     const childGlyphCol = childLine!.indexOf('╰');
     const tailGlyphCol = tailLine!.indexOf('⌇');
-    expect(childGlyphCol).toBe(2);
-    expect(tailGlyphCol).toBe(2);
+    expect(childGlyphCol).toBe(3);
+    expect(tailGlyphCol).toBe(3);
   });
 
   /**
@@ -644,12 +644,12 @@ describe('Spine renderer scenarios', () => {
     // `╰─` closes the outer spine column beneath it (isLast close-below).
     expect(tailLine![0]).toBe(' ');
 
-    // Grandchild-frame indent: buildIndent([true], g) = '  │ ' (col-0 closed)
-    // Tail row: '  │ ⌇  …' — blank col 0, │ at col 2, ⌇ at col 4
-    expect(tailLine!).toMatch(/^  │ ⌇  /);
+    // Grandchild-frame indent: buildIndent([true], g) = '   │  ' (col-0 closed)
+    // Tail row: '   │  ⌇ …' — blank cols 0-2, │ at col 3, ⌇ at col 6
+    expect(tailLine!).toMatch(/^   │  ⌇ /);
 
-    // Buggy form (too shallow): '│ ⌇  …' — missing grandchild depth slot
-    expect(tailLine!).not.toMatch(/^│ ⌇ /);
+    // Buggy form (too shallow): '│  ⌇ …' — missing grandchild depth slot
+    expect(tailLine!).not.toMatch(/^│  ⌇ /);
 
     // ⌇ must align with the connector column of a grandchild row (├ or ╰)
     const grandchildLine = lines.find((l) => l.includes('glob') || l.includes('grep'));
@@ -697,10 +697,10 @@ describe('Spine renderer scenarios', () => {
     const narrationLine = output.split('\n').find((l) => l.includes('summary narration with no tool calls'));
     expect(narrationLine).toBeDefined();
     // With H2 fix: textIndent extends one slot (agentResultSummary != null),
-    // so the row starts with '  │ ' (closed parent-spine + text gutter).
-    // Pre-fix output was '│ ' (parent spine re-opened, no closed slot).
-    expect(narrationLine!).toMatch(/^  │ /);
-    expect(narrationLine!).not.toMatch(/^│ │ /);
+    // so the row starts with '   │  ' (closed parent-spine + text gutter).
+    // Pre-fix output was '│  ' (parent spine re-opened, no closed slot).
+    expect(narrationLine!).toMatch(/^   │  /);
+    expect(narrationLine!).not.toMatch(/^│  │  /);
   });
 });
 
@@ -1092,7 +1092,7 @@ describe('ToolLane.getOverlay — suppresses ancestors already in scrollback', (
     const overlayLines = overlay.split('\n');
 
     // Root-level anonymous anchor: '◉ ' alone (the dim turn-root marker,
-    // 2 cells wide). Anchors the spine column for the child rows below
+    // 3 cells wide). Anchors the spine column for the child rows below
     // (which start with `│ ` at col 0). ◉ is chosen over `│ ` because the
     // overlay isn't physically adjacent to its committed scrollback header —
     // a `│` would assert upward continuity that doesn't exist under
@@ -1110,14 +1110,14 @@ describe('ToolLane.getOverlay — suppresses ancestors already in scrollback', (
     // dispatch head under skill-1, rendered with a tree connector:
     //   '│ ╰─'  (last sibling)   '│ ├─'  (mid sibling)
     //   - `│ `      = g.spine (skill-1's active spine column at col 0)
-    //   - `╰─ `/`├─ ` = g.lastConnector / g.midConnector (col 2, geometry only)
+    //   - `╰─ `/`├─ ` = g.lastConnector / g.midConnector (col 3, geometry only)
     //
     // No label suffix: the committed `◉ → Agent(critic)` lives in scrollback;
     // this row is geometry (a bare connector) to ground architect's rows below.
     const agentAnchor = overlayLines[1];
     expect(agentAnchor, 'missing nested anonymous anchor row').toBeDefined();
     expect(agentAnchor, `nested anchor must be connector-only; got: ${JSON.stringify(agentAnchor)}`)
-      .toMatch(/^│ (╰─|├─)\s*$/);
+      .toMatch(/^│  (╰─|├─)\s*$/);
 
     // The architect descendant (still alive, NOT headerEmitted) renders
     // with its FULL prefix at the next-deeper indent — proving the anchor
@@ -1238,7 +1238,7 @@ describe('ToolLane.getOverlay — anonymous anchor for headerEmitted ancestors',
     // connector attaches to it. Find the first row that looks like an anchor
     // (`◉` alone at root, or `│ <connector>` when nested) and assert architect
     // comes after.
-    const anchorIdx = lines.findIndex((l) => /^◉\s*$/.test(l) || /^│ (╰─|├─)\s*$/.test(l));
+    const anchorIdx = lines.findIndex((l) => /^◉\s*$/.test(l) || /^│  (╰─|├─)\s*$/.test(l));
     const architectIdx = lines.findIndex((l) => l.includes('architect'));
     expect(anchorIdx, 'anonymous anchor row must appear in overlay').toBeGreaterThanOrEqual(0);
     expect(architectIdx, 'architect must appear in overlay').toBeGreaterThanOrEqual(0);
@@ -1377,27 +1377,27 @@ describe('ToolLane.getOverlay — anonymous-anchor invariant', () => {
     const overlay = stripAnsi(lane.getOverlay());
     const lines = overlay.split('\n').filter(Boolean);
 
-    // Row 0: root anchor for skill — `◉ ` alone (turn-root marker, 2 cells).
+    // Row 0: root anchor for skill — `◉  ` alone (turn-root marker, 3 cells).
     expect(lines[0], `root anchor; got: ${JSON.stringify(lines[0])}`)
       .toMatch(/^◉\s*$/);
 
     // Row 1: nested anchor for agent-1 — `│ ╰─` (last sibling of skill's child
     // list; the others flushed) or `│ ├─`. Spine column at col 0 (skill-1's
-    // active spine), tree connector at col 2.
+    // active spine), tree connector at col 3.
     expect(lines[1], `nested anchor; got: ${JSON.stringify(lines[1])}`)
-      .toMatch(/^│ (╰─|├─)\s*$/);
+      .toMatch(/^│  (╰─|├─)\s*$/);
 
     // Row 2 (or later): architect's full prefix at depth 2 — a LEAF (no in-lane
     // children), so it hangs off its own connector. Because agent-1 is skill's
     // last child here (`╰─`), the overlay CLOSES col-0 beneath it (isLast): the
-    // architect row's col-0 slot is the blank `'  '`, col-2 is agent-1's active
+    // architect row's col-0 slot is the blank `'   '`, col-3 is agent-1's active
     // spine, then the connector. No `│` runs below the `╰─` (no severed spine).
     const architectLine = lines.find((l) => l.includes('architect'));
     expect(architectLine, 'architect row missing from overlay').toBeDefined();
     // architect is at depth 2 → 2 ancestor/spine slots + 3-cell connector.
     // Match: starts with `│ ` (or `  `) ×2 then `├─ ` / `╰─ ` then content.
     expect(architectLine, `architect connector alignment; got: ${JSON.stringify(architectLine)}`)
-      .toMatch(/^(│ |  )(│ |  )(├─ |╰─ )/);
+      .toMatch(/^(│  |   )(│  |   )(├─ |╰─ )/);
   });
 
   it('regression 4: partial overlay with one completed + one active child renders as one continuous tree', () => {
@@ -1444,7 +1444,7 @@ describe('ToolLane.getOverlay — anonymous-anchor invariant', () => {
     // (committed label is in scrollback). agent-1 is skill's last live child,
     // so col-0 CLOSES beneath this row (isLast).
     expect(overlayLines[1], `expected anonymous nested anchor; got: ${JSON.stringify(overlayLines[1])}`)
-      .toMatch(/^│ (╰─|├─)\s*$/);
+      .toMatch(/^│  (╰─|├─)\s*$/);
 
     // architect's full prefix appears at the correct depth. architect is itself
     // a dispatch head with an in-lane child (a-tool-1), so it hangs off its own
@@ -1455,7 +1455,7 @@ describe('ToolLane.getOverlay — anonymous-anchor invariant', () => {
     const architectLine = overlayLines.find((l) => l.includes('architect'));
     expect(architectLine, 'architect line missing').toBeDefined();
     expect(architectLine!, `architect connector geometry; got: ${JSON.stringify(architectLine)}`)
-      .toMatch(/^(│ |  )(│ |  )(├─ |╰─ )/);
+      .toMatch(/^(│  |   )(│  |   )(├─ |╰─ )/);
 
     // architect's child tool (a-tool-1 Read("plan.md")) appears deeper still.
     expect(overlay).toContain('Read');
@@ -1488,13 +1488,13 @@ describe('ToolLane.getOverlay — anonymous-anchor invariant', () => {
       const overlay = stripAnsi(lane.getOverlay());
       const lines = overlay.split('\n').filter(Boolean);
 
-      // Root anchor: `o ` (ASCII turn-root, 2 cells).
+      // Root anchor: `o  ` (ASCII turn-root, 3 cells).
       expect(lines[0], `ASCII root anchor; got: ${JSON.stringify(lines[0])}`)
         .toMatch(/^o\s*$/);
 
       // Nested anchor: `| +-` or `| \-` (ASCII spine + connector).
       expect(lines[1], `ASCII nested anchor; got: ${JSON.stringify(lines[1])}`)
-        .toMatch(/^\| (\\-|\+-)\s*$/);
+        .toMatch(/^\|  (\\-|\+-)\s*$/);
 
       // No `↳` (anti-breadcrumb invariant under ASCII mode too).
       expect(overlay).not.toContain('↳');
@@ -1684,8 +1684,8 @@ describe('ToolLane — committed spine continuity under a live skill', () => {
     const band = lane.flushSource('agent-1').flatMap((s) => s.split('\n')).map(stripAnsi);
     const readRow = band.find((l) => l.includes('Read'));
     expect(readRow, `Read descendant row missing:\n${band.join('\n')}`).toBeDefined();
-    // Open skill column + agent spine: `│ │ ├─ …`. The rejected close was `  │ ├─`.
-    expect(readRow!.startsWith('│ │ ')).toBe(true);
+    // Open skill column + agent spine: `│  │  ├─ …`. The rejected close was `   │  ├─`.
+    expect(readRow!.startsWith('│  │  ')).toBe(true);
     expect(readRow!.startsWith('  ')).toBe(false);
   });
 
@@ -1761,11 +1761,11 @@ describe('ToolLane — band/overlay descendant-row spine reconciliation', () => 
     expect(overlayRow, 'overlay Read row missing').toBeDefined();
     expect(bandRow, 'band Read row missing').toBeDefined();
     // Overlay: agent-1 is skill's last child, so its `╰─` CLOSES col-0 beneath it
-    // (ephemeral frame, internally consistent — no `│` below a `╰─`) → `'  │ '`.
-    expect(cols(overlayRow)).toBe('  │ ');
+    // (ephemeral frame, internally consistent — no `│` below a `╰─`) → `'   │  '`.
+    expect(cols(overlayRow)).toBe('   │  ');
     // Band: append-only, anchors heads with ◉ and keeps live-ancestor columns
-    // OPEN (cannot bake a last-child guess — would fragment on a later wave) → `'│ │ '`.
-    expect(cols(bandRow)).toBe('│ │ ');
+    // OPEN (cannot bake a last-child guess — would fragment on a later wave) → `'│  │  '`.
+    expect(cols(bandRow)).toBe('│  │  ');
     // The two intentionally DIVERGE at the seam — see the describe-block header.
     expect(cols(overlayRow)).not.toBe(cols(bandRow));
   });
@@ -1787,9 +1787,9 @@ describe('ToolLane — band/overlay descendant-row spine reconciliation', () => 
 
     expect(overlayRow, 'overlay Read row missing').toBeDefined();
     expect(bandRow, 'band Read row missing').toBeDefined();
-    // agent-a is NOT skill's last child → skill column stays OPEN → `'│ │ '`.
-    expect(cols(overlayRow)).toBe('│ │ ');
-    expect(cols(bandRow)).toBe('│ │ ');
+    // agent-a is NOT skill's last child → skill column stays OPEN → `'│  │  '`.
+    expect(cols(overlayRow)).toBe('│  │  ');
+    expect(cols(bandRow)).toBe('│  │  ');
     expect(cols(bandRow)).toBe(cols(overlayRow)); // the reconciliation property
   });
 });
@@ -1839,13 +1839,13 @@ describe('ToolLane.getOverlay — last-child connector closes its column (severe
     // (outer is skill's last live child), never the marker form.
     const outerAnchor = lines[1]!;
     expect(outerAnchor, `nested anchor must be a connector; got: ${JSON.stringify(outerAnchor)}`)
-      .toMatch(/^│ (╰─|├─)\s*$/);
+      .toMatch(/^│  (╰─|├─)\s*$/);
 
-    // The live leaf tool hangs under `outer` with col-0 CLOSED (`  │ …`): skill's
-    // spine ended at outer's `╰─` above. The severed-spine bug produced `│ │ …`.
+    // The live leaf tool hangs under `outer` with col-0 CLOSED (`   │  …`): skill's
+    // spine ended at outer's `╰─` above. The severed-spine bug produced `│  │  …`.
     const toolRow = lines.find((l) => l.includes('bash'))!;
     expect(toolRow, 'live tool row missing').toBeDefined();
-    expect(toolRow.startsWith('  │ '),
+    expect(toolRow.startsWith('   │  '),
       `tool row col-0 not closed below the last-child ╰─ (severed spine); got: ${JSON.stringify(toolRow)}`).toBe(true);
 
     // The invariant, stated directly: skill's col-0 spine is present on the
@@ -1872,12 +1872,12 @@ describe('ToolLane.getOverlay — last-child connector closes its column (severe
     const innerRow = lines.find((l) => l.includes('researcher'))!;
     expect(innerRow, 'inner head row missing').toBeDefined();
     expect(innerRow, `labeled nested head must lead with a connector; got: ${JSON.stringify(innerRow)}`)
-      .toMatch(/^│ (╰─|├─) /);
+      .toMatch(/^│  (╰─|├─) /);
 
-    // The grandchild tool sits one level deeper with col-0 CLOSED (`  │ …`):
+    // The grandchild tool sits one level deeper with col-0 CLOSED (`   │  …`):
     // inner is outer's last child, so outer's spine ended at inner's `╰─`.
     const toolRow = lines.find((l) => l.includes('Grep'))!;
-    expect(toolRow.startsWith('  │ '),
+    expect(toolRow.startsWith('   │  '),
       `grandchild col-0 not closed below the last-child ╰─; got: ${JSON.stringify(toolRow)}`).toBe(true);
   });
 });

@@ -735,10 +735,9 @@ describe('card', () => {
     expect(out).toContain('ok');
   });
 
-  it('renders checkpoint kind with ✅ CHECKPOINT chip', () => {
+  it('renders checkpoint kind with CHECKPOINT chip', () => {
     const out = strip(card({ kind: 'checkpoint', body: 'done' }));
     expect(out).toContain('CHECKPOINT');
-    expect(out).toContain('✅');
     expect(out).toContain('done');
   });
 
@@ -765,7 +764,6 @@ describe('card', () => {
   it('respects a caller-provided title', () => {
     const out = strip(card({ kind: 'checkpoint', title: 'CHECKPOINT — build', body: 'ok' }));
     expect(out).toContain('CHECKPOINT — build');
-    expect(out).not.toContain('✅'); // default chip suppressed when title is set
   });
 
   it('accepts body as an array of lines', () => {

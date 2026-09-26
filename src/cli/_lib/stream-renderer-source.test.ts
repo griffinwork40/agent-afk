@@ -7,16 +7,18 @@
 
 import { describe, it, expect } from 'vitest';
 import { formatDoneSummary, freshSourceState } from './stream-renderer-source.js';
+import { stripAnsi } from '../display.js';
 
 describe('formatDoneSummary', () => {
   it('renders bare Done when source has no stats and no metadata', () => {
     const source = freshSourceState('review');
     // Set startedAt to now so wallMs is ~0.
     source.startedAt = Date.now();
-    const summary = formatDoneSummary(source);
+    const summary = stripAnsi(formatDoneSummary(source));
     // Wall-clock fallback fires when stats array is empty AND wallMs > 0.
     // With startedAt = Date.now(), elapsed is usually 0ms → 0s skipped.
-    expect(summary === 'Done' || /^Done \(\d/.test(summary)).toBe(true);
+    // Format is now `✓ Done` or `✓ Done  <stats>` (no parentheses).
+    expect(summary === '✓ Done' || /^✓ Done/.test(summary)).toBe(true);
   });
 
   it('omits wall-clock when provider durationMs aligns with wall-clock', () => {

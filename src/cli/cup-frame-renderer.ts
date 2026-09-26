@@ -35,51 +35,29 @@
  *   - `newTopRow = max(1, targetBottomRow - lineCount + 1)`.
  *   - A supplied `anchorFloor` caps the shrink-pad so `newTopRow` never rises
  *     above it — protecting a fixed banner that occupies rows 1..anchorFloor-1.
+ *
+ * Concern decomposition (siblings):
+ *   - cup-frame-renderer.escapes.ts  — escape-sequence constants + builders
+ *   - cup-frame-renderer.cursor.ts   — CupCursorTracker (pure position state)
+ *   - cup-frame-renderer.batcher.ts  — CupWriteBatcher (coalesced stream writes)
  */
 
 import type { Writable } from 'node:stream';
 import { env } from '../config/env.js';
 import { hardWrapToWidth } from './wrap.js';
-
-// Synchronized output — supported by xterm/iTerm2/Apple Terminal. Wrapping a
-// frame write in these escapes prevents visible tearing when rendering multiple
-// lines in a single operation.
-const SYNC_START = '\x1b[?2026h';
-const SYNC_END = '\x1b[?2026l';
-
-// CUP: absolute cursor position. Rows and columns are 1-based.
-const cup = (row: number, col: number): string => `\x1b[${row};${col}H`;
-
-// Erase entire line at current cursor position (cursor does not move).
-const ERASE_LINE = '\x1b[2K';
-
-// Inline cursor visibility — avoids a direct dep on cli-cursor (which is only
-// a transitive dep under log-update and not directly accessible under pnpm's
-// strict hoisting). The escape codes are stable VT100/xterm sequences.
-const CURSOR_HIDE = '\x1b[?25l';
-const CURSOR_SHOW = '\x1b[?25h';
+import { cup, ERASE_LINE, SYNC_START, SYNC_END, CURSOR_SHOW } from './cup-frame-renderer.escapes.js';
+import { CupCursorTracker } from './cup-frame-renderer.cursor.js';
+import { CupWriteBatcher } from './cup-frame-renderer.batcher.js';
 
 export class CupFrameRenderer {
   private readonly stream: NodeJS.WriteStream & Writable;
-  private previousTopRow = 0;
-  private previousLineCount = 0;
-  private previousRawLineCount = 0;
-
-  /**
-   * One-shot override for the erase-loop ceiling in the next `render()` call.
-   * When set, the erase pass covers old rows up to this row (inclusive) instead
-   * of the new frame's `bottomRow`. Consumed (cleared) by `render()` after use.
-   *
-   * The compositor sets this before a repaint that moves `targetBottomRow`
-   * upward (cursor-follow dropdown collapse) so the erase pass can reach the
-   * old frame's full footprint without the default `bottomRow` guard truncating
-   * it. The compositor knows the footer boundary and caps this value
-   * accordingly; the renderer does not need to reason about the footer here.
-   */
-  private eraseBottomOverride: number | undefined;
+  private readonly cursor: CupCursorTracker;
+  private readonly batcher: CupWriteBatcher;
 
   constructor(stream: NodeJS.WriteStream & Writable) {
     this.stream = stream;
+    this.cursor = new CupCursorTracker();
+    this.batcher = new CupWriteBatcher(stream);
   }
 
   /**
@@ -90,7 +68,7 @@ export class CupFrameRenderer {
    * prevent ghost rows below the new frame.
    */
   setEraseBottomOverride(row: number): void {
-    this.eraseBottomOverride = row;
+    this.cursor.eraseBottomOverride = row;
   }
 
   /**
@@ -102,7 +80,7 @@ export class CupFrameRenderer {
    * to being preserved in scrollback by phase 1.
    */
   get topRow(): number {
-    return this.previousTopRow;
+    return this.cursor.previousTopRow;
   }
 
   /**
@@ -164,7 +142,6 @@ export class CupFrameRenderer {
     const bottomRow = Math.max(1, targetBottomRow);
     const floor = Math.max(1, anchorFloor ?? 1);
     const width = this.stream.columns ?? 80;
-    const useSyncOutput = this.stream.isTTY === true;
 
     // Wrap via the shared helper measure() also uses, so the physical row count
     // repaint() predicted (via measure) matches what we actually render here.
@@ -197,8 +174,8 @@ export class CupFrameRenderer {
     // When no banner is armed (floor === 1) maxPad is large and the pad is the
     // full raw-to-raw delta — byte-identical to the pre-clamp behaviour.
     const rawShrinkPad =
-      this.previousRawLineCount > rawLineCount
-        ? this.previousRawLineCount - rawLineCount
+      this.cursor.previousRawLineCount > rawLineCount
+        ? this.cursor.previousRawLineCount - rawLineCount
         : 0;
     const maxPad = Math.max(0, bottomRow - rawLineCount + 1 - floor);
     const shrinkPad = Math.min(rawShrinkPad, maxPad);
@@ -211,16 +188,7 @@ export class CupFrameRenderer {
     const newTopRow = Math.max(1, bottomRow - lineCount + 1);
 
     // Build output: erase previous frame + write new frame, all via CUP.
-    let out = '';
-
-    if (useSyncOutput) {
-      // CURSOR_HIDE is placed inside the sync block (after SYNC_START) so that
-      // the hide and the frame content land in a single write() call. This is
-      // safe for sync-unaware terminals: they process SYNC_START as a no-op and
-      // see CURSOR_HIDE immediately followed by the frame — identical visible
-      // behavior to a separate pre-frame write, without the extra syscall.
-      out += SYNC_START + CURSOR_HIDE;
-    }
+    this.batcher.beginFrame();
 
     // Erase the previous frame's rows. Covers cases where the new frame is
     // shorter than the previous (rows that would otherwise be stale on screen).
@@ -244,14 +212,13 @@ export class CupFrameRenderer {
     // sets `eraseBottomOverride` (capped at absoluteBottom, footer-safe)
     // before repainting, so the erase pass reaches the old frame's full
     // footprint without touching the footer band.
-    const eraseTop = this.previousTopRow;
-    const effectiveEraseBottom = this.eraseBottomOverride ?? bottomRow;
-    this.eraseBottomOverride = undefined; // consumed — one-shot
-    if (this.previousLineCount > 0) {
-      for (let i = 0; i < this.previousLineCount; i++) {
+    const eraseTop = this.cursor.previousTopRow;
+    const effectiveEraseBottom = this.cursor.consumeEraseBottomOverride() ?? bottomRow;
+    if (this.cursor.previousLineCount > 0) {
+      for (let i = 0; i < this.cursor.previousLineCount; i++) {
         const row = eraseTop + i;
         if (row > effectiveEraseBottom) break;
-        out += cup(row, 1) + ERASE_LINE;
+        this.batcher.append(cup(row, 1) + ERASE_LINE);
       }
     }
 
@@ -260,31 +227,14 @@ export class CupFrameRenderer {
     // blank rows overwrite the previously-occupied upper rows without content.
     for (let i = 0; i < lineCount; i++) {
       const row = newTopRow + i;
-      out += cup(row, 1) + ERASE_LINE + (frameLines[i] ?? '');
+      this.batcher.append(cup(row, 1) + ERASE_LINE + (frameLines[i] ?? ''));
     }
 
     // Leave cursor parked at the last content row, column 1 (matches where a
     // user would expect the cursor after rendering the input line).
-    out += cup(newTopRow + lineCount - 1, 1);
+    this.batcher.append(cup(newTopRow + lineCount - 1, 1));
 
-    if (useSyncOutput) {
-      out += SYNC_END;
-    }
-
-    try {
-      this.stream.write(out);
-    } catch {
-      // Invariant: if the frame write fails after CURSOR_HIDE was emitted
-      // inside the sync block, the cursor is left invisible on the host
-      // terminal. Restore visibility best-effort so a partial teardown
-      // doesn't strand a phantom-hidden cursor. Matches the silent-swallow
-      // pattern used in done() below.
-      try {
-        if (this.stream.isTTY) this.stream.write(SYNC_START + CURSOR_SHOW + SYNC_END);
-      } catch {
-        // Terminal fully gone — nothing more we can do.
-      }
-    }
+    this.batcher.flush();
 
     // Track padded lineCount as the on-screen footprint (erase-loop reference
     // for the next render). Track rawLineCount separately for shrink detection
@@ -306,9 +256,7 @@ export class CupFrameRenderer {
           `previousLineCount must cover at least previousRawLineCount — padded footprint must be ≥ raw content size; see PR #557.`,
       );
     }
-    this.previousTopRow = newTopRow;
-    this.previousLineCount = lineCount;
-    this.previousRawLineCount = rawLineCount;
+    this.cursor.commit(newTopRow, lineCount, rawLineCount);
   }
 
   /**
@@ -334,10 +282,7 @@ export class CupFrameRenderer {
    * coordinates participating in the math.
    */
   resetGeometry(): void {
-    this.previousTopRow = 0;
-    this.previousLineCount = 0;
-    this.previousRawLineCount = 0;
-    this.eraseBottomOverride = undefined;
+    this.cursor.reset();
   }
 
   /**
@@ -346,7 +291,7 @@ export class CupFrameRenderer {
    * must call `done()` separately to show the cursor.
    */
   clear(extraRows: number = 0): void {
-    if (this.previousLineCount === 0) return;
+    if (this.cursor.previousLineCount === 0) return;
 
     let out = '';
     const useSyncOutput = this.stream.isTTY === true;
@@ -355,8 +300,8 @@ export class CupFrameRenderer {
       out += SYNC_START;
     }
 
-    for (let i = 0; i < this.previousLineCount; i++) {
-      const row = this.previousTopRow + i;
+    for (let i = 0; i < this.cursor.previousLineCount; i++) {
+      const row = this.cursor.previousTopRow + i;
       out += cup(row, 1) + ERASE_LINE;
     }
 
@@ -386,16 +331,8 @@ export class CupFrameRenderer {
       out += SYNC_END;
     }
 
-    try {
-      this.stream.write(out);
-    } catch {
-      // noop
-    }
-
-    this.previousTopRow = 0;
-    this.previousLineCount = 0;
-    this.previousRawLineCount = 0;
-    this.eraseBottomOverride = undefined;
+    this.batcher.writeAtomic(out);
+    this.cursor.reset();
   }
 
   /**
@@ -403,16 +340,9 @@ export class CupFrameRenderer {
    * TerminalCompositor.disarm() after clear() to restore cursor visibility.
    */
   done(): void {
-    this.previousTopRow = 0;
-    this.previousLineCount = 0;
-    this.previousRawLineCount = 0;
-    this.eraseBottomOverride = undefined;
+    this.cursor.reset();
     if (this.stream.isTTY) {
-      try {
-        this.stream.write(SYNC_START + CURSOR_SHOW + SYNC_END);
-      } catch {
-        // noop
-      }
+      this.batcher.writeAtomic(SYNC_START + CURSOR_SHOW + SYNC_END);
     }
   }
 }

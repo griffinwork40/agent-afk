@@ -51,10 +51,7 @@ import {
 import type { ToolCall, ToolHandler, ToolResult } from '../../agent/tools/types.js';
 import { buildClosureGuidance } from '../../agent/session/closure-guidance.js';
 import type { ClosureReason } from '../../agent/trace/index.js';
-import {
-  DEFAULT_MIN_REPEATS,
-  detectRepeatedToolUse,
-} from '../scan/detectors/repeated-tool-use.js';
+import { detectRepeatedToolUse } from '../scan/detectors/repeated-tool-use.js';
 import { detectClosureAnomaly } from '../scan/detectors/closure-anomaly.js';
 import { parseTraceContent } from '../scan/reader.js';
 import type { DetectorResult, EvalCase, EvalCheck, EvalRunEvidenceRef, FailurePattern } from '../schemas.js';
@@ -199,7 +196,7 @@ async function replayRepeatedToolUse(
     content,
     sessionMtimeMs: 0,
   });
-  const findings = detectRepeatedToolUse([session], { minRepeats: DEFAULT_MIN_REPEATS });
+  const findings = detectRepeatedToolUse([session], { minRepeats: 2 });
 
   // Prefer the run whose fingerprint matches the eval-case provenance; fall
   // back to the longest run when no fingerprint was recorded.

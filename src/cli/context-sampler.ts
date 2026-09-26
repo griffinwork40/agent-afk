@@ -39,7 +39,7 @@ interface ContextUsageSource {
     totalTokens?: number;
     maxTokens?: number;
     autoCompactThreshold?: number;
-    isAutoCompactEnabled: boolean;
+    isAutoCompactEnabled?: boolean;
     [key: string]: unknown;
   }>;
 }

@@ -276,6 +276,17 @@ export class InputSurface {
   private pauseInterruptHandler: (() => void) | null = null;
 
   /**
+   * Optional callback fired when the compositor-path `readLine()` sets
+   * `pendingReadResolve` — the moment the prompt becomes receptive to an
+   * external wake via {@link abortPendingRead}. The REPL loop wires this
+   * to re-check the `BgResultNotifier` injection buffer, closing the
+   * timing gap where a background result settled mid-turn (when
+   * `isAwaitingInput()` was false) and the `onInjectable` hook was a
+   * no-op. Null when nothing is wired (no behavior change).
+   */
+  onAwaitingInput: (() => void) | null = null;
+
+  /**
    * Reject callback for the currently-pending readLine Promise (if any).
    * Set inside `readLine()` before the compositor path blocks, and
    * cleared once the Promise settles. Used by `dispose()` to abort any
@@ -620,6 +631,21 @@ export class InputSurface {
         // than only after the first keypress. Idle repaint is one cheap
         // frame; redundant if the prompt was already correctly drawn.
         compositor.repaint();
+        // Notify the REPL loop that the prompt is now receptive so it can
+        // re-check for background results that settled mid-turn. Fired
+        // after all compositor state is fully installed (setOnIdleEscape,
+        // setOnSubmit handler, idle mode, repaint) so that a synchronous
+        // abortPendingRead() inside the callback does not leave stale
+        // handlers installed on an already-resolved Promise.
+        //
+        // Opt-in via primePromptSuggestion: the turn-boundary readLine in
+        // loop-iteration.ts sets this flag. Sub-prompts (elicitation, form
+        // fields) deliberately omit it so tryAutoResume cannot abort a
+        // sub-prompt with an empty answer — only the main REPL prompt can
+        // trigger an auto-resume wake.
+        if (opts.primePromptSuggestion === true) {
+          this.onAwaitingInput?.();
+        }
       });
     }
     // Non-TTY fallback: delegate to the existing reader.

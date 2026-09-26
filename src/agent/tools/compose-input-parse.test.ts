@@ -473,6 +473,44 @@ describe('parseComposeInput — per-node agent_type', () => {
   });
 });
 
+describe('parseComposeInput — per-node isolation', () => {
+  it('accepts isolation:"worktree" without cwd or writeRoots', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: 'worktree' }));
+    expect(parsed.nodes[0]!.isolation).toBe('worktree');
+  });
+
+  it('accepts isolation:"none" and normalises it to undefined', () => {
+    const { parsed } = parseComposeInput(minimal({ isolation: 'none' }));
+    expect(parsed.nodes[0]!.isolation).toBeUndefined();
+  });
+
+  it('rejects unknown isolation value', () => {
+    expect(() => parseComposeInput(minimal({ isolation: 'sandbox' }))).toThrow(
+      /isolation must be "none" or "worktree"/,
+    );
+  });
+
+  it('rejects isolation:"worktree" combined with cwd', () => {
+    expect(() =>
+      parseComposeInput(minimal({ isolation: 'worktree', cwd: '/tmp/my-dir' })),
+    ).toThrow(/cannot set both cwd and isolation:"worktree"/);
+  });
+
+  it('rejects isolation:"worktree" combined with writeRoots', () => {
+    expect(() =>
+      parseComposeInput(minimal({ isolation: 'worktree', writeRoots: ['/tmp/extra-output'] })),
+    ).toThrow(/cannot set both writeRoots and isolation:"worktree"/);
+  });
+
+  it('allows isolation:"worktree" combined with readRoots (reads do not break isolation)', () => {
+    const { parsed } = parseComposeInput(
+      minimal({ isolation: 'worktree', readRoots: ['/data/shared'] }),
+    );
+    expect(parsed.nodes[0]!.isolation).toBe('worktree');
+    expect(parsed.nodes[0]!.readRoots).toEqual(['/data/shared']);
+  });
+});
+
 describe('parseComposeInput — compose-level fields still work', () => {
   it('accepts max_tool_rounds_per_node at compose level', () => {
     const { parsed } = parseComposeInput(minimal({}, { max_tool_rounds_per_node: 30 }));

@@ -20,6 +20,7 @@ import type { AgentModelInput } from '../../../agent/types.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import type { WorkspaceStore } from '../../../agent/workspace/index.js';
 import type { PhaseRole } from '../../../agent/tools/nesting.js';
+import type { DelegationBudget } from '../../../agent/tools/delegation-budget.js';
 
 export interface ForkMintPhaseOptions {
   /** Human-readable phase name used in error messages, e.g. `'spec'`. */
@@ -56,6 +57,8 @@ export interface ForkMintPhaseOptions {
   traceWriter?: TraceSink;
   /** Shared workspace for sibling-findings preamble injection. */
   workspaceStore?: WorkspaceStore;
+  /** Tree-wide delegation budget forwarded to the SubagentManager. */
+  delegationBudget?: DelegationBudget;
 }
 
 /**
@@ -78,6 +81,7 @@ export async function forkMintPhase(opts: ForkMintPhaseOptions): Promise<string>
     parentReadRoots,
     traceWriter,
     workspaceStore,
+    delegationBudget,
   } = opts;
 
   // `cwd` propagates the parent session's worktree so the forked subagent's
@@ -89,6 +93,7 @@ export async function forkMintPhase(opts: ForkMintPhaseOptions): Promise<string>
     ...(parentReadRoots !== undefined ? { parentReadRoots } : {}),
     ...(traceWriter !== undefined ? { traceWriter } : {}),
     ...(workspaceStore !== undefined ? { workspaceStore } : {}),
+    ...(delegationBudget !== undefined ? { delegationBudget } : {}),
   });
 
   const handle = await manager.forkSubagent({

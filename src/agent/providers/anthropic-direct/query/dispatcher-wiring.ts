@@ -178,7 +178,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         readRoots: args.sharedReadRoots,
         writeRoots: args.sharedWriteRoots,
         ...(config.env !== undefined ? { env: config.env } : {}),
-        sessionId: config.sessionId,
+        sessionId: resolvedSession.id,
         parentSessionId: config.parentSessionId,
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
         // Fork-scoped central output cap (#661): forwarded from the child

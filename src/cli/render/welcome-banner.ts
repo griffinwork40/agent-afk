@@ -1,4 +1,3 @@
-import { sep } from 'node:path';
 import chalk from 'chalk';
 import { displayWidth, padDisplayRight } from '../display.js';
 import { env } from '../../config/env.js';
@@ -8,6 +7,7 @@ import { palette } from '../palette.js';
 import { renderMascotLines, MASCOT_WIDTH, mascotSuppressed } from '../mascot.js';
 import { maxInnerBoxWidth, truncateDisplay } from './utils.js';
 import { renderAsciiWordmark, asciiWordmarkWidth } from './ascii-wordmark.js';
+import { contentMargin } from './measure.js';
 
 // ─── Welcome Banner ───────────────────────────────────────────────────────────
 
@@ -148,6 +148,13 @@ function renderLegacyBoxBanner(opts: WelcomeBannerOpts): string {
     lines.push(...wrapToWidth(palette.dim('  ' + opts.hintLine), getTerminalWidth()).split('\n'));
   }
 
+  // Content centering (AFK_CENTER_CONTENT): prepend left margin to every
+  // line so the banner floats at the same horizontal position as the
+  // centered content below it.
+  const pad = contentMargin();
+  if (pad.length > 0) {
+    return lines.map(l => pad + l).join('\n');
+  }
   return lines.join('\n');
 }
 
@@ -421,6 +428,13 @@ function renderHybridBanner(opts: WelcomeBannerOpts): string {
     );
   }
 
+  // Content centering (AFK_CENTER_CONTENT): prepend left margin to every
+  // line so the banner floats at the same horizontal position as the
+  // centered content below it.
+  const pad = contentMargin();
+  if (pad.length > 0) {
+    return lines.map(l => l.length > 0 ? pad + l : l).join('\n');
+  }
   return lines.join('\n');
 }
 
@@ -443,9 +457,13 @@ function tildifyHome(p: string): string {
   const home = env.HOME;
   if (home === undefined || home.length === 0) return p;
   if (p === home) return '~';
-  const prefix = home.endsWith(sep) ? home : home + sep;
+  // Use '/' unconditionally: callers always pass forward-slash paths (POSIX
+  // convention on all platforms), so matching against path.sep ('\\' on
+  // Windows) would never find a match there. The display output is also
+  // forward-slash by convention regardless of platform.
+  const prefix = home.endsWith('/') ? home : home + '/';
   if (p.startsWith(prefix)) {
-    return '~' + sep + p.slice(prefix.length);
+    return '~/' + p.slice(prefix.length);
   }
   return p;
 }

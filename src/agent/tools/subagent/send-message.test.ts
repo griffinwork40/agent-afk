@@ -255,3 +255,44 @@ describe('sendMessageToAgent — happy path (Anthropic provider)', () => {
     expect(handle.steer).toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Job-ID leak fix: unknown job error only shows caller's own jobs
+// ---------------------------------------------------------------------------
+
+describe('sendMessageToAgent — job-ID scope on unknown lookup', () => {
+  it('excludes jobs from other sessions in the "known" hint', async () => {
+    // Two jobs: one belonging to the caller, one from a different session.
+    const myJob = makeJob({ jobId: 'job-mine', parentSessionId: 'session-me', provenance: 'model' });
+    const otherJob = makeJob({ jobId: 'job-other', parentSessionId: 'session-them', provenance: 'model' });
+    const registry: BackgroundAgentRegistry = {
+      get: vi.fn().mockReturnValue(undefined), // the queried jobId is unknown
+      getHandle: vi.fn().mockReturnValue(undefined),
+      list: vi.fn().mockReturnValue([myJob, otherJob]),
+    } as unknown as BackgroundAgentRegistry;
+
+    const result = await sendMessageToAgent(registry, makeCall('no-such-job', 'hi'), 'session-me');
+
+    expect(result.isError).toBe(true);
+    // Should mention MY job only
+    expect(result.content).toContain('job-mine');
+    // Must NOT leak the other session's job ID
+    expect(result.content).not.toContain('job-other');
+  });
+
+  it('shows all model-jobs when no callerSessionId is provided', async () => {
+    const jobA = makeJob({ jobId: 'job-a', parentSessionId: 'session-x', provenance: 'model' });
+    const jobB = makeJob({ jobId: 'job-b', parentSessionId: 'session-y', provenance: 'model' });
+    const registry: BackgroundAgentRegistry = {
+      get: vi.fn().mockReturnValue(undefined),
+      getHandle: vi.fn().mockReturnValue(undefined),
+      list: vi.fn().mockReturnValue([jobA, jobB]),
+    } as unknown as BackgroundAgentRegistry;
+
+    const result = await sendMessageToAgent(registry, makeCall('no-such-job', 'hi'));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('job-a');
+    expect(result.content).toContain('job-b');
+  });
+});

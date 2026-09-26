@@ -47,7 +47,7 @@ const READ_TOOLS = new Set([
   // Anthropic SDK PascalCase
   'Read', 'Glob', 'Grep', 'NotebookRead', 'LS',
   // agent-afk built-in snake_case (src/agent/tools/schemas.ts)
-  'read_file', 'extract_document', 'glob', 'grep', 'list_directory',
+  'read_file', 'view_image', 'extract_document', 'glob', 'grep', 'list_directory',
   // config_get reads ~/.afk/config (afk.env / afk.config.json); secrets are
   // masked by the handler. Read-only by construction — no mutation surface.
   'config_get',
@@ -107,7 +107,7 @@ const SHELL_TOOLS = new Set([
 ]);
 export const SUBAGENT_TOOLS = new Set([
   'Agent', 'Task',
-  'agent', 'cancel_background_job', 'send_message_to_agent',
+  'agent', 'cancel_background_job', 'send_message_to_agent', 'get_background_job_health',
 ]);
 export const SKILL_TOOLS = new Set([
   'Skill',
@@ -146,6 +146,9 @@ const WEB_TOOLS = new Set([
   'web_scrape',
   // web_request: structured HTTP tool (all methods, SSRF-guarded, #1413).
   'web_request',
+  // image_generate: outbound OpenAI Images API call — external HTTP, same
+  // conceptual shape as web_request (billing + network side effect).
+  'image_generate',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).
@@ -174,6 +177,7 @@ const SCHEDULE_TOOLS = new Set([
   // agent-afk daemon lifecycle tools (src/agent/tools/schemas.ts).
   // Previously fell through to 'other' — now classified explicitly.
   'create_schedule',
+  'update_schedule',
   'list_schedules',
   'get_schedule_history',
   'cancel_schedule',
@@ -242,6 +246,7 @@ export const READ_ONLY_PHASE_TOOLS: readonly string[] = [
   'LS',
   // agent-afk snake_case (src/agent/tools/schemas.ts)
   'read_file',
+  'view_image',
   'extract_document',
   'glob',
   'grep',

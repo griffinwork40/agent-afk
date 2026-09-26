@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(4);
+    expect(facet.facet_version).toBe(5);
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -543,5 +543,34 @@ describe('deriveSessionFacet', () => {
     expect(facet.parallel_dispatch.ratio).toBeCloseTo(8 / 9);
     expect(facet.parallel_dispatch.parallel_turns).toBe(1);
     expect(facet.parallel_dispatch.tool_turns).toBe(2);
+  });
+
+  // yield_tracking (#2016)
+  it('yield_tracking: non-daemon sessions have is_scheduled_session=false and null pr fields', () => {
+    const facet = deriveSessionFacet(richSession());
+    expect(facet.yield_tracking).toEqual({
+      is_scheduled_session: false,
+      produced_pr: null,
+      pr_merged: null,
+    });
+  });
+
+  it('yield_tracking: daemon source sets is_scheduled_session=true', () => {
+    const session = { ...richSession(), source: 'daemon' as const };
+    const facet = deriveSessionFacet(session);
+    expect(facet.yield_tracking.is_scheduled_session).toBe(true);
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_merged).toBeNull();
+  });
+
+  it('yield_tracking: source field maps daemon correctly', () => {
+    const session = { ...richSession(), source: 'daemon' as const };
+    const facet = deriveSessionFacet(session);
+    expect(facet.source).toBe('daemon');
+  });
+
+  it('yield_tracking: schema-valid in the base facet', () => {
+    const facet = deriveSessionFacet(richSession());
+    expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
   });
 });

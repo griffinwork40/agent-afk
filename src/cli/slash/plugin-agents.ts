@@ -101,7 +101,7 @@ export async function registerPluginAgents(
   discoveredAgents = agents.map((a) => {
     const entry: DiscoveredAgent = {
       name: a.name,
-      description: a.description,
+      description: a.description ?? '',
     };
     if (a.model) entry.model = a.model;
     return entry;

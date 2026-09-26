@@ -30,6 +30,7 @@ import type { SubagentProgressSink, OutputEvent } from './types/session-types.js
 import { dispatchSubagentStart, dispatchSubagentStop } from './subagent-hooks.js';
 import type { AbortOrigin, TraceSink } from './trace/index.js';
 import type { Surface } from './awareness/types.js';
+import { admitFork, wrapTerminalWithRelease, type SpawnReceipt, type DelegationBudget } from './subagent/fork-budget.js';
 import { getCurrentSink } from './_lib/skill-sink-channel.js';
 import { touchWorktreeOccupancy, startWorktreeOccupancyHeartbeat } from './worktree/worktree-occupancy.js';
 import { resolveWorktreeMainRoot } from './worktree/worktree-read-root.js';
@@ -38,7 +39,7 @@ import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-sco
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import { validatePhaseRole } from './subagent/fork-validation.js';
 import { assembleChildConfig } from './subagent/fork-child-config.js';
-import { emitForkStarted, appendForkTelemetry } from './subagent/fork-lifecycle.js';
+import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
 import type { SubagentStatus, SubagentResult, SubagentTrace } from './subagent/result.js';
@@ -126,6 +127,8 @@ export class SubagentManager {
   /** Session label for subagent-log directory naming. Matches the label
    *  given to `setTasksRegistry` so writer and reader agree on the path. */
   private readonly sessionLabel: string | undefined;
+  /** Tree-wide delegation budget. Opt-in: undefined when no budget is configured. */
+  private readonly delegationBudget: DelegationBudget | undefined;
   private readonly abortGraph: AbortGraph;
   private readonly rootId: string;
   private rootController: AbortController;
@@ -155,6 +158,7 @@ export class SubagentManager {
     this.outputEventSink = options.outputEventSink;
     this.workspaceStore = options.workspaceStore;
     this.sessionLabel = options.sessionLabel;
+    this.delegationBudget = options.delegationBudget;
     // Witness layer: AbortGraph receives the writer at construction so
     // cascades fire `abort` events without per-call plumbing.
     this.abortGraph = new AbortGraph(options.traceWriter);
@@ -357,6 +361,9 @@ export class SubagentManager {
       );
     }
 
+    // Budget: throws when exhausted; undefined when no budget configured.
+    const budgetReceipt: SpawnReceipt | undefined = admitFork(this.delegationBudget, options.parent.sessionId ?? '');
+
     const childController = new AbortController();
     // External constraint: AbortGraph nodes registered before child construction
     // must be released if construction fails — otherwise graph accumulates orphan
@@ -484,19 +491,22 @@ export class SubagentManager {
       // Forward-reference ref: assigned immediately after handle construction,
       // before any async tick that could fire _onTerminal.
       const handleRef: { current: SubagentHandleImpl<T> | undefined } = { current: undefined };
-      const onTerminal = makeForkTerminalHook<T>(
-        {
-          id,
-          stopOccupancyHeartbeat,
-          // Resolve at termination time so setOutputEventSink() retains its
-          // documented late-binding/replacement semantics for in-flight forks.
-          getOutputEventSink: () => this.outputEventSink,
-          activeMap: this.active,
-          abortGraph: this.abortGraph,
-          logWriter,
-          completedCache: this.completed,
-        },
-        handleRef,
+      const onTerminal = wrapTerminalWithRelease(
+        makeForkTerminalHook<T>(
+          {
+            id,
+            stopOccupancyHeartbeat,
+            // Resolve at termination time so setOutputEventSink() retains its
+            // documented late-binding/replacement semantics for in-flight forks.
+            getOutputEventSink: () => this.outputEventSink,
+            activeMap: this.active,
+            abortGraph: this.abortGraph,
+            logWriter,
+            completedCache: this.completed,
+          },
+          handleRef,
+        ),
+        budgetReceipt,
       );
       handle = new SubagentHandleImpl<T>(
         id,
@@ -549,7 +559,7 @@ export class SubagentManager {
     } catch (err) {
       // A throw anywhere in the guarded span (resolveReadScope, assembleChildConfig,
       // heartbeat setup, wireWorkspaceSubscriptions, AgentSession construction, or
-      // handle wiring) reaches here. Three invariants to restore:
+      // handle wiring) reaches here. Four invariants to restore:
       //
       // 1. Disarm the occupancy heartbeat — there is no child left to protect, and
       //    a live timer would pin the worktree's sweep clock forever. The stub no-op
@@ -562,7 +572,13 @@ export class SubagentManager {
       // 3. Emit SubagentStop for symmetry — SubagentStart was dispatched above, so
       //    any hook observing SubagentStart expects a matching SubagentStop. Non-
       //    blocking: errors are swallowed by dispatchSubagentStop itself.
+      //
+      // 4. Roll back the delegation budget slot — the child never ran, so a
+      //    permanent slot consumption would silently exhaust maxTotalAgents across
+      //    forge/farm retry loops. `budgetReceipt` is undefined when no budget is
+      //    configured, so the rollback is a no-op in the common case.
       stopOccupancyHeartbeat();
+      budgetReceipt?.rollback();
       this.abortGraph.dispose(id);
       if (registry) {
         void dispatchSubagentStop(
@@ -605,15 +621,7 @@ export class SubagentManager {
 
     // Emit subagent_lifecycle 'started' into the parent output stream so live
     // surfaces (web-UI SSE, CLI) see the fork without scraping the witness trace.
-    this.outputEventSink?.({
-      type: 'subagent_lifecycle',
-      subagentId: id,
-      status: 'started',
-      ...(effectiveChildModel !== undefined ? { model: String(effectiveChildModel) } : {}),
-      ...(effectiveAgentType !== undefined ? { agentType: effectiveAgentType } : {}),
-      ...(options.promptHead !== undefined ? { promptHead: options.promptHead } : {}),
-      ...(options.parentId ? { parentToolUseId: options.parentId } : {}),
-    });
+    emitSubagentStartedEvent(this.outputEventSink, { subagentId: id, effectiveChildModel, effectiveAgentType, promptHead: options.promptHead, parentId: options.parentId });
 
     return handle;
   }

@@ -23,7 +23,7 @@
 import { z } from 'zod';
 
 /** Bump when the facet shape or derivation changes — invalidates caches. */
-export const FACET_VERSION = 4;
+export const FACET_VERSION = 5;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -54,7 +54,7 @@ export const StoredSessionInputSchema = z
   .object({
     sessionId: z.string().optional(),
     name: z.string().optional(),
-    source: z.enum(['cli', 'telegram', 'web']).optional(),
+    source: z.enum(['cli', 'telegram', 'web', 'daemon']).optional(),
     telegramChatId: z.number().optional(),
     model: z.string(),
     startedAt: z.number(),
@@ -169,12 +169,48 @@ export const ParallelDispatchStatsSchema = z.object({
 });
 export type ParallelDispatchStats = z.infer<typeof ParallelDispatchStatsSchema>;
 
+/**
+ * Session yield tracking — records whether a top-level implementation session
+ * produced a GitHub PR and whether that PR was subsequently merged.
+ *
+ * Fields:
+ *   - `is_scheduled_session`: true when the session was launched by the daemon
+ *     (source === 'daemon'). Scheduled sessions are excluded from the yield
+ *     denominator; only human-initiated implementation sessions count.
+ *   - `produced_pr`: true when the session's working branch had an associated
+ *     PR at teardown time; false when none was found; null when the check could
+ *     not run (gh unavailable, not a git repo, etc.).
+ *   - `pr_merged`: true when the associated PR's state is MERGED; false when
+ *     open or closed-unmerged; null when produced_pr is false or the check
+ *     could not run.
+ *
+ * Derivation: populated by `createFacetSessionEndHook` after session teardown.
+ * Pure-derive callers (no I/O) receive null for produced_pr and pr_merged;
+ * the hook overwrites the cached facet with real values once the async gh
+ * probe completes.
+ */
+export const YieldTrackingSchema = z.object({
+  /** True when the session was launched by the daemon scheduler. */
+  is_scheduled_session: z.boolean(),
+  /**
+   * True when the session's branch had a GitHub PR at teardown.
+   * Null when the gh probe could not run (no gh CLI, not a git repo, etc.).
+   */
+  produced_pr: z.boolean().nullable(),
+  /**
+   * True when the associated PR was merged.
+   * Null when produced_pr is false or the probe could not run.
+   */
+  pr_merged: z.boolean().nullable(),
+});
+export type YieldTracking = z.infer<typeof YieldTrackingSchema>;
+
 export const SessionFacetSchema = z
   .object({
     // provenance & identity
     facet_version: z.number().int(),
     session_id: z.string(),
-    source: z.enum(['cli', 'telegram', 'web', 'unknown']),
+    source: z.enum(['cli', 'telegram', 'web', 'daemon', 'unknown']),
     model: z.string(),
     derived_at: z.string(),
     derived_from: z.literal('afk-session'),
@@ -219,6 +255,9 @@ export const SessionFacetSchema = z
 
     // parallel dispatch ratio — measures how often the model batched tool calls (#2015)
     parallel_dispatch: ParallelDispatchStatsSchema,
+
+    // session yield tracking (#2016)
+    yield_tracking: YieldTrackingSchema,
 
     // decisions / evidence (v1-thin; semantic-enrichable)
     decisions: z.array(z.string()),

@@ -144,6 +144,10 @@ export class SessionShutdown {
         ...(config.traceWriter
           ? { tracePath: config.traceWriter.getTracePath() }
           : {}),
+        // Effective working directory for the session — threaded so
+        // session-end hooks (e.g. the yield probe) run git/gh against the
+        // session's repo rather than process.cwd().
+        ...(config.cwd ? { cwd: config.cwd } : {}),
       },
       // Invariant: skip traceWriter when this session owns the seal (step 3
       // above) — the writer is sealed, so the hook_decision write would throw.

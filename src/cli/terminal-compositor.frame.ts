@@ -1,7 +1,6 @@
 /**
- * Frame composition + scrollback eviction — `repaint` (the per-frame render
- * orchestrator), its picker-mode variant, and the pre-render
- * row-preservation / scrollback-eviction primitives — extracted from
+ * Frame composition orchestrator — `repaint` (the per-frame render
+ * orchestrator) and its picker-mode variant, extracted from
  * terminal-compositor.ts. Follows the free-functions-on-host pattern used by
  * the sibling render/committed-band/input-dispatch modules: the
  * TerminalCompositor owns all state; these functions read and MUTATE the narrow
@@ -17,10 +16,14 @@
  * functions (`repaintPickerFrame`, `preserveRowsBeforeFrameRender`,
  * `evictRowsToScrollback`) are module-private — they had no callers outside
  * this cluster.
+ *
+ * Concern-based siblings:
+ *   - `terminal-compositor.frame.layout.ts`   — viewport-budget computation
+ *   - `terminal-compositor.frame.lines.ts`    — frame line assembly
+ *   - `terminal-compositor.frame.position.ts` — physical row positioning
+ *   - `terminal-compositor.frame-preserve.ts` — row preservation / scrollback eviction
  */
 
-import { palette } from './palette.js';
-import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
 import type {
   BandRowMeta,
@@ -35,6 +38,14 @@ import {
   reflowCommittedBandToWidth,
   type BandReflowCache,
 } from './terminal-compositor.band-reflow.js';
+import { type ImageAttachment } from './input/attachments.js';
+import {
+  gatherChromeRows,
+  computeViewportLayout,
+  computePickerViewportLayout,
+} from './terminal-compositor.frame.layout.js';
+import { buildFrameLines, buildPickerFrameLines } from './terminal-compositor.frame.lines.js';
+import { computeFramePosition } from './terminal-compositor.frame.position.js';
 
 /**
  * Narrowest TerminalCompositor state slice the frame-composition functions
@@ -135,181 +146,45 @@ export function repaint(self: FrameHost): void {
     return;
   }
   const inputLine = self.renderInputLine();
-  const overlayLines = self.overlay ? self.overlay.split('\n') : [];
-  const spinnerRow = self.spinnerController.renderSpinnerRow();
-  // Tip row sits BELOW the spinner row, ABOVE the input line. Renders only
-  // when the spinner has a tip — `selectTip` enforces the warmup grace, so
-  // sub-second turns never paint a tip and then tear it down.
-  const tipRow = self.spinnerController.renderTipRow(self.stdout.columns ?? 80);
-  // Attachment status row — listed pasted/clipboard images so the user
-  // can see what's about to ride along on the next submission. Mutually
-  // exclusive with the clipboard-failure row (an ephemeral notice that
-  // last clipboard probe found no image — paint-clear: consumed on
-  // this repaint so the message disappears as soon as the user acts).
-  let attachmentRow: string | null = null;
-  if (self.attachments.length > 0) {
-    attachmentRow = renderStatusLine(self.attachments);
-  } else if (self.clipboardFailureMsg !== null) {
-    attachmentRow = palette.dim(self.clipboardFailureMsg);
-    self.clipboardFailureMsg = null;
-  }
+  const clipboardRef = { value: self.clipboardFailureMsg };
+  const chrome = gatherChromeRows(
+    self.overlay,
+    self.spinnerController,
+    self.attachments,
+    clipboardRef,
+    self.stdout.columns ?? 80,
+  );
+  self.clipboardFailureMsg = clipboardRef.value;
   const dropdownRows = self.renderDropdownRows();
   const hintRow = self.renderHintRow();
-  // Visual breathing room: when ANY chrome sits above the input cluster
-  // (overlay, spinner, tip, or attachment row), insert a blank line so
-  // the input has its own visual region instead of getting glued to the
-  // last status row. The dropdown+hint sit adjacent to the input by
-  // design (fish/atuin "input pinned, content rises" geometry — see the
-  // frame composition comment below), so the gap separates chrome from
-  // the entire (dropdown→hint→input) bottom cluster, not from the input
-  // alone. Idle state — empty overlay AND no spinner/tip/attachment —
-  // keeps the prompt flush so we don't waste a viewport row on a
-  // permanent leading blank. The decision must be made BEFORE we
-  // compute fixedRows so the overlay budget reserves space for the gap.
-  const hasFixedChrome = !!spinnerRow || !!tipRow || !!attachmentRow;
-  const hasContentAboveInput = hasFixedChrome || overlayLines.length > 0;
-  // Cap the frame at viewport height. log-update tracks the previous
-  // frame's line count and clears that many lines on the next paint;
-  // when the prior frame exceeded the viewport, lines that scrolled
-  // off the top can no longer be reached by its cursor-up codes and
-  // get stranded in scrollback. Keeping the most recent overlay lines
-  // (and always the spinner+tip+attachment+gap+dropdown+hint+input rows)
-  // keeps the frame log-update can fully clear.
-  //
-  // Invariant: the bg status bar (when active) owns rows (rows-extraRows)..(rows-1).
-  // Compositor frame must stay above that region or the two writers race the same physical row
-  // every spinner tick, producing flicker. Mirrors DECSTBM math in status-line.ts:287.
-  const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-  const maxLines = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
-  // hintRow is '' (a reserved blank slot) for un-hinted candidates and
-  // a non-empty `↳ …` string for hinted ones — both occupy one row.
-  // Test against `!== null` so the empty-string slot still counts.
-  const gapRows = hasContentAboveInput ? 1 : 0;
-  const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
-    + (attachmentRow ? 1 : 0) + gapRows + dropdownRows.length
-    + (hintRow !== null ? 1 : 0) + 1;
-  const overlayBudget = Math.max(0, maxLines - fixedRows);
-  const trimmedOverlay = overlayLines.length > overlayBudget
-    ? overlayLines.slice(-overlayBudget)
-    : overlayLines;
-  // Re-derive after trimming: if the overlay was the only thing above
-  // input and got entirely trimmed away by the viewport budget, suppress
-  // the gap. (fixedRows over-reserved by 1 in that edge case, harmless.)
-  const renderGap = hasFixedChrome || trimmedOverlay.length > 0;
-  // Note: we deliberately do NOT pre-pad overlay/spinner/tip/input lines
-  // for soft-wraps. log-update v8 wraps internally via wrap-ansi(hard:true)
-  // before computing its tracked line count and detects width changes to
-  // do a full erase+redraw (`previousWidth !== width` branch in
-  // node_modules/log-update/index.js). Pre-padding here would inflate the
-  // row count log-update sees, causing it to over-erase on the next paint.
-  //
-  // Invariant: the input line MUST be the last entry of `frameLines` so
-  // it consistently lands at the bottom of the log-update region — which
-  // the DECSTBM scroll region pins one row above the status line. The
-  // dropdown (when open) sits directly above the input and grows upward
-  // as more candidates are visible; the `↳ <when-to-use>` hint sits in
-  // between (closest to the input). Streaming overlay / spinner / tip /
-  // attachment rows stack above the dropdown, pushing UPWARD into the
-  // streaming region as they grow rather than shoving the input row off
-  // its anchor. This is the "input pinned, content rises" geometry —
-  // dropdown opening, attachment ack, and spinner activation never shift
-  // the cursor row the user is typing on.
-  const frameLines: string[] = [];
-  frameLines.push(...trimmedOverlay);
-  if (spinnerRow) frameLines.push(spinnerRow);
-  if (tipRow) frameLines.push(tipRow);
-  if (attachmentRow) frameLines.push(attachmentRow);
-  // Gap row sits between chrome and the (dropdown→hint→input) cluster
-  // so the input + its completion popup stay visually adjacent (the
-  // "input pinned, content rises" invariant above). With no chrome, no
-  // gap — keeps the prompt flush against the top of an idle viewport.
-  if (renderGap) frameLines.push('');
-  frameLines.push(...dropdownRows);
-  // `hintRow !== null` keeps the reserved blank-row slot for
-  // un-hinted candidates so the dropdown above doesn't shift up by 1
-  // row when the user navigates across a hinted ↔ un-hinted boundary.
-  if (hintRow !== null) frameLines.push(hintRow);
-  frameLines.push(inputLine);
+  const layout = computeViewportLayout(
+    chrome,
+    dropdownRows.length,
+    hintRow !== null,
+    self.stdout.rows ?? 24,
+    self.scrollRegion,
+  );
+  const frameLines = buildFrameLines(
+    chrome,
+    layout.trimmedOverlay,
+    layout.renderGap,
+    dropdownRows,
+    hintRow,
+    inputLine,
+  );
   // Invariant: absoluteBottom is the maximum row the compositor may ever write
   // to — the row just above the bg-status-bar DECSTBM reservation. It is the
   // hard upper bound for targetBottomRow in ALL branches below.
-  const absoluteBottom = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
+  const absoluteBottom = Math.max(1, (self.stdout.rows ?? 24) - 1 - layout.extraRows);
   const frame = frameLines.join('\n');
-  // Invariant: the input frame is bottom-pinned (targetBottomRow ===
-  // absoluteBottom) once committed content exists. On a FRESH session
-  // (placementMode === 'cursor-follow', no committed content yet), the frame
-  // instead sits just below the banner so the prompt appears directly under
-  // the welcome art — no large empty gap. The dropdown / hint / streaming
-  // overlay grow UPWARD from the input in both modes.
-  //
-  // Transition: cursor-follow → bottom-pinned fires once in commitAbove
-  // (committed-band-commit.ts) when hasCommitted first becomes true. After
-  // that the frame stays bottom-pinned for the remainder of the arm cycle.
-  //
-  // History: an earlier two-regime "content-following" placement pinned the
-  // frame just below the banner while idle, which caused opening the dropdown
-  // to push the whole frame DOWN (no headroom above the prompt). That was
-  // replaced with unconditional bottom-pinning, which fixed the dropdown but
-  // created a large empty gap on fresh sessions. placementMode restores the
-  // pre-commit top-flow layout without the dropdown-push bug: the frame pins
-  // at absoluteBottom even in cursor-follow when the dropdown is open
-  // (physicalRows > 1), so the menu grows into the empty viewport above
-  // instead of pushing down.
-  //
-  // Contract: cursor-follow computes targetBottomRow as
-  //   min(absoluteBottom, anchorRow + physicalRows - 1)
-  // so a 1-line idle frame lands at anchorRow (right below the banner) while
-  // a multi-line frame (dropdown open) extends downward toward absoluteBottom.
-  // Once physicalRows exceeds the gap, the frame naturally reaches
-  // absoluteBottom and the two modes converge.
-  // Invariant (wrap-aware frame height): physicalRows must reflect the
-  // POST-wrap row count — not just frameLines.length (the logical count).
-  // CupFrameRenderer hard-wraps at stdout.columns, so a single logical input
-  // line wider than the terminal occupies 2+ physical rows. Using the logical
-  // count in cursor-follow mode under-counts targetBottomRow by the extra
-  // wrapped rows, causing the frame to overlap the DECSTBM reserved footer
-  // band (LoopStageBar). Each spinner-tick repaint then writes the frame at
-  // the wrong position, and the footer bar's "· idle" CUP-paint lands inside
-  // the frame region — producing a cascade of duplicate idle lines that push
-  // content into scrollback. measure() returns the physical (post-wrap) line
-  // count; when unavailable, fall back to the logical count (safe for stubs
-  // and tests that don't wrap).
-  //
-  // Consolidation: lineCount is targetBottomRow-independent (it depends only
-  // on content and terminal width), so we call measure() once with any valid
-  // targetBottomRow to get lineCount, compute the real targetBottomRow from
-  // it, then derive desiredTopRow arithmetically — avoiding a second full
-  // wrap pass.
-  const logicalRows = frameLines.length;
-  const physicalRows = self.logUpdate.measure
-    ? self.logUpdate.measure(frame, absoluteBottom).lineCount
-    : logicalRows;
-  const targetBottomRow =
-    self.placementMode === 'cursor-follow' && self.anchorRow !== undefined
-      ? Math.min(absoluteBottom, (self.anchorRow - 1) + physicalRows)
-      : absoluteBottom;
-  // Anchor-row enforcement: when an upper-bound was supplied (typically by
-  // the surface that knows how many rows the welcome banner / update-
-  // notice consumed before arm), make sure the frame's top row does not
-  // climb above it via CUP positioning. When it would, evict the deficit
-  // into terminal scrollback FIRST (via DECSTBM-region `\n` writes that
-  // scroll the current viewport up one row at a time) so the row at the
-  // anchor that we are about to overwrite has already been preserved in
-  // scrollback for the user to scroll back to. After eviction the anchor
-  // shifts up by the same number of rows because the pre-arm content has
-  // moved upward in the viewport — re-running this branch on the next
-  // repaint with the same lineCount finds no deficit.
-  // Wrap-aware top row: CupFrameRenderer hard-wraps at stdout.columns, so a
-  // frame line wider than the terminal occupies >1 physical row. Sizing the
-  // committed-band eviction/re-pin off the LOGICAL line count
-  // (frameLines.length) under-counts in that case and re-pins the band INSIDE
-  // the physical frame footprint, where the next render's erase pass clobbers
-  // it (review #592). desiredTopRow is derived from the same physicalRows
-  // (lineCount) already computed above — equivalent to measure().topRow but
-  // without a second wrap pass. Stubs without measure() fall back to logical.
-  const desiredTopRow = self.logUpdate.measure
-    ? Math.max(1, targetBottomRow - physicalRows + 1)
-    : Math.max(1, targetBottomRow - frameLines.length + 1);
+  const { desiredTopRow, targetBottomRow } = computeFramePosition(
+    frame,
+    frameLines,
+    absoluteBottom,
+    self.placementMode,
+    self.anchorRow,
+    self.logUpdate,
+  );
   // Record the real (unpadded) frame top for commitAbove's routing. This is the
   // value Phase-2 will re-establish; logUpdate.topRow (shrink-padded) is not.
   self.lastMeasuredFrameTop = desiredTopRow;
@@ -332,13 +207,6 @@ export function repaint(self: FrameHost): void {
     && self.logUpdate.topRow
     && self.logUpdate.topRow > 0
   ) {
-    // The previous frame's bottom row (topRow is the PREVIOUS frame's top,
-    // tracked by CupFrameRenderer after each render).
-    // previousLineCount is not exposed, but we can infer the previous bottom
-    // from the tracked state: the renderer's render() sets lineCount (padded),
-    // so the previous bottom is at most absoluteBottom (bottom-pinned), or
-    // in cursor-follow it might be lower. We use absoluteBottom as the safe
-    // upper bound since we know the renderer never writes below it.
     if (targetBottomRow < absoluteBottom) {
       self.logUpdate.setEraseBottomOverride(absoluteBottom);
     }
@@ -364,52 +232,36 @@ export function repaint(self: FrameHost): void {
 function repaintPickerFrame(self: FrameHost): void {
   if (!self.logUpdate || !self.pickerController) return;
   const pickerRows = [...self.pickerController.renderRows()];
-  const overlayLines = self.overlay ? self.overlay.split('\n') : [];
-  const spinnerRow = self.spinnerController.renderSpinnerRow();
-  const tipRow = self.spinnerController.renderTipRow(self.stdout.columns ?? 80);
-  let attachmentRow: string | null = null;
-  if (self.attachments.length > 0) {
-    attachmentRow = renderStatusLine(self.attachments);
-  } else if (self.clipboardFailureMsg !== null) {
-    attachmentRow = palette.dim(self.clipboardFailureMsg);
-    self.clipboardFailureMsg = null;
-  }
-  const hasFixedChrome = !!spinnerRow || !!tipRow || !!attachmentRow;
-  const hasContentAboveInput = hasFixedChrome || overlayLines.length > 0;
-  // Invariant: the bg status bar (when active) owns rows (rows-extraRows)..(rows-1).
-  // Compositor frame must stay above that region or the two writers race the same physical row
-  // every spinner tick, producing flicker. Mirrors DECSTBM math in status-line.ts:287.
-  const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-  const maxLines = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
-  const gapRows = hasContentAboveInput ? 1 : 0;
-  const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
-    + (attachmentRow ? 1 : 0) + gapRows + pickerRows.length;
-  const overlayBudget = Math.max(0, maxLines - fixedRows);
-  const trimmedOverlay = overlayLines.length > overlayBudget
-    ? overlayLines.slice(-overlayBudget)
-    : overlayLines;
-  const renderGap = hasFixedChrome || trimmedOverlay.length > 0;
-  const frameLines: string[] = [];
-  frameLines.push(...trimmedOverlay);
-  if (spinnerRow) frameLines.push(spinnerRow);
-  if (tipRow) frameLines.push(tipRow);
-  if (attachmentRow) frameLines.push(attachmentRow);
-  if (renderGap) frameLines.push('');
-  frameLines.push(...pickerRows);
+  const clipboardRef = { value: self.clipboardFailureMsg };
+  const chrome = gatherChromeRows(
+    self.overlay,
+    self.spinnerController,
+    self.attachments,
+    clipboardRef,
+    self.stdout.columns ?? 80,
+  );
+  self.clipboardFailureMsg = clipboardRef.value;
+  const layout = computePickerViewportLayout(
+    chrome,
+    pickerRows.length,
+    self.stdout.rows ?? 24,
+    self.scrollRegion,
+  );
+  const frameLines = buildPickerFrameLines(chrome, layout.trimmedOverlay, layout.renderGap, pickerRows);
   // Empty-frame guard: when the picker's renderRows() is empty and no
   // chrome is active, frameLines is []. The CupFrameRenderer clamps
   // rawLineCount to ≥1, so rendering an empty string would violate the
   // padded-covers-raw invariant added in PR #557 (lineCount=0 <
   // rawLineCount=1). Skip the render — nothing to draw on screen.
   if (frameLines.length === 0) return;
-  const targetBottomRow = Math.max(1, (self.stdout.rows ?? 24) - 1 - extraRows);
+  const absoluteBottom = Math.max(1, (self.stdout.rows ?? 24) - 1 - layout.extraRows);
   const frame = frameLines.join('\n');
   // Wrap-aware top row — CupFrameRenderer hard-wraps at stdout.columns; sizing
   // the band off the logical line count re-pins it inside a soft-wrapped frame
   // (review #592). See repaint() for the full rationale.
   const desiredTopRow = self.logUpdate.measure
-    ? self.logUpdate.measure(frame, targetBottomRow).topRow
-    : Math.max(1, targetBottomRow - frameLines.length + 1);
+    ? self.logUpdate.measure(frame, absoluteBottom).topRow
+    : Math.max(1, absoluteBottom - frameLines.length + 1);
   // Record the real (unpadded) frame top for commitAbove's routing, exactly as
   // the non-picker repaint() body does (see its `self.lastMeasuredFrameTop =
   // desiredTopRow;` above). Without this, a picker frame's row count differs
@@ -423,6 +275,6 @@ function repaintPickerFrame(self: FrameHost): void {
   self.lastMeasuredFrameTop = desiredTopRow;
   preserveRowsBeforeFrameRender(self, desiredTopRow);
   const preRenderFrameTop = self.logUpdate.topRow ?? 0;
-  self.logUpdate.render(frame, targetBottomRow, self.anchorRow);
-  self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, targetBottomRow);
+  self.logUpdate.render(frame, absoluteBottom, self.anchorRow);
+  self.repositionCommittedBand(desiredTopRow, preRenderFrameTop, absoluteBottom);
 }

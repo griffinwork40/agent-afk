@@ -310,14 +310,14 @@ export type AccountInfo = {
 
 export type AgentInfo = {
   name: string;
-  description: string;
+  description?: string;
   model?: string;
 };
 
 export type ModelInfo = {
   value: string;
-  displayName: string;
-  description: string;
+  displayName?: string;
+  description?: string;
   supportsEffort?: boolean;
   supportedEffortLevels?: EffortLevel[];
   supportsAdaptiveThinking?: boolean;

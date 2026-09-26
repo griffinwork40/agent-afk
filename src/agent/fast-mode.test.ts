@@ -16,7 +16,7 @@ describe('FastModeController', () => {
     expect(snapshot).toMatchObject({ preference: 'on', effective: true });
   });
 
-  it.each(['claude-opus-5', 'claude-opus-5-20260724', 'claude-opus-4-8', 'claude-opus-4-8-20260201'])('accepts supported anchored model %s', (model) => {
+  it.each(['claude-opus-5', 'claude-opus-5-20260724', 'claude-opus-5-5', 'claude-opus-5-5-20260922', 'claude-opus-4-8', 'claude-opus-4-8-20260201'])('accepts supported anchored model %s', (model) => {
     expect(resolveFastModeStatus('on', { ...eligible, resolvedModelId: model }).effective).toBe(true);
   });
 

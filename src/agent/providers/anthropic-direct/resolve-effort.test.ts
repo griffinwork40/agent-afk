@@ -282,9 +282,78 @@ describe('resolveThinkingParam', () => {
     }
   });
 
-  it('never throws for adaptive or disabled configs regardless of max_tokens', () => {
+  it('never throws for adaptive regardless of max_tokens', () => {
     expect(() => resolveThinkingParam({ type: 'adaptive' }, 100, RESERVE_MODEL)).not.toThrow();
+  });
+
+  it('never throws for disabled on a non-adaptive model (e.g. claude-sonnet-4-6)', () => {
     expect(() => resolveThinkingParam({ type: 'disabled' }, 100, RESERVE_MODEL)).not.toThrow();
+    expect(resolveThinkingParam({ type: 'disabled' }, 64_000, RESERVE_MODEL)).toEqual({
+      type: 'disabled',
+    });
+  });
+
+  // ── #2073: disabled thinking on adaptive-only models ──────────────────
+
+  it('throws a clear agent-afk error for disabled on claude-opus-5-5 (always adaptive-only)', () => {
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5-5'),
+    ).toThrow(/claude-opus-5-5.*cannot be disabled|cannot be disabled.*claude-opus-5-5/i);
+  });
+
+  it('throws for disabled on claude-opus-5-5 with a dated model id', () => {
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5-5-20260922'),
+    ).toThrow(/cannot be disabled/);
+  });
+
+  // Rejecting `enabled` (requiresAdaptiveThinking) does not imply rejecting
+  // `disabled`: these models accept it, so it must pass through unchanged.
+  it('passes disabled through on claude-sonnet-5 (rejects enabled, accepts disabled)', () => {
+    expect(resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-sonnet-5')).toEqual({
+      type: 'disabled',
+    });
+  });
+
+  it.each(['claude-opus-4-7', 'claude-opus-4-8'])('passes disabled through on %s', (model) => {
+    expect(resolveThinkingParam({ type: 'disabled' }, 64_000, model)).toEqual({ type: 'disabled' });
+  });
+
+  it('throws for disabled on claude-opus-5 at max effort (#2073 Opus-5 case)', () => {
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5', 'max'),
+    ).toThrow(/claude-opus-5.*disabled.*max|disabled.*max.*claude-opus-5/i);
+  });
+
+  it('throws for disabled on claude-opus-5 at xhigh effort', () => {
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5', 'xhigh'),
+    ).toThrow(/effort/);
+  });
+
+  it('does NOT throw for disabled on claude-opus-5 at high effort (allowed)', () => {
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5', 'high'),
+    ).not.toThrow();
+    expect(resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5', 'high')).toEqual({
+      type: 'disabled',
+    });
+  });
+
+  it('does NOT throw for disabled on claude-opus-5 with no effort supplied', () => {
+    // When effort is undefined (not resolved), we cannot know it's forbidden — pass through.
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5'),
+    ).not.toThrow();
+  });
+
+  it('does NOT throw for disabled on claude-opus-5 at low/medium effort', () => {
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5', 'low'),
+    ).not.toThrow();
+    expect(() =>
+      resolveThinkingParam({ type: 'disabled' }, 64_000, 'claude-opus-5', 'medium'),
+    ).not.toThrow();
   });
 
   it('promotes enabled to adaptive on opus-4.7+ (no explicit budget leaks through)', () => {

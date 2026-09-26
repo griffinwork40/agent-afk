@@ -107,6 +107,7 @@ interface InternalJob extends BackgroundJob {
   onCleanup?: () => Promise<void>;
   /** Post-settlement synchronous callback, forwarded from RegisterArgs. */
   onSettled?: () => void;
+  /** Epoch-ms of the most recent observable activity. Updated on every progress event. */  lastActivityAt: number;
 }
 
 /** Default TTL for evicting terminal jobs from the registry map. */
@@ -118,7 +119,7 @@ const TERMINAL_EVICT_TTL_MS = 5 * 60 * 1000; // 5 minutes
  * otherwise hang session teardown indefinitely. On timeout, the job is
  * treated as settled (teardown proceeds) and a warning is logged.
  */
-const CANCEL_DRAIN_TIMEOUT_MS = 5000; // 5 seconds
+const CANCEL_DRAIN_TIMEOUT_MS = 1500; // 1.5 seconds — reduced from 5 s; a job that won't settle in 1.5 s won't settle in 5 s
 
 export interface BackgroundRegistryOptions {
   /** Optional trace writer. Witness events become no-ops when undefined. */
@@ -244,6 +245,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
         );
       },
       (event) => {
+        job.lastActivityAt = Date.now(); // heartbeat: any progress event = observable activity
         writer.write(event);
         // Feed text content to the Haiku summarizer's transcript ring buffer.
         if (event.type === 'chunk' && event.chunk.type === 'content') {
@@ -354,6 +356,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       label,
       model: args.model,
       startedAt,
+      lastActivityAt: startedAt,
       status: 'running',
       handle: args.handle,
       joiners: [],
@@ -398,15 +401,9 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   }
 
   /** Read-only snapshot of one job. */
-  get(jobId: string): BackgroundJob | undefined {
-    const job = this.jobs.get(jobId);
-    return job ? this.snapshot(job) : undefined;
-  }
-
+  get(jobId: string): BackgroundJob | undefined { const j = this.jobs.get(jobId); return j ? this.snapshot(j) : undefined; }
   /** Snapshot of every known job, in registration order. */
-  list(): readonly BackgroundJob[] {
-    return [...this.jobs.values()].map((j) => this.snapshot(j));
-  }
+  list(): readonly BackgroundJob[] { return [...this.jobs.values()].map((j) => this.snapshot(j)); }
 
   /**
    * Wait for a job to reach a terminal state and return its result.
@@ -807,6 +804,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       ...(job.result !== undefined ? { result: job.result } : {}),
       ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
       ...(job.parentSessionId !== undefined ? { parentSessionId: job.parentSessionId } : {}),
+      ...(job.lastActivityAt !== undefined ? { lastActivityAt: job.lastActivityAt } : {}),
     };
     return snap;
   }

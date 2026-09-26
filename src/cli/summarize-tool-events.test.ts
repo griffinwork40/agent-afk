@@ -22,7 +22,8 @@ describe('summarizeToolEvents', () => {
 
   it('formats a single successful tool call with name, input, and ✓', () => {
     const result = summarizeToolEvents([makeEvent({ toolName: 'read_file', input: '/path/to/file.ts' })]);
-    expect(result).toBe('\n[Tools used: read_file(/path/to/file.ts)✓]');
+    // shortenPaths collapses absolute paths with 3+ segments to basenames
+    expect(result).toBe('\n[Tools used: read_file(file.ts)✓]');
   });
 
   it('formats a tool call with error flag → ✗', () => {

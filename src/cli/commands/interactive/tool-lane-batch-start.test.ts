@@ -2,13 +2,13 @@
  * Tests for ToolLane live tool-activity indicator (Phase 2, issue #516).
  *
  * `notifyToolActivity` — records the dispatcher's OBSERVED running set so the
- * overlay renders `[×N]` next to each genuinely in-flight member row.
+ * overlay renders `∥i/N` next to each genuinely in-flight member row.
  *
  * Constraints:
  *  - Append-only scrollback: committed rows can't be re-laid-out.
  *  - Badge disappears when the dispatcher reports an empty active set.
  *  - Phase 1 completed-row badges (∥i/N) continue to work alongside.
- *  - A lone straggler (activeCount === 1) must never render [×1].
+ *  - A lone straggler (activeCount === 1) must never render ∥1.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -25,20 +25,22 @@ function overlayLines(lane: ToolLane): string[] {
   return stripAnsi(lane.getOverlay()).split('\n').filter(Boolean);
 }
 
-/** Returns true if any overlay line mentions `[×N]`. */
+/** Returns true if any overlay line contains a `∥i/N` badge where N === width. */
 function hasBadge(lines: string[], width: number): boolean {
-  return lines.some((l) => l.includes(`[×${width}]`));
+  return lines.some((l) => new RegExp(`∥\\d+/${width}`).test(l));
 }
 
 describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () => {
-  it('shows [×2] on in-flight rows after notifyToolActivity(2)', () => {
+  it('shows ∥i/N on in-flight rows after notifyToolActivity(2)', () => {
     const lane = new ToolLane();
     lane.addStart('id-read', 'read_file', '("x.ts")');
     lane.addStart('id-glob', 'glob', '("**/*.ts")');
     lane.notifyToolActivity(2, ['id-read', 'id-glob']);
 
     const lines = overlayLines(lane);
-    expect(hasBadge(lines, 2)).toBe(true);
+    // id-read is position 1, id-glob is position 2 → ∥1/2 and ∥2/2
+    expect(lines.some((l) => l.includes('∥1/2'))).toBe(true);
+    expect(lines.some((l) => l.includes('∥2/2'))).toBe(true);
   });
 
   it('shows the badge on both member rows, not on non-members', () => {
@@ -50,14 +52,14 @@ describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () 
     lane.notifyToolActivity(2, ['id-a', 'id-b']);
 
     const lines = overlayLines(lane);
-    // The badge appears (at least once) for a and b
-    const memberLines = lines.filter((l) => l.includes('[×2]'));
+    // The badge appears (at least once) for a and b (∥1/2 or ∥2/2)
+    const memberLines = lines.filter((l) => /∥\d+\/2/.test(l));
     expect(memberLines.length).toBeGreaterThanOrEqual(1);
 
     // c's line must NOT have the badge
     const grepLines = lines.filter((l) => l.includes('grep'));
     for (const gl of grepLines) {
-      expect(gl).not.toContain('[×2]');
+      expect(/∥\d+\/2/.test(gl)).toBe(false);
     }
   });
 
@@ -85,7 +87,7 @@ describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () 
     lane.addResult('id-a', makeResult('content-a'));
     // The badge must persist on id-b's row (dispatcher is authoritative, not addResult)
     const afterFirst = overlayLines(lane);
-    const bStillBadged = afterFirst.some((l) => l.includes('glob') && l.includes('[×2]'));
+    const bStillBadged = afterFirst.some((l) => l.includes('glob') && /∥\d+\/2/.test(l));
     expect(bStillBadged).toBe(true);
   });
 

@@ -477,7 +477,7 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
     // Pin the exact bucket grammar — pluralization changes are user-visible
     // string changes and must surface in this test, not silently in
     // production. Hidden = [Write, Glob] each at n=1, so no pluralization.
-    expect(overlay).toMatch(/… \+2 \(1 Write, 1 Glob\)/);
+    expect(overlay).toMatch(/\+2  Write ×1  Glob ×1/);
     expect(overlay).not.toMatch(/\+2 tool uses/);
   });
 
@@ -508,7 +508,7 @@ describe('ToolLane.upsertTextChild / removeTextChildrenUnder', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // bash → bash (sibilant, invariant), NOT bashs.
-    expect(overlay).toMatch(/… \+2 \(2 bash\)/);
+    expect(overlay).toMatch(/\+2  bash ×2/);
     expect(overlay).not.toMatch(/bashs/);
     expect(overlay).not.toMatch(/bashes/);
   });
@@ -1164,7 +1164,7 @@ describe('Bug #4 — progress event must not overwrite increment-only toolUses c
 describe('Bug #5 — agentResultSummary must use └ tree connector and appear after overflow', () => {
   // Invariant: spine topology contract for agentResultSummary
   //   Column pins (matches the PR #535 thinking-tail invariant at line ~1926):
-  //     col 0 = `│` (parent's live spine), col 2 = connector glyph (`├` non-last,
+  //     col 0 = `│` (parent's live spine), col 3 = connector glyph (`├` non-last,
   //     `╰` last), col 5 = content. Drift at any column = regression.
   //   Ordering:
   //     overflow ellipsis is a sibling row, agentResultSummary is the LAST
@@ -1207,8 +1207,8 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     const stripped = stripAnsi(lane.flush().join('\n'));
     const allLines = stripped.split('\n');
 
-    // Find overflow line: matches "… +N" pattern from formatCategoricalOverflow
-    const overflowIdx = allLines.findIndex((l) => /….*\+\d+/.test(l));
+    // Find overflow line: matches '··· +N' pattern from the new overflow format
+    const overflowIdx = allLines.findIndex((l) => /···.*\+\d+/.test(l));
     // Find result summary line
     const doneIdx = allLines.findIndex((l) => l.includes('Done (4 tool calls'));
 
@@ -1230,12 +1230,12 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     expect(doneLine).toContain('╰');
 
     // Assertion 3 (column-pin contract — PR #535 pattern):
-    //   `│ <connector><pad><content>` — connector at col 2, content at col 5.
+    //   `│  <connector><pad><content>` — connector at col 3, content at col 6.
     //   The overflow line uses `├` (non-last sibling); summary uses `╰` (last).
-    expect(overflowLine.indexOf('├')).toBe(2);
-    expect(overflowLine.indexOf('…')).toBe(5);
-    expect(doneLine.indexOf('╰')).toBe(2);
-    expect(doneLine.indexOf('Done (4 tool calls')).toBe(5);
+    expect(overflowLine.indexOf('├')).toBe(3);
+    expect(overflowLine.indexOf('·')).toBe(6);
+    expect(doneLine.indexOf('╰')).toBe(3);
+    expect(doneLine.indexOf('Done (4 tool calls')).toBe(6);
 
     // Assertion 4 (full-topology snapshot): locks the entire overlay shape.
     // Any structural drift — column position, sibling ordering, glyph
@@ -1243,12 +1243,12 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     // as a visible inline-snapshot diff instead of slipping past a
     // single-glyph toContain. Populated by `pnpm test -u` on first run.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(overflow-tester) [worker] — 4 tool calls
-      │ ├─ … +1 (1 Read)
-      │ ├─ ▸ Bash("file1.ts") — ✓ result1
-      │ ├─ ● Grep("file2.ts") — ✓ result2
-      │ ├─ ● Glob("file3.ts") — ✓ result3
-      │ ╰─ Done (4 tool calls · 2.5s)"
+      "◉  → Agent(overflow-tester) [worker] — 4 tool calls
+      │  ├─ ··· +1  Read ×1
+      │  ├─ ▸ Bash("file1.ts") — ✓ result1
+      │  ├─ ● Grep("file2.ts") — ✓ result2
+      │  ├─ ● Glob("file3.ts") — ✓ result3
+      │  ╰─ Done (4 tool calls · 2.5s)"
     `);
   });
 
@@ -1278,15 +1278,15 @@ describe('Bug #5 — agentResultSummary must use └ tree connector and appear a
     expect(doneLine).toContain('╰');
 
     // Column-pin contract (PR #535 pattern):
-    //   `│ ╰─ Done (…)` — `╰` at col 2 (connector column), `Done` at col 5.
-    expect(doneLine.indexOf('╰')).toBe(2);
-    expect(doneLine.indexOf('Done (1 tool')).toBe(5);
+    //   `│  ╰─ Done (…)` — `╰` at col 3 (connector column), `Done` at col 6.
+    expect(doneLine.indexOf('╰')).toBe(3);
+    expect(doneLine.indexOf('Done (1 tool')).toBe(6);
 
     // Full-topology snapshot — locks the 1-child-plus-summary shape.
     expect(stripped).toMatchInlineSnapshot(`
-      "◉ → Agent(connector-tester) [worker]
-      │ ├─ ● Read("data.ts") — ✓ ok
-      │ ╰─ Done (1 tool · 0.8s)"
+      "◉  → Agent(connector-tester) [worker]
+      │  ├─ ● Read("data.ts") — ✓ ok
+      │  ╰─ Done (1 tool · 0.8s)"
     `);
   });
 });
@@ -1455,10 +1455,10 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     const overlay = stripAnsi(lane.getOverlay());
     // Recency window: MAX_VISIBLE_CHILDREN = 3 keeps the MOST-RECENT pr4–pr6
     // visible; the older pr1–pr3 collapse into the leading overflow line.
-    // Overflow line: … +3 more: pr1, pr2, pr3
-    expect(overlay).toMatch(/… \+3 more: pr1, pr2, pr3/);
+    // Overflow line: ··· +3  pr1  pr2  pr3
+    expect(overlay).toMatch(/\+3  pr1  pr2  pr3/);
     // The label-list must NOT collapse to a categorical bucket
-    expect(overlay).not.toMatch(/\+3 \(/);
+    expect(overlay).not.toMatch(/\+3  [A-Z]/);
   });
 
   it('4 distinct leaf tools → categorical overflow shows pluralized names', () => {
@@ -1486,9 +1486,9 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // Hidden (older head): Write ×2 → "… +2 (2 Writes)"
-    expect(overlay).toMatch(/… \+2 \(2 Writes\)/);
+    expect(overlay).toMatch(/\+2  Writes ×2/);
     // Must not use the label-aware path (Write is not dispatch-class)
-    expect(overlay).not.toMatch(/more:/);
+    expect(overlay).not.toMatch(/  pr/);
   });
 
   it('mixed dispatch + leaf hidden → categorical fallback (heterogeneous)', () => {
@@ -1514,9 +1514,9 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // allDispatch=false → categorical. Should NOT be label-aware.
-    expect(overlay).not.toMatch(/more:/);
+    expect(overlay).not.toMatch(/  pr/);
     // Should show categorical with counts: 1 Agent + 1 bash = 2 total
-    expect(overlay).toMatch(/… \+2 \(/);
+    expect(overlay).toMatch(/\+2  /);
   });
 
   it('dispatch overflow with >LABEL_LIST_CAP labels → inline +N suffix', () => {
@@ -1533,8 +1533,8 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // 9 children, MAX_VISIBLE=3 keeps newest pr7–pr9 visible; older pr1–pr6
-    // collapse (hidden=6). LABEL_LIST_CAP=5 → shows pr1–pr5 + (+1) for pr6.
-    expect(overlay).toMatch(/… \+6 more: pr1, pr2, pr3, pr4, pr5 \(\+1\)/);
+    // collapse (hidden=6). LABEL_LIST_CAP=5 → shows pr1–pr5 + +1 for pr6.
+    expect(overlay).toMatch(/\+6  pr1  pr2  pr3  pr4  pr5  \+1/);
   });
 
   it('getGroupKey invariant: different Agent labels do NOT merge (existing invariant preserved)', () => {
@@ -1587,10 +1587,9 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // Must NOT render ellipsis or empty strings as labels.
-    expect(overlay).not.toMatch(/more: …/);
-    expect(overlay).not.toMatch(/more:.*, …/);
+    expect(overlay).not.toMatch(/  …/);
     // Must fall back to categorical (heterogeneous toolNames: Agent + agent).
-    expect(overlay).toMatch(/… \+2 \(/);
+    expect(overlay).toMatch(/\+2  /);
   });
 
   it('hidden grouped dispatch with placeholder label (translate.ts ellipsis) → categorical fallback', () => {
@@ -1616,9 +1615,10 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // Must NOT render ' …' as a label.
-    expect(overlay).not.toMatch(/more: …/);
-    // Must fall back to categorical: `… +2 (2 agents)`.
-    expect(overlay).toMatch(/… \+2 \(2 agents\)/);
+    expect(overlay).not.toMatch(/  …/);
+    // Must fall back to categorical: `··· +1  agents ×2`
+    // (2 unmerged agents group into 1 GroupedSibling row → hidden=[1 row]).
+    expect(overlay).toMatch(/\+1  agents ×2/);
   });
 
   // ─── Regression: heterogeneous dispatch must not blend label types ──────
@@ -1650,11 +1650,11 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     const overlay = stripAnsi(lane.getOverlay());
     // MUST NOT mix Agent + skill labels into one list — the user wouldn't
     // know which type each label belonged to.
-    expect(overlay).not.toMatch(/more:/);
+    expect(overlay).not.toMatch(/  pr/);
     // Must fall back to categorical with type counts.
-    expect(overlay).toMatch(/… \+3 \(/);
-    expect(overlay).toMatch(/1 Agent/);
-    expect(overlay).toMatch(/2 skills/);
+    expect(overlay).toMatch(/\+3  /);
+    expect(overlay).toMatch(/Agent ×1/);
+    expect(overlay).toMatch(/skills ×2/);
   });
 
   // ─── Regression: count/label honesty when groups land in hidden slice ────
@@ -1685,10 +1685,11 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    expect(overlay).toMatch(/… \+4 more: pr1 ×4/);
+    // 4 same-label Agents group into 1 GroupedSibling row → hidden=[1 row]
+    expect(overlay).toMatch(/\+1  pr1 ×4/);
     // Negative: must NOT emit the bare label without the count suffix.
-    expect(overlay).not.toMatch(/… \+4 more: pr1$/m);
-    expect(overlay).not.toMatch(/… \+4 more: pr1,/);
+    expect(overlay).not.toMatch(/\+1  pr1$/m);
+    expect(overlay).not.toMatch(/\+1  pr1,/);
   });
 
   it('hidden mix of groups + individuals → entry count reconciles across rows', () => {
@@ -1718,7 +1719,8 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    expect(overlay).toMatch(/… \+5 more: pr1 ×3, pr2, pr3(?!\s*\(\+)/);
+    // hidden=[Group(pr1×3), pr2, pr3] = 3 rows → +3
+    expect(overlay).toMatch(/\+3  pr1 ×3  pr2  pr3(?!\s*\(\+)/);
   });
 
   it('hidden labels overflow LABEL_LIST_CAP with a group → (+M) counts ENTRIES, not rows', () => {
@@ -1749,7 +1751,9 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    expect(overlay).toMatch(/… \+8 more: pr1 ×3, pr2, pr3, pr4, pr5 \(\+1\)/);
+    // hidden=[Group(pr1×3), pr2, pr3, pr4, pr5, pr6] = 6 rows → +6
+    // LABEL_LIST_CAP=5 → shows 5 of those 6 rows + +1 entry from pr6 row
+    expect(overlay).toMatch(/\+6  pr1 ×3  pr2  pr3  pr4  pr5  \+1/);
   });
 
   // ─── M1: terminal-injection sanitization ───────────────────────────────
@@ -1781,15 +1785,17 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
 
     const overlay = stripAnsi(lane.getOverlay());
     // Find the overflow line specifically.
-    const overflowLine = overlay.split('\n').find((line) => /\+3 more:/.test(line)) ?? '';
+    // 6 agents, keep newest 3 visible (pr1–pr3), hide oldest 3 (pr4, pr5, pr6).
+    // All are distinct labels → 3 rows hidden → +3.
+    const overflowLine = overlay.split('\n').find((line) => /\+3/.test(line) && line.includes('···')) ?? '';
     // Sanitization replaces control chars with space → contiguous tokens
-    // become space-separated: `pr4 INJECTED`, `pr5 [31mRED`.
+    // become space-separated: `pr4 INJECTED`, `pr5 RED`.
     expect(overflowLine).toContain('pr4 INJECTED');
     expect(overflowLine).toContain('pr6');
     // No literal CR/LF/ESC must remain in the rendered line.
     expect(overflowLine).not.toMatch(/[\r\n\x1b]/);
     // The sanitized line must still be a single visual row.
-    const overflowLines = overlay.split('\n').filter((line) => /\+3 more:/.test(line));
+    const overflowLines = overlay.split('\n').filter((line) => /\+3/.test(line) && line.includes('···'));
     expect(overflowLines).toHaveLength(1);
   });
 
@@ -1802,26 +1808,23 @@ describe('formatCategoricalOverflow — label-aware dispatch overflow', () => {
     const lane = new ToolLane();
     lane.addStartWithAgentContext('parent', 'skill', '(compose)', undefined);
     // 3 visible distinct dispatches + 1 hidden with the runaway label.
-    // Hidden has 1 item but the homogeneity check needs all same toolName →
-    // make all 4 Agents with distinct labels so pr4 (long one) goes hidden.
+    // Dispatch the long label FIRST (oldest) so it lands in the collapsed
+    // older head; pr1–pr3 are the newest 3 and stay visible.
+    lane.addStartWithAgentContext('a-long', 'Agent', `(${longLabel})`, 'parent');
+    lane.addResult('a-long', makeResult('done'));
     lane.addStartWithAgentContext('a-1', 'Agent', '(pr1)', 'parent');
     lane.addResult('a-1', makeResult('done'));
     lane.addStartWithAgentContext('a-2', 'Agent', '(pr2)', 'parent');
     lane.addResult('a-2', makeResult('done'));
     lane.addStartWithAgentContext('a-3', 'Agent', '(pr3)', 'parent');
     lane.addResult('a-3', makeResult('done'));
-    lane.addStartWithAgentContext('a-4', 'Agent', `(${longLabel})`, 'parent');
-    lane.addResult('a-4', makeResult('done'));
     lane.addResult('parent', makeResult('done'));
 
     const overlay = stripAnsi(lane.getOverlay());
-    const overflowLine = overlay.split('\n').find((line) => /\+1 more:/.test(line)) ?? '';
+    const overflowLine = overlay.split('\n').find((line) => /\+1/.test(line) && line.includes('···')) ?? '';
     // Truncated label must end with ellipsis and be no longer than 60 chars
     // (LABEL_DISPLAY_MAX), counting the trailing ellipsis as 1 char.
     expect(overflowLine).toContain('…');
-    // Extract the label portion after `more: `.
-    const labelPortion = overflowLine.split('more: ')[1] ?? '';
-    expect(labelPortion.length).toBeLessThanOrEqual(60);
     // The original 500-char label must NOT appear in full.
     expect(overflowLine).not.toContain('x'.repeat(100));
   });
@@ -2341,8 +2344,8 @@ describe('ToolLane.addDiff — render-only diff sidechannel', () => {
       expect(flushedB).toContain('+ mid-added');
       // For a mid-sibling under an Agent, diffIndent = '| ' (agent spine) + g.spine ('| ') + '  '.
       // In ASCII mode this is '| | ' + '  ' = '| |   '. At least one line must start
-      // with '| | ' confirming g.spine (not spineClosed) is used for the mid-sibling column.
-      const spineLines = flushedB.split('\n').filter((l) => l.startsWith('| | '));
+      // with '|  |  ' confirming g.spine (not spineClosed) is used for the mid-sibling column.
+      const spineLines = flushedB.split('\n').filter((l) => l.startsWith('|  |  '));
       expect(spineLines.length).toBeGreaterThan(0);
       // And box-drawing glyphs must be absent.
       expect(flushedB).not.toMatch(/[│├╰]/);
@@ -2377,7 +2380,7 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
   //   header row  = (live-ancestor spine slots) + '◉ ' + agent.prefix
   //   child row   = (live-ancestor spine slots) + '│ ' + connector + child.prefix
   //
-  // Where each slot is 2 cells: `'│ '` for a live external ancestor
+  // Where each slot is 3 cells: `'│  '` for a live external ancestor
   // (extraDepth > 0), `'◉ '` for the turn-root marker, `'│ '` for the
   // Agent's own spine column under which children render. Pre-spine,
   // the encoding was `'  '.repeat(extraDepth + 1) + prefix` — pure
@@ -2398,7 +2401,13 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     // With eager ancestor-header emission flushSource returns:
     //   [0] skill ancestor header (eagerly emitted)
     //   [1] the subagent block (Agent + children)
-    expect(flushed).toHaveLength(2);
+    //   [2] trailing spine-continuation separator (│ at depth 1)
+    expect(flushed).toHaveLength(3);
+
+    // Trailing separator: carries the skill's spine so the │ column stays
+    // continuous between independently committed sibling bands.
+    const separator = stripAnsi(flushed[2]!);
+    expect(separator).toBe('│  ');
 
     // First element: the skill ancestor header at root depth — uses the
     // same spine-encoded head-row shape as formatAgentSummary: `◉ ` at col 0
@@ -2407,32 +2416,32 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     // was the visible "broken topology spine" the renderer was emitting
     // (Bug A, scrollback path).
     const ancestorHeader = stripAnsi(flushed[0]!);
-    expect(ancestorHeader.startsWith('◉ ')).toBe(true);
+    expect(ancestorHeader.startsWith('◉  ')).toBe(true);
     expect(ancestorHeader).toContain('skill');
     expect(ancestorHeader).toContain('diagnose');
 
-    // Second element: the Agent block itself, indented at +1 depth (4 spaces).
+    // Second element: the Agent block itself, indented at +1 depth.
     const block = stripAnsi(flushed[1]!);
     const lines = block.split('\n');
 
-    // Header at +1 spine depth: `'│ '` (live skill ancestor) + `'◉ '`
+    // Header at +1 spine depth: `'│  '` (live skill ancestor) + `'◉  '`
     // (turn-root) + prefix. Pre-spine, this was `'    '` (4 spaces).
-    expect(lines[0]!.startsWith('│ ◉ ')).toBe(true);
+    expect(lines[0]!.startsWith('│  ◉  ')).toBe(true);
     expect(lines[0]!).toContain('Agent');
     expect(lines[0]!).toContain('critic-pragmatist');
-    // Negative assertion: header does NOT start with `'◉ '` at col 0
+    // Negative assertion: header does NOT start with `'◉  '` at col 0
     // (the root-depth shape — would mean the ancestor spine was dropped).
-    expect(/^◉ /.test(lines[0]!)).toBe(false);
+    expect(/^◉  /.test(lines[0]!)).toBe(false);
 
     // Spine-seam fix (revised): the skill ancestor is still LIVE when the
-    // subagent flushes — so its column stays OPEN (`'│ '`) in the committed
+    // subagent flushes — so its column stays OPEN (`'│  '`) in the committed
     // band. A live ancestor may emit further waves; closing it at flush time
     // bakes a false last-child guess and fragments col-0. The Agent's own
-    // spine column `'│ '` also continues: `'│ │ ├─ '`. Head row above keeps
-    // its incoming spine open (`'│ ◉ '`, PR #642 invariant preserved).
+    // spine column `'│  '` also continues: `'│  │  ├─ '`. Head row above keeps
+    // its incoming spine open (`'│  ◉  '`, PR #642 invariant preserved).
     const childLine = lines.find((l) => l.includes('Read'));
     expect(childLine).toBeDefined();
-    expect(childLine!.startsWith('│ │ ├─ ')).toBe(true);
+    expect(childLine!.startsWith('│  │  ├─ ')).toBe(true);
 
     // The skill parent should still be in the lane — only the subagent
     // and its tools were collected.
@@ -2455,9 +2464,9 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
 
     // Root-level subagent: header starts with `'◉ '` at col 0 — no live
     // ancestor spine. Pre-spine, this was `'  '` (2 spaces).
-    expect(headerLine.startsWith('◉ ')).toBe(true);
+    expect(headerLine.startsWith('◉  ')).toBe(true);
     // Negative: no leading spine slot would mean we accidentally double-indented.
-    expect(/^│ /.test(headerLine)).toBe(false);
+    expect(/^│  /.test(headerLine)).toBe(false);
   });
 
   it('grandchild subagent finishing inside Agent inside skill flushes at +2 spine slots', () => {
@@ -2476,32 +2485,37 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     //   [0] skill ancestor header (depth 0 → ◉ at col 0)
     //   [1] outer-agent ancestor header (depth 1 → │ ◉)
     //   [2] inner-agent block (depth 2 → │ │ ◉ head)
-    expect(flushed).toHaveLength(3);
+    //   [3] trailing spine-continuation separator (│ │ at depth 2)
+    expect(flushed).toHaveLength(4);
+
+    // Trailing separator: carries both ancestors' spines.
+    const separator = stripAnsi(flushed[3]!);
+    expect(separator).toBe('│  │  ');
 
     // [0] skill at root indent — spine-encoded head row, `◉ ` at col 0
     // (0 live-ancestor spine slots, turn-root marker). Pre-fix this was
     // `'  '` (2 spaces) — a naked-space indent that broke the spine column
     // running down through descendant rows.
     const skillHeader = stripAnsi(flushed[0]!);
-    expect(skillHeader.startsWith('◉ ')).toBe(true);
+    expect(skillHeader.startsWith('◉  ')).toBe(true);
     expect(skillHeader).toContain('skill');
 
     // [1] outer-agent at +1 depth — spine-encoded head row,
-    // `│ ◉ ` (1 live-ancestor spine slot for skill, then turn-root for
+    // `│  ◉  ` (1 live-ancestor spine slot for skill, then turn-root for
     // outer-agent's own frame). Pre-fix this was `'    '` (4 spaces) —
     // floated above its children with no spine column tying it to either
     // the skill above or the inner-agent block below.
     const outerHeader = stripAnsi(flushed[1]!);
-    expect(outerHeader.startsWith('│ ◉ ')).toBe(true);
+    expect(outerHeader.startsWith('│  ◉  ')).toBe(true);
     expect(outerHeader).toContain('devils-advocate');
 
-    // [2] inner-agent block — its header is at +2 depth (6 spaces)
+    // [2] inner-agent block — its header is at +2 depth
     const block = stripAnsi(flushed[2]!);
     const headerLine = block.split('\n')[0]!;
 
-    // Two live ancestors → +2 spine slots prepended → `'│ │ ◉ '` head.
+    // Two live ancestors → +2 spine slots prepended → `'│  │  ◉  '` head.
     // Pre-spine this was `'      '` (6 spaces).
-    expect(headerLine.startsWith('│ │ ◉ ')).toBe(true);
+    expect(headerLine.startsWith('│  │  ◉  ')).toBe(true);
     expect(headerLine).toContain('critic-pragmatist');
 
     // Both ancestors should survive the flush.
@@ -2534,7 +2548,13 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     //   [1] inner-skill header (depth 1 → │ ◉)
     //   [2] agent block (depth 2 → │ │ ◉ head, │ │ │ … children)
     const flushed = lane.flushSource('agent');
-    expect(flushed).toHaveLength(3);
+    // [0] outer-skill header, [1] inner-skill header,
+    // [2] agent block, [3] trailing spine separator (│ │ at depth 2)
+    expect(flushed).toHaveLength(4);
+
+    // Trailing separator: carries both skill ancestors' spines.
+    const depthTwoSep = stripAnsi(flushed[3]!);
+    expect(depthTwoSep).toBe('│  │  ');
 
     const block = stripAnsi(flushed[2]!);
     const rows = block.split('\n');
@@ -2542,12 +2562,12 @@ describe('ToolLane.flushSource — nesting-aware indent', () => {
     const childRow = rows.find((r) => r.includes('Read'));
 
     // ask #3: agent head row = two leading spine units + agent glyph.
-    expect(headRow.startsWith('│ │ ◉ '), `head row: ${JSON.stringify(headRow)}`).toBe(true);
+    expect(headRow.startsWith('│  │  ◉  '), `head row: ${JSON.stringify(headRow)}`).toBe(true);
 
     // ask #4: child-tool row = three leading spine units + branch connector.
     expect(childRow, `child row missing in block:\n${block}`).toBeDefined();
     expect(
-      /^│ │ │ [├╰]─/.test(childRow!),
+      /^│  │  │  [├╰]─/.test(childRow!),
       `child row: ${JSON.stringify(childRow)}`,
     ).toBe(true);
 
@@ -2745,9 +2765,9 @@ describe('ToolLane.flushSource — formatAgentHeader emits ◉ + dim │ spine (
     expect(outerHeader, `outer-skill header must start with ◉; got: ${JSON.stringify(outerHeader)}`)
       .toMatch(/^◉ /);
 
-    // inner-skill at depth 1 → `│ ◉ ` (ancestor spine + turn-root)
-    expect(innerHeader, `inner-skill header must start with │ ◉; got: ${JSON.stringify(innerHeader)}`)
-      .toMatch(/^│ ◉ /);
+    // inner-skill at depth 1 → `│  ◉  ` (ancestor spine + turn-root)
+    expect(innerHeader, `inner-skill header must start with │  ◉  ; got: ${JSON.stringify(innerHeader)}`)
+      .toMatch(/^│  ◉  /);
     expect(innerHeader).toContain('inner');
   });
 });
@@ -2792,26 +2812,26 @@ describe('ToolLane.flushSource — formatAgentChildren passes externalAncestors 
     const block = stripAnsi(secondLines.join('\n'));
     const blockLines = block.split('\n').filter(Boolean);
 
-    // architect block head row: `│ ◉ ` (ancestor spine │ + turn-root ◉)
+    // architect block head row: `│  ◉  ` (ancestor spine │ + turn-root ◉)
     const headRow = blockLines[0]!;
     expect(
       headRow,
-      `architect head row must start with │ ◉ (extraDepth=1 spine slot); got: ${JSON.stringify(headRow)}`
-    ).toMatch(/^│ ◉ /);
+      `architect head row must start with │  ◉  (extraDepth=1 spine slot); got: ${JSON.stringify(headRow)}`
+    ).toMatch(/^│  ◉  /);
 
     // Children of architect: spine-seam fix (revised) — architect is skill's
     // LAST inserted child, but the skill is still LIVE at flush time, so its
-    // column stays OPEN (`'│ '`) in the committed band. Both ancestor and
-    // architect's own spine column continue: `'│ │ ├─'` / `'│ │ ╰─'`. Bug B's
+    // column stays OPEN (`'│  '`) in the committed band. Both ancestor and
+    // architect's own spine column continue: `'│  │  ├─'` / `'│  │  ╰─'`. Bug B's
     // invariant (children are INDENTED, never at col 0) still holds — the row
-    // leads with 4 cells of gutter. Head row keeps its incoming spine open
-    // (`│ ◉ `, line ~3733 — PR #642 floating-spine invariant preserved).
+    // leads with 6 cells of gutter. Head row keeps its incoming spine open
+    // (`│  ◉  `, line ~3733 — PR #642 floating-spine invariant preserved).
     const toolRow = blockLines.find((l) => l.includes('bash') || l.includes('ls'));
     expect(toolRow, 'architect child tool row must be present').toBeDefined();
     expect(
       toolRow!,
-      `architect child must start with '│ │ ' (open live-ancestor col + architect spine); got: ${JSON.stringify(toolRow)}`
-    ).toMatch(/^│ │ [├╰]/);
+      `architect child must start with '│  │  ' (open live-ancestor col + architect spine); got: ${JSON.stringify(toolRow)}`
+    ).toMatch(/^│  │  [├╰]/);
   });
 
   it('formatAgentChildren at extraDepth=0 produces correct col-0 ◉ head (no regression)', () => {

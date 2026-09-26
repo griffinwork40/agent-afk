@@ -129,7 +129,7 @@ const INTERPRETER_DENYLIST =
  * {@link scrubAllowlistedRefs}, so it needs no exception here.
  */
 export const SENSITIVE_PATH_SIGNAL =
-  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config\/gh\b|\.config\/gcloud\b|\.netrc\b|\.password-store\b|\.afk\/config\b|\.npmrc\b|\.docker\/config\.json\b|\.git-credentials\b|\.kube\/config\b|Library\/Application Support\b|\/etc\/shadow\b|\/etc\/sudoers\b|master\.passwd\b|Library\/LaunchAgents\b|Library\/LaunchDaemons\b|\.config\/systemd\b/i;
+  /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config[/\\]gh\b|\.config[/\\]gcloud\b|\.netrc\b|\.password-store\b|\.afk[/\\]config\b|\.npmrc\b|\.docker[/\\]config\.json\b|\.git-credentials\b|\.kube[/\\]config\b|Library[/\\]Application Support\b|[/\\]etc[/\\]shadow\b|[/\\]etc[/\\]sudoers\b|master\.passwd\b|Library[/\\]LaunchAgents\b|Library[/\\]LaunchDaemons\b|\.config[/\\]systemd\b|AppData[/\\]Roaming[/\\]Mozilla\b|AppData[/\\]Roaming[/\\]gcloud\b|AppData[/\\]Roaming[/\\]Docker\b|AppData[/\\]Local[/\\]Google[/\\]Chrome\b|AppData[/\\]Local[/\\]Chromium\b|AppData[/\\]Local[/\\]BraveSoftware\b|AppData[/\\]Local[/\\]Microsoft[/\\]Edge\b/i;
 
 export interface BashRestrictionHookOptions {
   /**
@@ -322,9 +322,18 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
 function normalizeHomeRefs(command: string, home: string, afkHome: string | undefined): string {
   const normalized =
     afkHome === undefined ? command : command.replace(/\$\{AFK_HOME\}|\$AFK_HOME\b/g, afkHome);
+  // On Windows, homedir() returns backslash paths (C:\Users\foo). After
+  // substituting $HOME / ~ with the home value, the command may contain
+  // mixed separators — e.g. `C:\Users\foo/.afk/config/afk.env`. Normalise
+  // backslashes to forward slashes BEFORE the path-span normaliser runs so
+  // that PATH_LIKE_SPAN can see the resulting absolute path, and the denylist
+  // substring comparisons (which use forward-slash needles) can find a match.
+  // This is safe: the string is never executed — it is only scanned for
+  // substring matches, so rewriting separators cannot affect what runs.
   return normalized
     .replace(/\$\{HOME\}|\$HOME\b/g, home)
     .replace(/(^|[\s/=:])~(?=$|[/\s])/g, `$1${home}`)
+    .replace(/\\/g, '/')
     .replace(PATH_LIKE_SPAN, (span) => path.posix.normalize(span));
 }
 

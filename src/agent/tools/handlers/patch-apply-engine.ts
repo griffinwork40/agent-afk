@@ -8,11 +8,12 @@
  * @module agent/tools/handlers/patch-apply-engine
  */
 
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes } from 'crypto';
 import { writeFile, rename, mkdir, unlink, chmod, stat } from 'fs/promises';
 import { dirname, join, isAbsolute, resolve } from 'path';
 import { computeLineDiff } from '../../../utils/diff.js';
 import type { DiffPayload, DiffHunk } from '../../../utils/diff.js';
+import { sha256Hex } from './patch-validate.js';
 import type { PatchFileChange, ValidationError } from './patch-validate.js';
 import { errorMessage } from '../../../utils/errors.js';
 
@@ -42,11 +43,6 @@ export interface PatchApplyResult {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/** Compute SHA-256 hex digest of UTF-8 content. */
-function sha256Hex(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex');
-}
 
 /**
  * Compute a unified-diff string AND the structured {@link DiffPayload} for a
