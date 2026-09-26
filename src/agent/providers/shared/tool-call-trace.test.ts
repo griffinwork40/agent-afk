@@ -3,7 +3,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildToolCallStartedPayload,
   buildToolCallCompletedPayload,
+  buildErrorHead,
 } from './tool-call-trace.js';
+import { ToolCallCompletedPayloadSchema } from '../../trace/events.js';
 import type { ToolResult } from '../anthropic-direct/types.js';
 
 describe('buildToolCallStartedPayload', () => {
@@ -538,5 +540,203 @@ describe('buildToolCallCompletedPayload', () => {
       durationMs: 1,
     });
     expect('subagentId' in withoutId).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildErrorHead
+// ---------------------------------------------------------------------------
+
+describe('buildErrorHead', () => {
+  it('returns undefined for a successful call (isError=false)', () => {
+    expect(buildErrorHead(false, 'some output')).toBeUndefined();
+  });
+
+  it('returns undefined for an error call with empty content', () => {
+    expect(buildErrorHead(true, '')).toBeUndefined();
+  });
+
+  it('returns undefined for an error call with whitespace-only content', () => {
+    expect(buildErrorHead(true, '   \n\t  ')).toBeUndefined();
+  });
+
+  it('returns the content unchanged (beyond redaction) when it fits within 200 chars', () => {
+    const content = 'Error: file not found at /src/foo.ts';
+    const head = buildErrorHead(true, content);
+    expect(head).toBe(content);
+  });
+
+  it('collapses newlines to spaces', () => {
+    const head = buildErrorHead(true, 'line one\nline two\r\nline three\rline four');
+    expect(head).toBe('line one line two line three line four');
+  });
+
+  it('trims surrounding whitespace after newline collapse', () => {
+    const head = buildErrorHead(true, '\n  error message  \n');
+    expect(head).toBe('error message');
+  });
+
+  it('truncates at 200 chars and appends truncation marker', () => {
+    // Build a realistic-looking error that is >200 chars and won't match any
+    // redaction rule (no long opaque blobs, no known token prefixes).
+    const word = 'Error at path ';
+    const repeated = (word + '/src/some/file.ts: line does not match ').repeat(10);
+    expect(repeated.length).toBeGreaterThan(200);
+    const head = buildErrorHead(true, repeated);
+    expect(head).toBeDefined();
+    expect(head!.endsWith('… (truncated)')).toBe(true);
+    // The slice before the marker must be exactly 200 chars (code points).
+    const markerLen = '… (truncated)'.length;
+    expect(head!.slice(0, head!.length - markerLen)).toHaveLength(200);
+  });
+
+  it('does NOT append truncation marker when content is exactly 200 chars', () => {
+    // Use a word that repeats cleanly to hit exactly 200 chars without
+    // triggering the generic opaque-token redaction rule (no 32+ char blobs).
+    const word = 'error '; // 6 chars
+    const exact = (word.repeat(33) + 'end').slice(0, 200);
+    expect(exact).toHaveLength(200);
+    const head = buildErrorHead(true, exact);
+    expect(head).toBe(exact);
+    expect(head).not.toContain('(truncated)');
+  });
+
+  it('redacts an Anthropic API key (sk-ant-…)', () => {
+    const key = 'sk-ant-api03-' + 'A'.repeat(40);
+    const content = `Error: invalid key ${key} provided`;
+    const head = buildErrorHead(true, content);
+    expect(head).toBeDefined();
+    expect(head).not.toContain(key);
+    expect(head).toContain('[REDACTED]');
+  });
+
+  it('redacts a GitHub PAT (ghp_…) via the generic long-token rule', () => {
+    // ghp_ tokens are 40 chars (prefix + 36 base62 chars) — caught by
+    // the generic ≥32-char opaque token rule in redactSecrets.
+    const token = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7';
+    const content = `fatal: Authentication failed: ${token}`;
+    const head = buildErrorHead(true, content);
+    expect(head).toBeDefined();
+    expect(head).not.toContain(token);
+    expect(head).toContain('[REDACTED]');
+  });
+
+  it('redacts a Bearer token', () => {
+    const content = 'Authorization: Bearer mysupersecrettokenvalue1234567890 not allowed';
+    const head = buildErrorHead(true, content);
+    expect(head).toBeDefined();
+    expect(head).toContain('[REDACTED]');
+    expect(head).not.toContain('mysupersecrettokenvalue');
+  });
+
+  it('preserves non-secret content without altering it', () => {
+    const content = 'edit_file: old_string not found in /Users/me/project/src/foo.ts';
+    const head = buildErrorHead(true, content);
+    expect(head).toBe(content);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// errorHead integration: buildToolCallCompletedPayload
+// ---------------------------------------------------------------------------
+
+describe('buildToolCallCompletedPayload — errorHead field', () => {
+  it('includes errorHead on a failed call with non-empty content', () => {
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh1',
+      name: 'edit_file',
+      result: { content: 'old_string not found in file', isError: true },
+      truncated: false,
+      durationMs: 5,
+    });
+    expect('errorHead' in payload).toBe(true);
+    expect(payload.errorHead).toBe('old_string not found in file');
+  });
+
+  it('omits errorHead on a successful call', () => {
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh2',
+      name: 'bash',
+      result: { content: 'hello world', isError: false },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect('errorHead' in payload).toBe(false);
+  });
+
+  it('omits errorHead when error content is empty', () => {
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh3',
+      name: 'bash',
+      result: { content: '', isError: true },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect('errorHead' in payload).toBe(false);
+  });
+
+  it('redacts a secret in the error head', () => {
+    const key = 'sk-ant-api03-' + 'B'.repeat(40);
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh_redact',
+      name: 'bash',
+      result: { content: `Error: invalid key ${key}`, isError: true },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect(payload.errorHead).toBeDefined();
+    expect(payload.errorHead).not.toContain(key);
+    expect(payload.errorHead).toContain('[REDACTED]');
+  });
+
+  it('collapses newlines in the error head', () => {
+    const payload = buildToolCallCompletedPayload({
+      toolUseId: 'tu_eh_nl',
+      name: 'bash',
+      result: { content: 'line1\nline2\r\nline3', isError: true },
+      truncated: false,
+      durationMs: 1,
+    });
+    expect(payload.errorHead).toBe('line1 line2 line3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Schema: ToolCallCompletedPayloadSchema accepts/rejects errorHead
+// ---------------------------------------------------------------------------
+
+describe('ToolCallCompletedPayloadSchema — errorHead', () => {
+  const base = {
+    phase: 'completed' as const,
+    toolUseId: 'tu_s1',
+    name: 'bash',
+    resultBytes: 4,
+    isError: false,
+    truncated: false,
+    durationMs: 10,
+  };
+
+  it('validates a payload WITHOUT errorHead (backward compat)', () => {
+    const result = ToolCallCompletedPayloadSchema.safeParse(base);
+    expect(result.success).toBe(true);
+  });
+
+  it('validates a payload WITH errorHead present', () => {
+    const result = ToolCallCompletedPayloadSchema.safeParse({
+      ...base,
+      isError: true,
+      errorHead: 'old_string not found',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.errorHead).toBe('old_string not found');
+  });
+
+  it('rejects a payload where errorHead is not a string', () => {
+    const result = ToolCallCompletedPayloadSchema.safeParse({
+      ...base,
+      isError: true,
+      errorHead: 42,
+    });
+    expect(result.success).toBe(false);
   });
 });

@@ -235,6 +235,12 @@ interface RenderContext {
   showAll: boolean;
 }
 
+/** Format a redacted error-head snippet for a completed tool_call line.
+ *  Returns an empty string when the call succeeded or errorHead is absent. */
+function fmtErrorHead(isError: boolean, head: string | undefined): string {
+  return isError && head ? `  "${truncate(head, 120)}"` : '';
+}
+
 /**
  * Render one event to a human line, or `null` when the event is filtered
  * out of the default view. The detail text per kind is deliberately terse
@@ -261,10 +267,7 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
       const status = p.isError ? 'ERR' : 'ok';
       const trunc = p.truncated ? '  (truncated)' : '';
       const sub = p.subagentId ? `  [${p.subagentId}]` : '';
-      return line(
-        'tool',
-        `${p.name}  ${status}  ${fmtDuration(p.durationMs)}  ${fmtBytes(p.resultBytes)}${trunc}${sub}`,
-      );
+      return line('tool', `${p.name}  ${status}  ${fmtDuration(p.durationMs)}  ${fmtBytes(p.resultBytes)}${trunc}${sub}${fmtErrorHead(p.isError, p.errorHead)}`);
     }
 
     case 'hook_decision': {

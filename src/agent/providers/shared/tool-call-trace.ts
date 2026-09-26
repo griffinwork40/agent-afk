@@ -24,6 +24,7 @@
 
 import { createHash } from 'crypto';
 
+import { redactSecrets } from '../../redact-secrets.js';
 import type {
   ToolCallCompletedPayload,
   ToolCallStartedPayload,
@@ -164,6 +165,43 @@ function computeResourceFingerprint(
 }
 
 /**
+ * Cap for the `errorHead` field on failed tool_call.completed events.
+ * Deliberately small: the goal is failure-kind classification (stale edit,
+ * wrong path, policy refusal text), not full output reconstruction.
+ */
+const ERROR_HEAD_CAP = 200;
+
+/**
+ * Extract a short, sanitized head of the error text for inclusion in the
+ * `tool_call.completed` trace payload.
+ *
+ * - Returns `undefined` for successful calls or empty error content.
+ * - Collapses all newline sequences (CR, LF, CRLF) to a single space so the
+ *   head is always one line (trace JSONL must not embed raw newlines in field
+ *   values).
+ * - Trims surrounding whitespace after newline collapse.
+ * - Passes the result through {@link redactSecrets} so common token shapes
+ *   (sk-ant-*, Authorization Bearer, JWT, AWS key IDs, ≥32-char opaque
+ *   hex/base64 blobs) are replaced with `[REDACTED]`.
+ * - Caps at {@link ERROR_HEAD_CAP} characters (code points, not bytes) and
+ *   appends `… (truncated)` when the collapsed content exceeds that limit.
+ *
+ * The 200-char cap limits incidental-secret exposure; regex redaction is
+ * best-effort (connection strings, PEM blocks, and PII are not caught). The
+ * field is local-only (witness traces live in `~/.afk/state/witness/`) and
+ * is meant to classify failure kind, not reconstruct the full output.
+ */
+export function buildErrorHead(isError: boolean, content: string): string | undefined {
+  if (!isError) return undefined;
+  // Collapse all newline variants to a space, then trim.
+  const oneLine = content.replace(/\r\n|\r|\n/g, ' ').trim();
+  if (oneLine.length === 0) return undefined;
+  const redacted = redactSecrets(oneLine);
+  if (redacted.length <= ERROR_HEAD_CAP) return redacted;
+  return redacted.slice(0, ERROR_HEAD_CAP) + '… (truncated)';
+}
+
+/**
  * Build the `tool_call.completed` payload emitted AFTER a tool dispatch
  * settles, pairing with the `started` event above via `toolUseId`.
  *
@@ -185,12 +223,14 @@ export function buildToolCallCompletedPayload(args: {
   subagentId?: string | undefined;
 }): ToolCallCompletedPayload {
   const { toolUseId, name, result, truncated, durationMs, subagentId } = args;
+  const isError = result.isError === true;
+  const errorHead = buildErrorHead(isError, result.content);
   return {
     phase: 'completed',
     toolUseId,
     name,
     resultBytes: Buffer.byteLength(result.content, 'utf8'),
-    isError: result.isError === true,
+    isError,
     truncated,
     durationMs,
     ...(result.incomplete === true ? { incomplete: true } : {}),
@@ -202,5 +242,6 @@ export function buildToolCallCompletedPayload(args: {
       : {}),
     ...(subagentId !== undefined ? { subagentId } : {}),
     ...(result.testResult !== undefined ? { testResult: result.testResult } : {}),
+    ...(errorHead !== undefined ? { errorHead } : {}),
   };
 }
