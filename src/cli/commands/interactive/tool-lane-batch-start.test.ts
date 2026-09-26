@@ -2,7 +2,7 @@
  * Tests for ToolLane live tool-activity indicator (Phase 2, issue #516).
  *
  * `notifyToolActivity` — records the dispatcher's OBSERVED running set so the
- * overlay renders `∥N` next to each genuinely in-flight member row.
+ * overlay renders `∥i/N` next to each genuinely in-flight member row.
  *
  * Constraints:
  *  - Append-only scrollback: committed rows can't be re-laid-out.
@@ -25,9 +25,9 @@ function overlayLines(lane: ToolLane): string[] {
   return stripAnsi(lane.getOverlay()).split('\n').filter(Boolean);
 }
 
-/** Returns true if any overlay line mentions the parallel badge `∥N`. */
+/** Returns true if any overlay line contains a `∥i/N` badge where N === width. */
 function hasBadge(lines: string[], width: number): boolean {
-  return lines.some((l) => l.includes(`∥${width}`));
+  return lines.some((l) => new RegExp(`∥\\d+/${width}`).test(l));
 }
 
 describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () => {
@@ -52,14 +52,14 @@ describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () 
     lane.notifyToolActivity(2, ['id-a', 'id-b']);
 
     const lines = overlayLines(lane);
-    // The badge appears (at least once) for a and b
-    const memberLines = lines.filter((l) => l.includes('∥2'));
+    // The badge appears (at least once) for a and b (∥1/2 or ∥2/2)
+    const memberLines = lines.filter((l) => /∥\d+\/2/.test(l));
     expect(memberLines.length).toBeGreaterThanOrEqual(1);
 
     // c's line must NOT have the badge
     const grepLines = lines.filter((l) => l.includes('grep'));
     for (const gl of grepLines) {
-      expect(gl).not.toContain('∥2');
+      expect(/∥\d+\/2/.test(gl)).toBe(false);
     }
   });
 
@@ -87,7 +87,7 @@ describe('ToolLane — notifyToolActivity live badge (Phase 2, issue #516)', () 
     lane.addResult('id-a', makeResult('content-a'));
     // The badge must persist on id-b's row (dispatcher is authoritative, not addResult)
     const afterFirst = overlayLines(lane);
-    const bStillBadged = afterFirst.some((l) => l.includes('glob') && l.includes('∥2'));
+    const bStillBadged = afterFirst.some((l) => l.includes('glob') && /∥\d+\/2/.test(l));
     expect(bStillBadged).toBe(true);
   });
 
