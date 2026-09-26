@@ -6,8 +6,14 @@
  * this file. Isolating here prevents the mock from interfering with the
  * real-subprocess tests in command-executor.test.ts.
  *
- * Test purpose: verify that executeCommand uses `shell: true` in its spawn
- * call — the cross-platform fix for issue #703 (Windows compatibility).
+ * Test purposes:
+ *   1. Verify that executeCommand uses `shell: true` in its spawn call —
+ *      the cross-platform fix for issue #703 (Windows compatibility).
+ *   2. Regression for the "silent exit 0" bug: proc.unref() must be called
+ *      AFTER the process closes, not immediately after spawn. With detached:true,
+ *      calling proc.unref() immediately also unrefs the child's stdio pipes, so
+ *      if no other handles hold the event loop (e.g. no MCP server processes),
+ *      Node exits before the 'close' callback fires and the Promise never settles.
  *
  * NOTE: vi.mock() factories are hoisted above all imports/variable declarations
  * by vitest, so the factory cannot reference variables declared in this file.
@@ -68,6 +74,74 @@ function makeFakeProc() {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Regression: proc.unref() must be deferred until after settlement
+// ---------------------------------------------------------------------------
+//
+// Root cause of the "silent exit 0" bug: with detached:true, calling
+// proc.unref() immediately after spawn() unrefs the child's stdio pipes as well
+// as the child handle. If no other active handles exist (e.g. no MCP server
+// child processes keeping the event loop alive), Node drains the event loop and
+// exits before the 'close' callback fires — the Promise never settles and
+// sendMessage never fires.
+//
+// The fix: defer proc.unref() to settle(), called from 'close'/'error' handlers.
+// This keeps stdio pipes referenced (and the event loop alive) for exactly as
+// long as we need them, and unrefs the child once we have our result.
+
+describe('proc.unref() timing (regression for silent-exit-0 bug)', () => {
+  let fakeProc: ReturnType<typeof makeFakeProc>;
+
+  beforeEach(() => {
+    fakeProc = makeFakeProc();
+    vi.mocked(cp.spawn).mockReset();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(cp.spawn).mockReturnValue(fakeProc as any);
+  });
+
+  it('does NOT call proc.unref() before the process closes', async () => {
+    const context: HookContext = { event: 'SessionStart', sessionId: 'test' };
+    const resultPromise = executeCommand({
+      command: 'echo hello',
+      context,
+      agentCwd: '/tmp',
+      sessionId: 'test',
+      timeoutMs: 5_000,
+    });
+
+    // At this point the process is "running" — unref() must NOT have been
+    // called yet. If it were called immediately after spawn (the bug), the
+    // child's stdio pipes would be unreffed and in a no-other-handles scenario
+    // the event loop could drain before 'close' fires.
+    expect(vi.mocked(fakeProc.unref)).not.toHaveBeenCalled();
+
+    // Now simulate the process finishing.
+    fakeProc.emit('close', 0);
+    await resultPromise;
+
+    // unref() must have been called exactly once, AFTER the process closed.
+    expect(vi.mocked(fakeProc.unref)).toHaveBeenCalledOnce();
+  });
+
+  it('calls proc.unref() after an error event as well', async () => {
+    const context: HookContext = { event: 'SessionStart', sessionId: 'test' };
+    const resultPromise = executeCommand({
+      command: 'bad-command',
+      context,
+      agentCwd: '/tmp',
+      sessionId: 'test',
+      timeoutMs: 5_000,
+    });
+
+    expect(vi.mocked(fakeProc.unref)).not.toHaveBeenCalled();
+
+    fakeProc.emit('error', new Error('ENOENT: bad-command not found'));
+    await resultPromise;
+
+    expect(vi.mocked(fakeProc.unref)).toHaveBeenCalledOnce();
+  });
+});
 
 describe('spawn call — shell: true (cross-platform fix #703)', () => {
   let fakeProc: ReturnType<typeof makeFakeProc>;
