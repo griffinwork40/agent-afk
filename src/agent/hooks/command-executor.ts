@@ -185,6 +185,9 @@ export async function executeCommand(
     function settle(result: CommandExecutorResult): void {
       if (settled) return;
       settled = true;
+      // unref only once settled: an unref'd child whose stdio already hit EOF leaves no ref'd
+      // handle while its 'exit' is pending, so with no other handles the loop drained mid-hook.
+      proc.unref();
       resolve(result);
     }
 
@@ -209,10 +212,6 @@ export async function executeCommand(
             [...(shellResolution.args ?? []), command],
             spawnOpts,
           );
-    // Don't pin the event loop on POSIX (detached=true). On Windows
-    // (detached=false), unref() is a harmless no-op.
-    proc.unref();
-
     // --- Output capture with 64 KB per-stream cap ---
     // StringDecoder is used so multi-byte UTF-8 codepoints that straddle the
     // 64 000-byte boundary are not split mid-sequence (which would corrupt the

@@ -15,7 +15,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { detectAuthMode, buildClientOptions, buildRequestHeaders } from './auth.js';
+import { detectAuthMode, buildClientOptions, buildRequestHeaders, buildSystemPrefix } from './auth.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { randomUUID } from 'node:crypto';
 
@@ -83,11 +83,20 @@ export async function oneShotCompletion(input: OneShotInput): Promise<string> {
   if (Object.keys(headers).length > 0) requestOptions.headers = headers;
   if (signal) requestOptions.signal = signal;
 
+  // Invariant: OAuth (subscription) tokens must carry the same billing system
+  // prefix the streaming path sends (query/client-setup.ts buildSystemPrefix);
+  // without it the API answers 429 rate_limit_error for every non-haiku model,
+  // which made one-shot callers silently haiku-only under OAuth.
+  const prefix = buildSystemPrefix(mode);
+  const systemParam = prefix
+    ? [...prefix.flatMap((b) => (b.type === 'text' ? [{ type: 'text' as const, text: b.text }] : [])), { type: 'text' as const, text: system }]
+    : system;
+
   const response = await client.messages.create(
     {
       model: resolvedModel,
       max_tokens: maxTokens,
-      system,
+      system: systemParam,
       messages: [{ role: 'user', content: user }],
     },
     Object.keys(requestOptions).length > 0 ? requestOptions : undefined,
