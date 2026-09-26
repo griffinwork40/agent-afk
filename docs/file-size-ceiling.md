@@ -311,7 +311,9 @@ correct, and two returned *strong* alternatives against the all-136 campaign
 - **Baseline is a merge-conflict magnet** — every wave removes its files from it.
   Mitigated by generation (`--update-baseline`) + `.gitattributes -merge`;
   resolution is `git checkout origin/main -- .filesize-baseline.json &&
-  pnpm audit:filesize:update`, never editing conflict markers.
+  pnpm audit:filesize:update`, never editing conflict markers. Growth is refused
+  by default — pass `--allow-growth --reason "<text>"` to record a deliberate
+  increase; shrinks and removals are always allowed.
 - **Coverage floor has only ~1.4pt headroom** (74/79/82/74 vs 75.42/80.65/83.9/75.42).
 - **esbuild silently tree-shakes orphan siblings** — no CI signal; `build:dist`
   per wave is the only detector.

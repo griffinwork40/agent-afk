@@ -317,6 +317,23 @@ export function activeToolBadge(
 }
 
 /**
+ * Compact failure-propagation badge for NESTING ancestor rows.
+ *
+ * Rendered on Agent / skill / compose / Task rows that have one or more
+ * failed descendants, giving operators an at-a-glance signal that something
+ * went wrong deeper in the tree. Kept intentionally small: a single warning
+ * glyph + decimal count, never the full error message (which stays at the
+ * depth where it occurred).
+ *
+ * Returns `''` when count is 0 or undefined — non-failed ancestors show
+ * no indicator (no false positives).
+ */
+export function childFailureBadge(count: number | undefined): string {
+  if (!count) return '';
+  return ' ' + palette.warning('⚠') + palette.warning(` ${count}`);
+}
+
+/**
  * Format tool output as a two-line block (emitted together so both render
  * reliably). When `toolPrefix` is present the first line shows the tool
  * call; the second shows the outcome with a `⎿` connector.

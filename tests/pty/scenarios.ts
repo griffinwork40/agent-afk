@@ -26,6 +26,14 @@ import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { buildResizeMarker } from './constants.js';
 
+/**
+ * Placement mode under test. The parent runs every scenario twice — legacy
+ * bottom-pinned and content-hug (the interactive REPL's mode) — passing
+ * AFK_PTY_CONTENT_HUG=1 into the pty child's env for the second run. Every
+ * scrollback expectation (exactly-once, order, no blank void) must hold in both.
+ */
+const CONTENT_HUG = process.env['AFK_PTY_CONTENT_HUG'] === '1';
+
 /** Runtime handed to a scenario's drive() from inside the pty child. */
 export interface PtyDriveCtx {
   stdout: NodeJS.WriteStream;
@@ -92,6 +100,13 @@ export interface PtyScenario {
   ref: string;
   drive(ctx: PtyDriveCtx): Promise<void> | void;
   expect: PtyExpect;
+  /**
+   * Expectations for the content-hug run, when the scenario's PRECONDITION is
+   * specific to bottom-pinned placement (e.g. content evicted by frame growth,
+   * which content-hug deliberately hides as pending instead). Defaults to
+   * {@link expect}.
+   */
+  hugExpect?: PtyExpect;
 }
 
 /** Let the frame's async spinner/flush settle before the next step. */
@@ -172,7 +187,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'terminal-compositor.multi-commit-gap.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireProductionFooter(stdout, 'STATUSMODELXYZ');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -219,7 +234,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: '#539 · terminal-compositor.collapse-void.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireStatusLine(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       statusLine.setExtraRows(1);
       c.setSpinner({ enabled: true });
@@ -262,7 +277,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'terminal-compositor.overflow-gap.test.ts',
     async drive({ stdout, stdin }): Promise<void> {
       const statusLine = wireStatusLine(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       statusLine.setExtraRows(2); // StatusLine + LoopStageBar + VerdictLedger
       c.setSpinner({ enabled: true });
@@ -316,7 +331,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         },
         getExtraRows(): number { return 0; },
       };
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
       await c.arm();
       const tall = Array.from({ length: 12 }, (_, i) => `stream line ${i}`).join('\n');
       c.setOverlay(tall);
@@ -361,7 +376,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       const MESSAGE = 'Reply with only the word ok and nothing else. DUPCHECK alpha bravo charlie delta echo foxtrot golf hotel india';
       for (let i = 0; i < BANNER_ROWS; i++) stdout.write(`BANNER_LINE_${i}\n`);
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: BANNER_ROWS + 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: BANNER_ROWS + 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       // Pre-submit chrome cycle: transient chrome then collapse back to idle.
@@ -426,7 +441,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -473,7 +488,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -520,7 +535,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -574,7 +589,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     async drive(ctx): Promise<void> {
       const { stdout, stdin } = ctx;
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({ stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow: 1 });
       await c.arm();
       const ix = c as unknown as Repaintable;
       c.setSpinner({ enabled: true });
@@ -612,6 +627,19 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // falsifiable: reverting step 2's emission to `committedBand.slice(0,
       // overflow)` (physical rows) makes this measure 4 and fail.
       logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
+    },
+    // content-hug hides growth-covered rows as pending rather than evicting
+    // them (terminal-compositor.content-hug.ts), so the eviction precondition
+    // never occurs: the whole run stays on screen, exactly once, in order, with
+    // no blank void before the frame. (On-screen band rows are not REJOINED on
+    // a widen in either mode — reflowBandSplit only splits — so the rejoin
+    // property is asserted only where the line reached scrollback.)
+    hugExpect: {
+      inViewport: ['LOGSTART', 'FILLER_09'],
+      exactlyOnce: ['LOGSTART', 'LOGEND', 'FILLER_00', 'FILLER_09'],
+      order: [['LOGEND', 'FILLER_00'], ['FILLER_00', 'FILLER_09']],
+      maxViewportBlankRun: 0,
+      contentAnchors: ['FILLER_09'],
     },
   },
 
@@ -658,7 +686,7 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // by a CUP-positioned frame that mis-measured the anchor row.
       const anchorRow = BANNER_ROWS + 3; // banner + 2 warnings + blank
       const statusLine = wireProductionFooter(stdout, 'M');
-      const c = new TerminalCompositor({
+      const c = new TerminalCompositor({ contentHug: CONTENT_HUG,
         stdout, stdin, onCancel: () => {}, scrollRegion: statusLine, anchorRow,
       });
       await c.arm();

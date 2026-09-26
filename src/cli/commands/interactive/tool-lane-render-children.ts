@@ -9,6 +9,7 @@ import {
   formatDiffBlock,
   formatPreviewDiffBlock,
   doneGlyph,
+  childFailureBadge,
   sanitizeLabel,
   shortenPaths,
 } from './tool-lane-format.js';
@@ -200,9 +201,9 @@ function renderOverlayChildren(
         if (child.headerEmitted) {
           // Anonymous anchor: connector glyph only, no label body (the labeled
           // header lives in scrollback above).
-          lines.push(clampLineToTerminal(indentColored + connector, cols));
+          lines.push(clampLineToTerminal(indentColored + connector + childFailureBadge(child.failedChildCount), cols));
         } else {
-          lines.push(clampLineToTerminal(indentColored + connector + child.prefix, cols));
+          lines.push(clampLineToTerminal(indentColored + connector + child.prefix + childFailureBadge(child.failedChildCount), cols));
         }
         // Recurse: as we descend, the CURRENT parent (whose children we are
         // rendering) becomes a tracked ancestor column. That column must reflect
@@ -290,7 +291,7 @@ function renderOverlayChildren(
         // Live elapsed counter appended to the prefix line (same row as the
         // connector + tool name). Computed at repaint time from child.startedAt;
         // suppressed under ELAPSED_GRACE_MS (2s) to avoid flicker on fast tools.
-        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' …') + formatElapsed(child.startedAt), cols));
+        lines.push(clampLineToTerminal(indentColored + connector + child.prefix + palette.dim(' …') + formatElapsed(child.startedAt) + childFailureBadge(child.failedChildCount), cols));
         if (child.previewDiff) {
           // Pre-execution diff preview for nested edit_file. formatPreviewDiffBlock
           // renders ⟳ Proposed and applies the AFK_SHOW_DIFFS=0 opt-out.

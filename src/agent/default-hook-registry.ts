@@ -7,6 +7,7 @@
  */
 
 import { createHookRegistry, type HookRegistry } from './hooks.js';
+import { installPluginHooks } from './plugins/load-entrypoints.js';
 import { createShadowVerifyNudge } from './shadow-verify-nudge.js';
 import { createPlaceholderDetectHook } from './placeholder-detect.js';
 import { createPlaceholderPreventHook } from './placeholder-prevent.js';
@@ -107,6 +108,29 @@ function registerChildMemoryGuard(registry: HookRegistry): void {
 function registerSessionEndCleanupHooks(registry: HookRegistry): void {
   registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) cleanupComposeSpills(c.sessionId); return {}; });
   registry.register('SessionEnd', (c) => { if (c.event === 'SessionEnd' && c.sessionId) inboundAttachmentRegistry.clear(c.sessionId); return {}; });
+}
+
+/**
+ * Register the subagent-complete forwarding handler when a callback is
+ * provided. Extracted from {@link createDefaultHookRegistry} to keep that
+ * function within its baselined line-count ceiling.
+ */
+function registerSubagentCompleteHook(
+  registry: HookRegistry,
+  onSubagentComplete: ((info: SubagentCompleteInfo) => void) | undefined,
+): void {
+  if (!onSubagentComplete) return;
+  registry.register('SubagentStop', (context) => {
+    if (context.event !== 'SubagentStop') return {};
+    if (context.status === 'idle' || context.status === 'running') return {};
+    onSubagentComplete({
+      subagentId: context.subagentId,
+      status: context.status,
+      durationMs: context.durationMs,
+      agentType: context.agentType,
+    });
+    return {};
+  });
 }
 
 export function createDefaultHookRegistry(
@@ -310,19 +334,7 @@ export function createDefaultHookRegistry(
   // SPINE.md: classify git diff against the architecture spine at session end.
   // Best-effort; skips subagents; honors AFK_DISABLE_SPINE_UPDATE=1.
   registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: agentOptions?.cwd }));
-  if (onSubagentComplete) {
-    registry.register('SubagentStop', (context) => {
-      if (context.event !== 'SubagentStop') return {};
-      if (context.status === 'idle' || context.status === 'running') return {};
-      onSubagentComplete({
-        subagentId: context.subagentId,
-        status: context.status,
-        durationMs: context.durationMs,
-        agentType: context.agentType,
-      });
-      return {};
-    });
-  }
+  registerSubagentCompleteHook(registry, onSubagentComplete);
 
   // External-effect ledger: record outbound side effects (Telegram sends,
   // GitHub PR creation, MCP writes, outbound bash commands) to a durable
@@ -357,6 +369,9 @@ export function createDefaultHookRegistry(
     });
   }
 
+  // Install process-scoped plugin declarations on every new session registry.
+  // Built-in and config handlers retain their registration order.
+  installPluginHooks(registry);
   return { registry, memoryStore: store, addPreviewDiffRef };
 }
 

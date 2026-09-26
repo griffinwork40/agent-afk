@@ -11,6 +11,42 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.251.1] - 2026-09-26
+
+### Fixed
+- erase displaced footer after banner scroll; center the user echo (#2231) (19963445)
+
+## [5.251.0] - 2026-09-26
+
+### Added
+- expose process-scoped hook registration to plugins (#2213) (3b4e3708)
+
+### Changed
+- extract maybeRestartServices and cover the isGlobalInstall call site (#2204) (7f4fdf18)
+
+## [5.250.1] - 2026-09-26
+
+### Fixed
+- content-hug placement — no blank gaps between output and prompt (#2226) (164170ed)
+
+## [5.250.0] - 2026-09-26
+
+### Added
+- bubble failure indicators to parent agent rows (#2171) (41f43ff7)
+
+### Changed
+- funcsize baseline can grow via 'sync after rebase' regenerations (#2215) (ce992f50)
+
+## [5.249.4] - 2026-09-26
+
+### Fixed
+- tighten hasBadge to ∥i/N pattern, fix stale comment, fix light-review id_prefix (#2202) (a56923c5)
+
+### Changed
+- add unit tests for compact scrollback renderer (#2203) (6e17c434)
+- promote macOS test leg to required (#2216) (88e5320e)
+- make the filesize gate blocking and fix the env.ts regression (#2214) (45dbc4c0)
+
 ## [5.249.3] - 2026-09-25
 
 ### Fixed

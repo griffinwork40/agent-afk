@@ -24,6 +24,8 @@
  *   --changed-vs <ref>    touch-trigger: a baselined file MODIFIED relative to
  *                         <ref> must come under the ceiling in that same change.
  *   --list                print every scanned file with its line count.
+ *   --allow-growth        allow growth/new entries when running --update-baseline.
+ *   --reason "<text>"     required with --allow-growth; stamped on new entries.
  *
  * The baseline grandfathers files that already exceeded the ceiling when the gate
  * landed, and it is a ONE-WAY RATCHET — it fails five ways, so it can never
@@ -41,6 +43,7 @@
  * one subtree then touch disjoint contiguous line ranges, so concurrent PRs
  * mostly avoid conflicting. Never resolve a conflict by editing markers — run
  * `git checkout origin/main -- .filesize-baseline.json && pnpm audit:filesize:update`.
+ * To record deliberate growth: `pnpm audit:filesize:update --allow-growth --reason "<why>"`.
  */
 
 import * as fs from 'node:fs';
@@ -209,7 +212,35 @@ function main(): void {
   const argv = process.argv.slice(2);
 
   if (argv.includes('--update-baseline')) {
-    const { kept, dropped } = updateBaseline(RATCHET, scanAll());
+    const allowGrowth = argv.includes('--allow-growth');
+    const reasonIdx = argv.indexOf('--reason');
+    const reason = reasonIdx >= 0 ? (argv[reasonIdx + 1] ?? '') : '';
+
+    if (allowGrowth && !reason) {
+      console.error('✗ check-file-size: --allow-growth requires --reason "<text>" (non-empty).');
+      process.exit(1);
+    }
+    if (reason.startsWith('--')) {
+      console.error('✗ check-file-size: --reason value looks like a flag. Did you mean: --reason "..." --allow-growth?');
+      process.exit(1);
+    }
+
+    const { kept, dropped, blocked } = updateBaseline(RATCHET, scanAll(), { allowGrowth, reason });
+
+    if (blocked.length > 0) {
+      console.error(
+        `✗ check-file-size: ${blocked.length} file(s) grew or are new — refusing to update baseline (${BASELINE_REL}, ceiling ${LIMIT}) without --allow-growth:\n`,
+      );
+      for (const e of blocked) {
+        const delta = e.oldLoc === null ? `(new, ${e.newLoc})` : `${e.oldLoc} → ${e.newLoc} (+${e.newLoc - e.oldLoc})`;
+        console.error(`    ${e.key}  ${delta}`);
+      }
+      console.error(
+        `\nTo record a deliberate increase, re-run with:\n  pnpm audit:filesize:update --allow-growth --reason "<why this growth is intentional>"\n`,
+      );
+      process.exit(1);
+    }
+
     console.log(`✓ ${BASELINE_REL}: ${kept} entr${kept === 1 ? 'y' : 'ies'} over the ${LIMIT}-code-line ceiling.`);
     if (dropped.length > 0) {
       console.log(`  retired ${dropped.length} (now within the ceiling):`);

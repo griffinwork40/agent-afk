@@ -20,13 +20,14 @@ import {
 } from './terminal-compositor.band-reflow.js';
 import { boundLineToTerminal } from './render/bounded-line.js';
 import { contentMargin } from './render/measure.js';
-import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
+import { bannerScrollSequence, writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { decomposeCommitText } from './terminal-compositor.commit-text.js';
 import { snapshotCommitGeometry } from './terminal-compositor.commit-geometry.js';
 import { routeCommit } from './terminal-compositor.commit-route.js';
 import { commitPhase1Teardown } from './terminal-compositor.commit-phase1.js';
 import { commitPhase3Hold, commitPhase3HoldStore } from './terminal-compositor.commit-phase3-hold.js';
 import { commitPhase3Band } from './terminal-compositor.commit-phase3-band.js';
+import { postCommitPlacementMode, phase2PendingContentRows } from './terminal-compositor.content-hug.js';
 
 /**
  * Narrowest TerminalCompositor state slice the committed-band functions touch.
@@ -58,8 +59,15 @@ export interface CommittedBandHost {
   commitInFlight: boolean;
   /** Whether any commit has happened this arm cycle (guards growthDeficit). */
   hasCommitted: boolean;
-  /** Frame placement regime — flipped to 'bottom-pinned' on first commit. */
+  /** Frame placement regime — flipped to 'bottom-pinned' (or 'content-hug'
+   *  when {@link contentHug}) on first commit. */
   placementMode: FramePlacementMode;
+  /** Opt-in content-hug placement (TerminalCompositorOptions.contentHug). */
+  readonly contentHug: boolean;
+  /** content-hug: post-commit band length while a commit is in flight. */
+  pendingContentRows: number | null;
+  /** Real frame bottom of the last repaint (content-hug commit geometry). */
+  lastMeasuredFrameBottom: number;
   /** Stale-guard for endTurnFlush: true when committed-band state has changed
    *  since the last flush. Cleared by clearCommittedBand(); mirrors bandGeometryStale. */
   lifecycleStateDirty: boolean;
@@ -173,14 +181,14 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
       self.logUpdate.clear(extraRows);
       const bannerRows = Math.min(self.anchorRow - 1, rows - 1);
       writeWithScrollGuard(self, () => {
-        self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bannerRows)}`);
+        self.stdout.write(bannerScrollSequence(rows, bannerRows, extraRows));
       });
     } finally {
       self.committing = false;
       self.commitInFlight = false;
     }
     self.anchorRow = 1;
-    self.placementMode = 'bottom-pinned';
+    self.placementMode = postCommitPlacementMode(self);
     self.hasCommitted = true;
     self.lifecycleStateDirty = true;
     self.repaint();
@@ -237,16 +245,15 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   // streaming content is arriving, so the frame snaps to the viewport floor.
   // This is the ONLY site that flips the mode; resetState() resets it back
   // to 'cursor-follow' for the next arm cycle.
-  self.placementMode = 'bottom-pinned';
+  self.placementMode = postCommitPlacementMode(self);
   // Mark the compositor state as dirty so endTurnFlush (lifecycle.ts) knows
   // a redraw is warranted. Mirrors the bandGeometryStale setter pattern.
   self.lifecycleStateDirty = true;
 
-  // Phase 2: repaint the live frame at its normal bottom-anchored
-  // position. The repaint() does its own erase+paint via render(),
-  // landing the new frame at `newTopRow..rows-1` regardless of how
-  // big the previous frame was.
+  // Phase 2: repaint the live frame (bottom-anchored, or under content-hug just
+  // below the rows Phase 3 will paint — content-hug.ts, in-flight commit).
   self.debugLog('commitAbove:phase2:repaint');
+  self.pendingContentRows = phase2PendingContentRows(self, geo, route);
   self.repaint();
   self.debugLog('commitAbove:phase2:done', { newTopRow: self.logUpdate.topRow ?? null });
 
@@ -290,6 +297,7 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
     clearCommittedBand(self);
   }
 
+  self.pendingContentRows = null;
   self.commitInFlight = false;
   self.debugLog('commitAbove:phase3:done');
 }
