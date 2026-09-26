@@ -101,6 +101,13 @@ export interface ChildProviderFactoryArgs {
    */
   readOnlyBash?: boolean;
   /**
+   * When true, the provider exposes only `state_get` and `state_query`
+   * (no `state_put`, `state_cas`, or `state_delete`). Independent of
+   * `readOnlyMemory` so children can write facts to the memory archive while
+   * still being denied state-store mutations. Always set for child sessions.
+   */
+  readOnlyState?: boolean;
+  /**
    * Custom tools to register on the child's provider. Threaded from
    * `childConfig.customTools` so tools injected at fork time (e.g.
    * `emit_progress` via `wireProgressEvents`) reach the provider's
@@ -264,6 +271,10 @@ export function createChildProviderFactory(
       // Bash gate (read-only skill child). Forwarded into BOTH provider
       // constructors so the per-query dispatcher blocks mutating shell commands.
       ...(readOnlyBash === true ? { readOnlyBash: true } : {}),
+      // State gate: children may call memory_update (target:"fact") but must
+      // never write to the state store (state_put/cas/delete). Independent of
+      // readOnlyMemory so fact writes remain open while state writes stay closed.
+      readOnlyState: true as const,
       // Custom tools injected at fork time (e.g. emit_progress). The provider
       // constructor is the only read point — config.customTools is not consulted
       // at query time when a pre-built provider is set.
@@ -305,7 +316,8 @@ export function createChildProviderFactory(
  *     declared; falls back to the full RECON set when the skill declares no
  *     `tools:`)
  *   - `readOnlyBash: true` (dispatcher blocks mutating bash)
- *   - `readOnlyMemory: true` (consistency with the factory path)
+ *   - `readOnlyMemory: true` (read-only recon: no memory_update / procedure_write)
+ *   - `readOnlyState: true` (children cannot write to the state store)
  *   - NO `subagentExecutor` / `skillExecutor` — at the depth cap the child
  *     cannot fan out further anyway, so `agent`/`skill` would be dead schema.
  *

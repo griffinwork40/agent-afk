@@ -1,15 +1,57 @@
 /**
- * Unit tests for the memory SessionEnd hook, focused on the subagent guard.
+ * Unit tests for the memory hooks:
+ * - createChildMemoryHotBlockHook: blocks target:"hot" writes from subagents
+ * - createMemorySessionEndHook: guarded against forked subagent noise
  *
- * The hook is registered on the default registry, which forked subagents
+ * The hooks are registered on the default registry, which forked subagents
  * inherit via their child config (subagent.ts). Without the parentSessionId
  * guard, every subagent teardown would write a start/end session pair to the
  * store — polluting it with worker sessions the user never started.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { SessionEndContext } from '../hooks.js';
-import { createMemorySessionEndHook } from './memory-hooks.js';
+import type { PreToolUseContext, SessionEndContext } from '../hooks.js';
+import { createChildMemoryHotBlockHook, createMemorySessionEndHook } from './memory-hooks.js';
 import type { MemoryStore } from './memory-store.js';
+
+function preToolCtx(over: Partial<PreToolUseContext> = {}): PreToolUseContext {
+  return { event: 'PreToolUse', toolName: 'memory_update', ...over };
+}
+
+describe('createChildMemoryHotBlockHook', () => {
+  it("blocks target:'hot' write from a subagent (parentSessionId set)", () => {
+    const hook = createChildMemoryHotBlockHook();
+    const result = hook(
+      preToolCtx({ toolName: 'memory_update', input: { target: 'hot' }, parentSessionId: 'parent-1', sessionId: 'child-1' }),
+    );
+    expect(result).toMatchObject({ block: true });
+    const injectContext = (result as { injectContext?: string }).injectContext ?? '';
+    expect(injectContext).toContain('target:"hot"');
+  });
+
+  it("allows target:'fact' write from a subagent (returns {})", () => {
+    const hook = createChildMemoryHotBlockHook();
+    const result = hook(
+      preToolCtx({ toolName: 'memory_update', input: { target: 'fact' }, parentSessionId: 'parent-1', sessionId: 'child-1' }),
+    );
+    expect(result).toEqual({});
+  });
+
+  it("allows target:'hot' write from top-level session (no parentSessionId, returns {})", () => {
+    const hook = createChildMemoryHotBlockHook();
+    const result = hook(
+      preToolCtx({ toolName: 'memory_update', input: { target: 'hot' } }),
+    );
+    expect(result).toEqual({});
+  });
+
+  it("returns {} for non-memory_update tools", () => {
+    const hook = createChildMemoryHotBlockHook();
+    const result = hook(
+      preToolCtx({ toolName: 'bash', input: { command: 'ls' }, parentSessionId: 'parent-1' }),
+    );
+    expect(result).toEqual({});
+  });
+});
 
 function makeStoreSpy() {
   const startSession = vi.fn();

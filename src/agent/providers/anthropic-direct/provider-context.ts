@@ -47,6 +47,8 @@ export interface ProviderQueryContext {
    */
   readonly declaredSurface: string | undefined;
   readonly readOnlyMemory: boolean;
+  /** When true, state_put/cas/delete are blocked independent of readOnlyMemory. */
+  readonly readOnlyState: boolean;
   /** Presence-only: whether the workspace store is wired. Used to gate the
    *  workspace system prompt fragment in prompt assembly. */
   readonly workspaceStore: import('../../workspace/workspace-store.js').WorkspaceStore | undefined;

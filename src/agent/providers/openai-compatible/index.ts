@@ -105,6 +105,12 @@ export interface OpenAICompatibleProviderOptions {
    */
   readOnlyMemory?: boolean;
   /**
+   * When true, expose only `state_get` and `state_query` (no state_put/cas/delete).
+   * Independent of `readOnlyMemory` — child sessions can write facts while being
+   * denied state-store mutations. Set by `createChildProviderFactory`.
+   */
+  readOnlyState?: boolean;
+  /**
    * When true, the per-query {@link SessionToolDispatcher} blocks mutating
    * `bash` commands (read-only recon allowed). Parity with
    * `AnthropicDirectProviderOptions.readOnlyBash`. Set by
@@ -205,7 +211,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } else {
       schemas.push(...memoryToolSchemas);
     }
-    if (opts.readOnlyMemory === true) {
+    if (opts.readOnlyMemory === true || opts.readOnlyState === true) {
       schemas.push(...stateReadToolSchemas);
     } else {
       schemas.push(...stateToolSchemas);
@@ -571,9 +577,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
       for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
     }
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
-    // Read-only sessions get only state_get and state_query.
+    // Read-only sessions (readOnlyMemory) or child sessions (readOnlyState) get
+    // only state_get and state_query — independent so children can write facts
+    // while being denied state-store mutations.
     for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
-      if (this.providerOpts.readOnlyMemory === true && name !== 'state_get' && name !== 'state_query') continue;
+      if ((this.providerOpts.readOnlyMemory === true || this.providerOpts.readOnlyState === true) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
     if (opts.runtimeStateSource) {

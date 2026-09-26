@@ -130,6 +130,8 @@ export interface BuildDispatcherDeps {
   stateStore?: StateStore;
   surface: string;
   readOnlyMemory: boolean;
+  /** When true, gate state_put/cas/delete regardless of readOnlyMemory. */
+  readOnlyState: boolean;
   readOnlyBash: boolean;
   customTools: readonly CustomToolDef[];
   mcpManager: import('../../mcp/index.js').McpManager | undefined;
@@ -203,12 +205,13 @@ export function buildDispatcher(
     }
   }
   // State store tools: state_get, state_put, state_cas, state_delete, state_query.
-  // Read-only sessions get only state_get and state_query (mirroring the
-  // readOnlyMemory gate for memory_search above).
+  // Read-only sessions (readOnlyMemory) get only state_get and state_query.
+  // Child sessions (readOnlyState) are also restricted to reads — independent
+  // of readOnlyMemory so children can write facts while being denied state writes.
   if (deps.stateStore !== undefined) {
     const stateHandlers = createStateHandlers(deps.stateStore, opts?.sessionId);
     for (const [name, handler] of stateHandlers) {
-      if (deps.readOnlyMemory && name !== 'state_get' && name !== 'state_query') continue;
+      if ((deps.readOnlyMemory || deps.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
   }

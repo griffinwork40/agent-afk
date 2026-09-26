@@ -51,8 +51,10 @@ export function buildProviderSchemas(opts: AnthropicDirectProviderOptions): Anth
   }
   // State store tools: read-only sessions get only the two query tools;
   // full sessions get all five (get, put, cas, delete, query).
-  // Same read/write gating pattern as memory tools above.
-  if (opts.readOnlyMemory === true) {
+  // readOnlyState is independent of readOnlyMemory so child sessions can
+  // write facts (memory_update target:"fact") while still being denied
+  // state-store mutations (state_put/cas/delete).
+  if (opts.readOnlyMemory === true || opts.readOnlyState === true) {
     schemas.push(...stateReadToolSchemas);
   } else {
     schemas.push(...stateToolSchemas);

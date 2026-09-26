@@ -7,6 +7,7 @@ import {
   MAX_NESTING_DEPTH_CEILING,
   buildReadOnlyReconProvider,
   buildSkillRestrictedProvider,
+  createChildProviderFactory,
   resolveMaxNestingDepth,
 } from './nesting.js';
 import { ENV_REGISTRY } from '../../config/env.js';
@@ -270,6 +271,30 @@ describe('buildReadOnlyReconProvider allowlist override (issue #499 finding 2)',
     const provider = buildReadOnlyReconProvider('sonnet', undefined, shared);
     shared.push('write_file');
     expect(allowedOf(provider)).toEqual(['read_file', 'bash']);
+  });
+});
+
+describe('createChildProviderFactory — readOnlyState invariant', () => {
+  // Children must never write to the state store (state_put/cas/delete), but
+  // they may write facts to the memory archive (memory_update target:"fact").
+  // readOnlyState gates state writes independently of readOnlyMemory.
+  const readOnlyStateOf = (provider: unknown): boolean =>
+    (provider as { readOnlyState: boolean }).readOnlyState;
+
+  it('sets readOnlyState: true on Anthropic-routed child providers', () => {
+    const factory = createChildProviderFactory();
+    const stubExecutor = { execute: () => Promise.resolve({ content: [] }) } as unknown as import('./subagent-executor.js').SubagentExecutor;
+    const provider = factory({ childExecutor: stubExecutor, model: 'sonnet' });
+    expect(readOnlyStateOf(provider)).toBe(true);
+  });
+
+  it('sets readOnlyState: true on OpenAI-compatible child providers', () => {
+    const factory = createChildProviderFactory();
+    const stubExecutor = { execute: () => Promise.resolve({ content: [] }) } as unknown as import('./subagent-executor.js').SubagentExecutor;
+    const provider = factory({ childExecutor: stubExecutor, model: 'gpt-4o' });
+    // OpenAI-compatible provider stores options in providerOpts
+    const opts = (provider as { providerOpts: { readOnlyState?: boolean } }).providerOpts;
+    expect(opts.readOnlyState).toBe(true);
   });
 });
 
