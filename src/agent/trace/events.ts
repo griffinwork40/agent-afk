@@ -68,6 +68,10 @@ export const ToolCallCompletedPayloadSchema = z.object({
   batchIndex: z.number().int().positive().optional(),
   batchSize: z.number().int().positive().optional(),
   subagentId: z.string().optional(),
+  /** First ≤200 chars of error text (redacted, newlines collapsed). Present
+   *  only when `isError` is true and the content string is non-empty. Old
+   *  traces that lack this field continue to validate. */
+  errorHead: z.string().optional(),
 });
 
 export const ToolCallPayloadSchema = z.discriminatedUnion('phase', [

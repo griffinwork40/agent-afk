@@ -214,6 +214,25 @@ export interface ToolCallCompletedPayload {
    *  and on unclassified failures. See {@link ToolFailureClass}. */
   failureClass?: ToolFailureClass;
   /**
+   * First ≤200 characters of the error text when `isError` is true and the
+   * result carried a non-empty content string. Absent on success, absent when
+   * the error content is empty. Truncated with `… (truncated)` when the raw
+   * text exceeds the cap; newlines collapsed to spaces; passed through
+   * {@link import('../redact-secrets.js').redactSecrets} so common token
+   * shapes are replaced with `[REDACTED]`.
+   *
+   * Design tradeoff: traces are local-only files under `~/.afk/state/witness/`
+   * so egress is not a concern, but tool output can contain incidental secrets
+   * (the model read a file with an embedded token and echoed it in a shell
+   * error, for example). The 200-char cap limits exposure; regex redaction
+   * catches common patterns but is not exhaustive (connection strings, PEM
+   * blocks, and PII are not caught). The field is meant to classify failure
+   * *kind* (stale edit, wrong path, etc.) not to reconstruct the full output.
+   *
+   * Old traces without this field validate fine — the field is `optional`.
+   */
+  errorHead?: string;
+  /**
    * Concurrency-batch membership: 1-based position (`batchIndex`) and total
    * size (`batchSize`) of the batch this call was dispatched in, set by the
    * dispatcher's `executeBatch`. `batchSize > 1` means the call ran in a
