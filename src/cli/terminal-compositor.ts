@@ -486,6 +486,16 @@ export class TerminalCompositor {
   // terminal-compositor.commit-geometry.test.ts). 0 until the first repaint.
   /** @internal Relaxed from `private` for the frame + committed-band modules. */
   lastMeasuredFrameTop = 0;
+  /** Real frame bottom row (targetBottomRow) of the last repaint; 0 until the
+   *  first repaint. Read by content-hug commit geometry to measure how far the
+   *  frame sits above the viewport floor. @internal */
+  lastMeasuredFrameBottom = 0;
+  /** Opt-in content-hug placement ({@link TerminalCompositorOptions.contentHug}). @internal */
+  readonly contentHug: boolean;
+  /** Content-hug: the band length Phase 3 of the IN-FLIGHT commit will leave,
+   *  so the Phase-2 repaint positions the frame below the not-yet-painted
+   *  rows. null outside a commit. See terminal-compositor.content-hug.ts. @internal */
+  pendingContentRows: number | null = null;
   // Invariant: committedBandPaintedRows counts how many of committedBand's rows
   // are MATERIALIZED on the terminal right now — always the BOTTOM
   // committedBandPaintedRows rows (nearest the frame), since every paint site
@@ -615,6 +625,7 @@ export class TerminalCompositor {
     this.autocompleteState = opts.autocompleteState;
     this.formatInputBuffer = opts.formatInputBuffer;
     this.scrollRegion = opts.scrollRegion;
+    this.contentHug = opts.contentHug ?? false;
     this.spinnerController = new SpinnerController({
       captureMode: opts.captureMode ?? false,
       goblin: opts.goblinSpinner ?? false,

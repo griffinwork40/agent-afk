@@ -130,10 +130,14 @@ describe('TerminalCompositor scrollback over a real pty (issue #541)', () => {
     return;
   }
 
-  for (const [name, scenario] of Object.entries(SCENARIOS)) {
-    it(`${name}: ${scenario.description}`, async () => {
-      const res = await runScenarioInPty({ name, cols: scenario.cols, rows: scenario.rows });
-      assertExpectations(res, scenario.expect);
-    }, 45_000);
+  // Every scenario runs in both placement modes: legacy bottom-pinned and
+  // content-hug (the interactive REPL's mode, terminal-compositor.content-hug.ts).
+  for (const contentHug of [false, true]) {
+    for (const [name, scenario] of Object.entries(SCENARIOS)) {
+      it(`${contentHug ? '[content-hug] ' : ''}${name}: ${scenario.description}`, async () => {
+        const res = await runScenarioInPty({ name, cols: scenario.cols, rows: scenario.rows, contentHug });
+        assertExpectations(res, contentHug ? (scenario.hugExpect ?? scenario.expect) : scenario.expect);
+      }, 45_000);
+    }
   }
 });

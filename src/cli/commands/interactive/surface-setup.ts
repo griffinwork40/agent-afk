@@ -156,6 +156,7 @@ export async function setupSurface(
     // climb above. Undefined on daemons / non-bootstrap callers — defaults
     // the compositor to pre-fix behavior (no protection).
     ...(ctx.preArmAnchorRow !== undefined ? { anchorRow: ctx.preArmAnchorRow } : {}),
+    contentHug: true, // frame follows committed output: no blank gaps (terminal-compositor.content-hug.ts)
     // Ghost-text wiring — context factory extracted to surface-setup.suggest-config.ts.
     // Returns `{ suggest: { engine, getContext } }` when enabled, `{}` when disabled.
     ...buildSuggestConfig({

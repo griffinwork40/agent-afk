@@ -32,6 +32,7 @@
 
 import type { FrameHost } from './terminal-compositor.frame.js';
 import { archiveBandPrefixAndRepaintSurvivors } from './terminal-compositor.frame-preserve-archive.js';
+import { contentHugFrameSettled } from './terminal-compositor.content-hug.js';
 
 /**
  * Preserve rows that the next compositor frame is about to cover.
@@ -108,7 +109,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // at [1, room] hugging the forthcoming frame top, all materialized.
     const room = Math.max(0, desiredTopRow - 1);
     const hasPending = self.committedBandPaintedRows < bandLen;
-    const overlayCollapsed = self.overlay.trim().length === 0;
+    const overlayCollapsed = self.overlay.trim().length === 0 && contentHugFrameSettled(self);
     if (
       !self.commitInFlight &&
       hasPending &&
@@ -132,7 +133,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     }
 
     const grew = self.hasCommitted && prevTopRow > 1 && desiredTopRow < prevTopRow;
-    if (!grew || bandLen === 0) return;
+    if (!grew || bandLen === 0 || self.placementMode === 'content-hug') return; // content-hug.ts: hide-on-growth
     const growRoom = Math.max(0, desiredTopRow - 1);
     const growOverflow = bandLen - growRoom;
     if (growOverflow <= 0) return; // whole band fits above the new frame — no scroll
