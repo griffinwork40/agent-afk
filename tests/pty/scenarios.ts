@@ -25,6 +25,7 @@ import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
+import { SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
 import { OverlayComposer } from '../../src/cli/_lib/overlay-composer.js';
 import { armSmokeEffects, THOUGHT_SUMMARY_SLOT } from '../../src/cli/_lib/stream-renderer-smoke.js';
 import { ToolLane } from '../../src/cli/commands/interactive/tool-lane.js';
@@ -181,18 +182,26 @@ const TABLE_MD = [
  * Drive the REAL StreamingMarkdownRenderer through an armed compositor with
  * AFK_SMOKE_TEXT on, pushing `text` in small token-sized chunks. The env var
  * is set inside the pty child (drive() runs there), before the renderer
- * reads it at construction.
+ * reads it at construction. The renderer reads it only once, so the previous
+ * value is restored on exit. That keeps the helper from leaking the flag if
+ * it is ever reused in-process.
  */
 async function streamWithSmoke(ctx: PtyDriveCtx, text: string): Promise<StreamingMarkdownRenderer> {
+  const prev = process.env['AFK_SMOKE_TEXT'];
   process.env['AFK_SMOKE_TEXT'] = '1';
-  const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
-  await c.arm();
-  const md = new StreamingMarkdownRenderer({ out: ctx.stdout, compositor: c });
-  for (let i = 0; i < text.length; i += 12) {
-    md.push(text.slice(i, i + 12));
-    await settle(15);
+  try {
+    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout: ctx.stdout, stdin: ctx.stdin, onCancel: () => {}, anchorRow: 1 });
+    await c.arm();
+    const md = new StreamingMarkdownRenderer({ out: ctx.stdout, compositor: c });
+    for (let i = 0; i < text.length; i += 12) {
+      md.push(text.slice(i, i + 12));
+      await settle(15);
+    }
+    return md;
+  } finally {
+    if (prev === undefined) delete process.env['AFK_SMOKE_TEXT'];
+    else process.env['AFK_SMOKE_TEXT'] = prev;
   }
-  return md;
 }
 
 const SMOKE_PARA_1 = 'SMOKEONE_START the first paragraph streams in and commits whole SMOKEONE_END';
@@ -771,7 +780,8 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     expect: {
       exactlyOnce: ['SMOKEONE_START', 'SMOKEONE_END', 'SMOKETWO_START', 'SMOKETWO_END'],
       order: [['SMOKEONE_END', 'SMOKETWO_START']],
-      absent: ['⠶', '⠢', '⠂'],
+      // Every smoke glyph, including the faintest speck, must be gone.
+      absent: [...SMOKE_GLYPHS],
     },
   },
 
