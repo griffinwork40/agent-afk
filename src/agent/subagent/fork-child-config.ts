@@ -28,6 +28,7 @@ import { buildPhaseRestrictedProvider } from '../tools/nesting.js';
 import { MODEL_CAP_BYTES } from '../tools/handlers/_output-cap.js';
 import { applyManagerApiKeyFallback } from '../tools/child-credential.js';
 import { injectToolBudgetPreamble } from './budget-preamble.js';
+import { injectSubagentIdentityPreamble } from './identity-preamble.js';
 import { injectWorkspacePreamble } from '../workspace/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
@@ -53,6 +54,20 @@ export interface AssembleChildConfigArgs<T> {
   parentTraceWriter: TraceSink | undefined;
   parentSurface: Surface | undefined;
   parentCanUseTool: CanUseTool | undefined;
+}
+
+/**
+ * Append the model-facing fork preambles to a fully resolved child config.
+ *
+ * Invariant (preamble order): the identity preamble is applied first, to the
+ * config AFTER every default in {@link assembleChildConfig} has been resolved,
+ * because it derives its lines from `isNonInteractive` (defaulted to `true`
+ * there) and the threaded `depth` / `maxDepth`. The budget preamble then
+ * appends after it and stays the prompt's operational trailer; it likewise
+ * reads the final resolved `maxToolUseIterations`.
+ */
+function applyForkPreambles(config: AgentConfig): AgentConfig {
+  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config));
 }
 
 /**
@@ -108,7 +123,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ? args.workspaceStore.queryRelevant(null, taskPrompt)
     : [];
 
-  const assembled = injectToolBudgetPreamble({
+  const assembled = applyForkPreambles({
     ...options.config,
     // Invariant (trace seal ownership): mark this session as a fork so it
     // never seals the SHARED witness trace. The whole tree shares ONE

@@ -69,7 +69,7 @@ One residual bug, worth recognizing: a parent ending mid-wave seals over live ch
 
 ### Subagent tool-round budget
 
-The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (tools stripped from the next reply) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/session/budget-preamble.ts`. Full history and rationale: `docs/subagent-tool-budget.md`.
+The unit of the budget cap is **tool-use rounds**, not tool calls — 5 parallel calls in one reply consume 1 round, not 5. Default ceiling: **50 rounds per fork**; `0` = unbounded. Hitting the cap triggers a wind-down round (tools stripped from the next reply) rather than a kill, so the child returns partial work instead of dying mid-sentence. Each child is told its own budget at dispatch via the preamble injected by `src/agent/subagent/budget-preamble.ts`, and is told it IS a subagent (reply goes to the dispatching agent, no human reachable, whether it may nest further) by `src/agent/subagent/identity-preamble.ts`; both are applied at `assembleChildConfig`, and every identity line is derived from the child's resolved config so it is never false for that child. Full history and rationale: `docs/subagent-tool-budget.md`.
 
 ## Architecture
 

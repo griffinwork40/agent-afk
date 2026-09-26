@@ -41,6 +41,14 @@ vi.mock('./budget-preamble.js', () => ({
   injectToolBudgetPreamble: vi.fn((cfg: object) => cfg),
 }));
 
+vi.mock('./identity-preamble.js', () => ({
+  // Pass-through spy: assembleChildConfig field tests stay readable, while the
+  // wiring tests below assert WHAT the identity injector was handed and that
+  // it runs before the budget preamble. Rendering is covered in
+  // identity-preamble.test.ts.
+  injectSubagentIdentityPreamble: vi.fn((cfg: object) => cfg),
+}));
+
 vi.mock('../providers/shared/soft-deadline.js', () => ({
   resolveSoftDeadlineMs: vi.fn().mockReturnValue(0),
 }));
@@ -55,6 +63,8 @@ import { appendRoutingDecision } from '../routing-telemetry.js';
 import { MODEL_CAP_BYTES } from '../tools/handlers/_output-cap.js';
 import { SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { DENY_ELICITATION } from './constants.js';
+import { injectSubagentIdentityPreamble } from './identity-preamble.js';
+import { injectToolBudgetPreamble } from './budget-preamble.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // validatePhaseRole
@@ -366,6 +376,44 @@ describe('assembleChildConfig', () => {
     }));
 
     expect(cfg.systemPrompt).toBe('Keep this prompt unchanged.');
+  });
+
+  it('hands the identity injector the RESOLVED config (non-interactive default, threaded depth)', () => {
+    vi.mocked(injectSubagentIdentityPreamble).mockClear();
+    assembleChildConfig(makeArgs({
+      options: {
+        parent: { sessionId: 'p' },
+        config: { systemPrompt: 'TASK', depth: 2, maxDepth: 3 },
+        agentType: 't',
+      },
+    }));
+    const handed = vi.mocked(injectSubagentIdentityPreamble).mock.calls[0]?.[0];
+    expect(handed).toBeDefined();
+    expect(handed?.isNonInteractive).toBe(true);
+    expect(handed?.depth).toBe(2);
+    expect(handed?.maxDepth).toBe(3);
+    expect(handed?.systemPrompt).toBe('TASK');
+  });
+
+  it('passes an explicit isNonInteractive: false opt-out through to the identity injector', () => {
+    vi.mocked(injectSubagentIdentityPreamble).mockClear();
+    assembleChildConfig(makeArgs({
+      options: { parent: { sessionId: 'p' }, config: { isNonInteractive: false }, agentType: 't' },
+    }));
+    expect(vi.mocked(injectSubagentIdentityPreamble).mock.calls[0]?.[0]?.isNonInteractive).toBe(false);
+  });
+
+  it('runs the identity injector before the budget preamble, feeding its output forward', () => {
+    const identity = vi.mocked(injectSubagentIdentityPreamble);
+    const budget = vi.mocked(injectToolBudgetPreamble);
+    identity.mockClear();
+    budget.mockClear();
+    const marker = { systemPrompt: 'IDENTITY-OUT' };
+    identity.mockImplementationOnce((cfg) => ({ ...cfg, ...marker }));
+    const cfg = assembleChildConfig(makeArgs());
+    expect(identity.mock.invocationCallOrder[0]).toBeLessThan(budget.mock.invocationCallOrder[0] ?? 0);
+    expect(budget.mock.calls[0]?.[0]?.systemPrompt).toBe('IDENTITY-OUT');
+    expect(cfg.systemPrompt).toBe('IDENTITY-OUT');
   });
 
   it('stamps isSubagentFork: true unconditionally', () => {
