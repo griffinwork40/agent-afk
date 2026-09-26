@@ -5,10 +5,12 @@
  *   - Growing a baselined entry without `--allow-growth` → blocked, no file write.
  *   - A new entry over the ceiling without `--allow-growth` → blocked, no file write.
  *   - `allowGrowth` without a non-empty `reason` → throws synchronously.
- *   - `allowGrowth` + non-empty `reason` → writes; grown/new entries carry the reason.
+ *   - `allowGrowth` + non-empty `reason` → writes; new entries stamp the reason,
+ *     grown entries retain their existing hand-written reason.
  *   - Shrinks are always unrestricted (no `blocked` events, file is written).
  *   - Removals (key drops below ceiling) are always unrestricted.
- *   - Bootstrap case (no baseline file) → always writes regardless of apparent growth.
+ *   - Bootstrap case (no baseline FILE — file absent) → always writes without --allow-growth.
+ *   - Empty baseline FILE (file exists, entries={}) → NOT a bootstrap; --allow-growth required.
  */
 
 import * as fs from 'node:fs';
@@ -136,7 +138,7 @@ describe('updateBaseline — allowGrowth validation', () => {
 // ---------------------------------------------------------------------------
 
 describe('updateBaseline — allowGrowth writes correctly', () => {
-  it('writes when allowGrowth + reason are supplied; grown entry carries the new reason', () => {
+  it('writes when allowGrowth + reason are supplied; grown entry PRESERVES the existing reason', () => {
     const cfg = makeConfig();
     writeBaseline(cfg, { 'src/a.ts::fn': { loc: 120, reason: 'old reason' } });
 
@@ -147,9 +149,10 @@ describe('updateBaseline — allowGrowth writes correctly', () => {
     expect(result.kept).toBe(1);
 
     const written = loadBaseline(cfg);
+    // Grown entries preserve the hand-written reason; --reason applies only to NEW entries.
     expect(written.entries['src/a.ts::fn']).toMatchObject({
       loc: 130,
-      reason: 'intentional: merged complex path',
+      reason: 'old reason',
     });
   });
 
@@ -227,7 +230,7 @@ describe('updateBaseline — removals are unrestricted', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Bootstrap: no baseline file → always write
+// Bootstrap: no baseline FILE → always write
 // ---------------------------------------------------------------------------
 
 describe('updateBaseline — bootstrap (no baseline file)', () => {
@@ -243,16 +246,42 @@ describe('updateBaseline — bootstrap (no baseline file)', () => {
     expect(result.kept).toBe(1);
     expect(fs.existsSync(cfg.baselinePath)).toBe(true);
   });
+});
 
-  it('writes without allowGrowth when baseline file exists but is empty entries', () => {
+// ---------------------------------------------------------------------------
+// Empty baseline FILE (fileExisted=true, entries={}) → NOT a bootstrap
+// ---------------------------------------------------------------------------
+
+describe('updateBaseline — empty baseline file (not a bootstrap)', () => {
+  it('blocks growth when the baseline file exists but entries is empty (no --allow-growth)', () => {
     const cfg = makeConfig();
-    // Empty baseline (no prior entries).
-    writeBaseline(cfg, {});
+    // File exists with empty entries — simulates a bad merge resolution.
+    const emptyBaseline = JSON.stringify({ limit: cfg.limit, entries: {} });
+    fs.writeFileSync(cfg.baselinePath, emptyBaseline, 'utf8');
+    const mtime = fs.statSync(cfg.baselinePath).mtimeMs;
 
-    const sizes = new Map([['src/a.ts::fn', 200]]);
+    const sizes = new Map([['src/a.ts::fn', 150]]);
     const result = updateBaseline(cfg, sizes);
+
+    // Must be blocked, not silently treated as bootstrap.
+    expect(result.blocked.length).toBeGreaterThan(0);
+    expect(result.blocked[0]).toMatchObject({ key: 'src/a.ts::fn', oldLoc: null, newLoc: 150 });
+    // File must not be written.
+    expect(fs.statSync(cfg.baselinePath).mtimeMs).toBe(mtime);
+  });
+
+  it('writes with allowGrowth when the baseline file exists but entries is empty', () => {
+    const cfg = makeConfig();
+    const emptyBaseline = JSON.stringify({ limit: cfg.limit, entries: {} });
+    fs.writeFileSync(cfg.baselinePath, emptyBaseline, 'utf8');
+
+    const sizes = new Map([['src/a.ts::fn', 150]]);
+    const result = updateBaseline(cfg, sizes, { allowGrowth: true, reason: 'populating after bad merge' });
 
     expect(result.blocked).toHaveLength(0);
     expect(result.kept).toBe(1);
+    const written = loadBaseline(cfg);
+    // New entry (no prior record) — should carry the supplied reason.
+    expect(written.entries['src/a.ts::fn']).toMatchObject({ loc: 150, reason: 'populating after bad merge' });
   });
 });

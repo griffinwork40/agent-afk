@@ -57,10 +57,10 @@ export interface RatchetConfig {
   legacyReason: string;
 }
 
-export function loadBaseline(cfg: RatchetConfig): Baseline {
-  if (!fs.existsSync(cfg.baselinePath)) return { limit: cfg.limit, entries: {} };
+export function loadBaseline(cfg: RatchetConfig): Baseline & { fileExisted: boolean } {
+  if (!fs.existsSync(cfg.baselinePath)) return { limit: cfg.limit, entries: {}, fileExisted: false };
   const parsed = JSON.parse(fs.readFileSync(cfg.baselinePath, 'utf8')) as Partial<Baseline>;
-  return { limit: parsed.limit ?? cfg.limit, entries: parsed.entries ?? {} };
+  return { limit: parsed.limit ?? cfg.limit, entries: parsed.entries ?? {}, fileExisted: true };
 }
 
 /**
@@ -102,9 +102,9 @@ export interface UpdateOptions {
    */
   allowGrowth?: boolean;
   /**
-   * Required when `allowGrowth` is true. Stamped as the `reason` on every
-   * grown or new entry. Callers must validate that it is non-empty before
-   * calling updateBaseline; the function treats an empty string as an error.
+   * Required when `allowGrowth` is true. Stamped as the `reason` on **new**
+   * entries only (entries with no prior baseline record). Grown entries retain
+   * their existing hand-written reason unchanged.
    */
   reason?: string;
 }
@@ -132,7 +132,10 @@ export function updateBaseline(
   }
 
   const previous = loadBaseline(cfg);
-  const isBootstrap = Object.keys(previous.entries).length === 0;
+  // A genuine bootstrap means the file was absent — not just that entries is empty.
+  // An existing file with zero entries (e.g. after a bad merge resolution) is NOT
+  // a bootstrap; --allow-growth is required to populate it.
+  const isBootstrap = !previous.fileExisted;
 
   // Collect growth events before deciding whether to write.
   const blocked: GrowthEvent[] = [];
@@ -158,10 +161,15 @@ export function updateBaseline(
   for (const [key, loc] of sizes) {
     if (loc <= cfg.limit) continue;
     const prior = previous.entries[key];
-    const isGrown = blocked.some((e) => e.key === key);
+    const growthEvent = blocked.find((e) => e.key === key);
+    const isNew = growthEvent !== undefined && growthEvent.oldLoc === null;
     entries[key] = {
       loc,
-      reason: isGrown && opts.reason ? opts.reason : (prior?.reason ?? cfg.legacyReason),
+      // For new entries (no prior record), stamp opts.reason so the caller's
+      // rationale is recorded. For grown entries, the hand-written reason is
+      // authoritative — preserve it. AFK.md: "the `reason` and `permanent`
+      // fields are yours and survive regeneration".
+      reason: isNew ? (opts.reason ?? cfg.legacyReason) : (prior?.reason ?? cfg.legacyReason),
       ...(prior?.permanent ? { permanent: true } : {}),
     };
   }
