@@ -43,6 +43,7 @@ export interface ResetStateHost {
   hasCommitted: boolean;
   placementMode: FramePlacementMode;
   commitInFlight: boolean;
+  pendingContentRows: number | null;
   pendingResizeErase: { top: number; bottom: number } | null;
   bandGeometryStale: boolean;
   lastKnownRows: number;
@@ -104,6 +105,7 @@ export function resetState(self: ResetStateHost): void {
   // so a fresh arm cycle never re-pins stale transcript from the previous one.
   self.clearCommittedBand();
   self.commitInFlight = false;
+  self.pendingContentRows = null;
   // Drop resize ghost-erase state — a pending erase or stale row count from
   // the previous arm cycle must not leak into the next one (the first repaint
   // of a fresh arm re-seeds lastKnownRows before any resize can be detected).

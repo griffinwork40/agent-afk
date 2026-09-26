@@ -216,5 +216,10 @@ describe('Stage 2 (#540) render-not-repin: stateless window re-render', () => {
     expect(host.committedBandTopRow).toBe(14);
     expect(host.committedBandBottomRow).toBe(16);
     expect(host.committedBandPaintedRows).toBe(3);
+    // Rows 0..12 (1-based 1..13) are the blank gap above the band — they must
+    // all be empty: no #2182 top-shift gap between committed content and prompt.
+    for (let i = 0; i <= 12; i++) {
+      expect((lines[i] ?? '').trim(), `gap row ${i + 1} not blank:\n${dump}`).toBe('');
+    }
   });
 });

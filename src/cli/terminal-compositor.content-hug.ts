@@ -18,9 +18,9 @@
  * Contract (commit geometry): commitAbove's routing measures "room above the
  * frame" to decide fit / overflow / band-hold. In content-hug mode the frame
  * is deliberately NOT at the floor, so the room it must use is the room the
- * frame WOULD have if bottom-pinned: `frameTop + slack`, where slack is how
- * far the last-rendered frame bottom sits above `absoluteBottom`. Contiguity
- * checks keep using the ACTUAL frame top (the band is adjacent to it).
+ * frame WOULD have if bottom-pinned: `prevTopRow + hugSlack` (where hugSlack
+ * is how far the last-rendered frame bottom sits above `absoluteBottom`).
+ * Contiguity checks keep using the ACTUAL frame top (the band is adjacent to it).
  * History: an earlier content-following regime computed room from the real
  * (high) frame top, saw zero room on the first commit, and misrouted it into
  * the overflow path (duplicated echo line + lost card body). Measuring room
