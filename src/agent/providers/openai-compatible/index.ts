@@ -423,7 +423,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
     // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory);
+    // Child sessions (readOnlyState) get the fact-only prompt variant — they can
+    // write facts but not hot memory.
+    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory || this.providerOpts.readOnlyState);
     // Invariant: kept in lockstep with anthropic-direct's call site.
     // `excludeName` omits the executing skill's own entry for a skill-dispatch
     // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills

@@ -34,6 +34,13 @@ export interface PromptAssemblyArgs {
   cwd: string;
   surface: string;
   readOnlyMemory: boolean;
+  /**
+   * When true, the child-session memory prompt variant is used (fact-only,
+   * no hot-write guidance). Set for any child session regardless of
+   * `readOnlyMemory`, because children can write facts but not hot memory.
+   * Distinct from `readOnlyMemory` which gates the schema/handler set.
+   */
+  readOnlyState?: boolean;
   /** Whether workspace tools are enabled (store is wired). Gates inclusion of
    *  the workspace system prompt fragment. */
   workspaceEnabled: boolean;
@@ -84,7 +91,9 @@ export function assembleQueryPrompt(args: PromptAssemblyArgs): AssembledPrompt {
   // Read-only memory child sessions get a slimmed prompt that omits write
   // instructions for memory_update / procedure_write — keeps the model from
   // being told about tools it does not have.
-  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory);
+  // Child sessions (readOnlyState) can write facts but not hot memory — give
+  // them the slimmed child-prompt variant that omits hot-write guidance.
+  const memoryPrompt = resolveMemorySystemPrompt(args.readOnlyMemory || args.readOnlyState);
   const workspacePrompt = resolveWorkspaceSystemPrompt(args.workspaceEnabled);
 
   // Awareness identity fields interleaved into the `# Environment` fragment
