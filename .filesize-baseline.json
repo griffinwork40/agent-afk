@@ -5,7 +5,7 @@
     "src/agent/background-registry.ts": { "loc": 403, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/memory/memory-store.ts": { "loc": 704, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/memory/memory-tools.ts": { "loc": 438, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/agent/providers/openai-compatible/index.ts": { "loc": 429, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/agent/providers/openai-compatible/index.ts": { "loc": 428, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/providers/openai-compatible/query.ts": { "loc": 804, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/subagent.ts": { "loc": 380, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/agent/tools/compose-executor.ts": { "loc": 475, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

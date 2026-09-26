@@ -47,7 +47,7 @@ import { MemoryStore, createMemoryHandlers, memoryToolSchemas, memorySearchTool 
 import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
-import { stateToolSchemas, stateReadToolSchemas } from '../../state/state-schemas.js';
+
 import { getStateDatabasePath } from '../../../paths.js';
 import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
@@ -66,6 +66,7 @@ import {
   registerPresenceLifecycle,
   resolveTopLevelSessionId,
 } from '../shared/presence-lifecycle.js';
+import { type ChildSessionOptions, isStateRestricted, isMemoryRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -74,7 +75,7 @@ const PROVIDER_NAME = 'openai-compatible';
  * Anthropic-specific knobs (client factory, OAuth keychain) — so callers
  * can build either provider with the same dependency bundle.
  */
-export interface OpenAICompatibleProviderOptions {
+export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
   /** Override the default `https://api.openai.com/v1` endpoint. */
   baseURL?: string;
   /**
@@ -104,12 +105,6 @@ export interface OpenAICompatibleProviderOptions {
    * provider-level memory-write embargo as Anthropic-routed subagents.
    */
   readOnlyMemory?: boolean;
-  /**
-   * When true, expose only `state_get` and `state_query` (no state_put/cas/delete).
-   * Independent of `readOnlyMemory` — child sessions can write facts while being
-   * denied state-store mutations. Set by `createChildProviderFactory`.
-   */
-  readOnlyState?: boolean;
   /**
    * When true, the per-query {@link SessionToolDispatcher} blocks mutating
    * `bash` commands (read-only recon allowed). Parity with
@@ -211,7 +206,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     } else {
       schemas.push(...memoryToolSchemas);
     }
-    if (opts.readOnlyMemory === true || opts.readOnlyState === true) {
+    if (isStateRestricted(opts.readOnlyMemory, opts.readOnlyState)) {
       schemas.push(...stateReadToolSchemas);
     } else {
       schemas.push(...stateToolSchemas);
@@ -423,9 +418,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
     // rest are computed once and treated as stable across a cwd re-anchor.
     const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    // Child sessions (readOnlyState) get the fact-only prompt variant — they can
-    // write facts but not hot memory.
-    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory || this.providerOpts.readOnlyState);
+    const memoryPrompt = resolveMemorySystemPrompt(isMemoryRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState));
     // Invariant: kept in lockstep with anthropic-direct's call site.
     // `excludeName` omits the executing skill's own entry for a skill-dispatch
     // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
@@ -579,11 +572,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       for (const [n, h] of createWorkspaceHandlers(this.workspaceStore, opts.sessionId ?? '', opts.subagentId)) handlers.set(n, h);
     }
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
-    // Read-only sessions (readOnlyMemory) or child sessions (readOnlyState) get
-    // only state_get and state_query — independent so children can write facts
-    // while being denied state-store mutations.
+    // Read-only sessions get only state_get and state_query.
     for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
-      if ((this.providerOpts.readOnlyMemory === true || this.providerOpts.readOnlyState === true) && name !== 'state_get' && name !== 'state_query') continue;
+      if (isStateRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
     if (opts.runtimeStateSource) {
