@@ -11,6 +11,11 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.254.0] - 2026-09-26
+
+### Added
+- emit session_id_assigned event so traces are self-identifying (#2245) (f21a289a)
+
 ## [5.253.1] - 2026-09-26
 
 ### Fixed
