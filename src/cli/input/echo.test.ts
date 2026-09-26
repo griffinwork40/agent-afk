@@ -6,7 +6,7 @@
  * against the right edge of the terminal.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import stringWidth from 'string-width';
 
 /** Remove ANSI escape sequences so assertions work in any chalk level. */
@@ -47,6 +47,25 @@ describe('formatSubmittedEcho', () => {
     expect(result.endsWith(buffer)).toBe(true);
     expect(stringWidth(result)).toBe(terminalWidth - 1);
     expect(result).toBe('▶ ' + ' '.repeat(terminalWidth - 1 - stringWidth(buffer) - 2) + buffer);
+  });
+
+  it('centered content: right-aligns to the content band edge, not the terminal edge', async () => {
+    // Regression: only the LEFT centering margin was subtracted, so with
+    // AFK_CENTER_CONTENT on a wide pane the echoed message was stranded in the
+    // terminal's top-right corner, far outside the centered column.
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    try {
+      const fn = await importEcho();
+      const terminalWidth = 211;
+      const margin = Math.floor((terminalWidth - 100) / 2); // 55, prepended later by commitAbove
+      const result = strip(fn({ buffer: '/review 2219', promptText: 'afk › ', isTTY: true, terminalWidth }));
+      expect(result.endsWith('/review 2219')).toBe(true);
+      // Band is [margin, width - margin): content ends one column inside its right edge.
+      expect(margin + stringWidth(result)).toBe(terminalWidth - margin - 1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('card path: every content line ends flush right with the cyan bar', async () => {
