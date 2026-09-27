@@ -97,21 +97,30 @@ export function formatTaskCompletion(
   // ticks (a `Done` response), so the header swap can't collide with the
   // skipped/error icons.
   const downgraded = verifyDone === true && details.doneUnverified === true;
+  // Resolve response text before building the header so emptySuccess can
+  // influence the icon. Whitespace-only counts as empty.
+  const responseText = details.responseText ?? record.responseExcerpt;
+  const hasOutput = (responseText ?? '').trim().length > 0;
+  // Flag a success tick that produced no output — only when the downgraded
+  // header is not already active (the downgrade warning takes priority and
+  // already signals a problem to the operator).
+  const emptySuccess = record.status === 'success' && !downgraded && !hasOutput;
   const icon =
     record.status === 'success' ? '✅' : record.status === 'skipped' ? '⏭️' : '❌';
   const durationSec = (record.durationMs / 1000).toFixed(1);
   const header = downgraded
     ? `⚠️ Done (unverified) — daemon task: ${record.taskId} (${record.status})`
-    : `${icon} daemon task: ${record.taskId} (${record.status})`;
+    : emptySuccess
+      ? `⚠️ daemon task: ${record.taskId} (success, no output)`
+      : `${icon} daemon task: ${record.taskId} (${record.status})`;
   const lines = [
     header,
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
   if (record.errorMessage) lines.push(`error: ${record.errorMessage.slice(0, 400)}`);
-  const responseText = details.responseText ?? record.responseExcerpt;
-  if (responseText) {
-    lines.push('', responseText);
+  if (hasOutput) {
+    lines.push('', responseText as string);
   }
   if (downgraded) {
     lines.push('', DAEMON_DONE_UNVERIFIED_CAVEAT);

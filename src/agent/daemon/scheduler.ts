@@ -421,7 +421,9 @@ export class CronScheduler {
         ...baseRecord,
         durationMs: this.now() - startTimeMs,
         status: 'success',
-        responseExcerpt: responseText.slice(0, 280),
+        responseExcerpt: responseText.length > 280
+          ? `${responseText.slice(0, 280)}… [truncated]`
+          : responseText,
       };
       this.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
       return record;
