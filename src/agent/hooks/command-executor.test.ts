@@ -335,6 +335,81 @@ esac
   });
 
   // ---------------------------------------------------------------------------
+  // session_id in stdin payload — opts.sessionId is the source of truth
+  // ---------------------------------------------------------------------------
+
+  describe('session_id in stdin payload', () => {
+    it('opts.sessionId is written to stdin session_id field', async () => {
+      const scriptPath = join(tmp, 'check-sid.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"session_id":"explicit-sid"'*) echo '{"decision":"approve"}' ;;
+  *) echo "wrong session_id in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        command: scriptPath,
+        context: { event: 'PreToolUse', toolName: 'bash', sessionId: 'explicit-sid' },
+        agentCwd: tmp,
+        sessionId: 'explicit-sid',
+        timeoutMs: 5000,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('AFK_SESSION_ID env var matches opts.sessionId', async () => {
+      const scriptPath = join(tmp, 'check-env-sid.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+if [ "$AFK_SESSION_ID" = "env-test-sid" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong AFK_SESSION_ID: $AFK_SESSION_ID" >&2
+  exit 2
+fi
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        command: scriptPath,
+        context: { event: 'PostToolUse', toolName: 'write_file', sessionId: 'env-test-sid' },
+        agentCwd: tmp,
+        sessionId: 'env-test-sid',
+        timeoutMs: 5000,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('undefined opts.sessionId → session_id absent from stdin, AFK_SESSION_ID empty', async () => {
+      // JSON.stringify drops undefined values, so session_id is absent (not null)
+      // when sessionId is undefined. AFK_SESSION_ID is set to '' via ?? ''.
+      const scriptPath = join(tmp, 'check-null-sid.sh');
+      writeFileSync(
+        scriptPath,
+        '#!/bin/sh\npayload=$(cat)\ncase "$payload" in\n  *\'"session_id"\'*) echo "session_id key unexpectedly present: $payload" >&2; exit 2 ;;\nesac\nif [ -n "$AFK_SESSION_ID" ]; then\n  echo "expected empty AFK_SESSION_ID, got: $AFK_SESSION_ID" >&2; exit 2\nfi\necho \'{"decision":"approve"}\'\n',
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        command: scriptPath,
+        context: { event: 'SessionStart' },
+        agentCwd: tmp,
+        sessionId: undefined,
+        timeoutMs: 5000,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // stdin EPIPE race (CI regression)
   // ---------------------------------------------------------------------------
 

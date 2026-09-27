@@ -545,6 +545,99 @@ describe.skipIf(process.platform === 'win32')('plugin-tier hooks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Session id resolution — context.sessionId wins over agentConfig.sessionId
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.platform === 'win32')('session id resolution', () => {
+  it('context.sessionId wins over agentConfig.sessionId (registration-time fallback)', async () => {
+    // Script reads session_id from stdin and emits it as additionalContext.
+    // Written with writeFileSync rather than writeScript to use a plain string
+    // (no template literal) — avoids the esbuild octal-escape-in-template error
+    // that fires on the sed backreference \1 when compiled for test.
+    const scriptPath = join(tmp, 'echo-session-id.sh');
+    writeFileSync(
+      scriptPath,
+      '#!/bin/sh\npayload=$(cat)\nsid=$(echo "$payload" | sed \'s/.*"session_id":"\\([^"]*\\)".*/\\1/\')\necho "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$sid\\"}}"\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        PreToolUse: [
+          { hooks: [{ type: 'command', command: scriptPath, timeoutMs: 5000 }] },
+        ],
+      },
+    });
+    // Registration-time agentConfig has a different sessionId.
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp, sessionId: 'registration-id' });
+
+    // Dispatch with a context that carries a live sessionId.
+    const result = await registry.dispatch({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      sessionId: 'live-context-id',
+    });
+    // The hook should see the live context id, not the registration-time one.
+    expect(result.injectContext).toBe('live-context-id');
+  });
+
+  it('falls back to agentConfig.sessionId when context has no sessionId', async () => {
+    const scriptPath = join(tmp, 'echo-session-id-fallback.sh');
+    writeFileSync(
+      scriptPath,
+      '#!/bin/sh\npayload=$(cat)\nsid=$(echo "$payload" | sed \'s/.*"session_id":"\\([^"]*\\)".*/\\1/\')\necho "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$sid\\"}}"\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        // SubagentStop has no sessionId field — ideal for testing fallback.
+        SubagentStop: [
+          { hooks: [{ type: 'command', command: scriptPath, timeoutMs: 5000 }] },
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp, sessionId: 'registration-fallback-id' });
+
+    const result = await registry.dispatch({
+      event: 'SubagentStop',
+      subagentId: 'sa-fallback',
+      status: 'succeeded',
+    });
+    // SubagentStop carries no sessionId, so the registration-time id is used.
+    expect(result.injectContext).toBe('registration-fallback-id');
+  });
+
+  it('AFK_SESSION_ID env var reflects context.sessionId in the hook subprocess', async () => {
+    const scriptPath = writeScript(
+      'echo-env-session-id.sh',
+      `#!/bin/sh
+echo "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$AFK_SESSION_ID\\"}}"
+`,
+    );
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        PostToolUse: [
+          { hooks: [{ type: 'command', command: scriptPath, timeoutMs: 5000 }] },
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp, sessionId: 'reg-id' });
+
+    const result = await registry.dispatch({
+      event: 'PostToolUse',
+      toolName: 'write_file',
+      sessionId: 'env-context-id',
+    });
+    // AFK_SESSION_ID must carry the live context id, not the registration-time one.
+    expect(result.injectContext).toBe('env-context-id');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Episode mode hook filter
 // ---------------------------------------------------------------------------
 

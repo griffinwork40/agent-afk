@@ -22,6 +22,7 @@ import type { LoadedHooksConfig } from './config-loader.js';
 import { compileMatcher } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
 import { isWhatifEpisode } from '../whatif-episode-gate.js';
+import { resolveContextSessionId } from './hook-utils.js';
 
 export interface AgentConfigForBridge {
   cwd?: string;
@@ -131,11 +132,18 @@ export function loadAndRegisterConfigHooks(
             }
           }
 
+          // Prefer the live event context.sessionId over the registration-time
+          // agentConfig.sessionId so REPL / `afk chat` hooks receive the
+          // provider-assigned id rather than undefined. Falls back to the
+          // registration-time id for events whose context type carries no
+          // sessionId (SubagentStart, SubagentStop).
+          const effectiveSessionId = resolveContextSessionId(context, sessionId);
+
           const result = await executeCommand({
             command: hookCommand,
             context,
             agentCwd,
-            sessionId,
+            sessionId: effectiveSessionId,
             timeoutMs: hookTimeoutMs,
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
           });
