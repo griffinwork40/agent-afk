@@ -574,3 +574,178 @@ describe('repairOrphanToolUses — tool_result ordering heal', () => {
     expect(messages[2]!.content).toBe(content);
   });
 });
+
+// ─── OrphanRepairReport: return-value contract ─────────────────────────────
+
+describe('repairOrphanToolUses — OrphanRepairReport', () => {
+  it('returns null on healthy history (no repair needed)', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'tu_ok', name: 'bash', input: {} },
+        ] as ContentBlockParam[],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_ok', content: 'done' }] as ContentBlockParam[],
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'all good' }] as ContentBlockParam[] },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).toBeNull();
+  });
+
+  it('returns null on empty history', () => {
+    expect(repairOrphanToolUses([])).toBeNull();
+  });
+
+  it('returns null on plain text-only history', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi' },
+    ];
+    expect(repairOrphanToolUses(messages)).toBeNull();
+  });
+
+  it('orphan pass: report includes orphan ids and assistant indices', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'do it' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_orphan_1', name: 'bash', input: { cmd: 'SECRET_COMMAND' } },
+          { type: 'tool_use', id: 'toolu_orphan_2', name: 'read_file', input: { file: 'PRIVATE_PATH' } },
+        ] as ContentBlockParam[],
+      },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).not.toBeNull();
+    expect(report!.orphanToolUseIds).toEqual(['toolu_orphan_1', 'toolu_orphan_2']);
+    expect(report!.orphanAssistantIndices).toEqual([1]);
+    expect(report!.messageCountBefore).toBe(2);
+  });
+
+  it('hoist pass: report includes hoisted message indices', () => {
+    // user message with text before tool_result (needs hoist)
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'hey' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'tu_hoist', name: 'grep', input: {} },
+        ] as ContentBlockParam[],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'some text before' },
+          { type: 'tool_result', tool_use_id: 'tu_hoist', content: 'result' },
+        ] as ContentBlockParam[],
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'done' }] as ContentBlockParam[] },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).not.toBeNull();
+    expect(report!.hoistedMessageIndices).toEqual([2]);
+    // The orphan pass should not fire (tool_result is present)
+    expect(report!.orphanToolUseIds).toEqual([]);
+  });
+
+  it('bridge pass: report includes bridged indices', () => {
+    // Two consecutive assistant messages — needs a bridge
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: [{ type: 'text', text: 'first' }] as ContentBlockParam[] },
+      { role: 'assistant', content: [{ type: 'text', text: 'second' }] as ContentBlockParam[] },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).not.toBeNull();
+    expect(report!.bridgedIndices).toHaveLength(1);
+    // original index of the first assistant in the pair is 1
+    expect(report!.bridgedIndices[0]).toBe(1);
+  });
+
+  it('shapeBefore captures roles and block types but NEVER message text or tool inputs', () => {
+    const secretText = 'SECRET_CONTENT_THAT_MUST_NOT_APPEAR';
+    const secretInput = 'PRIVATE_TOOL_INPUT';
+    const messages: MessageParam[] = [
+      { role: 'user', content: secretText },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: secretText },
+          { type: 'tool_use', id: 'toolu_secret', name: 'bash', input: { cmd: secretInput } },
+        ] as ContentBlockParam[],
+      },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).not.toBeNull();
+    const shape = report!.shapeBefore;
+    // Must contain structural info
+    expect(shape).toContain('u[');
+    expect(shape).toContain('a[');
+    expect(shape).toContain('tool_use');
+    // Must NOT contain any message content or tool inputs
+    expect(shape).not.toContain(secretText);
+    expect(shape).not.toContain(secretInput);
+  });
+
+  it('shapeBefore format: roles, block types, counts', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'start' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'thinking' },
+          { type: 'tool_use', id: 'tu_a', name: 'bash', input: {} },
+          { type: 'tool_use', id: 'tu_b', name: 'read_file', input: {} },
+        ] as ContentBlockParam[],
+      },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).not.toBeNull();
+    const shape = report!.shapeBefore;
+    // Index 0: user with text
+    expect(shape).toContain('0:u[text]');
+    // Index 1: assistant with text + 2 tool_use blocks
+    expect(shape).toContain('1:a[text,tool_use*2]');
+  });
+
+  it('messageCountBefore reflects the pre-repair length', () => {
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'x' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu1', name: 'bash', input: {} }] as ContentBlockParam[],
+      },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report!.messageCountBefore).toBe(2);
+    // After repair a synthetic message was inserted
+    expect(messages).toHaveLength(3);
+  });
+
+  it('report reflects original indices even after multiple orphan insertions', () => {
+    // Two consecutive assistant messages each with an orphaned tool_use.
+    const messages: MessageParam[] = [
+      { role: 'user', content: 'start' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu_first', name: 'bash', input: {} }] as ContentBlockParam[],
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu_second', name: 'grep', input: {} }] as ContentBlockParam[],
+      },
+    ];
+    const report = repairOrphanToolUses(messages);
+    expect(report).not.toBeNull();
+    // Both tool_use ids should be in the report
+    expect(report!.orphanToolUseIds).toContain('tu_first');
+    expect(report!.orphanToolUseIds).toContain('tu_second');
+    // original indices of the assistant messages: 1 and 2
+    expect(report!.orphanAssistantIndices.sort()).toEqual([1, 2]);
+  });
+});

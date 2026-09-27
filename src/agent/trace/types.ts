@@ -873,7 +873,19 @@ export type SessionPhaseName =
   // Backward compat: old traces that predate this event simply lack it. Consumers
   // must treat its absence as "id unknown from trace alone" — the ledger
   // `traceLabel` bridge remains the fallback for those traces.
-  | 'session_id_assigned';
+  | 'session_id_assigned'
+  // Last-resort orphan-repair fired inside `openRound` (single event, no paired
+  // start). Emitted ONLY when `repairOrphanToolUses` in round-request.ts ACTUALLY
+  // changed the message history — i.e. a corruption path evaded both the primary
+  // defense (tool-round.ts rollback) and the turn-driver defense
+  // (query-turn-driver.ts:132). metadata carries: `hoistedIndices` (comma-separated
+  // original indices where tool_result blocks were reordered), `orphanIds`
+  // (tool_use ids that had no paired result), `assistantIndices` (original indices
+  // of the assistant messages that owned orphans), `bridgedIndices` (post-orphan-pass indices
+  // where role-alternation bridges were inserted), `messageCount` (count before
+  // repair), `shapeBefore` (compact structural summary — roles + block types + counts,
+  // NEVER message text or tool inputs; capped at 2000 chars). See #2136.
+  | 'orphan_repair';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
