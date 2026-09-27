@@ -5,14 +5,22 @@
  * atomic (temp + rename) to avoid leaving a half-written file. Missing file
  * returns an empty array. JSON parse failures log to stderr and return [].
  *
+ * Read-modify-write operations (`addSchedule`, `removeSchedule`,
+ * `updateSchedule`) are guarded by an `O_EXCL` advisory lockfile so that
+ * concurrent callers (parallel agents, CLI + daemon HTTP handler, or two
+ * REPL sessions) cannot silently drop each other's changes.
+ *
  * @module agent/daemon/schedule-store
  */
 
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -21,6 +29,47 @@ import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
 import { errorMessage } from '../../utils/errors.js';
+
+// ---------------------------------------------------------------------------
+// Advisory file lock (O_EXCL)
+// ---------------------------------------------------------------------------
+
+const LOCK_STALE_MS = 10_000;
+const LOCK_POLL_MS = 50;
+const LOCK_TIMEOUT_MS = 15_000;
+
+/**
+ * Run `fn` under an O_EXCL advisory lock on `storePath + ".lock"`.
+ * Stale locks (older than LOCK_STALE_MS) are removed and retried.
+ * Throws if the lock cannot be acquired within LOCK_TIMEOUT_MS.
+ */
+function withFileLock<T>(storePath: string, fn: () => T): T {
+  const lp = `${storePath}.lock`;
+  mkdirSync(dirname(lp), { recursive: true });
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  // Acquire: open with O_EXCL — fails EEXIST if already held.
+  while (Date.now() < deadline) {
+    try {
+      closeSync(openSync(lp, 'wx'));
+      break; // lock acquired
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code !== 'EEXIST') throw err;
+      // Remove stale lock left by a killed process.
+      try {
+        if (Date.now() - statSync(lp).mtimeMs > LOCK_STALE_MS) unlinkSync(lp);
+      } catch { /* removed concurrently — retry */ }
+      const wait = Math.min(LOCK_POLL_MS, deadline - Date.now());
+      if (wait <= 0) throw new Error(`[schedule-store] lock timeout: ${lp}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { unlinkSync(lp); } catch { /* best effort */ }
+  }
+}
 
 export interface ScheduledTaskConfig {
   /** Slug ID, e.g. "nightly-forge". Auto-generated from `name` via `slugify`. */
@@ -127,38 +176,50 @@ export function saveSchedules(configs: ScheduledTaskConfig[], path?: string): vo
  * as legacy pass-through (= always notify), so we materialize the default
  * here at write time. Tasks registered through other paths (e.g. the
  * built-in `worktree-prune` task) intentionally retain legacy behavior.
+ *
+ * The read-modify-write is wrapped in an advisory lockfile so concurrent
+ * callers cannot silently clobber each other's additions.
  */
 export function addSchedule(
   config: Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt'>,
   path?: string,
 ): ScheduledTaskConfig {
-  const schedules = loadSchedules(path);
-  const existing = schedules.map((s) => s.id);
-  const base = slugify(config.name);
-  const id = resolveSlugCollision(base, existing);
-  const now = new Date().toISOString();
-  const newConfig: ScheduledTaskConfig = {
-    ...config,
-    notifyOn: config.notifyOn ?? 'failure',
-    id,
-    createdAt: now,
-    updatedAt: now,
-  };
-  schedules.push(newConfig);
-  saveSchedules(schedules, path);
-  return newConfig;
+  const storePath = path ?? getSchedulesPath();
+  return withFileLock(storePath, () => {
+    const schedules = loadSchedules(storePath);
+    const existing = schedules.map((s) => s.id);
+    const base = slugify(config.name);
+    const id = resolveSlugCollision(base, existing);
+    const now = new Date().toISOString();
+    const newConfig: ScheduledTaskConfig = {
+      ...config,
+      notifyOn: config.notifyOn ?? 'failure',
+      id,
+      createdAt: now,
+      updatedAt: now,
+    };
+    schedules.push(newConfig);
+    saveSchedules(schedules, storePath);
+    return newConfig;
+  });
 }
 
 /**
  * Remove a schedule by ID. Returns true if removed, false if not found.
+ *
+ * The read-modify-write is wrapped in an advisory lockfile so concurrent
+ * callers cannot silently clobber each other's removals.
  */
 export function removeSchedule(id: string, path?: string): boolean {
-  const schedules = loadSchedules(path);
-  const before = schedules.length;
-  const filtered = schedules.filter((s) => s.id !== id);
-  if (filtered.length === before) return false;
-  saveSchedules(filtered, path);
-  return true;
+  const storePath = path ?? getSchedulesPath();
+  return withFileLock(storePath, () => {
+    const schedules = loadSchedules(storePath);
+    const before = schedules.length;
+    const filtered = schedules.filter((s) => s.id !== id);
+    if (filtered.length === before) return false;
+    saveSchedules(filtered, storePath);
+    return true;
+  });
 }
 
 /**
@@ -180,32 +241,38 @@ export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt'
  * This is the canonical update primitive — the agent tool handler, the
  * web-server PATCH route, and `toggleScheduleEnabled` all delegate here
  * so field-merge logic stays in one place.
+ *
+ * The read-modify-write is wrapped in an advisory lockfile so concurrent
+ * callers cannot silently clobber each other's patches.
  */
 export function updateSchedule(
   id: string,
   patch: SchedulePatch,
   path?: string,
 ): ScheduledTaskConfig | undefined {
-  const schedules = loadSchedules(path);
-  const idx = schedules.findIndex((s) => s.id === id);
-  if (idx === -1) return undefined;
-  const existing = schedules[idx]!;
-  const updated: ScheduledTaskConfig = {
-    ...existing,
-    ...(patch.name !== undefined ? { name: patch.name } : {}),
-    ...(patch.command !== undefined ? { command: patch.command } : {}),
-    ...(patch.cron !== undefined ? { cron: patch.cron } : {}),
-    ...(patch.executor !== undefined ? { executor: patch.executor } : {}),
-    ...(patch.trigger !== undefined ? { trigger: patch.trigger } : {}),
-    ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
-    ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
-    ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-    ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  schedules[idx] = updated;
-  saveSchedules(schedules, path);
-  return updated;
+  const storePath = path ?? getSchedulesPath();
+  return withFileLock(storePath, () => {
+    const schedules = loadSchedules(storePath);
+    const idx = schedules.findIndex((s) => s.id === id);
+    if (idx === -1) return undefined;
+    const existing = schedules[idx]!;
+    const updated: ScheduledTaskConfig = {
+      ...existing,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.command !== undefined ? { command: patch.command } : {}),
+      ...(patch.cron !== undefined ? { cron: patch.cron } : {}),
+      ...(patch.executor !== undefined ? { executor: patch.executor } : {}),
+      ...(patch.trigger !== undefined ? { trigger: patch.trigger } : {}),
+      ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
+      ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
+      ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    schedules[idx] = updated;
+    saveSchedules(schedules, storePath);
+    return updated;
+  });
 }
 
 /**

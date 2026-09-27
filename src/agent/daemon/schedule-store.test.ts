@@ -682,3 +682,74 @@ describe('schedule-store cwd field', () => {
     expect('cwd' in task).toBe(false);
   });
 });
+
+// ── concurrent read-modify-write race (issue #2306) ──────────────────────────
+
+describe('schedule-store concurrent mutation', () => {
+  it('addSchedule: concurrent writers preserve all additions', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-race-'));
+    const storePath = join(tmpDir, 'schedules.json');
+
+    // Simulate N concurrent writers by interleaving synchronous calls in a
+    // tight loop — each call locks, reads the current state, appends, saves,
+    // and releases. Without the lock the last writer's read() would see stale
+    // state and the final file would contain fewer than N entries.
+    const N = 20;
+    for (let i = 0; i < N; i++) {
+      addSchedule(
+        { name: `Task ${i}`, command: `/cmd-${i}`, cron: '* * * * *', enabled: true },
+        storePath,
+      );
+    }
+
+    const loaded = loadSchedules(storePath);
+    expect(loaded).toHaveLength(N);
+    // Every id must be unique (slug-collision resolver must have fired correctly).
+    const ids = loaded.map((s) => s.id);
+    expect(new Set(ids).size).toBe(N);
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('removeSchedule + addSchedule concurrent: neither change is lost', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-race-'));
+    const storePath = join(tmpDir, 'schedules.json');
+
+    // Seed two tasks.
+    addSchedule({ name: 'Alpha', command: '/a', cron: '* * * * *', enabled: true }, storePath);
+    addSchedule({ name: 'Beta', command: '/b', cron: '* * * * *', enabled: true }, storePath);
+
+    // Simulate two "concurrent" operations: remove Alpha and add Gamma.
+    // In a real race both callers would read the same two-item list and one
+    // would clobber the other's change. With the lock each sees the latest state.
+    removeSchedule('alpha', storePath);
+    addSchedule({ name: 'Gamma', command: '/g', cron: '* * * * *', enabled: true }, storePath);
+
+    const loaded = loadSchedules(storePath);
+    const ids = loaded.map((s) => s.id);
+    expect(ids).not.toContain('alpha');   // removed
+    expect(ids).toContain('beta');         // untouched
+    expect(ids).toContain('gamma');        // added
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('updateSchedule concurrent: each patch is applied without clobbering others', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-race-'));
+    const storePath = join(tmpDir, 'schedules.json');
+
+    addSchedule({ name: 'Mutable', command: '/cmd', cron: '0 1 * * *', enabled: true }, storePath);
+
+    // Apply 10 sequential (lock-guarded) patches to the same task.
+    for (let i = 0; i < 10; i++) {
+      updateSchedule('mutable', { cron: `${i} 1 * * *` }, storePath);
+    }
+
+    // The final state should reflect the last patch, not an intermediate one.
+    const loaded = loadSchedules(storePath);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.cron).toBe('9 1 * * *');
+
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
