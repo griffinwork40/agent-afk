@@ -66,25 +66,6 @@ export const CLAUDE_CODE_ALIASES: Readonly<Record<string, readonly string[]>> = 
 // ---------------------------------------------------------------------------
 
 /**
- * Build a reverse index: Claude Code alias → AFK canonical name.
- * Used only for documentation/cross-reference; actual matching tests the AFK
- * name against all aliases rather than going through the reverse map.
- */
-function buildReverseAliasIndex(): ReadonlyMap<string, string> {
-  const m = new Map<string, string>();
-  for (const [afkName, aliases] of Object.entries(CLAUDE_CODE_ALIASES)) {
-    for (const alias of aliases) {
-      m.set(alias, afkName);
-    }
-  }
-  return m;
-}
-
-/** Reverse map: Claude Code alias → AFK canonical name. */
-const REVERSE_ALIAS_INDEX = buildReverseAliasIndex();
-void REVERSE_ALIAS_INDEX; // referenced by tests via CLAUDE_CODE_ALIASES; kept for completeness
-
-/**
  * Return all names to test for a given AFK tool name: the name itself plus
  * all of its Claude Code aliases. Order: AFK name first.
  */

@@ -142,8 +142,6 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // keeps the executor's SIGKILL deadline aligned with the registry ceiling, so
 // there is no orphan window and the documented cap matches reality.
 
-
-
 interface SingleFileResult {
   hooks: ResolvedHooksConfig;
   enableShellHooks: boolean;
