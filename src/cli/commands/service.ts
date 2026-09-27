@@ -52,7 +52,7 @@ function parseServiceName(input: string): ServiceName {
 export function registerServiceCommand(program: Command): void {
   const service = program
     .command('service')
-    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux) — always-on, auto-restart');
+    .description('Manage AFK background services (launchd on macOS, systemd --user on Linux, Task Scheduler on Windows) — always-on, auto-restart');
 
   service
     .command('install <name>')

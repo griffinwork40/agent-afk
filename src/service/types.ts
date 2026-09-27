@@ -113,7 +113,7 @@ export interface ServiceStatus {
  */
 export interface ServiceManager {
   /** Which supervisor this manager drives. */
-  readonly backend: 'launchd' | 'systemd';
+  readonly backend: 'launchd' | 'systemd' | 'task-scheduler';
   /** Human-readable name of the config artifact, for CLI copy ("LaunchAgent plist" / "systemd user unit"). */
   readonly configKind: string;
 

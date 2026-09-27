@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Added
+- Windows Task Scheduler backend for `afk service` — install, uninstall, status, restart, upgrade via `schtasks` (user-level, no elevation, logon trigger, crash restart via RestartOnFailure); `/service-setup` skill detects Windows and routes accordingly (#1602)
+
 ## [5.257.4] - 2026-09-27
 
 ### Fixed
