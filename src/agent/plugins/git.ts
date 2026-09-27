@@ -205,14 +205,14 @@ export async function checkout(repo: string, ref: string, opts: CheckoutOptions 
  *   - the ref is already a full ref-path (`refs/...`) — callers like
  *     update.ts deliberately pass `refs/remotes/origin/<x>` or `refs/tags/<x>`
  *     and must not be double-resolved.
- *   - the ref contains a slash outside `refs/` — belt-and-suspenders guard:
- *     `origin/main` already unambiguously addresses the remote-tracking branch
- *     and does not trigger DWIM.
  *   - `refs/remotes/origin/<ref>` does not resolve — the ref is a tag, a SHA,
  *     or a branch that does not exist on origin; fall through unchanged.
  */
 async function resolveInstallRef(repo: string, ref: string, opts: GitOptions): Promise<string> {
-  if (ref.startsWith('refs/') || ref.includes('/')) return ref;
+  // Branch names may contain slashes (`feature/foo`), so only a fully
+  // qualified ref skips the probe. A remote-qualified name like `origin/main`
+  // probes `refs/remotes/origin/origin/main`, misses, and passes through.
+  if (ref.startsWith('refs/')) return ref;
   const remoteRef = `refs/remotes/origin/${ref}`;
   const sha = await tryRevParse(repo, remoteRef, opts);
   return sha !== null ? remoteRef : ref;

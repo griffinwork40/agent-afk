@@ -214,6 +214,30 @@ describe('checkout — remote-branch DWIM fix', () => {
     ]);
   });
 
+  it('resolves a remote-only branch name containing a slash (feature/foo)', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') return { stdout: 'deadbeef\n' };
+      return {};
+    });
+    await checkout('/tmp/repo', 'feature/foo', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual([
+      'checkout', '--detach', 'refs/remotes/origin/feature/foo',
+    ]);
+  });
+
+  it('passes a remote-qualified name (origin/main) through when the probe misses', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') throw new Error('fatal: Needed a single revision');
+      return {};
+    });
+    await checkout('/tmp/repo', 'origin/main', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual(['checkout', '--detach', 'origin/main']);
+  });
+
   it('passes qualified refs/remotes/origin/<x> through unchanged (no double-resolution)', async () => {
     const { runner, calls } = makeRunner(() => ({}));
     await checkout('/tmp/repo', 'refs/remotes/origin/main', { runner });
