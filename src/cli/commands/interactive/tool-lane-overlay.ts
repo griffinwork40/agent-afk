@@ -320,7 +320,7 @@ export function renderToolLaneOverlay(
         if (entry.previewDiff) {
           // Pre-execution diff preview: formatPreviewDiffBlock renders ⟳ Proposed
           // and applies the AFK_SHOW_DIFFS=0 opt-out (returns [] when disabled).
-          for (const line of formatPreviewDiffBlock(entry.previewDiff, '    ')) {
+          for (const line of formatPreviewDiffBlock(entry.previewDiff, '    ', cols)) {
             lines.push(clamp(line));
           }
         }

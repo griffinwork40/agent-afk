@@ -90,6 +90,79 @@ export interface CommittedBandHost {
   readonly stdout: NodeJS.WriteStream;
 }
 
+/**
+ * Pre-commit banner sync: on the FIRST commit of an arm cycle that has a
+ * visible banner (anchorRow > 1), synchronise placement mode and geometry
+ * BEFORE the geometry snapshot so Phase 1/2/3 see a consistent frame position.
+ *
+ * Contract (non-hug): scroll the banner into scrollback and reset anchorRow
+ * to 1, then repaint at absoluteBottom. The geometry snapshot then sees
+ * anchorRow=1 and a bottom-pinned frame, so fitsAboveFrame is true and all
+ * three commit phases flow normally with no gap between banner and content.
+ *
+ * History: PR #1823 fixed the same gap by scrolling the banner in
+ * interactive.ts BEFORE arming — but that hid the banner during the idle
+ * state (the user never saw the welcome art). This moves the scroll to the
+ * exact moment it is needed: the first commit, when the compositor
+ * transitions to bottom-pinned anyway. This is a re-introduction of the
+ * "pre-commit regime sync" pattern that existed before unconditional
+ * bottom-pinning (see the History comment in commit-geometry.ts).
+ * cursor-follow brought the need back.
+ *
+ * Contract (content-hug, issue #2229): the banner stays visible — the first
+ * reply flows directly under it, just like a shell. The banner scrolls off
+ * only once content + frame fill the viewport (the legacy-deficit path in
+ * preserveRowsBeforeFrameRender handles it). anchorRow is intentionally
+ * preserved; the committed region is therefore [anchorRow, ∞), which keeps
+ * banner rows [1, anchorRow-1] intact. The mode flip is needed because
+ * contentHugSlack reads placementMode: while it is 'cursor-follow', it
+ * returns 0 and the geometry snapshot routes the first commit to band-hold
+ * (zero above-frame room, frame already at anchorFloor). Flipping to
+ * 'content-hug' and calling repaint() updates lastMeasuredFrameBottom so
+ * contentHugSlack correctly reports the room below the banner.
+ *
+ * Precondition: called only from commitAbove, after its
+ * `if (!self.armed || !self.logUpdate) return;` guard, which is what makes
+ * the `logUpdate!` / `anchorRow!` assertions below safe.
+ */
+function preCommitBannerSync(self: CommittedBandHost, rows: number): void {
+  if (self.contentHug) {
+    self.placementMode = 'content-hug';
+    self.hasCommitted = true;
+    self.lifecycleStateDirty = true;
+    self.repaint();
+  } else {
+    const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
+    // Guard the clear→write window with both flags, mirroring the main commit
+    // path (commitAbove's committing/commitInFlight assignment). Without these
+    // guards a re-entrant repaint() that fires during logUpdate.clear() (e.g.
+    // a SIGWINCH flushed mid-stack) could trigger repositionCommittedBand
+    // (commitInFlight) or a second frame paint on top of the just-cleared
+    // region (committing). try/finally guarantees both are reset even if
+    // logUpdate.clear() or stdout.write() throws. repaint() is called OUTSIDE
+    // the try/finally so committing and commitInFlight are both false when the
+    // banner repaint fires — the compositor must accept re-entrant events from
+    // that repaint normally.
+    self.commitInFlight = true;
+    self.committing = true;
+    try {
+      self.logUpdate!.clear(extraRows);
+      const bannerRows = Math.min(self.anchorRow! - 1, rows - 1);
+      writeWithScrollGuard(self, () => {
+        self.stdout.write(bannerScrollSequence(rows, bannerRows, extraRows));
+      });
+    } finally {
+      self.committing = false;
+      self.commitInFlight = false;
+    }
+    self.anchorRow = 1;
+    self.placementMode = postCommitPlacementMode(self);
+    self.hasCommitted = true;
+    self.lifecycleStateDirty = true;
+    self.repaint();
+  }
+}
+
 export function commitAbove(self: CommittedBandHost, text: string): void {
   self.debugLog('commitAbove:enter', { textLen: text.length, anchorRow: self.anchorRow ?? null, committing: self.committing, topRow: self.logUpdate?.topRow ?? null });
 
@@ -142,56 +215,11 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
 
-  // Pre-commit banner scroll: on the FIRST commit of an arm cycle with a
-  // banner present (anchorRow > 1), scroll the banner into terminal
-  // scrollback and reset anchorRow to 1 BEFORE the geometry snapshot. This
-  // eliminates the idle-state gap between the banner and the first response
-  // without hiding the banner during the idle state (cursor-follow mode
-  // keeps the prompt just below the banner until the user submits).
-  //
-  // Sequence: clear the frame (which is at anchorRow in cursor-follow),
-  // scroll anchorRow-1 rows via newlines at the bottom, reset anchorRow,
-  // flip to bottom-pinned, repaint the frame at absoluteBottom. The
-  // geometry snapshot then sees anchorRow=1 and a bottom-pinned frame,
-  // so fitsAboveFrame is true and Phase 1/2/3 flow normally with no gap.
-  //
-  // History: PR #1823 fixed the same gap by scrolling the banner in
-  // interactive.ts BEFORE arming — but that hid the banner during the
-  // idle state (the user never saw the welcome art). This moves the
-  // scroll to the exact moment it is needed: the first commit, when the
-  // compositor transitions to bottom-pinned anyway.
-  //
-  // This is a re-introduction of the "pre-commit regime sync" pattern
-  // that existed before unconditional bottom-pinning (see the History
-  // comment in commit-geometry.ts). cursor-follow brought the need back.
+  // Pre-commit banner sync: on the FIRST commit with a visible banner
+  // (anchorRow > 1), synchronise placement mode / geometry before the
+  // geometry snapshot. See preCommitBannerSync() for the full contract.
   if (!self.hasCommitted && self.anchorRow !== undefined && self.anchorRow > 1) {
-    const extraRows = self.scrollRegion?.getExtraRows() ?? 0;
-    // Guard the clear→write window with both flags, mirroring the main commit
-    // path (lines 184-185). Without these guards a re-entrant repaint() that
-    // fires during logUpdate.clear() (e.g. a SIGWINCH flushed mid-stack) could
-    // trigger repositionCommittedBand (commitInFlight) or a second frame paint
-    // on top of the just-cleared region (committing). try/finally guarantees
-    // both are reset even if logUpdate.clear() or stdout.write() throws.
-    // repaint() is called OUTSIDE the try/finally so that committing and
-    // commitInFlight are both false when the banner repaint fires — the
-    // compositor must accept re-entrant events from that repaint normally.
-    self.commitInFlight = true;
-    self.committing = true;
-    try {
-      self.logUpdate.clear(extraRows);
-      const bannerRows = Math.min(self.anchorRow - 1, rows - 1);
-      writeWithScrollGuard(self, () => {
-        self.stdout.write(bannerScrollSequence(rows, bannerRows, extraRows));
-      });
-    } finally {
-      self.committing = false;
-      self.commitInFlight = false;
-    }
-    self.anchorRow = 1;
-    self.placementMode = postCommitPlacementMode(self);
-    self.hasCommitted = true;
-    self.lifecycleStateDirty = true;
-    self.repaint();
+    preCommitBannerSync(self, rows);
   }
 
   // F1 (retained-logical-source re-wrap): the prior band was hard-wrapped at

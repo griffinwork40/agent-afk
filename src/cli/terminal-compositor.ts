@@ -16,6 +16,7 @@
  */
 
 import { env } from '../config/env.js';
+import { assertGeometryConsistent } from './terminal-compositor.geometry-assert.js';
 import { palette } from './palette.js';
 import { InputCore, type InputCoreState } from './input-core.js';
 import type { AutocompleteState } from './input/autocomplete-state.js';
@@ -810,6 +811,7 @@ export class TerminalCompositor {
    * SIGWINCH ghost-erase rationale.
    */
   async arm(): Promise<void> {
+    assertGeometryConsistent('arm', this);
     return Lifecycle.arm(this);
   }
 
@@ -841,6 +843,7 @@ export class TerminalCompositor {
    * the drain-ordering and suggest-engine-dispose invariants.
    */
   disarm(): void {
+    assertGeometryConsistent('disarm', this);
     this.runCommitBarrier();
     Lifecycle.disarm(this);
   }
@@ -910,6 +913,7 @@ export class TerminalCompositor {
   // test suite reaches into it; these delegators forward to the module.
 
   commitAbove(text: string): void {
+    assertGeometryConsistent('commitAbove', this);
     // Held content (see setCommitBarrier) commits first, so it stays above
     // this text in scrollback.
     this.runCommitBarrier();
@@ -1082,6 +1086,7 @@ export class TerminalCompositor {
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {
+    assertGeometryConsistent('repaint', this);
     // Bump BEFORE painting so the lifecycle keypress handler's post-dispatch
     // comparison sees the increment from any repaint dispatchKey triggered.
     this.repaintCount++;

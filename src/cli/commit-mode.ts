@@ -55,6 +55,24 @@ export interface CommitModeInput {
    * outside content-hug, where it defaults to `frameTop` / `prevTopRow`.
    */
   roomTop?: number;
+  /**
+   * Rows the content-hug frame sits above the viewport floor (`absoluteBottom`)
+   * at the time of the commit geometry snapshot — i.e. `absoluteBottom -
+   * lastMeasuredFrameBottom`. Positive only while the hug frame has not yet
+   * reached the floor (viewport not yet full of content). Zero in every other
+   * placement mode and once the frame bottom-pins.
+   *
+   * When `hugSlack > 0` the `overlayTallEnoughToStrand` check is skipped:
+   * the hug frame sits above the floor, fits-path LFs scroll only
+   * already-painted band rows into scrollback (no blank rows), so the void on
+   * collapse cannot form. Once `hugSlack == 0` (frame bottom-pinned) the check
+   * applies — but only when `anchorRow <= 1` (no pre-arm banner), because
+   * `overflowPriorContiguous` requires `anchorRow <= 1` to merge the prior
+   * band; without that merge, routing to band-hold drops the prior band and
+   * causes content loss rather than preventing stranding. Omit (or 0) for
+   * bottom-pinned / cursor-follow mode.
+   */
+  hugSlack?: number;
 }
 
 /** The routing decision + the geometry the caller's phases consume. */
@@ -162,6 +180,7 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
     committedBandPaintedRows,
     geometryStale,
     roomTop,
+    hugSlack,
   } = input;
   const effPrevTop = roomTop ?? prevTopRow;
   const effRoomTop = roomTop ?? frameTop;
@@ -230,7 +249,25 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   // the visible viewport. Route through band-hold so rows accumulate in the
   // model and paint contiguously on collapse. The single-copy optimization is
   // preserved when room >= maxBandModel (frame at or near minimum height).
-  const overlayTallEnoughToStrand = fitsAboveFrame && room < maxBandModel;
+  // Contract (content-hug strand exclusion, issue #2229): skip the strand
+  // check when hugSlack > 0 — i.e. the hug frame has not yet reached the
+  // viewport floor and has slack below it. While hugSlack > 0 the fits-path
+  // bandOverflow LFs displace already-painted band rows into scrollback; blank
+  // rows NEVER enter scrollback because there are no blank rows above the frame
+  // (the hug frame sits directly below the committed band). Stranding requires
+  // eager archival of blank or future rows that then freeze in scrollback before
+  // the overlay collapses — that condition cannot arise while hugSlack > 0.
+  //
+  // Once hugSlack == 0 the frame has bottom-pinned. The check applies only
+  // when anchorRow <= 1 (no pre-arm banner) because that is the condition
+  // overflowPriorContiguous requires to merge the prior committed band into
+  // overflowRun — band-hold's protection depends on accumulating the full
+  // commit history in the model. When anchorRow > 1 (a banner is in play),
+  // overflowPriorContiguous is always false (see decideCommitMode — a
+  // mid-commit anchor-evict can move the band, so the merge is suppressed),
+  // routing to band-hold would drop the prior band and cause content loss
+  // instead of preventing stranding, so the check is skipped.
+  const overlayTallEnoughToStrand = !hugSlack && anchorRow <= 1 && fitsAboveFrame && room < maxBandModel;
   const useBandHold =
     overflowHasPending ||
     (!fitsAboveFrame && maxBandModel > 0) ||

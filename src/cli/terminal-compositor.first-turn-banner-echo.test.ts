@@ -424,11 +424,18 @@ describe('content-hug guard in banner-path eviction (contentHugFrameSettled)', (
     const bandRows = Array.from({ length: BAND_LEN }, (_, i) => `CH_CONTENT_${String(i).padStart(2, '0')}`);
     internals.committedBand = bandRows;
     internals.committedBandMeta = bandRows.map((t) => ({ logicalText: t, isHead: true }));
-    // Physical rows: floor = CH_ANCHOR_ROW = 5.  Painted rows sit at the bottom.
-    //   bandTopRow = 5 (floor), bandBottomRow = 5 + BAND_LEN - 1 = 24 — clamped
-    //   to the terminal height, actual painted region = [20, 24].
+    // Physical rows: floor = CH_ANCHOR_ROW = 5.  The band's tracked span is
+    //   [floor, frameTop - 1] = [5, 21]: it hugs the settled 1-row frame at
+    //   desiredTopRow = 22, the same `newTopRow - 1` contract every production
+    //   write site uses (commit-phase3-band.ts, commit-phase3-hold.ts). The
+    //   20-row band overflows that 17-row span, which is the pending overflow
+    //   under test. An earlier seed of 5 + BAND_LEN - 1 = 24 put the band ON the
+    //   last terminal row, below absoluteBottom (23); production cannot reach
+    //   that state and the geometry guard (I2b) rejects it. Eviction reads
+    //   `room = desiredTopRow - floor`, not this field, so the fix does not
+    //   change what the test exercises.
     internals.committedBandTopRow = CH_ANCHOR_ROW; // 5
-    internals.committedBandBottomRow = CH_ANCHOR_ROW + BAND_LEN - 1; // 24
+    internals.committedBandBottomRow = CH_ROWS - 3; // 21 = desiredTopRow(22) - 1
     internals.committedBandPaintedRows = PAINTED_ROWS; // 15 rows PENDING
     internals.hasCommitted = true;
     // content-hug: set placementMode so contentHugFrameSettled gate is active.

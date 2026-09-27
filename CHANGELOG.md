@@ -11,6 +11,56 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.258.0] - 2026-09-27
+
+### Added
+- content-hug+banner — first reply flows under banner (#2229) (27342ddb)
+
+### Fixed
+- scope the content-hug strand exclusion to frames with slack (#2229) (45b775de)
+
+### Changed
+- Merge pull request #2368 from griffinwork40/afk/issue-2229-hug-banner (9c1748f0)
+- assert the kept banner is painted exactly once (#2229) (f39e4133)
+- content-hug boot-warning scenario expects warnings in the viewport (#2229) (b86c788f)
+- note preCommitBannerSync's caller precondition (0627abe7)
+- Merge remote-tracking branch 'origin/main' into afk/issue-2229-hug-banner (c738fe16)
+
+## [5.257.9] - 2026-09-27
+
+### Fixed
+- honour pinnedRef pin when repo has semver tags (#2358) (#2360) (922f0e3d)
+
+### Changed
+- advisory findings from #2333 — many-image guard hardening (#2352) (3fdaf63f)
+
+## [5.257.8] - 2026-09-27
+
+### Fixed
+- resolve remote-only branch names before git checkout --detach (#2361) (645af141)
+- size the diff preview box from the tool-lane row budget (#1619) (0fd9d2bd)
+
+### Changed
+- Merge pull request #2359 from griffinwork40/afk/issue-1619-diff-width (639a84ec)
+
+## [5.257.7] - 2026-09-27
+
+### Added
+- dev/test geometry consistency guard at compositor entry points (1361e151)
+
+### Fixed
+- geometry guard reports instead of throwing under AFK_DEBUG_COMPOSITOR (8b336c8e)
+
+### Changed
+- Merge pull request #2336 from griffinwork40/afk/tui-geometry-guard (63cd3db8)
+- remove no-op identity spreads and clarify fork-preamble docs (#2321) (56fc1f62)
+- drop dead SETTLED constant and unused imports in OSC test (#2339) (ba1f7265)
+- bump next from 16.3.5 to 16.3.6 in /website (#2343) (d678c2aa)
+- bump @types/node from 26.6.1 to 26.6.2 in /website (#2342) (98f1124e)
+- seed #2290 content-hug band at a reachable bottom row (e48e0e40)
+- Merge remote-tracking branch 'origin/main' into afk/tui-geometry-guard (82f92b9c)
+- TUI research brief and architecture map (f0611d5c)
+
 ## [5.257.6] - 2026-09-27
 
 ### Fixed

@@ -330,7 +330,7 @@ function renderOverlayChildren(
           // Pre-execution diff preview for nested edit_file. formatPreviewDiffBlock
           // renders ⟳ Proposed and applies the AFK_SHOW_DIFFS=0 opt-out.
           const previewIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
-          for (const line of formatPreviewDiffBlock(child.previewDiff, previewIndent)) {
+          for (const line of formatPreviewDiffBlock(child.previewDiff, previewIndent, cols)) {
             lines.push(clampLineToTerminal(line, cols));
           }
         }

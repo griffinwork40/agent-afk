@@ -42,7 +42,7 @@ import {
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
-import { enforceManyImageLimit } from './_many-image-guard.js';
+import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
 
 /**
  * Contract: project an internal {@link AnthropicToolDef} to the wire-safe shape
@@ -199,7 +199,17 @@ export async function* openRound({
   // in the 2 001–8 000 px range pass the tool-level guards but cause a hard
   // HTTP 400 here. Replace out-of-range images with imageOmitted text blocks
   // so the request succeeds instead of permanently poisoning the session.
-  enforceManyImageLimit(input.messages);
+  const manyImageDegraded = enforceManyImageLimit(input.messages);
+  if (manyImageDegraded > 0) {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'many_image_degraded',
+      metadata: {
+        degradedCount: manyImageDegraded,
+        threshold: MANY_IMAGE_THRESHOLD,
+        maxDimension: MAX_DIMENSION_MANY_IMAGES,
+      },
+    });
+  }
 
   // Stamp a prompt-cache breakpoint on the last content block of the last
   // message before sending — non-mutating clone-and-stamp so the marker never

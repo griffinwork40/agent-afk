@@ -177,13 +177,45 @@ export async function listTags(repo: string, opts: GitOptions = {}): Promise<str
  * Hardened: post-checkout hook fires unconditionally on `git checkout`,
  * including `--detach`. This is THE primary RCE vector inside an untrusted
  * cloned repo — previously unprotected before this hardening.
+ *
+ * Remote-branch DWIM fix: a bare name like `afk` that exists only as
+ * `refs/remotes/origin/afk` causes git to DWIM `checkout --detach afk` into
+ * `-b afk --track origin/afk`, which is incompatible with `--detach` (exit
+ * 128). To prevent this we probe `refs/remotes/origin/<ref>` via tryRevParse
+ * and replace the bare name with the full remote-tracking ref when it
+ * resolves. Qualified refs (`refs/...`), SHAs, and tags (which do not resolve
+ * as `refs/remotes/origin/*`) are left unchanged. When a bare name is BOTH a
+ * tag and a remote branch, the remote branch wins: `--ref <name>` signals
+ * branch intent and the remote-tracking ref is the authoritative source after
+ * a plain `git clone`.
  */
 export async function checkout(repo: string, ref: string, opts: CheckoutOptions = {}): Promise<void> {
   const runner = opts.runner ?? defaultRunner;
+  const resolved = await resolveInstallRef(repo, ref, { runner, env: opts.env });
   const args = ['checkout', '--detach'];
   if (opts.force) args.push('--force');
-  args.push(ref);
+  args.push(resolved);
   await runner(withHardening(args), repo, opts.env);
+}
+
+/**
+ * Resolve a bare branch name to its remote-tracking ref when one exists.
+ *
+ * Skip resolution when:
+ *   - the ref is already a full ref-path (`refs/...`) — callers like
+ *     update.ts deliberately pass `refs/remotes/origin/<x>` or `refs/tags/<x>`
+ *     and must not be double-resolved.
+ *   - `refs/remotes/origin/<ref>` does not resolve — the ref is a tag, a SHA,
+ *     or a branch that does not exist on origin; fall through unchanged.
+ */
+async function resolveInstallRef(repo: string, ref: string, opts: GitOptions): Promise<string> {
+  // Branch names may contain slashes (`feature/foo`), so only a fully
+  // qualified ref skips the probe. A remote-qualified name like `origin/main`
+  // probes `refs/remotes/origin/origin/main`, misses, and passes through.
+  if (ref.startsWith('refs/')) return ref;
+  const remoteRef = `refs/remotes/origin/${ref}`;
+  const sha = await tryRevParse(repo, remoteRef, opts);
+  return sha !== null ? remoteRef : ref;
 }
 
 /**

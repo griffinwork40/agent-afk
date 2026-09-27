@@ -17,6 +17,7 @@ import * as git from '../plugins/git.js';
 import {
   readIndex,
   upsertMarketplace,
+  isMarketplacePinnedRef,
   type MarketplaceIndexEntry,
   type PluginIndex,
 } from '../plugins/index-store.js';
@@ -99,15 +100,24 @@ export async function updateMarketplace(
   // remote-tracking branch.
   let pickedSemverTag = false;
   if (options.ref) {
+    // Caller explicitly re-pins — honour the new ref and mark it pinned.
     targetRef = options.ref;
   } else {
-    const tags = await git.listTags(dir, gitOpts);
-    const latest = pickLatestSemverTag(tags);
-    if (latest !== null) {
-      targetRef = latest;
-      pickedSemverTag = true;
+    const defaultBranch = await git.getDefaultBranch(dir, gitOpts);
+    if (isMarketplacePinnedRef(entry, defaultBranch) && entry.ref) {
+      // Stored ref was user-pinned: advance a branch pin to the remote tip;
+      // a SHA/tag pin stays put (isBranch will be false → up-to-date or tag).
+      targetRef = entry.ref;
     } else {
-      targetRef = entry.ref ?? (await git.getDefaultBranch(dir, gitOpts));
+      // Auto-picked: run the semver-tag picker as before.
+      const tags = await git.listTags(dir, gitOpts);
+      const latest = pickLatestSemverTag(tags);
+      if (latest !== null) {
+        targetRef = latest;
+        pickedSemverTag = true;
+      } else {
+        targetRef = entry.ref ?? defaultBranch;
+      }
     }
   }
 
@@ -148,6 +158,7 @@ export async function updateMarketplace(
     ref: targetRef,
     commit,
     updatedAt: ts,
+    ...(options.ref !== undefined ? { pinnedRef: true } : {}),
   };
   upsertMarketplace(name, updated, indexPath);
 

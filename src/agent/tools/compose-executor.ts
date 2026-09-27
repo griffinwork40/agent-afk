@@ -717,7 +717,7 @@ export class ComposeExecutor {
           // Workspace-enabled provider (see compose-node-provider.ts).
           ...resolveComposeNodeProvider(nodeModel, this.ctx.workspaceStore, this.ctx.openaiBaseUrl),
           // Per-node resolved attachments; depth+1/maxDepth for preamble (#2266).
-          ...(resolvedAttachments !== undefined ? { resolvedAttachments } : {}), ...{ depth: depth + 1, maxDepth },
+          ...(resolvedAttachments !== undefined ? { resolvedAttachments } : {}), depth: depth + 1, maxDepth,
         };
       }));
 

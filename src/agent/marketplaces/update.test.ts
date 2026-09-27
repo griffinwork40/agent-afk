@@ -345,3 +345,133 @@ describe('updateAllMarketplaces', () => {
     expect(results.every((r) => r.status === 'updated')).toBe(true);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('updateMarketplace — pinnedRef branch: bare update follows pin, ignores semver tags', () => {
+  it('uses entry.ref instead of semver tag when pinnedRef is true', async () => {
+    seedMarketplace('mp', { ref: 'afk', commit: 'old-afk', pinnedRef: true });
+    const dir = writeCatalog('mp', [{ name: 'sample-plugin', source: './plugins/sample-plugin' }]);
+    writePlugin(dir, './plugins/sample-plugin', '1.0.0');
+    const { runner, calls } = makeRunner(['v2.0.0'], 'old-afk', { afk: 'new-afk' });
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') {
+      expect(outcome.toRef).toBe('afk');
+      expect(outcome.commit).toBe('new-afk');
+    }
+    const checkout = calls.find((c) => c.includes('checkout'));
+    expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/afk');
+    expect(calls.some((c) => c.includes('checkout') && c.includes('v2.0.0'))).toBe(false);
+    const idx = readIndex(indexPath);
+    expect(idx.marketplaces['mp'].ref).toBe('afk');
+    expect(idx.marketplaces['mp'].pinnedRef).toBe(true);
+  });
+
+  it('reports up-to-date when pinned branch tip already matches local HEAD', async () => {
+    seedMarketplace('mp', { ref: 'afk', commit: 'same', pinnedRef: true });
+    writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    const { runner, calls } = makeRunner(['v2.0.0'], 'same', { afk: 'same' });
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome.status).toBe('up-to-date');
+    expect(calls.some((c) => c.includes('checkout'))).toBe(false);
+  });
+});
+
+describe('updateMarketplace — unpinned (auto): semver tag picker still runs', () => {
+  it('auto-picks the latest tag when pinnedRef is false', async () => {
+    seedMarketplace('mp', { ref: 'v1.0.0', commit: 'old', pinnedRef: false });
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'new');
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+});
+
+describe('updateMarketplace — --ref on update re-pins', () => {
+  it('sets pinnedRef true when options.ref is supplied', async () => {
+    seedMarketplace('mp', { ref: 'v1.0.0', commit: 'old', pinnedRef: false });
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v1.0.0'], 'new', { afk: 'afk-sha' });
+    const outcome = await updateMarketplace(
+      'mp',
+      { ref: 'afk' },
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('afk');
+    const idx = readIndex(indexPath);
+    expect(idx.marketplaces['mp'].pinnedRef).toBe(true);
+    expect(idx.marketplaces['mp'].ref).toBe('afk');
+  });
+});
+
+describe('updateMarketplace — legacy migration rule', () => {
+  it('treats a legacy entry with ref "afk" (non-semver, non-default) as pinned', async () => {
+    const entry: MarketplaceIndexEntry = {
+      source: 'owner/repo',
+      sourceType: 'github',
+      ref: 'afk',
+      commit: 'old-afk',
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    upsertMarketplace('mp', entry, indexPath);
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner, calls } = makeRunner(['v2.0.0'], 'old-afk', { afk: 'new-afk' });
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') {
+      expect(outcome.toRef).toBe('afk');
+      expect(outcome.commit).toBe('new-afk');
+    }
+    const checkout = calls.find((c) => c.includes('checkout'));
+    expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/afk');
+    expect(calls.some((c) => c.includes('checkout') && c.includes('v2.0.0'))).toBe(false);
+  });
+
+  it('treats a legacy entry with ref "v1.0.0" (semver) as auto-picked', async () => {
+    const entry: MarketplaceIndexEntry = {
+      source: 'owner/repo',
+      sourceType: 'github',
+      ref: 'v1.0.0',
+      commit: 'old',
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    upsertMarketplace('mp', entry, indexPath);
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'new', {});
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+});

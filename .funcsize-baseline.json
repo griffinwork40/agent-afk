@@ -58,7 +58,6 @@
     "src/cli/input/reader.keypress.nav.ts::handleNavKey": { "loc": 208, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/input/reader.ts::readWithAutocompleteTty": { "loc": 230, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/render/picker.ts::runPicker": { "loc": 262, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/terminal-compositor.committed-band-commit.ts::commitAbove": { "loc": 211, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/terminal-compositor.frame-preserve.ts::preserveRowsBeforeFrameRender": { "loc": 209, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts::handleEnter": { "loc": 259, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/skills/audit-fit/index.ts::handler": { "loc": 292, "reason": "legacy: predates the function-size gate; pending helper extraction" },

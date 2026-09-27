@@ -90,13 +90,21 @@ function isBase64ImageBlock(block: unknown): block is Base64ImageBlock {
   return s['type'] === 'base64' && typeof s['data'] === 'string';
 }
 
-/** Map a MIME type string to the format key expected by readImageDimensions. */
-function mediaTypeToFormat(mediaType: string): string {
+/** Returns true for ANY image block — base64 or URL — to count all toward the threshold. */
+function isAnyImageBlock(block: unknown): boolean {
+  if (!block || typeof block !== 'object') return false;
+  return (block as Record<string, unknown>)['type'] === 'image';
+}
+
+/** Map a MIME type string to the format key expected by readImageDimensions.
+ * Returns null for unrecognised types — the caller skips dimension parsing for
+ * those blocks rather than falling back to a wrong parser. */
+function mediaTypeToFormat(mediaType: string): string | null {
   if (mediaType === 'image/jpeg' || mediaType === 'image/jpg') return 'jpeg';
   if (mediaType === 'image/png') return 'png';
   if (mediaType === 'image/webp') return 'webp';
   if (mediaType === 'image/gif') return 'gif';
-  return 'png'; // fallback — dimension parse will return null if bytes don't match
+  return null; // unknown type — skip dimension parsing
 }
 
 // ---------------------------------------------------------------------------
@@ -104,8 +112,44 @@ function mediaTypeToFormat(mediaType: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Collect every content block (across all message roles and content arrays)
- * that is a base64 image block.
+ * Count ALL image blocks in a messages array — both base64 and URL sources —
+ * so the threshold check reflects the true number Anthropic sees on the wire.
+ */
+function countAllImageBlocks(messages: MessageParam[]): number {
+  let count = 0;
+
+  for (const msg of messages) {
+    const content = msg.content;
+    if (!Array.isArray(content)) continue;
+
+    for (const block of content) {
+      if (isAnyImageBlock(block)) {
+        count++;
+        continue;
+      }
+      // tool_result blocks contain a nested content array
+      if (
+        block &&
+        typeof block === 'object' &&
+        (block as unknown as Record<string, unknown>)['type'] === 'tool_result'
+      ) {
+        const inner = (block as unknown as Record<string, unknown>)['content'];
+        if (Array.isArray(inner)) {
+          for (const ib of inner) {
+            if (isAnyImageBlock(ib)) count++;
+          }
+        }
+      }
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Collect every BASE64 image block (across all message roles and content arrays).
+ * URL image blocks are excluded from the result — they cannot be decoded for
+ * dimension inspection and must remain unchanged in the replacement pass.
  *
  * Returns an array of objects pointing at the parent content array and the
  * block index so they can be mutated in place.
@@ -116,7 +160,7 @@ interface ImageBlockRef {
   block: Base64ImageBlock;
 }
 
-function collectImageBlocks(messages: MessageParam[]): ImageBlockRef[] {
+function collectBase64ImageBlocks(messages: MessageParam[]): ImageBlockRef[] {
   const refs: ImageBlockRef[] = [];
 
   for (const msg of messages) {
@@ -165,10 +209,15 @@ function collectImageBlocks(messages: MessageParam[]): ImageBlockRef[] {
  * @returns The number of image blocks that were downgraded (0 = no action).
  */
 export function enforceManyImageLimit(messages: MessageParam[]): number {
-  const refs = collectImageBlocks(messages);
+  // Count ALL image blocks (base64 + URL) to match what Anthropic sees on the wire.
+  // URL blocks count toward the threshold but cannot be decoded — skip them in the
+  // replacement pass (they stay unchanged regardless of their dimensions).
+  const totalImageCount = countAllImageBlocks(messages);
 
   // Fast path: fewer than the threshold — no action needed.
-  if (refs.length <= MANY_IMAGE_THRESHOLD) return 0;
+  if (totalImageCount <= MANY_IMAGE_THRESHOLD) return 0;
+
+  const refs = collectBase64ImageBlocks(messages);
 
   let degraded = 0;
 
@@ -176,6 +225,10 @@ export function enforceManyImageLimit(messages: MessageParam[]): number {
     const base64 = block.source.data;
     const buf = Buffer.from(base64, 'base64');
     const format = mediaTypeToFormat(block.source.media_type);
+
+    // Unknown media type — skip dimension parsing entirely (don't degrade it).
+    if (format === null) continue;
+
     const dims = readImageDimensions(buf, format);
 
     // Cannot determine dimensions → leave the block alone. Worst case the API

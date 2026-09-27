@@ -873,7 +873,18 @@ export type SessionPhaseName =
   // Backward compat: old traces that predate this event simply lack it. Consumers
   // must treat its absence as "id unknown from trace alone" — the ledger
   // `traceLabel` bridge remains the fallback for those traces.
-  | 'session_id_assigned';
+  | 'session_id_assigned'
+  // Many-image dimension guard fired at request-build time and replaced one or
+  // more image blocks with imageOmitted text blocks (issue #2348). Emitted when
+  // `enforceManyImageLimit` degrades at least one image in `openRound` (single
+  // event, no paired start). `metadata` carries `degradedCount` (number of
+  // blocks replaced), `threshold` (MANY_IMAGE_THRESHOLD = 20), and
+  // `maxDimension` (MAX_DIMENSION_MANY_IMAGES = 2000). PURE OBSERVABILITY: the
+  // degradation itself is already reflected in the mutated messages array; this
+  // event makes the repair visible in the trace so operators can diagnose
+  // sessions that hit the many-image ceiling without inspecting raw message
+  // payloads.
+  | 'many_image_degraded';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
