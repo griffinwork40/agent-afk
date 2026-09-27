@@ -73,7 +73,7 @@ jobs:
         # a bug ~7 times in 300 commits (fixed one call site at a time).
         run: pnpm audit:width:check
 
-      - name: Audit the 350-line source-file ceiling (one-way ratchet)
+      - name: Audit the 350-line source-file ceiling (one-way ratchet + touch-trigger)
         # `.filesize-baseline.json` grandfathers the files that already exceeded
         # the ceiling when this gate landed. The ratchet fails four ways — a
         # non-baselined file over the ceiling, a baselined file that GREW, a
@@ -83,19 +83,15 @@ jobs:
         # `pnpm audit:filesize:update`; never hand-edit it.
         # CI-blocking — the advisory `|| true` was dropped in #2206 after main
         # silently regressed past its own ratchet while the gate could not fail.
-        run: pnpm audit:filesize:check
-
-      - name: Audit the 350-line ceiling on files this PR touches
-        # Touch-trigger: a change that modifies a still-oversized baselined file
-        # must bring it under the ceiling. The grandfathered set is whatever
-        # `.filesize-baseline.json` holds today (count it there, don't cache it
-        # here); touching any of them forces the split, so the backlog retires
-        # through ordinary feature work even if no dedicated refactor wave runs.
-        # `|| true` dropped in #2206 (it was advisory while the god-object waves
-        # landed). Caveat: the default shallow checkout has no `origin/<base>`
-        # ref, so `changedSince` falls back to an empty touch-set and this step
-        # currently enforces only what the full-scan step above already does.
-        # Activating TOUCHED needs a deeper fetch — a separate policy call.
+        #
+        # One step, not two (#2235): `--changed-vs` runs the full-scan ratchet
+        # above AND adds the TOUCHED check (a change that modifies a
+        # still-oversized baselined file must bring it under the ceiling), so a
+        # separate plain `--check` step only repeated the same scan.
+        # Caveat: the default shallow checkout has no `origin/<base>` ref, so
+        # `changedSince` falls back to an empty touch-set and TOUCHED is
+        # currently inert — only the full-scan checks enforce. Activating
+        # TOUCHED needs a deeper fetch — a separate policy call.
         # See docs/file-size-ceiling.md.
         run: pnpm audit:filesize:check --changed-vs origin/${{ github.base_ref || 'main' }}
 
