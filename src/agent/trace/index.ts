@@ -96,3 +96,4 @@ export {
   NdjsonTraceWriter,
 } from './writer.js';
 export type { NdjsonTraceWriterOptions, TraceSink, TraceWriter } from './writer.js';
+export { emitSessionIdAssigned } from '../session/session-id-trace.js';

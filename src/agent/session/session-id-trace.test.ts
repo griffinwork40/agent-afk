@@ -20,13 +20,13 @@ vi.mock('../../utils/debug.js', () => ({ debugLog: vi.fn() }));
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDefaultTraceWriter } from './factory.js';
-import { TraceEventSchema, SessionPhasePayloadSchema } from './events.js';
+import { createDefaultTraceWriter } from '../trace/factory.js';
+import { TraceEventSchema, SessionPhasePayloadSchema } from '../trace/events.js';
 import { createMockProvider, type MockProviderHandle } from '../__fixtures__/mock-provider.js';
 import { AgentSession } from '../session.js';
 import type { AgentConfig } from '../types.js';
-import { InMemoryTraceWriter } from './writer.js';
-import { emitSessionIdAssigned } from '../session/session-id-trace.js';
+import { InMemoryTraceWriter } from '../trace/writer.js';
+import { emitSessionIdAssigned } from './session-id-trace.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
