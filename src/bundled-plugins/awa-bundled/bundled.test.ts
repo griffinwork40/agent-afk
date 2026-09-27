@@ -128,7 +128,7 @@ const PINNED_HASHES = {
 
 
 
-  review: 'd370edb1f95a8837964cddd864868c423709ed3b551d6740bd27f693027eabde',
+  review: '8caaef0d862df96b92c64e31eab2f1eab129d1451826934bf81e8b0365e5aa9f',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
@@ -292,6 +292,19 @@ describe('bundled skills', () => {
       expect(content).toContain('addressed since prior review');
       // Assert the prior-feedback capture section exists
       expect(content).toContain('Capture prior reviewer feedback');
+    });
+
+    // Invariant: #2367 — /review is strictly read-only; the prompt-only
+    // gh pr merge exception (Merge offer) was removed. Nothing in the skill
+    // text may grant permission to run `gh pr merge`.
+    it('review is strictly read-only — no gh pr merge exception (#2367)', () => {
+      const content = readBundled('review');
+      // The "Merge offer" section must be gone.
+      expect(content).not.toContain('Merge offer');
+      // No literal `gh pr merge` as a permitted action. Note: the Never-list
+      // line "`gh pr comment` / `review` / `edit` / `merge` / `create`" contains
+      // the word "merge" but NOT the string "gh pr merge" — this assertion is safe.
+      expect(content).not.toContain('gh pr merge');
     });
 
     // Invariant: #1134 — ground-state runs inline reconnaissance only. The skill

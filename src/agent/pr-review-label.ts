@@ -1,12 +1,13 @@
 /**
  * PR review coverage labeling — issue #2011.
  *
- * At merge time (ship / review auto-merge offer) every PR gets exactly one
- * of three labels reflecting how it was reviewed before merging:
+ * At merge time (ship or explicit merge by the caller) every PR gets exactly
+ * one of three labels reflecting how it was reviewed before merging:
  *
  *   human-reviewed  — at least one approval from a non-bot account
  *   agent-reviewed  — only bot/agent approvals (no human approval)
- *   auto-merged     — merged via the /review auto-merge offer (docs/test-only)
+ *   auto-merged     — merged by a caller that explicitly set autoMerged: true
+ *                     (the /review auto-merge offer was removed in #2367)
  *
  * These labels make review coverage retrospectively queryable:
  *
@@ -38,7 +39,11 @@ export const LABEL_HUMAN_REVIEWED = 'human-reviewed';
 /** Label applied when only bot/agent accounts approved (no human approval). */
 export const LABEL_AGENT_REVIEWED = 'agent-reviewed';
 
-/** Label applied when the PR was merged via the /review auto-merge offer. */
+/**
+ * Label applied when the caller merges with `autoMerged: true`.
+ * Note: the /review skill's auto-merge offer was removed in #2367; this label
+ * and the `autoMerged` path are kept for callers that merge explicitly.
+ */
 export const LABEL_AUTO_MERGED = 'auto-merged';
 
 /** All three possible review-coverage labels, for idempotent cleanup. */
@@ -191,7 +196,7 @@ export async function ensureLabelExists(
     },
     [LABEL_AUTO_MERGED]: {
       color: 'cfd3d7',
-      description: 'PR merged via /review auto-merge offer (docs/test-only)',
+      description: 'PR merged explicitly by caller (autoMerged: true)',
     },
   };
 
@@ -255,8 +260,8 @@ export async function applyReviewLabel(
 
 /**
  * High-level entry point: fetch the PR's reviews, classify, and apply the
- * appropriate review-coverage label. Pass `autoMerged: true` when the call
- * comes from the /review auto-merge path.
+ * appropriate review-coverage label. Pass `autoMerged: true` when the caller
+ * has merged the PR explicitly (the /review auto-merge offer was removed in #2367).
  *
  * Fail-soft — never throws. Suitable for fire-and-forget after a merge.
  */
