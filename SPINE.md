@@ -5,7 +5,7 @@
 
 ## Invariants
 
-- **INV-001** (2026-09-17, spine-init): Long comment blocks (≥15 lines) must open with `// Invariant:`, `// Contract:`, or `// History:` (reinforced 2026-09-18)
+- **INV-001** (2026-09-17, spine-init): Long comment blocks (≥15 lines) must open with `// Invariant:`, `// Contract:`, or `// History:` (reinforced 2026-09-27)
 - **INV-002** (2026-09-17, spine-init): Every DECSTBM emit must be bracketed by `\x1b[s`/`\x1b[u` save/restore or carry a comment explaining why cursor-home is safe at that site (DEC VT spec: CSI r always homes the cursor to (1,1)) (`src/cli/status-line.ts:286-290`)
 - **INV-003** (2026-09-17, spine-init): Before first `log-update.render()` of a session, cursor must be at the target row (typically `stdout.rows - 1`)
 - **INV-004** (2026-09-17, spine-init): Lifecycle flag must be set synchronously before any `await` that could trigger interval timer or resize handler re-entry
@@ -62,6 +62,8 @@
 - **INV-055** (2026-09-23, 9b0972da-73c1-42b1-a75c-12d1ef18452a): Compose node tool restriction must be mechanically enforced via canUseTool callback, not just telemetry labels. (reinforced 2026-09-23)
 - **INV-056** (2026-09-23, 23cc6bb4-4b31-48ce-a66b-1b927d56037f): Compose node system prompt and model defaults must flow through resolveComposeNodeAgent() return object, not inline lookups. (`src/agent/tools/compose-agent-resolve.ts`)
 - **INV-057** (2026-09-23, 71ae57b4-d945-46ad-9edb-b437c9fd8008): Attachment resolution in compose nodes uses per-node async Promise.all with try/catch sentinels; pre-failed nodes are excluded from the DAG via edge filtering. (`src/agent/tools/compose-executor.ts`)
+- **INV-058** (2026-09-26, d6d89e68-7a33-4329-b46e-4279a83d4640): When AFK_CENTER_CONTENT=1 enables centered input layout, renderInputLine() must clip long buffers to fit within terminal width so CupFrameRenderer never hard-wraps to column 0, which corrupts DECSTBM scroll-region accounting (src/cli/terminal-compositor.render.ts:166-254, iss (reinforced 2026-09-26)
+- **INV-059** (2026-09-26, d6d89e68-7a33-4329-b46e-4279a83d4640): clipInputViewport() contract: caret must remain visible (displayWidth ≤ max(1, availableWidth)) even when rawBefore alone exceeds availableWidth; before/after ANSI styling preserved by measuring rawBefore/rawAfter and re-applying color after slicing (src/cli/terminal-composit (reinforced 2026-09-26)
 
 
 ## Explicitly Rejected Patterns
@@ -93,3 +95,4 @@
 - **TST-010** (2026-09-22, 8f778a31-6f10-4939-b681-24c4b5beb507): Project key format: `proj.<sanitized-basename>-<sha1_hex8>`; sanitizes special chars to `_`, caps at 128 chars
 - **TST-011** (2026-09-22, 40d6aa9a-531d-4970-9c68-38ea62305453): Compaction core algorithm factored to shared/compaction.ts; provider-specific ops passed as collaborators to runCompactionCore() (`src/agent/providers/shared/compaction.ts:556-612`)
 - **TST-012** (2026-09-23, 7adbce41-b73e-4dcf-9f9d-0f4b5999bbe0): Compose node agent resolution factored to resolveComposeNodeAgent() helper; named agents return structured canUseTool callback (`src/agent/tools/compose-agent-resolve.ts`)
+- **TST-013** (2026-09-26, d8b3faf2-ac62-4bf8-b1cc-21b6da274d90): Use suffixDisplayWidth() helper for left-scroll overflow text: when rawBefore exceeds budget, truncate from the LEFT showing only rightmost visible portion with leading '…' sentinel, preserving user awareness of hidden content to the left (src/cli/display.js utility, invoked  (reinforced 2026-09-26)
