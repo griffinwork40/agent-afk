@@ -610,3 +610,213 @@ describe('updateAll — marketplace deduplication (issue #993)', () => {
     expect(r?.status).toBe('missing-dir');
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('updatePlugin — pinnedRef branch: bare update follows pin, ignores semver tags', () => {
+  it('uses entry.ref instead of semver tag when pinnedRef is true', async () => {
+    // Entry pinned to branch "afk"; repo has v2.0.0 semver tag. Must follow afk, not v2.0.0.
+    seed('afk-plugin', { ref: 'afk', commit: 'old-afk-sha', pinnedRef: true });
+    const { runner, calls } = makeRunner(['v2.0.0'], 'old-afk-sha', { afk: 'new-afk-sha' });
+    const outcome = await updatePlugin(
+      'afk-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') {
+      expect(outcome.toRef).toBe('afk');
+      expect(outcome.commit).toBe('new-afk-sha');
+    }
+    // Must check out the remote tracking ref for the pinned branch.
+    const checkout = calls.find((c) => c.includes('checkout'));
+    expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/afk');
+    // Must NOT have checked out the semver tag.
+    expect(calls.some((c) => c.includes('checkout') && c.includes('v2.0.0'))).toBe(false);
+    // Index must record the pinned branch, not the tag.
+    const idx = readIndex(indexPath);
+    expect(idx.plugins['afk-plugin'].ref).toBe('afk');
+    expect(idx.plugins['afk-plugin'].pinnedRef).toBe(true);
+  });
+
+  it('reports up-to-date when pinned branch tip already matches local HEAD', async () => {
+    seed('afk-plugin', { ref: 'afk', commit: 'same-sha', pinnedRef: true });
+    const { runner, calls } = makeRunner(['v2.0.0'], 'same-sha', { afk: 'same-sha' });
+    const outcome = await updatePlugin(
+      'afk-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome.status).toBe('up-to-date');
+    expect(calls.some((c) => c.includes('checkout'))).toBe(false);
+  });
+});
+
+describe('updatePlugin — pinnedRef SHA: bare update stays put', () => {
+  it('reports up-to-date when HEAD matches the pinned SHA', async () => {
+    const sha = 'abcdef1234567890';
+    seed('sha-plugin', { ref: sha, commit: sha, pinnedRef: true });
+    // The SHA has no remote branch ref — isBranch will be false.
+    const { runner, calls } = makeRunner(['v2.0.0', 'v1.0.0'], sha, {});
+    const outcome = await updatePlugin(
+      'sha-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    // SHA pin: targetRef === entry.ref → up-to-date without checkout.
+    expect(outcome.status).toBe('up-to-date');
+    expect(calls.some((c) => c.includes('checkout'))).toBe(false);
+  });
+});
+
+describe('updatePlugin — unpinned (auto): semver tag picker still runs', () => {
+  it('auto-picks the latest tag when pinnedRef is false', async () => {
+    seed('auto-plugin', { ref: 'v1.0.0', commit: 'old', pinnedRef: false });
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'new');
+    const outcome = await updatePlugin(
+      'auto-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+
+  it('auto-picks the latest tag when pinnedRef is absent (old entry without field)', async () => {
+    // Entry from before this fix: no pinnedRef field; ref is a semver tag → auto-pick.
+    const entryWithoutPinnedRef = {
+      source: 'owner/repo',
+      sourceType: 'github' as const,
+      ref: 'v1.0.0',
+      commit: 'old',
+      enabled: true,
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    mkdirSync(join(pluginsDir, 'legacy-plugin'), { recursive: true });
+    upsertPlugin('legacy-plugin', entryWithoutPinnedRef as any, indexPath);
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'new');
+    const outcome = await updatePlugin(
+      'legacy-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+});
+
+describe('updatePlugin — --ref on update re-pins', () => {
+  it('sets pinnedRef true when options.ref is supplied', async () => {
+    seed('plugin', { ref: 'v1.0.0', commit: 'old', pinnedRef: false });
+    const { runner } = makeRunner(['v1.0.0'], 'new', { afk: 'new-sha' });
+    const outcome = await updatePlugin(
+      'plugin',
+      { ref: 'afk' },
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('afk');
+    const idx = readIndex(indexPath);
+    expect(idx.plugins['plugin'].pinnedRef).toBe(true);
+    expect(idx.plugins['plugin'].ref).toBe('afk');
+  });
+});
+
+describe('updatePlugin — legacy migration rule: undefined pinnedRef + non-semver non-default ref = pinned', () => {
+  it('treats a legacy entry with ref "afk" as pinned (non-semver, non-default)', async () => {
+    // Old entry: installed with --ref afk before this fix. pinnedRef is absent.
+    const entry = {
+      source: 'owner/repo',
+      sourceType: 'github' as const,
+      ref: 'afk',
+      commit: 'old-afk',
+      enabled: true,
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    mkdirSync(join(pluginsDir, 'legacy-afk'), { recursive: true });
+    upsertPlugin('legacy-afk', entry as any, indexPath);
+    // Repo has v2.0.0 tag; afk branch advanced to new-sha.
+    const { runner, calls } = makeRunner(['v2.0.0'], 'old-afk', { afk: 'new-sha' });
+    const outcome = await updatePlugin(
+      'legacy-afk',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    // Must follow the afk branch, not pick v2.0.0.
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') {
+      expect(outcome.toRef).toBe('afk');
+      expect(outcome.commit).toBe('new-sha');
+    }
+    const checkout = calls.find((c) => c.includes('checkout'));
+    expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/afk');
+    expect(calls.some((c) => c.includes('checkout') && c.includes('v2.0.0'))).toBe(false);
+  });
+
+  it('treats a legacy entry with ref "main" (default branch) as auto-picked', async () => {
+    // Legacy entry with ref = "main" — matches default branch → auto-pick, not pinned.
+    const entry = {
+      source: 'owner/repo',
+      sourceType: 'github' as const,
+      ref: 'main',
+      commit: 'old',
+      enabled: true,
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    mkdirSync(join(pluginsDir, 'legacy-main'), { recursive: true });
+    upsertPlugin('legacy-main', entry as any, indexPath);
+    // Repo has v2.0.0 tag — auto-pick should select it.
+    const { runner } = makeRunner(['v2.0.0'], 'old', {});
+    const outcome = await updatePlugin(
+      'legacy-main',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+
+  it('treats a legacy entry with ref "v1.0.0" (semver tag) as auto-picked', async () => {
+    // Legacy entry with ref = "v1.0.0" — semver → auto-pick, not pinned.
+    const entry = {
+      source: 'owner/repo',
+      sourceType: 'github' as const,
+      ref: 'v1.0.0',
+      commit: 'old',
+      enabled: true,
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    mkdirSync(join(pluginsDir, 'legacy-v1'), { recursive: true });
+    upsertPlugin('legacy-v1', entry as any, indexPath);
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'old', {});
+    const outcome = await updatePlugin(
+      'legacy-v1',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+});
+
+describe('updateAll — respects pinnedRef on every plugin', () => {
+  it('honours pinned refs for all plugins in one updateAll pass', async () => {
+    seed('afk-plugin', { ref: 'afk', commit: 'old-afk', pinnedRef: true });
+    seed('auto-plugin', { ref: 'v1.0.0', commit: 'old-auto', pinnedRef: false });
+    const { runner } = makeRunner(['v2.0.0'], 'new', { afk: 'new-afk' });
+    const results = await updateAll({ pluginsDir, indexPath, gitRunner: runner, now: () => new Date() });
+    const afk = results.find((r) => r.name === 'afk-plugin');
+    const auto = results.find((r) => r.name === 'auto-plugin');
+    expect(afk?.status).toBe('updated');
+    if (afk?.status === 'updated') expect(afk.toRef).toBe('afk');
+    expect(auto?.status).toBe('updated');
+    if (auto?.status === 'updated') expect(auto.toRef).toBe('v2.0.0');
+  });
+});

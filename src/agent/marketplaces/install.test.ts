@@ -329,3 +329,35 @@ describe('installMarketplace — remote-only branch ref (fix #2357)', () => {
     expect(result.entry.commit).toBe('cafef00d');
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('installMarketplace — pinnedRef recorded in index', () => {
+  it('sets pinnedRef: true when --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v1.0.0'], 'sha1', 'my-mp');
+    const result = await installMarketplace(
+      'anthropics/my-mp',
+      { ref: 'afk' },
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(result.entry.pinnedRef).toBe(true);
+    const stored = readIndex(indexPath).marketplaces[result.name];
+    expect(stored.pinnedRef).toBe(true);
+    expect(stored.ref).toBe('afk');
+  });
+
+  it('sets pinnedRef: false when no --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v2.0.0'], 'sha2', 'auto-mp');
+    const result = await installMarketplace(
+      'anthropics/auto-mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(result.entry.pinnedRef).toBe(false);
+    const stored = readIndex(indexPath).marketplaces[result.name];
+    expect(stored.pinnedRef).toBe(false);
+  });
+});

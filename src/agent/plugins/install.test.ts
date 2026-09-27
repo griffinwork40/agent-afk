@@ -457,3 +457,35 @@ describe('installPlugin — remote-only branch ref (fix #2357)', () => {
     expect(existsSync(join(pluginsDir, 'cleanup-plugin'))).toBe(false);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('installPlugin — pinnedRef recorded in index', () => {
+  it('sets pinnedRef: true when --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v1.0.0', 'v2.0.0'], 'sha1', 'my-plugin');
+    const result = await installPlugin(
+      'anthropics/my-plugin',
+      { ref: 'my-branch' },
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false },
+    );
+    expect(result.entry.pinnedRef).toBe(true);
+    const stored = readIndex(indexPath).plugins[result.name];
+    expect(stored.pinnedRef).toBe(true);
+    expect(stored.ref).toBe('my-branch');
+  });
+
+  it('sets pinnedRef: false when no --ref is supplied', async () => {
+    const { runner } = makeFakeGit(['v2.0.0'], 'sha2', 'auto-plugin');
+    const result = await installPlugin(
+      'anthropics/auto-plugin',
+      {},
+      { pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false },
+    );
+    expect(result.entry.pinnedRef).toBe(false);
+    const stored = readIndex(indexPath).plugins[result.name];
+    expect(stored.pinnedRef).toBe(false);
+  });
+});
