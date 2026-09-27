@@ -56,22 +56,18 @@ export interface CommandExecutorResult {
 }
 
 /**
- * Execute a single hook command and resolve with a `HookDecision`.
+ * Serialize the JSON payload written to a hook command's stdin.
  *
- * Resolves (never rejects) — errors surface via the returned decision or
- * `console.warn`. The caller (config-bridge) is responsible for throwing
- * `HookBlockedError` if `decision.decision === 'block'` or
- * `decision.continue === false`.
+ * Invariant: PostToolUse and PostToolUseFailure carry the same `tool_input`
+ * PreToolUse saw. The same input already reaches the same hook scripts on
+ * PreToolUse, so omitting it afterward adds no protection; it only breaks
+ * post-hoc hooks that need to know which file was edited or which command ran.
  */
-export async function executeCommand(
-  opts: ExecuteCommandOptions,
-): Promise<CommandExecutorResult> {
-  const { context, agentCwd, sessionId, timeoutMs } = opts;
-
-  // Tilde-expand the command path before spawning.
-  const command = opts.command.replace(/^~\//, homedir() + '/');
-
-  // Build the stdin JSON payload.
+function buildStdinPayload(
+  context: HookContext,
+  sessionId: string | undefined,
+  agentCwd: string,
+): string {
   const payload: Record<string, unknown> = {
     session_id: sessionId,
     hook_event_name: context.event,
@@ -84,16 +80,6 @@ export async function executeCommand(
     context.event === 'PostToolUseFailure'
   ) {
     payload['tool_name'] = context.toolName;
-  }
-  // Invariant: PostToolUse and PostToolUseFailure see exactly what PreToolUse
-  // saw. The same input already reaches the same hook scripts on PreToolUse;
-  // omitting it afterward adds no protection and breaks post-hoc hooks that
-  // need to know which file was edited, which command ran, etc.
-  if (
-    context.event === 'PreToolUse' ||
-    context.event === 'PostToolUse' ||
-    context.event === 'PostToolUseFailure'
-  ) {
     payload['tool_input'] = context.input;
   }
   if (context.event === 'PostToolUse') {
@@ -116,7 +102,26 @@ export async function executeCommand(
   // transcript_path: always emit the key so hook scripts can detect it.
   // When unknown, emit null (not undefined — JSON.stringify drops undefined).
   payload['transcript_path'] = null;
-  const stdinPayload = JSON.stringify(payload);
+  return JSON.stringify(payload);
+}
+
+/**
+ * Execute a single hook command and resolve with a `HookDecision`.
+ *
+ * Resolves (never rejects) — errors surface via the returned decision or
+ * `console.warn`. The caller (config-bridge) is responsible for throwing
+ * `HookBlockedError` if `decision.decision === 'block'` or
+ * `decision.continue === false`.
+ */
+export async function executeCommand(
+  opts: ExecuteCommandOptions,
+): Promise<CommandExecutorResult> {
+  const { context, agentCwd, sessionId, timeoutMs } = opts;
+
+  // Tilde-expand the command path before spawning.
+  const command = opts.command.replace(/^~\//, homedir() + '/');
+
+  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd);
 
   // Env vars injected into the child process.
   //
