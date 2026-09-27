@@ -282,6 +282,56 @@ exit 0
       expect(result.decision.decision).toBe('block');
       expect(result.decision.reason).toContain('bash tool detected');
     });
+
+    it('PostToolUse context includes tool_input in stdin payload (issue #2376)', async () => {
+      const scriptPath = join(tmp, 'check-post-input.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"tool_input"'*) echo '{"decision":"approve"}' ;;
+  *) echo "tool_input missing in PostToolUse payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'PostToolUse',
+        toolName: 'edit_file',
+        input: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
+        output: 'Edited /tmp/x.ts',
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('PostToolUseFailure context includes tool_input in stdin payload (issue #2376)', async () => {
+      const scriptPath = join(tmp, 'check-failure-input.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"tool_input"'*) echo '{"decision":"approve"}' ;;
+  *) echo "tool_input missing in PostToolUseFailure payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'PostToolUseFailure',
+        toolName: 'bash',
+        input: { command: 'rm -rf /' },
+        error: 'permission denied',
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
   });
 
   // ---------------------------------------------------------------------------

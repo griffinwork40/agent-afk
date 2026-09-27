@@ -85,7 +85,15 @@ export async function executeCommand(
   ) {
     payload['tool_name'] = context.toolName;
   }
-  if (context.event === 'PreToolUse') {
+  // Invariant: PostToolUse and PostToolUseFailure see exactly what PreToolUse
+  // saw. The same input already reaches the same hook scripts on PreToolUse;
+  // omitting it afterward adds no protection and breaks post-hoc hooks that
+  // need to know which file was edited, which command ran, etc.
+  if (
+    context.event === 'PreToolUse' ||
+    context.event === 'PostToolUse' ||
+    context.event === 'PostToolUseFailure'
+  ) {
     payload['tool_input'] = context.input;
   }
   if (context.event === 'PostToolUse') {
@@ -98,12 +106,6 @@ export async function executeCommand(
   }
   if (context.event === 'PostToolUseFailure') {
     payload['error'] = context.error;
-    // Deliberate omission: tool_input is not forwarded to shell hooks for
-    // PostToolUseFailure. The originating input is available in-process via
-    // context.input, but injecting it into the shell environment or stdin
-    // payload risks forwarding untrusted, potentially large, or sensitive
-    // tool inputs to arbitrary shell scripts. Add tool_input here if a
-    // future use-case justifies it, with appropriate size/content guards.
   }
   if (context.event === 'PreCompact') {
     payload['trigger'] = context.trigger ?? null;
