@@ -188,6 +188,51 @@ describe('loadHooksConfigFile', () => {
     expect(hook.timeoutMs).toBe(30_000);
   });
 
+  it('timeout (seconds, Claude Code field) is converted to ms when timeout_ms absent', () => {
+    const path = writeJson('config.json', {
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [{ type: 'command', command: 'echo jev', timeout: 10 }],
+          },
+        ],
+      },
+    });
+    const result = loadHooksConfigFile(path, 'plugin');
+    const hook = result.hooks.PreToolUse![0]!.hooks[0]!;
+    expect(hook.timeoutMs).toBe(10_000);
+  });
+
+  it('timeout_ms wins over timeout when both are present', () => {
+    const path = writeJson('config.json', {
+      hooks: {
+        PreToolUse: [
+          {
+            hooks: [{ type: 'command', command: 'echo both', timeout_ms: 5_000, timeout: 10 }],
+          },
+        ],
+      },
+    });
+    const result = loadHooksConfigFile(path, 'plugin');
+    const hook = result.hooks.PreToolUse![0]!.hooks[0]!;
+    expect(hook.timeoutMs).toBe(5_000);
+  });
+
+  it('timeout: 0 is ignored; falls back to default 30000', () => {
+    const path = writeJson('config.json', {
+      hooks: {
+        Stop: [
+          {
+            hooks: [{ type: 'command', command: 'echo zero', timeout: 0 }],
+          },
+        ],
+      },
+    });
+    const result = loadHooksConfigFile(path, 'user-global');
+    const hook = result.hooks.Stop![0]!.hooks[0]!;
+    expect(hook.timeoutMs).toBe(30_000);
+  });
+
   it('skips malformed hook entry (no command) with a warning', () => {
     const path = writeJson('config.json', {
       hooks: {

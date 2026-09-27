@@ -110,7 +110,9 @@ export function loadAndRegisterConfigHooks(
       if (group.tier !== 'plugin' && !userGlobalEnabled) continue;
 
       // Compile the matcher once per group — not per dispatch.
-      const matchFn = compileMatcher(group.matcher);
+      // Pass a warn sink so invalid regex patterns are surfaced via console.warn
+      // instead of silently falling back without any signal to the operator.
+      const matchFn = compileMatcher(group.matcher, (msg) => console.warn(`[hooks] ${msg}`));
 
       for (const hook of group.hooks) {
         const hookCommand = hook.command;
