@@ -453,6 +453,9 @@ export const SessionPhaseNameSchema = z.enum([
   // `sessionId` on the payload carries the provider-issued id; present only
   // on this phase kind. Absent on all older traces — treat absence as unknown.
   'session_id_assigned',
+  // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
+  // types.ts — metadata carries degradedCount, threshold, maxDimension.
+  'many_image_degraded',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
