@@ -103,3 +103,51 @@ export function shellDescription(): string {
   const gitBash = findGitBashOnWindows();
   return gitBash !== undefined ? 'Git Bash' : 'PowerShell';
 }
+
+/**
+ * Return the shell-specific syntax guidance fragment embedded in the bash
+ * tool description so the model generates commands compatible with the
+ * active shell.
+ *
+ * - **POSIX** (`/bin/sh`): the existing POSIX/dash bashism guidance —
+ *   byte-identical to the pre-Windows text so macOS/Linux behaviour is
+ *   unchanged.
+ * - **Git Bash** (win32, bash.exe found): bash syntax is available; POSIX
+ *   coreutils supplied by Git for Windows.
+ * - **PowerShell** (win32, no bash.exe): explicit PowerShell 5.1 syntax
+ *   instructions — variable access, sequencing, cmdlets, quoting rules.
+ */
+export function bashToolShellGuidance(): string {
+  if (process.platform !== 'win32') {
+    // POSIX path — text is byte-identical to the original description fragment.
+    return (
+      `Commands run through /bin/sh (POSIX) (Node spawn with shell:true) — NOT bash and NOT your $SHELL; /bin/sh is bash-in-POSIX-mode on macOS but dash on Debian/Ubuntu. ` +
+      'Only process substitution <(...) reliably fails closed (exit 2, nothing runs). Other bashisms are nonportable and are NOT dependable refusals: ' +
+      '[[ ]] runs on macOS but is a not-found command on dash while the rest of the line still executes; {a,b} expands on macOS but passes through literally on dash (silently wrong argument); arrays run on macOS but are a syntax error on dash. ' +
+      'So never assume a bashism-containing command was side-effect-free — prefer a temp file or a POSIX equivalent.'
+    );
+  }
+
+  const gitBash = findGitBashOnWindows();
+
+  if (gitBash !== undefined) {
+    // Git Bash path — bash syntax, POSIX coreutils from Git for Windows.
+    return (
+      `Commands run through Git Bash (Node spawn with shell:true) — bash syntax is available and POSIX coreutils (ls, grep, sed, awk, find, …) are provided by Git for Windows. ` +
+      'Write standard bash commands; POSIX process substitution <(...) works. ' +
+      'Bashisms ([[ ]], arrays, {a,b} brace expansion) are supported. ' +
+      'Use $VAR or ${VAR} for environment variables.'
+    );
+  }
+
+  // PowerShell fallback — no Git Bash found; give accurate PowerShell 5.1 guidance.
+  return (
+    `Commands run through powershell.exe -Command (Node spawn with shell:true) — NOT a POSIX shell. Use PowerShell syntax and cmdlets: ` +
+    'use $env:VAR (not $VAR) for environment variables; ' +
+    'use ; to sequence commands (&& only works in PowerShell 7+, not 5.1); ' +
+    'use Get-ChildItem (or dir) instead of ls, Select-String instead of grep, Get-Content instead of cat; ' +
+    'no POSIX utilities (sed, awk, find, xargs) — use PowerShell equivalents or Where-Object/ForEach-Object pipelines; ' +
+    'quoting: use single quotes for literal strings, double quotes for interpolation; ' +
+    'subexpressions use $(...) syntax. Avoid POSIX-only constructs entirely.'
+  );
+}
