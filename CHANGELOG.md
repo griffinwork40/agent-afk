@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.261.5] - 2026-09-28
+
+### Fixed
+- address advisory findings from #2213 — plugin hook registration (#2337) (56081762)
+
+### Changed
+- Merge pull request #2432 from griffinwork40/afk/issue-2428-q8w3 (e068f969)
+
 ## [5.261.4] - 2026-09-27
 
 ### Fixed
