@@ -17,6 +17,7 @@
 
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { getWhatifDir } from '../paths.js';
 import { materializeSandboxes } from './sandbox.js';
 import { describeChange } from './operators/index.js';
@@ -178,12 +179,13 @@ export async function runWhatif(
 
   // ── a) Run directory ──────────────────────────────────────────────────────
 
-  // Run dir uses only the timestamp — omitting the change title keeps the
-  // path opaque to the agent during an episode (issue #2425).  The title is
-  // recorded in results.json so it is never lost.
+  // Run dir is a timestamp plus an opaque suffix — omitting the change title
+  // keeps the path opaque to the agent during an episode (issue #2425), and
+  // the suffix stops two runs started in the same second from colliding.
+  // The title is recorded in results.json so it is never lost.
   const runDir = path.join(
     getWhatifDir(),
-    dateStamp(now),
+    `${dateStamp(now)}-${randomBytes(3).toString('hex')}`,
   );
   await fsp.mkdir(runDir, { recursive: true });
 

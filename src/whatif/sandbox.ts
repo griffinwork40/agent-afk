@@ -2,7 +2,9 @@
  * Sandbox materializer for the what-if prediction engine.
  *
  * Builds two isolated environments (baseline, candidate) under
- * `<runDir>/sandboxes/{baseline,candidate}/`. The candidate home
+ * `<runDir>/sandboxes/<opaque-id>/`. Directory names never carry the arm
+ * label, so an episode cannot tell which arm it is in (issue #2425); the
+ * arm mapping lives only on the Environment objects. The candidate home
  * then has the ChangeSpec applied via operator registry.
  *
  * Contract:
