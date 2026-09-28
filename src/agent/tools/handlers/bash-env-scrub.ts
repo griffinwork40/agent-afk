@@ -13,7 +13,7 @@
  */
 
 /** Env vars stripped from every shell child process the agent spawns. */
-const BASH_ENV_SCRUB: readonly string[] = ['AFK_WHATIF_EPISODE'];
+const BASH_ENV_SCRUB: readonly string[] = ['AFK_WHATIF_EPISODE', 'AFK_WHATIF_TOOL_LOG'];
 
 /**
  * Return a copy of `env` with episode-revealing variables removed.
