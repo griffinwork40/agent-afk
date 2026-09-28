@@ -401,6 +401,11 @@ export interface WhatifReport {
   /** Probes dropped by probe-grounding because they reference non-existent paths. */
   droppedProbes?: import('./probe-grounding.js').DroppedProbe[];
   /**
+   * When --keep-sandboxes is set, the isolated root directories for each arm.
+   * Absent otherwise.  The mapping is also written to <runDir>/sandboxes.json.
+   */
+  keptSandboxes?: { baseline: string; candidate: string };
+  /**
    * Counts of turns/sessions excluded during corpus collection.
    * Present when the verify phase ran; lets callers see corpus shrinkage.
    */

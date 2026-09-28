@@ -29,13 +29,15 @@ export interface VerifiedReportArgs {
   autoKeepContextHooks: boolean;
   /** Per-output judge grades from the verify phase; written to grades.jsonl (#2477). */
   judgeResults: JudgeResults;
+  /** When --keep-sandboxes is set, the arm-to-root mapping to surface on the report. */
+  keptSandboxes?: { baseline: string; candidate: string };
 }
 
 /** Build the verified WhatifReport, persist it, and return it. */
 export async function buildAndPersistVerifiedReport(args: VerifiedReportArgs): Promise<WhatifReport> {
   const { spec, structural, predictions, verifyResult, droppedProbes, corpusExclusions,
     verifyTraces, analystCostUsd, runDir, resolvedJudge, autoKeepContextHooks,
-    judgeResults } = args;
+    judgeResults, keptSandboxes } = args;
   const episodesCostUsd = verifyTraces.reduce((s, t) => s + t.costUsd, 0);
   const totalCostUsd = analystCostUsd + episodesCostUsd;
   const limits = [
@@ -47,6 +49,7 @@ export async function buildAndPersistVerifiedReport(args: VerifiedReportArgs): P
     spec, structural, predictions, verify: verifyResult, costUsd: totalCostUsd, runDir, limits,
     ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
     corpusExclusions,
+    ...(keptSandboxes !== undefined ? { keptSandboxes } : {}),
   };
   const report: WhatifReport = { ...partialReport, headline: buildHeadline(partialReport) };
   await persistRun(runDir, report, verifyTraces, judgeResults);

@@ -291,6 +291,11 @@ async function runWhatifCommand(
         const termLines2 = renderTerminal(report, palette);
         for (const line of termLines2) process.stdout.write(line + '\n');
         process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+        if (report.keptSandboxes) {
+          process.stdout.write(
+            `Sandboxes kept: baseline=${report.keptSandboxes.baseline} candidate=${report.keptSandboxes.candidate}\n`,
+          );
+        }
         return;
       }
       // Non-interactive, no --yes: print message and fail.
@@ -312,6 +317,11 @@ async function runWhatifCommand(
   const termLines = renderTerminal(report, palette);
   for (const line of termLines) process.stdout.write(line + '\n');
   process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+  if (report.keptSandboxes) {
+    process.stdout.write(
+      `Sandboxes kept: baseline=${report.keptSandboxes.baseline} candidate=${report.keptSandboxes.candidate}\n`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
