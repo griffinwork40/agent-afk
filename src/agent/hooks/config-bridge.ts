@@ -50,14 +50,28 @@ export function loadAndRegisterConfigHooks(
   const sessionId = agentConfig.sessionId;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
-  // Episode mode: disable ALL config/plugin hooks by default so both the
-  // baseline and candidate arms see byte-identical first user messages.
-  // Cwd- or recency-sensitive hooks (e.g. pattern-card surfacers) otherwise
-  // inject arm-specific text that confounds every delta measurement.
-  // Setting AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 restores pre-fix behaviour for
-  // changes that specifically test context-injecting hooks.
+  // Episode mode: disable the context-injecting events (SessionStart and
+  // UserPromptSubmit) by default so both the baseline and candidate arms see
+  // byte-identical first user messages.  Cwd- or recency-sensitive hooks
+  // (e.g. a plugin hook whose output depends on cwd and accumulated state)
+  // would otherwise inject arm-specific text that confounds every delta
+  // measurement.
+  //
+  // Tool-gating hooks (PreToolUse, PostToolUse, PostToolUseFailure, Stop, …)
+  // keep registering in episodes — they cannot inject context into the first
+  // user message and their presence makes the episode more realistic.
+  //
+  // Setting AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 (or auto-set by the harness when
+  // the change spec itself targets hooks or plugins) restores pre-fix behaviour
+  // so both arms can observe the hooks under test.
   const inEpisode = isWhatifEpisode();
   const keepContextHooks = keepContextHooksInEpisode();
+
+  /** Events whose injectContext reaches the first user message of a session. */
+  const CONTEXT_INJECTING_EVENTS: ReadonlySet<HarnessHookEvent> = new Set([
+    'SessionStart',
+    'UserPromptSubmit',
+  ]);
 
   const validEvents: HarnessHookEvent[] = [
     'SessionStart',
@@ -97,11 +111,12 @@ export function loadAndRegisterConfigHooks(
     }
   }
 
-  // In episode mode (without opt-in), collect all hooks that would have been
-  // registered and warn once so the operator knows what was disabled.
+  // In episode mode (without opt-in), skip the context-injecting events only
+  // (SessionStart and UserPromptSubmit) and warn so the operator knows what
+  // was disabled.  Tool-gating events are unaffected and register below.
   if (inEpisode && !keepContextHooks) {
     const disabledHooks: string[] = [];
-    for (const event of validEvents) {
+    for (const event of CONTEXT_INJECTING_EVENTS) {
       const groups = hookConfig.hooks[event];
       if (groups === undefined) continue;
       for (const group of groups) {
@@ -112,16 +127,20 @@ export function loadAndRegisterConfigHooks(
     }
     if (disabledHooks.length > 0) {
       console.warn(
-        `[hooks] what-if episode: context-injecting hooks disabled so both arms see identical context` +
-          ` (set AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 to keep):\n` +
+        `[hooks] what-if episode: SessionStart and UserPromptSubmit hooks disabled so both arms` +
+          ` see identical first user messages (set AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 to keep):\n` +
           disabledHooks.map((s) => `  - ${s}`).join('\n'),
       );
     }
-    // Skip all hook registration for this episode arm.
-    return;
+    // Do NOT return here — tool-gating events (PreToolUse, PostToolUse, etc.)
+    // still need to register to preserve episode realism.
   }
 
   for (const event of validEvents) {
+    // Episode mode without opt-in: skip context-injecting events to keep arms
+    // byte-identical on their first user message.
+    if (inEpisode && !keepContextHooks && CONTEXT_INJECTING_EVENTS.has(event)) continue;
+
     const groups = hookConfig.hooks[event];
     if (groups === undefined || groups.length === 0) continue;
 

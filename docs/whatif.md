@@ -291,6 +291,7 @@ calls is therefore visible to the judge, not just the final reply.
 | `AFK_WHATIF_EPISODE` | engine | `1` = this process is a sandboxed episode |
 | `AFK_WHATIF_TOOL_LOG` | engine | Absolute path for the episode tool-call log |
 | `AFK_WHATIF_ALLOW_MCP` | user (opt-in) | `1` = allow MCP in episodes |
+| `AFK_WHATIF_KEEP_CONTEXT_HOOKS` | user (opt-in) / engine (auto) | `1` = keep `SessionStart` and `UserPromptSubmit` hooks in episodes |
 | `AFK_FRAMEWORK_PROMPT_FILE` | user (opt-in) | Replacement for bundled `system-prompt.md` |
 
 **Episode gate rules**: when `AFK_WHATIF_EPISODE=1`, the PreToolUse hook
@@ -298,6 +299,21 @@ classifies every tool call as `'executed'` (read-only) or `'recorded'`
 (side-effecting). The first `'recorded'` verdict latches the gate; all
 subsequent calls are also blocked. The gate applies tree-wide (no subagent
 exemption). The gate is implemented in `src/agent/whatif-episode-gate.ts`.
+
+**Hook isolation**: inside an episode, `SessionStart` and `UserPromptSubmit`
+config and plugin hooks are disabled by default. These are the only events
+whose `injectContext` output reaches the first user message — a plugin hook
+whose output depends on cwd and accumulated state would otherwise inject
+arm-specific text and confound every delta measurement. Tool-gating hooks
+(`PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`, etc.) keep registering
+normally because they cannot affect the first user message and their presence
+makes the episode more realistic.
+
+Set `AFK_WHATIF_KEEP_CONTEXT_HOOKS=1` to restore the pre-isolation behaviour.
+The harness sets this flag **automatically** when the change spec itself
+targets hooks or plugins (a `disable-plugin` change, or a `file` change
+targeting `home:config/afk.config.json` or a `hooks.json` manifest) — so
+both arms can observe the hook behaviour under test.
 
 ### Files
 

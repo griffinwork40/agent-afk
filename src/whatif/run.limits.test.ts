@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { verifyShortfallLimits, hookIsolationLimits } from './run.limits.js';
+import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
 import type { VerifyResult } from './types.js';
 
 const base: VerifyResult = {
@@ -46,5 +46,47 @@ describe('hookIsolationLimits', () => {
   it('does NOT include userMessageDiff warning when diff is whitespace-only', () => {
     const out = hookIsolationLimits({ keepContextHooks: false, structural: { userMessageDiff: '   ' } });
     expect(out.some((l) => l.includes('still differed'))).toBe(false);
+  });
+});
+
+describe('specTargetsHooksOrPlugins', () => {
+  it('returns false for a non-hook change (memory-add)', () => {
+    const spec = {
+      title: 'Add a memory fact',
+      changes: [{ kind: 'memory-add' as const, content: 'prefer pnpm', category: 'preference' as const }],
+    };
+    expect(specTargetsHooksOrPlugins(spec)).toBe(false);
+  });
+
+  it('returns true for disable-plugin (hooks.json hooks would be suppressed)', () => {
+    const spec = {
+      title: 'Disable plugin',
+      changes: [{ kind: 'disable-plugin' as const, name: 'my-plugin' }],
+    };
+    expect(specTargetsHooksOrPlugins(spec)).toBe(true);
+  });
+
+  it('returns true for file targeting home:config/afk.config.json', () => {
+    const spec = {
+      title: 'Edit hook config',
+      changes: [{ kind: 'file' as const, path: 'home:config/afk.config.json', content: '{}' }],
+    };
+    expect(specTargetsHooksOrPlugins(spec)).toBe(true);
+  });
+
+  it('returns true for file whose basename is hooks.json (plugin hook manifest)', () => {
+    const spec = {
+      title: 'Edit plugin hooks',
+      changes: [{ kind: 'file' as const, path: 'home:plugins/my-plugin/hooks/hooks.json', content: '{}' }],
+    };
+    expect(specTargetsHooksOrPlugins(spec)).toBe(true);
+  });
+
+  it('returns false for a file change to an unrelated path', () => {
+    const spec = {
+      title: 'Edit AFK.md',
+      changes: [{ kind: 'file' as const, path: 'home:AFK.md', content: 'hello' }],
+    };
+    expect(specTargetsHooksOrPlugins(spec)).toBe(false);
   });
 });

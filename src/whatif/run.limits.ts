@@ -10,8 +10,38 @@
  * @module whatif/run.limits
  */
 
-import type { VerifyResult } from './types.js';
+import type { VerifyResult, ChangeSpec } from './types.js';
 import type { StructuralImpact } from './types.js';
+
+/**
+ * Returns true when the change spec directly targets hooks or plugins.
+ *
+ * When true, the harness automatically enables `AFK_WHATIF_KEEP_CONTEXT_HOOKS`
+ * in both episode arms so that the hooks under test actually register and can
+ * be observed.  Without this, both arms would run with context hooks suppressed
+ * and the experiment would measure nothing.
+ *
+ * Detects:
+ *   - `disable-plugin`  — removes a plugin and its hooks.json hooks.
+ *   - `file` targeting `home:config/afk.config.json` — modifies the primary
+ *     hook configuration file.
+ *   - `file` targeting a path whose basename is `hooks.json` — modifies a
+ *     plugin-contributed hooks manifest.
+ */
+export function specTargetsHooksOrPlugins(spec: ChangeSpec): boolean {
+  for (const change of spec.changes) {
+    if (change.kind === 'disable-plugin') return true;
+    if (change.kind === 'file') {
+      const p = change.path;
+      // home:config/afk.config.json is the primary hook config location.
+      if (p === 'home:config/afk.config.json') return true;
+      // Any hooks.json file (plugin or user-defined hook manifests).
+      const basename = p.includes('/') ? p.slice(p.lastIndexOf('/') + 1) : p;
+      if (basename === 'hooks.json') return true;
+    }
+  }
+  return false;
+}
 
 export function verifyShortfallLimits(v: VerifyResult): string[] {
   const out: string[] = [];

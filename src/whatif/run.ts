@@ -22,7 +22,7 @@ import { materializeSandboxes } from './sandbox.js';
 import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
-import { verifyShortfallLimits, hookIsolationLimits } from './run.limits.js';
+import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
 import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges } from './predict.js';
@@ -197,12 +197,23 @@ export async function runWhatif(
 
   // ── b) Sandboxes ──────────────────────────────────────────────────────────
 
+  // When the change spec directly targets hooks or plugins, keep context hooks
+  // on in both episode arms so the hooks under test actually register and can
+  // be observed.  Without this, both arms would run with SessionStart and
+  // UserPromptSubmit suppressed, making the experiment measure nothing.
+  // The manual AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 override takes the same path.
+  const autoKeepContextHooks =
+    specTargetsHooksOrPlugins(spec) || keepContextHooksInEpisode();
+
   const sandboxes = await materializeSandboxes({
     realHome,
     realCwd,
     runDir,
     spec,
-    baseLaunch: { model: options.agentModel, env: {} },
+    baseLaunch: {
+      model: options.agentModel,
+      env: autoKeepContextHooks ? { AFK_WHATIF_KEEP_CONTEXT_HOOKS: '1' } : {},
+    },
   });
 
   const { baseline, candidate } = sandboxes;
@@ -226,7 +237,10 @@ export async function runWhatif(
     // ── e) Predict-only path ──────────────────────────────────────────────
 
     if (!options.verify) {
-      const limits = standardLimits({ verified: false, judgeExternal: false });
+      const limits = [
+        ...standardLimits({ verified: false, judgeExternal: false }),
+        ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
+      ];
       const partialReport: Omit<WhatifReport, 'headline'> = {
         spec,
         structural,
@@ -320,7 +334,7 @@ export async function runWhatif(
     const limits = [
       ...standardLimits({ verified: true, judgeExternal: resolvedJudge.external }),
       ...verifyShortfallLimits(verifyResult!),
-      ...hookIsolationLimits({ keepContextHooks: keepContextHooksInEpisode(), structural }),
+      ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
     ];
 
     const partialReport: Omit<WhatifReport, 'headline'> = {

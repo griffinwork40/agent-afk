@@ -662,7 +662,7 @@ describe('episode mode hook filter', () => {
     expect(registry.count('PreToolUse')).toBe(1);
   });
 
-  it('inside episode (default): NO hooks register — both arms see identical context', () => {
+  it('inside episode (default): only context-injecting events suppressed, tool-gating hooks register', () => {
     vi.stubEnv('AFK_WHATIF_EPISODE', '1');
     vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '');
     const registry = createHookRegistry();
@@ -677,13 +677,15 @@ describe('episode mode hook filter', () => {
       },
     });
     loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
-    // All hooks disabled — both arms see byte-identical first user messages.
+    // Context-injecting events suppressed — both arms see byte-identical first user messages.
     expect(registry.count('SessionStart')).toBe(0);
     expect(registry.count('UserPromptSubmit')).toBe(0);
-    expect(registry.count('Stop')).toBe(0);
-    expect(registry.count('PreToolUse')).toBe(0);
-    expect(registry.count('SessionEnd')).toBe(0);
-    expect(registry.count('PostToolUse')).toBe(0);
+    // Tool-gating events keep registering — they cannot inject context into the
+    // first user message and their presence preserves episode realism.
+    expect(registry.count('Stop')).toBe(1);
+    expect(registry.count('PreToolUse')).toBe(1);
+    expect(registry.count('SessionEnd')).toBe(1);
+    expect(registry.count('PostToolUse')).toBe(1);
   });
 
   it('inside episode with AFK_WHATIF_KEEP_CONTEXT_HOOKS=1: all hooks register', () => {
