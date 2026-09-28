@@ -392,7 +392,8 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       model: args.model,
       startedAt,
       status: 'running',
-      ...(args.parentSessionId !== undefined ? { parentSessionId: args.parentSessionId } : {}),
+      ownerPid: process.pid,
+      ...(args.parentSessionId !== undefined && { parentSessionId: args.parentSessionId }),
       schemaVersion: 1,
     };
     void writer.writeMeta(metaRecord);

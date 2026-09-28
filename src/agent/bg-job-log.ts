@@ -28,6 +28,7 @@ import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
 import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta } from '../paths.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
+import { isProcessAlive } from './process-liveness.js';
 import type { OutputEvent } from './types/session-types.js';
 
 // ---------------------------------------------------------------------------
@@ -52,8 +53,22 @@ export interface BgJobMeta {
    * `isIncompleteStopReason` / `annotateIfIncomplete` partial-result labeling
    * the in-memory replay applies. Optional and additive: old logs written
    * before this field existed simply lack it (schemaVersion stays 1).
+   *
+   * Synthetic sentinel values (not emitted by the subagent runtime):
+   * - `'owner-process-exited'` — set by `reconcileOrphanedMeta` when the job
+   *   was still `running` on disk but its owner PID has since died. The job
+   *   was never explicitly stopped; this value signals post-hoc detection.
    */
   stopReason?: string;
+  /**
+   * PID of the process that created this job. Written at registration time so
+   * that if the owner crashes or is killed, readers can detect the orphan and
+   * promote it from `running` to `failed` with `reason: 'owner-process-exited'`
+   * instead of leaving it stuck in `running` forever. Optional and additive —
+   * old meta.json files that predate this field are treated as if the owner is
+   * alive (no promotion), preserving backward compatibility.
+   */
+  ownerPid?: number;
   schemaVersion: 1;
 }
 
@@ -212,6 +227,39 @@ export class BgJobLogWriter {
 }
 
 // ---------------------------------------------------------------------------
+// Orphan detection
+// ---------------------------------------------------------------------------
+
+/**
+ * If `meta` is still `running` but its owner PID is no longer alive,
+ * return a copy promoted to `failed` with `stopReason: 'owner-process-exited'`.
+ * Otherwise return `meta` unchanged.
+ *
+ * This is a pure, synchronous reconciliation — it does NOT write to disk.
+ * Callers that want to persist the correction should call `writeMeta` after
+ * receiving a promoted result.
+ *
+ * `endedAt` is intentionally left absent on orphan-reconciled records:
+ * the process exit time is unknown, so stamping the current read time
+ * would inflate any durationMs calculation. Consumers must tolerate an
+ * absent `endedAt` (the field is already optional in `BgJobMeta`).
+ *
+ * Liveness check delegates to `isProcessAlive` from `process-liveness.ts`,
+ * which returns `true` for EPERM (process exists, no permission) and `false`
+ * for any other error — including ESRCH (no such process) and EINVAL.
+ */
+export function reconcileOrphanedMeta(meta: BgJobMeta): BgJobMeta {
+  if (meta.status !== 'running') return meta;
+  if (meta.ownerPid === undefined) return meta; // legacy entry — no PID recorded
+  if (isProcessAlive(meta.ownerPid)) return meta;
+  return {
+    ...meta,
+    status: 'failed',
+    stopReason: 'owner-process-exited',
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
 
@@ -261,7 +309,8 @@ export class BgJobLogReader {
       const parsed = JSON.parse(raw) as BgJobMeta;
       // Reject files with an unexpected schema version (stale v0, future v2, etc.)
       if (parsed.schemaVersion !== 1) return null;
-      return parsed;
+      // Lazily promote orphaned running entries whose owner PID has died.
+      return reconcileOrphanedMeta(parsed);
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       // Corrupted meta — log and return null
