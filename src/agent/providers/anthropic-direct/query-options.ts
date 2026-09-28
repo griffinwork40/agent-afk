@@ -35,6 +35,11 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Newer balanced Claude — adaptive thinking, new tokenizer',
   },
   {
+    value: 'claude-sonnet-5-5',
+    displayName: 'Claude Sonnet 5.5',
+    description: 'Faster, cheaper Sonnet — adaptive thinking, 1M context',
+  },
+  {
     value: 'claude-opus-5',
     displayName: 'Claude Opus 5',
     description: 'Highest-capability Claude for agentic coding',
