@@ -142,16 +142,8 @@ async function collectVerifyEpisodes(
 }
 
 // ---------------------------------------------------------------------------
-// Slug helper
+// Run-dir helper
 // ---------------------------------------------------------------------------
-
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'run';
-}
 
 function dateStamp(now: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
@@ -186,9 +178,12 @@ export async function runWhatif(
 
   // ── a) Run directory ──────────────────────────────────────────────────────
 
+  // Run dir uses only the timestamp — omitting the change title keeps the
+  // path opaque to the agent during an episode (issue #2425).  The title is
+  // recorded in results.json so it is never lost.
   const runDir = path.join(
     getWhatifDir(),
-    `${dateStamp(now)}-${slugify(spec.title)}`,
+    dateStamp(now),
   );
   await fsp.mkdir(runDir, { recursive: true });
 

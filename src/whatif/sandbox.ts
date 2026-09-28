@@ -21,6 +21,7 @@ import {
 } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 
 import type {
   Environment,
@@ -109,10 +110,15 @@ interface SandboxPaths {
   project: string; // git worktree dir (only used when specTouchesProject)
 }
 
-function sandboxPaths(runDir: string, label: 'baseline' | 'candidate'): SandboxPaths {
+/** Generate an opaque 8-hex-character directory name (issue #2425). */
+function opaqueId(): string {
+  return randomBytes(4).toString('hex');
+}
+
+function sandboxPaths(sandboxesRoot: string, id: string): SandboxPaths {
   return {
-    home: join(runDir, 'sandboxes', label, 'home'),
-    project: join(runDir, 'sandboxes', label, 'project'),
+    home: join(sandboxesRoot, id, 'home'),
+    project: join(sandboxesRoot, id, 'project'),
   };
 }
 
@@ -158,9 +164,11 @@ export async function materializeSandboxes(
   const sandboxesRoot = join(runDir, 'sandboxes');
   mkdirSync(sandboxesRoot, { recursive: true });
 
-  // Build both homes identically
-  const baselinePaths = sandboxPaths(runDir, 'baseline');
-  const candidatePaths = sandboxPaths(runDir, 'candidate');
+  // Use opaque ids for sandbox dirs so the agent cannot detect arm names
+  // from filesystem paths (issue #2425).  Labels are preserved on the
+  // Environment objects and in results.json, never in the directory name.
+  const baselinePaths = sandboxPaths(sandboxesRoot, opaqueId());
+  const candidatePaths = sandboxPaths(sandboxesRoot, opaqueId());
 
   buildSandboxHome(realHome, baselinePaths.home);
   buildSandboxHome(realHome, candidatePaths.home);

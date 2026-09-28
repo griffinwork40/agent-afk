@@ -107,6 +107,26 @@ describe('materializeSandboxes: home layout', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // Issue #2425: sandbox paths must not reveal arm names ('baseline'/'candidate').
+  it('sandbox home paths do not contain the strings "baseline" or "candidate"', async () => {
+    const spec: ChangeSpec = { title: 'noop', changes: [] };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(baseline.home).not.toMatch(/baseline/i);
+      expect(baseline.home).not.toMatch(/candidate/i);
+      expect(candidate.home).not.toMatch(/baseline/i);
+      expect(candidate.home).not.toMatch(/candidate/i);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('creates baseline and candidate home directories', async () => {
     const spec: ChangeSpec = { title: 'noop', changes: [] };
     const { baseline, candidate, cleanup } = await materializeSandboxes({
