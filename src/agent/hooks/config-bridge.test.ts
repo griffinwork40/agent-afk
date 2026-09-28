@@ -662,8 +662,9 @@ describe('episode mode hook filter', () => {
     expect(registry.count('PreToolUse')).toBe(1);
   });
 
-  it('inside episode: only SessionStart and UserPromptSubmit register', () => {
+  it('inside episode (default): only context-injecting events suppressed, tool-gating hooks register', () => {
     vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '');
     const registry = createHookRegistry();
     const config = makeEnabledConfig({
       hooks: {
@@ -676,13 +677,55 @@ describe('episode mode hook filter', () => {
       },
     });
     loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
-    // Context-shaping events register.
+    // Context-injecting events suppressed — both arms see byte-identical first user messages.
+    expect(registry.count('SessionStart')).toBe(0);
+    expect(registry.count('UserPromptSubmit')).toBe(0);
+    // Tool-gating events keep registering — they cannot inject context into the
+    // first user message and their presence preserves episode realism.
+    expect(registry.count('Stop')).toBe(1);
+    expect(registry.count('PreToolUse')).toBe(1);
+    expect(registry.count('SessionEnd')).toBe(1);
+    expect(registry.count('PostToolUse')).toBe(1);
+  });
+
+  it('inside episode with AFK_WHATIF_KEEP_CONTEXT_HOOKS=1: all hooks register', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '1');
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        SessionStart: [makeGroup([{ type: 'command', command: 'echo ss', timeoutMs: 1000 }])],
+        UserPromptSubmit: [makeGroup([{ type: 'command', command: 'echo ups', timeoutMs: 1000 }])],
+        Stop: [makeGroup([{ type: 'command', command: 'echo stop', timeoutMs: 1000 }])],
+        PreToolUse: [makeGroup([{ type: 'command', command: 'echo pre', timeoutMs: 1000 }])],
+        SessionEnd: [makeGroup([{ type: 'command', command: 'echo end', timeoutMs: 1000 }])],
+        PostToolUse: [makeGroup([{ type: 'command', command: 'echo post', timeoutMs: 1000 }])],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    // All hooks register when opt-in is set.
     expect(registry.count('SessionStart')).toBe(1);
     expect(registry.count('UserPromptSubmit')).toBe(1);
-    // Side-effect tails are skipped.
-    expect(registry.count('Stop')).toBe(0);
-    expect(registry.count('PreToolUse')).toBe(0);
-    expect(registry.count('SessionEnd')).toBe(0);
-    expect(registry.count('PostToolUse')).toBe(0);
+    expect(registry.count('Stop')).toBe(1);
+    expect(registry.count('PreToolUse')).toBe(1);
+    expect(registry.count('SessionEnd')).toBe(1);
+    expect(registry.count('PostToolUse')).toBe(1);
+  });
+
+  it('inside episode: cwd-dependent SessionStart hook is NOT registered (cannot differ between arms)', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '');
+    const registry = createHookRegistry();
+    // Simulate a pattern-card surfacer that injects cwd-dependent text.
+    const config = makeEnabledConfig({
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: 'echo cwd=$(pwd) > /dev/stdout', timeoutMs: 1000 }]),
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    // Must NOT register — output would differ per arm (baseline vs candidate cwd).
+    expect(registry.count('SessionStart')).toBe(0);
   });
 });

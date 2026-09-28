@@ -25,6 +25,8 @@ engine:
    run in isolated sandboxes for both the baseline and candidate environments.
    Rates are measured (P(yes) per prediction), each prediction is marked
    Confirmed / Refuted / Unclear, and unpredicted differences are proposed.
+   Each prediction is scored only on its own probes (see
+   [Which episodes score a prediction](#which-episodes-score-a-prediction)).
 
 4. **Records calibration**: every prediction + verified outcome is appended to
    `~/.afk/state/whatif/ledger.jsonl` to improve future predictions.
@@ -157,6 +159,34 @@ The terminal output shows:
 - **Caveats**: fixed reminders about what the engine can and cannot see.
 
 The full Markdown report is written to `~/.afk/state/whatif/<run-id>/report.md`.
+
+### Which episodes score a prediction
+
+Every episode output is graded once, on every question, in a single judge call.
+What differs is which of those grades feed each prediction's result:
+
+- **Before / After / CI / Result** use only the prediction's own synthetic
+  probes (episodes whose `targets` is that prediction's id). A replayed turn
+  like "why does fast compact fail?" gives the agent no chance to show "honors
+  an explicit subagent request", so pooling it in would only pull the delta
+  toward zero. Before #2403 every episode was pooled, which diluted a real
+  effect about 10x (2 probes at 0% → 100% plus 18 unrelated episodes at 0% read
+  as a 10-point shift).
+- **Other episodes** is the same question graded on every other episode
+  (replayed real turns, suite prompts, other predictions' probes). It is
+  context only, for spotting a behavior that leaks outside its probes, and
+  never affects the result.
+- **Scored on** shows how many probes contributed and `n` (graded outputs per
+  arm, baseline/candidate). A prediction with no graded probe (all failed,
+  budget stop, judge failure) shows `no graded probes` and is always Unclear.
+- **Episodes behind each result** lists the contributing episode ids.
+
+`results.json` carries the same data per prediction under
+`verify.predictions[].scope`: `episodes.baseline` / `episodes.candidate` (ids
+with a graded output), `targetedEpisodes` (probes planned), and `background`
+(the other-episodes rate comparison, absent when an arm had none). The
+Measured Behaviors table and Unexpected Differences still use every episode,
+since those are universal.
 
 ---
 
@@ -291,6 +321,7 @@ calls is therefore visible to the judge, not just the final reply.
 | `AFK_WHATIF_EPISODE` | engine | `1` = this process is a sandboxed episode |
 | `AFK_WHATIF_TOOL_LOG` | engine | Absolute path for the episode tool-call log |
 | `AFK_WHATIF_ALLOW_MCP` | user (opt-in) | `1` = allow MCP in episodes |
+| `AFK_WHATIF_KEEP_CONTEXT_HOOKS` | user (opt-in) / engine (auto) | `1` = keep `SessionStart` and `UserPromptSubmit` hooks in episodes |
 | `AFK_FRAMEWORK_PROMPT_FILE` | user (opt-in) | Replacement for bundled `system-prompt.md` |
 
 **Episode gate rules**: when `AFK_WHATIF_EPISODE=1`, the PreToolUse hook
@@ -298,6 +329,21 @@ classifies every tool call as `'executed'` (read-only) or `'recorded'`
 (side-effecting). The first `'recorded'` verdict latches the gate; all
 subsequent calls are also blocked. The gate applies tree-wide (no subagent
 exemption). The gate is implemented in `src/agent/whatif-episode-gate.ts`.
+
+**Hook isolation**: inside an episode, `SessionStart` and `UserPromptSubmit`
+config and plugin hooks are disabled by default. These are the only events
+whose `injectContext` output reaches the first user message — a plugin hook
+whose output depends on cwd and accumulated state would otherwise inject
+arm-specific text and confound every delta measurement. Tool-gating hooks
+(`PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`, etc.) keep registering
+normally because they cannot affect the first user message and their presence
+makes the episode more realistic.
+
+Set `AFK_WHATIF_KEEP_CONTEXT_HOOKS=1` to restore the pre-isolation behaviour.
+The harness sets this flag **automatically** when the change spec itself
+targets hooks or plugins (a `disable-plugin` change, or a `file` change
+targeting `home:config/afk.config.json` or a `hooks.json` manifest) — so
+both arms can observe the hook behaviour under test.
 
 ### Files
 

@@ -60,6 +60,21 @@ export const WHATIF_ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_WHATIF_KEEP_CONTEXT_HOOKS',
+    description:
+      'When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), ' +
+      'keep SessionStart and UserPromptSubmit config/plugin hooks enabled. By default, these hooks ' +
+      'are disabled inside episodes so that both the baseline and candidate arms see byte-identical ' +
+      'first user messages, preventing cwd- or recency-sensitive hook output from confounding the ' +
+      'measured delta. Set this flag only when the change under test specifically concerns ' +
+      'context-injecting hook behaviour.',
+    type: 'boolean',
+    required: false,
+    default: '',
+    example: '1',
+    category: 'misc',
+  },
+  {
     name: 'AFK_FRAMEWORK_PROMPT_FILE',
     description:
       'Absolute path to a replacement for the framework base system prompt ' +

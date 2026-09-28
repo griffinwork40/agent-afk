@@ -3,10 +3,45 @@
  * set out to: failed episodes, ungraded outputs, and a budget stop. Each is
  * otherwise invisible in the rates, which silently shrink to the survivors.
  *
+ * Also surfaces the hook-isolation note (context-injecting hooks disabled in
+ * episodes) and a first-user-message diff warning when arms diverged despite
+ * the isolation, so the operator knows the delta may be confounded.
+ *
  * @module whatif/run.limits
  */
 
-import type { VerifyResult } from './types.js';
+import type { VerifyResult, ChangeSpec } from './types.js';
+import type { StructuralImpact } from './types.js';
+
+/**
+ * Returns true when the change spec directly targets hooks or plugins.
+ *
+ * When true, the harness automatically enables `AFK_WHATIF_KEEP_CONTEXT_HOOKS`
+ * in both episode arms so that the hooks under test actually register and can
+ * be observed.  Without this, both arms would run with context hooks suppressed
+ * and the experiment would measure nothing.
+ *
+ * Detects:
+ *   - `disable-plugin`  — removes a plugin and its hooks.json hooks.
+ *   - `file` targeting `home:config/afk.config.json` — modifies the primary
+ *     hook configuration file.
+ *   - `file` targeting a path whose basename is `hooks.json` — modifies a
+ *     plugin-contributed hooks manifest.
+ */
+export function specTargetsHooksOrPlugins(spec: ChangeSpec): boolean {
+  for (const change of spec.changes) {
+    if (change.kind === 'disable-plugin') return true;
+    if (change.kind === 'file') {
+      const p = change.path;
+      // home:config/afk.config.json is the primary hook config location.
+      if (p === 'home:config/afk.config.json') return true;
+      // Any hooks.json file (plugin or user-defined hook manifests).
+      const basename = p.includes('/') ? p.slice(p.lastIndexOf('/') + 1) : p;
+      if (basename === 'hooks.json') return true;
+    }
+  }
+  return false;
+}
 
 export function verifyShortfallLimits(v: VerifyResult): string[] {
   const out: string[] = [];
@@ -18,6 +53,30 @@ export function verifyShortfallLimits(v: VerifyResult): string[] {
   }
   if (v.truncatedByBudget) {
     out.push('The run stopped early at the spending cap, so fewer episodes were measured than planned.');
+  }
+  return out;
+}
+
+/**
+ * Returns the standard hook-isolation limit bullet (always included in
+ * verified runs, unless the operator opted in to keeping context hooks).
+ * Pass `keepContextHooks` = true when AFK_WHATIF_KEEP_CONTEXT_HOOKS was set.
+ */
+export function hookIsolationLimits(opts: {
+  keepContextHooks: boolean;
+  structural: Pick<StructuralImpact, 'userMessageDiff'>;
+}): string[] {
+  const out: string[] = [];
+  if (!opts.keepContextHooks) {
+    out.push(
+      'SessionStart and UserPromptSubmit hooks were disabled in episodes so both arms ' +
+        'see identical first user messages (set AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 to keep them).',
+    );
+  }
+  if (opts.structural.userMessageDiff && opts.structural.userMessageDiff.trim().length > 0) {
+    out.push(
+      'The first user message still differed between arms — injected context may confound the measured delta.',
+    );
   }
   return out;
 }
