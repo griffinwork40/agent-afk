@@ -11,9 +11,10 @@
  * false and `load()` is a no-op.
  *
  * Invariant: each in-flight fetch is owned by the (sessionId, toolUseId) pair
- * that started it. When the session or tool row changes, the pending request is
- * aborted via AbortController and its completion callback guards against
- * installing a stale result into the new row's state.
+ * that started it. When the session or tool row changes, or the component
+ * unmounts, the pending request is aborted via AbortController, and its
+ * completion callbacks drop the result once their signal is aborted, so a
+ * stale response never lands in the new row's state.
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
@@ -53,12 +54,15 @@ export function useFullToolResult(toolUseId: string | undefined): FullToolResult
   // when sessionId or toolUseId changes before the fetch completes.
   const abortRef = useRef<AbortController | null>(null);
 
-  // A different call (or session) invalidates what was loaded and aborts any
-  // pending fetch so the old promise cannot install its result in the new row.
+  // A different call (or session) invalidates what was loaded. The cleanup runs
+  // before the next (sessionId, toolUseId) takes effect AND on unmount, aborting
+  // any pending fetch so the old promise cannot install its result.
   useEffect(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
     setState({ status: 'idle' });
+    return () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
   }, [sessionId, toolUseId]);
 
   const load = useCallback(() => {
@@ -67,20 +71,17 @@ export function useFullToolResult(toolUseId: string | undefined): FullToolResult
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    // Snapshot the identity pair at call time; the completion callbacks check
-    // these against the current values so a stale response from a prior
-    // (sessionId, toolUseId) is silently dropped rather than overwriting state.
-    const expectedSession = sessionId;
-    const expectedTool = toolUseId;
     setState({ status: 'loading' });
+    // The aborted-signal check is the stale-result guard: this controller is
+    // aborted whenever the (sessionId, toolUseId) pair changes, the component
+    // unmounts, or a newer load() supersedes it.
     apiFetch<ToolResultResponse>(toolResultPath(sessionId, toolUseId), { signal: ac.signal }).then(
       (result) => {
-        if (ac.signal.aborted || sessionId !== expectedSession || toolUseId !== expectedTool) return;
+        if (ac.signal.aborted) return;
         setState({ status: 'loaded', result });
       },
       (err: unknown) => {
         if (ac.signal.aborted) return;
-        if (sessionId !== expectedSession || toolUseId !== expectedTool) return;
         setState({ status: 'error', message: describeError(err) });
       },
     );

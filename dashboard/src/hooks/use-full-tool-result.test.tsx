@@ -4,13 +4,14 @@
  * install its result into the state of a new row if the user switched before
  * the request completed.
  *
- * Fix: each load() call issues an AbortController and guards its setState
- * callback with an identity check against the captured (sessionId, toolUseId).
+ * Fix: each load() call issues an AbortController that is aborted when the
+ * (sessionId, toolUseId) pair changes, the component unmounts, or a newer
+ * load() supersedes it; the completion callbacks drop results once aborted.
  *
  * @module hooks/use-full-tool-result.test
  */
 
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import React from 'react';
 import { TranscriptSessionContext, useFullToolResult } from './use-full-tool-result';
@@ -171,5 +172,20 @@ describe('useFullToolResult', () => {
     }).not.toThrow();
 
     expect(result.current.state.status).toBe('loading');
+  });
+
+  it('aborts the in-flight request on unmount', () => {
+    mockedApiFetch.mockImplementation(() => new Promise<ToolResultResponse>(() => {}));
+
+    const { result, unmount } = renderHook(() => useFullToolResult('tu-1'), {
+      wrapper: wrapper('sess-1'),
+    });
+
+    act(() => { result.current.load(); });
+    const init = mockedApiFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.signal?.aborted).toBe(false);
+
+    unmount();
+    expect(init?.signal?.aborted).toBe(true);
   });
 });

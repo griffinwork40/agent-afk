@@ -159,20 +159,4 @@ describe('AgentSession.close() — journal ordering', () => {
     // The ordering invariant: provider write before the terminal journal call.
     expect(writeIdx).toBeLessThan(terminalIdx);
   });
-
-  /**
-   * Documents the pre-fix ordering failure: journal was closed BEFORE the
-   * provider, so any write in the provider's close() was silently dropped.
-   * This test is a static ordering demonstration, not a call to AgentSession.
-   */
-  it('old ordering (journal closed first) causes writes to arrive after journal finalization', () => {
-    const log: string[] = [];
-    log.push('journal:close');     // old code: journal.close() was first
-    log.push('provider:close-write'); // provider.close() wrote after
-
-    const closeIdx = log.indexOf('journal:close');
-    const writeIdx = log.indexOf('provider:close-write');
-    // This is exactly the bug: write comes AFTER journal closed.
-    expect(closeIdx).toBeLessThan(writeIdx);
-  });
 });
