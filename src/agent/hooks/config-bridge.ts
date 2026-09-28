@@ -21,7 +21,7 @@ import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '
 import type { LoadedHooksConfig } from './config-loader.js';
 import { compileMatcher } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
-import { isWhatifEpisode } from '../whatif-episode-gate.js';
+import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
 import { resolveContextSessionId } from './hook-utils.js';
 
 export interface AgentConfigForBridge {
@@ -50,13 +50,14 @@ export function loadAndRegisterConfigHooks(
   const sessionId = agentConfig.sessionId;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
-  // Episode mode: allow only context-shaping hooks. Side-effect tails
-  // (notifications, external writes triggered by Stop/PostToolUse, etc.) must
-  // not fire during a sandboxed episode — the episode is a replay for observation,
-  // not a live session. SessionStart and UserPromptSubmit shape preamble/context,
-  // which IS necessary for the episode to see the correct prompt structure.
-  const episodeAllowedEvents = new Set<HarnessHookEvent>(['SessionStart', 'UserPromptSubmit']);
+  // Episode mode: disable ALL config/plugin hooks by default so both the
+  // baseline and candidate arms see byte-identical first user messages.
+  // Cwd- or recency-sensitive hooks (e.g. pattern-card surfacers) otherwise
+  // inject arm-specific text that confounds every delta measurement.
+  // Setting AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 restores pre-fix behaviour for
+  // changes that specifically test context-injecting hooks.
   const inEpisode = isWhatifEpisode();
+  const keepContextHooks = keepContextHooksInEpisode();
 
   const validEvents: HarnessHookEvent[] = [
     'SessionStart',
@@ -96,10 +97,31 @@ export function loadAndRegisterConfigHooks(
     }
   }
 
+  // In episode mode (without opt-in), collect all hooks that would have been
+  // registered and warn once so the operator knows what was disabled.
+  if (inEpisode && !keepContextHooks) {
+    const disabledHooks: string[] = [];
+    for (const event of validEvents) {
+      const groups = hookConfig.hooks[event];
+      if (groups === undefined) continue;
+      for (const group of groups) {
+        for (const hook of group.hooks) {
+          disabledHooks.push(`${event}: ${hook.command}`);
+        }
+      }
+    }
+    if (disabledHooks.length > 0) {
+      console.warn(
+        `[hooks] what-if episode: context-injecting hooks disabled so both arms see identical context` +
+          ` (set AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 to keep):\n` +
+          disabledHooks.map((s) => `  - ${s}`).join('\n'),
+      );
+    }
+    // Skip all hook registration for this episode arm.
+    return;
+  }
+
   for (const event of validEvents) {
-    // In episode mode, skip events that are pure side-effect tails. Only
-    // SessionStart and UserPromptSubmit may run (they shape context / preamble).
-    if (inEpisode && !episodeAllowedEvents.has(event)) continue;
 
     const groups = hookConfig.hooks[event];
     if (groups === undefined || groups.length === 0) continue;

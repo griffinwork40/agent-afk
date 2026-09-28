@@ -22,7 +22,8 @@ import { materializeSandboxes } from './sandbox.js';
 import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
-import { verifyShortfallLimits } from './run.limits.js';
+import { verifyShortfallLimits, hookIsolationLimits } from './run.limits.js';
+import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges } from './predict.js';
 import { collectRealTurns, syntheticEpisodes, loadSuiteEpisodes } from './episodes.js';
@@ -319,6 +320,7 @@ export async function runWhatif(
     const limits = [
       ...standardLimits({ verified: true, judgeExternal: resolvedJudge.external }),
       ...verifyShortfallLimits(verifyResult!),
+      ...hookIsolationLimits({ keepContextHooks: keepContextHooksInEpisode(), structural }),
     ];
 
     const partialReport: Omit<WhatifReport, 'headline'> = {
