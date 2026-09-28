@@ -333,6 +333,13 @@ describe('runWhatif — verify path', () => {
     const vp1 = verify.predictions.find((vp) => vp.prediction.id === 'p1');
     expect(vp1).toBeDefined();
     expect(vp1!.verdict).toBe('confirmed');
+    // #2403: scored only on p1's own synthetic probe, not the replayed real
+    // turns; those appear as a separate background rate.
+    expect(vp1!.scope?.episodes.baseline).toEqual(['s1']);
+    expect(vp1!.scope?.episodes.candidate).toEqual(['s1']);
+    expect(vp1!.scope?.targetedEpisodes).toBe(1);
+    expect(vp1!.rates.n).toEqual({ baseline: 1, candidate: 1 });
+    expect(vp1!.scope?.background?.n.baseline).toBeGreaterThan(0);
 
     // Feature delta for 'Asked before acting' should be positive
     const askFeat = verify.features.find((f) => f.label === 'Asked before acting');
@@ -351,7 +358,10 @@ describe('runWhatif — verify path', () => {
       .filter(Boolean);
 
     expect(md).toContain('confirmed');
+    expect(md).toContain('Scored on');
+    expect(md).toContain('- p1: s1');
     expect(results).toHaveProperty('verify');
+    expect(results.verify.predictions[0].scope.episodes.candidate).toEqual(['s1']);
     expect(traces.length).toBeGreaterThan(0);
     // Each line must be valid JSON
     for (const line of traces) {

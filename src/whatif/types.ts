@@ -145,7 +145,7 @@ export interface Prediction {
   /**
    * Positively framed yes/no question answerable from ONE episode output, e.g.
    * "Does the response ask the user a clarifying question before using any tool?"
-   * The measured rate is P(yes) across episodes.
+   * The measured rate is P(yes) across this prediction's own probes (#2403).
    */
   testQuestion: string;
   /** 1-2 synthetic user requests likely to exercise this behavior. */
@@ -262,10 +262,31 @@ export interface RateComparison {
 
 export type Verdict = 'confirmed' | 'refuted' | 'unclear';
 
+/**
+ * Which episodes back one prediction's verdict (issue #2403). A prediction is
+ * scored only on its own synthetic probes (`Episode.targets`); every other
+ * episode is reported as `background`, never pooled into the verdict.
+ */
+export interface PredictionScope {
+  /** Episode ids with at least one graded output in each arm, in run order. */
+  episodes: { baseline: string[]; candidate: string[] };
+  /** Episodes written to target this prediction (before failures/judging). */
+  targetedEpisodes: number;
+  /**
+   * The same question graded on every non-targeted episode. Context only:
+   * shows whether the behavior shifted outside its probes. Absent when an
+   * arm had no graded non-targeted output.
+   */
+  background?: RateComparison;
+}
+
 export interface VerifiedPrediction {
   prediction: Prediction;
+  /** Rates over the prediction's targeted episodes only; drives `verdict`. */
   rates: RateComparison;
   verdict: Verdict;
+  /** Absent in results written before #2403 (those pooled every episode). */
+  scope?: PredictionScope;
 }
 
 export interface DiscoveredDifference {

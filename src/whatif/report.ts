@@ -112,6 +112,63 @@ export function buildHeadline(report: Omit<WhatifReport, 'headline'>): string {
   return `Likely effect: ${biggestLabel} much ${biggestAfter > biggestBefore ? 'more' : 'less'} often (${pct(biggestBefore)} → ${pct(biggestAfter)})${accStr}.`;
 }
 
+/** "2 probes, n=6/6" : how many episodes and graded outputs back a verdict. */
+function scoredOn(vp: VerifiedPrediction): string {
+  const n = `n=${vp.rates.n.baseline}/${vp.rates.n.candidate}`;
+  if (!vp.scope) return n; // pre-#2403 result: pooled over every episode
+  const eps = new Set([...vp.scope.episodes.baseline, ...vp.scope.episodes.candidate]).size;
+  if (eps === 0) return `no graded probes (${vp.scope.targetedEpisodes} planned)`;
+  return `${eps} probe${eps === 1 ? '' : 's'}, ${n}`;
+}
+
+function backgroundStr(vp: VerifiedPrediction): string {
+  const bg = vp.scope?.background;
+  if (!bg) return '—';
+  return `${pct(bg.baseline)} → ${pct(bg.candidate)} (n=${bg.n.baseline}/${bg.n.candidate})`;
+}
+
+function episodeList(vp: VerifiedPrediction): string {
+  const { baseline, candidate } = vp.scope!.episodes;
+  if (baseline.length === 0 && candidate.length === 0) return 'none graded';
+  if (baseline.join(',') === candidate.join(',')) return baseline.join(', ');
+  return `baseline ${baseline.join(', ') || 'none'}; candidate ${candidate.join(', ') || 'none'}`;
+}
+
+/**
+ * Verified predictions table plus the per-prediction evidence list.
+ *
+ * Contract (#2403): Before / After / CI / Result come from the prediction's
+ * own probes only. "Other episodes" is the same question on every other
+ * episode, shown for context and never part of the verdict. `n` is graded
+ * outputs per arm (episodes × samples that survived running and judging).
+ */
+function renderVerifiedPredictionTable(
+  predictions: Prediction[],
+  verified: VerifiedPrediction[],
+): string[] {
+  const lines: string[] = [];
+  const vpMap = new Map(verified.map((vp) => [vp.prediction.id, vp]));
+  lines.push('> Before / After / CI / Result use only the probes written for each prediction. "Other episodes" is the same question on every other episode, for context; it does not affect the result.\n');
+  lines.push('| # | Behavior | Direction | Before | After | CI | Scored on | Other episodes | Result |');
+  lines.push('|---|----------|-----------|--------|-------|----|-----------|----------------|--------|');
+  for (const pred of predictions) {
+    const vp = vpMap.get(pred.id);
+    if (!vp) {
+      lines.push(`| ${pred.id} | ${pred.behavior} | ${pred.direction} | — | — | — | — | — | ⚪ unclear |`);
+      continue;
+    }
+    lines.push(
+      `| ${pred.id} | ${pred.behavior} | ${pred.direction} | ${pct(vp.rates.baseline)} | ${pct(vp.rates.candidate)} | ${ciStr(vp.rates.ci)} | ${scoredOn(vp)} | ${backgroundStr(vp)} | ${verdictEmoji(vp.verdict)} ${vp.verdict} |`,
+    );
+  }
+  const scoped = predictions.map((p) => vpMap.get(p.id)).filter((vp) => vp?.scope !== undefined);
+  if (scoped.length > 0) {
+    lines.push('', '**Episodes behind each result:**', '');
+    for (const vp of scoped) lines.push(`- ${vp!.prediction.id}: ${episodeList(vp!)}`);
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------------------
 // renderMarkdown
 // ---------------------------------------------------------------------------
@@ -192,21 +249,7 @@ export function renderMarkdown(report: WhatifReport): string {
       );
     }
   } else {
-    const vpMap = new Map(
-      verify.predictions.map((vp) => [vp.prediction.id, vp]),
-    );
-    lines.push('| # | Behavior | Direction | Before | After | CI | Result |');
-    lines.push('|---|----------|-----------|--------|-------|----|--------|');
-    for (const pred of predictions) {
-      const vp = vpMap.get(pred.id);
-      if (!vp) {
-        lines.push(`| ${pred.id} | ${pred.behavior} | ${pred.direction} | — | — | — | ⚪ unclear |`);
-        continue;
-      }
-      lines.push(
-        `| ${pred.id} | ${pred.behavior} | ${pred.direction} | ${pct(vp.rates.baseline)} | ${pct(vp.rates.candidate)} | ${ciStr(vp.rates.ci)} | ${verdictEmoji(vp.verdict)} ${vp.verdict} |`,
-      );
-    }
+    lines.push(...renderVerifiedPredictionTable(predictions, verify.predictions));
   }
   lines.push('');
 
@@ -304,7 +347,7 @@ export function renderTerminal(report: WhatifReport, palette: ThemePalette): str
           : palette.meta;
       out.push(
         `  ${palette.dim(pred.id)} ${pred.behavior}` +
-          `  ${palette.meta(`${pct(vp.rates.baseline)} → ${pct(vp.rates.candidate)}` )}` +
+          `  ${palette.meta(`${pct(vp.rates.baseline)} → ${pct(vp.rates.candidate)} (${scoredOn(vp)})`)}` +
           `  ${verdictColor(vp.verdict)}`,
       );
     }

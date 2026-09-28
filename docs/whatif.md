@@ -25,6 +25,8 @@ engine:
    run in isolated sandboxes for both the baseline and candidate environments.
    Rates are measured (P(yes) per prediction), each prediction is marked
    Confirmed / Refuted / Unclear, and unpredicted differences are proposed.
+   Each prediction is scored only on its own probes (see
+   [Which episodes score a prediction](#which-episodes-score-a-prediction)).
 
 4. **Records calibration**: every prediction + verified outcome is appended to
    `~/.afk/state/whatif/ledger.jsonl` to improve future predictions.
@@ -157,6 +159,34 @@ The terminal output shows:
 - **Caveats**: fixed reminders about what the engine can and cannot see.
 
 The full Markdown report is written to `~/.afk/state/whatif/<run-id>/report.md`.
+
+### Which episodes score a prediction
+
+Every episode output is graded once, on every question, in a single judge call.
+What differs is which of those grades feed each prediction's result:
+
+- **Before / After / CI / Result** use only the prediction's own synthetic
+  probes (episodes whose `targets` is that prediction's id). A replayed turn
+  like "why does fast compact fail?" gives the agent no chance to show "honors
+  an explicit subagent request", so pooling it in would only pull the delta
+  toward zero. Before #2403 every episode was pooled, which diluted a real
+  effect about 10x (2 probes at 0% → 100% plus 18 unrelated episodes at 0% read
+  as a 10-point shift).
+- **Other episodes** is the same question graded on every other episode
+  (replayed real turns, suite prompts, other predictions' probes). It is
+  context only, for spotting a behavior that leaks outside its probes, and
+  never affects the result.
+- **Scored on** shows how many probes contributed and `n` (graded outputs per
+  arm, baseline/candidate). A prediction with no graded probe (all failed,
+  budget stop, judge failure) shows `no graded probes` and is always Unclear.
+- **Episodes behind each result** lists the contributing episode ids.
+
+`results.json` carries the same data per prediction under
+`verify.predictions[].scope`: `episodes.baseline` / `episodes.candidate` (ids
+with a graded output), `targetedEpisodes` (probes planned), and `background`
+(the other-episodes rate comparison, absent when an arm had none). The
+Measured Behaviors table and Unexpected Differences still use every episode,
+since those are universal.
 
 ---
 
