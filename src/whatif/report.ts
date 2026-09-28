@@ -2,7 +2,7 @@
  * Report rendering for the what-if prediction engine.
  *
  * Three render targets:
- *   - {@link buildHeadline}   — one plain-English sentence.
+ *   - {@link buildHeadline}   — one plain-English sentence (see report.headline.ts).
  *   - {@link renderMarkdown}  — full GitHub-flavoured Markdown report.
  *   - {@link renderTerminal}  — compact terminal output using the semantic palette.
  *   - {@link standardLimits} — caveats that accompany every report.
@@ -19,6 +19,7 @@ import type {
   WhatifReport,
 } from './types.js';
 import { describeChange } from './operators/index.js';
+export { buildHeadline } from './report.headline.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,71 +47,8 @@ function truncateLines(text: string, maxLines: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// buildHeadline
+// Verified prediction table (#2403)
 // ---------------------------------------------------------------------------
-
-/**
- * Build a single plain-English sentence summarising the report.
- *
- * For predict-only runs it describes the top prediction (if any).
- * For verified runs it includes the most notable rate shift and the
- * prediction accuracy.
- */
-export function buildHeadline(report: Omit<WhatifReport, 'headline'>): string {
-  const { predictions, verify } = report;
-
-  if (!verify) {
-    // Predict-only.
-    const first = predictions[0];
-    if (!first) return 'No behavioral changes predicted.';
-    return `Predicted (not yet measured): ${first.behavior} is expected to be ${first.direction} (${first.confidence} confidence).`;
-  }
-
-  // Verified run — find the largest |delta| among verified predictions.
-  const { predictions: verified, features, predictionAccuracy } = verify;
-
-  // Look at VerifiedPredictions then feature deltas for the biggest shift.
-  let biggestLabel = '';
-  let biggestDelta = 0;
-  let biggestBefore = 0;
-  let biggestAfter = 0;
-
-  for (const vp of verified) {
-    const d = Math.abs(vp.rates.delta);
-    if (d > biggestDelta) {
-      biggestDelta = d;
-      biggestLabel = (vp.prediction as Prediction).behavior;
-      biggestBefore = vp.rates.baseline;
-      biggestAfter = vp.rates.candidate;
-    }
-  }
-
-  for (const feat of features) {
-    const d = Math.abs(feat.rates.delta);
-    if (d > biggestDelta) {
-      biggestDelta = d;
-      biggestLabel = feat.label.toLowerCase();
-      biggestBefore = feat.rates.baseline;
-      biggestAfter = feat.rates.candidate;
-    }
-  }
-
-  const totalResolved = verified.filter(
-    (vp) => vp.verdict === 'confirmed' || vp.verdict === 'refuted',
-  ).length;
-  const confirmed = verified.filter((vp) => vp.verdict === 'confirmed').length;
-
-  const accStr =
-    predictionAccuracy !== undefined
-      ? `; ${confirmed} of ${totalResolved} predictions confirmed`
-      : '';
-
-  if (!biggestLabel) {
-    return `No significant behavioral differences detected${accStr}.`;
-  }
-
-  return `Likely effect: ${biggestLabel} much ${biggestAfter > biggestBefore ? 'more' : 'less'} often (${pct(biggestBefore)} → ${pct(biggestAfter)})${accStr}.`;
-}
 
 /** "2 probes, n=6/6" : how many episodes and graded outputs back a verdict. */
 function scoredOn(vp: VerifiedPrediction): string {
