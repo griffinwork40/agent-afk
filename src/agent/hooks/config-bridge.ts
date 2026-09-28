@@ -122,7 +122,6 @@ export function loadAndRegisterConfigHooks(
   }
 
   for (const event of validEvents) {
-
     const groups = hookConfig.hooks[event];
     if (groups === undefined || groups.length === 0) continue;
 
