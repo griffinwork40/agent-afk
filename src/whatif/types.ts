@@ -338,6 +338,15 @@ export interface VerifiedPrediction {
    * {@link CROSS_CHECK_MIN_AGREEMENT} (#2413).
    */
   verdictReason?: 'judges disagree';
+  /**
+   * Paired per-probe sign-flip analysis (#2477 step 3). ADDITIVE secondary
+   * analysis — never affects `verdict`, `rates`, or any existing field.
+   *
+   * Present when the verify phase ran and the prediction had at least one
+   * targeted episode. Absent on pre-#2477 results and `unobservable`
+   * predictions.
+   */
+  probeSignFlip?: import('./probe-signflip.js').ProbeSignFlipResult;
 }
 
 export interface DiscoveredDifference {

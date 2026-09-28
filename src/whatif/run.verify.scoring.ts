@@ -39,6 +39,8 @@
 
 import { compareRates, verdictFor } from './stats.js';
 import { unobservableReason } from './observability.js';
+import { computeProbeSignFlip } from './probe-signflip.js';
+import type { ArmSamples } from './probe-signflip.js';
 import type { Episode, EpisodeTrace, Prediction, VerifiedPrediction } from './types.js';
 
 type Arm = 'baseline' | 'candidate';
@@ -156,6 +158,47 @@ function inEpisodeOrder(episodes: Episode[], seen: Set<string>): string[] {
   return episodes.filter((e) => seen.has(e.id)).map((e) => e.id);
 }
 
+// ---------------------------------------------------------------------------
+// Per-probe sign-flip data collection (#2477 step 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect all raw per-sample P(yes) scores for each targeted episode in both
+ * arms. Used to build the ArmSamples map for computeProbeSignFlip.
+ *
+ * Returns a Map from episodeId → { baseline: number[], candidate: number[] }.
+ * Episodes with no graded output in either arm are still included with empty
+ * arrays — the sign-flip routine classifies them as unpaired.
+ */
+function collectRawSamplesForProbes(
+  qid: string,
+  goodTraces: EpisodeTrace[],
+  judgeResults: JudgeResults,
+  targetedIds: Set<string>,
+): Map<string, ArmSamples> {
+  const result = new Map<string, ArmSamples>();
+
+  // Initialise entries for every targeted episode.
+  for (const id of targetedIds) {
+    result.set(id, { baseline: [], candidate: [] });
+  }
+
+  for (const trace of goodTraces) {
+    if (!targetedIds.has(trace.episodeId)) continue;
+    const score = judgeResults.get(traceKey(trace))?.[qid];
+    if (score === undefined) continue;
+    const entry = result.get(trace.episodeId);
+    if (!entry) continue;
+    if (trace.env === 'baseline') {
+      entry.baseline.push(score);
+    } else {
+      entry.candidate.push(score);
+    }
+  }
+
+  return result;
+}
+
 /**
  * Score one prediction on its own probes, with every other episode reported
  * as a background rate. See the module contract.
@@ -191,11 +234,23 @@ export function scorePrediction(
       ? 'unclear'
       : verdictFor(prediction, rates);
 
+  // Paired per-probe sign-flip analysis (#2477 step 3).
+  // ADDITIVE: computed for all non-unobservable predictions with targeted
+  // episodes. Never touches verdict, rates, or any other existing field.
+  const episodeOrder = inEpisodeOrder(episodes, targeted);
+  const rawSamples = downstream === undefined && targeted.size > 0
+    ? collectRawSamplesForProbes(prediction.id, goodTraces, judgeResults, targeted)
+    : undefined;
+  const probeSignFlip = rawSamples !== undefined
+    ? computeProbeSignFlip(rawSamples, episodeOrder)
+    : undefined;
+
   return {
     prediction,
     rates,
     verdict,
     ...(downstream !== undefined ? { unobservableReason: downstream } : {}),
+    ...(probeSignFlip !== undefined ? { probeSignFlip } : {}),
     scope: {
       episodes: {
         baseline: inEpisodeOrder(episodes, b.episodeIds),

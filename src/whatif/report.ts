@@ -18,6 +18,7 @@ import type {
   VerifiedPrediction,
   WhatifReport,
 } from './types.js';
+import { fmtP, renderProbeSignFlipSection } from './report.signflip.js';
 import { describeChange } from './operators/index.js';
 import { verdictEmoji, verdictLabel } from './report-verdict.js';
 import { mdeLimitLine } from './mde.js';
@@ -223,6 +224,13 @@ export function renderMarkdown(report: WhatifReport): string {
   lines.push('');
 
   if (verify) {
+    // ── 4b. Paired per-probe sign-flip (secondary, additive) ─────────────
+    const sfLines = renderProbeSignFlipSection(verify.predictions);
+    if (sfLines.length > 0) {
+      lines.push(...sfLines);
+      lines.push('');
+    }
+
     // ── 5. Unexpected differences ─────────────────────────────────────────
     if (verify.discovered.length > 0) {
       lines.push(`## Unexpected Differences\n`);
@@ -333,6 +341,28 @@ export function renderTerminal(report: WhatifReport, palette: ThemePalette): str
   }
 
   out.push('');
+
+  // Paired sign-flip summary (secondary, shown when data exists).
+  if (verify) {
+    const withSf = verify.predictions.filter(
+      (vp: VerifiedPrediction) => vp.probeSignFlip?.p !== null && vp.probeSignFlip !== undefined,
+    );
+    if (withSf.length > 0) {
+      out.push(palette.heading('Per-Probe Paired Analysis (secondary)'));
+      for (const vp of withSf) {
+        const sf = vp.probeSignFlip!;
+        const pStr = sf.p !== null ? `p=${fmtP(sf.p)}` : 'no data';
+        const minStr = sf.minAchievableP !== null ? ` (min achievable ${fmtP(sf.minAchievableP)})` : '';
+        const warn = sf.underpoweredForSig ? ` ${palette.meta('cannot reach p<0.05')}` : '';
+        out.push(
+          `  ${palette.dim(vp.prediction.id)} n_paired=${sf.nPaired} n_nonzero=${sf.nNonzero} ` +
+          `Δ̄=${sf.meanDelta >= 0 ? '+' : ''}${(sf.meanDelta * 100).toFixed(1)}pp ` +
+          `${pStr}${minStr}${warn}`,
+        );
+      }
+      out.push('');
+    }
+  }
 
   // Limits.
   out.push(palette.heading('Limits'));

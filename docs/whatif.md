@@ -228,6 +228,38 @@ Observability fields in `results.json` (#2409):
 - `verify.predictionAccuracy` is confirmed / (confirmed + refuted): both
   `"unclear"` and `"unobservable"` are excluded.
 
+### Per-probe sign-flip analysis (`probeSignFlip`) (#2477 step 3)
+
+A secondary analysis, additive to the Newcombe verdict. Present on non-`unobservable`
+predictions that have at least one targeted episode. Never changes `verdict`, `rates`,
+or any other existing field.
+
+```json
+"probeSignFlip": {
+  "nPaired": 10,          // probes with data in both arms
+  "nUnpaired": 2,         // probes present in only one arm (dropped, biases toward no change)
+  "nNonzero": 6,          // probes with |d_i| > 1e-9 (enter the test)
+  "meanDelta": 0.082,     // mean of all paired per-probe differences (cand − base)
+  "probeDiffs": [0.48, 0.0, 0.025, ...],  // per-probe d_i, in episode order
+  "p": 0.2812,            // two-sided sign-flip p-value (null when nPaired=0)
+  "minAchievableP": 0.03125,  // 2/2^nNonzero; null when nNonzero=0
+  "underpoweredForSig": false, // true when minAchievableP > 0.05
+  "method": "exact"       // "exact" (k≤16) or "montecarlo" (k>16, 100k draws)
+}
+```
+
+**Pairing rule:** episodes present in both arms form paired probes. Episodes
+present in only one arm (usually because all candidate runs timed out or failed)
+are counted as `nUnpaired` and excluded. Excluding them biases toward no change,
+so the `nUnpaired` count cross-references the arm-imbalance flag (#2494).
+
+**Zero tolerance:** differences with |d_i| ≤ 1e-9 are excluded from the test.
+They contribute to `meanDelta` and `probeDiffs` but not to `nNonzero` or `p`.
+
+**Min achievable p:** with k nonzero probes, the two-sided p cannot go below
+2/2^k. At k ≤ 4, min_p ≥ 0.125 and the test cannot reach conventional
+significance regardless of effect size. At k = 6 (the pilot), min_p = 0.03125.
+
 ---
 
 ## Safety model

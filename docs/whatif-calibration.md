@@ -282,3 +282,48 @@ when n is interpreted as the number of unit-weight observations. A paired t or
 bootstrap would require a separate CI module and would break the clean
 `compareRates([baseline]), compareRates([candidate])` interface; that upgrade
 is left for a future PR when the sample size justifies the precision gain.
+
+---
+
+## Sign-flip harness (#2477 step 3)
+
+The paired per-probe sign-flip test (see `src/whatif/probe-signflip.ts`) is a
+secondary analysis run beside the Newcombe interval. It is ADDITIVE: it never
+changes the verdict. The harness runs the same seeded grid to measure its
+false-positive rate (FPR) under the null and power under an effect.
+
+**Important caveat:** the harness draws both arms from the SAME per-episode
+latent rate (p_b_e for baseline, p_c_e = clip(p_b_e + delta_e) for candidate).
+This makes each probe's within-probe correlation across arms higher than in real
+data, where baseline and candidate draws are independent runs. The harness
+therefore **overstates the pairing gain**. Use these numbers for direction only,
+not as production calibration.
+
+### How to read the sign-flip harness numbers
+
+- At **delta=0**: P(sig) is the false-positive rate. Should be ≤ 5%.
+- At **delta=0.3**: P(sig) is power. Higher is better.
+
+Key observation from the grid (seed=42, 400 reps, LOW ICC):
+
+| Setting | Newcombe P(confirm) | Sign-flip P(sig) | Notes |
+|---------|---------------------|------------------|-------|
+| E=12, S=1, delta=0   | 6.8%  | 1.8%  | FPR both near nominal |
+| E=12, S=3, delta=0.3 | 52.0% | 61.8% | Sign-flip higher power at S=3 |
+| E=12, S=5, delta=0.3 | 55.0% | 89.0% | Sign-flip much higher power at S=5 |
+| E=6,  S=1, delta=0.3 | 33.8% | 0.5%  | Sign-flip very low power at S=1 |
+
+**Pattern:** with S=1 (one sample per probe, binary 0/1), sign-flip has very low
+power because the per-probe mean is a single Bernoulli and carries no continuous
+variation. With S≥3 the per-probe mean becomes a continuous proportion, and the
+sign-flip exploits between-probe correlation to achieve higher power than the
+unpaired Newcombe test. The crossover happens around S=3 at E=12. This matches
+the pilot finding that probe count (not sample count) is what buys power — though
+the harness caveat applies: real data correlation may differ.
+
+**Min achievable p:** with k nonzero probes, p cannot go below 2/2^k. At 6
+probes min_p = 0.03125 (< 0.05). At ≤4 probes min_p ≥ 0.125 and significance
+is unreachable. The `underpoweredForSig` flag is set in results.json when this
+happens.
+
+Regenerate: `pnpm exec tsx scripts/generate-whatif-calibration.ts`

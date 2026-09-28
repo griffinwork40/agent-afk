@@ -70,6 +70,7 @@
  */
 
 import { scorePrediction, traceKey, type JudgeResults } from '../run.verify.scoring.js';
+import { computeProbeSignFlip } from '../probe-signflip.js';
 import type { Episode, EpisodeTrace, Prediction, Verdict } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -449,6 +450,130 @@ export function findCell(
     (c) => c.trueDelta === trueDelta && c.episodes === episodes && c.samples === samples && c.tau === tau,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Sign-flip harness (#2477 step 3)
+//
+// NOTE: the harness draws both arms from the SAME per-episode latent rate
+// p_b_e.  The candidate arm is p_c_e = clip(p_b_e + delta_e).  This perfect
+// within-probe correlation overstates the pairing gain vs. real data, where
+// the baseline and candidate probe draws are from independent runs.  Use
+// these numbers for power/FPR direction only, not as production calibration.
+// ---------------------------------------------------------------------------
+
+/**
+ * Sign-flip verdict: 'sig' when p < 0.05, 'nonsig' otherwise (including null p).
+ * This is not a full verdict analogous to confirmed/refuted/unclear; it only
+ * classifies the secondary test result.
+ */
+export type SignFlipVerdict = 'sig' | 'nonsig';
+
+export interface SignFlipCell {
+  trueDelta: TrueDelta;
+  episodes: EpisodeCount;
+  samples: SampleCount;
+  tau: Tau;
+  reps: number;
+  /** P(p < 0.05) over reps. At delta=0 this is the false-positive rate. */
+  pSig: number;
+}
+
+/**
+ * One sign-flip simulation run.  Uses continuous per-episode latent means
+ * (not Bernoulli samples) so the statistic is the per-probe mean P(yes).
+ */
+function simulateSignFlipOnce(
+  rand: () => number,
+  trueDelta: number,
+  numEpisodes: number,
+  numSamples: number,
+  alpha: number,
+  betaParam: number,
+  tau: number,
+): SignFlipVerdict {
+  const episodeIds: string[] = [];
+  const rawSamples = new Map<string, { baseline: number[]; candidate: number[] }>();
+
+  for (let e = 0; e < numEpisodes; e++) {
+    const epId = `ep_${e}`;
+    episodeIds.push(epId);
+    const pBaseline = betaSample(rand, alpha, betaParam);
+    const deltaE = tau > 0
+      ? clamp01(pBaseline + trueDelta + stdNormal(rand) * tau) - pBaseline
+      : trueDelta;
+    const pCandidate = clamp01(pBaseline + deltaE);
+    const bSamples: number[] = [];
+    const cSamples: number[] = [];
+    for (let s = 0; s < numSamples; s++) {
+      // Use raw Bernoulli draws; per-episode means are averaged inside computeProbeSignFlip.
+      bSamples.push(rand() < pBaseline ? 1 : 0);
+      cSamples.push(rand() < pCandidate ? 1 : 0);
+    }
+    rawSamples.set(epId, { baseline: bSamples, candidate: cSamples });
+  }
+
+  const r = computeProbeSignFlip(rawSamples, episodeIds);
+  return r.p !== null && r.p < 0.05 ? 'sig' : 'nonsig';
+}
+
+/**
+ * Run the sign-flip calibration grid.
+ *
+ * Returns one {@link SignFlipCell} per (trueDelta × episodes × samples × tau).
+ * pSig at delta=0 is the false-positive rate; at delta>0 it is power.
+ */
+export function runSignFlipGrid(opts: HarnessOptions = {}): SignFlipCell[] {
+  const {
+    reps = 400,
+    seed = 42,
+    baseRate = 0.5,
+    tauValues = [0],
+  } = opts;
+
+  const resolvedICC = opts.icc !== undefined
+    ? opts.icc
+    : opts.betweenEpisodeSd !== undefined
+      ? theoreticalICC(opts.betweenEpisodeSd)
+      : LOW_ICC;
+
+  const { alpha, beta: betaParam } = betaFromICC(baseRate, resolvedICC);
+  const rand = mulberry32(seed);
+  const cells: SignFlipCell[] = [];
+
+  for (const tau of tauValues as Tau[]) {
+    for (const trueDelta of TRUE_DELTAS) {
+      for (const episodes of EPISODE_COUNTS) {
+        for (const samples of SAMPLE_COUNTS) {
+          let sigCount = 0;
+          for (let r = 0; r < reps; r++) {
+            const v = simulateSignFlipOnce(rand, trueDelta, episodes, samples, alpha, betaParam, tau);
+            if (v === 'sig') sigCount++;
+          }
+          cells.push({ trueDelta, episodes, samples, tau, reps, pSig: sigCount / reps });
+        }
+      }
+    }
+  }
+
+  return cells;
+}
+
+/**
+ * Look up a specific sign-flip cell from the grid result.
+ */
+export function findSignFlipCell(
+  cells: SignFlipCell[],
+  trueDelta: TrueDelta,
+  episodes: EpisodeCount,
+  samples: SampleCount,
+  tau: Tau = 0,
+): SignFlipCell | undefined {
+  return cells.find(
+    (c) => c.trueDelta === trueDelta && c.episodes === episodes && c.samples === samples && c.tau === tau,
+  );
+}
+
+// ---------------------------------------------------------------------------
 
 /**
  * Render the grid as a Markdown table.

@@ -32,10 +32,13 @@ import { scorePrediction, traceKey, type JudgeResults } from '../run.verify.scor
 import type { Episode, EpisodeTrace, Prediction } from '../types.js';
 import {
   findCell,
+  findSignFlipCell,
   HIGH_ICC,
   LOW_ICC,
   runGrid,
+  runSignFlipGrid,
   type GridCell,
+  type SignFlipCell,
 } from './calibration-harness.js';
 
 // ---------------------------------------------------------------------------
@@ -425,5 +428,61 @@ describe('false-refute at delta≥0.1 with tau>0 (post-fix)', () => {
 
   it('HIGH ICC, tau=0.05, E=12, S=3: P(refuted|delta=0.1) ≤ 0.03', () => {
     expect(cellH(0.1, 12, 3, 0.05).pRefuted).toBeLessThanOrEqual(0.03);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §9  Sign-flip harness (#2477 step 3)
+//
+// NOTE: the harness overstates pairing gain because both arms share the same
+// per-episode latent rate. Use pSig numbers as a direction check only, not
+// as production calibration. See calibration-harness.ts sign-flip NOTE.
+//
+// False-positive rate (FPR) at delta=0 should stay near nominal 5%.
+// Power at delta>0 should grow with episodes.
+// ---------------------------------------------------------------------------
+
+const sfCellsLow = runSignFlipGrid({ reps: REPS, seed: 42, icc: LOW_ICC, tauValues: [0] });
+const sfCellsHigh = runSignFlipGrid({ reps: REPS, seed: 42, icc: HIGH_ICC, tauValues: [0] });
+
+function sfCellL(trueDelta: 0 | 0.1 | 0.3, episodes: 3 | 6 | 12, samples: 1 | 3 | 5): SignFlipCell {
+  const c = findSignFlipCell(sfCellsLow, trueDelta, episodes, samples, 0);
+  if (!c) throw new Error(`SF low-ICC cell (${trueDelta}, ${episodes}, ${samples}) not found`);
+  return c;
+}
+
+function sfCellH(trueDelta: 0 | 0.1 | 0.3, episodes: 3 | 6 | 12, samples: 1 | 3 | 5): SignFlipCell {
+  const c = findSignFlipCell(sfCellsHigh, trueDelta, episodes, samples, 0);
+  if (!c) throw new Error(`SF high-ICC cell (${trueDelta}, ${episodes}, ${samples}) not found`);
+  return c;
+}
+
+describe('sign-flip FPR under null (delta=0)', () => {
+  it('LOW ICC, E=6, S=1: P(sig|delta=0) ≤ 0.15 (FPR; harness overstates pairing gain)', () => {
+    // At k=6 probes the min achievable p is 2/64=0.03, so FPR is bounded;
+    // harness shares latent rate so actual FPR may be lower than real data.
+    expect(sfCellL(0, 6, 1).pSig).toBeLessThanOrEqual(0.15);
+  });
+
+  it('LOW ICC, E=12, S=1: P(sig|delta=0) ≤ 0.15', () => {
+    expect(sfCellL(0, 12, 1).pSig).toBeLessThanOrEqual(0.15);
+  });
+
+  it('HIGH ICC, E=6, S=1: P(sig|delta=0) ≤ 0.15', () => {
+    expect(sfCellH(0, 6, 1).pSig).toBeLessThanOrEqual(0.15);
+  });
+});
+
+describe('sign-flip power grows with episodes (delta=0.3)', () => {
+  it('LOW ICC, S=1: power at E=12 ≥ power at E=3 (within 5pp slack)', () => {
+    const p3 = sfCellL(0.3, 3, 1).pSig;
+    const p12 = sfCellL(0.3, 12, 1).pSig;
+    expect(p12).toBeGreaterThan(p3 - 0.05);
+  });
+
+  it('HIGH ICC, S=1: power at E=12 ≥ power at E=3 (within 5pp slack)', () => {
+    const p3 = sfCellH(0.3, 3, 1).pSig;
+    const p12 = sfCellH(0.3, 12, 1).pSig;
+    expect(p12).toBeGreaterThan(p3 - 0.05);
   });
 });
