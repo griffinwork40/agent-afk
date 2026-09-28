@@ -12,6 +12,8 @@
 import { z } from 'zod';
 import { extractJsonAs } from './json-extract.js';
 import type { CompleteFn, Prediction, StructuralImpact } from './types.js';
+import type { RepoManifest } from './repo-manifest.js';
+import { formatRepoManifest } from './repo-manifest.js';
 
 // ---------------------------------------------------------------------------
 // Zod schema
@@ -53,6 +55,8 @@ how the agent's behavior will change. Return a JSON array of Prediction objects.
 - Each prediction must have a POSITIVELY framed testQuestion answerable from a
   single agent output. Phrase as "Does the response …?" — never "Is it too …?".
 - probes: 1-2 realistic user requests that would exercise the predicted behavior.
+  When a ## Repo context section is present below, probes MUST reference only paths
+  listed there, or no specific file paths at all. Never invent file names.
 - confidence must be honest: high only when the causal link is clear from the diff.
 - Ids must be p1, p2, … pN (sequential, no gaps).
 
@@ -72,6 +76,8 @@ export interface PredictInput {
   changeDescriptions: string[];
   structural: StructuralImpact;
   trackRecord?: string;
+  /** Optional repo manifest used to ground probes in real paths. */
+  repoManifest?: RepoManifest;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,7 +95,7 @@ export async function predictChanges(
   complete: CompleteFn,
   model: string,
 ): Promise<Prediction[]> {
-  const { spec, changeDescriptions, structural, trackRecord } = input;
+  const { spec, changeDescriptions, structural, trackRecord, repoManifest } = input;
 
   // Build a concise summary of the structural diff.
   const systemDiffSnippet = headTail(structural.systemDiff || '(no system prompt diff)', 12000);
@@ -105,6 +111,13 @@ export async function predictChanges(
 
   if (trackRecord) {
     sections.push(`## Engine track record (calibration)\n${headTail(trackRecord, 2000)}`);
+  }
+
+  if (repoManifest) {
+    const repoSection = formatRepoManifest(repoManifest);
+    if (repoSection) {
+      sections.push(repoSection);
+    }
   }
 
   const user = sections.join('\n\n');

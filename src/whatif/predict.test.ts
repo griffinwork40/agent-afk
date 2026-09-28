@@ -118,4 +118,54 @@ describe('predictChanges', () => {
     const call = (fn as ReturnType<typeof vi.fn>).mock.calls[0] as [Parameters<CompleteFn>[0]];
     expect(call[0].user).toContain('[truncated]');
   });
+
+  it('includes repo context section when repoManifest is provided', async () => {
+    const fn = makeFake('[]');
+    const repoManifest = {
+      languages: ['TypeScript', 'Markdown'],
+      paths: ['src/index.ts', 'README.md'],
+      allPaths: new Set(['src/index.ts', 'README.md']),
+    };
+    await predictChanges(
+      {
+        spec: { title: 't', changes: [] },
+        changeDescriptions: [],
+        structural: emptyStructural(),
+        repoManifest,
+      },
+      fn,
+      MODEL,
+    );
+    const call = (fn as ReturnType<typeof vi.fn>).mock.calls[0] as [Parameters<CompleteFn>[0]];
+    expect(call[0].user).toContain('## Repo context');
+    expect(call[0].user).toContain('TypeScript');
+    expect(call[0].user).toContain('src/index.ts');
+    expect(call[0].user).toContain('README.md');
+    expect(call[0].user).toContain('probes must reference only paths');
+  });
+
+  it('omits repo context section when repoManifest is absent', async () => {
+    const fn = makeFake('[]');
+    await predictChanges(
+      { spec: { title: 't', changes: [] }, changeDescriptions: [], structural: emptyStructural() },
+      fn,
+      MODEL,
+    );
+    const call = (fn as ReturnType<typeof vi.fn>).mock.calls[0] as [Parameters<CompleteFn>[0]];
+    expect(call[0].user).not.toContain('## Repo context');
+  });
+
+  it('SYSTEM prompt includes grounding instruction for probes', async () => {
+    const fn = makeFake('[]');
+    await predictChanges(
+      { spec: { title: 't', changes: [] }, changeDescriptions: [], structural: emptyStructural() },
+      fn,
+      MODEL,
+    );
+    const call = (fn as ReturnType<typeof vi.fn>).mock.calls[0] as [Parameters<CompleteFn>[0]];
+    // The system prompt instructs the model about the ## Repo context section
+    expect(call[0].system).toContain('## Repo context');
+    // The system prompt forbids inventing file names
+    expect(call[0].system).toContain('Never invent file names');
+  });
 });

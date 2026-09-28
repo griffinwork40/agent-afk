@@ -25,6 +25,8 @@ import { normalizeSnapshot } from './structural.normalize.js';
 import { verifyShortfallLimits } from './run.limits.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges } from './predict.js';
+import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
+import { groundProbes, makeSetChecker } from './probe-grounding.js';
 import { collectRealTurns, syntheticEpisodes, loadSuiteEpisodes } from './episodes.js';
 import { estimateVerifyCost } from './cost.js';
 import { buildHeadline, standardLimits } from './report.js';
@@ -70,6 +72,7 @@ interface PredictPhaseResult {
   predictions: import('./types.js').Prediction[];
   analystCostUsd: number;
   changeKinds: string[];
+  droppedProbes: import('./probe-grounding.js').DroppedProbe[];
 }
 
 /**
@@ -112,13 +115,23 @@ async function runPredictPhase(
     return result;
   };
 
-  const predictions = await predictChanges(
-    { spec, changeDescriptions, structural, trackRecord },
+  const repoManifest = buildRepoManifest(options.realCwd);
+
+  const rawPredictions = await predictChanges(
+    { spec, changeDescriptions, structural, trackRecord, repoManifest },
     wrappedComplete,
     options.analystModel,
   );
 
-  return { structural, predictions, analystCostUsd, changeKinds };
+  // Tracked-path set first (empty set outside git → pass-through), then the
+  // filesystem, so directories and untracked-but-real files are not dropped.
+  const tracked = makeSetChecker(repoManifest.allPaths);
+  const { predictions, droppedProbes } = groundProbes(
+    rawPredictions,
+    (p) => tracked(p) || pathExistsInCwd(options.realCwd, p),
+  );
+
+  return { structural, predictions, analystCostUsd, changeKinds, droppedProbes };
 }
 
 /**
@@ -217,7 +230,7 @@ export async function runWhatif(
   try {
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
-    const { structural, predictions, analystCostUsd: predictCost, changeKinds } =
+    const { structural, predictions, analystCostUsd: predictCost, changeKinds, droppedProbes } =
       await runPredictPhase(baseline, candidate, spec, options, deps, runnerOpts);
 
     let analystCostUsd = predictCost;
@@ -233,6 +246,7 @@ export async function runWhatif(
         costUsd: analystCostUsd,
         runDir,
         limits,
+        ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
       const report: WhatifReport = { ...partialReport, headline };
@@ -329,6 +343,7 @@ export async function runWhatif(
       costUsd: totalCostUsd,
       runDir,
       limits,
+      ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
     };
     const headline = buildHeadline(partialReport);
     const report: WhatifReport = { ...partialReport, headline };
