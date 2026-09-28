@@ -306,6 +306,11 @@ export interface WhatifReport {
   /** Plain-English caveats that always accompany the report. */
   limits: string[];
   headline: string;
+  /**
+   * Counts of turns/sessions excluded during corpus collection.
+   * Present when the verify phase ran; lets callers see corpus shrinkage.
+   */
+  corpusExclusions?: import('./episodes.js').CorpusExclusions;
 }
 
 // ---------------------------------------------------------------------------
