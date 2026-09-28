@@ -37,7 +37,12 @@ describe('FullToolOutput', () => {
     expect(mockApiFetch).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /load full output/i }));
     await waitFor(() => expect(screen.getByText('FULL TEXT')).toBeInTheDocument());
-    expect(mockApiFetch).toHaveBeenCalledWith('/api/sessions/sess-1/tool-results/tu1');
+    // The hook now passes an AbortController signal so stale requests can be
+    // cancelled when the session or tool row changes before the fetch completes.
+    expect(mockApiFetch).toHaveBeenCalledWith(
+      '/api/sessions/sess-1/tool-results/tu1',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(screen.queryByText('FULL… [truncated]')).toBeNull();
   });
 

@@ -23,11 +23,48 @@ function isIndex(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0;
 }
 
+/**
+ * Invariant: validate each recognized block shape against what this codebase
+ * writes/reads (types.ts JournalBlock). A syntactically valid JSONL line
+ * whose blocks are missing required fields (e.g. tool_result without
+ * toolUseId, or with non-array content) would reach provider adapters or
+ * hydrate.ts and throw. Unknown block types are rejected; they belong to a
+ * future schema version that this reader cannot safely fold. The non-throwing
+ * malformed-line contract (parseJournalLine → null) is preserved: invalid
+ * blocks make isMessage return false, which makes isValidRecord return false,
+ * which returns null rather than throwing.
+ */
+function isBlock(b: unknown): boolean {
+  if (!isObject(b)) return false;
+  switch (b['type']) {
+    case 'text':
+      return typeof b['text'] === 'string';
+    case 'text_ref':
+      return isObject(b['ref']) && typeof b['preview'] === 'string';
+    case 'thinking':
+      return typeof b['thinking'] === 'string';
+    case 'redacted_thinking':
+      return typeof b['data'] === 'string';
+    case 'tool_use':
+      return typeof b['id'] === 'string' && typeof b['name'] === 'string' && 'input' in b;
+    case 'tool_result':
+      // content is always JournalResultPart[] in this codebase (the adapter
+      // converts Anthropic's string shorthand to [{ type:'text', text }]).
+      return typeof b['toolUseId'] === 'string' && Array.isArray(b['content']);
+    case 'image':
+      return isObject(b['source']);
+    case 'document':
+      return isObject(b['source']);
+    default:
+      return false;
+  }
+}
+
 function isMessage(v: unknown): boolean {
   if (!isObject(v)) return false;
   if (v['role'] !== 'user' && v['role'] !== 'assistant') return false;
   const content = v['content'];
-  return Array.isArray(content) && content.every((b) => isObject(b) && typeof b['type'] === 'string');
+  return Array.isArray(content) && content.every(isBlock);
 }
 
 function isValidRecord(p: Record<string, unknown>): boolean {

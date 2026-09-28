@@ -452,7 +452,14 @@ export class AgentSession implements IAgentSession {
     this.currentState = 'closed';
     this.outputBroadcast.close();
     await this.ledger.seal('close');
-    await this.journal.close();
+    // Invariant: abort and drain the provider BEFORE closing the journal.
+    // Both providers perform final journal synchronization during their
+    // abort/turn-finalization paths (JournalSync.sync at commit points).
+    // Closing the journal first silently discards those writes, leaving the
+    // journal ending at an unmatched tool_use or missing completed tool
+    // results — corrupting the resume source. The reset path (session-reset.ts)
+    // already follows this order: provider.close() + iterator.return + drain
+    // initPromise → closeForReset(). close() must match it.
     if (!this.abortController.signal.aborted) this.abortController.abort('closed');
     this.stateManager.resolveInitializationIfNeeded();
     try {
@@ -468,6 +475,7 @@ export class AgentSession implements IAgentSession {
         // ignore
       }
     }
+    await this.journal.close();
     await this.shutdown.dispatchOnce('close');
   }
 
