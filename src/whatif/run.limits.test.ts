@@ -16,6 +16,23 @@ describe('verifyShortfallLimits', () => {
     expect(out).toHaveLength(3);
     expect(out[1]).toContain('3 output(s) could not be graded by the jev judge');
   });
+  it('includes arm-imbalance summary when armImbalance is set', () => {
+    const imbalance = {
+      baselineFailRate: 0,
+      candidateFailRate: 0.375,
+      rateDiff: 0.375,
+      allInOneArm: true,
+      concentrationArm: 'candidate' as const,
+      summary: 'Arm-imbalance warning: failures are concentrated in one arm (all 6 failures in the candidate arm). This may bias the verdict toward "no change". Consider raising --timeout.',
+    };
+    const out = verifyShortfallLimits({ ...base, failedEpisodes: 6, armImbalance: imbalance });
+    expect(out.some((l) => l.includes('Arm-imbalance warning'))).toBe(true);
+    expect(out.some((l) => l.includes('--timeout'))).toBe(true);
+  });
+  it('does NOT include arm-imbalance line when armImbalance is absent', () => {
+    const out = verifyShortfallLimits({ ...base, failedEpisodes: 1 });
+    expect(out.every((l) => !l.includes('Arm-imbalance'))).toBe(true);
+  });
 });
 
 describe('hookIsolationLimits', () => {

@@ -24,13 +24,14 @@
  * mechanically suppressed false confirms and hid the Monte Carlo symptom of
  * #2404.
  *
- * Given `mean` (μ) and `ICC` (ρ = σ²_b / (σ²_b + σ²_w)), and setting
- * σ²_w = μ(1-μ) (Bernoulli variance at the latent rate), the Beta
- * parameters are derived as:
+ * Given `mean` (μ) and `ICC` (ρ = σ²_b / (σ²_b + σ²_w)), the Beta
+ * parameters are derived from the concentration c = α + β = 1/ρ - 1:
  *
- *   σ²_b = ρ · μ(1-μ) / (1-ρ)
- *   α    = μ   · (μ(1-μ)/σ²_b - 1)
- *   β    = (1-μ) · (μ(1-μ)/σ²_b - 1)
+ *   α = μ · (1/ρ - 1)
+ *   β = (1-μ) · (1/ρ - 1)
+ *
+ * Endpoint means (μ=0 or μ=1) produce a degenerate distribution: every
+ * draw returns exactly μ (Bernoulli variance = 0 → no between-episode spread).
  *
  * When ICC → 0, σ²_b → 0 and the Beta concentrates at μ (no between-episode
  * variance). When ICC → 1, α = β = 0 and the Beta is a Bernoulli (each
@@ -77,7 +78,7 @@ import type { Episode, EpisodeTrace, Prediction, Verdict } from '../types.js';
 // Seeded PRNG — Mulberry32 (fast, good statistical properties, small state)
 // ---------------------------------------------------------------------------
 
-function mulberry32(seed: number): () => number {
+export function mulberry32(seed: number): () => number {
   let s = seed >>> 0;
   return (): number => {
     s += 0x6d2b79f5;
@@ -104,9 +105,9 @@ function clamp01(x: number): number {
 
 /**
  * Draw one sample from Beta(alpha, beta) using Johnk's method.
- * Suitable for α, β > 0.5 (harness uses α,β ≥ 0.5 by construction).
+ * Requires α, β > 0. The harness enforces this via the BETA_FLOOR check in betaFromICC.
  */
-function betaSample(rand: () => number, alpha: number, beta: number): number {
+export function betaSample(rand: () => number, alpha: number, beta: number): number {
   // Johnk's method: generate X=U^(1/alpha), Y=V^(1/beta); accept if X+Y≤1.
   for (let i = 0; i < 1000; i++) {
     const u = rand();
@@ -166,27 +167,48 @@ export function theoreticalICC(betweenEpisodeSd: number, baseRate = 0.5): number
 // Beta parameters from ICC and mean
 // ---------------------------------------------------------------------------
 
-interface BetaParams {
+export interface BetaParams {
   alpha: number;
   beta: number;
+  /** When true, this is a degenerate distribution pinned at `mean`. */
+  degenerate?: boolean;
 }
+
+/** Minimum alpha/beta accepted by the sampler (Johnk's method requires > 0). */
+const BETA_FLOOR = 1e-6;
 
 /**
  * Derive Beta(alpha, beta) parameters from a target mean and ICC.
  *
- * σ²_b = ρ · μ(1-μ) / (1-ρ)
- * α    = μ   · (μ(1-μ)/σ²_b - 1)   [clamped to ≥0.5 to keep sampler valid]
- * β    = (1-μ) · (μ(1-μ)/σ²_b - 1) [clamped to ≥0.5]
+ * The correct concentration parameter is:
+ *   α + β = 1/ρ - 1   (where ρ = ICC)
+ *   α = μ · (1/ρ - 1),  β = (1-μ) · (1/ρ - 1)
+ *
+ * Endpoint means (μ = 0 or 1) have zero within-episode variance, so the
+ * Beta is degenerate — every draw equals exactly μ.  We return
+ * `degenerate: true` and the caller uses μ directly instead of sampling.
+ *
+ * Throws RangeError if the ICC would produce α or β below BETA_FLOOR.
  */
-function betaFromICC(mean: number, icc: number): BetaParams {
+export function betaFromICC(mean: number, icc: number): BetaParams {
   const mu = clamp01(mean);
-  const rho = Math.max(1e-6, Math.min(1 - 1e-6, icc));
-  const sigmaWSq = mu * (1 - mu);
-  const sigmaBSq = (rho * sigmaWSq) / (1 - rho);
-  const concentration = Math.max(0, sigmaWSq / sigmaBSq - 1);
-  // Clamp to 0.5 to keep Johnk's method efficient; any ≥0.5 works.
-  const alpha = Math.max(0.5, mu * concentration);
-  const beta = Math.max(0.5, (1 - mu) * concentration);
+  const rho = Math.max(1e-9, Math.min(1 - 1e-9, icc));
+
+  // Endpoint means: Bernoulli variance = 0, Beta is degenerate at μ.
+  if (mu === 0 || mu === 1) {
+    return { alpha: mu, beta: 1 - mu, degenerate: true };
+  }
+
+  // Correct concentration: α + β = 1/ρ - 1
+  const concentration = 1 / rho - 1;
+  const alpha = mu * concentration;
+  const beta = (1 - mu) * concentration;
+
+  if (alpha < BETA_FLOOR || beta < BETA_FLOOR) {
+    throw new RangeError(
+      `betaFromICC: ICC=${icc} with mean=${mean} produces alpha=${alpha.toExponential(3)} or beta=${beta.toExponential(3)} below the sampler floor ${BETA_FLOOR}. Use a lower ICC.`,
+    );
+  }
   return { alpha, beta };
 }
 
@@ -289,8 +311,7 @@ function simulateOnce(
   trueDelta: number,
   numEpisodes: number,
   numSamples: number,
-  alpha: number,
-  betaParam: number,
+  params: BetaParams,
   tau: number,
   direction: 'added' | 'removed',
 ): Verdict {
@@ -316,8 +337,10 @@ function simulateOnce(
     // Mark as targeted synthetic probe so scorePrediction counts it.
     episodes.push({ id: epId, source: 'synthetic', prompt: `probe ${e}`, targets: predId });
 
-    // Per-episode latent rates (Beta hierarchical model).
-    const pBaseline = betaSample(rand, alpha, betaParam);
+    // Per-episode latent rates — degenerate endpoints return mean directly.
+    const pBaseline = params.degenerate
+      ? params.alpha  // alpha == mean for degenerate (mu=0 → 0, mu=1 → 1)
+      : betaSample(rand, params.alpha, params.beta);
 
     // Per-episode effect: delta_e ~ Normal(signedDelta, tau), bounded to keep
     // candidate in [0,1] (|delta_e| ≤ 1, clamped to the feasible range).
@@ -391,7 +414,7 @@ export function runGrid(opts: HarnessOptions = {}): GridCell[] {
       ? theoreticalICC(opts.betweenEpisodeSd)
       : LOW_ICC;
 
-  const { alpha, beta: betaParam } = betaFromICC(baseRate, resolvedICC);
+  const betaParams = betaFromICC(baseRate, resolvedICC);
 
   const rand = mulberry32(seed);
   const cells: GridCell[] = [];
@@ -408,8 +431,7 @@ export function runGrid(opts: HarnessOptions = {}): GridCell[] {
               trueDelta,
               episodes,
               samples,
-              alpha,
-              betaParam,
+              betaParams,
               tau,
               direction,
             );

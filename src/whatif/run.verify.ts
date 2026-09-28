@@ -12,11 +12,12 @@
 
 import { extractFeatures, featureIndicators, FEATURE_LABELS } from './observe.js';
 import { compareRates, predictionAccuracy, agreementRate, applyAgreementDowngrade } from './stats.js';
-import { scorePrediction, scoresForQuestion, traceKey } from './run.verify.scoring.js';
+import { scorePrediction, scoresForQuestion, traceKey, type JudgeResults } from './run.verify.scoring.js';
 import { discoverDifferences, type OutputPair } from './discover.js';
 import { appendCalibration, type CalibrationRecord } from './ledger.js';
 import { BudgetTracker } from './cost.js';
 import { renderTrace } from './trace-render.js';
+import { buildFailedEpisodeRecords, detectArmImbalance } from './run.failures.js';
 import type {
   AgentRunner,
   CompleteFn,
@@ -60,6 +61,8 @@ interface RunEpisodesResult {
   allTraces: EpisodeTrace[];
   truncatedByBudget: boolean;
   failedEpisodes: number;
+  /** Total traces attempted per arm (including failures), for imbalance rates. */
+  armTotals: { baseline: number; candidate: number };
 }
 
 interface EpTask {
@@ -89,6 +92,7 @@ async function runEpisodes(
   const allTraces: EpisodeTrace[] = [];
   let truncatedByBudget = false;
   let failedEpisodes = 0;
+  const armTotals = { baseline: 0, candidate: 0 };
 
   const taskList: EpTask[] = [];
   for (const ep of episodes) {
@@ -105,6 +109,7 @@ async function runEpisodes(
       const trace = await runner.run(task.env, task.ep, task.s, runnerOpts);
       allTraces.push(trace);
       budget.add(trace.costUsd);
+      armTotals[trace.env]++;
       if (trace.error) failedEpisodes++;
       if (budget.exceeded) truncatedByBudget = true;
       onProgress?.({ stage: 'run', message: `Episode ${task.ep.id}/${task.env.label} done`, done: allTraces.length, total });
@@ -134,7 +139,7 @@ async function runEpisodes(
   }
   await Promise.allSettled(inflight);
 
-  return { allTraces, truncatedByBudget, failedEpisodes };
+  return { allTraces, truncatedByBudget, failedEpisodes, armTotals };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +274,8 @@ export interface VerifyRunOutput {
   verifyResult: VerifyResult;
   allTraces: EpisodeTrace[];
   analystCostUsd: number;
+  /** Per-output judge grades keyed by {@link traceKey}. Used by persistGrades (#2477). */
+  judgeResults: JudgeResults;
 }
 
 /**
@@ -286,10 +293,17 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
 
   onProgress?.({ stage: 'run', message: `Running ${episodes.length} episodes × 2 envs × ${samples} samples` });
 
-  const { allTraces, truncatedByBudget, failedEpisodes } = await runEpisodes(
+  const { allTraces, truncatedByBudget, failedEpisodes, armTotals } = await runEpisodes(
     episodes, baseline, candidate, samples, concurrency, maxUsdRemaining,
     runner, runnerOpts, signal, onProgress,
   );
+
+  // Build per-failure records and detect arm imbalance (#2411).
+  const episodeTargets = new Map(
+    episodes.filter((e) => e.targets !== undefined).map((e) => [e.id, e.targets!]),
+  );
+  const failedEpisodeRecords = buildFailedEpisodeRecords(allTraces, episodeTargets);
+  const armImbalance = detectArmImbalance(failedEpisodeRecords, armTotals.baseline, armTotals.candidate);
 
   if (signal?.aborted) {
     const err = new Error('whatif aborted');
@@ -408,8 +422,11 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
       truncatedByBudget,
       failedEpisodes,
       judgeFailures,
+      failedEpisodeRecords,
+      ...(armImbalance !== undefined ? { armImbalance } : {}),
     },
     allTraces,
     analystCostUsd,
+    judgeResults,
   };
 }

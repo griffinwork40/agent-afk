@@ -11,6 +11,20 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.268.1] - 2026-09-28
+
+### Fixed
+- correct estimateVerifyCost 1.92x overestimate (#2489) (78317b05)
+- simulate calibration harness ICC presets and endpoint base rates correctly (633f3ac8)
+
+### Changed
+- Merge pull request #2494 from griffinwork40/afk/iso-compose-fix-2411-2-ryvk37 (75c9dcb5)
+- Merge pull request #2493 from griffinwork40/afk/iso-compose-judge-grades-1-gez9da (e2340f0b)
+- Merge pull request #2490 from griffinwork40/afk/issue-2479-q3x8 (0cb54a34)
+- Merge pull request #2492 from griffinwork40/afk/iso-compose-fix-2489-3-ewvk4x (717dae9f)
+- report failed episodes per arm and flag arm-imbalance (#2411) (09bf99b8)
+- persist per-output judge grades to grades.jsonl (#2491) (0945fafc)
+
 ## [5.268.0] - 2026-09-28
 
 ### Added

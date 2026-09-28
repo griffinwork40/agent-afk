@@ -31,10 +31,13 @@ import { describe, expect, it } from 'vitest';
 import { scorePrediction, traceKey, type JudgeResults } from '../run.verify.scoring.js';
 import type { Episode, EpisodeTrace, Prediction } from '../types.js';
 import {
+  betaFromICC,
+  betaSample,
   findCell,
   findSignFlipCell,
   HIGH_ICC,
   LOW_ICC,
+  mulberry32,
   runGrid,
   runSignFlipGrid,
   type GridCell,
@@ -432,7 +435,94 @@ describe('false-refute at delta≥0.1 with tau>0 (post-fix)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// §9  Sign-flip harness (#2477 step 3)
+// §9  ICC parameterization correctness (#2479 fix)
+//
+// betaFromICC must use α+β = 1/ICC - 1 (not 1/ICC - 2).
+// We verify two ways:
+//   (a) Algebraic: 1/(α+β+1) == ICC for a standard Beta(α,β).
+//   (b) Sampling: draw many latent rates from Beta(α,β), estimate the
+//       sample ICC (var(draws)/(mu*(1-mu))), and confirm it is within
+//       ±0.015 of the labeled ICC (3000 draws, Monte Carlo SE ≈ 0.005).
+// ---------------------------------------------------------------------------
+
+describe('ICC parameterization correctness (betaFromICC, #2479 fix)', () => {
+  it('LOW_ICC algebraic: 1/(α+β+1) matches LOW_ICC exactly', () => {
+    const { alpha, beta } = betaFromICC(0.5, LOW_ICC);
+    expect(1 / (alpha + beta + 1)).toBeCloseTo(LOW_ICC, 10);
+  });
+
+  it('HIGH_ICC algebraic: 1/(α+β+1) matches HIGH_ICC exactly', () => {
+    const { alpha, beta } = betaFromICC(0.5, HIGH_ICC);
+    expect(1 / (alpha + beta + 1)).toBeCloseTo(HIGH_ICC, 10);
+  });
+
+  it('LOW_ICC sampling: realized ICC within ±0.015 of label (3000 draws)', () => {
+    const rand = mulberry32(1234);
+    const { alpha, beta } = betaFromICC(0.5, LOW_ICC);
+    const N = 3000;
+    const draws: number[] = Array.from({ length: N }, () => betaSample(rand, alpha, beta));
+    const mu = draws.reduce((a, b) => a + b, 0) / N;
+    const variance = draws.reduce((a, x) => a + (x - mu) ** 2, 0) / (N - 1);
+    const realizedICC = variance / (mu * (1 - mu));
+    expect(realizedICC).toBeGreaterThanOrEqual(LOW_ICC - 0.015);
+    expect(realizedICC).toBeLessThanOrEqual(LOW_ICC + 0.015);
+  });
+
+  it('HIGH_ICC sampling: realized ICC within ±0.015 of label (3000 draws)', () => {
+    const rand = mulberry32(5678);
+    const { alpha, beta } = betaFromICC(0.5, HIGH_ICC);
+    const N = 3000;
+    const draws: number[] = Array.from({ length: N }, () => betaSample(rand, alpha, beta));
+    const mu = draws.reduce((a, b) => a + b, 0) / N;
+    const variance = draws.reduce((a, x) => a + (x - mu) ** 2, 0) / (N - 1);
+    const realizedICC = variance / (mu * (1 - mu));
+    expect(realizedICC).toBeGreaterThanOrEqual(HIGH_ICC - 0.015);
+    expect(realizedICC).toBeLessThanOrEqual(HIGH_ICC + 0.015);
+  });
+
+  it('betaFromICC throws RangeError for ICC that produces alpha/beta below floor', () => {
+    // ICC extremely close to 1 → concentration → 0 → alpha/beta → 0
+    expect(() => betaFromICC(0.5, 1 - 1e-12)).toThrow(RangeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §10  Endpoint base rates (#2479 fix)
+//
+// baseRate=0 or baseRate=1 must NOT produce NaN and must yield a usable grid.
+// With a degenerate baseline (all episodes at rate 0), delta=0.1 should
+// produce a nonzero false-confirm rate — confirming trueDelta>0 cells work.
+// ---------------------------------------------------------------------------
+
+describe('endpoint base rates produce valid results (#2479 fix)', () => {
+  it('baseRate=0: runGrid completes without NaN in any cell', () => {
+    const cells = runGrid({ reps: 50, seed: 99, baseRate: 0, icc: LOW_ICC, tauValues: [0] });
+    for (const c of cells) {
+      expect(isNaN(c.pConfirmed)).toBe(false);
+      expect(isNaN(c.pRefuted)).toBe(false);
+      expect(isNaN(c.pUnclear)).toBe(false);
+    }
+  });
+
+  it('baseRate=1: runGrid completes without NaN in any cell', () => {
+    const cells = runGrid({ reps: 50, seed: 99, baseRate: 1, icc: LOW_ICC, tauValues: [0] });
+    for (const c of cells) {
+      expect(isNaN(c.pConfirmed)).toBe(false);
+      expect(isNaN(c.pRefuted)).toBe(false);
+      expect(isNaN(c.pUnclear)).toBe(false);
+    }
+  });
+
+  it('baseRate=0, delta=0.1: P(confirmed)+P(refuted)+P(unclear)=1 for all cells', () => {
+    const cells = runGrid({ reps: 50, seed: 99, baseRate: 0, icc: LOW_ICC, tauValues: [0] });
+    for (const c of cells) {
+      expect(c.pConfirmed + c.pRefuted + c.pUnclear).toBeCloseTo(1, 5);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §11  Sign-flip harness (#2477 step 3)
 //
 // NOTE: the harness overstates pairing gain because both arms share the same
 // per-episode latent rate. Use pSig numbers as a direction check only, not

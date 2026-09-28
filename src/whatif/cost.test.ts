@@ -26,12 +26,11 @@ describe('estimateVerifyCost', () => {
 
   it('call count includes discover + predict + agent calls + judge calls', () => {
     const result = estimateVerifyCost(baseInput);
-    // discover(1) + predict(1) + agent(2*2*samples*episodes) + judge(episodes*samples*2)
-    // = 2 + 2*2*2*10 + 10*2*2 = 2 + 80 + 40 = 122... wait, let's check formula
-    // agentCallsPerEp = 2 envs * 2 calls * samples = 2*2*2 = 8 per episode → 8*10 = 80
-    // judgeCallsTotal = episodes * samples * 2 = 10*2*2 = 40
-    // total = 2 + 80 + 40 = 122
-    expect(result.calls).toBe(122);
+    // discover(1) + predict(1) + agent(2 envs × 1 call × samples × episodes) + judge(episodes × samples × 2 envs)
+    // agentCallsPerEp = 2 envs × 1 call × samples = 2*1*2 = 4 per episode → 4*10 = 40
+    // judgeCallsTotal = episodes × samples × 2 envs = 10*2*2 = 40
+    // total = 2 + 40 + 40 = 82
+    expect(result.calls).toBe(82);
   });
 
   it('breakdown sums to total', () => {
@@ -78,6 +77,31 @@ describe('estimateVerifyCost', () => {
   it('breakdown has discover, predict, agent, judge keys', () => {
     const result = estimateVerifyCost(baseInput);
     expect(Object.keys(result.breakdown).sort()).toEqual(['agent', 'discover', 'judge', 'predict']);
+  });
+
+  it('pilot regression: estimate within 1.0–1.3× of pilot actual $6.21 (issue #2489)', () => {
+    // Fixture: paid pilot run 20260928-153056-015fbb.
+    // Parameters: claude-sonnet-4-6 agent, 13 targeted episodes, 2 samples,
+    // Jev judge (external), system tokens 33 389 (baseline) / 33 415 (candidate).
+    // Actual total from traces.jsonl: $6.2121 across 52 successful agent calls
+    // (13 episodes × 2 envs × 2 samples = 52), confirming 1 call per tuple.
+    // Root cause of the prior 1.92× overestimate: agentCallsPerEp used 2×2×samples
+    // instead of the correct 2×1×samples, doubling agent call count and cost.
+    const pilotResult = estimateVerifyCost({
+      episodes: 13,
+      samples: 2,
+      agentModel: 'claude-sonnet-4-6',
+      analystModel: 'claude-sonnet-4-6',
+      systemTokens: { baseline: 33_389, candidate: 33_415 },
+      judgeExternal: true,
+    });
+    const actual = 6.21;
+    const ratio = pilotResult.usd / actual;
+    // Target: mildly conservative — no more than 1.3× actual, at least 1.0×.
+    expect(ratio).toBeGreaterThanOrEqual(1.0);
+    expect(ratio).toBeLessThanOrEqual(1.3);
+    // Call count sanity: 2 + 2×1×2×13 + 13×2×2 = 2 + 52 + 52 = 106
+    expect(pilotResult.calls).toBe(106);
   });
 });
 

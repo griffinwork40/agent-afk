@@ -438,6 +438,7 @@ export async function runWhatif(
 
     let verifyResult: Awaited<ReturnType<typeof verifyRun>>['verifyResult'] | undefined;
     let verifyTraces: EpisodeTrace[] = [];
+    let verifyJudgeResults: Awaited<ReturnType<typeof verifyRun>>['judgeResults'] | undefined;
     let verifyCost = 0;
     try {
       const out = await verifyRun({
@@ -464,6 +465,7 @@ export async function runWhatif(
       });
       verifyResult = out.verifyResult;
       verifyTraces = out.allTraces;
+      verifyJudgeResults = out.judgeResults;
       verifyCost = out.analystCostUsd;
     } finally {
       await resolvedJudge.close?.();
@@ -476,6 +478,7 @@ export async function runWhatif(
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
+      judgeResults: verifyJudgeResults!,
     });
   } finally {
     // Tear down sandboxes unless keepSandboxes

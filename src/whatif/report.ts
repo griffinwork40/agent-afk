@@ -14,11 +14,11 @@
 
 import type { ThemePalette } from '../cli/palette.js';
 import type {
-  Prediction,
   VerifiedPrediction,
   WhatifReport,
 } from './types.js';
 import { fmtP, renderProbeSignFlipSection } from './report.signflip.js';
+import { scoredOn, renderVerifiedPredictionTable } from './report.predictions.js';
 import { describeChange } from './operators/index.js';
 import { verdictEmoji, verdictLabel } from './report-verdict.js';
 import { mdeLimitLine } from './mde.js';
@@ -32,111 +32,11 @@ function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
-function ciStr(ci: [number, number]): string {
-  return `[${pct(ci[0])}, ${pct(ci[1])}]`;
-}
-
 /** Truncate a string to at most `maxLines` lines, appending a note if cut. */
 function truncateLines(text: string, maxLines: number): string {
   const lines = text.split('\n');
   if (lines.length <= maxLines) return text;
   return lines.slice(0, maxLines).join('\n') + `\n… (${lines.length - maxLines} more lines truncated)`;
-}
-
-// ---------------------------------------------------------------------------
-// Verified prediction table (#2403)
-// ---------------------------------------------------------------------------
-
-/**
- * "2 probes (n=6 eps, 18 samples)" — episodes are the unit of analysis
- * (#2404); sample count shown separately for transparency.
- */
-function scoredOn(vp: VerifiedPrediction): string {
-  const nEps = `n=${vp.rates.n.baseline}/${vp.rates.n.candidate} eps`;
-  if (!vp.scope) return nEps; // pre-#2403 result: pooled over every episode
-  const eps = new Set([...vp.scope.episodes.baseline, ...vp.scope.episodes.candidate]).size;
-  if (eps === 0) return `no graded probes (${vp.scope.targetedEpisodes} planned)`;
-  const samplesNote = vp.scope.totalSamples !== undefined
-    ? `, ${vp.scope.totalSamples} samples`
-    : '';
-  return `${eps} probe${eps === 1 ? '' : 's'}, ${nEps}${samplesNote}`;
-}
-
-function backgroundStr(vp: VerifiedPrediction): string {
-  const bg = vp.scope?.background;
-  if (!bg) return '—';
-  return `${pct(bg.baseline)} → ${pct(bg.candidate)} (n=${bg.n.baseline}/${bg.n.candidate})`;
-}
-
-function episodeList(vp: VerifiedPrediction): string {
-  const { baseline, candidate } = vp.scope!.episodes;
-  if (baseline.length === 0 && candidate.length === 0) return 'none graded';
-  if (baseline.join(',') === candidate.join(',')) return baseline.join(', ');
-  return `baseline ${baseline.join(', ') || 'none'}; candidate ${candidate.join(', ') || 'none'}`;
-}
-
-/** Render per-prediction cross-check agreement cell (#2413). */
-function crossCheckCell(vp: VerifiedPrediction): string {
-  if (vp.crossCheckTooFew) return '⚠ too few cross-checks';
-  if (vp.crossCheckAgreement !== undefined) {
-    const flag = vp.crossCheckAgreement < 0.75 ? ' ⚠ low' : '';
-    return `${pct(vp.crossCheckAgreement)}${flag}`;
-  }
-  return '—';
-}
-
-/**
- * Verified predictions table plus the per-prediction evidence list.
- *
- * Contract (#2403): Before / After / CI / Result come from the prediction's
- * own probes only. "Other episodes" is the same question on every other
- * episode, shown for context and never part of the verdict. `n` is graded
- * outputs per arm (episodes × samples that survived running and judging).
- */
-function renderVerifiedPredictionTable(
-  predictions: Prediction[],
-  verified: VerifiedPrediction[],
-): string[] {
-  const lines: string[] = [];
-  const vpMap = new Map(verified.map((vp) => [vp.prediction.id, vp]));
-  const hasCrossCheck = verified.some(
-    (vp) => vp.crossCheckAgreement !== undefined || vp.crossCheckTooFew,
-  );
-  lines.push('> Before / After / CI / Result use only the probes written for each prediction. "Other episodes" is the same question on every other episode, for context; it does not affect the result.\n');
-  if (hasCrossCheck) {
-    lines.push('| # | Behavior | Direction | Before | After | CI | Scored on | Other episodes | Judge agree | Result |');
-    lines.push('|---|----------|-----------|--------|-------|----|-----------|----------------|-------------|--------|');
-  } else {
-    lines.push('| # | Behavior | Direction | Before | After | CI | Scored on | Other episodes | Result |');
-    lines.push('|---|----------|-----------|--------|-------|----|-----------|----------------|--------|');
-  }
-  for (const pred of predictions) {
-    const vp = vpMap.get(pred.id);
-    if (!vp) {
-      if (hasCrossCheck) {
-        lines.push(`| ${pred.id} | ${pred.behavior} | ${pred.direction} | — | — | — | — | — | — | ⚪ unclear |`);
-      } else {
-        lines.push(`| ${pred.id} | ${pred.behavior} | ${pred.direction} | — | — | — | — | — | ⚪ unclear |`);
-      }
-      continue;
-    }
-    const resultCell = `${verdictEmoji(vp.verdict)} ${verdictLabel(vp)}${vp.verdictReason ? ` (${vp.verdictReason})` : ''}`;
-    if (hasCrossCheck) {
-      lines.push(
-        `| ${pred.id} | ${pred.behavior} | ${pred.direction} | ${pct(vp.rates.baseline)} | ${pct(vp.rates.candidate)} | ${ciStr(vp.rates.ci)} | ${scoredOn(vp)} | ${backgroundStr(vp)} | ${crossCheckCell(vp)} | ${resultCell} |`,
-      );
-    } else {
-      lines.push(
-        `| ${pred.id} | ${pred.behavior} | ${pred.direction} | ${pct(vp.rates.baseline)} | ${pct(vp.rates.candidate)} | ${ciStr(vp.rates.ci)} | ${scoredOn(vp)} | ${backgroundStr(vp)} | ${resultCell} |`,
-      );
-    }
-  }
-  const scoped = predictions.map((p) => vpMap.get(p.id)).filter((vp) => vp?.scope !== undefined);
-  if (scoped.length > 0) {
-    lines.push('', '**Episodes behind each result:**', '');
-    for (const vp of scoped) lines.push(`- ${vp!.prediction.id}: ${episodeList(vp!)}`);
-  }
-  return lines;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,8 +124,29 @@ export function renderMarkdown(report: WhatifReport): string {
   lines.push('');
 
   if (verify) {
+    // ── 4.5. Arm imbalance warning + failed episodes (#2411) ──────────────
+    if (verify.armImbalance) {
+      lines.push(`> [!WARNING]`);
+      lines.push(`> **${verify.armImbalance.summary}**`);
+      lines.push('');
+    }
+
+    const recs = verify.failedEpisodeRecords ?? [];
+    if (recs.length > 0) {
+      lines.push(`## Failed Episodes\n`);
+      lines.push('| Episode | Arm | Sample | Class | Duration | Message |');
+      lines.push('|---------|-----|--------|-------|----------|---------|');
+      for (const r of recs) {
+        const probeCell = r.probe ? ` (${r.probe})` : '';
+        lines.push(
+          `| ${r.episodeId}${probeCell} | ${r.arm} | ${r.sample} | ${r.errorClass} | ${(r.durationMs / 1000).toFixed(1)}s | ${r.errorMessage} |`,
+        );
+      }
+      lines.push('');
+    }
+
     // ── 4b. Paired per-probe sign-flip (secondary, additive) ─────────────
-    const sfLines = renderProbeSignFlipSection(verify.predictions);
+    const sfLines = renderProbeSignFlipSection(verify.predictions, verify.armImbalance);
     if (sfLines.length > 0) {
       lines.push(...sfLines);
       lines.push('');
@@ -302,6 +223,12 @@ export function renderMarkdown(report: WhatifReport): string {
 export function renderTerminal(report: WhatifReport, palette: ThemePalette): string[] {
   const { headline, predictions, verify, costUsd, limits } = report;
   const out: string[] = [];
+
+  // Arm-imbalance banner — shown before everything else so it cannot be missed.
+  if (verify?.armImbalance) {
+    out.push(palette.warning(`⚠ ${verify.armImbalance.summary}`));
+    out.push('');
+  }
 
   // Headline.
   out.push(palette.brand(headline));

@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyRun, type VerifyRunInput } from './run.verify.js';
 import { scorePrediction, scoresForQuestion, traceKey, type JudgeResults } from './run.verify.scoring.js';
+import type { GradeEntry } from './run.persist.grades.js';
 import type {
   AgentRunner,
   Environment,
@@ -387,3 +388,112 @@ describe('verifyRun: cross-check agreement downgrade (#2413)', () => {
 });
 
 // Observability (#2409) is covered in run.verify.observability.test.ts.
+
+// ---------------------------------------------------------------------------
+// judgeResults surface (#2477)
+// ---------------------------------------------------------------------------
+
+describe('verifyRun: judgeResults are exposed for grades persistence (#2477)', () => {
+  it('judgeResults has an entry for every successfully graded trace', async () => {
+    const episodes = acceptanceEpisodes(2);
+    const { judgeResults, allTraces } = await verifyRun(input(episodes, [pred('p1')]));
+    const successfulTraces = allTraces.filter((t) => !t.error);
+    for (const t of successfulTraces) {
+      const key = traceKey(t);
+      expect(judgeResults.has(key), `missing grade for key ${key}`).toBe(true);
+      expect(typeof judgeResults.get(key)!['p1']).toBe('number');
+    }
+  });
+
+  it('judgeResults contains pairing keys: episodeId, env, sample, predictionId', async () => {
+    const episodes = acceptanceEpisodes(0); // 2 targeted probes only
+    const { judgeResults, allTraces } = await verifyRun(input(episodes, [pred('p1')]));
+    // Spot-check: every key decomposes into episodeId:env:sample
+    for (const key of judgeResults.keys()) {
+      const parts = key.split(':');
+      expect(parts).toHaveLength(3); // episodeId:env:sample
+      expect(['baseline', 'candidate']).toContain(parts[1]);
+      expect(isNaN(Number(parts[2]))).toBe(false);
+    }
+    // All successful traces should have a matching key
+    const goodTraces = allTraces.filter((t) => !t.error);
+    expect(judgeResults.size).toBe(goodTraces.length);
+  });
+
+  it('grades for targeted probes reflect the keyword judge result', async () => {
+    const episodes = acceptanceEpisodes(0);
+    const { judgeResults, allTraces } = await verifyRun(input(episodes, [pred('p1')]));
+    for (const t of allTraces.filter((t) => !t.error && t.episodeId === 's1')) {
+      const grade = judgeResults.get(traceKey(t))!['p1']!;
+      if (t.env === 'candidate') {
+        // candidate probe text contains 'BEHAVIOR': judge should score 1
+        expect(grade).toBe(1);
+      } else {
+        expect(grade).toBe(0);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GradeEntry pairing invariants (#2477)
+// ---------------------------------------------------------------------------
+
+describe('GradeEntry pairing keys support arm pairing per probe', () => {
+  /**
+   * Parse grades.jsonl from judgeResults to verify pairing structure
+   * without writing to disk.
+   */
+  function toGradeEntries(
+    judgeResults: JudgeResults,
+    allTraces: Awaited<ReturnType<typeof verifyRun>>['allTraces'],
+    predictionIds: string[],
+  ): GradeEntry[] {
+    const entries: GradeEntry[] = [];
+    for (const t of allTraces) {
+      if (t.error) continue;
+      const grades = judgeResults.get(traceKey(t));
+      if (!grades) continue;
+      for (const predictionId of predictionIds) {
+        const pYes = grades[predictionId];
+        if (pYes === undefined) continue;
+        entries.push({
+          episodeId: t.episodeId,
+          env: t.env as 'baseline' | 'candidate',
+          sample: t.sample,
+          predictionId,
+          pYes,
+        });
+      }
+    }
+    return entries;
+  }
+
+  it('each (episodeId, sample, predictionId) appears in both arms for a full run', async () => {
+    const episodes = acceptanceEpisodes(0);
+    const { judgeResults, allTraces } = await verifyRun(input(episodes, [pred('p1')]));
+    const entries = toGradeEntries(judgeResults, allTraces, ['p1']);
+
+    const byTuple = new Map<string, Set<string>>();
+    for (const e of entries) {
+      const k = `${e.episodeId}:${e.sample}:${e.predictionId}`;
+      const s = byTuple.get(k) ?? new Set();
+      s.add(e.env);
+      byTuple.set(k, s);
+    }
+    // Every (episode, sample, prediction) should appear in BOTH arms
+    for (const [k, arms] of byTuple) {
+      expect(arms.size, `both arms present for ${k}`).toBe(2);
+    }
+  });
+
+  it('pYes is between 0 and 1 inclusive', async () => {
+    const episodes = acceptanceEpisodes(2);
+    const { judgeResults, allTraces } = await verifyRun(input(episodes, [pred('p1')]));
+    const entries = toGradeEntries(judgeResults, allTraces, ['p1']);
+    for (const e of entries) {
+      expect(e.pYes).toBeGreaterThanOrEqual(0);
+      expect(e.pYes).toBeLessThanOrEqual(1);
+    }
+  });
+});

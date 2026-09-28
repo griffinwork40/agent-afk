@@ -54,6 +54,9 @@ export function verifyShortfallLimits(v: VerifyResult): string[] {
   if (v.truncatedByBudget) {
     out.push('The run stopped early at the spending cap, so fewer episodes were measured than planned.');
   }
+  if (v.armImbalance) {
+    out.push(v.armImbalance.summary);
+  }
   return out;
 }
 

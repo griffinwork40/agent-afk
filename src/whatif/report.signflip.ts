@@ -7,6 +7,7 @@
  */
 
 import { ZERO_TOLERANCE } from './probe-signflip.js';
+import type { ArmImbalance } from './run.failures.js';
 import type { VerifiedPrediction } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,10 @@ export function fmtP(p: number): string {
  *
  * Returns an empty array when no prediction has a probeSignFlip result.
  */
-export function renderProbeSignFlipSection(verified: VerifiedPrediction[]): string[] {
+export function renderProbeSignFlipSection(
+  verified: VerifiedPrediction[],
+  armImbalance?: ArmImbalance,
+): string[] {
   const withSignFlip = verified.filter((vp) => vp.probeSignFlip !== undefined);
   if (withSignFlip.length === 0) return [];
 
@@ -99,10 +103,12 @@ export function renderProbeSignFlipSection(verified: VerifiedPrediction[]): stri
       }
 
       if (sf.nUnpaired > 0) {
+        const imbalanceNote = armImbalance
+          ? ` The arm-imbalance flag is set (${armImbalance.summary.split('.')[0]}); these unpaired probes inherit the same bias.`
+          : ' See the arm-imbalance section above if that flag is set.';
         lines.push(
           `> ⚠ ${sf.nUnpaired} probe${sf.nUnpaired === 1 ? '' : 's'} were present in only one arm ` +
-          '(all runs in the other arm failed or were not run). Excluding them biases toward no change. ' +
-          'See the arm-imbalance flag in the run report.\n',
+          `(all runs in the other arm failed or were not run). Excluding them biases toward no change.${imbalanceNote}\n`,
         );
       }
     }

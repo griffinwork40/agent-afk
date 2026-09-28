@@ -375,6 +375,17 @@ export interface VerifyResult {
   failedEpisodes: number;
   /** Outputs the judge could not grade; excluded from every rate. */
   judgeFailures?: number;
+  /**
+   * Per-failure records: arm, probe, error class, message, duration.
+   * Empty when there were no failures; always present when verify ran (#2411).
+   */
+  failedEpisodeRecords?: import('./run.failures.js').FailedEpisodeRecord[];
+  /**
+   * Arm-imbalance flag: set when failures are significantly concentrated in
+   * one arm, which biases verdicts toward "no change" (#2411).
+   * Absent when the run had no failures or the imbalance was within threshold.
+   */
+  armImbalance?: import('./run.failures.js').ArmImbalance;
 }
 
 export interface WhatifReport {

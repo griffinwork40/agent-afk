@@ -10,6 +10,7 @@ import type { ChangeSpec, EpisodeTrace, Judge, Prediction, VerifyResult, WhatifR
 import type { DroppedProbe } from './probe-grounding.js';
 import type { CorpusExclusions } from './episodes.js';
 import type { StructuralImpact } from './types.js';
+import type { JudgeResults } from './run.verify.scoring.js';
 import { standardLimits, buildHeadline } from './report.js';
 import { verifyShortfallLimits, hookIsolationLimits } from './run.limits.js';
 import { persistRun } from './run.persist.js';
@@ -26,12 +27,15 @@ export interface VerifiedReportArgs {
   runDir: string;
   resolvedJudge: Judge;
   autoKeepContextHooks: boolean;
+  /** Per-output judge grades from the verify phase; written to grades.jsonl (#2477). */
+  judgeResults: JudgeResults;
 }
 
 /** Build the verified WhatifReport, persist it, and return it. */
 export async function buildAndPersistVerifiedReport(args: VerifiedReportArgs): Promise<WhatifReport> {
   const { spec, structural, predictions, verifyResult, droppedProbes, corpusExclusions,
-    verifyTraces, analystCostUsd, runDir, resolvedJudge, autoKeepContextHooks } = args;
+    verifyTraces, analystCostUsd, runDir, resolvedJudge, autoKeepContextHooks,
+    judgeResults } = args;
   const episodesCostUsd = verifyTraces.reduce((s, t) => s + t.costUsd, 0);
   const totalCostUsd = analystCostUsd + episodesCostUsd;
   const limits = [
@@ -45,6 +49,6 @@ export async function buildAndPersistVerifiedReport(args: VerifiedReportArgs): P
     corpusExclusions,
   };
   const report: WhatifReport = { ...partialReport, headline: buildHeadline(partialReport) };
-  await persistRun(runDir, report, verifyTraces);
+  await persistRun(runDir, report, verifyTraces, judgeResults);
   return report;
 }

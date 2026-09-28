@@ -455,3 +455,123 @@ describe('standardLimits', () => {
     expect(mdeLimits.length).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// renderMarkdown: failed episodes table and arm-imbalance banner (#2411)
+// ---------------------------------------------------------------------------
+
+describe('renderMarkdown: failed episodes', () => {
+  it('no failed episodes: no Failed Episodes section', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodeRecords = [];
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).not.toContain('## Failed Episodes');
+  });
+
+  it('shows Failed Episodes table with arm, class, duration, message', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodes = 1;
+    verify.failedEpisodeRecords = [
+      {
+        episodeId: 's3',
+        arm: 'candidate',
+        sample: 0,
+        errorClass: 'timeout',
+        errorMessage: 'Episode timed out after 180000ms.',
+        durationMs: 180007,
+      },
+    ];
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).toContain('## Failed Episodes');
+    expect(md).toContain('s3');
+    expect(md).toContain('candidate');
+    expect(md).toContain('timeout');
+    expect(md).toContain('180.0s');
+    expect(md).toContain('Episode timed out after 180000ms.');
+  });
+
+  it('includes probe column when probe is set on a failure record', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodes = 1;
+    verify.failedEpisodeRecords = [
+      {
+        episodeId: 's6',
+        arm: 'candidate',
+        sample: 0,
+        errorClass: 'timeout',
+        errorMessage: 'timed out',
+        probe: 'p2',
+        durationMs: 180000,
+      },
+    ];
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).toContain('s6 (p2)');
+  });
+
+  it('shows arm-imbalance warning block when armImbalance is set', () => {
+    const vp = makeVerifiedPred('p1', 'unclear');
+    const verify = makeVerifyResult([vp]);
+    verify.failedEpisodes = 6;
+    verify.failedEpisodeRecords = [];
+    verify.armImbalance = {
+      baselineFailRate: 0,
+      candidateFailRate: 0.375,
+      rateDiff: 0.375,
+      allInOneArm: true,
+      concentrationArm: 'candidate',
+      summary:
+        'Arm-imbalance warning: failures are concentrated in one arm (all 6 failures in the candidate arm). This may bias the verdict toward "no change". Consider raising --timeout.',
+    };
+    const md = renderMarkdown(makeReport(verify));
+    expect(md).toContain('[!WARNING]');
+    expect(md).toContain('Arm-imbalance warning');
+    expect(md).toContain('--timeout');
+  });
+
+  it('no arm-imbalance warning when armImbalance is absent', () => {
+    const vp = makeVerifiedPred('p1', 'confirmed');
+    const md = renderMarkdown(makeReport(makeVerifyResult([vp])));
+    expect(md).not.toContain('[!WARNING]');
+    expect(md).not.toContain('Arm-imbalance warning');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderTerminal: arm-imbalance banner (#2411)
+// ---------------------------------------------------------------------------
+
+describe('renderTerminal: arm-imbalance banner', () => {
+  const identityPalette = new Proxy(
+    {},
+    { get: () => (s: string) => s },
+  ) as Parameters<typeof renderTerminal>[1];
+
+  it('shows imbalance banner at the top when armImbalance is set', () => {
+    const verify = makeVerifyResult([makeVerifiedPred('p1', 'unclear')]);
+    verify.armImbalance = {
+      baselineFailRate: 0,
+      candidateFailRate: 0.5,
+      rateDiff: 0.5,
+      allInOneArm: true,
+      concentrationArm: 'candidate',
+      summary: 'Arm-imbalance warning: test summary.',
+    };
+    const report = makeReport(verify);
+    const lines = renderTerminal(report, identityPalette);
+    const joined = lines.join('\n');
+    expect(joined).toContain('Arm-imbalance warning');
+    // Banner must appear before the headline (first non-empty line).
+    const bannerIdx = lines.findIndex((l) => l.includes('Arm-imbalance warning'));
+    const headlineIdx = lines.findIndex((l) => l === report.headline);
+    expect(bannerIdx).toBeLessThan(headlineIdx);
+  });
+
+  it('no banner when armImbalance is absent', () => {
+    const report = makeReport(makeVerifyResult([makeVerifiedPred('p1', 'confirmed')]));
+    const lines = renderTerminal(report, identityPalette);
+    expect(lines.every((l) => !l.includes('Arm-imbalance'))).toBe(true);
+  });
+});
