@@ -24,6 +24,7 @@ import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
 import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
+import { mdeLimits, preflightMdeLine } from './mde.js';
 import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges } from './predict.js';
@@ -307,6 +308,12 @@ export async function runWhatif(
       throw new WhatifBudgetError(totalEstimate, options.maxUsd);
     }
 
+    // Before paying: how large a shift this run can detect (#2410).
+    deps.onProgress?.({
+      stage: 'preflight',
+      message: preflightMdeLine({ episodes: episodes.length, estimateUsd: totalEstimate, predictions }),
+    });
+
     deps.onProgress?.({ stage: 'run', message: 'Running episodes' });
 
     let verifyResult: Awaited<ReturnType<typeof verifyRun>>['verifyResult'] | undefined;
@@ -352,6 +359,7 @@ export async function runWhatif(
     const limits = [
       ...standardLimits({ verified: true, judgeExternal: resolvedJudge.external }),
       ...verifyShortfallLimits(verifyResult!),
+      ...mdeLimits(verifyResult!.predictions),
       ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
     ];
 

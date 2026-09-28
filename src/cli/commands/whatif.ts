@@ -203,7 +203,10 @@ async function runWhatifCommand(
       ...deps,
       onProgress: (p) => {
         const msg = `${p.stage}: ${p.message}`;
-        if (spinner) {
+        if (spinner && p.stage === 'preflight') {
+          // Keep the cost + detectable-effect line on screen (#2410).
+          spinner.info(msg).start('whatif: running episodes…');
+        } else if (spinner) {
           spinner.text = msg;
         } else {
           process.stderr.write(`[whatif] ${msg}\n`);

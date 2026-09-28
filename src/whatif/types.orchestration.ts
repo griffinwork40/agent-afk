@@ -16,6 +16,7 @@ export type WhatifStage =
   | 'snapshot'
   | 'predict'
   | 'episodes'
+  | 'preflight'
   | 'run'
   | 'judge'
   | 'discover'

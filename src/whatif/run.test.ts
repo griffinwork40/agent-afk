@@ -346,6 +346,18 @@ describe('runWhatif — verify path', () => {
     expect(askFeat).toBeDefined();
     expect(askFeat!.rates.candidate).toBeGreaterThan(askFeat!.rates.baseline);
 
+    // #2410: the preflight states the detectable effect before any episode
+    // runs, and the report flags p1's one-episode MDE as a limit.
+    const progress = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: Array<{ stage: string; message: string }>) => c[0],
+    );
+    const preflight = progress.find((p) => p?.stage === 'preflight');
+    expect(preflight?.message).toMatch(/Estimated cost about \$\d+\.\d{2}\./);
+    expect(preflight?.message).toContain('episode(s) per arm');
+    expect(progress.findIndex((p) => p?.stage === 'preflight'))
+      .toBeLessThan(progress.findIndex((p) => p?.stage === 'run'));
+    expect(report.limits.some((l) => l.startsWith('Prediction p1 was measured on 1 episode(s)'))).toBe(true);
+
     // Files written
     const md = await fsp.readFile(path.join(report.runDir, 'report.md'), 'utf8');
     const results = JSON.parse(
