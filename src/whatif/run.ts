@@ -23,7 +23,7 @@ import { materializeSandboxes } from './sandbox.js';
 import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
-import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
+import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins, mdeLimits } from './run.limits.js';
 import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges } from './predict.js';
@@ -35,7 +35,7 @@ import {
   loadSuiteEpisodes,
   type CorpusExclusions,
 } from './episodes.js';
-import { estimateVerifyCost } from './cost.js';
+import { preflightEstimate } from './run.preflight.js';
 import { buildHeadline, standardLimits } from './report.js';
 import { persistRun } from './run.persist.js';
 import { verifyRun } from './run.verify.js';
@@ -287,20 +287,11 @@ export async function runWhatif(
       return undefined;
     });
 
-    // Preflight cost estimate
-    const estimate = estimateVerifyCost({
-      episodes: episodes.length,
-      samples: options.samples,
-      agentModel: options.agentModel,
-      analystModel: options.analystModel,
-      systemTokens: {
-        baseline: structural.tokens.baseline,
-        candidate: structural.tokens.candidate,
-      },
-      judgeExternal: resolvedJudge.external,
-    });
+    // Preflight cost + MDE estimate (emits MDE warning via onProgress).
+    const totalEstimate = preflightEstimate(
+      episodes, options, structural, resolvedJudge.external, analystCostUsd, deps.onProgress,
+    );
 
-    const totalEstimate = estimate.usd + analystCostUsd;
     if (totalEstimate > options.maxUsd) {
       await resolvedJudge.close?.();
       await crossCheckJudge?.close?.();
@@ -353,6 +344,7 @@ export async function runWhatif(
       ...standardLimits({ verified: true, judgeExternal: resolvedJudge.external }),
       ...verifyShortfallLimits(verifyResult!),
       ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
+      ...mdeLimits(verifyResult!.predictions),
     ];
 
     const partialReport: Omit<WhatifReport, 'headline'> = {

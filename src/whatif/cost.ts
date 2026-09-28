@@ -26,6 +26,7 @@
 
 import { deriveCallCostUsd } from '../agent/providers/anthropic-direct/pricing.js';
 import { resolveModelId } from '../agent/session/model-resolution.js';
+import { mde, nForMde } from './mde.js';
 
 // ---------------------------------------------------------------------------
 // Fallback pricing for unknown models
@@ -87,6 +88,17 @@ export interface VerifyCostEstimate {
   breakdown: Record<string, number>;
   /** True when one or more model rows was missing from the pricing table. */
   approximate?: boolean;
+  /**
+   * Approximate minimum detectable effect for the planned episode count,
+   * as a proportion (0–1). E.g. 0.31 means the run can detect ~31pp shifts.
+   * Based on worst-case p=0.5 two-sided 95% CI half-width.
+   */
+  mdePercent: number;
+  /**
+   * Episodes per arm needed to detect a 10pp shift (the "policy-relevant"
+   * threshold). Use to tell users how many more episodes they would need.
+   */
+  nFor10pp: number;
 }
 
 /**
@@ -157,10 +169,15 @@ export function estimateVerifyCost(input: VerifyCostInput): VerifyCostEstimate {
     judge: judgeUsd,
   };
 
+  const mdePercent = mde(episodes);
+  const nFor10pp = nForMde(0.10);
+
   const result: VerifyCostEstimate = {
     usd: totalUsd,
     calls: totalCalls,
     breakdown,
+    mdePercent,
+    nFor10pp,
   };
   if (approximate) result.approximate = true;
   return result;

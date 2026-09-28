@@ -27,6 +27,11 @@ export interface WhatifProgress {
   /** Optional completed/total for the current stage. */
   done?: number;
   total?: number;
+  /**
+   * When set, the message should be printed persistently (not overwritten by
+   * a spinner). Used for preflight summary lines such as the MDE warning.
+   */
+  persistent?: boolean;
 }
 
 /** Text-in/text-out model call used for predict, compile, judge, discover. */

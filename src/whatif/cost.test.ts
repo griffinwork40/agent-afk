@@ -79,6 +79,24 @@ describe('estimateVerifyCost', () => {
     const result = estimateVerifyCost(baseInput);
     expect(Object.keys(result.breakdown).sort()).toEqual(['agent', 'discover', 'judge', 'predict']);
   });
+
+  it('mdePercent: n=20 episodes → ~31pp (≈0.31)', () => {
+    const result = estimateVerifyCost({ ...baseInput, episodes: 20 });
+    expect(result.mdePercent).toBeCloseTo(0.31, 1);
+    expect(result.mdePercent).toBeGreaterThan(0);
+    expect(result.mdePercent).toBeLessThan(1);
+  });
+
+  it('mdePercent decreases as episodes increase', () => {
+    const low = estimateVerifyCost({ ...baseInput, episodes: 20 });
+    const high = estimateVerifyCost({ ...baseInput, episodes: 200 });
+    expect(high.mdePercent).toBeLessThan(low.mdePercent);
+  });
+
+  it('nFor10pp is 193 (ceil(0.5*(1.96/0.10)^2))', () => {
+    const result = estimateVerifyCost(baseInput);
+    expect(result.nFor10pp).toBe(193);
+  });
 });
 
 // ---------------------------------------------------------------------------

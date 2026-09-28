@@ -203,6 +203,16 @@ async function runWhatifCommand(
       ...deps,
       onProgress: (p) => {
         const msg = `${p.stage}: ${p.message}`;
+        if (p.persistent) {
+          // Persistent lines (e.g. preflight MDE) must survive the spinner.
+          if (spinner) {
+            spinner.info(p.message);
+            spinner.start();
+          } else {
+            process.stderr.write(`[whatif] ${p.message}\n`);
+          }
+          return;
+        }
         if (spinner) {
           spinner.text = msg;
         } else {

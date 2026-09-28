@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
-import type { VerifyResult } from './types.js';
+import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins, mdeLimits } from './run.limits.js';
+import type { VerifyResult, VerifiedPrediction } from './types.js';
 
 const base: VerifyResult = {
   predictions: [], discovered: [], features: [], episodes: 4, samples: 2,
@@ -46,6 +46,95 @@ describe('hookIsolationLimits', () => {
   it('does NOT include userMessageDiff warning when diff is whitespace-only', () => {
     const out = hookIsolationLimits({ keepContextHooks: false, structural: { userMessageDiff: '   ' } });
     expect(out.some((l) => l.includes('still differed'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// mdeLimits
+// ---------------------------------------------------------------------------
+
+function makeVP(id: string, n: number): VerifiedPrediction {
+  return {
+    prediction: {
+      id,
+      behavior: 'test',
+      direction: 'added',
+      confidence: 'medium',
+      reason: 'r',
+      testQuestion: 'q?',
+      probes: [],
+    },
+    rates: {
+      baseline: 0.5,
+      candidate: 0.6,
+      delta: 0.1,
+      ci: [-0.2, 0.4],
+      n: { baseline: n, candidate: n },
+    },
+    verdict: 'unclear',
+  };
+}
+
+describe('mdeLimits', () => {
+  it('returns empty for no predictions', () => {
+    expect(mdeLimits([])).toEqual([]);
+  });
+
+  it('emits a bullet when MDE > 10pp (n=20 → ~31pp)', () => {
+    const out = mdeLimits([makeVP('p1', 20)]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('20 episode(s)');
+    expect(out[0]).toContain('31pp');
+    expect(out[0]).toContain('10pp');
+    expect(out[0]).toContain('193');
+  });
+
+  it('emits nothing when MDE ≤ 10pp (n=200 → ~9.8pp ≤ 10pp)', () => {
+    // mde(200) ≈ 0.098 which is ≤ 0.10, so no bullet
+    const out = mdeLimits([makeVP('p1', 200)]);
+    expect(out).toHaveLength(0);
+  });
+
+  it('groups multiple predictions with same n into one bullet', () => {
+    const out = mdeLimits([makeVP('p1', 20), makeVP('p2', 20)]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('2 predictions');
+    expect(out[0]).toContain('p1');
+    expect(out[0]).toContain('p2');
+  });
+
+  it('emits separate bullets for predictions with different n', () => {
+    const out = mdeLimits([makeVP('p1', 10), makeVP('p2', 20)]);
+    expect(out).toHaveLength(2);
+  });
+
+  it('uses min(n.baseline, n.candidate) when arms differ', () => {
+    const vp: VerifiedPrediction = {
+      ...makeVP('p1', 0),
+      rates: {
+        baseline: 0.5, candidate: 0.6, delta: 0.1, ci: [-0.2, 0.4],
+        n: { baseline: 200, candidate: 10 }, // min is 10 → MDE > 10pp
+      },
+    };
+    const out = mdeLimits([vp]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('10 episode(s)');
+  });
+
+  it('counts episodes (scope), not samples, when a scope is present', () => {
+    const ids = (k: number): string[] => Array.from({ length: k }, (_, i) => `e${i}`);
+    const vp: VerifiedPrediction = {
+      ...makeVP('p1', 200), // 200 samples…
+      scope: { episodes: { baseline: ids(20), candidate: ids(25) }, targetedEpisodes: 25 },
+    };
+    const out = mdeLimits([vp]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('20 episode(s)'); // …but only 20 episodes/arm
+  });
+
+  it('skips predictions with an empty arm or an unobservable verdict', () => {
+    expect(mdeLimits([makeVP('p1', 0)])).toEqual([]);
+    expect(mdeLimits([{ ...makeVP('p2', 20), verdict: 'unobservable' }])).toEqual([]);
   });
 });
 

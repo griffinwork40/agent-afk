@@ -10,8 +10,9 @@
  * @module whatif/run.limits
  */
 
-import type { VerifyResult, ChangeSpec } from './types.js';
+import type { VerifyResult, ChangeSpec, VerifiedPrediction } from './types.js';
 import type { StructuralImpact } from './types.js';
+import { mde, nForMde, formatMde } from './mde.js';
 
 /**
  * Returns true when the change spec directly targets hooks or plugins.
@@ -53,6 +54,56 @@ export function verifyShortfallLimits(v: VerifyResult): string[] {
   }
   if (v.truncatedByBudget) {
     out.push('The run stopped early at the spending cap, so fewer episodes were measured than planned.');
+  }
+  return out;
+}
+
+/** The policy-relevant MDE threshold (10pp). Shifts smaller than this are
+ * practically undetectable with typical episode counts. */
+const MDE_THRESHOLD = 0.10;
+
+/**
+ * Returns MDE limit bullets for predictions whose achieved MDE (based on the
+ * actual episode count in each arm) exceeds {@link MDE_THRESHOLD} (10pp).
+ *
+ * Bullets are grouped by n so the output is concise even with many predictions.
+ * Only fires when at least one prediction has MDE > 10pp.
+ */
+export function mdeLimits(predictions: readonly VerifiedPrediction[]): string[] {
+  if (predictions.length === 0) return [];
+
+  // Group predictions by per-arm episode count. Prefer the episode scope
+  // (samples within one episode are not independent, #2404); fall back to the
+  // score count for results written before #2403. Skip predictions with no
+  // evidence (empty arm) or no observable outcome — an MDE there is noise.
+  const byN = new Map<number, string[]>();
+  for (const vp of predictions) {
+    if (vp.verdict === 'unobservable') continue;
+    const n = vp.scope
+      ? Math.min(vp.scope.episodes.baseline.length, vp.scope.episodes.candidate.length)
+      : Math.min(vp.rates.n.baseline, vp.rates.n.candidate);
+    if (n <= 0) continue;
+    const achievedMde = mde(n);
+    if (achievedMde > MDE_THRESHOLD) {
+      const ids = byN.get(n) ?? [];
+      ids.push(vp.prediction.id);
+      byN.set(n, ids);
+    }
+  }
+
+  if (byN.size === 0) return [];
+
+  const out: string[] = [];
+  for (const [n, ids] of byN) {
+    const achievedMde = mde(n);
+    const needed = nForMde(MDE_THRESHOLD);
+    const mdeStr = formatMde(achievedMde);
+    const label =
+      ids.length === 1 ? `prediction ${ids[0]}` : `${ids.length} predictions (${ids.join(', ')})`;
+    out.push(
+      `With ${n} episode(s) per arm, ${label} can only detect ~${mdeStr} shifts; ` +
+        `to detect 10pp you need ~${needed} episodes/arm.`,
+    );
   }
   return out;
 }
