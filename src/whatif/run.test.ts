@@ -604,3 +604,49 @@ describe('runWhatif — synthetic episodes before replay turns', () => {
     // If no untagged episodes exist that's fine — synthetic-only run
   });
 });
+
+// ---------------------------------------------------------------------------
+// sandbox manifest (#2478)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — sandbox manifest', () => {
+  it('writes sandboxes.json in runDir when keepSandboxes is true', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    // sandboxesFile must be recorded on the report
+    expect(report.sandboxesFile).toBeDefined();
+    const manifestPath = report.sandboxesFile!;
+
+    // The manifest must live inside runDir (never inside a sandbox root)
+    expect(manifestPath).toBe(path.join(report.runDir, 'sandboxes.json'));
+
+    // File must exist and parse correctly
+    const raw = await fsp.readFile(manifestPath, 'utf8');
+    const manifest = JSON.parse(raw) as { baseline: string; candidate: string };
+    expect(typeof manifest.baseline).toBe('string');
+    expect(typeof manifest.candidate).toBe('string');
+
+    // runDir must not be under either arm root
+    expect(report.runDir.startsWith(manifest.baseline)).toBe(false);
+    expect(report.runDir.startsWith(manifest.candidate)).toBe(false);
+
+    // Neither arm root must be under runDir
+    expect(manifest.baseline.startsWith(report.runDir)).toBe(false);
+    expect(manifest.candidate.startsWith(report.runDir)).toBe(false);
+  });
+
+  it('does not write sandboxes.json when keepSandboxes is false', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    expect(report.sandboxesFile).toBeUndefined();
+
+    const manifestPath = path.join(report.runDir, 'sandboxes.json');
+    await expect(fsp.access(manifestPath)).rejects.toThrow();
+  });
+});

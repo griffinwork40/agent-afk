@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getWhatifDir } from '../paths.js';
 import { materializeSandboxes } from './sandbox.js';
+import { writeSandboxManifest } from './sandbox-manifest.js';
 import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
@@ -362,6 +363,9 @@ export async function runWhatif(
     signal: deps.signal,
   };
 
+  // Collects the successful report so the finally block can attach sandboxesFile.
+  let finalReport: WhatifReport | undefined;
+
   try {
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
@@ -387,10 +391,9 @@ export async function runWhatif(
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
-      const report: WhatifReport = { ...partialReport, headline };
-
-      await persistRun(runDir, report, []);
-      return report;
+      finalReport = { ...partialReport, headline };
+      await persistRun(runDir, finalReport, []);
+      return finalReport;
     }
 
     // ── f) Verify phase ───────────────────────────────────────────────────
@@ -474,15 +477,22 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
+    finalReport = await buildAndPersistVerifiedReport({
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
     });
+    return finalReport;
   } finally {
-    // Tear down sandboxes unless keepSandboxes
-    if (!options.keepSandboxes) {
+    if (options.keepSandboxes) {
+      // Write the arm-to-root mapping into the run dir (never inside a sandbox).
+      const sandboxesFile = await writeSandboxManifest(runDir, sandboxes.roots);
+      if (sandboxesFile !== null && finalReport !== undefined) {
+        finalReport.sandboxesFile = sandboxesFile;
+      }
+    } else {
+      // Tear down sandboxes when not keeping them
       await sandboxes.cleanup().catch(() => {
         // Best-effort; do not mask the primary error
       });

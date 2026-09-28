@@ -396,6 +396,11 @@ export interface WhatifReport {
    * Present when the verify phase ran; lets callers see corpus shrinkage.
    */
   corpusExclusions?: import('./episodes.js').CorpusExclusions;
+  /**
+   * Absolute path to `<runDir>/sandboxes.json` when `keepSandboxes` was set
+   * and the manifest was written successfully.  Absent otherwise.
+   */
+  sandboxesFile?: string;
 }
 
 // ---------------------------------------------------------------------------
