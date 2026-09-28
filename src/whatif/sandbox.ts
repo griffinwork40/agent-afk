@@ -56,7 +56,7 @@ export interface MaterializeOptions {
 export interface SandboxResult {
   baseline: Environment;
   candidate: Environment;
-  /** Opaque per-arm roots under os.tmpdir() (set when keepSandboxes is true). */
+  /** Per-arm mkdtemp roots under os.tmpdir(); recorded in sandboxes.json when keepSandboxes is set. */
   roots: { baseline: string; candidate: string };
   cleanup(): Promise<void>;
 }
