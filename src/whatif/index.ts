@@ -49,6 +49,7 @@ export type {
   RateComparison,
   Verdict,
   VerifiedPrediction,
+  PredictionScope,
   DiscoveredDifference,
   FeatureDelta,
   VerifyResult,

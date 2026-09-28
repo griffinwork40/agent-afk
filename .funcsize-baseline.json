@@ -45,7 +45,6 @@
     "src/cli/commands/interactive/footer-subsystems.ts::setupFooterSubsystems": { "loc": 268, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/loop-iteration.ts::runInputLoop": { "loc": 789, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/surface-setup.ts::setupSurface": { "loc": 318, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/commands/interactive/task-view-mid-turn.ts::launchMidTurnTaskView": { "loc": 229, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane-overlay.ts::renderToolLaneOverlay": { "loc": 276, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/tool-lane-render-children.ts::renderOverlayChildren": { "loc": 240, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/interactive/turn-handler.ts::runTurn": { "loc": 280, "reason": "legacy: predates the function-size gate; pending helper extraction" },

@@ -58,6 +58,55 @@ describe('extractPathTokens', () => {
     const tokens = extractPathTokens('some tokens e.g. ignored');
     expect(tokens).toEqual([]);
   });
+
+  // ── false-positive slash pairs (two plain segments, no extension) ──────
+
+  it('does not treat "coverage/quality" as a path (false positive)', () => {
+    const tokens = extractPathTokens('Improve coverage/quality of the tests');
+    expect(tokens).toEqual([]);
+  });
+
+  it('does not treat "read/write" as a path (false positive)', () => {
+    const tokens = extractPathTokens('Check read/write permissions');
+    expect(tokens).toEqual([]);
+  });
+
+  it('does not treat "and/or" as a path (false positive)', () => {
+    const tokens = extractPathTokens('Use one and/or the other');
+    expect(tokens).toEqual([]);
+  });
+
+  it('does not treat "input/output" as a path (false positive)', () => {
+    const tokens = extractPathTokens('Validate the input/output contract');
+    expect(tokens).toEqual([]);
+  });
+
+  // ── true positives that the tighter check must still accept ────────────
+
+  it('detects "src/whatif/" as a path (trailing slash = directory)', () => {
+    const tokens = extractPathTokens('Look in src/whatif/ for the module');
+    expect(tokens).toContain('src/whatif/');
+  });
+
+  it('detects "./scripts/x.sh" as a path (starts with ./)', () => {
+    const tokens = extractPathTokens('Run ./scripts/x.sh to build');
+    expect(tokens).toContain('./scripts/x.sh');
+  });
+
+  it('detects "src/whatif/foo" as a path (3 segments)', () => {
+    const tokens = extractPathTokens('Edit src/whatif/foo to fix the bug');
+    expect(tokens).toContain('src/whatif/foo');
+  });
+
+  it('detects "src/main.py" as a path (segment has known extension)', () => {
+    const tokens = extractPathTokens('Please edit src/main.py for me');
+    expect(tokens).toContain('src/main.py');
+  });
+
+  it('detects "docs/README.md" as a path (segment has known extension)', () => {
+    const tokens = extractPathTokens('See docs/README.md for details');
+    expect(tokens).toContain('docs/README.md');
+  });
 });
 
 // ---------------------------------------------------------------------------

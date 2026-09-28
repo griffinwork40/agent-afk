@@ -86,8 +86,27 @@ function looksLikePath(token: string): boolean {
     if (pat.test(stripped)) return false;
   }
 
-  // Has a slash (path component separator) — treat as path.
-  if (stripped.includes('/')) return true;
+  // Has a slash — but only treat as a path under tighter conditions to avoid
+  // false positives like "and/or", "read/write", "coverage/quality".
+  if (stripped.includes('/')) {
+    // Explicit relative prefix (./foo, ../bar) — always a path.
+    if (stripped.startsWith('./') || stripped.startsWith('../')) return true;
+    // Trailing slash — directory reference.
+    if (stripped.endsWith('/')) return true;
+    // Split into segments and check for known extensions or depth.
+    const segments = stripped.split('/');
+    // 3+ segments means src/whatif/foo style — treat as path.
+    if (segments.length >= 3) return true;
+    // Any segment with a known file extension — treat as path.
+    const hasKnownExt = segments.some((seg) => {
+      const dot = seg.lastIndexOf('.');
+      if (dot <= 0) return false;
+      return KNOWN_EXTENSIONS.has(seg.slice(dot + 1).toLowerCase());
+    });
+    if (hasKnownExt) return true;
+    // Two plain-word segments with no extension (e.g. "and/or") — not a path.
+    return false;
+  }
 
   // Ends with a known extension (e.g. "config.yaml").
   const dot = stripped.lastIndexOf('.');

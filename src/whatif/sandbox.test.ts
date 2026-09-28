@@ -43,7 +43,10 @@ function tmpDir(): string {
 
 /**
  * Build a fake AFK_HOME tree with:
- *   - config/afk.env  (has ANTHROPIC_API_KEY + AFK_MODEL)
+ *   - config/afk.env  (has ANTHROPIC_API_KEY + AFK_MODEL + sandbox-owned keys
+ *                       AFK_HOME/AFK_STATE_DIR/AFK_FRAMEWORK_DIR to simulate
+ *                       the issue-2428 scenario where the operator's afk.env
+ *                       sets these to real paths)
  *   - AFK.md
  *   - skills/a, skills/b  (directories, simulating skill entries)
  *   - plugins/p1  (directory)
@@ -60,6 +63,10 @@ function buildFakeHome(dir: string): string {
       'ANTHROPIC_API_KEY=sk-ant-secret123',
       'AFK_MODEL=claude-sonnet-4-5',
       'AFK_EFFORT=high',
+      // Issue #2428: operator afk.env may set these to real paths
+      'AFK_HOME=/real/afk/home',
+      'AFK_STATE_DIR=/real/afk/state',
+      'AFK_FRAMEWORK_DIR=/real/afk/framework',
     ].join('\n'),
     'utf8',
   );
@@ -143,6 +150,53 @@ describe('materializeSandboxes: home layout', () => {
     expect(baseline.launch.unset).toContain('AFK_MODEL');
     expect(candidate.launch.unset).toContain('AFK_MODEL');
     expect(candidate.launch.unset).not.toContain('ANTHROPIC_API_KEY');
+    await cleanup();
+  });
+
+  // Issue #2428: sandbox-owned keys must NOT appear in launch.unset and must
+  // be stripped from the sandbox afk.env copy (so dotenv can't fill them back).
+  it('does not include AFK_FRAMEWORK_DIR in launch.unset (issue #2428)', async () => {
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    expect(baseline.launch.unset ?? []).not.toContain('AFK_FRAMEWORK_DIR');
+    expect(candidate.launch.unset ?? []).not.toContain('AFK_FRAMEWORK_DIR');
+    await cleanup();
+  });
+
+  it('does not include AFK_HOME or AFK_STATE_DIR in launch.unset (issue #2428)', async () => {
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    for (const env of [baseline, candidate]) {
+      expect(env.launch.unset ?? []).not.toContain('AFK_HOME');
+      expect(env.launch.unset ?? []).not.toContain('AFK_STATE_DIR');
+    }
+    await cleanup();
+  });
+
+  it('strips AFK_HOME/AFK_STATE_DIR/AFK_FRAMEWORK_DIR from the sandbox afk.env copy (issue #2428)', async () => {
+    const { candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    const envContent = readFileSync(join(candidate.home, 'config', 'afk.env'), 'utf8');
+    expect(envContent).not.toContain('AFK_HOME');
+    expect(envContent).not.toContain('AFK_STATE_DIR');
+    expect(envContent).not.toContain('AFK_FRAMEWORK_DIR');
+    // Ordinary non-credential keys are still present
+    expect(envContent).toContain('AFK_MODEL');
     await cleanup();
   });
 
@@ -462,6 +516,21 @@ describe('env operator', () => {
     const op = getOperator('env');
     await expect(
       op.apply({ kind: 'env', key: 'AFK_HOME', value: '/fake' }, makeCandidateEnv(), ctx),
+    ).rejects.toThrow();
+  });
+
+  // Issue #2428: AFK_FRAMEWORK_DIR must be reserved alongside AFK_HOME/AFK_STATE_DIR
+  it('rejects AFK_FRAMEWORK_DIR (issue #2428)', async () => {
+    const op = getOperator('env');
+    await expect(
+      op.apply({ kind: 'env', key: 'AFK_FRAMEWORK_DIR', value: '/evil' }, makeCandidateEnv(), ctx),
+    ).rejects.toThrow();
+  });
+
+  it('rejects AFK_STATE_DIR', async () => {
+    const op = getOperator('env');
+    await expect(
+      op.apply({ kind: 'env', key: 'AFK_STATE_DIR', value: '/evil' }, makeCandidateEnv(), ctx),
     ).rejects.toThrow();
   });
 

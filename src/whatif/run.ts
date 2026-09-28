@@ -22,12 +22,18 @@ import { materializeSandboxes } from './sandbox.js';
 import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
-import { verifyShortfallLimits } from './run.limits.js';
+import { verifyShortfallLimits, hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
+import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges } from './predict.js';
 import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
 import { groundProbes, makeSetChecker } from './probe-grounding.js';
-import { collectRealTurns, syntheticEpisodes, loadSuiteEpisodes } from './episodes.js';
+import {
+  collectRealTurns,
+  syntheticEpisodes,
+  loadSuiteEpisodes,
+  type CorpusExclusions,
+} from './episodes.js';
 import { estimateVerifyCost } from './cost.js';
 import { buildHeadline, standardLimits } from './report.js';
 import { persistRun } from './run.persist.js';
@@ -140,18 +146,20 @@ async function runPredictPhase(
 async function collectVerifyEpisodes(
   options: WhatifOptions & { sessionsDir?: string },
   predictions: import('./types.js').Prediction[],
-): Promise<import('./types.js').Episode[]> {
+): Promise<{ episodes: import('./types.js').Episode[]; corpusExclusions: CorpusExclusions }> {
+  const corpusExclusions: CorpusExclusions = {
+    whatifSessions: 0, excludedSessionIds: 0,
+    nonStandaloneTurns: 0, whatifTopicTurns: 0,
+  };
   const realTurns = await collectRealTurns({
     limit: options.turns,
     sessionsDir: options.sessionsDir,
+    stats: corpusExclusions,
   });
-
   const synthetic = syntheticEpisodes(predictions);
-
   const suitesDir = path.join(options.realHome, 'whatif', 'suites');
   const suiteEps = await loadSuiteEpisodes(suitesDir).catch(() => []);
-
-  return [...realTurns, ...synthetic, ...suiteEps];
+  return { episodes: [...realTurns, ...synthetic, ...suiteEps], corpusExclusions };
 }
 
 // ---------------------------------------------------------------------------
@@ -209,12 +217,23 @@ export async function runWhatif(
 
   // ── b) Sandboxes ──────────────────────────────────────────────────────────
 
+  // When the change spec directly targets hooks or plugins, keep context hooks
+  // on in both episode arms so the hooks under test actually register and can
+  // be observed.  Without this, both arms would run with SessionStart and
+  // UserPromptSubmit suppressed, making the experiment measure nothing.
+  // The manual AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 override takes the same path.
+  const autoKeepContextHooks =
+    specTargetsHooksOrPlugins(spec) || keepContextHooksInEpisode();
+
   const sandboxes = await materializeSandboxes({
     realHome,
     realCwd,
     runDir,
     spec,
-    baseLaunch: { model: options.agentModel, env: {} },
+    baseLaunch: {
+      model: options.agentModel,
+      env: autoKeepContextHooks ? { AFK_WHATIF_KEEP_CONTEXT_HOOKS: '1' } : {},
+    },
   });
 
   const { baseline, candidate } = sandboxes;
@@ -238,7 +257,10 @@ export async function runWhatif(
     // ── e) Predict-only path ──────────────────────────────────────────────
 
     if (!options.verify) {
-      const limits = standardLimits({ verified: false, judgeExternal: false });
+      const limits = [
+        ...standardLimits({ verified: false, judgeExternal: false }),
+        ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
+      ];
       const partialReport: Omit<WhatifReport, 'headline'> = {
         spec,
         structural,
@@ -259,7 +281,7 @@ export async function runWhatif(
 
     deps.onProgress?.({ stage: 'episodes', message: 'Collecting episodes' });
 
-    const episodes = await collectVerifyEpisodes(options, predictions);
+    const { episodes, corpusExclusions } = await collectVerifyEpisodes(options, predictions);
 
     // Resolve judge BEFORE preflight estimate (so we know if it's external)
     const resolvedJudge = await deps.makeJudge(options.judge);
@@ -333,6 +355,7 @@ export async function runWhatif(
     const limits = [
       ...standardLimits({ verified: true, judgeExternal: resolvedJudge.external }),
       ...verifyShortfallLimits(verifyResult!),
+      ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
     ];
 
     const partialReport: Omit<WhatifReport, 'headline'> = {
@@ -344,6 +367,7 @@ export async function runWhatif(
       runDir,
       limits,
       ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
+      corpusExclusions,
     };
     const headline = buildHeadline(partialReport);
     const report: WhatifReport = { ...partialReport, headline };

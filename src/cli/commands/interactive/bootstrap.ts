@@ -38,6 +38,11 @@ export { buildAgentSession } from './bootstrap-session-builder.js';
  * already-built session registry. Extracted from {@link bootstrapSession} to
  * keep that function within its baselined line-count ceiling.
  *
+ * Import any plugin JS entrypoints (manifest `main`) before constructing the
+ * session: the skill manifest is assembled synchronously in the constructor,
+ * so a plugin's registerSkill() side-effects must already have run for its
+ * code-backed skills to appear. Idempotent + non-fatal; no-op without plugins.
+ *
  * Idempotent: {@link ensurePluginEntrypointsLoaded} is process-scoped and
  * skips already-loaded entrypoints. {@link installPluginHooks} is safe to
  * call multiple times — the REPL registry is constructed before plugin
