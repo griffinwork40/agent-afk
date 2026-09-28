@@ -39,6 +39,21 @@ import { join, dirname } from 'node:path';
  */
 const CREDENTIAL_KEY_REGEX = /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|OAUTH)/i;
 
+/**
+ * Keys that `buildChildEnv` always overrides with sandbox-derived paths.
+ * These must NEVER appear in `sandboxedAfkEnvKeys()` (so they are not added
+ * to `launch.unset`) and must be stripped from the sandbox afk.env copy —
+ * otherwise `dotenv` (override:false) would fill them from the copied file
+ * and point the child at the real framework / state directories.
+ *
+ * Extend this set if `buildChildEnv` gains additional sandbox-path overrides.
+ */
+export const SANDBOX_OWNED_KEYS: ReadonlySet<string> = new Set([
+  'AFK_HOME',
+  'AFK_STATE_DIR',
+  'AFK_FRAMEWORK_DIR',
+]);
+
 function stripCredentialLines(content: string): string {
   return content
     .split('\n')
@@ -48,7 +63,7 @@ function stripCredentialLines(content: string): string {
       const eq = trimmed.indexOf('=');
       if (eq === -1) return true; // keep malformed lines
       const key = trimmed.slice(0, eq).trim();
-      return !CREDENTIAL_KEY_REGEX.test(key);
+      return !CREDENTIAL_KEY_REGEX.test(key) && !SANDBOX_OWNED_KEYS.has(key);
     })
     .join('\n');
 }
@@ -84,6 +99,11 @@ function linkExists(p: string): boolean {
  * these in the child env so the child reads them from the sandbox copy (see
  * `LaunchSettings.unset`). Credential keys are excluded: the child must keep
  * inheriting those from the parent because the sandbox copy strips them.
+ *
+ * Sandbox-owned keys (AFK_HOME, AFK_STATE_DIR, AFK_FRAMEWORK_DIR) are also
+ * excluded: `buildChildEnv` always sets them to sandbox-derived paths, so they
+ * must never be added to `launch.unset` (which would cause the unset loop in
+ * `buildChildEnv` to delete the sandbox overrides).
  */
 export function sandboxedAfkEnvKeys(realHome: string): string[] {
   const file = join(realHome, 'config', 'afk.env');
@@ -91,7 +111,8 @@ export function sandboxedAfkEnvKeys(realHome: string): string[] {
   const keys: string[] = [];
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
-    if (m?.[1] && !CREDENTIAL_KEY_REGEX.test(m[1])) keys.push(m[1]);
+    if (m?.[1] && !CREDENTIAL_KEY_REGEX.test(m[1]) && !SANDBOX_OWNED_KEYS.has(m[1]))
+      keys.push(m[1]);
   }
   return keys;
 }

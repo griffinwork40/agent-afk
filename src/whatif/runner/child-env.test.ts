@@ -144,6 +144,52 @@ describe('buildChildEnv', () => {
     vi.unstubAllEnvs();
   });
 
+  // Issue #2428: sandbox-owned path keys must survive launch.unset — they must
+  // always point at the sandbox, never at the real AFK directories.
+  it('AFK_FRAMEWORK_DIR is the sandbox path even when parent env has a real path (via unset)', () => {
+    vi.stubEnv('AFK_FRAMEWORK_DIR', '/real/framework');
+    const result = buildChildEnv(
+      { ...baseEnv, launch: { env: {}, unset: ['AFK_FRAMEWORK_DIR'] } },
+      {},
+    );
+    expect(result['AFK_FRAMEWORK_DIR']).toBe('/sandbox/home/agent-framework');
+    vi.unstubAllEnvs();
+  });
+
+  it('AFK_HOME is the sandbox path even when parent env sets it and launch.unset lists it', () => {
+    vi.stubEnv('AFK_HOME', '/real/home');
+    const result = buildChildEnv(
+      { ...baseEnv, launch: { env: {}, unset: ['AFK_HOME'] } },
+      {},
+    );
+    expect(result['AFK_HOME']).toBe('/sandbox/home');
+    vi.unstubAllEnvs();
+  });
+
+  it('AFK_STATE_DIR is the sandbox path even when parent env sets it and launch.unset lists it', () => {
+    vi.stubEnv('AFK_STATE_DIR', '/real/state');
+    const result = buildChildEnv(
+      { ...baseEnv, launch: { env: {}, unset: ['AFK_STATE_DIR'] } },
+      {},
+    );
+    expect(result['AFK_STATE_DIR']).toBe('/sandbox/home/state');
+    vi.unstubAllEnvs();
+  });
+
+  it('launch.env cannot override AFK_FRAMEWORK_DIR (sandbox path always wins)', () => {
+    const env: Environment = {
+      ...baseEnv,
+      launch: { env: { AFK_FRAMEWORK_DIR: '/launch-override/framework' } },
+    };
+    const result = buildChildEnv(env, {});
+    expect(result['AFK_FRAMEWORK_DIR']).toBe('/sandbox/home/agent-framework');
+  });
+
+  it('extra cannot override AFK_FRAMEWORK_DIR (sandbox path always wins)', () => {
+    const result = buildChildEnv(baseEnv, { AFK_FRAMEWORK_DIR: '/extra-override/framework' });
+    expect(result['AFK_FRAMEWORK_DIR']).toBe('/sandbox/home/agent-framework');
+  });
+
   it('launch.env can never re-add a security-deleted var', () => {
     const result = buildChildEnv(
       { ...baseEnv, launch: { env: { AFK_ALLOW_PROJECT_MCP: '1', AFK_SOMETHING: 'x' } } },
