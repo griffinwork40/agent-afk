@@ -28,6 +28,7 @@ import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges, resolveMaxPredictions, DEFAULT_PROBES } from './predict.js';
 import { buildAndPersistVerifiedReport } from './run.report.js';
+import { recordKeptSandboxes } from './run.sandboxes.js';
 import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
 import { groundProbes, makeSetChecker } from './probe-grounding.js';
 import {
@@ -354,7 +355,7 @@ export async function runWhatif(
     },
   });
 
-  const { baseline, candidate } = sandboxes;
+  const { baseline, candidate, roots: sandboxRoots } = sandboxes;
 
   const runnerOpts: RunnerOptions = {
     timeoutMs: options.episodeTimeoutMs,
@@ -362,6 +363,7 @@ export async function runWhatif(
     signal: deps.signal,
   };
 
+  let report: WhatifReport | undefined;
   try {
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
@@ -387,7 +389,7 @@ export async function runWhatif(
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
-      const report: WhatifReport = { ...partialReport, headline };
+      report = { ...partialReport, headline };
 
       await persistRun(runDir, report, []);
       return report;
@@ -474,15 +476,27 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
+    report = await buildAndPersistVerifiedReport({
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
     });
+    return report;
   } finally {
-    // Tear down sandboxes unless keepSandboxes
-    if (!options.keepSandboxes) {
+    // Tear down sandboxes unless keepSandboxes; when keeping, record roots.
+    if (options.keepSandboxes) {
+      // Best-effort: write sandboxes.json and attach keptSandboxes to report.
+      // A write failure must not mask the primary result or error.
+      try {
+        await recordKeptSandboxes(runDir, sandboxRoots);
+        if (report !== undefined) {
+          report.keptSandboxes = sandboxRoots;
+        }
+      } catch {
+        // Ignore — best-effort; operator can still find roots via report.runDir
+      }
+    } else {
       await sandboxes.cleanup().catch(() => {
         // Best-effort; do not mask the primary error
       });

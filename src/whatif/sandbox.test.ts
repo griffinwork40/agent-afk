@@ -325,6 +325,27 @@ describe('materializeSandboxes: home layout', () => {
     expect(existsSync(candidateRoot)).toBe(false);
   });
 
+  // Issue #2478: materializeSandboxes exposes roots; each root contains its arm's home.
+  it('exposes roots that contain the arm homes (issue #2478)', async () => {
+    const spec: ChangeSpec = { title: 'noop', changes: [] };
+    const { baseline, candidate, roots, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(resolve(baseline.home).startsWith(resolve(roots.baseline))).toBe(true);
+      expect(resolve(candidate.home).startsWith(resolve(roots.candidate))).toBe(true);
+      // Cross-check: each arm's home is NOT under the other arm's root
+      expect(resolve(baseline.home).startsWith(resolve(roots.candidate))).toBe(false);
+      expect(resolve(candidate.home).startsWith(resolve(roots.baseline))).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
   // Issue #2466: arm sandboxes must be isolated — neither arm's home nor
   // project should be reachable by walking up from the other arm's paths
   // within 4 levels (excluding os.tmpdir() itself and filesystem root).

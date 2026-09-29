@@ -564,6 +564,56 @@ describe('runWhatif — MDE gate', () => {
 // Synthetic episodes come first (#2477 step 1)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// keepSandboxes: sandboxes.json written to runDir (issue #2478)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — keepSandboxes records sandbox roots', () => {
+  it('writes sandboxes.json to runDir with baseline and candidate roots', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    // sandboxes.json must exist in runDir
+    const jsonPath = path.join(report.runDir, 'sandboxes.json');
+    const rawJson = await fsp.readFile(jsonPath, 'utf8');
+    const parsed = JSON.parse(rawJson) as { baseline: string; candidate: string };
+
+    // report.keptSandboxes must match the file contents
+    expect(report.keptSandboxes).toBeDefined();
+    expect(parsed.baseline).toBe(report.keptSandboxes!.baseline);
+    expect(parsed.candidate).toBe(report.keptSandboxes!.candidate);
+
+    // Both roots must exist on disk
+    expect((await fsp.stat(parsed.baseline)).isDirectory()).toBe(true);
+    expect((await fsp.stat(parsed.candidate)).isDirectory()).toBe(true);
+
+    // sandboxes.json must NOT live inside either arm root
+    expect(jsonPath.startsWith(parsed.baseline)).toBe(false);
+    expect(jsonPath.startsWith(parsed.candidate)).toBe(false);
+
+    // runDir must NOT be inside either arm root
+    expect(report.runDir.startsWith(parsed.baseline)).toBe(false);
+    expect(report.runDir.startsWith(parsed.candidate)).toBe(false);
+
+    // Clean up the kept sandboxes to avoid temp-dir leaks
+    await fsp.rm(parsed.baseline, { recursive: true, force: true });
+    await fsp.rm(parsed.candidate, { recursive: true, force: true });
+  });
+
+  it('does NOT write sandboxes.json when keepSandboxes is false', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    const jsonPath = path.join(report.runDir, 'sandboxes.json');
+    await expect(fsp.access(jsonPath)).rejects.toThrow();
+    expect(report.keptSandboxes).toBeUndefined();
+  });
+});
+
 describe('runWhatif — synthetic episodes before replay turns', () => {
   it('runner receives synthetic probe episodes before replay turns', async () => {
     // Write real session turns so collectRealTurns finds something
