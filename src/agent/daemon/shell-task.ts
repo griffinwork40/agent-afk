@@ -1,13 +1,18 @@
 /**
  * Shell executor for daemon scheduled tasks.
  *
- * Runs a command via `/bin/sh -c` with a wall-clock timeout, captures
+ * Runs a command via the platform shell with a wall-clock timeout, captures
  * stdout + stderr, and returns a telemetry record. No AgentSession is
  * spawned -- this is the lightweight path for simple cron jobs (backups,
  * health checks, log rotation).
  *
  * Mirrors the contract of `worktree-prune-task.ts` -- a standalone
  * async function called by the scheduler's executor dispatch.
+ *
+ * Shell selection: on POSIX `/bin/sh -c` is used (unchanged). On Windows,
+ * `resolveShell()` picks Git Bash first (preferred -- full POSIX compat),
+ * then PowerShell (fallback). `cmd.exe` is deliberately avoided. This mirrors
+ * the behaviour of `src/agent/hooks/command-executor.ts`.
  *
  * @module agent/daemon/shell-task
  */
@@ -17,6 +22,7 @@ import { promisify } from 'node:util';
 
 import { env } from '../../config/env.js';
 import { redactInlineSecrets } from '../session/prompt-dump.js';
+import { resolveShell } from '../../utils/resolve-shell.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
 
 const execFile = promisify(execFileCb);
@@ -34,6 +40,24 @@ function sliceSafe(s: string, start: number): string {
   return s.slice(safe);
 }
 
+/**
+ * Resolve the shell executable and prefix args for the current platform.
+ *
+ * Contract: on POSIX returns `{ shell: '/bin/sh', shellArgs: ['-c'] }`.
+ * On Windows, defers to `resolveShell()` (Git Bash first, PowerShell
+ * fallback). The returned `shellArgs` are prepended before the command
+ * string so the execFile call is uniform across platforms.
+ */
+function resolvedShellAndArgs(): { shell: string; shellArgs: string[] } {
+  const resolution = resolveShell();
+  if (resolution.shell === true) {
+    // POSIX: Node would normally pick /bin/sh; be explicit so execFile
+    // behaviour is identical to the previous hard-coded call.
+    return { shell: '/bin/sh', shellArgs: ['-c'] };
+  }
+  return { shell: resolution.shell, shellArgs: resolution.args ?? [] };
+}
+
 export interface ShellTaskOptions {
   now: () => number;
   writeTelemetry: (record: TelemetryRecord) => void;
@@ -42,9 +66,10 @@ export interface ShellTaskOptions {
 /**
  * Execute `task.command` as a shell command and return a telemetry record.
  *
- * Uses `execFile('/bin/sh', ['-c', command])` -- no `shell: true` flag on
- * the spawn options, so the command goes through exactly one shell
- * interpretation (same pattern as worktree-prune-task.ts).
+ * The shell is resolved via `resolveShell()`:
+ *   - POSIX: `/bin/sh -c <command>` (unchanged from the original behaviour).
+ *   - Windows (Git Bash found): `<git-bash> -c <command>`.
+ *   - Windows (no Git Bash): `powershell.exe -Command <command>`.
  *
  * When `task.cwd` is set it is passed as `cwd` to the child process, so the
  * shell inherits the per-task working directory. Precedence mirrors the agent
@@ -70,8 +95,10 @@ export async function runShellTask(
     triggeredAt: triggeredAt.toISOString(),
   };
 
+  const { shell, shellArgs } = resolvedShellAndArgs();
+
   try {
-    const { stdout, stderr } = await execFile('/bin/sh', ['-c', task.command], {
+    const { stdout, stderr } = await execFile(shell, [...shellArgs, task.command], {
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024, // 1 MB
       env: process.env,
