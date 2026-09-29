@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { verifyRun, type VerifyRunInput } from './run.verify.js';
 import { scorePrediction, scoresForQuestion, traceKey, type JudgeResults } from './run.verify.scoring.js';
+import { CROSS_CHECK_MIN_AGREEMENT } from './stats.js';
 import type { GradeEntry } from './run.persist.grades.js';
 import type {
   AgentRunner,
@@ -309,9 +310,11 @@ describe('verifyRun: cross-check agreement downgrade (#2413)', () => {
 
   /**
    * Run with enough episodes so that the ~10% cross-check sample picks up
-   * CROSS_CHECK_MIN_ITEMS (5) items for the prediction's question.
-   * We use 60 total episodes (2 targeted + 58 real) so ~6 get cross-checked
-   * across all questions.
+   * at least CROSS_CHECK_MIN_ITEMS items for the prediction's question.
+   * With 60 total episodes (2 targeted + 58 real) and a ~10% sample rate,
+   * ~6 items get cross-checked — just above the CROSS_CHECK_MIN_ITEMS (5)
+   * threshold. If CROSS_CHECK_MIN_ITEMS or the sample rate changes, this
+   * count must be recalculated so the downgrade tests remain meaningful.
    */
   function manyEpisodes(): Episode[] {
     const eps: Episode[] = [
@@ -329,12 +332,15 @@ describe('verifyRun: cross-check agreement downgrade (#2413)', () => {
       input(episodes, [pred('p1')], { crossCheckJudge }),
     );
     const vp = verifyResult.predictions[0]!;
+    // Precondition: enough items were cross-checked so the downgrade can fire.
+    // If this fails, manyEpisodes() no longer produces CROSS_CHECK_MIN_ITEMS
+    // cross-checks and the assertions below are meaningless.
+    expect(vp.crossCheckAgreement).toBeDefined();
     // Without cross-check this would be confirmed (delta = 1.0).
     // With a disagreeing cross-check and enough items it should be unclear.
     expect(vp.verdict).toBe('unclear');
     expect(vp.verdictReason).toBe('judges disagree');
-    expect(vp.crossCheckAgreement).toBeDefined();
-    expect(vp.crossCheckAgreement!).toBeLessThan(0.75);
+    expect(vp.crossCheckAgreement!).toBeLessThan(CROSS_CHECK_MIN_AGREEMENT);
   });
 
   it('agreeing cross-check judge: verdict stays confirmed', async () => {
@@ -346,7 +352,7 @@ describe('verifyRun: cross-check agreement downgrade (#2413)', () => {
     const vp = verifyResult.predictions[0]!;
     expect(vp.verdict).toBe('confirmed');
     expect(vp.verdictReason).toBeUndefined();
-    expect(vp.crossCheckAgreement).toBeGreaterThanOrEqual(0.75);
+    expect(vp.crossCheckAgreement).toBeGreaterThanOrEqual(CROSS_CHECK_MIN_AGREEMENT);
   });
 
   it('too few cross-check items: does not downgrade, sets crossCheckTooFew', async () => {

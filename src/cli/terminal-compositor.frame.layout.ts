@@ -92,15 +92,34 @@ export function truncateOverlayPreservingHead(lines: string[], budget: number): 
   const hidden = lines.length - headCount - tailCount;
   const head = lines.slice(0, headCount);
   const tail = lines.slice(-tailCount);
+  // Find the first non-blank tail row to use as the "below" reference for the
+  // gutter.  When every tail row is blank (degenerate input), `below` is
+  // `undefined` and `hiddenIndicatorGutter` returns `''`, so the indicator
+  // renders flush-left — harmless on degenerate output.
   const below = tail.find((l) => stripAnsi(l).trim().length > 0);
+  // `above` is the last VISIBLE head row, not the structurally adjacent hidden
+  // row.  On well-formed tool-lane output the two are equivalent because rails
+  // are continuous: `tool-lane-render.ts` draws every intermediate row, so no
+  // rail ever jumps across a cut.  Using the last head row is safe and avoids
+  // having to re-scan the hidden region.
   const gutter = hiddenIndicatorGutter(head[head.length - 1], below);
   const indicator = palette.dim(`${gutter}${hidden} earlier ${hidden === 1 ? 'line' : 'lines'} hidden`);
   return [...head, indicator, ...tail];
 }
 
-/** Glyphs whose rail continues UP out of their cell (so the row above must draw a rail). */
+/**
+ * Glyphs whose rail continues UP out of their cell (so the row above must draw
+ * a rail).  The set is a superset of what `tool-lane-render.ts` actually emits
+ * (`│`, `├`, `╰`) — the extra glyphs (`└`, `┤`, `┼`, `┴`) are included
+ * defensively so the gutter remains correct if new connectors are added to the
+ * renderer without touching this file.
+ */
 const RAIL_UP = new Set(['│', '├', '╰', '└', '┤', '┼', '┴']);
-/** Glyphs whose rail continues DOWN out of their cell. */
+/**
+ * Glyphs whose rail continues DOWN out of their cell.  The set is likewise a
+ * defensive superset — `tool-lane-render.ts` emits only `│` and `├`; the
+ * others (`╭`, `┌`, `┤`, `┼`, `┬`) are included for future-proofing.
+ */
 const RAIL_DOWN = new Set(['│', '├', '╭', '┌', '┤', '┼', '┬']);
 /** Tree node glyphs that sit ON a parent rail (e.g. nested `◉ → Agent(...)`). */
 const NODE = new Set(['◉', '○', '●', '◆', '◇']);

@@ -8,6 +8,7 @@
 
 import type { Prediction, VerifiedPrediction } from './types.js';
 import { verdictEmoji, verdictLabel } from './report-verdict.js';
+import { CROSS_CHECK_MIN_AGREEMENT } from './stats.js';
 
 // ---------------------------------------------------------------------------
 // Helpers (pct is re-declared here to avoid a circular import with report.ts)
@@ -53,7 +54,7 @@ function episodeList(vp: VerifiedPrediction): string {
 function crossCheckCell(vp: VerifiedPrediction): string {
   if (vp.crossCheckTooFew) return '⚠ too few cross-checks';
   if (vp.crossCheckAgreement !== undefined) {
-    const flag = vp.crossCheckAgreement < 0.75 ? ' ⚠ low' : '';
+    const flag = vp.crossCheckAgreement < CROSS_CHECK_MIN_AGREEMENT ? ' ⚠ low' : '';
     return `${pct(vp.crossCheckAgreement)}${flag}`;
   }
   return '—';

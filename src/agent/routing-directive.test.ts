@@ -16,6 +16,7 @@ import { describe, it, expect } from 'vitest';
 import { parseTerminalState } from '../cli/commands/interactive/terminal-state.js';
 
 import { NARRATION_DIRECTIVE } from './narration-directive.js';
+import { SHARED_CONTEXT_DIRECTIVE } from './shared-context-directive.js';
 import {
   END_OF_TURN_DIRECTIVE,
   ROUTING_DIRECTIVE,
@@ -112,6 +113,34 @@ describe('assembleSystemPrompt', () => {
       // Contract: the directive must reference the base line explicitly so
       // the model reads it as a scoped refinement, not a conflict.
       expect(NARRATION_DIRECTIVE).toContain('"Run the loop; do not narrate it"');
+    });
+  });
+
+  describe('shared-context directive (surface)', () => {
+    it.each(['repl', 'telegram'] as const)('appends SHARED_CONTEXT_DIRECTIVE on the %s surface', (surface) => {
+      expect(assembleSystemPrompt(BASE, false, surface)).toContain(SHARED_CONTEXT_DIRECTIVE);
+    });
+
+    it('omits SHARED_CONTEXT_DIRECTIVE on the one-shot surface and by default', () => {
+      expect(assembleSystemPrompt(BASE, true, 'one-shot')).not.toContain(SHARED_CONTEXT_DIRECTIVE);
+      expect(assembleSystemPrompt(BASE, true)).not.toContain(SHARED_CONTEXT_DIRECTIVE);
+    });
+
+    it('places shared-context after narration and before the end-of-turn protocol', () => {
+      const out = assembleSystemPrompt(BASE, true, 'repl') ?? '';
+      const narrationIdx = out.indexOf(NARRATION_DIRECTIVE);
+      const sharedIdx = out.indexOf(SHARED_CONTEXT_DIRECTIVE);
+      const endIdx = out.indexOf(END_OF_TURN_DIRECTIVE);
+      expect(narrationIdx).toBeGreaterThan(-1);
+      expect(narrationIdx).toBeLessThan(sharedIdx);
+      expect(sharedIdx).toBeLessThan(endIdx);
+    });
+
+    it('is normative and makes no claim about what the renderer shows', () => {
+      // Invariant (see shared-context-directive.ts): a rendering claim is false
+      // on some surface; the directive must stay phrased as an instruction.
+      expect(SHARED_CONTEXT_DIRECTIVE).toContain('Do not assume the user has seen the underlying results.');
+      expect(SHARED_CONTEXT_DIRECTIVE).not.toMatch(/collapsed|has not seen|cannot see|sees a/i);
     });
   });
 

@@ -246,7 +246,6 @@ export function applyAgreementDowngrade(
 
   const base: VerifiedPrediction = { ...vp, crossCheckAgreement: agreement };
   if (
-    vp.verdict !== 'unobservable' &&
     (vp.verdict === 'confirmed' || vp.verdict === 'refuted') &&
     agreement < CROSS_CHECK_MIN_AGREEMENT
   ) {

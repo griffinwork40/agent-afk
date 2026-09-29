@@ -469,7 +469,7 @@ describe('loadSpecFile', () => {
     expect(() => loadSpecFile(p)).toThrow(/no valid changes/);
   });
 
-  it('silently drops invalid change entries and returns the valid ones', () => {
+  it('warns and drops invalid change entries, returns the valid ones', () => {
     const p = join(dir, 'mixed.json');
     writeFileSync(p, JSON.stringify({
       title: 'Mixed',

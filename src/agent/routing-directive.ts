@@ -22,6 +22,7 @@
  */
 
 import { NARRATION_DIRECTIVE } from './narration-directive.js';
+import { SHARED_CONTEXT_DIRECTIVE } from './shared-context-directive.js';
 
 export const ROUTING_DIRECTIVE = `[skill-routing: active]
 
@@ -161,9 +162,10 @@ export function assembleSystemPrompt(
   const parts: string[] = [base];
   if (autoRouting) parts.push(ROUTING_DIRECTIVE);
   if (SURFACES_WITH_END_OF_TURN.has(surface)) {
-    // Invariant: narration rides the same interactive gate and precedes the
-    // end-of-turn protocol, which must remain the final block.
+    // Invariant: narration and shared-context ride the same interactive gate
+    // and precede the end-of-turn protocol, which must remain the final block.
     parts.push(NARRATION_DIRECTIVE);
+    parts.push(SHARED_CONTEXT_DIRECTIVE);
     parts.push(END_OF_TURN_DIRECTIVE);
   }
   return parts.join('\n\n');

@@ -63,12 +63,16 @@ export const VerifiedOutcomeSchema = z.object({
   votes: z.array(VoteSchema),
   history: z.array(HistoryEntrySchema),
   /**
-   * First prompt text (normalized for cross_session_reask Jaccard comparison).
-   * Stored at teardown; absent on records written before M2 or when unavailable.
+   * Prompt fingerprint: sorted, deduplicated token array (max 64 tokens) used
+   * for cross_session_reask Jaccard comparison. Raw prompt text is intentionally
+   * never stored here (issue #2449). Legacy `first_prompt` keys from records
+   * written before this change are stripped on the next read-modify-write,
+   * because this schema uses a plain z.object (not .passthrough()) which strips
+   * unknown keys on parse.
    */
-  first_prompt: z.string().optional(),
+  first_prompt_tokens: z.array(z.string()).max(64).optional(),
   /**
-   * Effective cwd at session start. Stored alongside first_prompt so the
+   * Effective cwd at session start. Stored alongside first_prompt_tokens so the
    * cross_session_reask LF can filter to the same directory.
    */
   first_cwd: z.string().optional(),

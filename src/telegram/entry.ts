@@ -32,8 +32,7 @@ import { loadSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
 import { planTelegramCredential, applyTelegramCredentialPlan } from './credentials.js';
-import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
-import { loadCredential } from '../cli/config.js';
+import { preloadClaudeKeychainOAuth, loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
 import { startStatsTicker } from './stats-ticker.js';
@@ -100,9 +99,11 @@ export async function main(): Promise<void> {
   // fallback for when the OAuth exchange succeeded but the write-back to the
   // store failed (locked / read-only) — without it, planTelegramCredential
   // would re-read the still-expired store and report missing credentials.
-  const refreshedToken = await preloadClaudeKeychainOAuth(providerName);
+  // `loadAnthropicCredential` already incorporates the refreshed token as its
+  // final tier, so no explicit fallback is needed here.
+  await preloadClaudeKeychainOAuth(providerName);
   const credentialPlan = planTelegramCredential(providerName, {
-    loadAnthropicCredential: () => loadCredential() ?? refreshedToken,
+    loadAnthropicCredential,
   });
   if (!applyTelegramCredentialPlan(credentialPlan, config)) {
     process.exit(1);

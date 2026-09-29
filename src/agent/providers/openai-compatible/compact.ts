@@ -50,16 +50,9 @@ import {
 export { readShrinkFraction };
 import type { OpenAIMessage } from './messages.js';
 
-/** Minimal structural view of an assistant `tool_calls[]` entry (runtime-present). */
-interface OpenAIToolCallView {
-  id?: string;
-  function?: { name?: string; arguments?: string };
-}
-
-/** Read the `tool_calls` array off a message without importing the OpenAI SDK type. */
-function toolCallsOf(msg: OpenAIMessage): OpenAIToolCallView[] | undefined {
-  const tc = (msg as { tool_calls?: unknown }).tool_calls;
-  return Array.isArray(tc) ? (tc as OpenAIToolCallView[]) : undefined;
+/** Read the `tool_calls` array off an assistant message, or return `undefined`. */
+function toolCallsOf(msg: OpenAIMessage): OpenAIMessage['tool_calls'] {
+  return Array.isArray(msg.tool_calls) ? msg.tool_calls : undefined;
 }
 
 function truncateArgs(args: string): string {

@@ -260,6 +260,29 @@ describe('decideCommitMode', () => {
     expect(m.overflowPriorContiguous).toBe(false);
     expect(m.overflowRun).toEqual(['a', 'b']);
   });
+
+  it('geometryStale + anchorRow>1: does NOT merge prior band (anchorRow guard takes precedence)', () => {
+    // Regression guard for the finding from PR #2390 review: when frameErased
+    // (now geometryStale) was true, an earlier design bypassed the anchorRow<=1
+    // gate and merged the prior band unconditionally. With anchorRow > 1 the
+    // banner occupies rows above the band; merging across a potential
+    // anchor-evict shift would silently corrupt those rows. The anchorRow<=1
+    // guard must remain even when geometryStale is true.
+    const m = decideCommitMode(
+      base({
+        prevTopRow: 3,
+        frameTop: 3,
+        lineCount: 2,
+        textLines: ['a', 'b'],
+        anchorRow: 2,
+        committedBand: ['x', 'y'],
+        committedBandBottomRow: 2,
+        geometryStale: true,
+      }),
+    );
+    expect(m.overflowPriorContiguous).toBe(false);
+    expect(m.overflowRun).toEqual(['a', 'b']);
+  });
 });
 
 describe('capBandModel', () => {

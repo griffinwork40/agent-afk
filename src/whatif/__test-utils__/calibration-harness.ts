@@ -106,8 +106,18 @@ function clamp01(x: number): number {
 /**
  * Draw one sample from Beta(alpha, beta) using Johnk's method.
  * Requires α, β > 0. The harness enforces this via the BETA_FLOOR check in betaFromICC.
+ *
+ * **Degenerate guard**: if {@link betaFromICC} returned `degenerate: true`, do NOT call
+ * this function — use the mean directly. Calling `betaSample(rand, 0, 1)` (mu=0) happens
+ * to return 0 by Johnk's fallback, but it silently skips the intended degenerate branch.
  */
 export function betaSample(rand: () => number, alpha: number, beta: number): number {
+  if (alpha <= 0 || beta <= 0) {
+    throw new RangeError(
+      `betaSample: alpha and beta must be > 0 (got alpha=${alpha}, beta=${beta}). ` +
+      'If betaFromICC returned degenerate: true, use the mean directly instead of sampling.',
+    );
+  }
   // Johnk's method: generate X=U^(1/alpha), Y=V^(1/beta); accept if X+Y≤1.
   for (let i = 0; i < 1000; i++) {
     const u = rand();
@@ -188,10 +198,21 @@ const BETA_FLOOR = 1e-6;
  * Beta is degenerate — every draw equals exactly μ.  We return
  * `degenerate: true` and the caller uses μ directly instead of sampling.
  *
+ * **Caller contract**: when the returned `degenerate` flag is `true`, callers
+ * MUST use the `mean` (i.e. `params.alpha` for μ=0, or `1-params.beta` for
+ * μ=1) directly — do NOT pass the result to {@link betaSample}.
+ * `betaSample` now asserts `alpha > 0 && beta > 0` and will throw if called
+ * with degenerate params.
+ *
  * Throws RangeError if the ICC would produce α or β below BETA_FLOOR.
  */
 export function betaFromICC(mean: number, icc: number): BetaParams {
   const mu = clamp01(mean);
+  // Clamp ICC to (1e-9, 1-1e-9).  The lower floor is tighter than BETA_FLOOR (1e-6)
+  // so that extreme-ICC inputs (e.g. 1e-8) produce a clean RangeError from the
+  // alpha/beta floor check below, rather than silently passing at ICC≈1e-6 and then
+  // failing inside the sampler.  The binding constraint in normal operation is BETA_FLOOR,
+  // so the 1e-9 floor is never reached when mu is strictly inside (0,1).
   const rho = Math.max(1e-9, Math.min(1 - 1e-9, icc));
 
   // Endpoint means: Bernoulli variance = 0, Beta is degenerate at μ.
@@ -509,8 +530,7 @@ function simulateSignFlipOnce(
   trueDelta: number,
   numEpisodes: number,
   numSamples: number,
-  alpha: number,
-  betaParam: number,
+  params: BetaParams,
   tau: number,
 ): SignFlipVerdict {
   const episodeIds: string[] = [];
@@ -519,7 +539,10 @@ function simulateSignFlipOnce(
   for (let e = 0; e < numEpisodes; e++) {
     const epId = `ep_${e}`;
     episodeIds.push(epId);
-    const pBaseline = betaSample(rand, alpha, betaParam);
+    // Degenerate endpoints return mean directly (same pattern as simulateOnce).
+    const pBaseline = params.degenerate
+      ? params.alpha // alpha == mean for degenerate (mu=0 → 0, mu=1 → 1)
+      : betaSample(rand, params.alpha, params.beta);
     const deltaE = tau > 0
       ? clamp01(pBaseline + trueDelta + stdNormal(rand) * tau) - pBaseline
       : trueDelta;
@@ -558,7 +581,7 @@ export function runSignFlipGrid(opts: HarnessOptions = {}): SignFlipCell[] {
       ? theoreticalICC(opts.betweenEpisodeSd)
       : LOW_ICC;
 
-  const { alpha, beta: betaParam } = betaFromICC(baseRate, resolvedICC);
+  const betaParams = betaFromICC(baseRate, resolvedICC);
   const rand = mulberry32(seed);
   const cells: SignFlipCell[] = [];
 
@@ -568,7 +591,7 @@ export function runSignFlipGrid(opts: HarnessOptions = {}): SignFlipCell[] {
         for (const samples of SAMPLE_COUNTS) {
           let sigCount = 0;
           for (let r = 0; r < reps; r++) {
-            const v = simulateSignFlipOnce(rand, trueDelta, episodes, samples, alpha, betaParam, tau);
+            const v = simulateSignFlipOnce(rand, trueDelta, episodes, samples, betaParams, tau);
             if (v === 'sig') sigCount++;
           }
           cells.push({ trueDelta, episodes, samples, tau, reps, pSig: sigCount / reps });

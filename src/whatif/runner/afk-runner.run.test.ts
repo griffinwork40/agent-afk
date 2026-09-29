@@ -228,8 +228,28 @@ describe('accumulateStreamJson — text', () => {
       doneEvent({}),
     ]);
     const { text } = accumulateStreamJson(stdout);
-    expect(text).toBe('Before. After.');
+    // Regression guard fires first so a future refactor that leaks thinking
+    // produces an obvious failure message, not just a wrong-string mismatch.
     expect(text).not.toContain('SECRET REASONING');
+    expect(text).toBe('Before. After.');
+  });
+
+  it('excludes a thinking chunk that arrives between rounds (after tool_result)', () => {
+    // Verifies the module docstring claim that thinking after a tool_result
+    // (the round boundary) is also excluded — not just single-round thinking.
+    // Emission ordering: content → tool_use_detail → tool_result → thinking →
+    // content → done.
+    const stdout = ndjson([
+      contentChunk('Before. '),
+      toolDetailChunk('bash', 'tu1'),
+      toolResultChunk('tu1'),
+      { type: 'chunk', chunk: { type: 'thinking', content: 'INTER-ROUND SECRET' } },
+      contentChunk('After.'),
+      doneEvent({}),
+    ]);
+    const { text } = accumulateStreamJson(stdout);
+    expect(text).not.toContain('INTER-ROUND SECRET');
+    expect(text).toBe('Before. [tool: bash]After.');
   });
 });
 
@@ -311,6 +331,21 @@ describe('accumulateStreamJson — stream_retry', () => {
       doneEvent({}),
     ]);
     expect(accumulateStreamJson(stdout).text).toBe('Y [tool: bash]');
+  });
+
+  it('excludes thinking before a stream_retry; only the re-driven content survives', () => {
+    // Thinking arrives before the retry rollback: the whole aborted attempt —
+    // including the thinking chunk — is discarded. Only the re-driven content
+    // chunk after stream_retry should appear in the final text.
+    const stdout = ndjson([
+      { type: 'chunk', chunk: { type: 'thinking', content: 'ABORTED REASONING' } },
+      streamRetryEvent(),
+      contentChunk('re-driven content'),
+      doneEvent({}),
+    ]);
+    const { text } = accumulateStreamJson(stdout);
+    expect(text).not.toContain('ABORTED REASONING');
+    expect(text).toBe('re-driven content');
   });
 });
 

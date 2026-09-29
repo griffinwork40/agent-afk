@@ -76,9 +76,9 @@ function getToolCallIds(msg: OpenAIMessage): string[] | null {
  *
  *   - Every assistant `tool_calls` turn is immediately followed by a
  *     contiguous run of `role:'tool'` messages covering all call ids.
- *     Missing ids get a synthetic error result inserted at the END of the
- *     existing tool-result run (or right after the assistant message when
- *     none are present), in `tool_calls` order.
+ *     Missing ids get a synthetic error result inserted **in `tool_calls`
+ *     declaration order** — interleaved among any real results so the output
+ *     sequence matches the assistant's call order exactly.
  *
  *   - Stray `role:'tool'` messages — those not immediately after an assistant
  *     `tool_calls` message, or whose `tool_call_id` doesn't match any id in
@@ -95,6 +95,19 @@ function getToolCallIds(msg: OpenAIMessage): string[] | null {
  */
 export function repairOrphanToolCalls(messages: OpenAIMessage[]): OpenAIMessage[] {
   if (messages.length === 0) return messages;
+
+  // Fast path: skip the full scan when no message can possibly need repair.
+  // Repair is needed when any assistant message carries tool_calls (potential
+  // orphan or stray) OR when any tool message carries a defined tool_call_id
+  // (potential stray with no owning assistant). When neither is true the array
+  // is already valid and we return it as-is without allocating a new array.
+  const hasAssistantToolCalls = messages.some(
+    (m) => m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0,
+  );
+  const hasToolMessages = messages.some((m) => m.role === 'tool' && m.tool_call_id !== undefined);
+  if (!hasAssistantToolCalls && !hasToolMessages) {
+    return messages;
+  }
 
   // Build the output in a single forward pass.
   // We accumulate messages one by one; when we encounter an assistant message
@@ -138,31 +151,33 @@ export function repairOrphanToolCalls(messages: OpenAIMessage[]): OpenAIMessage[
       i++;
     }
 
-    // Build the set of ids already covered by the existing tool messages.
-    const covered = new Set<string>();
-    for (const tm of toolMsgs) {
-      const tcid = tm.tool_call_id;
-      if (typeof tcid === 'string') covered.add(tcid);
-    }
-
-    // Keep only tool messages whose tool_call_id matches one of this
-    // assistant's call ids (drops strays / mismatched ids). Tool messages with
-    // undefined tool_call_id (Ollama shim shape) are preserved conservatively.
+    // Index the existing tool messages by tool_call_id for O(1) lookup, and
+    // collect Ollama-style messages (undefined id) to preserve in order.
     const ownedIds = new Set(callIds);
+    const byId = new Map<string, OpenAIMessage>();
+    const noIdMsgs: OpenAIMessage[] = [];
     for (const tm of toolMsgs) {
       const tcid = tm.tool_call_id;
       if (tcid === undefined) {
-        // Ollama-style tool result with no correlation id — preserve.
-        out.push(tm);
+        // Ollama-style: no correlation id — preserve in encountered order.
+        noIdMsgs.push(tm);
       } else if (typeof tcid === 'string' && ownedIds.has(tcid)) {
-        out.push(tm);
+        byId.set(tcid, tm);
       }
-      // else: stray with an id that doesn't match — drop.
+      // else: stray with a defined id that doesn't belong to this assistant — drop.
     }
 
-    // Insert synthetic results for each orphaned id, in tool_calls order.
+    // Emit Ollama-style results first (no id to place them by), then results in
+    // `tool_calls` declaration order: the real message when present, otherwise a
+    // synthetic placeholder. This keeps the output sequence aligned with the
+    // assistant's call order rather than appending synthetics at the tail —
+    // strict local OpenAI-compatible shims (e.g. llama.cpp, vLLM) require this.
+    for (const msg of noIdMsgs) out.push(msg);
     for (const id of callIds) {
-      if (!covered.has(id)) {
+      const real = byId.get(id);
+      if (real !== undefined) {
+        out.push(real);
+      } else {
         out.push({
           role: 'tool',
           content: INTERRUPTED_CONTENT,

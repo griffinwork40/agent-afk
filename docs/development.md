@@ -264,10 +264,10 @@ If a daemon is already running and pnpm skipped the hook, restart it manually:
 afk service restart daemon
 ```
 
-> **Platform note:** on macOS, the hook restarts the launchd-supervised daemon automatically when it runs (i.e. when pnpm did *not* skip it). On Linux/systemd, the hook never restarts the daemon — you must run `afk service restart daemon` after every upgrade, even when the hook ran.
+> **Platform note:** on macOS, the hook restarts the launchd-supervised daemon automatically when it runs (i.e. when pnpm did **not** skip it). On Linux/systemd, the hook never restarts the daemon — you must run `afk service restart daemon` after every upgrade, even when the hook ran.
 
 **Evidence** (pnpm 10.32.1, 2026-09-25, issue [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)):
 
-- `pnpm add -g <tarball>` — postinstall **skipped** (warning printed; `~/.afk/state/telegram/bot.pid` not updated, daemon not restarted).
+- `pnpm add -g <tarball>` — postinstall **skipped** (warning printed; `~/.afk/state/telegram/bot.pid` not checked (no Telegram notice printed), daemon not restarted).
 - `pnpm add -g --allow-build=agent-afk <tarball>` — postinstall **runs**; `npm_config_global=true` confirmed in env; daemon restarted on macOS.
 - `npm_config_global` is set to `"true"` whenever postinstall does run, so `isGlobalInstall()` correctly gates daemon restarts on macOS.
