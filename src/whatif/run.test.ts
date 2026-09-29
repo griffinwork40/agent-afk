@@ -604,3 +604,57 @@ describe('runWhatif — synthetic episodes before replay turns', () => {
     // If no untagged episodes exist that's fine — synthetic-only run
   });
 });
+
+// ---------------------------------------------------------------------------
+// keepSandboxes: sandboxes.json mapping (#2478)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — keepSandboxes sandbox mapping', () => {
+  it('writes sandboxes.json in runDir when keepSandboxes is true', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    // sandboxes.json must exist in the run dir
+    const mapPath = path.join(report.runDir, 'sandboxes.json');
+    const raw = await fsp.readFile(mapPath, 'utf8');
+    const map = JSON.parse(raw) as { baseline: string; candidate: string };
+
+    // Must be strings (paths)
+    expect(typeof map.baseline).toBe('string');
+    expect(typeof map.candidate).toBe('string');
+
+    // Both sandbox roots must exist on disk
+    await expect(fsp.access(map.baseline)).resolves.toBeUndefined();
+    await expect(fsp.access(map.candidate)).resolves.toBeUndefined();
+
+    // sandboxes.json must NOT be inside either arm root
+    expect(mapPath.startsWith(map.baseline)).toBe(false);
+    expect(mapPath.startsWith(map.candidate)).toBe(false);
+
+    // Neither arm root should be under runDir (arm roots live in os.tmpdir())
+    expect(map.baseline.startsWith(report.runDir)).toBe(false);
+    expect(map.candidate.startsWith(report.runDir)).toBe(false);
+
+    // report.sandboxRoots is populated
+    expect(report.sandboxRoots).toBeDefined();
+    expect(report.sandboxRoots!.baseline).toBe(map.baseline);
+    expect(report.sandboxRoots!.candidate).toBe(map.candidate);
+
+    // Cleanup the tmp arm roots to avoid leaking in CI
+    await fsp.rm(map.baseline, { recursive: true, force: true }).catch(() => undefined);
+    await fsp.rm(map.candidate, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  it('does NOT write sandboxes.json when keepSandboxes is false', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    const mapPath = path.join(report.runDir, 'sandboxes.json');
+    await expect(fsp.access(mapPath)).rejects.toThrow();
+    expect(report.sandboxRoots).toBeUndefined();
+  });
+});

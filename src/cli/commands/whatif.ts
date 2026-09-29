@@ -290,7 +290,7 @@ async function runWhatifCommand(
         }
         const termLines2 = renderTerminal(report, palette);
         for (const line of termLines2) process.stdout.write(line + '\n');
-        process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+        printRunFooter(report, !!runOpts.keepSandboxes);
         return;
       }
       // Non-interactive, no --yes: print message and fail.
@@ -311,7 +311,27 @@ async function runWhatifCommand(
   // Terminal output.
   const termLines = renderTerminal(report, palette);
   for (const line of termLines) process.stdout.write(line + '\n');
+  printRunFooter(report, !!runOpts.keepSandboxes);
+}
+
+// ---------------------------------------------------------------------------
+// Output helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Print the standard post-run footer lines to stdout.
+ * When `keepSandboxes` is set and the report carries roots, also prints where
+ * each arm's sandbox was kept and where the mapping file lives (#2478).
+ */
+function printRunFooter(report: WhatifReport, keepSandboxes: boolean): void {
   process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+  if (keepSandboxes && report.sandboxRoots) {
+    process.stdout.write(
+      `Sandboxes kept: ${report.sandboxRoots.baseline} (baseline), ` +
+        `${report.sandboxRoots.candidate} (candidate)` +
+        ` — mapping in ${report.runDir}/sandboxes.json\n`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@
  *   - `results.json`    Full `WhatifReport` as JSON
  *   - `traces.jsonl`    All `EpisodeTrace` records, one per line
  *   - `grades.jsonl`    Per-output judge grades (verify runs only; see #2477)
+ *   - `sandboxes.json`  Arm-to-root mapping (only when --keep-sandboxes; see #2478)
  *
  * @module whatif/run.persist
  */
@@ -20,6 +21,31 @@ import type { JudgeResults } from './run.verify.scoring.js';
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
+
+/**
+ * Write `sandboxes.json` into `runDir` (NOT inside either arm root).
+ *
+ * Only called when `--keep-sandboxes` is set.  The file lives in the run
+ * directory — outside both arm roots — so writing it never reopens the
+ * arm-isolation vulnerability fixed in #2466 / #2467.
+ *
+ * Errors are swallowed (best-effort): a write failure must not mask the run
+ * result when called from the `finally` block of `runWhatif`.
+ */
+export async function persistSandboxMap(
+  runDir: string,
+  roots: { baseline: string; candidate: string },
+): Promise<void> {
+  try {
+    await fsp.writeFile(
+      path.join(runDir, 'sandboxes.json'),
+      JSON.stringify(roots, null, 2) + '\n',
+      'utf8',
+    );
+  } catch {
+    // Best-effort — do not let a write failure mask the run result.
+  }
+}
 
 /**
  * Persist run artefacts to `runDir`.

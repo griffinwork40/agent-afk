@@ -39,7 +39,7 @@ import {
 import { estimateVerifyCost } from './cost.js';
 import { buildHeadline, standardLimits } from './report.js';
 import { isUnderpowered, mdeGateRefusedMessage, mdePreflightLine } from './mde.js';
-import { persistRun } from './run.persist.js';
+import { persistRun, persistSandboxMap } from './run.persist.js';
 import { verifyRun } from './run.verify.js';
 import type {
   EpisodeTrace,
@@ -387,7 +387,11 @@ export async function runWhatif(
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
-      const report: WhatifReport = { ...partialReport, headline };
+      const report: WhatifReport = {
+        ...partialReport,
+        headline,
+        ...(options.keepSandboxes ? { sandboxRoots: sandboxes.roots } : {}),
+      };
 
       await persistRun(runDir, report, []);
       return report;
@@ -474,18 +478,25 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
+    const verifiedReport = await buildAndPersistVerifiedReport({
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
     });
+    if (options.keepSandboxes) {
+      verifiedReport.sandboxRoots = sandboxes.roots;
+    }
+    return verifiedReport;
   } finally {
     // Tear down sandboxes unless keepSandboxes
     if (!options.keepSandboxes) {
       await sandboxes.cleanup().catch(() => {
         // Best-effort; do not mask the primary error
       });
+    } else {
+      // Record where the kept sandboxes live (outside either arm root — #2478).
+      await persistSandboxMap(runDir, sandboxes.roots);
     }
   }
 }

@@ -56,6 +56,8 @@ export interface MaterializeOptions {
 export interface SandboxResult {
   baseline: Environment;
   candidate: Environment;
+  /** Opaque per-arm root paths (inside os.tmpdir()) created by mkdtemp. */
+  roots: { baseline: string; candidate: string };
   cleanup(): Promise<void>;
 }
 
@@ -278,5 +280,10 @@ export async function materializeSandboxes(
     }
   }
 
-  return { baseline, candidate, cleanup };
+  const roots = {
+    baseline: baselinePaths.root,
+    candidate: candidatePaths.root,
+  };
+
+  return { baseline, candidate, roots, cleanup };
 }
