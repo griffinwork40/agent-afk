@@ -354,9 +354,13 @@ describe('runShellTask – telemetry write', () => {
 describe('runShellTask – per-task cwd', () => {
   it('runs the command in task.cwd when set', async () => {
     const col = makeTelemetryCollector();
-    // `pwd -P` resolves symlinks so macOS /tmp → /private/tmp is handled.
+    // Use realpathSync.native to:
+    //   (a) resolve POSIX symlinks (macOS /tmp -> /private/tmp), and
+    //   (b) expand Windows 8.3 short names (RUNNER~1 -> runneradmin) so
+    //       the reference path matches what Git Bash reports via `pwd -P`.
+    //   On POSIX, realpathSync.native is identical to realpathSync.
     const { realpathSync } = require('node:fs');
-    const targetDir = realpathSync(require('node:os').tmpdir());
+    const targetDir: string = realpathSync.native(require('node:os').tmpdir());
     const result = await runShellTask(
       { taskId: 'task-cwd', command: 'pwd -P', cwd: targetDir },
       'cron',
@@ -364,9 +368,9 @@ describe('runShellTask – per-task cwd', () => {
     );
     expect(result.status).toBe('success');
     // On Windows, Git Bash reports the CWD in POSIX style (/c/Users/…) while
-    // Node's realpathSync returns a Windows path (C:\Users\…). Normalise both
-    // sides to a lowercase forward-slash form so the comparison is host-OS-
-    // agnostic. On POSIX the normalisation is a no-op.
+    // Node's realpathSync.native returns a Windows path (C:\Users\…). Normalise
+    // both sides to a lowercase forward-slash form for a host-OS-agnostic
+    // comparison. On POSIX the normalisation is a no-op.
     const normalise = (p: string) =>
       p.replace(/^\/([a-z])\//i, (_, d: string) => `${d.toLowerCase()}:/`)
        .replace(/\\/g, '/').toLowerCase();
