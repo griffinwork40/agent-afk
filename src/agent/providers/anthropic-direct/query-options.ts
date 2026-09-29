@@ -63,6 +63,13 @@ export interface AnthropicDirectQueryOptions {
   promptStream: AsyncIterable<ProviderUserTurn>;
   toolDispatcher: ToolDispatcher;
   sessionId?: string;
+  /**
+   * The session's resolved working directory (`config.cwd || process.cwd()`).
+   * Stored and surfaced via the `TurnDriverContext.cwd` field so `session.init`
+   * and other metadata report the session's own cwd, not the host process's.
+   * Absent callers (tests, external integrations) fall back to `process.cwd()`.
+   */
+  cwd?: string;
   initialMessages?: MessageParam[];
   /** Durable message-journal sink (`AgentConfig.messageJournal`); seeded into SessionState. */
   messageJournal?: import('../../journal/index.js').MessageJournal;

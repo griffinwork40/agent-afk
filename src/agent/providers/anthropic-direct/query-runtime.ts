@@ -108,6 +108,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly traceWriter?: import('../../trace/index.js').TraceSink;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
+  /**
+   * The session's configured working directory — `opts.cwd ?? process.cwd()`.
+   * Surfaced via `TurnDriverContext.cwd` so `session.init` reports the
+   * session's own directory rather than the host process's cwd — they differ
+   * for daemon tasks whose per-task `cwd` or `AFK_DAEMON_CWD` is set.
+   */
+  private readonly _cwd: string;
 
   /**
    * Per-session mutable state — see {@link SessionState}. Held as a
@@ -164,6 +171,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
+    this._cwd = opts.cwd ?? process.cwd();
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
     this.onPermissionMode = opts.onPermissionMode;
@@ -226,6 +234,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get throttleQueue() { return query.throttleQueue; },
       get fastModeController() { return query.fastModeController; },
       get beforeNextRound() { return query.beforeNextRound; },
+      get cwd() { return query._cwd; },
       composeSystem: () => query.composeSystem(),
       makeInterruptedTurnEvent: () => query.makeInterruptedTurnEvent(),
       compact: () => query.compact(),

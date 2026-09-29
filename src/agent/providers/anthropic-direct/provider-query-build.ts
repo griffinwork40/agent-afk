@@ -178,6 +178,7 @@ export function buildProviderQuery(
     ...(config.softDeadlineMs !== undefined
       ? { softDeadlineMs: config.softDeadlineMs }
       : {}),
+    cwd,
     ...(cwdDependentsFactory !== undefined ? { cwdDependentsFactory } : {}),
     ...(systemPromptRebuildFactory !== undefined ? { systemPromptRebuildFactory } : {}),
     // Path-approval half of the live `/bypass` toggle: keep the provider's

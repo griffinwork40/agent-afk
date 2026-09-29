@@ -58,6 +58,13 @@ export interface TurnDriverContext {
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
   /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
   readonly beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * The session's configured working directory — `config.cwd || process.cwd()`.
+   * Used instead of bare `process.cwd()` so daemon tasks whose `cwd` differs
+   * from the daemon process's working directory report the correct path in
+   * `session.init`, the ledger meta, and the debug banner.
+   */
+  readonly cwd: string;
   /** Build the per-turn `system` payload (re-read each turn for date rollover). */
   composeSystem(): ContentBlockParam[] | null;
   /** Synthetic terminal for an interrupted turn that yielded none of its own. */
@@ -72,7 +79,7 @@ function buildSessionInfo(ctx: TurnDriverContext): ProviderSessionInfo {
     sessionId: ctx.initSessionId,
     model: ctx.state.currentModel,
     permissionMode: ctx.state.currentPermissionMode,
-    cwd: process.cwd(),
+    cwd: ctx.cwd,
     tools: [],
     slashCommands: [],
     skills: [],
