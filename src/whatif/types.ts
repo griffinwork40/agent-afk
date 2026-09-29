@@ -405,6 +405,11 @@ export interface WhatifReport {
    * Present when the verify phase ran; lets callers see corpus shrinkage.
    */
   corpusExclusions?: import('./episodes.js').CorpusExclusions;
+  /**
+   * Kept sandbox roots, present only when `--keep-sandboxes` was set.
+   * The mapping is also written to `<runDir>/sandboxes.json`.
+   */
+  keptSandboxes?: { baseline: string; candidate: string };
 }
 
 // ---------------------------------------------------------------------------

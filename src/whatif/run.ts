@@ -41,6 +41,7 @@ import { buildHeadline, standardLimits } from './report.js';
 import { isUnderpowered, mdeGateRefusedMessage, mdePreflightLine } from './mde.js';
 import { persistRun } from './run.persist.js';
 import { verifyRun } from './run.verify.js';
+import { writeSandboxMap } from './run.sandbox-map.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
@@ -354,7 +355,7 @@ export async function runWhatif(
     },
   });
 
-  const { baseline, candidate } = sandboxes;
+  const { baseline, candidate, roots: sandboxRoots } = sandboxes;
 
   const runnerOpts: RunnerOptions = {
     timeoutMs: options.episodeTimeoutMs,
@@ -385,6 +386,7 @@ export async function runWhatif(
         runDir,
         limits,
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
+        ...(options.keepSandboxes ? { keptSandboxes: sandboxRoots } : {}),
       };
       const headline = buildHeadline(partialReport);
       const report: WhatifReport = { ...partialReport, headline };
@@ -479,10 +481,13 @@ export async function runWhatif(
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
+      ...(options.keepSandboxes ? { keptSandboxes: sandboxRoots } : {}),
     });
   } finally {
-    // Tear down sandboxes unless keepSandboxes
-    if (!options.keepSandboxes) {
+    if (options.keepSandboxes) {
+      // Write the arm-to-root mapping outside both sandbox roots (best-effort).
+      writeSandboxMap(runDir, sandboxRoots);
+    } else {
       await sandboxes.cleanup().catch(() => {
         // Best-effort; do not mask the primary error
       });
