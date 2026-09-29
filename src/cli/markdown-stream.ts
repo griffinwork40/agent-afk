@@ -1,5 +1,6 @@
 import { ResizeBus } from './terminal-size.js';
 import type { TerminalCompositor } from './terminal-compositor.js';
+import { CommitWriteTx, type TxStream } from './terminal-compositor.commit-write-tx.js';
 import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { calculateContentWidth, calculateProseContentWidth, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle } from './markdown-stream-format.js';
 import { PendingFormatCache } from './markdown-stream.pending-cache.js';
@@ -416,6 +417,28 @@ export class StreamingMarkdownRenderer {
   /** Append `chunk` (may be '') and commit every completed block the defer gate allows. */
   private runPipeline(chunk: string): void {
     if (this.flushing) return;
+    this.atomically(() => this.runPipelineNow(chunk));
+  }
+
+  /**
+   * Invariant (one pipeline pass, one visible state): a pass that completes a
+   * block repaints the overlay WITHOUT that block (onPreCommit) and then
+   * commits it above. Written separately, the terminal shows the block vanish
+   * for a frame and reappear several rows higher: the "paragraph jump".
+   * Running the whole pass inside one write transaction delivers only the
+   * final state, in one DEC 2026 synchronized write. Every pass (new chunk,
+   * forced drain, deferred-commit recheck timer) goes through runPipeline, and
+   * everything in here is synchronous, so the transaction cannot capture
+   * writes from unrelated work.
+   */
+  private atomically(fn: () => void): void {
+    const stream = this.compositor?.stdout as TxStream | undefined;
+    if (!stream) return fn();
+    const tx = CommitWriteTx.begin(stream);
+    try { fn(); } finally { tx.end(); }
+  }
+
+  private runPipelineNow(chunk: string): void {
     this.buffer = runParsePipeline(this.buffer, chunk, {
       deferCommit: (buffer, boundary) => this.defer.shouldDefer(this.blockRevealRemaining(buffer, boundary)),
       onPreCommit: (newBuffer) => {
@@ -530,6 +553,10 @@ export class StreamingMarkdownRenderer {
    * the turn — where it leaks into scrollback every time `commitAbove` repaints.
    */
   commitPending(): void {
+    this.atomically(() => this.commitPendingNow());
+  }
+
+  private commitPendingNow(): void {
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     this.releaseHeld(true);
     this.commitDeferred();
