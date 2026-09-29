@@ -396,11 +396,14 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
+    if (!verifyResult) throw new Error('verifyRun did not return a verifyResult');
+    if (!verifyJudgeResults) throw new Error('verifyRun did not return judgeResults');
+
     return buildAndPersistVerifiedReport({
-      spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
+      spec, structural, predictions, verifyResult, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
-      judgeResults: verifyJudgeResults!,
+      judgeResults: verifyJudgeResults,
       ...(baselineSampleResult ? { baselineSamplePerPrediction: baselineSampleResult.perPrediction } : {}),
     });
   } finally {

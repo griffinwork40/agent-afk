@@ -35,15 +35,15 @@ async function readGrades(dir: string): Promise<GradeEntry[]> {
   return raw.split('\n').filter(Boolean).map((l) => JSON.parse(l) as GradeEntry);
 }
 
-let tmp: string;
-beforeEach(async () => { tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'whatif-grades-test-')); });
-afterEach(async () => { await fsp.rm(tmp, { recursive: true, force: true }); });
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 describe('persistGrades', () => {
+  let tmp: string;
+  beforeEach(async () => { tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'whatif-grades-test-')); });
+  afterEach(async () => { await fsp.rm(tmp, { recursive: true, force: true }); });
+
   it('writes one row per (trace, prediction) pair with all pairing keys', async () => {
     const traces: EpisodeTrace[] = [
       trace('s1', 'baseline', 0),

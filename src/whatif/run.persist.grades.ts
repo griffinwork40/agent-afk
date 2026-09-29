@@ -84,7 +84,7 @@ export async function persistGrades(
       if (pYes === undefined) continue; // question not graded (discovered pred may follow later)
       const entry: GradeEntry = {
         episodeId: trace.episodeId,
-        env: trace.env as 'baseline' | 'candidate',
+        env: trace.env,
         sample: trace.sample,
         predictionId,
         pYes,
