@@ -143,6 +143,19 @@ describe('/whatif slash command', () => {
     expect(lines.some((l) => l.includes('report.md') || l.includes('report'))).toBe(true);
   });
 
+  it('forwards --no-baseline-sample to runWhatif (regression: #2599)', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "Always ask." --no-baseline-sample --yes');
+    expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).toMatchObject({ noBaselineSample: true });
+  });
+
+  it('does not set noBaselineSample when flag is absent', async () => {
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "Always ask." --yes');
+    // noBaselineSample should be absent (not spread in) when flag not given
+    expect(vi.mocked(runWhatif).mock.calls[0]?.[0]).not.toMatchObject({ noBaselineSample: true });
+  });
+
   it('prints compiled spec and asks for --yes when text is given without --yes', async () => {
     const { resolveSpec } = await import('../../../whatif/surface.js');
     vi.mocked(resolveSpec).mockResolvedValueOnce({

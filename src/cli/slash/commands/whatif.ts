@@ -268,6 +268,7 @@ export const whatifCmd: SlashCommand = {
     '--keep-sandboxes',
     '--probes',
     '--max-predictions',
+    '--no-baseline-sample',
     '--yes',
     '--json',
   ],
