@@ -308,6 +308,24 @@ export class OpenAICompatibleProvider implements ModelProvider {
           : { active: [], backgroundJobs: [] },
     });
 
+    // Invariant: resolve the session id BEFORE anything that consumes it —
+    // the tool dispatcher (every `ToolHandlerContext.sessionId`),
+    // `buildOpts.sessionIdOverride` (query construction), and the presence
+    // write below must receive the SAME id. The Telegram watcher resolves a
+    // session's ledger path from the id in its presence file, so a mismatch
+    // makes auto-subscribe tail a ledger that does not exist.
+    // History: both providers shared a config.sessionId bug fixed via the
+    // shared helper; parity is pinned by shared/dispatcher-session-id.test.ts.
+    const resolvedSession = resolveTopLevelSessionId({
+      sessionId: config.sessionId,
+      resume: config.resume,
+      depth: config.depth,
+      parentSessionId: config.parentSessionId,
+      surface: this.providerOpts.surface ?? 'cli',
+      memoized: this._mintedSessionId,
+    });
+    this._mintedSessionId = resolvedSession.memoized;
+
     // External-dispatcher branch mirrors anthropic-direct: when the caller
     // supplies their own dispatcher, wrap it so `get_runtime_state` is still
     // intercepted by the awareness handler. Otherwise the inner dispatcher
@@ -319,7 +337,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
           ...(this._sharedReadRoots !== undefined ? { readRoots: this._sharedReadRoots } : {}),
           ...(this._sharedWriteRoots !== undefined ? { writeRoots: this._sharedWriteRoots } : {}),
-          ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
+          ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
           ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
           ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
           // Fork-scoped central output cap (#661): forwarded from the child
@@ -338,26 +356,6 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.hookRegistry !== undefined ? { hookRegistry: config.hookRegistry } : {}),
           ...(config.planExitControls !== undefined ? { planExitControls: config.planExitControls } : {}),
         });
-
-    // Invariant: resolve the session id BEFORE anything that consumes it —
-    // both `buildOpts.sessionIdOverride` (query construction) and the presence
-    // write below must receive the SAME id. The Telegram watcher resolves a
-    // session's ledger path from the id in its presence file, so a mismatch
-    // makes auto-subscribe tail a ledger that does not exist.
-    //
-    // This provider previously hand-duplicated the anthropic-direct gate,
-    // including its `config.sessionId` bug: that field is set only under
-    // --resume, so a fresh session wrote no presence file at all. Both providers
-    // now call the one shared helper so they cannot drift again.
-    const resolvedSession = resolveTopLevelSessionId({
-      sessionId: config.sessionId,
-      resume: config.resume,
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      surface: this.providerOpts.surface ?? 'cli',
-      memoized: this._mintedSessionId,
-    });
-    this._mintedSessionId = resolvedSession.memoized;
 
     const buildOpts: NonNullable<Parameters<typeof buildQueryFromConfig>[2]> = {};
     // Undefined for forks — they keep the factory's own per-call mint.

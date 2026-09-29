@@ -181,6 +181,8 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
         maxTurns: parsed.options.maxTurns,
         episodeTimeoutMs: parsed.options.episodeTimeoutMs,
         keepSandboxes: parsed.options.keepSandboxes,
+        ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
+        ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
       },
       deps,
     );

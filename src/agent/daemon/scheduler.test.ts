@@ -384,7 +384,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
   async function runWith(opts: {
     response: string;
     metadata?: Record<string, unknown>;
-  }): Promise<TaskCompletionDetails | undefined> {
+  }): Promise<{ details: TaskCompletionDetails | undefined; record: TelemetryRecord | undefined }> {
     const onTaskComplete = vi.fn();
     const scheduler = new CronScheduler({
       telemetryPath,
@@ -396,24 +396,28 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
     await scheduler.tick('t');
     await scheduler.stop();
-    if (!onTaskComplete.mock.calls[0]) return undefined;
-    return onTaskComplete.mock.calls[0][1] as TaskCompletionDetails | undefined;
+    if (!onTaskComplete.mock.calls[0]) return { details: undefined, record: undefined };
+    return {
+      record: onTaskComplete.mock.calls[0][0] as TelemetryRecord | undefined,
+      details: onTaskComplete.mock.calls[0][1] as TaskCompletionDetails | undefined,
+    };
   }
 
   it('Done + no evidence → details.doneUnverified === true', async () => {
-    const details = await runWith({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } });
+    const { details, record } = await runWith({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } });
     expect(details?.doneUnverified).toBe(true);
+    expect(record?.doneUnverified).toBe(true);
   });
 
   it('Done + no metadata (no tools ran) → details.doneUnverified === true', async () => {
     // Absent metadata is the common tool-less tick; runOnce defaults to [] and
     // the probe still flags an unbacked Done.
-    const details = await runWith({ response: DONE_RESPONSE });
+    const { details } = await runWith({ response: DONE_RESPONSE });
     expect(details?.doneUnverified).toBe(true);
   });
 
   it('Done + corroborating evidence (write_file) → doneUnverified falsy', async () => {
-    const details = await runWith({
+    const { details } = await runWith({
       response: DONE_RESPONSE,
       metadata: { successfulToolNames: ['read_file', 'write_file'] },
     });
@@ -421,7 +425,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
   });
 
   it('Done + only read-only tools → details.doneUnverified === true', async () => {
-    const details = await runWith({
+    const { details } = await runWith({
       response: DONE_RESPONSE,
       metadata: { successfulToolNames: ['read_file', 'grep', 'glob'] },
     });
@@ -429,7 +433,7 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
   });
 
   it('non-Done terminal state (Blocked) → doneUnverified falsy even with no evidence', async () => {
-    const details = await runWith({ response: BLOCKED_RESPONSE, metadata: { successfulToolNames: [] } });
+    const { details } = await runWith({ response: BLOCKED_RESPONSE, metadata: { successfulToolNames: [] } });
     expect(details?.doneUnverified ?? false).toBe(false);
   });
 
@@ -483,11 +487,63 @@ describe('CronScheduler — "Done" verification (doneUnverified)', () => {
     await scheduler.stop();
     expect(seen).toEqual([['bash', 'read_file']]);
   });
+
+  // ── telemetry persistence (#2307) ──────────────────────────────────────────
+
+  it('unverified Done tick writes doneUnverified:true to the telemetry file', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete: vi.fn(),
+      doneUnverifiedProbe: probe,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    expect(written.status).toBe('success');          // status unchanged (backward compat)
+    expect(written.doneUnverified).toBe(true);       // new field persisted
+  });
+
+  it('verified Done tick (has evidence) omits doneUnverified from the telemetry file', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () =>
+        makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: ['write_file'] } }),
+      onTaskComplete: vi.fn(),
+      doneUnverifiedProbe: probe,
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    expect(written.status).toBe('success');
+    expect(written.doneUnverified).toBeUndefined();  // absent when verified
+  });
+
+  it('no probe → doneUnverified absent from telemetry (fail-open)', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: DONE_RESPONSE, metadata: { successfulToolNames: [] } }),
+      onTaskComplete: vi.fn(),
+      // no doneUnverifiedProbe
+    });
+    scheduler.register({ taskId: 't', command: 'run', trigger: 'cron', cronExpression: '* * * * *' });
+    await scheduler.tick('t');
+    await scheduler.stop();
+    const line = readFileSync(telemetryPath, 'utf-8').trim();
+    const written = JSON.parse(line) as { status: string; doneUnverified?: boolean };
+    expect(written.status).toBe('success');
+    expect(written.doneUnverified).toBeUndefined();
+  });
 });
 
 // TaskCompletionDetails is imported implicitly through the scheduler module's
 // exported type surface; alias it for the local casts above.
 type TaskCompletionDetails = import('./scheduler.js').TaskCompletionDetails;
+type TelemetryRecord = import('./scheduler.js').TelemetryRecord;
 
 describe('CronScheduler — witness trace-writer wiring', () => {
   let dir: string;
@@ -1068,5 +1124,159 @@ describe('CronScheduler — per-task cwd', () => {
     expect(record.errorMessage).toMatch(/does not exist/);
     // No session was spawned — we bailed before spawn
     expect(sessionSpawned).toBe(false);
+  });
+});
+
+// ── overlap guard (#2299) ─────────────────────────────────────────────────────
+
+describe('CronScheduler — overlap guard (#2299)', () => {
+  let dir: string;
+  let telemetryPath: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    telemetryPath = join(dir, 'telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a second tick while the first is in flight yields status:skipped, skipReason:overlap', async () => {
+    // Gate: the first sendMessage never resolves until we release it.
+    let releaseFirstRun!: () => void;
+    const firstRunGate = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+
+    let sessionCallCount = 0;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => {
+        sessionCallCount += 1;
+        return {
+          sendMessage: () => firstRunGate.then(() => ({ content: 'ok' })),
+          close: () => Promise.resolve(),
+        } as unknown as AgentSession;
+      },
+    });
+
+    scheduler.register({
+      taskId: 'overlap-test',
+      command: 'slow-run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    // Start first tick (does not await — it is blocked on firstRunGate).
+    const firstTickPromise = scheduler.tick('overlap-test');
+
+    // Yield to the microtask queue so the first tick's `inFlightTaskIds.add`
+    // runs before the second tick checks the guard.
+    await Promise.resolve();
+
+    // Second tick fires while first is still in flight.
+    const secondRecord = await scheduler.tick('overlap-test');
+
+    // Verify the skip record.
+    expect(secondRecord.status).toBe('skipped');
+    expect(secondRecord.skipReason).toBe('overlap');
+    expect(secondRecord.taskId).toBe('overlap-test');
+
+    // Only one real session should have been constructed.
+    expect(sessionCallCount).toBe(1);
+
+    // Let the first tick finish and confirm it succeeds.
+    releaseFirstRun();
+    const firstRecord = await firstTickPromise;
+    expect(firstRecord.status).toBe('success');
+
+    await scheduler.stop();
+  });
+
+  it('the guard releases after a successful run so the next tick proceeds normally', async () => {
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => makeSession({ response: 'done' }),
+    });
+    scheduler.register({
+      taskId: 'guard-release-test',
+      command: 'fast-run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    // First tick: completes normally.
+    const r1 = await scheduler.tick('guard-release-test');
+    expect(r1.status).toBe('success');
+
+    // Second tick: guard must be released so this also completes normally.
+    const r2 = await scheduler.tick('guard-release-test');
+    expect(r2.status).toBe('success');
+
+    await scheduler.stop();
+  });
+
+  it('the guard releases after a failed run so the next tick proceeds normally', async () => {
+    let calls = 0;
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => {
+        calls += 1;
+        // First call throws; subsequent calls succeed.
+        if (calls === 1) return makeSession({ throws: new Error('boom') });
+        return makeSession({ response: 'ok' });
+      },
+    });
+    scheduler.register({
+      taskId: 'guard-error-release',
+      command: 'flaky-run',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    const r1 = await scheduler.tick('guard-error-release');
+    expect(r1.status).toBe('error');
+
+    // Guard must be released even on error.
+    const r2 = await scheduler.tick('guard-error-release');
+    expect(r2.status).toBe('success');
+
+    await scheduler.stop();
+  });
+
+  it('overlap telemetry record is written to the JSONL sink', async () => {
+    let releaseFirstRun!: () => void;
+    const firstRunGate = new Promise<void>((resolve) => { releaseFirstRun = resolve; });
+
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      sessionFactory: () => ({
+        sendMessage: () => firstRunGate.then(() => ({ content: 'ok' })),
+        close: () => Promise.resolve(),
+      }) as unknown as AgentSession,
+    });
+    scheduler.register({
+      taskId: 'overlap-telemetry',
+      command: 'work',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+    });
+
+    const firstTickPromise = scheduler.tick('overlap-telemetry');
+    await Promise.resolve();
+
+    const skipped = await scheduler.tick('overlap-telemetry');
+    expect(skipped.status).toBe('skipped');
+
+    releaseFirstRun();
+    await firstTickPromise;
+
+    // Both records should appear in the telemetry file.
+    const lines = readFileSync(telemetryPath, 'utf-8').trim().split('\n');
+    const records = lines.map((l) => JSON.parse(l) as { status: string; skipReason?: string });
+    const skippedRecords = records.filter((r) => r.status === 'skipped');
+    expect(skippedRecords).toHaveLength(1);
+    expect(skippedRecords[0]!.skipReason).toBe('overlap');
+
+    await scheduler.stop();
   });
 });

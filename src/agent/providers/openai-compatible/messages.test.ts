@@ -205,27 +205,42 @@ describe('buildMessages', () => {
   });
 
   it('appends priorTurns after history but before current user turn', () => {
+    // Use a realistic assistant+tool_calls turn so the history is valid for the
+    // OpenAI API and passes through repairOrphanToolCalls unchanged (clean history).
+    const assistantTurnWithCall = {
+      role: 'assistant' as const,
+      content: null as unknown as string,
+      tool_calls: [{ id: 'call_1', type: 'function' as const, function: { name: 'fn', arguments: '{}' } }],
+    };
     const m = buildMessages({
       config: baseConfig(),
       priorTurns: [
-        { role: 'assistant', content: 'thinking...' },
+        assistantTurnWithCall,
         { role: 'tool', content: 'tool result', tool_call_id: 'call_1' },
       ],
       currentUserText: 'continue',
     });
     expect(m).toEqual([
-      { role: 'assistant', content: 'thinking...' },
+      assistantTurnWithCall,
       { role: 'tool', content: 'tool result', tool_call_id: 'call_1' },
       { role: 'user', content: 'continue' },
     ]);
   });
 
   it('handles a turn with no currentUserText (e.g. continuation of a tool loop)', () => {
+    // A solo role:'tool' message is a stray (no owning assistant tool_calls),
+    // so repairOrphanToolCalls drops it. Use a complete assistant+tool pair
+    // instead to exercise the pass-through path for a tool loop continuation.
+    const assistantTurnWithCall = {
+      role: 'assistant' as const,
+      content: null as unknown as string,
+      tool_calls: [{ id: 'x', type: 'function' as const, function: { name: 'fn', arguments: '{}' } }],
+    };
     const m = buildMessages({
       config: baseConfig(),
-      priorTurns: [{ role: 'tool', content: 'r', tool_call_id: 'x' }],
+      priorTurns: [assistantTurnWithCall, { role: 'tool', content: 'r', tool_call_id: 'x' }],
     });
-    expect(m).toEqual([{ role: 'tool', content: 'r', tool_call_id: 'x' }]);
+    expect(m).toEqual([assistantTurnWithCall, { role: 'tool', content: 'r', tool_call_id: 'x' }]);
   });
 
   it('down-converts image parts in history to text when target model has no vision', () => {

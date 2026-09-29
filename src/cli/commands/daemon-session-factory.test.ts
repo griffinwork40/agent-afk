@@ -315,4 +315,16 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
     expect(subExec.ctx?.cwd).toBe(daemonWideCwd);
     void session.close().catch(() => undefined);
   });
+  it('executors fork from a deferred parent exposing the daemon session journal (subagents journal via forSubagent)', () => {
+    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = factory(makeConfig());
+    const provider = (session as unknown as { config?: { provider?: unknown } }).config?.provider as AnthropicDirectProvider;
+    expect(session.messageJournal).toBeDefined();
+    type Ctx = { ctx?: { parentSession?: { messageJournal?: unknown } } };
+    for (const exec of [readSubagentExecutor(provider), readSkillExecutor(provider), readComposeExecutor(provider)]) {
+      // Same object: fork-child-config turns it into `forSubagent(childId)`.
+      expect((exec as Ctx).ctx?.parentSession?.messageJournal).toBe(session.messageJournal);
+    }
+    void session.close().catch(() => undefined);
+  });
 });

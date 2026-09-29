@@ -1,5 +1,5 @@
 import { Context } from 'telegraf';
-import type { Message, MessageEntity } from 'telegraf/types';
+import type { Message } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
 import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatMicrocompact, formatQueued, escapeHtml } from '../formatter.js';
@@ -20,6 +20,10 @@ import type { ContentBlockParam, DocumentBlockParam } from '@anthropic-ai/sdk/re
 import { registerInboundImageBlocks } from '../../agent/content/attachment-registry.js';
 import { handleDocumentMessage } from './document.js';
 import { sniffMimeType, readResponseBytesWithLimit } from './message.media-helpers.js';
+import { drainBgInjections, prependToContent } from '../bg-injection.js';
+import { addressedToBot } from './message.addressed-to-bot.js';
+
+export { addressedToBot };
 
 type QueueItem =
   | { type: 'message'; ctx: Context; text: string }
@@ -29,51 +33,6 @@ type QueueItem =
   | { type: 'compact'; ctx: Context };
 
 type LogFn = (...args: unknown[]) => void;
-
-/**
- * Decide whether a message is "addressed to the bot" for the per-chat tag-only
- * response policy. A message counts as addressed when ANY of:
- *
- *   1. It replies to one of the bot's own messages (`replyFromId === botId`).
- *   2. It carries a `mention` entity whose text is `@<botUsername>` (the entity
- *      text is sliced from `text` at [offset, offset+length) and compared
- *      case-insensitively — Telegram usernames are case-insensitive).
- *   3. It carries a `text_mention` entity (used for users without a public
- *      username) whose `user.id` equals the bot's id.
- *
- * Fail-closed on the mention paths when the inputs needed to evaluate them are
- * missing (no text, no entities, or no known bot username) — those simply don't
- * match, so an un-addressed message stays un-addressed.
- */
-export function addressedToBot(
-  text: string | undefined,
-  entities: MessageEntity[] | undefined,
-  replyFromId: number | undefined,
-  botId: number,
-  botUsername: string | undefined,
-): boolean {
-  // (a) Reply to one of the bot's own messages.
-  if (replyFromId !== undefined && replyFromId === botId) return true;
-
-  if (!entities || entities.length === 0) return false;
-
-  const wantMention = botUsername ? `@${botUsername.toLowerCase()}` : undefined;
-
-  for (const e of entities) {
-    // (c) text_mention: discriminated narrowing exposes `user` without a cast.
-    if (e.type === 'text_mention') {
-      if (e.user?.id === botId) return true;
-      continue;
-    }
-    // (b) mention: the entity text is the @username; compare case-insensitively.
-    if (e.type === 'mention' && wantMention && text !== undefined) {
-      const mentionText = text.slice(e.offset, e.offset + e.length).toLowerCase();
-      if (mentionText === wantMention) return true;
-    }
-  }
-
-  return false;
-}
 
 /**
  * Message handler with queueing support
@@ -908,7 +867,7 @@ export class MessageHandler {
       // Keep the "typing…" indicator alive for the whole (often multi-minute)
       // streamed turn; a one-shot chat action would expire after ~5s.
       await withTypingIndicator(ctx, () =>
-        streamResponse(ctx, session, content, this.log, {
+        streamResponse(ctx, session, prependToContent(drainBgInjections(routeKey(route)), content), this.log, {
           cleanFinal: true,
           // Record the completed turn into the shared session store so the CLI
           // can `--resume <name>` this Telegram conversation. Best-effort inside.

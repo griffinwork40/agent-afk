@@ -760,6 +760,22 @@ export const SCENARIOS: Record<string, PtyScenario> = {
         ['MCPWARN', 'FIRST_TURN_OUTPUT'],
       ],
     },
+    // content-hug (#2229): the first commit no longer scrolls the banner into
+    // scrollback. The first reply flows directly UNDER the banner and the
+    // warnings, so all of them stay in the VIEWPORT (baseY=0). The invariant
+    // under test is unchanged (the post-clear warnings survive the arm and the
+    // first commit, exactly once, in order); only their location differs.
+    hugExpect: {
+      absent: ['PRECLEAR_LINE_0', 'PRECLEAR_LINE_29'],
+      inViewport: ['POSTCLEAR_BANNER_0', 'SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
+      // The banner too: keeping it on screen must never duplicate it.
+      exactlyOnce: ['POSTCLEAR_BANNER_0', 'POSTCLEAR_BANNER_9', 'SHADOWWARN', 'MCPWARN', 'FIRST_TURN_OUTPUT'],
+      order: [
+        ['POSTCLEAR_BANNER_9', 'SHADOWWARN'],
+        ['SHADOWWARN', 'MCPWARN'],
+        ['MCPWARN', 'FIRST_TURN_OUTPUT'],
+      ],
+    },
   },
   // ─────────────────────────────────────────────────────────────────────────
   // smoke-text (AFK_SMOKE_TEXT): the reveal mask must never corrupt what

@@ -42,6 +42,7 @@ import { scanLocalPlugins } from '../plugins-scanner.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 import { errorMessage } from '../../utils/errors.js';
+export { compileMatcher, CLAUDE_CODE_ALIASES } from './matcher.js';
 
 // ---------------------------------------------------------------------------
 // Raw shapes (as they appear on disk)
@@ -51,6 +52,8 @@ export interface RawCommandHook {
   type: 'command';
   command: string;
   timeout_ms?: number;
+  /** Claude Code field: seconds. Honored when `timeout_ms` is absent. */
+  timeout?: number;
 }
 
 /** Union type for hook entries; extensible for future hook types. */
@@ -139,37 +142,6 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // keeps the executor's SIGKILL deadline aligned with the registry ceiling, so
 // there is no orphan window and the documented cap matches reality.
 
-/**
- * Compile a matcher string into a predicate that tests a tool name.
- *
- * - `undefined` or `"*"` → always true
- * - `"/regex/[flags]"` → compiled as `RegExp`
- * - any other string → strict equality
- */
-export function compileMatcher(matcher: string | undefined): (toolName: string) => boolean {
-  if (matcher === undefined || matcher === '*') return () => true;
-
-  // Regex syntax: /pattern/ or /pattern/flags
-  const regexMatch = /^\/(.+)\/([gimsuy]*)$/.exec(matcher);
-  if (regexMatch !== null) {
-    const pattern = regexMatch[1]!;
-    const flags = regexMatch[2]!;
-    try {
-      // Strip g/y flags before constructing the RegExp. Both are stateful:
-      // they advance `lastIndex` on each re.test() call, so a reused instance
-      // (cached once per group in config-bridge) would alternate true/false on
-      // successive invocations of the same tool. i/m/s/u are stateless and safe.
-      const safeFlags = flags.replace(/[gy]/g, '');
-      const re = new RegExp(pattern, safeFlags);
-      return (toolName: string) => re.test(toolName);
-    } catch {
-      // Malformed regex — fall through to exact-match
-    }
-  }
-
-  return (toolName: string) => toolName === matcher;
-}
-
 interface SingleFileResult {
   hooks: ResolvedHooksConfig;
   enableShellHooks: boolean;
@@ -188,10 +160,16 @@ function validateHook(raw: unknown): ResolvedCommandHook | null {
   if (typeof obj['command'] !== 'string' || obj['command'].length === 0) {
     return null;
   }
-  const rawTimeout =
-    typeof obj['timeout_ms'] === 'number' && obj['timeout_ms'] > 0
-      ? obj['timeout_ms']
-      : DEFAULT_TIMEOUT_MS;
+  // timeout_ms wins; fall back to timeout (seconds, Claude Code field) × 1000;
+  // both default to DEFAULT_TIMEOUT_MS when absent or non-positive.
+  let rawTimeout: number;
+  if (typeof obj['timeout_ms'] === 'number' && obj['timeout_ms'] > 0) {
+    rawTimeout = obj['timeout_ms'];
+  } else if (typeof obj['timeout'] === 'number' && obj['timeout'] > 0) {
+    rawTimeout = obj['timeout'] * 1_000;
+  } else {
+    rawTimeout = DEFAULT_TIMEOUT_MS;
+  }
   // Clamp to the registry's per-handler ceiling — see DEFAULT_TIMEOUT_MS note.
   const timeoutMs = Math.min(rawTimeout, HOOK_HANDLER_TIMEOUT_MS);
   return { type: 'command', command: obj['command'], timeoutMs };

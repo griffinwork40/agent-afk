@@ -10,6 +10,8 @@
  */
 
 import { palette } from './palette.js';
+import { stripAnsi } from './display.js';
+import { getGlyphs, type Glyphs } from './commands/interactive/tool-lane-render.js';
 import { renderStatusLine, type ImageAttachment } from './input/attachments.js';
 import type { SpinnerController } from './input/spinner.js';
 import type { CompositorScrollRegionGuard } from './terminal-compositor.types.js';
@@ -88,8 +90,74 @@ export function truncateOverlayPreservingHead(lines: string[], budget: number): 
   // tailCount >= 2 for any budget >= 4: headCount >= 1, so budget - 1 - 1 >= 2.
   const tailCount = budget - headCount - 1;
   const hidden = lines.length - headCount - tailCount;
-  const indicator = palette.dim(`      ${hidden} earlier ${hidden === 1 ? 'line' : 'lines'} hidden`);
-  return [...lines.slice(0, headCount), indicator, ...lines.slice(-tailCount)];
+  const head = lines.slice(0, headCount);
+  const tail = lines.slice(-tailCount);
+  const below = tail.find((l) => stripAnsi(l).trim().length > 0);
+  const gutter = hiddenIndicatorGutter(head[head.length - 1], below);
+  const indicator = palette.dim(`${gutter}${hidden} earlier ${hidden === 1 ? 'line' : 'lines'} hidden`);
+  return [...head, indicator, ...tail];
+}
+
+/** Glyphs whose rail continues UP out of their cell (so the row above must draw a rail). */
+const RAIL_UP = new Set(['│', '├', '╰', '└', '┤', '┼', '┴']);
+/** Glyphs whose rail continues DOWN out of their cell. */
+const RAIL_DOWN = new Set(['│', '├', '╭', '┌', '┤', '┼', '┬']);
+/** Tree node glyphs that sit ON a parent rail (e.g. nested `◉ → Agent(...)`). */
+const NODE = new Set(['◉', '○', '●', '◆', '◇']);
+
+interface GutterGlyphs { rail: string; up: Set<string>; down: Set<string>; horiz: Set<string>; node: Set<string> }
+
+/**
+ * Contract: the Unicode box-drawing sets are always recognised (they never
+ * lead ordinary content). ASCII spine chars (`|`, `+`, `\\`, `-`, `o`) DO lead
+ * ordinary content (markdown bullets, tables, "+2 more"), so they are added only
+ * when the tool lane is actually drawing with {@link getGlyphs}' ASCII set, and
+ * the drawn rail follows the active set.
+ */
+function gutterGlyphs(g: Readonly<Glyphs>): GutterGlyphs {
+  const rail = g.spine[0]!;
+  const up = new Set(RAIL_UP), down = new Set(RAIL_DOWN), horiz = new Set(['─']), node = new Set(NODE);
+  if (rail !== '│') {
+    up.add(rail).add(g.midConnector[0]!).add(g.lastConnector[0]!);
+    down.add(rail).add(g.midConnector[0]!);
+    horiz.add(g.midConnector[1]!);
+    node.add(g.turnRoot[0]!);
+  }
+  return { rail, up, down, horiz, node };
+}
+
+/**
+ * Contract: derive the leading gutter for the synthetic "N earlier lines hidden"
+ * row from its neighbours so it neither breaks the tree spine nor escapes the
+ * content margin.
+ *
+ * Scans the leading run of `below` (the first non-blank row after the
+ * indicator) cell by cell: spaces are copied, any glyph whose rail connects
+ * upward becomes the active rail, a horizontal run directly after a connector
+ * (`├─`, `+-`) becomes spaces. The scan stops at the first content glyph; if that glyph is a tree node sitting on a rail that the
+ * row `above` carries down, a rail is drawn in its column. Returns a string
+ * ending in whitespace (or empty) so the indicator text never touches a rail.
+ * Box-drawing glyphs are single-cell, so code-point index == column.
+ */
+export function hiddenIndicatorGutter(
+  above: string | undefined,
+  below: string | undefined,
+  glyphs: Readonly<Glyphs> = getGlyphs(),
+): string {
+  const { rail, up: railUp, down: railDown, horiz, node } = gutterGlyphs(glyphs);
+  const a = [...stripAnsi(above ?? '')];
+  const b = [...stripAnsi(below ?? '')];
+  let out = '';
+  for (let i = 0; i < b.length; i++) {
+    const ch = b[i]!;
+    if (ch === ' ') { out += ' '; continue; }
+    if (railUp.has(ch)) { out += rail; continue; }
+    if (horiz.has(ch) && i > 0 && (railUp.has(b[i - 1]!) || horiz.has(b[i - 1]!))) { out += ' '; continue; }
+    const up = a[i];
+    if (node.has(ch) && up !== undefined && railDown.has(up)) out += rail;
+    break;
+  }
+  return out.length === 0 || out.endsWith(' ') ? out : out + ' ';
 }
 
 /**

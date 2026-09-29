@@ -30,6 +30,10 @@
  * callers) converges there. Provider-agnostic; shape handling mirrors
  * `budget-preamble.ts`.
  *
+ * Dependencies: imports `resolveMaxNestingDepth` from `../tools/nesting.js` as
+ * a pure env-reader fallback (same architectural layer). If this module grows
+ * further cross-layer imports, revisit the coupling.
+ *
  * @module agent/subagent/identity-preamble
  */
 

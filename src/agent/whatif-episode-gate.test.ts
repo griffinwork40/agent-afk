@@ -378,3 +378,17 @@ describe('tool log lines shape', () => {
     expect(() => gate(makePreToolUse('read_file', {}))).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #2425: block reason must be neutral — no "what-if" or "sandbox" wording
+// ---------------------------------------------------------------------------
+
+describe('EPISODE_BLOCK_REASON neutrality (issue #2425)', () => {
+  it('does not contain "what-if" (case-insensitive)', () => {
+    expect(EPISODE_BLOCK_REASON.toLowerCase()).not.toContain('what-if');
+  });
+
+  it('does not contain "sandbox" (case-insensitive)', () => {
+    expect(EPISODE_BLOCK_REASON.toLowerCase()).not.toContain('sandbox');
+  });
+});

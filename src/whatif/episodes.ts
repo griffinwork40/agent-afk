@@ -25,6 +25,8 @@ import type { Episode, Prediction } from './types.js';
 /** Minimum and maximum prompt lengths for real episodes. */
 const MIN_LEN = 15;
 const MAX_LEN = 4000;
+/** Higher minimum length for non-first turns — they must stand alone. */
+const MIN_LEN_LATER = 40;
 
 /** Substrings that disqualify a prompt from real-episode inclusion. */
 const DISQUALIFY_SUBSTRINGS = [
@@ -34,6 +36,19 @@ const DISQUALIFY_SUBSTRINGS = [
   'The user has switched off plan mode',
 ] as const;
 
+/**
+ * Leading-token anaphora: "it", "that", "this", "those", "these", "proceed",
+ * "same", "#N", "just #N", bare ordinal "1." / "2)".
+ */
+const ANAPHORA_RE =
+  /^(?:it|that|this|those|these|proceed|same|#\d+|just\s+#?\d+|\d+[.)]\s)\b/i;
+
+/** Conservative: turn is primarily about /whatif when the keyword appears. */
+const WHATIF_TOPIC_RE = /\bwhatif\b/i;
+
+/** Session contains a /whatif invocation (with optional leading whitespace). */
+const WHATIF_SESSION_RE = /^\s*\/whatif\b/i;
+
 function isUsable(text: string): boolean {
   if (text.startsWith('/')) return false;
   if (text.length < MIN_LEN || text.length > MAX_LEN) return false;
@@ -41,6 +56,40 @@ function isUsable(text: string): boolean {
     if (text.includes(sub)) return false;
   }
   return true;
+}
+
+/**
+ * Returns true when `text` can stand alone as the first message of a fresh
+ * session — used for non-first turns.
+ *
+ * @example
+ * isStandalone('inspect it please')     // false — deictic opener
+ * isStandalone('proceed with that')     // false — "proceed"
+ * isStandalone('just #1 please')        // false — "just #1"
+ * isStandalone("Why doesn't fast compact work on agent-afk?") // true
+ */
+export function isStandalone(text: string): boolean {
+  if (!isUsable(text)) return false;
+  if (text.length < MIN_LEN_LATER) return false;
+  if (ANAPHORA_RE.test(text)) return false;
+  if (WHATIF_TOPIC_RE.test(text)) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Corpus exclusion stats
+// ---------------------------------------------------------------------------
+
+/** Exclusion counts written to results.json so corpus shrinkage is visible. */
+export interface CorpusExclusions {
+  /** Sessions skipped because they contained a /whatif invocation. */
+  whatifSessions: number;
+  /** Sessions skipped via `excludeSessionIds`. */
+  excludedSessionIds: number;
+  /** Non-first turns dropped by the standalone check (anaphora / length). */
+  nonStandaloneTurns: number;
+  /** Turns dropped because the text is primarily about /whatif. */
+  whatifTopicTurns: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +107,8 @@ interface CollectOpts {
   now?: Date;
   /** Exclude sessions whose events.jsonl mtime is older than this many days. */
   maxAgeDays?: number;
+  /** Out-object for exclusion counts; keeps the return type backward-compatible. */
+  stats?: CorpusExclusions;
 }
 
 interface SessionEntry {
@@ -98,6 +149,12 @@ async function listSessions(sessionsDir: string): Promise<SessionEntry[]> {
  *
  * Preambles are stripped via `extractUserContent`; secrets via
  * `redactInlineSecrets`. Case-insensitive dedup across the collected set.
+ *
+ * - Sessions are skipped when any user record matches /^\s*\/whatif\b/i.
+ * - First turn per session: filtered by `isUsable`.
+ * - Later turns: additionally filtered by `isStandalone` (higher min length,
+ *   no anaphora / deictic opener, not primarily about /whatif).
+ * - Exclusion counts written to `opts.stats` when provided.
  */
 export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
   const { limit, excludeSessionIds = [], sessionsDir, now, maxAgeDays } = opts;
@@ -112,13 +169,24 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
       ? (now ?? new Date()).getTime() - maxAgeDays * 24 * 60 * 60 * 1000
       : undefined;
 
+  const exclusions: CorpusExclusions = {
+    whatifSessions: 0,
+    excludedSessionIds: 0,
+    nonStandaloneTurns: 0,
+    whatifTopicTurns: 0,
+  };
+
   const episodes: Episode[] = [];
   const seenLower = new Set<string>();
   let idx = 1;
 
   for (const sess of sessions) {
     if (episodes.length >= limit) break;
-    if (excludeSet.has(sess.id)) continue;
+
+    if (excludeSet.has(sess.id)) {
+      exclusions.excludedSessionIds++;
+      continue;
+    }
     if (cutoffMs !== undefined && sess.mtime < cutoffMs) break; // sorted newest first
 
     let lines: string;
@@ -128,7 +196,26 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
       continue;
     }
 
-    for (const rawLine of lines.split('\n')) {
+    // Pre-scan: skip session if any user record is a /whatif invocation.
+    const rawLines = lines.split('\n');
+    let isWhatifSession = false;
+    for (const rawLine of rawLines) {
+      const rec = parseRecord(rawLine);
+      if (!rec || rec.kind !== 'user') continue;
+      const rawText: string = (rec as { kind: string; text: string }).text;
+      if (rawText && WHATIF_SESSION_RE.test(rawText)) {
+        isWhatifSession = true;
+        break;
+      }
+    }
+    if (isWhatifSession) {
+      exclusions.whatifSessions++;
+      continue;
+    }
+
+    let turnIndexInSession = 0;
+
+    for (const rawLine of rawLines) {
       if (episodes.length >= limit) break;
       const rec = parseRecord(rawLine);
       if (!rec || rec.kind !== 'user') continue;
@@ -141,7 +228,21 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
       // Redact secrets.
       const redacted = redactInlineSecrets(stripped);
 
-      if (!isUsable(redacted)) continue;
+      const isFirstTurn = turnIndexInSession === 0;
+      turnIndexInSession++;
+
+      if (isFirstTurn) {
+        if (!isUsable(redacted)) continue;
+      } else {
+        if (WHATIF_TOPIC_RE.test(redacted)) {
+          exclusions.whatifTopicTurns++;
+          continue;
+        }
+        if (!isStandalone(redacted)) {
+          exclusions.nonStandaloneTurns++;
+          continue;
+        }
+      }
 
       // Case-insensitive dedup.
       const lower = redacted.toLowerCase();
@@ -154,6 +255,10 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
         prompt: redacted,
       });
     }
+  }
+
+  if (opts.stats) {
+    Object.assign(opts.stats, exclusions);
   }
 
   return episodes;

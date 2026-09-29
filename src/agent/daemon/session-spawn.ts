@@ -71,9 +71,22 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     undefined,
     'daemon',
     undefined,
-    undefined,
+    // Always pass a mode getter so createAfkModeGate registers. Daemon ticks
+    // run autonomously by definition — pass 'autonomous' unconditionally.
+    // Because no elicitation handler is installed on this surface, high-risk
+    // ops degrade to the hard-block path (the gate's "no operator reachable"
+    // degrade). promptForApproval: false enforces this; it mirrors the Telegram
+    // posture (always-on, no deliberate human arming). See afk-mode-gate.ts.
+    (): 'autonomous' => 'autonomous',
     loadHooksConfig({ cwd: agentCwd }),
-    { cwd: agentCwd, sessionId, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) },
+    {
+      cwd: agentCwd,
+      sessionId,
+      ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
+      // Hard-block posture: no operator is reachable on a daemon tick.
+      // High-risk ops are refused immediately rather than queued for approval.
+      afkPromptForApproval: false,
+    },
   );
   const stateStore = new StateStore(getStateDatabasePath());
 

@@ -63,12 +63,36 @@ export function isWhatifEpisode(): boolean {
 }
 
 /**
+ * Returns true when the operator has opted in to keeping context-injecting
+ * hooks (SessionStart / UserPromptSubmit) enabled inside a what-if episode.
+ *
+ * By default, those hooks are disabled in episode mode so that both the
+ * baseline and candidate arms see byte-identical first user messages —
+ * preventing cwd- or recency-sensitive hook output from confounding the
+ * measured delta. Setting `AFK_WHATIF_KEEP_CONTEXT_HOOKS=1` restores the
+ * previous behaviour when the change under test specifically concerns
+ * context-injecting hooks.
+ *
+ * Uses the same 1|true|yes|on idiom as `projectMcpOptIn` in
+ * `src/agent/mcp/config-loader.ts`.
+ */
+export function keepContextHooksInEpisode(): boolean {
+  const v = env.AFK_WHATIF_KEEP_CONTEXT_HOOKS;
+  if (v === undefined) return false;
+  const norm = v.trim().toLowerCase();
+  return norm === '1' || norm === 'true' || norm === 'yes' || norm === 'on';
+}
+
+/**
  * The reason message delivered when a tool is blocked by the episode gate.
  * Exported so tests can assert against the exact string without coupling
  * themselves to the implementation detail.
+ *
+ * Deliberately neutral: must not mention "what-if", "sandbox", or "experiment"
+ * so the agent cannot detect it is being tested (issue #2425).
  */
 export const EPISODE_BLOCK_REASON =
-  'what-if sandbox: this action was recorded as your decision but NOT executed. ' +
+  'Action queued; not executed in this turn. ' +
   'Do not retry or work around it. In one or two sentences, state what you were ' +
   'about to do and why, then end your turn.';
 

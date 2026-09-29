@@ -22,6 +22,7 @@ import type { AgentConfig } from '../types.js';
 import type { ProviderQuery } from '../provider.js';
 import type { SessionStateManager } from './session-state.js';
 import type { PlanExitBridge } from './plan-exit-bridge.js';
+import type { JournalLifecycle } from './journal-lifecycle.js';
 import { resolveModelId } from './model-resolution.js';
 import { updatePresenceCwd } from '../awareness/presence.js';
 import { errorMessage } from '../../utils/errors.js';
@@ -34,6 +35,8 @@ export interface ConfigDeps {
   getStateManager: () => SessionStateManager;
   getPlanExit: () => PlanExitBridge;
   pushSidebandEvent: (event: OutputEvent) => void;
+  /** Message-journal glue; optional so test harnesses may omit it. */
+  getJournal?: () => JournalLifecycle;
 }
 
 /**
@@ -44,8 +47,12 @@ export interface ConfigDeps {
  */
 export async function setModel(model: AgentModelInput | undefined, deps: ConfigDeps): Promise<void> {
   const resolved = resolveModelId(model);
+  // Read before the metadata write below so the journal mark reflects a real
+  // change: /model re-selecting the current model is not a switch.
+  const previous = deps.getStateManager().getSessionMetadata().model;
   if (typeof model === 'string' && model.length > 0) await deps.getProviderQuery().setModel(model);
   if (resolved) deps.getStateManager().setSessionMetadata((prev) => ({ ...prev, model: resolved }));
+  if (resolved && resolved !== previous) deps.getJournal?.().markModelSwitch(resolved);
 }
 
 /** Flip plan vs. default permission mode, updating provider + state + sideband. */

@@ -37,6 +37,9 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-opus-5': 128_000,
   // Claude Opus 5.5 (released 2026-09-22): same 128k max output as Opus 5.
   'claude-opus-5-5': 128_000,
+  // Claude Sonnet 5.5 (released 2026-09-28): 128k max output, per the models
+  // overview table (verified 2026-09-28).
+  'claude-sonnet-5-5': 128_000,
   // 'claude-opus-4-8' is no longer a first-class alias (MODEL_MAP.opus now
   // resolves to claude-opus-5) but remains Active per Anthropic's deprecation
   // table and reachable by its raw wire id (`--model claude-opus-4-8`, a config
@@ -161,6 +164,8 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'claude-opus-5': 1_000_000,
   // Claude Opus 5.5 (released 2026-09-22): native 1M window, same as Opus 5.
   'claude-opus-5-5': 1_000_000,
+  // Claude Sonnet 5.5 (released 2026-09-28): native 1M window, same as Sonnet 5.
+  'claude-sonnet-5-5': 1_000_000,
   // Opus 4.8 / 4.7 / 4.6: native 1M windows, no beta header — the same
   // context-windows page cited below for Sonnet 4.6 names all three opus
   // generations in its 1M list, and all three are Active per the deprecation
@@ -313,6 +318,8 @@ const MODEL_AUTOCOMPACT_BUDGET: Record<string, number> = {
   // `_1m` short-circuit in autoCompactLimitFor; raw wire id keeps the
   // bounded working budget.
   'claude-opus-5-5': 200_000,
+  // Sonnet 5.5 (released 2026-09-28): same cost/latency policy as Sonnet 5.
+  'claude-sonnet-5-5': 200_000,
   // Sonnet 4.6 also ships a native 1M window (see MODEL_CONTEXT_LIMITS), so it
   // takes the same 200k working budget as its Sonnet 5 sibling: a raw
   // `claude-sonnet-4-6` session reports the truthful 1M window on the status line

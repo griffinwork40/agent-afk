@@ -149,9 +149,9 @@ describe('patchYieldFields', () => {
     const sessionId = 'sess-atomic-write-test';
     const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-test-'));
 
-    // Minimal valid v5 facet JSON — satisfies SessionFacetSchema.
+    // Minimal valid facet JSON — satisfies SessionFacetSchema (passthrough allows any version).
     const facet = {
-      facet_version: 5,
+      facet_version: 6,
       session_id: sessionId,
       source: 'cli',
       model: 'claude-opus-4-5',

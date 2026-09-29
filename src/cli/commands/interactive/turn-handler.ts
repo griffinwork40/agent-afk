@@ -1,7 +1,6 @@
 import type { AgentSession } from '../../../agent/session.js';
 import type { SessionStats, ToolEvent } from '../../slash/types.js';
 import type { OutputEvent, SubagentProgressMeta } from '../../../agent/types.js';
-import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { describeForHistory, type ImageAttachment } from '../../input/attachments.js';
 import type { InputSurfaceRefs } from '../../input/input-surface.js';
 import { palette } from '../../palette.js';
@@ -22,19 +21,9 @@ import { makeHandleBackgroundKey, installSubagentPromotion } from './turn-handle
 import { createTurnTtfbState, emitPlainTtfbWaiting, ttfbRendererOptions } from './turn-handler.ttfb.js';
 import { type PausedPickerRef } from './turn-handler.paused.js';
 import { processStreamEvent, type StreamEventState, type StreamEventContext } from './turn-handler.stream-events.js';
-import {
-  handleTurnCompletion,
-  buildAssistantContentBlocks,
-  buildUserContentBlocks,
-} from './turn-handler.completion.js';
+import { handleTurnCompletion } from './turn-handler.completion.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
-
-// buildAssistantContentBlocks and buildUserContentBlocks are defined in
-// turn-handler.completion.ts (where they feed handleTurnCompletion directly)
-// and re-exported here so existing callers that import from this module
-// continue to compile without changes.
-export { buildAssistantContentBlocks, buildUserContentBlocks } from './turn-handler.completion.js';
 
 // InputSurfaceRefs moved to `src/cli/input/input-surface.ts` alongside
 // the InputSurface class that owns these refs. Re-exported here so
@@ -270,22 +259,15 @@ export async function runTurn(
       }
     });
 
-    // Pre-compute content blocks for the sidecar (structured resume path).
-    // See turn-handler.completion.ts: buildAssistantContentBlocks / buildUserContentBlocks.
-    const assistantBlocks = buildAssistantContentBlocks(state.responseText, toolEvents);
-    const prevTurnToolEvents = stats.turns.at(-1)?.toolEvents ?? [];
-    const userBlocks = Array.isArray(payload)
-      ? (payload as ContentBlockParam[])
-      : buildUserContentBlocks(historyText, prevTurnToolEvents);
-
+    // Sidecar turns persist text + metadata only. The full conversation
+    // (tool_use/tool_result content, attachments) lives in the message
+    // journal, which is the resume source — see docs/message-journal.md.
     await handleTurnCompletion({
       state,
       stats,
       h,
       toolEvents,
       historyText,
-      assistantBlocks,
-      userBlocks,
       completionWriter,
       borrowedCompositor,
       renderer,

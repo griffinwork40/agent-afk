@@ -11,6 +11,419 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.271.0] - 2026-09-29
+
+### Added
+- persist doneUnverified in schedule telemetry (1eabf0ea)
+
+### Fixed
+- address review feedback — JSDoc, record assertion, baseline (1fb0a6bb)
+
+### Changed
+- Merge pull request #2322 from griffinwork40/afk/iso-agent-tool-4-foq9u1 (fbd08d2f)
+- merge main; drop scheduler.ts filesize grandfather (fits at 350 after #2320) (2348c891)
+- Merge remote-tracking branch 'origin/main' into afk/pr2322-rebase-main (b92756e7)
+- Merge remote-tracking branch 'origin/main' into afk/pr2322-fix (6eaefd5a)
+
+## [5.270.3] - 2026-09-29
+
+### Fixed
+- use real-length sk- token in redaction test (7fdc7913)
+- redact secrets in makeSessionStartSkipRecord; add test; merge main; add JSDoc notes (9383e9f5)
+- add per-task in-flight overlap guard to CronScheduler (391861a2)
+
+### Changed
+- Merge pull request #2320 from griffinwork40/afk/iso-agent-tool-7-p3r1o7 (653858b5)
+
+## [5.270.2] - 2026-09-29
+
+### Added
+- derive session facets from the message journal (27e9d8cf)
+
+### Fixed
+- address review feedback on repair-orphan-tool-calls (e49a0d8f)
+- address review feedback (d4bd47fd)
+- extract aggregateToolEvents, clean journal-adapter, unify dedup (de4f8c96)
+- strip leading newlines from append change.text; add content-ops tests (bada0594)
+- keep journal commit detection and home isolation (3a851063)
+- headroom warning also prints under --force; rates render as % (8b554574)
+- probe headroom check (#2504) (a3a8de71)
+- append operator inserts an extra blank line (2b04e7fd)
+- openai-compatible never repairs orphaned tool calls before sending history (643e9be6)
+
+### Changed
+- Merge pull request #2438 from griffinwork40/afk/issue-2417-4d60 (3b625eab)
+- Merge pull request #2496 from griffinwork40/afk/issue-2412-dok6 (16ea924b)
+- Merge pull request #2506 from griffinwork40/afk/issue-2461-q7r3 (0f7d533a)
+- Merge pull request #2505 from griffinwork40/afk/whatif-headroom-2504 (6c106678)
+- fix postinstall docs — platform split, silent-skip wording, hook duties, isGlobalInstall, marker file (#2280) (d4c11229)
+- restore #2412 regression tests dropped by prior fix commit (51eeed80)
+- remove pr-body.md (76677951)
+- remove pr-body.md (leftover) (ba4e181c)
+
+## [5.270.1] - 2026-09-29
+
+### Fixed
+- keep turn budgets across retry-tier replays; report hard-timeout partials (#2507) (32513ed5)
+- add crash notification handlers to standalone telegram bot (#2311) (e3f01b70)
+- hidden-lines gutter follows the active glyph set (8bc30f47)
+- keep tree spine intact on "N earlier lines hidden" row (9c7d3c97)
+
+### Changed
+- Merge pull request #2497 from griffinwork40/afk/fix-hidden-lines-spine (90843dcf)
+
+## [5.270.0] - 2026-09-28
+
+### Added
+- support Claude Sonnet 5.5 (claude-sonnet-5-5) (#2495) (774930c6)
+
+## [5.269.0] - 2026-09-28
+
+### Added
+- paired per-probe sign-flip analysis (#2477 step 3) (#2498) (2a9d4503)
+
+## [5.268.1] - 2026-09-28
+
+### Fixed
+- correct estimateVerifyCost 1.92x overestimate (#2489) (78317b05)
+- simulate calibration harness ICC presets and endpoint base rates correctly (633f3ac8)
+
+### Changed
+- Merge pull request #2494 from griffinwork40/afk/iso-compose-fix-2411-2-ryvk37 (75c9dcb5)
+- Merge pull request #2493 from griffinwork40/afk/iso-compose-judge-grades-1-gez9da (e2340f0b)
+- Merge pull request #2490 from griffinwork40/afk/issue-2479-q3x8 (0cb54a34)
+- Merge pull request #2492 from griffinwork40/afk/iso-compose-fix-2489-3-ewvk4x (717dae9f)
+- report failed episodes per arm and flag arm-imbalance (#2411) (09bf99b8)
+- persist per-output judge grades to grades.jsonl (#2491) (0945fafc)
+
+## [5.268.0] - 2026-09-28
+
+### Added
+- --probes N, probe dedupe, predictions cap, probes before replay (#2477 step 1) (c0326ab1)
+- provenance-carrying adapters keep provider switches lossless (#2464) (693337c8)
+
+### Fixed
+- subagents ignore /reauth account switch (stale boot-token cache) (019efea1)
+
+### Changed
+- Merge pull request #2463 from 0x7067/docs/plugin-hook-contract (8e5c7f28)
+- Merge pull request #2482 from griffinwork40/afk/whatif-probes-2477 (59663207)
+- Merge pull request #2468 from griffinwork40/afk/journal-provenance (8e25b580)
+- Merge pull request #2469 from griffinwork40/afk/20260928-131257-4d5c6b (07bad547)
+- record live A→B→A signature result (#2464) (0aec3759)
+- bring the command-hook contract up to date (770d9de9)
+
+## [5.267.0] - 2026-09-28
+
+### Added
+- minimum-detectable-effect preflight, gate, and report limit (#2410) (3c9e04e3)
+- per-prediction judge agreement downgrades verdicts when judges disagree (#2413) (64dd1196)
+
+### Fixed
+- correct power convention and use per-prediction probe count (d5b0c8bd)
+
+### Changed
+- Merge pull request #2476 from griffinwork40/afk/iso-compose-mde-2-plh7j1 (c7aeada0)
+- Merge pull request #2475 from griffinwork40/afk/iso-compose-crosscheck-3-2azvpb (7493ff53)
+- remove stray commit-message files (ae01c313)
+- Merge remote-tracking branch 'origin/afk/iso-compose-stats-1-e7z5zf' into afk/iso-compose-mde-2-plh7j1 (134ea19b)
+
+## [5.266.2] - 2026-09-28
+
+### Fixed
+- per-episode analysis and real equivalence test for verdicts (#2404, #2405) (16345281)
+
+### Changed
+- Merge pull request #2473 from griffinwork40/afk/iso-compose-stats-1-e7z5zf (292422fe)
+- remove stray commit-message files (d2f20703)
+- extend calibration harness — Beta latent, tau dimension, updated thresholds (e500f913)
+
+## [5.266.1] - 2026-09-28
+
+### Fixed
+- isolate arm sandboxes so episodes cannot reach the other arm (#2466) (05b263ac)
+
+### Changed
+- Merge pull request #2467 from griffinwork40/afk/iso-agent-tool-1-aafzkj (3a3e203e)
+- Merge pull request #2465 from griffinwork40/afk/iso-compose-harness-1-oxi4or (43cbeab3)
+- calibration harness: add ICC dimension, regenerate docs (beb2e90c)
+- model-free calibration harness for verify verdicts (#2404, #2405) (5ca9806e)
+
+## [5.266.0] - 2026-09-28
+
+### Added
+- per-session message journal (full tool results, resume/fork source) (#2452) (416a11d1)
+
+## [5.265.3] - 2026-09-28
+
+### Fixed
+- F1/F2/F3/F6 re-review findings for disarm-while-suspended owner-wrote path (5f15ef41)
+- B1 CSI tracking, L1 idempotent remove, L2 resetState, L3 live dims, B2 pending archive (346d2d21)
+- remove debugLog from disarm (not in LifecycleHost interface) (72704a52)
+- counted-handoff suspend/resume + prior-band archive fix (69fc5465)
+- settle+queue design for suspend-commit (issue #2382, PR #2390) (a105362d)
+
+### Changed
+- Merge pull request #2400 from griffinwork40/afk/issue-2382-suspend-commit (2573e900)
+- drop agent report file from repo root (d743a658)
+- add 2400-fixes-report.md with per-finding evidence and gate results (6844dfee)
+- extract processChunk + helpers to suspend-observer.process.ts (funcsize gate) (1c327415)
+- restore strict oracles + add counted-handoff tests (3675208d)
+- Merge remote-tracking branch 'origin/main' into afk/issue-2382-suspend-commit (dff035d7)
+
+## [5.265.2] - 2026-09-28
+
+### Fixed
+- address PR #2448 review findings (F1/F2/F3/F5) (0a026366)
+- strip escape sequences from task-view header and error events (#2445) (11137394)
+
+### Changed
+- Merge pull request #2448 from griffinwork40/afk/issue-2445-escape-sanitize (48807429)
+
+## [5.265.1] - 2026-09-28
+
+### Fixed
+- ground synthetic probes in real repo paths (#2407) (#2430) (fb3bea51)
+
+## [5.265.0] - 2026-09-28
+
+### Added
+- capture resultTail on verification events; parse pass/fail from tail (e0d90c2a)
+
+### Changed
+- intercepted actions are scored as 'did not happen', so unobservable predictions show as refuted (#2436) (3f6bd6cb)
+- Merge pull request #2437 from griffinwork40/afk/verified-outcome-capture (c433b43c)
+- Merge remote-tracking branch 'origin/main' into afk/sync-capture (fe274377)
+
+## [5.264.0] - 2026-09-28
+
+### Added
+- M2 nightly delayed-relabel job (c1b7350c)
+
+### Fixed
+- relabel job caps provisional records, not the directory scan (726e69b3)
+
+### Changed
+- Merge pull request #2439 from griffinwork40/afk/verified-outcome-relabel (13a1da72)
+- Merge remote-tracking branch 'origin/main' into afk/sync-relabel (2e27e6f5)
+- Merge remote-tracking branch 'origin/afk/verified-outcome-m2' into afk/relabel-conflict-fix (b9b52919)
+
+## [5.263.0] - 2026-09-28
+
+### Added
+- M2 part 2 — session-end hook, child attribution, closure LF, cross_session_reask (762b7fb6)
+- outcome store, /good and /bad feedback, get_facet join (5d3391a1)
+
+### Changed
+- episodes are not blind; the agent can detect the experiment and read which change was applied (#2447) (ebc4ac4f)
+- Merge pull request #2441 from griffinwork40/afk/verified-outcome-m2 (dec21498)
+- Merge remote-tracking branch 'origin/main' into afk/sync-m2 (1da2fef8)
+- Merge remote-tracking branch 'origin/main' into afk/sync-m2 (a9cb26ad)
+
+## [5.262.1] - 2026-09-28
+
+### Added
+- events.jsonl reader extends backfill to 16k older sessions (4abb48dd)
+
+### Fixed
+- exclude whatif sessions and context-dependent follow-ups from replay corpus (#2435) (3c3a92a9)
+- F1/F2/F3 review findings (session 5) (de82082f)
+- guarantee alt-screen teardown on SIGINT and all process.exit paths (#2393) (946703cb)
+- mid-turn task view uses the alternate screen (9ef02e46)
+
+### Changed
+- Merge pull request #2440 from griffinwork40/afk/verified-outcome-history (988faf4b)
+- Merge pull request #2393 from griffinwork40/afk/taskview-alt-screen (4e9b388f)
+- Merge remote-tracking branch 'origin/main' into afk/sync-history (84be5da0)
+- Merge remote-tracking branch 'origin/main' into afk/taskview-alt-screen (7e53d264)
+
+## [5.262.0] - 2026-09-28
+
+### Added
+- M0 backfill — verified_outcome labeling functions and distribution report (1aec6259)
+
+### Fixed
+- M0 precision fixes; exit check now honestly FAILS (887b194d)
+
+### Changed
+- Merge pull request #2429 from griffinwork40/afk/verified-outcome-m0 (cd192e9c)
+
+## [5.261.7] - 2026-09-28
+
+### Fixed
+- score predictions on their relevant episodes (#2403) (#2427) (b9a5cc96)
+
+### Changed
+- hook-injected context differs between arms (path- and recency-sensitive hooks confound deltas) (#2434) (9fbe8314)
+
+## [5.261.6] - 2026-09-28
+
+### Fixed
+- gate report headline on significance, scale adverb, name total predictions (#2433) (4ff87436)
+
+## [5.261.5] - 2026-09-28
+
+### Fixed
+- address advisory findings from #2213 — plugin hook registration (#2337) (56081762)
+
+### Changed
+- Merge pull request #2432 from griffinwork40/afk/issue-2428-q8w3 (e068f969)
+
+## [5.261.4] - 2026-09-27
+
+### Fixed
+- prefer context.sessionId over registration-time id in command hooks (#2392) (12eaee43)
+- dispose() marks buffered jobs delivered; clarify truncateBytes JSDoc (f355f975)
+- trim query() invariant comment to pass funcsize ratchet (65d9999b)
+- clear resetArmed in stream.retry branch of PlanTextTracker (9c20a166)
+- deliver background subagent results to chat and next turn (68c9a1d0)
+- refuse exit_plan_mode when the plan was never written as visible text (e3fb66bc)
+- pass the resolved session id to the tool dispatcher (d4692df5)
+
+### Changed
+- Merge pull request #2380 from griffinwork40/afk/issue-2364-opk9 (f6ec52e4)
+- Merge pull request #2362 from griffinwork40/afk/debug-advocate-output (210910d7)
+- Merge pull request #2354 from griffinwork40/afk/oai-dispatcher-sessionid (836507df)
+- Merge branch 'main' into afk/oai-dispatcher-sessionid (c019a80d)
+
+## [5.261.3] - 2026-09-27
+
+### Fixed
+- regenerate env-registry docs after AFK_WHATIF_ALLOW_MCP description update (9c1aa0b1)
+
+### Changed
+- Merge pull request #2356 from griffinwork40/afk/issue-2349-q8x3 (919975c8)
+- fix stale comments and tighten tests from #2324–#2333 triage batch (d237819c)
+
+## [5.261.2] - 2026-09-27
+
+### Fixed
+- correct overlayTallEnoughToStrand analysis after adversarial review (d64cce8c)
+
+### Changed
+- Merge pull request #2384 from griffinwork40/afk/issue-2369-correction (4965ae74)
+
+## [5.261.1] - 2026-09-27
+
+### Fixed
+- two follow-up defects from #2382 suspend-commit review (e0c69603)
+- treat a suspended frame as top-unknown so suspended commits survive (#2382) (3ade1cba)
+
+### Changed
+- Merge pull request #2390 from griffinwork40/afk/issue-2382-suspend-commit (3058fe66)
+- Merge pull request #2391 from griffinwork40/afk/issue-2389-q7t3 (4ae9896f)
+- pin accumulateStreamJson's deliberate exclusion of thinking chunks (a0da2998)
+
+## [5.261.0] - 2026-09-27
+
+### Added
+- gate major versions behind a manual dispatch; auto-update never crosses a major (2b54bd1c)
+
+### Changed
+- Merge pull request #2385 from griffinwork40/afk/major-release-gate (bb9e16c3)
+- Merge pull request #2370 from griffinwork40/afk/issue-2363-l7jj (a26af363)
+- show the full high-risk command in approval prompts (head+tail preview, no 256-char form cap) (554513af)
+
+## [5.260.0] - 2026-09-27
+
+### Added
+- A/B framework prompt edits and capture inter-tool narration (c7614ff8)
+
+### Fixed
+- address review feedback (36ba1f07)
+
+### Changed
+- Merge pull request #2374 from griffinwork40/afk/whatif-framework-prompt (0bd4e4be)
+
+## [5.259.2] - 2026-09-27
+
+### Fixed
+- wire AFK risk gate for daemon ticks and afk chat (#2315) (9ee45429)
+
+## [5.259.1] - 2026-09-27
+
+### Fixed
+- flag empty-output success and mark truncated response excerpt (#2383) (69b2f986)
+
+## [5.259.0] - 2026-09-27
+
+### Added
+- light narration on interactive surfaces (#2375) (a497294f)
+
+### Changed
+- compositor-level regression for tall-overlay strand gap (#2369) (#2381) (52d00e30)
+
+## [5.258.2] - 2026-09-27
+
+### Added
+- Claude Code matcher and timeout compatibility (#2377) (#2379) (7ec0269f)
+
+### Fixed
+- include tool_input in PostToolUse and PostToolUseFailure command-hook payloads (#2378) (506125c0)
+
+## [5.258.1] - 2026-09-27
+
+### Fixed
+- surface active shell in tool description; PowerShell syntax guidance on Windows fallback (#2346) (b13ab6b4)
+
+## [5.258.0] - 2026-09-27
+
+### Added
+- content-hug+banner — first reply flows under banner (#2229) (27342ddb)
+
+### Fixed
+- scope the content-hug strand exclusion to frames with slack (#2229) (45b775de)
+
+### Changed
+- Merge pull request #2368 from griffinwork40/afk/issue-2229-hug-banner (9c1748f0)
+- assert the kept banner is painted exactly once (#2229) (f39e4133)
+- content-hug boot-warning scenario expects warnings in the viewport (#2229) (b86c788f)
+- note preCommitBannerSync's caller precondition (0627abe7)
+- Merge remote-tracking branch 'origin/main' into afk/issue-2229-hug-banner (c738fe16)
+
+## [5.257.9] - 2026-09-27
+
+### Fixed
+- honour pinnedRef pin when repo has semver tags (#2358) (#2360) (922f0e3d)
+
+### Changed
+- advisory findings from #2333 — many-image guard hardening (#2352) (3fdaf63f)
+
+## [5.257.8] - 2026-09-27
+
+### Fixed
+- resolve remote-only branch names before git checkout --detach (#2361) (645af141)
+- size the diff preview box from the tool-lane row budget (#1619) (0fd9d2bd)
+
+### Changed
+- Merge pull request #2359 from griffinwork40/afk/issue-1619-diff-width (639a84ec)
+
+## [5.257.7] - 2026-09-27
+
+### Added
+- dev/test geometry consistency guard at compositor entry points (1361e151)
+
+### Fixed
+- geometry guard reports instead of throwing under AFK_DEBUG_COMPOSITOR (8b336c8e)
+
+### Changed
+- Merge pull request #2336 from griffinwork40/afk/tui-geometry-guard (63cd3db8)
+- remove no-op identity spreads and clarify fork-preamble docs (#2321) (56fc1f62)
+- drop dead SETTLED constant and unused imports in OSC test (#2339) (ba1f7265)
+- bump next from 16.3.5 to 16.3.6 in /website (#2343) (d678c2aa)
+- bump @types/node from 26.6.1 to 26.6.2 in /website (#2342) (98f1124e)
+- seed #2290 content-hug band at a reachable bottom row (e48e0e40)
+- Merge remote-tracking branch 'origin/main' into afk/tui-geometry-guard (82f92b9c)
+- TUI research brief and architecture map (f0611d5c)
+
+## [5.257.6] - 2026-09-27
+
+### Fixed
+- show child-failure badge on completed nested agent rows (cfb66840)
+
+### Changed
+- Merge pull request #2335 from griffinwork40/afk/issue-2239-ekdo (61bdc5a6)
+
 ## [5.257.5] - 2026-09-27
 
 ### Fixed

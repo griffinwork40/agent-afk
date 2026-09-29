@@ -20,7 +20,7 @@ export function commitPhase1Teardown(
   route: CommitRoute,
 ): number {
   const { fitsAboveFrame, anchorFloor, rows, cols } = geo;
-  const { lineCount, textLines, useBandHold, overflowRun, overflowRunMeta, archiveCount } = route;
+  const { lineCount, textLines, useBandHold, overflowRun, overflowRunMeta, archiveCount, overflowPriorContiguous } = route;
 
   // Invariant (single-copy commit): each committed line reaches the
   // terminal EXACTLY ONCE. The whole-block duplication bug came from
@@ -141,6 +141,29 @@ export function commitPhase1Teardown(
         const archiveLines = scrollbackFlushLines(overflowRun, overflowRunMeta, archiveCount);
         const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);
         if (escape.length > 0) self.stdout.write(escape);
+      }
+      // Contract (prior-band archive, issue #2382 counted-handoff): when the prior
+      // committed band was NOT merged into overflowRun (overflowPriorContiguous is
+      // false — requires anchorRow > 1), its rows are about to be overwritten by
+      // Phase 3's CUP writes without ever reaching scrollback. Archive the FULL
+      // band here — painted rows AND any pending prefix — so no committed content
+      // is silently discarded. Pending rows (indices [0..length-paintedRows)) were
+      // never displayed and can be archived without the single-copy constraint
+      // that applies to painted rows; the painted suffix is about to be overwritten
+      // by Phase 3 on-screen, so archiving it now is its ONLY scrollback copy.
+      // This path is the symmetric counterpart to the LF-emit fallback in the
+      // fitsAboveFrame branch (the Merge-path guard comment above) — both protect
+      // prior band content when anchorRow > 1 prevents the merge.
+      if (!overflowPriorContiguous && self.committedBand.length > 0) {
+        // Archive the full band (pending prefix + painted suffix). When paintedRows
+        // == 0 the band is fully pending (commitPhase3HoldStore path) and the
+        // condition `> 0` from the original code would have discarded it; including
+        // it here is safe because pending rows were never on screen.
+        const priorBand = self.committedBand;
+        const priorMeta = self.committedBandMeta;
+        const priorArchiveLines = scrollbackFlushLines(priorBand, priorMeta, priorBand.length);
+        const priorEscape = buildScrollbackArchiveEscape(priorArchiveLines, anchorFloor, rows, cols);
+        if (priorEscape.length > 0) self.stdout.write(priorEscape);
       }
     } else if (fitsAboveFrame) {
       if (bandOverflow > 0) {

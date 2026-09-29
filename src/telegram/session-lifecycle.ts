@@ -127,6 +127,9 @@ export function finalizeTelegramSession(
     ...(sessionConfig.resumeHistory !== undefined
       ? { resumeHistory: sessionConfig.resumeHistory }
       : {}),
+    ...(sessionConfig.resumeMessages !== undefined
+      ? { resumeMessages: sessionConfig.resumeMessages }
+      : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
     maxTurns: 100,

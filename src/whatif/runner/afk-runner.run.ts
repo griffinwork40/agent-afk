@@ -2,8 +2,24 @@
  * Episode child-process execution for the AFK runner.
  *
  * Extracted from `afk-runner.ts` to keep that file within the 350-line
- * ceiling. Owns spawn, stdout capture, stdout JSON parsing, timeout/signal
+ * ceiling. Owns spawn, stdout capture, NDJSON parsing, timeout/signal
  * enforcement, and stderr tail collection.
+ *
+ * Output format: `afk chat --format stream-json` (NDJSON, one OutputEvent per
+ * line). This gives the judge ALL assistant text — including narration written
+ * between tool calls — not just the final message. Text segments are joined
+ * with lightweight `[tool: <name>]` markers where tool calls occurred so the
+ * judge can see the full reasoning flow in order.
+ *
+ * Stream parsing lives in `afk-runner.stream.ts` and is re-exported here.
+ *
+ * Cost and token counts come from the terminal `done` event, whose
+ * `usage.input_tokens` is summed over the turn's model rounds. On the
+ * anthropic-direct provider that count is uncached input only: cache reads
+ * and cache writes are reported separately (`cache_read_input_tokens`,
+ * `cache_creation_input_tokens`) and are not included in `inputTokens`.
+ * OpenAI-compatible providers instead report a prompt total that includes
+ * cached tokens.
  *
  * @module whatif/runner/afk-runner.run
  */
@@ -11,6 +27,10 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawn as nodeSpawn } from 'node:child_process';
 import type { EpisodeTrace } from '../types.js';
+import { accumulateStreamJson } from './afk-runner.stream.js';
+
+export { accumulateStreamJson } from './afk-runner.stream.js';
+export type { AccumulateResult, StreamDoneMeta } from './afk-runner.stream.js';
 
 export type SpawnFn = typeof nodeSpawn;
 
@@ -34,36 +54,6 @@ const SK_ANT_PATTERN = /sk-ant-[A-Za-z0-9_-]+/g;
 /** Redact Anthropic credentials from error strings. */
 function redactSecrets(text: string): string {
   return text.replace(SK_ANT_PATTERN, '[REDACTED]');
-}
-
-/**
- * Extract the LAST top-level JSON object from stdout.
- *
- * `afk chat --format json` prints a pretty-printed JSON object as its last
- * output line, but may emit other text before it (spinners, warnings written
- * to stdout by mistake). We scan for the last `{…}` block.
- */
-function extractLastJson(stdout: string): unknown | null {
-  // Find all positions of top-level '{' and match their closing '}'.
-  let last: unknown = null;
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < stdout.length; i++) {
-    const ch = stdout[i];
-    if (ch === '{') {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (ch === '}') {
-      if (depth > 0) {
-        depth--;
-        if (depth === 0 && start !== -1) {
-          const candidate = stdout.slice(start, i + 1);
-          try { last = JSON.parse(candidate); } catch { /* skip */ }
-        }
-      }
-    }
-  }
-  return last;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,11 +157,20 @@ async function waitForChild(
 // ---------------------------------------------------------------------------
 
 /**
- * Spawn the chat child, wait for it to finish, and parse the result into an
- * {@link EpisodeTrace}.
+ * Spawn the chat child (using `--format stream-json`), wait for it to finish,
+ * and parse the NDJSON output into an {@link EpisodeTrace}.
  *
- * On timeout, nonzero exit, or unparsable output the returned trace has
- * `error` set instead of throwing.
+ * `EpisodeTrace.text` contains ALL assistant text in document order, with
+ * lightweight `[tool: <name>]` markers inserted where tool calls occurred.
+ * This gives the judge full narration, not just the final assistant message.
+ *
+ * Error conditions:
+ *   - timeout: error set with timeout description.
+ *   - nonzero exit: error set with exit code + redacted stderr.
+ *   - exit 0 but no `done` event seen: error set. This means a truncated
+ *     stream (crash, OOM, network cut) whose partial text would skew cost
+ *     accounting and judging, so run.verify.ts counts it as a failed episode
+ *     instead of a good trace with zero cost.
  */
 export async function runEpisodeChild(args: RunEpisodeChildArgs): Promise<EpisodeTrace> {
   const { command, spawnArgs, spawnOptions, spawnImpl, episodeId, envLabel, sample, timeoutMs, signal } = args;
@@ -196,12 +195,7 @@ export async function runEpisodeChild(args: RunEpisodeChildArgs): Promise<Episod
     };
   }
 
-  const parsed = extractLastJson(stdout);
-
-  if (exitCode !== 0 || parsed === null || typeof parsed !== 'object') {
-    const errMsg = exitCode !== 0
-      ? `afk chat exited ${exitCode}. stderr: ${redactSecrets(stderrTail)}`
-      : `afk chat output did not contain a JSON object. stderr: ${redactSecrets(stderrTail)}`;
+  if (exitCode !== 0) {
     return {
       episodeId,
       env: envLabel,
@@ -212,20 +206,36 @@ export async function runEpisodeChild(args: RunEpisodeChildArgs): Promise<Episod
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
-      error: errMsg,
+      error: `afk chat exited ${exitCode}. stderr: ${redactSecrets(stderrTail)}`,
     };
   }
 
-  const obj = parsed as Record<string, unknown>;
+  const { text, meta, doneSeen } = accumulateStreamJson(stdout);
+
+  if (!doneSeen) {
+    return {
+      episodeId,
+      env: envLabel,
+      sample,
+      text: '',
+      tools: [],
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs,
+      error: `afk chat stream ended without a done event. stderr: ${redactSecrets(stderrTail)}`,
+    };
+  }
+
   return {
     episodeId,
     env: envLabel,
     sample,
-    text: typeof obj['message'] === 'string' ? obj['message'] : '',
+    text,
     tools: [],
-    costUsd: typeof obj['costUsd'] === 'number' ? obj['costUsd'] : 0,
-    inputTokens: typeof obj['inputTokens'] === 'number' ? obj['inputTokens'] : 0,
-    outputTokens: typeof obj['outputTokens'] === 'number' ? obj['outputTokens'] : 0,
-    durationMs: typeof obj['durationMs'] === 'number' ? obj['durationMs'] : durationMs,
+    costUsd: meta.costUsd,
+    inputTokens: meta.inputTokens,
+    outputTokens: meta.outputTokens,
+    durationMs: meta.durationMs ?? durationMs,
   };
 }

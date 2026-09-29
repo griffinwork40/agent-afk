@@ -317,6 +317,16 @@ const OPUS5_DISABLED_FORBIDDEN_EFFORTS = new Set<string>(['xhigh', 'max']);
 const isAlwaysAdaptiveModel = (model: string): boolean => /(claude-)?opus-5[-.]5/.test(model);
 
 /**
+ * Claude Sonnet 5.5 rejects `{type:'disabled'}` with HTTP 400 and replaces it
+ * with `{type:'between_tools'}` ("the lowest thinking setting", keeps up-front
+ * thinking off). `between_tools` is accepted only at low/medium/high effort and
+ * takes no other field (`display`/`budget_tokens` → 400). Source:
+ * https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide#turn-off-up-front-thinking
+ */
+const isSonnet55 = (model: string): boolean => /(claude-)?sonnet-5[-.]5/.test(model);
+const BETWEEN_TOOLS_FORBIDDEN_EFFORTS = new Set<string>(['xhigh', 'max']);
+
+/**
  * Translate our internal {@link ThinkingConfig} into the Anthropic SDK wire
  * shape, applying model-specific fixups.
  *
@@ -370,6 +380,21 @@ export function resolveThinkingParam(
             `Remove --thinking disabled / AFK_THINKING=disabled, or use a model ` +
             `that supports extended thinking control.`,
         );
+      }
+      // Claude Sonnet 5.5: `disabled` → 400. Translate to the documented
+      // replacement `between_tools` (same intent: no up-front thinking), which
+      // itself 400s at xhigh/max — fail fast there with a legible error.
+      if (m.length > 0 && isSonnet55(m)) {
+        if (effort !== undefined && BETWEEN_TOOLS_FORBIDDEN_EFFORTS.has(effort)) {
+          throw new Error(
+            `[afk] ${m} cannot run with thinking off at effort '${effort}' ` +
+              `(its between_tools setting allows low/medium/high only). ` +
+              `Lower the effort (e.g. --effort high) or remove --thinking disabled.`,
+          );
+        }
+        // Cast: SDK 0.74 ThinkingConfigParam predates `between_tools`; the
+        // server accepts it with no beta header.
+        return { type: 'between_tools' } as unknown as ThinkingConfigParam;
       }
       // Claude Opus 5: rejects {type:'disabled'} at xhigh/max effort only.
       if (
@@ -487,6 +512,11 @@ export function resolveEffort(
   // regex below, which would otherwise match `opus-5` as a substring of
   // `opus-5-5` and return `max`.
   if (/(claude-)?opus-5-5/.test(m)) return 'high';
+  // Sonnet 5.5 (released 2026-09-28): server default is `high`, and levels are
+  // recalibrated vs Sonnet 5 (Anthropic recommends medium→high for agentic
+  // coding). Pin `high` rather than letting the substring regex below return
+  // `max` — `max` also makes `--thinking disabled` (between_tools) a 400.
+  if (/(claude-)?sonnet-5-5/.test(m)) return 'high';
   // Allowlist: `4-6`/`4-7`/`4-8` opus & sonnet variants plus Sonnet 5 and
   // Opus 5 accept `output_config.effort` (4.x variants probed via
   // scripts/probe-effort-{all-models,older}.mjs against the OAuth identity;

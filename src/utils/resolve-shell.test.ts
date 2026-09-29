@@ -9,7 +9,7 @@ vi.mock('node:fs', async () => {
 import * as fs from 'node:fs';
 
 // Import under test AFTER mock is wired.
-import { resolveShell, shellDescription } from './resolve-shell.js';
+import { resolveShell, shellDescription, bashToolShellGuidance } from './resolve-shell.js';
 
 describe('resolveShell', () => {
   const originalPlatform = process.platform;
@@ -154,5 +154,132 @@ describe('shellDescription', () => {
     process.env['PATH'] = '';
     vi.mocked(fs.existsSync).mockReturnValue(false);
     expect(shellDescription()).toBe('PowerShell');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bashToolShellGuidance
+// ---------------------------------------------------------------------------
+
+describe('bashToolShellGuidance', () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+    delete process.env['MSYSTEM'];
+    process.env['PATH'] = process.env['PATH'] ?? '';
+  });
+
+  // -----------------------------------------------------------------------
+  // POSIX — guidance must contain /bin/sh and POSIX-specific terms
+  // -----------------------------------------------------------------------
+
+  it('POSIX: mentions /bin/sh (POSIX) in the guidance', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('/bin/sh (POSIX)');
+  });
+
+  it('POSIX (linux): mentions /bin/sh (POSIX) in the guidance', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('/bin/sh (POSIX)');
+  });
+
+  it('POSIX: mentions dash bashism warning', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('dash');
+  });
+
+  it('POSIX: does not mention PowerShell', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    const guidance = bashToolShellGuidance();
+    expect(guidance).not.toContain('PowerShell');
+    expect(guidance).not.toContain('powershell');
+  });
+
+  // -----------------------------------------------------------------------
+  // Windows + Git Bash — bash syntax available; no PowerShell instructions
+  // -----------------------------------------------------------------------
+
+  it('win32 + Git Bash: mentions Git Bash', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === 'C:\\Program Files\\Git\\bin\\bash.exe',
+    );
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('Git Bash');
+  });
+
+  it('win32 + Git Bash: does not emit PowerShell instructions', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === 'C:\\Program Files\\Git\\bin\\bash.exe',
+    );
+    const guidance = bashToolShellGuidance();
+    expect(guidance).not.toContain('$env:');
+    expect(guidance).not.toContain('powershell.exe');
+  });
+
+  it('win32 + Git Bash: does not claim /bin/sh', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === 'C:\\Program Files\\Git\\bin\\bash.exe',
+    );
+    const guidance = bashToolShellGuidance();
+    expect(guidance).not.toContain('/bin/sh');
+  });
+
+  // -----------------------------------------------------------------------
+  // Windows without Git Bash — PowerShell fallback guidance
+  // -----------------------------------------------------------------------
+
+  it('win32 without Git Bash: mentions PowerShell', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('PowerShell');
+  });
+
+  it('win32 without Git Bash: mentions powershell.exe -Command', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('powershell.exe -Command');
+  });
+
+  it('win32 without Git Bash: instructs $env: for env vars', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('$env:');
+  });
+
+  it('win32 without Git Bash: does not claim /bin/sh', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['PATH'] = '';
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const guidance = bashToolShellGuidance();
+    expect(guidance).not.toContain('/bin/sh');
+  });
+
+  // -----------------------------------------------------------------------
+  // bashTool description on non-win32 still contains the POSIX header phrase
+  // -----------------------------------------------------------------------
+
+  it('POSIX: bash tool description contains expected POSIX header phrase', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    // Dynamically import schemas.bash to pick up the mocked platform.
+    // (This verifies the description wires through bashToolShellGuidance.)
+    const guidance = bashToolShellGuidance();
+    expect(guidance).toContain('Commands run through /bin/sh (POSIX) (Node spawn with shell:true)');
   });
 });

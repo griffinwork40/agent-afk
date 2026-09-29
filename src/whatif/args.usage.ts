@@ -60,7 +60,19 @@ RUN OPTIONS
   --concurrency <n>            Parallel episodes (default: 4)
   --max-turns <n>              Max turns per episode (default: 3)
   --timeout <sec>              Episode timeout in seconds (default: 180)
+  --probes <n>                 Synthetic probe episodes per prediction (1–12; default 6)
+  --max-predictions <n>        Max predictions to retain (1–8; default 3 when probes>2, else 8)
   --keep-sandboxes             Keep sandbox directories after run
   --yes                        Skip confirmation of compiled spec
+  --force                      Bypass the MDE underpowered gate (--verify only)
   --json                       Print results as JSON to stdout
+
+ENV VARS (episode behaviour)
+  AFK_WHATIF_KEEP_CONTEXT_HOOKS=1
+    Keep SessionStart and UserPromptSubmit hooks enabled inside episodes.
+    By default those hooks are disabled so both arms see byte-identical
+    first user messages. Set this when your change specifically tests
+    context-injecting hook behaviour. The engine sets it automatically
+    when the change spec targets hooks or plugins (disable-plugin, or a
+    file change to afk.config.json or a hooks.json manifest).
 `;

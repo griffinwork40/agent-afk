@@ -24,7 +24,7 @@ import { resolveCredentialForModel } from '../../auth/credential-resolver.js';
 import { getCurrentSink } from '../../_lib/skill-sink-channel.js';
 import { loadSkillPrompts } from '../../../skills/_lib/prompt-loader.js';
 import { debugLog } from '../../../utils/debug.js';
-import { buildForkedChildConfig } from './fork-child-config.js';
+import { buildForkedChildConfig, type JournalParentHolder } from './fork-child-config.js';
 import { renderForkOutcome } from './fork-result.js';
 import { substituteSkillArgs } from './load-mode.js';
 import type { SkillExecutorInternals } from './types.js';
@@ -154,6 +154,7 @@ export async function executeForkedRegistrySkill(
   // and lifecycle events emit into the parent's trace. Without this,
   // SubagentManager.forkSubagent's emitSubagentLifecycle no-ops (it reads
   // options.config.traceWriter, not the manager's).
+  const journalView: JournalParentHolder = {};
   const { childConfig, childManager } = buildForkedChildConfig(
     internals,
     {
@@ -177,6 +178,8 @@ export async function executeForkedRegistrySkill(
     } as AgentConfig,
     call.signal,
     readOnly,
+    undefined,
+    journalView,
   );
 
   // Fork → run → teardown skeleton is shared with executePluginSkill via
@@ -186,6 +189,7 @@ export async function executeForkedRegistrySkill(
     manager,
     childManager,
     childConfig,
+    journalView,
     label: skill.name,
     idPrefix: `skill-fork-${skill.name}`,
     parentId: call.id,
@@ -283,12 +287,14 @@ export async function executePluginSkill(
   // subagentExecutor / skillExecutor / readOnlyMemory / readOnlyBash intact
   // while applying the correct effective allowlist. No post-fork provider
   // override — buildForkedChildConfig is the only place permissions are set.
+  const journalView: JournalParentHolder = {};
   const { childConfig, childManager } = buildForkedChildConfig(
     internals,
     baseAgentConfig,
     call.signal,
     readOnly,
     allowedTools,
+    journalView,
   );
 
   // Fork → run → teardown skeleton is shared with executeForkedRegistrySkill
@@ -298,6 +304,7 @@ export async function executePluginSkill(
     manager,
     childManager,
     childConfig,
+    journalView,
     label: skillName,
     idPrefix: `skill-${skillName}`,
     parentId: call.id,
@@ -336,6 +343,8 @@ export async function runForkedSkillToResult(
     manager: SubagentManager;
     childManager: SubagentManager | undefined;
     childConfig: AgentConfig;
+    /** Backfilled with the fork's own journal (see JournalParentHolder). */
+    journalView?: JournalParentHolder;
     label: string;
     idPrefix: string;
     parentId: string;
@@ -348,6 +357,7 @@ export async function runForkedSkillToResult(
     manager,
     childManager,
     childConfig,
+    journalView,
     label,
     idPrefix,
     parentId,
@@ -387,6 +397,8 @@ export async function runForkedSkillToResult(
       parentId,
       agentType: label,
     });
+    // Nested forks of this skill child journal via ITS journal (forSubagent).
+    if (journalView !== undefined) journalView.messageJournal = handle.session?.messageJournal;
 
     // Invariant: the anchor is ALWAYS sent, args or not. Naming the skill
     // removes the "which skill?" ambiguity a bare "Run the skill." would leave;

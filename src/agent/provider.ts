@@ -464,6 +464,14 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    */
   rewindConversation?(turnIndex: number): Promise<ProviderRewindConversationResult>;
   /**
+   * Optional. The live conversation in provider-neutral journal form (synced
+   * first, so it is current), or `undefined` when this query keeps no
+   * journal. The provider router hands it to a swapped-in inner as
+   * `resumeMessages` so a `/model` swap continues the CURRENT conversation,
+   * not the process-start resume snapshot (docs/message-journal.md).
+   */
+  journalSnapshot?(): import('./journal/types.js').JournalMessage[] | undefined;
+  /**
    * Optional. Update the working directory used by the system prompt and
    * tool handlers for all **subsequent** turns in this query's lifetime.
    *
@@ -636,6 +644,12 @@ export interface ProviderCompactResult {
     blocksCleared: number;
     /** Total content bytes reclaimed. */
     bytesReclaimed: number;
+    /**
+     * Message index of the earliest cleared block. The edit is IN PLACE on
+     * already-journaled messages, so the provider re-syncs its message
+     * journal from here (docs/message-journal.md).
+     */
+    firstClearedIndex?: number;
   };
 }
 

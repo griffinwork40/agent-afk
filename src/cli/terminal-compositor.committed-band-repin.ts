@@ -155,7 +155,16 @@ export function repositionCommittedBand(
   // The render's erase pass clears [preRenderFrameTop, …]; if it started at or
   // above the band's current bottom it wiped the band → must repaint.
   const renderErasedBand = preRenderFrameTop > 0 && preRenderFrameTop <= self.committedBandBottomRow;
-  if (!moved && !renderErasedBand) return;
+  // Invariant (#2382 review, pending rows that now fit): a band-hold model
+  // stored while no frame was on screen (commitPhase3HoldStore) is tracked at
+  // the collapsed-frame position with committedBandPaintedRows = 0. When the
+  // next frame lands exactly there (the idle 1-row frame after resumeInput),
+  // `moved` is false and the render erased nothing, yet `fit` rows are owed to
+  // the screen. Repaint whenever fewer than `fit` rows are materialized; the
+  // paint below sets committedBandPaintedRows = fit, so this stays idempotent
+  // (no per-tick churn once the owed rows are on screen).
+  const owesRows = self.committedBandPaintedRows < fit;
+  if (!moved && !renderErasedBand && !owesRows) return;
   const paint = self.committedBand.slice(self.committedBand.length - fit);
   // Content centering (AFK_CENTER_CONTENT): derive the margin from the CURRENT
   // terminal width so the band adapts on resize. The band stores raw (unpadded)

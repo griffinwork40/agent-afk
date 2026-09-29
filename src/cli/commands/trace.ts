@@ -29,6 +29,8 @@ import { join } from 'node:path';
 
 import { handleCommandError } from '../errors/index.js';
 import { formatCacheUsage } from './trace-usage-format.js';
+import { fmtBytes, fmtDuration, fmtTime, fmtUsd, label, truncate } from './trace-format.js';
+import { buildTraceResults, DEFAULT_RESULT_LINES, withToolResult } from './trace-results.js';
 import { getTraceDir, getWitnessRoot } from '../../paths.js';
 import { readLedger } from '../../agent/session-ledger.js';
 import type { TraceEvent } from '../../agent/trace/index.js';
@@ -183,49 +185,6 @@ async function traceLabelFromLedger(
     // Ledger unreadable — treat as no signal and fall back to the direct lookup.
   }
   return { kind: 'none' };
-}
-
-// ---------------------------------------------------------------------------
-// Formatting helpers
-// ---------------------------------------------------------------------------
-
-function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
-}
-
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function fmtUsd(n: number): string {
-  return `$${n.toFixed(4)}`;
-}
-
-/** UTC HH:MM:SS slice of an ISO-8601 timestamp; deterministic across
- *  timezones (good for stable output and tests). */
-function fmtTime(ts: string): string {
-  return ts.length >= 19 ? ts.slice(11, 19) : ts;
-}
-
-/**
- * Truncate `s` to at most `n` Unicode code points (not UTF-16 units), appending
- * `…` at the cut so an emoji straddling the boundary is never split into a lone
- * surrogate. ASCII input is unaffected: `s.length` and code-point count agree
- * for ASCII, so existing callers see identical output for ASCII strings.
- */
-function truncate(s: string, n: number): string {
-  const cps = Array.from(s);
-  return cps.length > n ? `${cps.slice(0, n - 1).join('')}…` : s;
-}
-
-/** Fixed label column so event lines align. */
-function label(s: string): string {
-  const WIDTH = 9;
-  return s.length >= WIDTH ? s : s + ' '.repeat(WIDTH - s.length);
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +600,13 @@ export interface FormatTraceOptions {
   showAll?: boolean;
   /** Show only the last N rendered events. */
   limit?: number;
+  /**
+   * `--results`: rendered full-result block for a completed tool call (from
+   * the message journal), printed under its row. See trace-results.ts.
+   */
+  resultFor?: (toolUseId: string) => string | null;
+  /** Header line explaining where results came from (or why there are none). */
+  resultsNote?: string;
 }
 
 /**
@@ -695,12 +661,13 @@ export function formatTrace(
       ` (${summary.toolErrors} err) · ${summary.subagents} subagents · ${summary.claims} claims` +
       ` · ${summary.blocks} blocks${throttlePart}${ttfbPart}${bootWarningPart}${costPart}`,
   );
+  if (options.resultsNote !== undefined) out.push(options.resultsNote);
   out.push('');
 
   let rendered: string[] = [];
   for (const e of events) {
     const r = renderEvent(e, ctx);
-    if (r !== null) rendered.push(r);
+    if (r !== null) rendered.push(withToolResult(r, e, options.resultFor));
   }
 
   const hiddenByLimit =
@@ -731,6 +698,12 @@ export function formatTrace(
 // Command registration
 // ---------------------------------------------------------------------------
 
+/** `--results-lines` value: a non-negative integer, else the default. */
+function parseResultLines(raw: string | undefined): number {
+  const n = raw === undefined ? NaN : parseInt(raw, 10);
+  return Number.isNaN(n) || n < 0 ? DEFAULT_RESULT_LINES : n;
+}
+
 export function registerTraceCommand(program: Command): void {
   const trace = program
     .command('trace')
@@ -749,10 +722,12 @@ export function registerTraceCommand(program: Command): void {
     .option('--all', 'Include low-signal events (latency phases, paired tool starts)', false)
     .option('--json', 'Emit the raw NDJSON record unchanged (for piping to jq)', false)
     .option('-n, --limit <number>', 'Show only the last N events')
+    .option('--results', 'Print each tool call\'s full result (from the message journal) under its row', false)
+    .option('--results-lines <number>', `Max lines per result with --results (0 = no limit, default ${DEFAULT_RESULT_LINES})`)
     .action(
       async (
         session: string | undefined,
-        options: { all: boolean; json: boolean; limit?: string },
+        options: { all: boolean; json: boolean; limit?: string; results: boolean; resultsLines?: string },
       ) => {
         try {
           const selector = session ?? 'latest';
@@ -770,10 +745,14 @@ export function registerTraceCommand(program: Command): void {
             const n = parseInt(options.limit, 10);
             if (!Number.isNaN(n) && n >= 0) limit = n;
           }
+          const results = options.results
+            ? buildTraceResults(loaded.sessionId, loaded.events, parseResultLines(options.resultsLines))
+            : undefined;
           process.stdout.write(
             formatTrace(loaded.sessionId, loaded.tracePath, loaded, {
               showAll: options.all,
               ...(limit !== undefined ? { limit } : {}),
+              ...(results !== undefined ? { resultFor: results.resultFor, resultsNote: results.note } : {}),
             }),
           );
         } catch (err) {

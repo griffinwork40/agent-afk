@@ -39,6 +39,11 @@ import { createSkillRenderer } from './create-skill-renderer.js';
 import { recordTurn } from '../session-stats.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
+import { redactSecrets } from '../../../agent/redact-secrets.js';
+import { isVerificationCommand } from '../../../agent/outcomes/verification-patterns.js';
+
+/** Max characters to keep in the `resultTail` field on verification tool events. */
+const RESULT_TAIL_CHARS = 240;
 
 /**
  * Minimum ms between onContextProgress fires during a skill-dispatch turn.
@@ -212,6 +217,18 @@ export async function runSkillDispatchTurn(
           if (pending) {
             pending.result = c.content;
             pending.isError = c.isError;
+            const isVerify = pending.toolName === 'test_run' ||
+              (pending.toolName === 'bash' && isVerificationCommand(pending.input));
+            if (isVerify) {
+              const tailLines = c.tailPreview;
+              const rawForTail = tailLines !== undefined && tailLines.length > 0
+                ? tailLines.join('\n')
+                : c.content;
+              const tail = rawForTail.length > RESULT_TAIL_CHARS
+                ? rawForTail.slice(-RESULT_TAIL_CHARS)
+                : rawForTail;
+              pending.resultTail = redactSecrets(tail);
+            }
             pendingTools.delete(c.toolUseId);
           }
           if (ctx.onContextProgress) {

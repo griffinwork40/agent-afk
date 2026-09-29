@@ -1,8 +1,43 @@
 import { readFileSync, existsSync } from 'fs';
-import { dirname, resolve } from 'path';
+import { dirname, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import { env } from '../config/env.js';
 import { loadConfig } from './config.js';
+
+/**
+ * Load the framework base system prompt.
+ *
+ * When `AFK_FRAMEWORK_PROMPT_FILE` is set (non-blank), that file replaces the
+ * bundled `system-prompt.md` so `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>`
+ * can A/B test framework prompt edits without touching the checked-in file.
+ * Unset = the bundled prompt, byte-identical to prior behaviour.
+ *
+ * Contract: an unreadable override path THROWS. Silently running with the
+ * bundled prompt would make an A/B run measure nothing, and running with no
+ * framework base at all would measure something worse; failing loudly is the
+ * only outcome that cannot be mistaken for a valid experiment.
+ */
+export function loadSystemPrompt(): string | undefined {
+  const override = env.AFK_FRAMEWORK_PROMPT_FILE?.trim();
+  if (override) {
+    // path.isAbsolute, not a leading-slash check, so Windows absolute paths
+    // such as C:\prompts\x.md are accepted on Windows CI and hosts.
+    if (!isAbsolute(override)) {
+      throw new Error(
+        `AFK_FRAMEWORK_PROMPT_FILE="${override}" must be an absolute path (got a relative path).`,
+      );
+    }
+    try {
+      return readFileSync(override, 'utf-8');
+    } catch (err) {
+      throw new Error(
+        `AFK_FRAMEWORK_PROMPT_FILE="${override}" is unreadable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return loadBundledSystemPrompt();
+}
 
 /**
  * Load the runtime system prompt from the installed package
@@ -10,11 +45,15 @@ import { loadConfig } from './config.js';
  * correctly from both the compiled `dist/cli/` and the source `src/cli/`
  * locations.
  *
+ * Invariant: this function body is matched byte-for-byte by Pattern C in
+ * `scripts/esbuild-plugin-inline-prompts.mjs`, which replaces it with the
+ * inlined prompt text in the published bundle. Edit both together.
+ *
  * Works for any provider — the Codex adapter writes the resolved text to a
  * temp `model_instructions_file` when the Anthropic preset conventions
  * don't map cleanly.
  */
-export function loadSystemPrompt(): string | undefined {
+export function loadBundledSystemPrompt(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
   const promptPath = resolve(here, '..', '..', 'system-prompt.md');
   if (!existsSync(promptPath)) return undefined;

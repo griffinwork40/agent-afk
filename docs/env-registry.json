@@ -325,6 +325,14 @@
       "category": "paths"
     },
     {
+      "name": "AFK_FRAMEWORK_PROMPT_FILE",
+      "description": "Absolute path to a replacement for the framework base system prompt (`system-prompt.md`). When set, `loadSystemPrompt()` reads this file instead of the bundled `system-prompt.md`. Unset = byte-identical default behaviour. An unreadable path throws at prompt load (hard error, no fallback). Use with `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>` to A/B test framework prompt changes without modifying `system-prompt.md`.",
+      "type": "string",
+      "required": false,
+      "example": "/tmp/whatif-narration/system-prompt.narrate.md",
+      "category": "misc"
+    },
+    {
       "name": "AFK_GOBLIN_MASCOT",
       "description": "Reacting goblin mini-sprite in the reserved footer band while the agent runs tools (3 rows, animated). 1 = on, unset/0 = off (default). Claims terminal rows, so it is opt-in.",
       "type": "boolean",
@@ -524,6 +532,14 @@
       "default": "1",
       "example": "0",
       "category": "misc"
+    },
+    {
+      "name": "AFK_MESSAGE_JOURNAL_DISABLED",
+      "description": "Disable the per-session message journal (state/sessions/<id>/journal.jsonl + blobs/). The journal records the full conversation, including full tool results, and is the source for --resume and /fork. Set to 1 to skip journal writes; resume then falls back to the text-only sidecar history.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
     },
     {
       "name": "AFK_MICROCOMPACT_DELEGATION_BYTES",
@@ -1206,7 +1222,7 @@
     },
     {
       "name": "AFK_WHATIF_ALLOW_MCP",
-      "description": "When set to \"1\" or \"true\" inside a what-if episode (AFK_WHATIF_EPISODE=1), keep MCP servers enabled. By default, MCP servers are disabled inside episodes to prevent side effects from spawning external processes. Set this flag only when the change under test specifically concerns MCP server behaviour.",
+      "description": "When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), keep MCP servers enabled. By default, MCP servers are disabled inside episodes to prevent side effects from spawning external processes. Set this flag only when the change under test specifically concerns MCP server behaviour.",
       "type": "boolean",
       "required": false,
       "default": "",
@@ -1216,6 +1232,15 @@
     {
       "name": "AFK_WHATIF_EPISODE",
       "description": "When set to \"1\" or \"true\", the process is a sandboxed what-if episode. The episode gate (src/agent/whatif-episode-gate.ts) intercepts every PreToolUse call: read-only tools execute normally; the first side-effecting action is RECORDED as the decision but NOT executed. Episode processes are spawned by `afk whatif --verify` as isolated subprocesses with their own AFK_HOME / AFK_STATE_DIR pointing at the sandbox. Do not set this manually in production — it disables delegation, MCP (unless AFK_WHATIF_ALLOW_MCP=1), and all write tools.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WHATIF_KEEP_CONTEXT_HOOKS",
+      "description": "When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), keep SessionStart and UserPromptSubmit config/plugin hooks enabled. By default, these hooks are disabled inside episodes so that both the baseline and candidate arms see byte-identical first user messages, preventing cwd- or recency-sensitive hook output from confounding the measured delta. Set this flag only when the change under test specifically concerns context-injecting hook behaviour.",
       "type": "boolean",
       "required": false,
       "default": "",

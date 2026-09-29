@@ -23,6 +23,7 @@
 import type { ChalkInstance } from 'chalk';
 import { describe, expect, it } from 'vitest';
 import {
+  hiddenIndicatorGutter,
   truncateOverlayPreservingHead,
   computeViewportLayout,
   computePickerViewportLayout,
@@ -30,6 +31,7 @@ import {
 } from './terminal-compositor.frame.layout.js';
 import { stripAnsi } from './display.js';
 import { palette } from './palette.js';
+import { ASCII_GLYPHS, UNICODE_GLYPHS } from './commands/interactive/tool-lane-render.js';
 
 // ---------------------------------------------------------------------------
 // Sentinel chalk helper — lets us assert WHICH palette role was applied
@@ -248,5 +250,71 @@ describe('computePickerViewportLayout — spine truncation', () => {
     expect(layout.trimmedOverlay[0]).toBe(root);
     expect(stripAnsi(layout.trimmedOverlay[Math.floor(16 * 0.25)]))
       .toContain('earlier lines hidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Indicator gutter: the hidden-lines row must continue the tree spine and sit
+// inside the content margin (regression: "17 earlier lines hidden" rendered at
+// col 6, outside the margin, severing every `│` rail it crossed).
+// ---------------------------------------------------------------------------
+
+describe('hidden-lines indicator gutter', () => {
+  const M = '          '; // content margin (10 cols)
+
+  it('carries every rail of the row below and respects the content margin', () => {
+    const lines = [
+      `${M}◉ skill(pr-triage)`,
+      `${M}  ◉ Agent(A) [worker]`,
+      `${M}  │  ├─ ◆ skill(review) ✓ 170 lines`,
+      ...Array.from({ length: 17 }, (_, i) => `${M}  │  │      hidden ${i}`),
+      `${M}  │  │      - Whether a stated intent`,
+      `${M}  │  ╰─ ▸ bash ×3 — 3 done`,
+      `${M}  ◉ Agent(B) [worker]`,
+    ];
+    const result = truncateOverlayPreservingHead(lines, 8).map((l) => stripAnsi(l));
+    const row = result.find((l) => l.includes('earlier lines hidden'))!;
+    expect(row).toBeDefined();
+    expect(row.startsWith(M)).toBe(true);
+    const below = result[result.indexOf(row) + 1]!;
+    // Every rail column in the next row must also be a rail on the indicator row.
+    [...below].forEach((ch, i) => {
+      if (ch === '│' || ch === '├' || ch === '╰') expect(row[i], `col ${i}\n${result.join('\n')}`).toBe('│');
+    });
+  });
+
+  it('draws the parent rail through a nested node glyph directly below', () => {
+    expect(hiddenIndicatorGutter(`${M}  │  ╰─ bash`, `${M}  ◉ Agent(B)`)).toBe(`${M}  │ `);
+  });
+
+  it('does not invent a rail above a top-level node', () => {
+    expect(hiddenIndicatorGutter(`${M}plain text`, `${M}◉ skill(x)`)).toBe(M);
+  });
+
+  it('turns horizontal connector runs into spaces', () => {
+    expect(hiddenIndicatorGutter('', '│  ├─ ◆ x')).toBe('│  │  ');
+  });
+
+  it('skips blank tail rows when picking the reference row', () => {
+    const lines = ['◉ root', ...Array.from({ length: 10 }, () => 'x'), '', `${M}│ tail`, `${M}│ tail2`];
+    const result = truncateOverlayPreservingHead(lines, 5).map((l) => stripAnsi(l));
+    expect(result[1]).toBe(`${M}│ 10 earlier lines hidden`);
+  });
+});
+
+describe('hidden-lines indicator gutter (ASCII glyph mode)', () => {
+  it('continues ASCII rails when the ASCII glyph set is active', () => {
+    expect(hiddenIndicatorGutter('', '|  +- o x', ASCII_GLYPHS)).toBe('|  |  ');
+    expect(hiddenIndicatorGutter('  |  \\- bash', '  o Agent', ASCII_GLYPHS)).toBe('  | ');
+  });
+
+  it('does not treat ASCII lookalikes as rails under the Unicode set', () => {
+    expect(hiddenIndicatorGutter('', '  | a | b |', UNICODE_GLYPHS)).toBe('  ');
+    expect(hiddenIndicatorGutter('', '  +2 more', UNICODE_GLYPHS)).toBe('  ');
+  });
+
+  it('keeps a content bullet that is not preceded by a connector', () => {
+    expect(hiddenIndicatorGutter('', '│  │      - Whether', UNICODE_GLYPHS)).toBe('│  │      ');
+    expect(hiddenIndicatorGutter('', '|  - item', ASCII_GLYPHS)).toBe('|  ');
   });
 });

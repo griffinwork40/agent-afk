@@ -56,6 +56,26 @@ export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
 const CHOICE_BYPASS = 'Approve — implement now (bypass mode: no prompts, read/write any path)';
 const CHOICE_KEEP = 'Keep planning';
 
+const PICKER_MESSAGE =
+  'Plan ready. How do you want to proceed? (Your plan is in the conversation above.)';
+// Shown when the visible-text gate's refusal budget is spent: the picker still
+// appears (the user is never stranded) but it no longer claims the plan is above.
+const PICKER_MESSAGE_UNWRITTEN =
+  'Plan ready. How do you want to proceed? (Warning: the agent did not write its ' +
+  'plan out as visible text in this response. Choose Keep planning to prompt it to write one.)';
+
+/**
+ * Tool result for a gate refusal. Names WHY (tool results and thinking are not
+ * visible to the user) so the model writes the plan instead of re-calling.
+ */
+export const PLAN_TEXT_REFUSAL =
+  'exit_plan_mode refused: you have not written your plan as visible text in this ' +
+  'response. The user cannot see your thinking, and tool results (including subagent ' +
+  'and skill output such as review findings) are collapsed in their terminal, so they ' +
+  'have not seen the plan. Write it now as normal assistant text: the chosen approach, ' +
+  'the risks, the alternatives considered, and any review findings that shaped it. ' +
+  'Then call exit_plan_mode again in that same response.';
+
 /**
  * Label for the primary "approve and implement" choice, which restores the mode
  * the user was in BEFORE plan mode. The phrasing reflects the concrete restored
@@ -96,6 +116,9 @@ export const exitPlanModeTool: AnthropicToolDef = {
     'IMPORTANT: only call this in plan mode, and only when the task requires ' +
     'implementation (writing code or files). For research / read-only / ' +
     'understanding tasks, do NOT call it — just answer.\n\n' +
+    'Write the plan as visible assistant text in the SAME response, before this ' +
+    'call. Your thinking and tool results are not shown to the user, so a call ' +
+    'with no visible plan text is refused.\n\n' +
     'Do NOT ask "is this plan ok?" with ask_question — that is what this tool ' +
     'does. Resolve any open requirement questions with ask_question FIRST, then ' +
     'call exit_plan_mode.\n\n' +
@@ -132,6 +155,14 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       };
     }
 
+    // Visible-text gate: refuse when the plan was never written where the user
+    // can see it (see session/plan-text-tracker.ts). Runs AFTER the queued-
+    // message check so a typed-ahead message still wins. Absent gate = 'ok'.
+    const planText = controls.checkPlanText?.() ?? 'ok';
+    if (planText === 'refuse') {
+      return { content: PLAN_TEXT_REFUSAL };
+    }
+
     // Restore the mode the user was in before plan mode (falls back to 'default'
     // when none was captured). This is the PRIMARY approve choice.
     const prevMode: PermissionMode = controls.getPrePlanMode() ?? 'default';
@@ -149,9 +180,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
       serverName: 'agent',
       origin: 'agent',
       type: 'choice',
-      message:
-        'Plan ready. How do you want to proceed? ' +
-        '(Your plan is in the conversation above.)',
+      message: planText === 'warn' ? PICKER_MESSAGE_UNWRITTEN : PICKER_MESSAGE,
       choices,
     };
 

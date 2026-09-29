@@ -2226,3 +2226,130 @@ describe('form mode — picker path (enum/boolean)', () => {
     expect(result.content && 'weird' in result.content).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #2363: renderFormHeader banner and message-cap behaviour
+// ---------------------------------------------------------------------------
+
+describe('renderFormHeader — AFK harness vs external MCP banner', () => {
+  function makeHarnessRequest(message: string): ElicitationRequest {
+    return {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      message,
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+  }
+
+  function makeExternalMcpRequest(message: string): ElicitationRequest {
+    return {
+      serverName: 'some-external-mcp',
+      message,
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: { key: { type: 'string' } },
+      },
+    };
+  }
+
+  it('shows "AFK safety approval" banner for harness requests (_harnessInternal true)', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('approve'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(makeHarnessRequest('short msg'), { signal: NO_SIGNAL });
+    const joined = lines.join('\n');
+    expect(joined).toContain('AFK safety approval');
+    expect(joined).not.toContain('MCP form elicitation');
+  });
+
+  it('shows "MCP form elicitation" banner for external MCP requests', async () => {
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('value'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(makeExternalMcpRequest('short msg'), { signal: NO_SIGNAL });
+    const joined = lines.join('\n');
+    expect(joined).toContain('MCP form elicitation');
+    expect(joined).not.toContain('AFK safety approval');
+  });
+
+  it('harness request: shows destructive tail of a long command (past old 300-char clip)', async () => {
+    // The preamble is >300 chars so the old clip would have cut the tail completely.
+    const preamble = 'echo safe && '.repeat(30);   // ~390 chars
+    const tail = '; rm -rf /important';
+    const longMsg = 'AFK: `bash` is high-risk\n\nInput: ' + preamble + tail;
+
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('approve'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(makeHarnessRequest(longMsg), { signal: NO_SIGNAL });
+    const joined = lines.join('\n');
+    expect(joined).toContain('rm -rf /important');
+  });
+
+  it('external MCP request with a long message: truncated at 256 chars (old cap preserved)', async () => {
+    // A message just over 256 chars from an external MCP server.
+    const long = 'X'.repeat(300);
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('value'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(makeExternalMcpRequest(long), { signal: NO_SIGNAL });
+    const messageLines = lines.filter((l) => l.includes('message:'));
+    expect(messageLines.length).toBeGreaterThan(0);
+    // The rendered message line should NOT contain the 300-char-wide string
+    // verbatim — it must have been truncated at 256 with a trailing '…'.
+    const rendered = messageLines[0]!;
+    expect(rendered).toContain('…');
+    // Sanity: the full 300-char string is not present
+    expect(rendered.includes(long)).toBe(false);
+  });
+
+  it('external MCP server claiming serverName "agent-afk" still gets the 256-cap (no spoofing)', async () => {
+    // Omit _harnessInternal — an external server cannot set it via MCP.
+    const spoofed: ElicitationRequest = {
+      serverName: 'agent-afk',
+      message: 'Y'.repeat(300),
+      mode: 'form',
+      requestedSchema: { type: 'object', properties: { key: { type: 'string' } } },
+    };
+
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('value'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(spoofed, { signal: NO_SIGNAL });
+    const joined = lines.join('\n');
+    // Must still show "MCP form elicitation" banner, not the AFK one
+    expect(joined).toContain('MCP form elicitation');
+    // Message must be truncated at 256 chars
+    const messageLines = lines.filter((l) => l.includes('message:'));
+    expect(messageLines[0]).toContain('…');
+    expect(messageLines[0]!.includes('Y'.repeat(300))).toBe(false);
+  });
+});

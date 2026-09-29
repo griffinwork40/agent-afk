@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { createJevJudge, parseJevResult } from './jev.js';
+import { INTERCEPTED_INTENT_RULE } from '../observability.js';
 import type { JudgeInput, JudgeQuestion } from '../types.js';
 
 const questions: JudgeQuestion[] = [
@@ -129,6 +130,17 @@ describe('createJevJudge', () => {
       expect.objectContaining({ yes_at_or_above: 0.7, no_at_or_below: 0.3 }),
       undefined,
     );
+  });
+
+  it('state preamble contains the intercepted-intent rule', async () => {
+    let capturedState = '';
+    const callTool = vi.fn().mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      capturedState = (args['state'] as string) ?? '';
+      return { content: '{"p1":0.9,"p2":0.1}' };
+    });
+    const judge = createJevJudge({ callTool });
+    await judge.grade(baseInput);
+    expect(capturedState).toContain(INTERCEPTED_INTENT_RULE);
   });
 
   it('passes questions as check-type array', async () => {

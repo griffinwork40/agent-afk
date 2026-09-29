@@ -71,6 +71,12 @@ export interface TurnRunnerDeps {
   setSubagentOutputRecorder: (r: SubagentOutputRecorder | null) => void;
   getProviderQuery: () => ProviderQuery;
   getLedgerMetadata: () => ReturnType<SessionStateManager['getSessionMetadata']>;
+  /**
+   * Optional raw provider-event observer, called in stream order BEFORE the
+   * event is transformed. Feeds the `exit_plan_mode` visible-text gate
+   * (`PlanTextTracker.observe`); must be synchronous and must not throw.
+   */
+  observeProviderEvent?: (event: ProviderEvent) => void;
 }
 
 /**
@@ -273,6 +279,7 @@ export class TurnStreamRunner {
         const result = await this.deps.getProviderIterator().next();
         if (result.done) break;
         const event = result.value;
+        this.deps.observeProviderEvent?.(event);
         const output = transformProviderEvent(event, deps);
 
         if (output) {

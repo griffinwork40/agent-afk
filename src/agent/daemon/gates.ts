@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 export const DEFAULT_SESSIONSTART_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-export type SessionStartSkipReason = 'cooldown';
+export type SessionStartSkipReason = 'cooldown' | 'overlap';
 
 export interface GateDecision {
   fire: boolean;

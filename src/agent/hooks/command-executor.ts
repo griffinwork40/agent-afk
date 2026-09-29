@@ -56,6 +56,56 @@ export interface CommandExecutorResult {
 }
 
 /**
+ * Serialize the JSON payload written to a hook command's stdin.
+ *
+ * Invariant: PostToolUse and PostToolUseFailure carry the same `tool_input`
+ * PreToolUse saw. The same input already reaches the same hook scripts on
+ * PreToolUse, so omitting it afterward adds no protection; it only breaks
+ * post-hoc hooks that need to know which file was edited or which command ran.
+ */
+function buildStdinPayload(
+  context: HookContext,
+  sessionId: string | undefined,
+  agentCwd: string,
+): string {
+  const payload: Record<string, unknown> = {
+    session_id: sessionId,
+    hook_event_name: context.event,
+    cwd: agentCwd,
+  };
+
+  if (
+    context.event === 'PreToolUse' ||
+    context.event === 'PostToolUse' ||
+    context.event === 'PostToolUseFailure'
+  ) {
+    payload['tool_name'] = context.toolName;
+    payload['tool_input'] = context.input;
+  }
+  if (context.event === 'PostToolUse') {
+    // Serialize tool output so hook scripts can inspect it.
+    // Omit when output is undefined to avoid confusing hooks with a null key.
+    if (context.output !== undefined) {
+      payload['tool_output'] =
+        typeof context.output === 'string' ? context.output : JSON.stringify(context.output);
+    }
+  }
+  if (context.event === 'PostToolUseFailure') {
+    payload['error'] = context.error;
+  }
+  if (context.event === 'PreCompact') {
+    payload['trigger'] = context.trigger ?? null;
+  }
+  if (context.event === 'UserPromptSubmit') {
+    payload['prompt'] = context.prompt;
+  }
+  // transcript_path: always emit the key so hook scripts can detect it.
+  // When unknown, emit null (not undefined — JSON.stringify drops undefined).
+  payload['transcript_path'] = null;
+  return JSON.stringify(payload);
+}
+
+/**
  * Execute a single hook command and resolve with a `HookDecision`.
  *
  * Resolves (never rejects) — errors surface via the returned decision or
@@ -71,50 +121,7 @@ export async function executeCommand(
   // Tilde-expand the command path before spawning.
   const command = opts.command.replace(/^~\//, homedir() + '/');
 
-  // Build the stdin JSON payload.
-  const payload: Record<string, unknown> = {
-    session_id: sessionId,
-    hook_event_name: context.event,
-    cwd: agentCwd,
-  };
-
-  if (
-    context.event === 'PreToolUse' ||
-    context.event === 'PostToolUse' ||
-    context.event === 'PostToolUseFailure'
-  ) {
-    payload['tool_name'] = context.toolName;
-  }
-  if (context.event === 'PreToolUse') {
-    payload['tool_input'] = context.input;
-  }
-  if (context.event === 'PostToolUse') {
-    // Serialize tool output so hook scripts can inspect it.
-    // Omit when output is undefined to avoid confusing hooks with a null key.
-    if (context.output !== undefined) {
-      payload['tool_output'] =
-        typeof context.output === 'string' ? context.output : JSON.stringify(context.output);
-    }
-  }
-  if (context.event === 'PostToolUseFailure') {
-    payload['error'] = context.error;
-    // Deliberate omission: tool_input is not forwarded to shell hooks for
-    // PostToolUseFailure. The originating input is available in-process via
-    // context.input, but injecting it into the shell environment or stdin
-    // payload risks forwarding untrusted, potentially large, or sensitive
-    // tool inputs to arbitrary shell scripts. Add tool_input here if a
-    // future use-case justifies it, with appropriate size/content guards.
-  }
-  if (context.event === 'PreCompact') {
-    payload['trigger'] = context.trigger ?? null;
-  }
-  if (context.event === 'UserPromptSubmit') {
-    payload['prompt'] = context.prompt;
-  }
-  // transcript_path: always emit the key so hook scripts can detect it.
-  // When unknown, emit null (not undefined — JSON.stringify drops undefined).
-  payload['transcript_path'] = null;
-  const stdinPayload = JSON.stringify(payload);
+  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd);
 
   // Env vars injected into the child process.
   //
@@ -183,8 +190,8 @@ export async function executeCommand(
     let settled = false;
 
     function settle(result: CommandExecutorResult): void {
-      // unref unconditionally so a future caller that sets settled=true before
-      // calling settle() cannot skip unref() and pin the event loop.
+      // unref() is idempotent — calling it again after a prior settle() is
+      // harmless and ensures the event loop is never pinned by the child process.
       proc.unref();
       if (settled) return;
       settled = true;

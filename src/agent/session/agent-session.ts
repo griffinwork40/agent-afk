@@ -54,16 +54,11 @@ import { PlanExitBridge } from './plan-exit-bridge.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
-import { wireAbortSignal } from './session-setup.js';
+import { scheduleTopLevelHousekeeping, wireAbortSignal } from './session-setup.js';
+import { sessionLabelFromTracePath } from '../../paths.js';
+import { JournalLifecycle } from './journal-lifecycle.js';
+import type { MessageJournal } from '../journal/index.js';
 import { SessionStateManager } from './session-state.js';
-import { getSessionGrantsPath, sessionLabelFromTracePath } from '../../paths.js';
-import {
-  capJsonlBySize,
-  SESSION_GRANTS_MAX_BYTES,
-  SESSION_GRANTS_KEEP_TAIL_LINES,
-} from '../log-retention.js';
-import { sweepWitnessTree, WITNESS_SWEEP_START_DELAY_MS } from '../witness-sweep.js';
-import { sweepSessionSidecars, SESSION_SIDECAR_SWEEP_START_DELAY_MS } from '../session-sidecar-sweep.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
 import type { SubagentOutputRecorder } from './subagent-output-capture.js';
 import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
@@ -134,6 +129,8 @@ export class AgentSession implements IAgentSession {
    * after close. Lifecycle glue lives in {@link LedgerLifecycle}.
    */
   private readonly ledger = new LedgerLifecycle();
+  /** Durable message journal (docs/message-journal.md); glue in {@link JournalLifecycle}. */
+  private readonly journal = new JournalLifecycle(() => this.stateManager.getSessionId());
   private readonly outputBroadcast = new OutputBroadcast();
   private readonly shutdown: SessionShutdown;
   private runner!: TurnStreamRunner;
@@ -162,6 +159,7 @@ export class AgentSession implements IAgentSession {
               requestImplementSeed: (message, mode) =>
                 this.planExit.requestImplementSeed(message, mode),
               getPrePlanMode: () => this.planExit.getPrePlanMode(),
+              checkPlanText: () => this.planExit.planText.check(),
             },
           }
         : config;
@@ -194,37 +192,17 @@ export class AgentSession implements IAgentSession {
       actor: deriveActor(config.parentSessionId),
     });
 
+    this.config = this.journal.open(this.config);
     this.initSdkLifecycle();
+    this.journal.arm(this.config);
 
-    // Bound the write-only session-grants audit log at session start. Top-level
-    // sessions only: subagents share the parent's path, so re-running per fork
-    // is redundant and widens the rewrite-collision window. Fire-and-forget +
-    // silent-fail — best-effort housekeeping that must never delay or break
-    // construction.
+    // Top-level housekeeping (grants-log cap, witness + sidecar sweeps). See
+    // scheduleTopLevelHousekeeping for the deferral / unref invariants.
     if (this.config.parentSessionId === undefined) {
-      void capJsonlBySize(getSessionGrantsPath(), {
-        maxBytes: SESSION_GRANTS_MAX_BYTES,
-        keepTailLines: SESSION_GRANTS_KEEP_TAIL_LINES,
-      });
-      // Bound the witness tree the same way. Self-throttled by a stamp file,
-      // so this is a no-op on all but one session start every few hours (#849).
-      //
-      // Invariant: deferred off the construction path and `.unref()`ed, exactly
-      // as BackgroundAgentRegistry's eviction sweep is. The walk is O(files in
-      // the witness tree), so running it inline competes with the session's own
-      // first-turn I/O. The unref also means a short-lived process exits without
-      // ever paying for it.
-      const witnessSweepTimer = setTimeout(() => {
-        void sweepWitnessTree({
-          activeLabel:
-            sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
-        });
-      }, WITNESS_SWEEP_START_DELAY_MS);
-      witnessSweepTimer.unref();
-      const sidecarSweepTimer = setTimeout(() => {
-        void sweepSessionSidecars({ activeSessionId: this.sessionId });
-      }, SESSION_SIDECAR_SWEEP_START_DELAY_MS);
-      sidecarSweepTimer.unref();
+      scheduleTopLevelHousekeeping(
+        () => sessionLabelFromTracePath(this.config.traceWriter?.getTracePath()) ?? undefined,
+        () => this.sessionId,
+      );
     }
   }
 
@@ -280,6 +258,7 @@ export class AgentSession implements IAgentSession {
       setSubagentOutputRecorder: (r) => { this.subagentOutputRecorder = r; },
       getProviderQuery: () => this.providerQuery,
       getLedgerMetadata: () => this.stateManager.getSessionMetadata(),
+      observeProviderEvent: (e) => this.planExit.planText.observe(e),
     });
 
     const initializer = new ProviderInitializer(
@@ -302,6 +281,8 @@ export class AgentSession implements IAgentSession {
   get cwd(): string | undefined { return this.config.cwd; }
   get abortSignal(): AbortSignal { return this.abortController.signal; }
   get hookRegistry(): HookRegistry | undefined { return this._hookRegistry; }
+  /** This session's message journal (forks fork from it via `forSubagent`). */
+  get messageJournal(): MessageJournal | undefined { return this.journal.current; }
 
   /**
    * Abort the session with a caller-supplied reason BEFORE calling close().
@@ -371,16 +352,19 @@ export class AgentSession implements IAgentSession {
       getInitPromise: () => this.initPromise,
       getShutdown: () => this.shutdown,
       getLedger: () => this.ledger,
+      getJournal: () => this.journal,
       getStateManager: () => this.stateManager,
       reinitialize: (patch) => {
-        this.config = patch(this.config);
+        this.config = this.journal.open(patch(this.config));
         this.initSdkLifecycle();
+        this.journal.arm(this.config);
       },
     });
   }
 
   private async onAbort(): Promise<void> {
     void this.ledger.seal('abort');
+    this.journal.flush();
     try {
       await this.providerQuery.interrupt(providerAbortReason(this.abortController.signal.reason));
     } catch {
@@ -396,6 +380,7 @@ export class AgentSession implements IAgentSession {
       getStateManager: () => this.stateManager,
       getPlanExit: () => this.planExit,
       pushSidebandEvent: (event) => this.pushSidebandEvent(event),
+      getJournal: () => this.journal,
     };
   }
 
@@ -467,6 +452,14 @@ export class AgentSession implements IAgentSession {
     this.currentState = 'closed';
     this.outputBroadcast.close();
     await this.ledger.seal('close');
+    // Invariant: abort and drain the provider BEFORE closing the journal.
+    // Both providers perform final journal synchronization during their
+    // abort/turn-finalization paths (JournalSync.sync at commit points).
+    // Closing the journal first silently discards those writes, leaving the
+    // journal ending at an unmatched tool_use or missing completed tool
+    // results — corrupting the resume source. The reset path (session-reset.ts)
+    // already follows this order: provider.close() + iterator.return + drain
+    // initPromise → closeForReset(). close() must match it.
     if (!this.abortController.signal.aborted) this.abortController.abort('closed');
     this.stateManager.resolveInitializationIfNeeded();
     try {
@@ -482,6 +475,7 @@ export class AgentSession implements IAgentSession {
         // ignore
       }
     }
+    await this.journal.close();
     await this.shutdown.dispatchOnce('close');
   }
 

@@ -31,6 +31,7 @@ import type {
   RewindTarget,
 } from '../provider.js';
 import type { HookRegistry } from '../hooks.js';
+import type { MessageJournal } from '../journal/types.js';
 import type { ZodType } from 'zod';
 
 /** Agent session state */
@@ -266,6 +267,12 @@ export interface IAgentSession {
    * session runs without hooks (e.g. tests, bare harnesses).
    */
   readonly hookRegistry?: HookRegistry;
+  /**
+   * The session's message journal, if any. Exposed so forks journal to
+   * `messageJournal.forSubagent(childId)` (never to this journal itself); see
+   * the invariant in ../subagent/fork-child-config.ts.
+   */
+  readonly messageJournal?: MessageJournal;
 
   sendMessage(content: string, options?: SendMessageOptions): Promise<Message>;
   sendMessageStream(content: string | ContentBlockParam[]): AsyncIterable<OutputEvent>;

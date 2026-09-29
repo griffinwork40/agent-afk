@@ -23,7 +23,7 @@
 import { z } from 'zod';
 
 /** Bump when the facet shape or derivation changes — invalidates caches. */
-export const FACET_VERSION = 5;
+export const FACET_VERSION = 6;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -205,6 +205,20 @@ export const YieldTrackingSchema = z.object({
 });
 export type YieldTracking = z.infer<typeof YieldTrackingSchema>;
 
+/**
+ * Per-subagent tool call breakdown (#2461).
+ * Populated in the facet when the parent session has a message journal and at
+ * least one subagent journal exists. Each entry covers ONE subagent's own
+ * tool calls — they are excluded from the parent's `tool_counts` / `tool_errors`.
+ */
+export const SubagentToolSummarySchema = z.object({
+  subagent_id: z.string(),
+  tool_calls: z.number().int(),
+  tool_errors: z.number().int(),
+  tool_counts: z.record(z.string(), z.number()),
+});
+export type SubagentToolSummary = z.infer<typeof SubagentToolSummarySchema>;
+
 export const SessionFacetSchema = z
   .object({
     // provenance & identity
@@ -262,6 +276,10 @@ export const SessionFacetSchema = z
     // decisions / evidence (v1-thin; semantic-enrichable)
     decisions: z.array(z.string()),
     evidence_pointers: z.array(z.string()),
+
+    // subagent tool-call breakdown (#2461): excluded from parent tool_counts.
+    // Optional: absent when the journal is unavailable or there are no subagents.
+    subagent_breakdown: z.array(SubagentToolSummarySchema).optional(),
   })
   .passthrough();
 

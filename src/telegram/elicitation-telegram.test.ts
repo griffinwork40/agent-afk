@@ -345,3 +345,50 @@ describe('createTelegramElicitationHandler — topic thread routing (#1219)', ()
     await p;
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #2363: Telegram must show destructive tail of long commands
+// ---------------------------------------------------------------------------
+
+describe('Telegram elicitation — AFK command preview', () => {
+  it('shows the destructive tail of a bash command past 300 chars in the sent message', async () => {
+    // Build a realistic AFK gate approval request with a long command whose
+    // dangerous tail starts after the old 300-char clip boundary.
+    const preamble = 'echo safe && '.repeat(30);   // ~390 chars
+    const dangerousTail = '; rm -rf /important';
+    const command = preamble + dangerousTail;
+    const preview = command; // the new buildInputPreview keeps the tail visible
+
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      title: 'AFK high-risk approval',
+      message:
+        `AFK: \`bash\` is high-risk / irreversible and AFK mode runs unattended. ` +
+        `Approve this single call?\n\nInput: ${preview}`,
+      mode: 'form',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    expect(stub.sent).toHaveLength(1);
+    const text = stub.sent[0]!.text;
+    // The dangerous tail must be visible in the Telegram message
+    expect(text).toContain('rm -rf /important');
+
+    controller.abort();
+    await p;
+  });
+});

@@ -14,6 +14,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentModelInput, CanUseTool, IAgentSession } from './types.js';
 import type { ModelProvider } from './provider.js';
 import type { SubagentManager } from './subagent.js';
+import type { JournalParent } from './subagent/fork-types.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
 import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
 import { TimeoutError, errorMessage } from '../utils/errors.js';
@@ -183,7 +184,7 @@ export interface SubagentDAGNode {
 
 export interface SubagentDAGOptions {
   manager: SubagentManager;
-  parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'>;
+  parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'> & JournalParent;
   nodes: SubagentDAGNode[];
   edges: DAGEdge[];
   failFast?: boolean;
@@ -347,7 +348,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
       try {
         handle = await manager.forkSubagent({
-          parent: { sessionId: parentSession.sessionId },
+          parent: { sessionId: parentSession.sessionId, messageJournal: parentSession.messageJournal },
           config: {
             model: spec.model ?? 'sonnet',
             systemPrompt: spec.systemPrompt,
@@ -380,7 +381,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
             // SMALLER binds, so take the min: deriving from the node timeout alone
             // would arm a deadline later than the fork budget that will actually
             // fire.
-            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}), ...{ depth: spec.depth, maxDepth: spec.maxDepth }, // #2266
+            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}), depth: spec.depth, maxDepth: spec.maxDepth,
           },
           idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
           ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),

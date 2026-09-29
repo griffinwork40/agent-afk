@@ -30,6 +30,20 @@ name: Auto Release
 on:
   push:
     branches: [main]
+  # Invariant: a MAJOR is never published by a plain merge. Parallel agent
+  # sessions merge several PRs a day, and one stray `!:` subject or the words
+  # BREAKING CHANGE in a squash body would otherwise cut and publish a major on
+  # its own. A detected major fails the push-triggered run (loudly, and every
+  # later merge stays blocked) until a human dispatches this workflow with an
+  # explicit bump: `major` to cut it on purpose, or `minor`/`patch` when the
+  # detection was a false positive.
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'auto = derive from commits (a detected major is refused); major/minor/patch = release exactly this bump'
+        type: choice
+        options: [auto, major, minor, patch]
+        default: auto
 
 # Serialize releases so two quick merges cannot race on the version bump / tag
 # push. cancel-in-progress: false ⇒ the second merge waits, then computes its
@@ -86,6 +100,9 @@ jobs:
 
       - name: Compute next version from Conventional Commits
         id: bump
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUMP_INPUT: ${{ inputs.bump || 'auto' }}
         run: |
           set -euo pipefail
           CURRENT=$(jq -r .version package.json)
@@ -103,6 +120,20 @@ jobs:
             BUMP=minor
           elif grep -qE '^(fix|perf|refactor)(\([^)]*\))?:' <<<"$LOG"; then
             BUMP=patch
+          fi
+
+          # Major gate (see the Invariant on `on:` above).
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$BUMP_INPUT" != auto ]; then
+            echo "Manual bump: detected=$BUMP, releasing as $BUMP_INPUT"
+            BUMP="$BUMP_INPUT"
+          elif [ "$BUMP" = major ]; then
+            MSG="Breaking change detected since ${LAST_TAG:-repo start}; majors are never auto-published. Run the Auto Release workflow manually with bump=major to cut it, or bump=minor/patch if the detection is a false positive. Releases stay blocked until then."
+            echo "::error::$MSG"
+            echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
+            echo "Matching commits:" >> "$GITHUB_STEP_SUMMARY"
+            git log --format='- %h %s' "$RANGE" --grep='BREAKING CHANGE' >> "$GITHUB_STEP_SUMMARY" || true
+            git log --format='- %h %s' "$RANGE" -E --grep='^[a-z]+(\([^)]*\))?!:' >> "$GITHUB_STEP_SUMMARY" || true
+            exit 1
           fi
 
           if [ "$BUMP" = none ]; then

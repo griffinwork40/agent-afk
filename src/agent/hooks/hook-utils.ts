@@ -23,3 +23,23 @@ export function isSubagentContext(context: HookContext, extraSignals?: ForkSigna
   if (extraSignals?.subagentToolOutputCapBytes !== undefined) return true;
   return false;
 }
+
+/**
+ * Resolve the session id for a hook command invocation.
+ *
+ * Contract: prefer the live `context.sessionId` over the registration-time
+ * `registrationSessionId` so command hooks fired on the REPL / `afk chat`
+ * surfaces receive the provider-assigned id rather than `undefined`.
+ * `SubagentStartContext` and `SubagentStopContext` carry no `sessionId` field,
+ * so for those events the registration-time fallback is the only source.
+ *
+ * Invariant: this function is the single merge point for hook command session
+ * id resolution — do not inline the precedence in callers.
+ */
+export function resolveContextSessionId(
+  context: HookContext,
+  registrationSessionId: string | undefined,
+): string | undefined {
+  if ('sessionId' in context && context.sessionId !== undefined) return context.sessionId;
+  return registrationSessionId;
+}

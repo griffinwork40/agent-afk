@@ -1,0 +1,171 @@
+/**
+ * Outcome session-end hook — immediate-pass labeling at root teardown.
+ *
+ * Wired alongside the facet hook in default-hook-registry.ts. At SessionEnd
+ * for a root (non-forked) session:
+ *   1. Loads the session JSON turns (via loadStoredSession).
+ *   2. Recovers artifacts (commit SHAs, PR URLs, repo) from tool result previews.
+ *   3. Runs all immediate LFs (closure, error_tail, verification,
+ *      in_session_correction, self_report). Closure info is read from
+ *      context.tracePath when available.
+ *   4. Upserts into the outcome store as 'provisional' (settles_after = 7 days
+ *      when artifacts present) or settled immediately otherwise.
+ *   5. Stores first_prompt / first_cwd for cross_session_reask lookups.
+ *
+ * Fire-and-forget: never throws into or delays teardown.
+ *
+ * @module agent/outcomes/session-end-hook
+ */
+
+import { existsSync, readFileSync } from 'node:fs';
+import type { HookHandler } from '../hooks.js';
+import { isSubagentContext } from '../hooks/hook-utils.js';
+import { loadStoredSession } from '../facets/store.js';
+import { recoverArtifacts } from './artifacts.js';
+import { runImmediateLFs, type ClosureInfo } from './lf-immediate.js';
+import { upsertVotes } from './store.js';
+import { lfReask } from './lf-reask.js';
+import type { VerifiedOutcome } from './schema.js';
+
+// ---------------------------------------------------------------------------
+// Closure reader — synchronous, reads tracePath written by the trace layer
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the closure reason from a sealed trace.jsonl file.
+ * Returns null when tracePath is absent, the file doesn't exist, or parse fails.
+ * This is the LoadClosure injectable required by lfClosure/runImmediateLFs.
+ */
+function closureFromTrace(tracePath: string | undefined): ClosureInfo | null {
+  if (!tracePath || !existsSync(tracePath)) return null;
+  try {
+    const raw = readFileSync(tracePath, 'utf8');
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line) as Record<string, unknown>;
+        if (obj['kind'] === 'closure') {
+          const p = obj['payload'] as Record<string, unknown> | undefined;
+          const reason = p?.['reason'];
+          if (reason === 'abort') return { reason: 'abort' };
+          if (reason === 'iteration_cap') return { reason: 'iteration_cap' };
+          return { reason: 'normal' };
+        }
+      } catch {
+        // malformed line — skip
+      }
+    }
+  } catch {
+    // IO error
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Session-kind detection
+// ---------------------------------------------------------------------------
+
+function detectSessionKind(
+  turns: Array<{ toolEvents?: Array<{ toolName: string }> }>,
+): VerifiedOutcome['session_kind'] {
+  const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'patch_apply']);
+  for (const turn of turns) {
+    for (const ev of turn.toolEvents ?? []) {
+      if (WRITE_TOOLS.has(ev.toolName)) return 'mutating';
+    }
+  }
+  return 'text';
+}
+
+// ---------------------------------------------------------------------------
+// First prompt extraction
+// ---------------------------------------------------------------------------
+
+function extractFirstPrompt(
+  turns: Array<{ user?: string }>,
+): string | undefined {
+  for (const turn of turns) {
+    const text = turn.user?.trim();
+    if (text) return text.slice(0, 2000); // cap at 2K chars
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Hook factory
+// ---------------------------------------------------------------------------
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function createOutcomeSessionEndHook(): HookHandler {
+  return (context) => {
+    if (context.event !== 'SessionEnd') return {};
+    if (isSubagentContext(context)) return {};
+    const sessionId = context.sessionId;
+    if (!sessionId) return {};
+
+    // Fire-and-forget: never block or throw into teardown
+    void _runImmediatePass(sessionId, context.tracePath, context.cwd).catch(() => {});
+
+    return {};
+  };
+}
+
+async function _runImmediatePass(
+  sessionId: string,
+  tracePath: string | undefined,
+  cwd: string | undefined,
+): Promise<void> {
+  // Load session turns — may be missing if sidecar was swept or corrupted
+  const session = loadStoredSession(sessionId);
+  const turns = session?.turns ?? [];
+
+  // Recover artifacts and run LFs
+  const artifacts = recoverArtifacts(turns);
+  const now = new Date().toISOString();
+  const closure = closureFromTrace(tracePath);
+
+  const { votes, selfReport } = runImmediateLFs(
+    sessionId,
+    turns,
+    () => closure,
+    now,
+  );
+
+  // Determine state / settles_after
+  const hasArtifacts = artifacts.commits.length > 0 || artifacts.prs.length > 0;
+  const settlesAfter = hasArtifacts
+    ? new Date(Date.now() + SEVEN_DAYS_MS).toISOString()
+    : null;
+
+  const sessionKind = detectSessionKind(turns);
+  const firstPrompt = extractFirstPrompt(turns);
+
+  const base: Omit<VerifiedOutcome, 'votes' | 'history'> = {
+    schema_version: 1,
+    session_id: sessionId,
+    label: 'unknown',
+    confidence: 0,
+    state: hasArtifacts ? 'provisional' : 'settled',
+    settles_after: settlesAfter,
+    session_kind: sessionKind,
+    self_report: selfReport,
+    artifacts,
+    ...(firstPrompt !== undefined ? { first_prompt: firstPrompt } : {}),
+    ...(cwd !== undefined ? { first_cwd: cwd } : {}),
+  };
+
+  upsertVotes(sessionId, votes, base);
+
+  // cross_session_reask: check if this NEW session should add a -1 to a
+  // prior session (fire-and-forget within the already-void context)
+  if (firstPrompt !== undefined) {
+    void Promise.resolve().then(() => {
+      try {
+        lfReask(sessionId, firstPrompt, cwd, now);
+      } catch {
+        // best-effort
+      }
+    });
+  }
+}

@@ -27,6 +27,7 @@ import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
+import { scrubBashEnv } from './bash-env-scrub.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -271,9 +272,12 @@ export function createBashHandler(
         ...((context?.resolveBase ?? context?.cwd ?? cwd) !== undefined
           ? { cwd: context?.resolveBase ?? context?.cwd ?? cwd }
           : {}),
-        ...(context?.env !== undefined
-          ? { env: { ...process.env, ...context.env } }
-          : {}),
+        // Always scrub episode-revealing vars (issue #2425) regardless of
+        // whether context.env is set — both the inherit-process.env path
+        // (context.env undefined) and the explicit merge path must be clean.
+        env: scrubBashEnv(
+          context?.env !== undefined ? { ...process.env, ...context.env } : undefined,
+        ),
       };
       const proc =
         shellResolution.shell === true

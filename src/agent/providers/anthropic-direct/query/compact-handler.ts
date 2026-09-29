@@ -177,14 +177,14 @@ export async function compactHistory(
   // sentinel guard inside microcompactToolResults (`isMicrocompactPlaceholder`)
   // prevents double-clearing any block already replaced in a prior pass.
   const opts = readMicrocompactOptions();
-  const { blocksCleared, bytesReclaimed } = microcompactToolResults(state.messages, opts);
+  const { blocksCleared, bytesReclaimed, firstClearedIndex } = microcompactToolResults(state.messages, opts);
   if (blocksCleared > 0 && !result.compacted) {
     return {
       compacted: false,
       reason: 'microcompacted',
       messagesBefore,
       messagesAfter: state.messages.length,
-      microcompaction: { blocksCleared, bytesReclaimed },
+      microcompaction: { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) },
     };
   }
 

@@ -21,6 +21,8 @@
  * @module agent/routing-directive
  */
 
+import { NARRATION_DIRECTIVE } from './narration-directive.js';
+
 export const ROUTING_DIRECTIVE = `[skill-routing: active]
 
 Route recurring work through registered skills instead of rolling ad-hoc solutions:
@@ -131,7 +133,8 @@ Never end a turn mid-loop without one of these. The terminal-state heading must 
 
 /**
  * Identifies the surface assembling the prompt. Interactive surfaces (`repl`,
- * `telegram`) receive the end-of-turn protocol; the non-interactive `one-shot`
+ * `telegram`) receive the light-narration directive and the end-of-turn
+ * protocol; the non-interactive `one-shot`
  * surface does not, since its output is consumed programmatically and a
  * terminal-state heading would corrupt downstream parsing.
  *
@@ -158,6 +161,9 @@ export function assembleSystemPrompt(
   const parts: string[] = [base];
   if (autoRouting) parts.push(ROUTING_DIRECTIVE);
   if (SURFACES_WITH_END_OF_TURN.has(surface)) {
+    // Invariant: narration rides the same interactive gate and precedes the
+    // end-of-turn protocol, which must remain the final block.
+    parts.push(NARRATION_DIRECTIVE);
     parts.push(END_OF_TURN_DIRECTIVE);
   }
   return parts.join('\n\n');

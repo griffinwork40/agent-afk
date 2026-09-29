@@ -18,9 +18,11 @@ import type { Environment, Episode, RunnerOptions } from '../types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * A fake "afk chat" script that:
+ * A fake "afk chat --format stream-json" script that:
  *   - Appends two JSONL lines to $AFK_WHATIF_TOOL_LOG.
- *   - Prints a JSON object to stdout.
+ *   - Emits NDJSON OutputEvent lines on stdout (stream-json format):
+ *       chunk/content "Hello, ", then tool_use_detail for read_file,
+ *       then chunk/content " world", then done with metadata.
  *   - Exits 0.
  */
 const FAKE_RUN_SCRIPT = `
@@ -30,16 +32,14 @@ if (logPath) {
   fs.appendFileSync(logPath, JSON.stringify({ts:1,tool:'read_file',input:{path:'/foo'},verdict:'executed',subagent:false}) + '\\n');
   fs.appendFileSync(logPath, JSON.stringify({ts:2,tool:'bash',input:{command:'echo hi'},verdict:'recorded',subagent:false}) + '\\n');
 }
-const out = {
-  success: true,
-  model: 'claude-3-5-sonnet',
-  message: 'Hello from fake agent',
-  costUsd: 0.01,
-  durationMs: 500,
-  inputTokens: 100,
-  outputTokens: 50,
-};
-console.log(JSON.stringify(out, null, 2));
+// stream-json NDJSON: text before tool, tool marker, text after tool, done with metadata
+const events = [
+  { type: 'chunk', chunk: { type: 'content', content: 'Hello, ' } },
+  { type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'tu1', toolName: 'read_file', toolInput: '{}' } },
+  { type: 'chunk', chunk: { type: 'content', content: ' world' } },
+  { type: 'done', metadata: { totalCostUsd: 0.01, durationMs: 500, usage: { input_tokens: 100, output_tokens: 50 } } },
+];
+for (const e of events) process.stdout.write(JSON.stringify(e) + '\\n');
 process.exit(0);
 `;
 
@@ -169,7 +169,8 @@ describe('createAfkRunner().run()', () => {
     const trace = await runner.run(env, baseEpisode, 0, baseOpts);
 
     expect(trace.error).toBeUndefined();
-    expect(trace.text).toBe('Hello from fake agent');
+    // stream-json: text segments with [tool: name] marker between them
+    expect(trace.text).toBe('Hello, [tool: read_file] world');
     expect(trace.costUsd).toBe(0.01);
     expect(trace.inputTokens).toBe(100);
     expect(trace.outputTokens).toBe(50);

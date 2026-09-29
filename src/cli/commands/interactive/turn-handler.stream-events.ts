@@ -21,6 +21,11 @@ import { joinAtRoundSeam } from './turn-text-seam.js';
 import { observeFirstContent, type TurnTtfbState } from './turn-handler.ttfb.js';
 import { tickContextProgress } from './turn-handler.context-progress.js';
 import { handlePausedEvent, type PausedPickerRef } from './turn-handler.paused.js';
+import { redactSecrets } from '../../../agent/redact-secrets.js';
+import { isVerificationCommand } from '../../../agent/outcomes/verification-patterns.js';
+
+/** Max characters to keep in the `resultTail` field on verification tool events. */
+const RESULT_TAIL_CHARS = 240;
 
 // ─── Mutable state ───────────────────────────────────────────────────────────
 
@@ -134,6 +139,23 @@ export async function processStreamEvent(
     if (pending) {
       pending.result = c.content;
       pending.isError = c.isError;
+      // Capture resultTail for verification commands so lfVerification can
+      // parse pass/fail even when the command was piped and isError reflects
+      // only the pipe's last stage. Use tailPreview (last N non-empty lines
+      // already extracted by truncateContent) when available; otherwise slice
+      // the raw content to the last RESULT_TAIL_CHARS characters.
+      const isVerify = pending.toolName === 'test_run' ||
+        (pending.toolName === 'bash' && isVerificationCommand(pending.input));
+      if (isVerify) {
+        const tailLines = c.tailPreview;
+        const rawForTail = tailLines !== undefined && tailLines.length > 0
+          ? tailLines.join('\n')
+          : c.content;
+        const tail = rawForTail.length > RESULT_TAIL_CHARS
+          ? rawForTail.slice(-RESULT_TAIL_CHARS)
+          : rawForTail;
+        pending.resultTail = redactSecrets(tail);
+      }
       pendingTools.delete(c.toolUseId);
     }
     turnTtfb.plainHooks?.onToolResult(c, pending?.toolName);

@@ -15,8 +15,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { basename, dirname, join } from 'path';
-import { getFacetCacheDir, getSessionsDir, validateSessionId } from '../../paths.js';
+import { basename, dirname, join, resolve } from 'path';
+import { getFacetCacheDir, getSessionJournalPath, getSessionsDir, getSubagentJournalPath, validateSessionId } from '../../paths.js';
+import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
+import { isMessageJournalDisabled } from '../journal/noop.js';
+import { journalRecordsToToolEvents, summarizeSubagentJournal } from './journal-adapter.js';
 import { deriveSessionFacet } from './derive.js';
 import {
   FACET_VERSION,
@@ -24,6 +27,8 @@ import {
   StoredSessionInputSchema,
   type SessionFacet,
   type StoredSessionInput,
+  type SubagentToolSummary,
+  type ToolEventInput,
 } from './schema.js';
 
 export interface FacetStoreOptions {
@@ -84,10 +89,69 @@ function writeFacet(cachePath: string, facet: SessionFacet): void {
 
 /**
  * A cached facet is fresh iff it was produced by the current FACET_VERSION and
- * the session sidecar has not been modified since the facet was derived.
+ * neither the session sidecar nor any journal file is newer than the mtime
+ * recorded in the facet. `effectiveMtimeMs` is max(sidecar, journal mtimes).
  */
-function isFresh(cached: SessionFacet, sessionMtimeMs: number): boolean {
-  return cached.facet_version === FACET_VERSION && cached.source_session_mtime_ms === sessionMtimeMs;
+function isFresh(cached: SessionFacet, effectiveMtimeMs: number): boolean {
+  return cached.facet_version === FACET_VERSION && cached.source_session_mtime_ms === effectiveMtimeMs;
+}
+
+/**
+ * Safe mtime read — returns 0 on any error (missing path, permission error).
+ */
+function safeMtimeMs(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Attempt to read journal records for a session and return the derived events
+ * plus the max journal mtime (parent + subagent journals). Returns undefined
+ * when the journal is disabled, absent, or unreadable (safe fallback to
+ * sidecar). Never throws.
+ */
+function tryReadJournal(sessionId: string, sessionsDir: string): {
+  parentEvents: ToolEventInput[];
+  subagentBreakdown: SubagentToolSummary[];
+  journalMtimeMs: number;
+} | undefined {
+  try {
+    if (isMessageJournalDisabled()) return undefined;
+    // The journal reader always resolves under the default sessions dir. When a
+    // caller overrides `sessionsDir` (e.g. `afk insights --afk-home`), a journal
+    // found there would belong to a different home — use the sidecar instead.
+    if (resolve(sessionsDir) !== resolve(getSessionsDir())) return undefined;
+    if (!journalExists(sessionId)) return undefined;
+
+    const records = readJournalRecords(sessionId);
+    const parentEvents = journalRecordsToToolEvents(records);
+
+    // Subagent journals
+    const subagentIds = listSubagentJournals(sessionId);
+    const subagentBreakdown = subagentIds.map((subId) => {
+      const subRecords = readJournalRecords(sessionId, { subagentId: subId });
+      return summarizeSubagentJournal(subId, subRecords);
+    });
+
+    // Compute effective journal mtime: max of parent + all subagent journal files
+    let journalMtimeMs = safeMtimeMs(getSessionJournalPath(sessionId));
+    for (const subId of subagentIds) {
+      try {
+        const subPath = getSubagentJournalPath(sessionId, subId);
+        const subMtime = safeMtimeMs(subPath);
+        if (subMtime > journalMtimeMs) journalMtimeMs = subMtime;
+      } catch {
+        // ignore invalid subagent id
+      }
+    }
+
+    return { parentEvents, subagentBreakdown, journalMtimeMs };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -106,9 +170,19 @@ export function getOrDeriveFacet(
   const sessionMtimeMs = statSync(sessionPath).mtimeMs;
   const cachePath = cachePathFor(sessionId, cacheDir);
 
+  // Read journal once per session — never per-facet. Falls back to undefined
+  // (sidecar path) when the journal is absent, disabled, or unreadable.
+  const journalData = tryReadJournal(sessionId, sessionsDir);
+
+  // Effective mtime for staleness: max(sidecar, journal files) so a journal
+  // append after the sidecar is saved still triggers a re-derive.
+  const effectiveMtimeMs = journalData !== undefined
+    ? Math.max(sessionMtimeMs, journalData.journalMtimeMs)
+    : sessionMtimeMs;
+
   if (!options.force) {
     const cached = readCachedFacet(cachePath);
-    if (cached && isFresh(cached, sessionMtimeMs)) return cached;
+    if (cached && isFresh(cached, effectiveMtimeMs)) return cached;
   }
 
   const session = loadStoredSession(sessionId, sessionsDir);
@@ -116,7 +190,13 @@ export function getOrDeriveFacet(
 
   const facet = deriveSessionFacet(session, {
     sourceSessionPath: sessionPath,
-    sourceSessionMtimeMs: sessionMtimeMs,
+    sourceSessionMtimeMs: effectiveMtimeMs,
+    ...(journalData !== undefined
+      ? {
+          journalEvents: journalData.parentEvents,
+          subagentBreakdown: journalData.subagentBreakdown,
+        }
+      : {}),
   });
   writeFacet(cachePath, facet);
   return facet;

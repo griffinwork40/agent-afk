@@ -16,8 +16,17 @@
  */
 
 import type { PermissionMode } from '../types.js';
+import { PlanTextTracker } from './plan-text-tracker.js';
 
 export class PlanExitBridge {
+  /**
+   * Visible-plan-text gate state for `exit_plan_mode`. Fed every provider
+   * event by the turn runner and reset at each user turn by
+   * `sendMessageStreamInternal`; read by the handler via
+   * `PlanExitControls.checkPlanText`. See {@link PlanTextTracker}.
+   */
+  readonly planText = new PlanTextTracker();
+
   /**
    * Pending plan-exit implement-turn queued by an approved `exit_plan_mode`
    * tool call. The REPL drains it with {@link takeSeed} after the current turn,

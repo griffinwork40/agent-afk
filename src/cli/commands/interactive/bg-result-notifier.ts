@@ -98,12 +98,15 @@ function extractOutput(job: BackgroundJob): string {
  * job so the model knows how to retrieve the full result. Byte-accurate
  * (not char-accurate) so multi-byte content can't overshoot the cap.
  *
- * Invariant: called on ALREADY-ESCAPED text so the cap bounds the final
- * injected size. Escape-then-truncate matters: escaping expands `<` to
- * `&lt;` (4×), so truncating pre-escape text would let adversarial output
- * (e.g. 16KB of `<`) balloon to ~64KB post-escape and bypass the cap.
- * Truncation may cut an entity mid-sequence (`&am`); harmless in model
- * context.
+ * Escaping is the CALLER's responsibility. When embedding in an XML envelope
+ * (model-injection context), pass already-escaped text so the byte cap bounds
+ * the final injected size — escaping expands `<` to `&lt;` (4×), so truncating
+ * pre-escape text would let adversarial output (e.g. 16KB of `<`) balloon to
+ * ~64KB post-escape and bypass the cap. Plain-text surfaces (e.g. Telegram push
+ * via {@link formatBgResultBody}) intentionally skip escaping and call this on
+ * raw output — that is correct, not an omission.
+ * Truncation may cut a multi-byte codepoint or XML entity mid-sequence; harmless
+ * in the respective contexts.
  */
 function truncateBytes(text: string, maxBytes: number, jobId: string): string {
   if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
@@ -114,6 +117,16 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
     buf.toString('utf8') +
     `\n… [truncated at ${maxBytes} bytes — full result via /bgsub:join ${jobId}]`
   );
+}
+
+/**
+ * Human-readable result body for one settled job (no XML envelope, no
+ * escaping), capped at {@link MAX_INJECTION_BYTES} with the same
+ * `/bgsub:join <jobId>` marker. Used by push surfaces (Telegram) that show
+ * the result to the operator rather than the model.
+ */
+export function formatBgResultBody(job: BackgroundJob): string {
+  return truncateBytes(extractOutput(job), MAX_INJECTION_BYTES, job.jobId);
 }
 
 /**

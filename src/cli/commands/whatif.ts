@@ -39,7 +39,10 @@ import type { WhatifReport } from '../../whatif/types.js';
 // during tsc; the static import below is what callers see at runtime.
 // ---------------------------------------------------------------------------
 // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-import type { WhatifBudgetError as WhatifBudgetErrorType } from '../../whatif/run.js';
+import type {
+  WhatifBudgetError as WhatifBudgetErrorType,
+  WhatifMdeError as WhatifMdeErrorType,
+} from '../../whatif/run.js';
 
 function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   return (
@@ -47,6 +50,10 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
     'estimateUsd' in err &&
     'maxUsd' in err
   );
+}
+
+function isMdeError(err: unknown): err is WhatifMdeErrorType {
+  return err instanceof Error && 'episodesPerArm' in err;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,8 +110,11 @@ export function registerWhatifCommand(program: Command): void {
     .option('--concurrency <n>', 'Parallel episodes (default: 4)')
     .option('--max-turns <n>', 'Max turns per episode (default: 3)')
     .option('--timeout <sec>', 'Episode timeout in seconds (default: 180)')
+    .option('--probes <n>', 'Synthetic probe episodes per prediction (1–12; default 6)')
+    .option('--max-predictions <n>', 'Max predictions to retain (1–8; default 3 when probes>2, else 8)')
     .option('--keep-sandboxes', 'Keep sandbox directories after run')
     .option('--yes', 'Skip confirmation of compiled spec')
+    .option('--force', 'Bypass the MDE underpowered gate (--verify only)')
     .option('--json', 'Print results as JSON to stdout')
     .action(async (changeParts: string[], opts: Record<string, unknown>) => {
       try {
@@ -194,42 +204,45 @@ async function runWhatifCommand(
 
   let report: WhatifReport;
 
+  // Hoist runOpts and depsWithProgress so the MDE-gate catch path can re-run.
+  const depsWithProgress: typeof deps = {
+    ...deps,
+    onProgress: (p) => {
+      const msg = `${p.stage}: ${p.message}`;
+      if (spinner) {
+        spinner.text = msg;
+      } else {
+        process.stderr.write(`[whatif] ${msg}\n`);
+      }
+    },
+  };
+
+  const runOpts = {
+    spec,
+    realHome,
+    realCwd,
+    agentModel,
+    analystModel,
+    verify: parsed.options.verify,
+    turns: parsed.options.turns,
+    samples: parsed.options.samples,
+    maxUsd: parsed.options.maxUsd,
+    judge: parsed.options.judge,
+    concurrency: parsed.options.concurrency,
+    maxTurns: parsed.options.maxTurns,
+    episodeTimeoutMs: parsed.options.episodeTimeoutMs,
+    keepSandboxes: parsed.options.keepSandboxes,
+    force: parsed.force,
+    ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
+    ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
+  };
+
   try {
     // Dynamic import tolerates run.ts not existing during type-check if this
     // file is compiled before the sibling agent writes it.
     const { runWhatif } = await import('../../whatif/run.js');
 
-    const depsWithProgress: typeof deps = {
-      ...deps,
-      onProgress: (p) => {
-        const msg = `${p.stage}: ${p.message}`;
-        if (spinner) {
-          spinner.text = msg;
-        } else {
-          process.stderr.write(`[whatif] ${msg}\n`);
-        }
-      },
-    };
-
-    report = await runWhatif(
-      {
-        spec,
-        realHome,
-        realCwd,
-        agentModel,
-        analystModel,
-        verify: parsed.options.verify,
-        turns: parsed.options.turns,
-        samples: parsed.options.samples,
-        maxUsd: parsed.options.maxUsd,
-        judge: parsed.options.judge,
-        concurrency: parsed.options.concurrency,
-        maxTurns: parsed.options.maxTurns,
-        episodeTimeoutMs: parsed.options.episodeTimeoutMs,
-        keepSandboxes: parsed.options.keepSandboxes,
-      },
-      depsWithProgress,
-    );
+    report = await runWhatif(runOpts, depsWithProgress);
   } catch (err) {
     spinner?.stop();
 
@@ -240,6 +253,48 @@ async function runWhatifCommand(
           `estimated $${be.estimateUsd.toFixed(2)}, limit $${be.maxUsd.toFixed(2)}.\n` +
           `Raise the cap with: --max-usd ${Math.ceil(be.estimateUsd * 1.5)}\n`,
       );
+      process.exit(2);
+    }
+
+    if (isMdeError(err)) {
+      const me = err as WhatifMdeErrorType;
+      const detail = me.message.replace('whatif: run is underpowered — ', '');
+      if (parsed.yes && !parsed.force) {
+        // --yes suppresses interactive prompts; refuse with a clear message.
+        process.stderr.write(
+          `${palette.error('whatif: underpowered run refused')} — ${detail}\n`,
+        );
+        process.exit(2);
+      }
+      if (process.stdin.isTTY) {
+        // Interactive: ask the operator whether to proceed anyway.
+        process.stderr.write(`\n${palette.warning('whatif: underpowered run')}\n  ${detail}\n`);
+        const proceed = await confirmSpec(['Proceed anyway? [y/N]']);
+        if (!proceed) {
+          process.stderr.write('Aborted.\n');
+          process.exit(0);
+        }
+        // Re-run with force=true after user confirms.
+        const { runWhatif: rerun } = await import('../../whatif/run.js');
+        spinner?.start();
+        try {
+          report = await rerun({ ...runOpts, force: true }, depsWithProgress);
+        } catch (err2) {
+          spinner?.stop();
+          throw err2;
+        }
+        spinner?.stop();
+        if (parsed.json) {
+          process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+          return;
+        }
+        const termLines2 = renderTerminal(report, palette);
+        for (const line of termLines2) process.stdout.write(line + '\n');
+        process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+        return;
+      }
+      // Non-interactive, no --yes: print message and fail.
+      process.stderr.write(`${palette.error('whatif:')} ${detail}\n`);
       process.exit(2);
     }
 
@@ -303,8 +358,11 @@ function buildArgvFromOpts(
   push('--concurrency', opts['concurrency']);
   push('--max-turns', opts['maxTurns']);
   push('--timeout', opts['timeout']);
+  push('--probes', opts['probes']);
+  push('--max-predictions', opts['maxPredictions']);
   push('--keep-sandboxes', opts['keepSandboxes']);
   push('--yes', opts['yes']);
+  push('--force', opts['force']);
   push('--json', opts['json']);
 
   return argv;

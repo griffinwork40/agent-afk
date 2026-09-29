@@ -90,6 +90,23 @@ function isNewerVersion(current: string, latest: string): boolean {
   return isPrerelease(current) && !isPrerelease(latest);
 }
 
+/** Leading numeric segment of a semver string (`6.0.0-beta.1` → 6), or NaN. */
+function majorOf(version: string): number {
+  return Number(version.split('.', 1)[0]);
+}
+
+/**
+ * True when `latest` lives on a different major line than `current`.
+ *
+ * Invariant: a major version is where breaking changes ship, so the silent
+ * `auto` policy must never cross one — `triggerAutoUpdate()` refuses, and the
+ * banner tells the user to upgrade by hand. An unparseable major counts as a
+ * crossing (NaN !== anything), which fails closed toward "do not install".
+ */
+export function isMajorUpgrade(current: string, latest: string): boolean {
+  return majorOf(current) !== majorOf(latest);
+}
+
 function readCache(): UpdateCache | null {
   try {
     const raw = readFileSync(cachePath(), 'utf-8');
@@ -199,10 +216,15 @@ export function printUpdateBanner(info: UpdateInfo): void {
   // Invariant: style through the palette, never hand-rolled SGR literals. Raw
   // escapes bypass chalk's level gate, so they printed color even under
   // NO_COLOR / CI / a piped stderr, and they were invisible to `applyTheme()`.
+  const hint = isMajorUpgrade(info.currentVersion, info.latestVersion)
+    ? `Major release (may include breaking changes), not installed automatically.\n` +
+      `See https://github.com/griffinwork40/agent-afk/releases/tag/v${info.latestVersion} ` +
+      `then run \`npm install -g agent-afk@${info.latestVersion}\` to update`
+    : 'Run `npm install -g agent-afk` to update';
   process.stderr.write(
     `\n${palette.warning(palette.bold('Update available:'))} ` +
     `${palette.dim(info.currentVersion)} → ${palette.bold(info.latestVersion)}\n` +
-    `${palette.dim('Run `npm install -g agent-afk` to update')}\n`,
+    `${palette.dim(hint)}\n`,
   );
 }
 
@@ -343,6 +365,10 @@ export function fetchLatestVersion(
 
 export function triggerAutoUpdate(latestVersion: string): void {
   if (!SEMVER_RE.test(latestVersion)) return;
+  // Never silently cross a major line (see isMajorUpgrade). Enforced here, at
+  // the only function that spawns the background install, so no caller can
+  // bypass it. The banner already told the user how to upgrade by hand.
+  if (isMajorUpgrade(getVersion(), latestVersion)) return;
   // Debounce: a marker on disk means a prior install is still in flight (or
   // finished but not yet announced). Spawning a second `npm install -g` over
   // it races two installs against the same global package. checkPendingUpdate()

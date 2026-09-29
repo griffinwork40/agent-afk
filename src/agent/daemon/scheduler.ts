@@ -40,7 +40,6 @@ import { spawnDaemonSession } from './session-spawn.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
-  type GateDecision,
   type SessionStartSkipReason,
 } from './gates.js';
 import {
@@ -51,6 +50,7 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord } from './scheduler.overlap-guard.js';
 
 
 export interface SchedulerOptions {
@@ -135,6 +135,15 @@ export interface TelemetryRecord {
   skipReason?: SessionStartSkipReason;
   /** Human-readable label from ScheduledTaskConfig, if available. */
   name?: string;
+  /**
+   * True when the tick's response self-certified a `Done` terminal state with
+   * NO corroborating evidence (no successful file-write/edit/shell call this
+   * turn). Absent when verification did not run, when the response was
+   * verified, or when the terminal state is not `Done`. Enables post-hoc
+   * review tools to distinguish a verified success from an unverified claim.
+   * The `status` field remains `'success'` for backward compatibility.
+   */
+  doneUnverified?: boolean;
 }
 
 export interface TaskCompletionDetails {
@@ -148,7 +157,7 @@ export interface TaskCompletionDetails {
    * on any parse failure (fail-open). The push formatter downgrades the
    * completion message to "⚠️ Done (unverified)" only when this is `true` AND
    * `daemon.verifyDone` is enabled — see `formatTaskCompletion` in
-   * `src/cli/commands/daemon.ts`. Never persisted to telemetry.
+   * `src/cli/commands/daemon.ts`. Persisted to telemetry as `TelemetryRecord.doneUnverified` (only when `true`) as of #2307.
    */
   doneUnverified?: boolean;
   /**
@@ -178,6 +187,8 @@ export class CronScheduler {
   private pullPollTimer: ReturnType<typeof setInterval> | undefined;
   private isDequeuing = false;
   private readonly queueDir: string;
+  /** Per-task in-flight guard: IDs of tasks whose runOnce promise is still pending. Intra-process only — no cross-process coordination. */
+  private readonly inFlightTaskIds = new Set<string>();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -225,6 +236,7 @@ export class CronScheduler {
   /**
    * Run one tick of `taskId` immediately, bypassing the cron timer and gates.
    * Used by `--once` CLI mode and by tests. Recorded as `trigger: 'cron'`.
+   * Note: subject to the per-task in-flight overlap guard (see {@link CronScheduler.inFlightTaskIds}).
    */
   async tick(taskId: string): Promise<TelemetryRecord> {
     const entry = this.registry.get(taskId);
@@ -255,7 +267,9 @@ export class CronScheduler {
       if (decision.fire) {
         records.push(await this.runOnce(task, 'sessionstart'));
       } else {
-        records.push(this.recordSkip(task, decision));
+        const skipRecord = makeSessionStartSkipRecord(task, decision, this.now());
+        this.writeTelemetry(skipRecord, task);
+        records.push(skipRecord);
       }
     }
     return records;
@@ -301,6 +315,18 @@ export class CronScheduler {
   }
 
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
+    // Overlap guard: skip and record telemetry when this task's previous run is
+    // still in progress. Prevents stacked concurrent sessions on slow ticks
+    // (the in-flight set is released in the agent-path finally block below).
+    // The guard is intentionally checked BEFORE the cwd and executor branches
+    // so it applies uniformly to all executor types.
+    if (this.inFlightTaskIds.has(task.taskId)) {
+      const record = makeOverlapSkipRecord(task, trigger, this.now());
+      this.writeTelemetry(record, task);
+      return record;
+    }
+    this.inFlightTaskIds.add(task.taskId);
+    try {
     // Resolve executor early so the cwd guard can skip builtin tasks (which
     // ignore cwd entirely and would produce spurious errors if the dir vanishes).
     const isLegacySentinel = task.command === '__BUILTIN_WORKTREE_PRUNE__';
@@ -421,7 +447,9 @@ export class CronScheduler {
         ...baseRecord,
         durationMs: this.now() - startTimeMs,
         status: 'success',
-        responseExcerpt: responseText.slice(0, 280),
+        responseExcerpt: responseText.length > 280
+          ? `${responseText.slice(0, 280)}… [truncated]`
+          : responseText,
       };
       this.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
       return record;
@@ -457,22 +485,9 @@ export class CronScheduler {
       memoryStore?.close();
       stateStore?.close();
     }
-  }
-
-  private recordSkip(task: ScheduledTask, decision: GateDecision): TelemetryRecord {
-    const triggeredAt = new Date(this.now());
-    const record: TelemetryRecord = {
-      taskId: task.taskId,
-      command: task.command,
-      trigger: 'sessionstart',
-      ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-      triggeredAt: triggeredAt.toISOString(),
-      durationMs: 0,
-      status: 'skipped',
-      ...(decision.skipReason !== undefined ? { skipReason: decision.skipReason } : {}),
-    };
-    this.writeTelemetry(record, task);
-    return record;
+    } finally {
+      this.inFlightTaskIds.delete(task.taskId);
+    }
   }
 
   private async spawnSession(task: ScheduledTask, trigger: TelemetryTrigger = 'cron'): ReturnType<typeof spawnDaemonSession> {
@@ -501,10 +516,12 @@ export class CronScheduler {
     task?: ScheduledTask,
     details?: TaskCompletionDetails,
   ): void {
+    // Persist doneUnverified (#2307): only written when true; absent = not unverified.
+    const persistedRecord: TelemetryRecord = details?.doneUnverified === true ? { ...record, doneUnverified: true } : record;
     try {
-      appendFileSync(this.telemetryPath(), `${JSON.stringify(record)}\n`, 'utf-8');
+      appendFileSync(this.telemetryPath(), `${JSON.stringify(persistedRecord)}\n`, 'utf-8');
       const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
-      fireOnTaskComplete(record, opts, task, details);
+      fireOnTaskComplete(persistedRecord, opts, task, details);
     } catch (err) {
       // Telemetry failure must not crash the daemon. Log to stderr and move on.
       const msg = errorMessage(err);

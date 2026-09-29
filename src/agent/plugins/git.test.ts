@@ -86,9 +86,12 @@ describe('git wrapper', () => {
   it('checkout calls git checkout --detach <ref> in cwd', async () => {
     const { runner, calls } = makeRunner(() => ({}));
     await checkout('/tmp/repo', 'v1.2.3', { runner });
-    expect(calls).toHaveLength(1);
-    expect(gitVerbArgs(calls[0]!.args)).toEqual(['checkout', '--detach', 'v1.2.3']);
-    expect(calls[0]!.cwd).toBe('/tmp/repo');
+    // Two calls: first rev-parse to probe refs/remotes/origin/v1.2.3 (returns
+    // empty → not a remote branch), then the actual checkout.
+    expect(calls).toHaveLength(2);
+    const checkoutCall = calls.at(-1)!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual(['checkout', '--detach', 'v1.2.3']);
+    expect(checkoutCall.cwd).toBe('/tmp/repo');
   });
 
   it('checkout adds --force before the ref when opts.force is set', async () => {
@@ -109,7 +112,8 @@ describe('git wrapper', () => {
   it('checkout omits --force by default', async () => {
     const { runner, calls } = makeRunner(() => ({}));
     await checkout('/tmp/repo', 'v1.2.3', { runner });
-    expect(gitVerbArgs(calls[0]!.args)).not.toContain('--force');
+    const checkoutCall = calls.at(-1)!;
+    expect(gitVerbArgs(checkoutCall.args)).not.toContain('--force');
   });
 
   it('getCommitSha returns trimmed stdout', async () => {
@@ -153,5 +157,116 @@ describe('git wrapper', () => {
   it('tryRevParse returns null on empty stdout', async () => {
     const { runner } = makeRunner(() => ({ stdout: '\n' }));
     expect(await tryRevParse('/tmp/repo', 'HEAD', { runner })).toBeNull();
+  });
+});
+
+describe('checkout — remote-branch DWIM fix', () => {
+  it('resolves a bare remote-only branch name to refs/remotes/origin/<branch>', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') return { stdout: 'deadbeef\n' };
+      return {};
+    });
+    await checkout('/tmp/repo', 'afk', { runner });
+    const revParseCall = calls.find((c) => subcommandOf(c.args) === 'rev-parse')!;
+    expect(gitVerbArgs(revParseCall.args)).toEqual([
+      'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/afk',
+    ]);
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual([
+      'checkout', '--detach', 'refs/remotes/origin/afk',
+    ]);
+  });
+
+  it('leaves a tag-like ref unchanged when refs/remotes/origin/<tag> does not resolve', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') throw new Error('fatal: Needed a single revision');
+      return {};
+    });
+    await checkout('/tmp/repo', 'v1.0.0', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual(['checkout', '--detach', 'v1.0.0']);
+  });
+
+  it('leaves a 40-char SHA unchanged (refs/remotes/origin/<sha> never resolves)', async () => {
+    const sha40 = 'a'.repeat(40);
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') return { stdout: '' };
+      return {};
+    });
+    await checkout('/tmp/repo', sha40, { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual(['checkout', '--detach', sha40]);
+  });
+
+  it('resolves the default branch (main) to refs/remotes/origin/main when it exists on remote', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') return { stdout: 'cafe0000\n' };
+      return {};
+    });
+    await checkout('/tmp/repo', 'main', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual([
+      'checkout', '--detach', 'refs/remotes/origin/main',
+    ]);
+  });
+
+  it('resolves a remote-only branch name containing a slash (feature/foo)', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') return { stdout: 'deadbeef\n' };
+      return {};
+    });
+    await checkout('/tmp/repo', 'feature/foo', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual([
+      'checkout', '--detach', 'refs/remotes/origin/feature/foo',
+    ]);
+  });
+
+  it('passes a remote-qualified name (origin/main) through when the probe misses', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') throw new Error('fatal: Needed a single revision');
+      return {};
+    });
+    await checkout('/tmp/repo', 'origin/main', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual(['checkout', '--detach', 'origin/main']);
+  });
+
+  it('passes qualified refs/remotes/origin/<x> through unchanged (no double-resolution)', async () => {
+    const { runner, calls } = makeRunner(() => ({}));
+    await checkout('/tmp/repo', 'refs/remotes/origin/main', { runner });
+    // No rev-parse probe when ref already starts with refs/
+    expect(calls.filter((c) => subcommandOf(c.args) === 'rev-parse')).toHaveLength(0);
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual([
+      'checkout', '--detach', 'refs/remotes/origin/main',
+    ]);
+  });
+
+  it('passes refs/tags/<x> through unchanged (no resolution)', async () => {
+    const { runner, calls } = makeRunner(() => ({}));
+    await checkout('/tmp/repo', 'refs/tags/v2.0.0', { runner });
+    expect(calls.filter((c) => subcommandOf(c.args) === 'rev-parse')).toHaveLength(0);
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual(['checkout', '--detach', 'refs/tags/v2.0.0']);
+  });
+
+  it('prefers remote branch over tag when bare name resolves as both', async () => {
+    const { runner, calls } = makeRunner((call) => {
+      const sub = subcommandOf(call.args);
+      if (sub === 'rev-parse') return { stdout: 'deadbeef\n' };
+      return {};
+    });
+    await checkout('/tmp/repo', 'v1.0.0', { runner });
+    const checkoutCall = calls.find((c) => subcommandOf(c.args) === 'checkout')!;
+    expect(gitVerbArgs(checkoutCall.args)).toEqual([
+      'checkout', '--detach', 'refs/remotes/origin/v1.0.0',
+    ]);
   });
 });

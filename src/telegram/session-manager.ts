@@ -22,7 +22,7 @@ import { type TelegramRoute, routeKey } from './route.js';
 import { sessionRegistry, type SessionRegistry } from '../agent/session/session-registry.js';
 import { ensureRegistryHandle, archiveRegistryHandle } from './session-manager.registry.js';
 import { resolveActiveRouteForChat } from './session-manager.active-route.js';
-import { hydrateStatsFromStore } from './session-manager.hydrate-stats.js';
+import { hydrateStatsFromStore, getRouteSessionId, getRouteSessionName, persistSessionName } from './session-manager.hydrate-stats.js';
 import { evictIdleSessions, evictStaleSessionData, clearElicitationRouteForKey } from './session-manager.evict-idle.js';
 import { demandLoadSidecar } from './session-manager.demand-load.js';
 import { promises as fs } from 'fs';
@@ -445,7 +445,18 @@ export class SessionManager {
   getSessionName(target: RouteTarget): string | undefined {
     const route = toRoute(target);
     this._hydrateStatsFromStore(route);
-    return this.sessionStats.get(routeKey(route))?.name;
+    return getRouteSessionName(this.sessionStats, route);
+  }
+
+  /**
+   * Return the SDK session id for the chat's current session, or undefined
+   * when no model turn has completed yet. Used by Telegram feedback commands
+   * (/good, /bad) to key the outcome record.
+   */
+  getSessionId(target: RouteTarget): string | undefined {
+    const route = toRoute(target);
+    this._hydrateStatsFromStore(route);
+    return getRouteSessionId(this.sessionStats, this.sessions, route);
   }
 
   /**
@@ -455,25 +466,11 @@ export class SessionManager {
    */
   setSessionName(target: RouteTarget, slug: string): { persisted: boolean } {
     const route = toRoute(target);
-    const key = routeKey(route);
-    const stats = this._getOrCreateStats(route);
-    stats.name = slug;
-
-    // Capture the live session's id if the stats don't carry one yet, so the
-    // persisted sidecar is keyed the same way the per-turn autosave keys it.
-    const live = this.sessions.get(key);
-    if (!stats.sessionId && live?.sessionId) stats.sessionId = live.sessionId;
-
-    if (stats.totalTurns > 0 && stats.sessionId) {
-      // Mirror the captured sessionId into SessionData BEFORE saveSession so
-      // the data.sessionId update is guaranteed even if saveSession throws.
-      // The throw still propagates to the caller so it can report the failure.
-      const data = this.sessionData.get(key);
-      if (data) data.sessionId = stats.sessionId;
-      saveSession(stats);
-      return { persisted: true };
-    }
-    return { persisted: false };
+    // Ensure stats exist before delegating (stats must exist for persistSessionName
+    // to find them, but _getOrCreateStats also captures cwd/model/source which
+    // the sibling helper does not re-derive).
+    this._getOrCreateStats(route);
+    return persistSessionName(this.sessionStats, this.sessionData, this.sessions, route, slug);
   }
 
   /**

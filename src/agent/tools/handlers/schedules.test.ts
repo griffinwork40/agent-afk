@@ -450,6 +450,24 @@ describe('get_schedule_history handler', () => {
     const result = await getScheduleHistoryHandler({}, fakeSignal);
     expect(result.isError).toBe(true);
   });
+
+  it('surfaces doneUnverified:true from telemetry records that carry the field (#2307)', async () => {
+    const afDir = join(tmpDir, 'agent-framework');
+    mkdirSync(afDir, { recursive: true });
+    const telemetryPath = join(afDir, 'forge-telemetry.jsonl');
+    const records = [
+      { taskId: 'probe-task', status: 'success', triggeredAt: '2024-06-01T00:00:00Z', doneUnverified: true },
+      { taskId: 'probe-task', status: 'success', triggeredAt: '2024-06-01T01:00:00Z' },
+    ];
+    writeFileSync(telemetryPath, records.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf-8');
+
+    const result = await getScheduleHistoryHandler({ taskId: 'probe-task', limit: 10 }, fakeSignal);
+    const parsed = JSON.parse(result.content as string) as Array<{ taskId: string; doneUnverified?: boolean }>;
+    expect(parsed).toHaveLength(2);
+    // Oldest-first order: first record has doneUnverified:true, second omits it.
+    expect(parsed[0]?.doneUnverified).toBe(true);
+    expect(parsed[1]?.doneUnverified).toBeUndefined();
+  });
 });
 
 describe('live-sync surface (daemonSynced)', () => {

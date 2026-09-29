@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 
 import { parseTerminalState } from '../cli/commands/interactive/terminal-state.js';
 
+import { NARRATION_DIRECTIVE } from './narration-directive.js';
 import {
   END_OF_TURN_DIRECTIVE,
   ROUTING_DIRECTIVE,
@@ -82,6 +83,35 @@ describe('assembleSystemPrompt', () => {
       const out = assembleSystemPrompt(BASE, false);
       expect(out).not.toContain(END_OF_TURN_DIRECTIVE);
       expect(out).toBe(BASE);
+    });
+  });
+
+  describe('narration directive (surface)', () => {
+    it.each(['repl', 'telegram'] as const)('appends NARRATION_DIRECTIVE on the %s surface', (surface) => {
+      expect(assembleSystemPrompt(BASE, false, surface)).toContain(NARRATION_DIRECTIVE);
+    });
+
+    it('omits NARRATION_DIRECTIVE on the one-shot surface and by default', () => {
+      // Invariant: nobody watches one-shot / daemon / subagent turns live, so
+      // narration there is pure token cost; the base "do not narrate" stands.
+      expect(assembleSystemPrompt(BASE, true, 'one-shot')).not.toContain(NARRATION_DIRECTIVE);
+      expect(assembleSystemPrompt(BASE, true)).not.toContain(NARRATION_DIRECTIVE);
+    });
+
+    it('places narration after routing and before the end-of-turn protocol', () => {
+      const out = assembleSystemPrompt(BASE, true, 'repl')!;
+      const routingIdx = out.indexOf(ROUTING_DIRECTIVE);
+      const narrationIdx = out.indexOf(NARRATION_DIRECTIVE);
+      const endIdx = out.indexOf(END_OF_TURN_DIRECTIVE);
+      expect(routingIdx).toBeLessThan(narrationIdx);
+      expect(narrationIdx).toBeLessThan(endIdx);
+      expect(out.endsWith(END_OF_TURN_DIRECTIVE)).toBe(true);
+    });
+
+    it('names the base-prompt line it refines', () => {
+      // Contract: the directive must reference the base line explicitly so
+      // the model reads it as a scoped refinement, not a conflict.
+      expect(NARRATION_DIRECTIVE).toContain('"Run the loop; do not narrate it"');
     });
   });
 

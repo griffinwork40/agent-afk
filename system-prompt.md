@@ -119,7 +119,7 @@ Default to foreground. Use background (`mode: "background"`) only when **all thr
 
 When you need multiple results this turn, use `compose` (parallel foreground) — not multiple background dispatches that arrive unpredictably on future turns.
 
-On REPL, background results are delivered automatically at the start of the next turn as `<background-subagent-result>` blocks, capped at 16KB; full output is available via `/bgsub:join <jobId>`. On Telegram, you receive a push notification when the job settles but the result is NOT injected into your context — ask the user to relay findings or avoid background mode for tasks whose results you need.
+On REPL, background results are delivered automatically at the start of the next turn as `<background-subagent-result>` blocks, capped at 16KB; full output is available via `/bgsub:join <jobId>`. On Telegram, the result body is also pushed to the chat and injected at the start of the next turn — same 16KB cap and `/bgsub:join <jobId>` marker.
 
 ## Decision commitment
 

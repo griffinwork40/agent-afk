@@ -17,7 +17,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * Parse the `cwd` field from a request body for CREATE routes.
  * Returns `{ ok: false; message }` on validation failure, or
  * `{ ok: true; resolved }` with the absolute path on success (undefined when
- * the field is absent). A non-string value (e.g. `cwd: 123`) is a 400.
+ * the field is absent). `null` is treated as absent (returns `resolved:
+ * undefined`) — you cannot clear a cwd that was never set. A non-string,
+ * non-null value (e.g. `cwd: 123`) is a 400.
  */
 export function parseCwdCreate(
   body: unknown,
