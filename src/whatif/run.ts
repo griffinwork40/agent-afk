@@ -28,6 +28,7 @@ import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges, resolveMaxPredictions, DEFAULT_PROBES } from './predict.js';
 import { buildAndPersistVerifiedReport } from './run.report.js';
+import { writeSandboxManifest } from './sandbox-manifest.js';
 import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
 import { groundProbes, makeSetChecker } from './probe-grounding.js';
 import {
@@ -389,6 +390,10 @@ export async function runWhatif(
       const headline = buildHeadline(partialReport);
       const report: WhatifReport = { ...partialReport, headline };
 
+      if (options.keepSandboxes) {
+        await writeSandboxManifest(runDir, sandboxes.roots);
+        report.keptSandboxes = sandboxes.roots;
+      }
       await persistRun(runDir, report, []);
       return report;
     }
@@ -474,12 +479,17 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
+    const verifiedReport = await buildAndPersistVerifiedReport({
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
     });
+    if (options.keepSandboxes) {
+      await writeSandboxManifest(runDir, sandboxes.roots);
+      verifiedReport.keptSandboxes = sandboxes.roots;
+    }
+    return verifiedReport;
   } finally {
     // Tear down sandboxes unless keepSandboxes
     if (!options.keepSandboxes) {
