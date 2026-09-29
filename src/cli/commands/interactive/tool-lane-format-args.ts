@@ -20,9 +20,23 @@ import { sanitizeLabel } from './tool-lane-format-sanitize.js';
  * only collapse paths in the gaps between them. The URL span deliberately
  * allows RFC-valid path punctuation such as commas and parentheses so a URL
  * like `https://example.com/a,b/c/d/e` is not split and mangled.
+ *
+ * Invariant: the URL-span regex must stay LINEAR in input length. This runs on
+ * every tool-lane overlay render, synchronously on the main event loop. The old
+ * unbounded scheme `[a-z][a-z0-9+.-]*` (case-insensitive, so it matches almost
+ * all of the base64 alphabet) re-scanned to the end of the run from every start
+ * position when no `://` followed: O(n^2), 2.5s per call on the 75K-char base64
+ * `data:` URI in GitHub's 404 page. Re-run per frame, that starved the REPL
+ * event loop, watchdogs and SIGTERM handler (#2568). Two bounds keep it linear:
+ *   - the lookbehind only lets a match START at the beginning of a
+ *     scheme-character run, not at every position inside it;
+ *   - `{0,63}` caps how far each attempt scans for the `:`.
+ * Behaviour is unchanged except for a scheme glued onto a run of more than 64
+ * scheme characters (e.g. 100 letters then `https://…`), which is no longer
+ * treated as a URL span. Real schemes are far shorter than 64 characters.
  */
 export function shortenPaths(text: string): string {
-  const urlSpan = /[a-z][a-z0-9+.-]*:\/\/[^\s<>\"`]+/gi;
+  const urlSpan = /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,63}:\/\/[^\s<>\"`]+/gi;
   let result = '';
   let lastIndex = 0;
   for (const match of text.matchAll(urlSpan)) {
