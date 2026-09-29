@@ -9,6 +9,7 @@
  */
 
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
+import { isWhatifEpisode } from '../../whatif-episode-gate.js';
 
 /**
  * Invariant: skill-dispatch sub-agents must never pause to ask the operator
@@ -17,6 +18,11 @@ import type { AnthropicToolDef } from '../anthropic-direct/types.js';
  * a bare numeric skill arg can lure a confused model into), plus the clipboard
  * tools. Non-interactive surfaces drop the operator-facing tools. Parity with
  * the toolDefs filter in AnthropicDirectProvider. No skill calls either tool.
+ *
+ * Exception: what-if episodes (#2600) keep `ask_question` in the non-interactive
+ * branch so the episode gate can log it as 'executed' and observe.ts can measure
+ * firstAction='ask' / askedBeforeActing. The gate blocks the call immediately
+ * with proceed-on-assumption guidance — observable without being interactive.
  */
 export function selectBaseSchemas(
   schemas: AnthropicToolDef[],
@@ -32,6 +38,13 @@ export function selectBaseSchemas(
     );
   }
   if (opts.isNonInteractive) {
+    // In what-if episode mode, keep ask_question so its intent is observable
+    // via the episode gate's tool log (#2600).
+    if (isWhatifEpisode()) {
+      return schemas.filter(
+        (t) => t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+      );
+    }
     return schemas.filter(
       (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
     );
