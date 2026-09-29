@@ -8,8 +8,11 @@
  *   - parseTraceContent preserves event order and line numbers.
  */
 
-import { describe, it, expect } from 'vitest';
-import { parseDuration, parseTraceContent } from './reader.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { parseDuration, parseTraceContent, scanWitness } from './reader.js';
 
 describe('parseDuration', () => {
   it('parses days', () => {
@@ -148,5 +151,70 @@ describe('parseTraceContent', () => {
     const result = parseTraceContent({ ...baseArgs, content: '' });
     expect(result.events).toHaveLength(0);
     expect(result.invalidLineCount).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pathRelativeTo — tested via scanWitness with a filesystem fixture.
+//
+// The old string-prefix implementation had a sibling-prefix bug:
+//   absolutePath = '/a/rootX/file', root = '/a/root'
+//   '/a/rootX/file'.startsWith('/a/root') === true  ← wrong match
+// The new relative()-based implementation rejects this case correctly.
+// ---------------------------------------------------------------------------
+
+describe('pathRelativeTo (via scanWitness)', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'afk-reader-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** Write a minimal valid trace.jsonl to sessionDir and return its tracePath. */
+  function writeTrace(sessionDir: string): void {
+    const ev = {
+      ts: new Date().toISOString(),
+      seq: 0,
+      kind: 'session_phase',
+      payload: { phase: 'start' },
+    };
+    writeFileSync(join(sessionDir, 'trace.jsonl'), JSON.stringify(ev) + '\n', 'utf8');
+  }
+
+  it('produces a relative path when tracePath is inside afkHome', () => {
+    // witnessRoot = tmp/witness; afkHome = tmp
+    const witnessRoot = join(tmp, 'witness');
+    const sessionDir = join(witnessRoot, 'sess-A');
+    mkdirSync(sessionDir, { recursive: true });
+    writeTrace(sessionDir);
+
+    const result = scanWitness({ witnessRoot, afkHome: tmp });
+    expect(result.sessionsScanned).toBe(1);
+    const session = result.sessions[0]!;
+    // relativeTracePath should be relative, not absolute
+    expect(session.relativeTracePath).not.toMatch(/^\//);
+    expect(session.relativeTracePath).toContain('witness');
+  });
+
+  it('does not match a sibling-prefix path (the old bug)', () => {
+    // afkHome = tmp/afk; witnessRoot = tmp/afkEVIL/witness
+    // Old code: '/tmp/afkEVIL/...'.startsWith('/tmp/afk') === true → wrongly strips
+    // New code: relative('/tmp/afk', '/tmp/afkEVIL/...') = '../afkEVIL/...' → keeps absolute
+    const afkHome = join(tmp, 'afk');
+    const witnessRoot = join(tmp, 'afkEVIL', 'witness');
+    const sessionDir = join(witnessRoot, 'sess-B');
+    mkdirSync(afkHome, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true });
+    writeTrace(sessionDir);
+
+    const result = scanWitness({ witnessRoot, afkHome });
+    expect(result.sessionsScanned).toBe(1);
+    const session = result.sessions[0]!;
+    // Must NOT have stripped the prefix; the path should still be absolute
+    expect(session.relativeTracePath).toMatch(/^\//);
   });
 });
