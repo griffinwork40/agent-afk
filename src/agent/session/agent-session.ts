@@ -459,18 +459,6 @@ export class AgentSession implements IAgentSession {
     } catch {
       // ignore
     }
-    // When a provider is injected via config.provider (e.g. daemon factory,
-    // tests) its close() releases SQLite handles (stateStore, memoryStore).
-    // ProviderQuery.close() only closes the query-level state; the provider's
-    // own close() must be called separately. Feature-detect because ModelProvider
-    // makes close() optional (providers that hold no resources may omit it).
-    // Ordering: AFTER providerQuery.close() so a mid-turn journal sync that
-    // fires inside the query close lands before the store is torn down.
-    try {
-      await this.config.provider?.close?.();
-    } catch {
-      // ignore
-    }
     await this.providerIterator.return?.();
     if (this.initPromise) {
       try {
