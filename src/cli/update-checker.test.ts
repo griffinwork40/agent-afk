@@ -316,7 +316,7 @@ describe('update-checker', () => {
       expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
-    it('accepts pre-release versions', () => {
+    it('accepts same-major pre-release versions', () => {
       mockExistsSync.mockReturnValue(false); // no in-flight marker
       triggerAutoUpdate('1.11.0-beta.1');
       expect(mockSpawn).toHaveBeenCalled();

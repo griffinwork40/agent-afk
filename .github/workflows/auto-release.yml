@@ -64,6 +64,9 @@ jobs:
     timeout-minutes: 20
     # Loop guard: skip the `chore(release):` commit this job itself pushes,
     # otherwise that push-to-main would recurse into another release.
+    # On `workflow_dispatch` `github.event.head_commit` is null (the event
+    # object has no commit payload), so `startsWith(null, ...)` evaluates to
+    # false — the guard passes and the dispatch runs. This is intentional.
     if: ${{ !startsWith(github.event.head_commit.message, 'chore(release):') }}
     permissions:
       contents: write # push the release commit + tag, create the GitHub Release
@@ -124,6 +127,12 @@ jobs:
 
           # Major gate (see the Invariant on `on:` above).
           if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$BUMP_INPUT" != auto ]; then
+            # Warn when the manual bump input overrides a detected 'none' so the
+            # operator has an on-screen signal that no releasable commits were
+            # found, yet a release is being cut intentionally.
+            if [ "$BUMP" = none ]; then
+              echo "::warning::workflow_dispatch with bump=$BUMP_INPUT overrides detected BUMP=none (no releasable commits). Releasing as $BUMP_INPUT by operator request."
+            fi
             echo "Manual bump: detected=$BUMP, releasing as $BUMP_INPUT"
             BUMP="$BUMP_INPUT"
           elif [ "$BUMP" = major ]; then
