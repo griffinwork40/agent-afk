@@ -144,7 +144,7 @@
     "string-width": "^8.2.0",
     "telegraf": "^4.16.3",
     "turndown": "^7.2.4",
-    "undici": "^7.27.0",
+    "undici": "^7.27.1",
     "wrap-ansi": "^10.0.0",
     "zod": "^4.3.6"
   },
