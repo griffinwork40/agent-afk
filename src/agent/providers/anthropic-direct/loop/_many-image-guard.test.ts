@@ -274,8 +274,8 @@ describe('enforceManyImageLimit — bulk degradation', () => {
     expect(countImageOmittedBlocks(msgs)).toBe(5);
   });
 
-  it('handles width-only violation (tall narrow image)', () => {
-    // 20 small + 1 that is 100x2001 (height exceeds 2000)
+  it('handles height-only violation (tall narrow image)', () => {
+    // 20 small + 1 that is 100x2001 (height exceeds 2000, width is fine)
     const msgs = makeImageMessages(20, 100, 100);
     msgs.push({
       role: 'user',

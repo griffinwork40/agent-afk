@@ -73,12 +73,6 @@ export interface CommitModeInput {
    * bottom-pinned / cursor-follow mode.
    */
   hugSlack?: number;
-  /**
-   * The live frame is erased (`suspendInput()`), so there is no frame top to
-   * test band adjacency against (`prevTopRow` is 0, `frameTop` is the
-   * fallback). See `overflowPriorContiguous` below. Omit (or false) otherwise.
-   */
-  frameErased?: boolean;
 }
 
 /** The routing decision + the geometry the caller's phases consume. */
@@ -187,7 +181,6 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
     geometryStale,
     roomTop,
     hugSlack,
-    frameErased,
   } = input;
   const effPrevTop = roomTop ?? prevTopRow;
   const effRoomTop = roomTop ?? frameTop;
@@ -220,17 +213,9 @@ export function decideCommitMode(input: CommitModeInput): CommitMode {
   // rides into the band-hold model as PENDING content rather than being treated
   // as "not contiguous" and silently left to be overwritten by the next frame
   // render with no scrollback copy ever having been made.
-  // Invariant (#2382, erased frame): while the frame is erased the band is
-  // still painted where it was and nothing can move it (repaint() no-ops, and
-  // this band-hold commit scrolls nothing unless the run exceeds maxBandModel),
-  // so the class invariant holds verbatim and the band merges. That includes
-  // anchorRow > 1: the anchor gate guards against an anchor-evict shifting the
-  // TRACKED rows, and no row arithmetic is consulted here. Without the merge
-  // the prior band is dropped from the model and the resume repaint erases it.
   const overflowPriorContiguous =
     committedBand.length > 0 &&
-    (frameErased === true ||
-      (anchorRow <= 1 && (geometryStale || committedBandBottomRow === frameTop - 1)));
+    anchorRow <= 1 && (geometryStale || committedBandBottomRow === frameTop - 1);
   const overflowRun = overflowPriorContiguous ? [...committedBand, ...textLines] : textLines;
   const overflowHasPending =
     overflowPriorContiguous && committedBand.length > committedBandPaintedRows;

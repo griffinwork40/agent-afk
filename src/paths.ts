@@ -105,6 +105,29 @@ export function getFacetCacheDir(): string {
   return join(getAgentFrameworkDir(), 'facets');
 }
 
+/**
+ * Directory for VerifiedOutcome JSON records (one per session id).
+ *
+ * Records live at ~/.afk/agent-framework/outcomes/<sessionId>.json and are
+ * written atomically via tmp+rename by src/agent/outcomes/store.ts.
+ * Never hand-join paths to this directory — always use this helper or
+ * getOutcomeRecordPath().
+ */
+export function getOutcomesDir(): string {
+  return join(getAgentFrameworkDir(), 'outcomes');
+}
+
+/**
+ * Full path for a single VerifiedOutcome record.
+ *
+ * Callers are expected to validate the sessionId via validateSessionId()
+ * (re-exported from paths.witness.js) before calling this, consistent with
+ * the facet cache (cachePathFor) pattern.
+ */
+export function getOutcomeRecordPath(sessionId: string): string {
+  return join(getOutcomesDir(), `${sessionId}.json`);
+}
+
 export function getSkillsDir(): string {
   return join(getAfkHome(), 'skills');
 }
@@ -346,6 +369,13 @@ export {
   sessionLabelFromTracePath,
   validateSessionId,
 } from './paths.witness.js';
+
+export {
+  getSessionBlobsDir,
+  getSessionJournalPath,
+  getSubagentJournalPath,
+  getSubagentJournalsDir,
+} from './paths.journal.js';
 
 export function getDaemonStateDir(instanceId: string = 'default'): string {
   return join(getAfkStateDir(), 'daemon', `agent-afk@${instanceId}`);

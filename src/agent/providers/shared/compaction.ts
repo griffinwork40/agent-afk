@@ -233,6 +233,13 @@ export interface ToolResultRef {
    * Absent when the correlation cannot be established (defensive).
    */
   toolName?: string;
+  /**
+   * Index of the message holding this result in the array passed to
+   * {@link MicrocompactOps.listToolResults}. Lets
+   * {@link microcompactToolResults} report `firstClearedIndex` so the message
+   * journal can re-sync the in-place edits (docs/message-journal.md).
+   */
+  messageIndex?: number;
 }
 
 /**
@@ -271,6 +278,12 @@ export interface MicrocompactResult {
   bytesReclaimed: number;
   /** Total `tool_result` blocks seen (cleared, kept-recent, already-placeholder, or below threshold). */
   blocksScanned: number;
+  /**
+   * Message index of the earliest block cleared in THIS pass (from
+   * {@link ToolResultRef.messageIndex}); absent when nothing was cleared or
+   * the provider did not supply indices.
+   */
+  firstClearedIndex?: number;
 }
 
 /**
@@ -340,7 +353,11 @@ export function microcompactToolResults<M>(
 
   let blocksCleared = 0;
   let bytesReclaimed = 0;
+  let firstClearedIndex: number | undefined;
   for (const ref of candidates) {
+    if (ref.messageIndex !== undefined && (firstClearedIndex === undefined || ref.messageIndex < firstClearedIndex)) {
+      firstClearedIndex = ref.messageIndex;
+    }
     const placeholder = buildMicrocompactPlaceholder(ref.byteLength);
     const before = ref.byteLength;
     ref.clear(placeholder);
@@ -349,7 +366,7 @@ export function microcompactToolResults<M>(
     blocksCleared += 1;
   }
 
-  return { blocksCleared, bytesReclaimed, blocksScanned };
+  return { blocksCleared, bytesReclaimed, blocksScanned, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) };
 }
 
 /** UTF-8 byte length of a string — the metric microcompaction thresholds on. */

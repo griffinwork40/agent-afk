@@ -433,7 +433,7 @@ export function registerChatCommand(program: Command): void {
           },
           // Live registry so forked subagents resolve it via forkSubagent's
           // parent fallback (SubagentStart/Stop + shadow-verify nudge).
-          get hookRegistry() { return boundSession?.hookRegistry; },
+          get hookRegistry() { return boundSession?.hookRegistry; }, get messageJournal() { return boundSession?.messageJournal; },
         };
 
         // Invariant: ONE root manager per session, shared by all three

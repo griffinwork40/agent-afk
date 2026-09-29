@@ -105,6 +105,40 @@ describe('PlanTextTracker', () => {
     expect(t.check()).toBe('refuse');
   });
 
+  it('does not count zero-width codepoints (U+200B, U+FEFF) toward the visible threshold', () => {
+    const t = new PlanTextTracker();
+    t.beginTurn();
+    // Build a string whose only non-whitespace characters are zero-width:
+    // enough repetitions that it would exceed MIN_PLAN_TEXT_CHARS if counted.
+    const zwsp = '\u200b'.repeat(MIN_PLAN_TEXT_CHARS + 10);
+    const feff = '\ufeff'.repeat(MIN_PLAN_TEXT_CHARS + 10);
+    feed(t, [text(zwsp + feff), toolStart('exit_plan_mode')]);
+    expect(t.check()).toBe('refuse');
+  });
+
+  it('pending tool.use.start followed by the confirmed tool.use does not double-apply the armed reset', () => {
+    // Verifies the intentional inclusion of both `tool.use.start` (pending) and
+    // the subsequent `tool.use` (confirmed) in the switch: both must call
+    // applyArmedReset(), but only the first one fires (resetArmed is cleared on
+    // the first application), so the plan text written before the pending start
+    // is preserved through the full pending → confirmed emission sequence.
+    const t = new PlanTextTracker();
+    t.beginTurn();
+    // Round 1: plan text + a tool whose output comes back.
+    feed(t, [text(plan), toolStart('agent'), toolOut('agent')]);
+    // Round 2: exit_plan_mode emits pending start then confirmed tool.use.
+    // The pending start applies the armed reset (zeroing round 1's text —
+    // correct, it's a new response). The plan text for round 2 is then
+    // accumulated. The final tool.use fires applyArmedReset again, but since
+    // resetArmed is already false, it is a no-op.
+    feed(t, [
+      text(plan),
+      toolStart('exit_plan_mode', true), // pending — applies reset (round 1 erased, round 2 chars kept)
+      toolStart('exit_plan_mode'),        // confirmed tool.use.start (no-op reset, no new chars)
+    ]);
+    expect(t.check()).toBe('ok');
+  });
+
   it('tool.output → stream.retry → delta.text(plan): re-emitted plan after a retry is not discarded', () => {
     // Regression: stream.retry did not clear resetArmed, so the stale armed
     // reset fired on the first post-retry delta.text and zeroed roundChars

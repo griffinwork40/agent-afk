@@ -8,10 +8,15 @@
  * session never forks a duplicate sidecar.
  *
  * Resume is client-side replay, not server-side restoration — there is no SDK
- * or server session store. `--resume <id|name>` / `/resume` read this sidecar
- * and the provider reconstructs the conversation by replaying `turns[]` as
- * `resumeHistory` (see resume-session.ts → resumeConfigFor). Only user/
- * assistant TEXT survives replay; tool calls and thinking blocks do not.
+ * or server session store. The message journal
+ * (`sessions/<id>/journal.jsonl`, see docs/message-journal.md) is the resume
+ * source: when it exists, resume-session.ts → resumeConfigFor hands the
+ * provider its full-fidelity messages as `resumeMessages` (tool_use /
+ * tool_result content included). Sidecar `turns[]` are text + metadata for
+ * /history, listings, and the text-replay fallback. Old sidecars written
+ * before the journal may still carry `userContentBlocks` /
+ * `assistantContentBlocks`; those replay via `resumeHistory` only when no
+ * journal exists for the session.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, realpathSync } from 'fs';

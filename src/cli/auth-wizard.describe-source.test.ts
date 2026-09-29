@@ -53,9 +53,9 @@ describe('describeCredentialSource', () => {
     expect(describeCredentialSource()).toBe('Claude Code login (keychain)');
   });
 
-  it('returns session-refresh label when tier-3 process-local refreshed token is active', () => {
+  it('returns session-refresh label when tier-4 process-local refreshed token is active', () => {
     // env vars unset, keychain returns nothing, but a token was refreshed
-    // in-process and write-back to the credential store failed.
+    // in-process and write-back to the credential store failed (tier 4).
     vi.mocked(hasProcessLocalRefreshedToken).mockReturnValue(true);
     expect(describeCredentialSource()).toBe('Claude Code login (session refresh)');
   });

@@ -2,8 +2,9 @@
  * Integration test: load claude-jev's real hooks.json through the AFK loader
  * and bridge, verifying Claude Code matcher and timeout compatibility.
  *
- * Fixture: src/agent/hooks/__fixtures__/jev-hooks.json (copy of
- * /Users/griffinlong/Projects/open_source/claude-jev/hooks/hooks.json)
+ * Fixture: src/agent/hooks/__fixtures__/jev-hooks.json (a checked-in copy of
+ * `hooks/hooks.json` from the claude-jev repo, github.com/0x7067/claude-jev;
+ * this test never reads a live checkout, so it cannot drift with local paths)
  *
  * Assertions:
  *   - "Agent|Task" group fires for AFK tool "agent"

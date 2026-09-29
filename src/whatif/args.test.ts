@@ -7,6 +7,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseWhatifArgs, tokenizeSlashArgs, loadSpecFile } from './args.js';
+import type { ParsedWhatifArgs } from './args.js';
 
 // ---------------------------------------------------------------------------
 // tokenizeSlashArgs
@@ -468,7 +469,7 @@ describe('loadSpecFile', () => {
     expect(() => loadSpecFile(p)).toThrow(/no valid changes/);
   });
 
-  it('silently drops invalid change entries and returns the valid ones', () => {
+  it('warns and drops invalid change entries, returns the valid ones', () => {
     const p = join(dir, 'mixed.json');
     writeFileSync(p, JSON.stringify({
       title: 'Mixed',
@@ -484,5 +485,127 @@ describe('loadSpecFile', () => {
 
   it('throws when the file does not exist', () => {
     expect(() => loadSpecFile(join(dir, 'no-such-file.json'))).toThrow(/cannot read/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --force flag
+// ---------------------------------------------------------------------------
+
+describe('parseWhatifArgs — --force flag', () => {
+  it('defaults force to false', () => {
+    const r = parseWhatifArgs(['--append', 'text']) as ParsedWhatifArgs;
+    expect(r.force).toBe(false);
+  });
+
+  it('sets force to true when --force is passed', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--force']) as ParsedWhatifArgs;
+    expect(r.force).toBe(true);
+  });
+
+  it('--force can be combined with --verify and --yes', () => {
+    const r = parseWhatifArgs([
+      '--append', 'text', '--verify', '--yes', '--force',
+    ]) as ParsedWhatifArgs;
+    expect(r.force).toBe(true);
+    expect(r.yes).toBe(true);
+    expect(r.options.verify).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --probes and --max-predictions flags (#2477)
+// ---------------------------------------------------------------------------
+
+describe('parseWhatifArgs — --probes flag', () => {
+  it('defaults probes to undefined (uses DEFAULT_PROBES at call site)', () => {
+    const r = parseWhatifArgs(['--append', 'text']) as ParsedWhatifArgs;
+    expect(r.options.probes).toBeUndefined();
+  });
+
+  it('parses --probes 4', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes', '4']) as ParsedWhatifArgs;
+    expect(r.options.probes).toBe(4);
+  });
+
+  it('accepts boundary value 1', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes', '1']) as ParsedWhatifArgs;
+    expect(r.options.probes).toBe(1);
+  });
+
+  it('accepts boundary value 12', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes', '12']) as ParsedWhatifArgs;
+    expect(r.options.probes).toBe(12);
+  });
+
+  it('rejects 0 (below minimum)', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes', '0']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('1–12');
+  });
+
+  it('rejects 13 (above maximum)', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes', '13']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('1–12');
+  });
+
+  it('rejects non-integer', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes', 'abc']);
+    expect(typeof r).toBe('string');
+  });
+
+  it('requires a value', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--probes']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('--probes requires a number');
+  });
+});
+
+describe('parseWhatifArgs — --max-predictions flag', () => {
+  it('defaults maxPredictions to undefined (resolved at call site)', () => {
+    const r = parseWhatifArgs(['--append', 'text']) as ParsedWhatifArgs;
+    expect(r.options.maxPredictions).toBeUndefined();
+  });
+
+  it('parses --max-predictions 3', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--max-predictions', '3']) as ParsedWhatifArgs;
+    expect(r.options.maxPredictions).toBe(3);
+  });
+
+  it('accepts boundary value 1', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--max-predictions', '1']) as ParsedWhatifArgs;
+    expect(r.options.maxPredictions).toBe(1);
+  });
+
+  it('accepts boundary value 8', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--max-predictions', '8']) as ParsedWhatifArgs;
+    expect(r.options.maxPredictions).toBe(8);
+  });
+
+  it('rejects 0 (below minimum)', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--max-predictions', '0']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('1–8');
+  });
+
+  it('rejects 9 (above maximum)', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--max-predictions', '9']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('1–8');
+  });
+
+  it('requires a value', () => {
+    const r = parseWhatifArgs(['--append', 'text', '--max-predictions']);
+    expect(typeof r).toBe('string');
+    expect(r as string).toContain('--max-predictions requires a number');
+  });
+
+  it('both --probes and --max-predictions can be combined', () => {
+    const r = parseWhatifArgs([
+      '--append', 'text', '--probes', '4', '--max-predictions', '2',
+    ]) as ParsedWhatifArgs;
+    expect(r.options.probes).toBe(4);
+    expect(r.options.maxPredictions).toBe(2);
   });
 });

@@ -75,6 +75,9 @@ export const MODEL_PRICING: ReadonlyMap<string, ModelPricing> = new Map<string, 
   // became the permanent rate — the pricing page no longer mentions a standard
   // $3 / $15 tier (verified 2026-09-23).
   ['claude-sonnet-5', { inputPerMTok: 2.0, outputPerMTok: 10.0, cacheWrite5mPerMTok: 2.50, cacheWrite1hPerMTok: 4.0, cacheReadPerMTok: 0.20 }],
+  // Claude Sonnet 5.5 (released 2026-09-28): same rates as Sonnet 5, per
+  // https://platform.claude.com/docs/en/about-claude/pricing (verified 2026-09-28).
+  ['claude-sonnet-5-5', { inputPerMTok: 2.0, outputPerMTok: 10.0, cacheWrite5mPerMTok: 2.50, cacheWrite1hPerMTok: 4.0, cacheReadPerMTok: 0.20 }],
   // Claude Opus 5 (GA 2026-07-24): $5 / $25 per MTok.
   ['claude-opus-5', { inputPerMTok: 5.0, outputPerMTok: 25.0, cacheWrite5mPerMTok: 6.25, cacheWrite1hPerMTok: 10.0, cacheReadPerMTok: 0.50 }],
   // Claude Opus 5.5 (released 2026-09-22): $4 / $20 per MTok — cheaper than

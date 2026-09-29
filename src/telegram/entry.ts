@@ -32,12 +32,44 @@ import { loadSystemPrompt } from '../cli/shared-helpers.js';
 import type { AgentModelInput } from '../agent/types.js';
 import { applyTelegramFileOverrides } from './env-file-overrides.js';
 import { planTelegramCredential, applyTelegramCredentialPlan } from './credentials.js';
-import { preloadClaudeKeychainOAuth } from '../agent/auth/credential-resolver.js';
-import { loadCredential } from '../cli/config.js';
+import { preloadClaudeKeychainOAuth, loadAnthropicCredential } from '../agent/auth/credential-resolver.js';
 import { readDiskVersion, UNKNOWN_VERSION } from './daemon-version.js';
 import { createTelegramSessionFactory } from './create-session.js';
 import { startStatsTicker } from './stats-ticker.js';
 import { errorMessage } from '../utils/errors.js';
+import { pushIfConfigured } from './push.js';
+
+/**
+ * Register uncaughtException / unhandledRejection process handlers that push a
+ * best-effort Telegram crash notice before exiting. Rate-limited to one push
+ * per 60 s to avoid crash-loop self-DOS. Mirrors the daemon's crash-handler
+ * contract (src/cli/commands/daemon.ts).
+ *
+ * Exported for testing only — callers should use `main()`.
+ */
+export function installCrashHandlers(): void {
+  let lastCrashPushAt = 0;
+  const CRASH_PUSH_GUARD_MS = 60_000;
+  const notifyCrash = (kind: string, err: unknown): void => {
+    const nowMs = Date.now();
+    if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
+    lastCrashPushAt = nowMs;
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    void pushIfConfigured(
+      `🛑 agent-afk telegram ${kind}\n${msg.slice(0, 500)}`,
+    ).catch((pushErr: unknown) => {
+      console.error('[telegram] crash notification push failed:', errorMessage(pushErr));
+    });
+  };
+  process.on('uncaughtException', (err) => {
+    notifyCrash('uncaughtException', err);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (err) => {
+    notifyCrash('unhandledRejection', err);
+    process.exit(1);
+  });
+}
 
 export async function main(): Promise<void> {
   // Version the daemon is running as, captured once. Compared against the
@@ -67,9 +99,11 @@ export async function main(): Promise<void> {
   // fallback for when the OAuth exchange succeeded but the write-back to the
   // store failed (locked / read-only) — without it, planTelegramCredential
   // would re-read the still-expired store and report missing credentials.
-  const refreshedToken = await preloadClaudeKeychainOAuth(providerName);
+  // `loadAnthropicCredential` already incorporates the refreshed token as its
+  // final tier, so no explicit fallback is needed here.
+  await preloadClaudeKeychainOAuth(providerName);
   const credentialPlan = planTelegramCredential(providerName, {
-    loadAnthropicCredential: () => loadCredential() ?? refreshedToken,
+    loadAnthropicCredential,
   });
   if (!applyTelegramCredentialPlan(credentialPlan, config)) {
     process.exit(1);
@@ -188,6 +222,8 @@ export async function main(): Promise<void> {
     console.log('✅ Bot stopped.');
     process.exit(0);
   };
+
+  installCrashHandlers();
 
   // Invariant: signal handlers are registered BEFORE bot.start() so a
   // SIGTERM arriving during async startup still runs a clean shutdown.

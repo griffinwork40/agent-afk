@@ -66,9 +66,9 @@ export interface TurnDriverContext {
   compact(): Promise<ProviderCompactResult>;
 }
 
-/** Drive the session: emit `session.init`, then loop user turns until closed. */
-export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<ProviderEvent, void, void> {
-  const info: ProviderSessionInfo = {
+/** The `session.init` payload for this session. */
+function buildSessionInfo(ctx: TurnDriverContext): ProviderSessionInfo {
+  return {
     sessionId: ctx.initSessionId,
     model: ctx.state.currentModel,
     permissionMode: ctx.state.currentPermissionMode,
@@ -88,7 +88,11 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
     apiKeySource: ctx.retry.authMode,
     version: 'anthropic-direct-v1',
   };
-  yield { type: 'session.init', info };
+}
+
+/** Drive the session: emit `session.init`, then loop user turns until closed. */
+export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<ProviderEvent, void, void> {
+  yield { type: 'session.init', info: buildSessionInfo(ctx) };
 
   const promptIterator = ctx.promptStream[Symbol.asyncIterator]();
   try {
@@ -197,6 +201,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
         ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
         ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),
+        journalSync: ctx.state.journalSync,
         onUsageProgress: (usage) => { ctx.state.lastUsage = usage; },
       });
 
@@ -261,6 +266,8 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         return;
       } finally {
         ctx.abort.clear(controller);
+        // Journal commit point for every turn exit (abort, error, overload).
+        ctx.state.journalSync.sync(ctx.state.messages);
       }
 
       // A turn that exits the loop CLEANLY (no throw) while the signal is

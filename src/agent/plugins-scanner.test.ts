@@ -231,6 +231,54 @@ describe('plugins-scanner', () => {
     expect(scanLocalPlugins(tmpHome)).toEqual([]);
   });
 
+  describe('marketplace whose root is also a plugin', () => {
+    function writeRootMarketplace(installed: string[]): { rootDir: string; nestedDir: string } {
+      const rootDir = join(tmpHome, 'cache', 'mp-root');
+      const nestedDir = join(rootDir, 'adapters', 'host');
+      writePluginManifest(rootDir);
+      writePluginManifest(nestedDir);
+      writeFileSync(
+        join(rootDir, '.claude-plugin', 'marketplace.json'),
+        JSON.stringify({
+          name: 'mp-root',
+          plugins: [
+            { name: 'root-plugin', source: './' },
+            { name: 'host-plugin', source: './adapters/host' },
+          ],
+        }),
+      );
+      const plugins: Record<string, unknown> = {};
+      for (const name of installed) {
+        plugins[`mp-root:${name}`] = {
+          source: `mp-root:${name}`, sourceType: 'marketplace',
+          ref: null, commit: null, enabled: true,
+          installedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+          marketplace: 'mp-root',
+        };
+      }
+      writeFileSync(join(tmpHome, '.index.json'), JSON.stringify({ version: 2, plugins, marketplaces: {} }));
+      return { rootDir, nestedDir };
+    }
+
+    it('does not load the root plugin when it is not installed', () => {
+      writeRootMarketplace([]);
+
+      expect(scanLocalPlugins(tmpHome)).toEqual([]);
+    });
+
+    it('loads an installed plugin nested under an uninstalled root', () => {
+      const { nestedDir } = writeRootMarketplace(['host-plugin']);
+
+      expect(scanLocalPlugins(tmpHome)).toEqual([{ type: 'local', path: nestedDir }]);
+    });
+
+    it('loads the root plugin when it is installed', () => {
+      const { rootDir } = writeRootMarketplace(['root-plugin']);
+
+      expect(scanLocalPlugins(tmpHome)).toEqual([{ type: 'local', path: rootDir }]);
+    });
+  });
+
   it('loads a cache-layout plugin WITHOUT an index entry when trustAll is set', () => {
     // Imported-root case: a foreign tool's plugin home (e.g. ~/.claude/plugins)
     // has no AFK index, and the user opted into the whole binary via importFrom.

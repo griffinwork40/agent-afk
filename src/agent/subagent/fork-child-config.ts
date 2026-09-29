@@ -74,6 +74,60 @@ function applyForkPreambles(config: AgentConfig): AgentConfig {
 }
 
 /**
+ * Parent-derived fields the child inherits only when the caller's
+ * `options.config` left them unset (awareness topology, cwd, read/write scope,
+ * trace writer, surface). Extracted from {@link assembleChildConfig} verbatim;
+ * spread AFTER `...options.config` there, so explicit caller values still win.
+ */
+function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<AgentConfig> {
+  return {
+    // Awareness metadata: surface parent identity + phase role into the
+    // child's config so the get_runtime_state tool's `self` view can report
+    // the topology fields. Caller-supplied values on options.config win on
+    // collision, matching the spread-then-override pattern used throughout
+    // this block. `depth`/`maxDepth` are threaded by SubagentExecutor right
+    // before this call — they live on the executor context, not on the
+    // manager, so we leave them to the caller here.
+    ...(args.options.config.parentSessionId === undefined && args.options.parent.sessionId !== undefined
+      ? { parentSessionId: args.options.parent.sessionId }
+      : {}),
+    ...(args.options.config.phaseRole === undefined && args.options.phaseRole !== undefined
+      ? { phaseRole: args.options.phaseRole }
+      : {}),
+    // Inherit the manager's cwd when the caller didn't override.
+    // Required for `afk interactive -w` worktree isolation to extend
+    // into forked subagents (otherwise child bash/grep falls back to
+    // process.cwd() and operates on the wrong working tree).
+    ...(args.options.config.cwd === undefined && args.parentCwd !== undefined
+      ? { cwd: args.parentCwd }
+      : {}),
+    // Inherited read scope (computed in forkSubagent). Only set when the
+    // caller left readRoots unset; otherwise the `...options.config` spread's
+    // readRoots (or the provider's `[cwd]` default) stands.
+    ...(args.inheritedReadRoots !== undefined ? { readRoots: args.inheritedReadRoots } : {}),
+    // Explicit write-root pre-grant (#435): composed with cwd above. When
+    // writeRoots is absent, composedWriteRoots is undefined and the
+    // `...options.config` spread's writeRoots (or the provider's `[cwd]`
+    // default) stands.
+    ...(args.composedWriteRoots !== undefined ? { writeRoots: args.composedWriteRoots } : {}),
+    // Invariant: a forked child's trace origin comes from its inherited
+    // parent surface, not from any actor-role value (see session-identity.ts).
+    // Inherit traceWriter + surface from the manager so every worker session
+    // (e.g. farm branch workers) writes into the same trace file and reports
+    // the correct origin ('cli'/'daemon'/'telegram') without per-call plumbing.
+    // Guard: explicit values on options.config win (the ...options.config
+    // spread above already set them); these only fill the gap when
+    // the per-fork config omits them — matching the cwd inheritance pattern.
+    ...(args.options.config.traceWriter === undefined && args.parentTraceWriter !== undefined
+      ? { traceWriter: args.parentTraceWriter }
+      : {}),
+    ...(args.options.config.surface === undefined && args.parentSurface !== undefined
+      ? { surface: args.parentSurface }
+      : {}),
+  };
+}
+
+/**
  * Build the `AgentConfig` for a forked child, applying all fork-time defaults,
  * invariants, and inheritance rules in a single deterministic pass.
  *
@@ -100,15 +154,10 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     registry,
     effectiveChildModel,
     effectiveTimeoutMs,
-    inheritedReadRoots,
-    composedWriteRoots,
     childController,
-    parentCwd,
     parentApiKey,
     parentBaseUrl,
     parentProvider,
-    parentTraceWriter,
-    parentSurface,
     parentCanUseTool,
   } = args;
 
@@ -244,49 +293,17 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // into auto-resume with an explicit `autoResumeOnUsageLimit: true`
     // (e.g. unattended daemon flows that prefer waiting over failing).
     autoResumeOnUsageLimit: options.config.autoResumeOnUsageLimit ?? false,
-    // Awareness metadata: surface parent identity + phase role into the
-    // child's config so the get_runtime_state tool's `self` view can report
-    // the topology fields. Caller-supplied values on options.config win on
-    // collision, matching the spread-then-override pattern used throughout
-    // this block. `depth`/`maxDepth` are threaded by SubagentExecutor right
-    // before this call — they live on the executor context, not on the
-    // manager, so we leave them to the caller here.
-    ...(options.config.parentSessionId === undefined && options.parent.sessionId !== undefined
-      ? { parentSessionId: options.parent.sessionId }
-      : {}),
-    ...(options.config.phaseRole === undefined && options.phaseRole !== undefined
-      ? { phaseRole: options.phaseRole }
-      : {}),
-    // Inherit the manager's cwd when the caller didn't override.
-    // Required for `afk interactive -w` worktree isolation to extend
-    // into forked subagents (otherwise child bash/grep falls back to
-    // process.cwd() and operates on the wrong working tree).
-    ...(options.config.cwd === undefined && parentCwd !== undefined
-      ? { cwd: parentCwd }
-      : {}),
-    // Inherited read scope (computed in forkSubagent). Only set when the
-    // caller left readRoots unset; otherwise the `...options.config` spread's
-    // readRoots (or the provider's `[cwd]` default) stands.
-    ...(inheritedReadRoots !== undefined ? { readRoots: inheritedReadRoots } : {}),
-    // Explicit write-root pre-grant (#435): composed with cwd above. When
-    // writeRoots is absent, composedWriteRoots is undefined and the
-    // `...options.config` spread's writeRoots (or the provider's `[cwd]`
-    // default) stands.
-    ...(composedWriteRoots !== undefined ? { writeRoots: composedWriteRoots } : {}),
-    // Invariant: a forked child's trace origin comes from its inherited
-    // parent surface, not from any actor-role value (see session-identity.ts).
-    // Inherit traceWriter + surface from the manager so every worker session
-    // (e.g. farm branch workers) writes into the same trace file and reports
-    // the correct origin ('cli'/'daemon'/'telegram') without per-call plumbing.
-    // Guard: explicit values on options.config win (the ...options.config
-    // spread above already set them); these only fill the gap when
-    // the per-fork config omits them — matching the cwd inheritance pattern.
-    ...(options.config.traceWriter === undefined && parentTraceWriter !== undefined
-      ? { traceWriter: parentTraceWriter }
-      : {}),
-    ...(options.config.surface === undefined && parentSurface !== undefined
-      ? { surface: parentSurface }
-      : {}),
+    ...inheritedParentFields(args),
+    // Invariant (message journal): a fork resumes the PARENT's session id, so
+    // a journal keyed by session id would write the parent's `journal.jsonl`.
+    // Every child gets the parent's per-subagent journal
+    // (`sessions/<parentId>/subagents/<id>.jsonl`) or none. Stamped after the
+    // spread so an inherited `options.config.messageJournal` (a caller that
+    // cloned the parent's config) can never leak through; `resumeMessages` is
+    // cleared for the same reason: children never reseed from the parent's
+    // journal, they start from their own prompt.
+    messageJournal: options.parent.messageJournal?.forSubagent(id),
+    resumeMessages: undefined,
     // Child session inherits the SAME resolved registry (see `registry`
     // in forkSubagent) so its own SessionStart/SessionEnd/PreToolUse fire
     // against it. Session-scoped hooks (memory writer, plan-mode gate)

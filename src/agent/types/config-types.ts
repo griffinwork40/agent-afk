@@ -17,6 +17,7 @@ import type {
 import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
 import type { TraceSink } from '../trace/index.js';
+import type { JournalMessage, MessageJournal } from '../journal/types.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
@@ -435,6 +436,22 @@ export interface AgentConfig {
    * persistence. Native providers can ignore this and use {@link resume}.
    */
   resumeHistory?: ResumeHistoryTurn[];
+
+  /**
+   * Full-fidelity conversation to seed on resume, folded + hydrated from the
+   * session's message journal (docs/message-journal.md). When present,
+   * providers seed from this and IGNORE {@link resumeHistory}; each provider
+   * converts it with its own `JournalAdapter.fromJournalMessages`.
+   */
+  resumeMessages?: JournalMessage[];
+
+  /**
+   * Durable message-journal sink for this session (or, on a subagent fork,
+   * the child's journal from `parent.forSubagent(id)`). Providers wrap it in
+   * a `JournalSync` and call `sync(messages)` at their commit points.
+   * Absent = journaling off (disabled, tests, one-shot callers).
+   */
+  messageJournal?: MessageJournal;
 
   /** Override or seed the SDK session ID */
   sessionId?: string;

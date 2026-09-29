@@ -144,10 +144,10 @@
     },
     {
       "name": "AFK_COMPACT_MODEL",
-      "description": "Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class).",
+      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). Falls back to a cheap haiku-class default when unset. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
       "type": "string",
       "required": false,
-      "example": "claude-haiku-4-5",
+      "example": "gpt-6-luna",
       "category": "model"
     },
     {
@@ -523,6 +523,14 @@
       "default": "1",
       "example": "0",
       "category": "misc"
+    },
+    {
+      "name": "AFK_MESSAGE_JOURNAL_DISABLED",
+      "description": "Disable the per-session message journal (state/sessions/<id>/journal.jsonl + blobs/). The journal records the full conversation, including full tool results, and is the source for --resume and /fork. Set to 1 to skip journal writes; resume then falls back to the text-only sidecar history.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "debug"
     },
     {
       "name": "AFK_MICROCOMPACT_DELEGATION_BYTES",
@@ -1206,6 +1214,15 @@
     {
       "name": "AFK_WHATIF_EPISODE",
       "description": "When set to \"1\" or \"true\", the process is a sandboxed what-if episode. The episode gate (src/agent/whatif-episode-gate.ts) intercepts every PreToolUse call: read-only tools execute normally; the first side-effecting action is RECORDED as the decision but NOT executed. Episode processes are spawned by `afk whatif --verify` as isolated subprocesses with their own AFK_HOME / AFK_STATE_DIR pointing at the sandbox. Do not set this manually in production — it disables delegation, MCP (unless AFK_WHATIF_ALLOW_MCP=1), and all write tools.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_WHATIF_KEEP_CONTEXT_HOOKS",
+      "description": "When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), keep SessionStart and UserPromptSubmit config/plugin hooks enabled. By default, these hooks are disabled inside episodes so that both the baseline and candidate arms see byte-identical first user messages, preventing cwd- or recency-sensitive hook output from confounding the measured delta. Set this flag only when the change under test specifically concerns context-injecting hook behaviour.",
       "type": "boolean",
       "required": false,
       "default": "",

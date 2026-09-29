@@ -15,9 +15,6 @@ export interface CommitGeometry {
   /** Frame top used for ROOM math: `prevTopRow + hugSlack` under content-hug
    *  (the bottom-pinned top), else `frameTop`. Contiguity keeps `frameTop`. */
   roomTop: number;
-  /** The live frame is erased (suspendInput): no frame top exists, so
-   *  `prevTopRow` is 0 and band adjacency cannot be tested by row number. */
-  frameErased: boolean;
 }
 
 /**
@@ -113,19 +110,9 @@ export function snapshotCommitGeometry(
   // both are excluded and we fall through to rawLogUpdateTopRow — the BLOCKER-1
   // band-hold safety path. When lastMeasuredFrameTop is 0 (no repaint yet) this
   // reduces EXACTLY to the prior expression.
-  // Invariant (#2382, suspended frame = top unknown): suspendInput() erased the
-  // frame and repaint() no-ops until resumeInput(), so Phase 2 establishes NO
-  // frame this commit. logUpdate.topRow is 0 after the erase; the measured top
-  // and the band floor must drop out too — both describe a frame that is no
-  // longer on screen (the floor is a correction to a MEASURED top, and there
-  // is none). prevTopRow then reads 0, which is exactly BLOCKER-1's "no known
-  // frame top": the commit takes the band-hold deferral and resumeInput()'s
-  // repaint paints it. suspendInput also zeroes the measured fields, so
-  // contentHugSlack reads no slack for the erased frame.
-  const frameErased = self.suspended;
-  const measuredFrameTop = self.bandGeometryStale || frameErased ? 0 : self.lastMeasuredFrameTop;
+  const measuredFrameTop = self.bandGeometryStale ? 0 : self.lastMeasuredFrameTop;
   const bandFloor =
-    self.committedBand.length > 0 && self.committedBandBottomRow > 0 && !self.bandGeometryStale && !frameErased
+    self.committedBand.length > 0 && self.committedBandBottomRow > 0 && !self.bandGeometryStale
       ? self.committedBandBottomRow + 1
       : 0;
   const prevTopRow = Math.max(rawLogUpdateTopRow, measuredFrameTop, bandFloor);
@@ -179,6 +166,5 @@ export function snapshotCommitGeometry(
     phase1EffectiveFrameTop,
     hugSlack,
     roomTop,
-    frameErased,
   };
 }

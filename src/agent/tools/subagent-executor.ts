@@ -595,10 +595,10 @@ export class SubagentExecutor implements SubagentControl {
         // the REPL/Telegram human via the process-wide elicitation router.)
         denyElicitations: true, progressEvents: parsed.progress_events,
       });
-      // Backfill: give the depth-1 child executor a real parentId so any
-      // depth-2 forks it spawns carry handle.id as their parentId.
+      // Backfill: give the depth-1 child executor a real parentId (handle.id) and the
+      // child's OWN journal, so depth-2 forks journal via its forSubagent (never ours).
       if (childParentSession !== undefined) {
-        childParentSession.sessionId = handle.id;
+        childParentSession.sessionId = handle.id; childParentSession.messageJournal = handle.session?.messageJournal;
       }
       // Wave manifest: unit transitioned to 'running' once fork returns a handle.
       this.updateCurrentWaveUnit(call.id, 'running', undefined, isolationTeardown !== undefined ? childConfig.cwd : undefined);

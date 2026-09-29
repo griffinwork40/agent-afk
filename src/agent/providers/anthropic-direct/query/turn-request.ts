@@ -3,6 +3,7 @@ import type { FastModeController, FastTurnDecision } from '../../../fast-mode.js
 import type { AnthropicClientLike, AnthropicToolDef, RunTurnInput, ToolDispatcher } from '../types.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
+import { TurnAccumulator } from '../loop/turn-accumulator.js';
 
 export interface TurnRequestInput {
   client: AnthropicClientLike;
@@ -28,6 +29,7 @@ export interface TurnRequestInput {
   throttleQueue?: RunTurnInput['throttleQueue'];
   onUsageProgress?: RunTurnInput['onUsageProgress'];
   beforeNextRound?: RunTurnInput['beforeNextRound'];
+  journalSync?: RunTurnInput['journalSync'];
 }
 
 /** Snapshot eligibility and construct the immutable input reused by all rounds/retries. */
@@ -75,6 +77,10 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.throttleQueue ? { throttleQueue: input.throttleQueue } : {}),
       ...(input.onUsageProgress ? { onUsageProgress: input.onUsageProgress } : {}),
       ...(input.beforeNextRound ? { beforeNextRound: input.beforeNextRound } : {}),
+      ...(input.journalSync ? { journalSync: input.journalSync } : {}),
+      // One accumulator per USER TURN, shared by every retry-tier replay of it
+      // (see RunTurnInput.turnState).
+      turnState: new TurnAccumulator(),
     },
   };
 }

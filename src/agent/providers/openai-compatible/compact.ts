@@ -50,16 +50,9 @@ import {
 export { readShrinkFraction };
 import type { OpenAIMessage } from './messages.js';
 
-/** Minimal structural view of an assistant `tool_calls[]` entry (runtime-present). */
-interface OpenAIToolCallView {
-  id?: string;
-  function?: { name?: string; arguments?: string };
-}
-
-/** Read the `tool_calls` array off a message without importing the OpenAI SDK type. */
-function toolCallsOf(msg: OpenAIMessage): OpenAIToolCallView[] | undefined {
-  const tc = (msg as { tool_calls?: unknown }).tool_calls;
-  return Array.isArray(tc) ? (tc as OpenAIToolCallView[]) : undefined;
+/** Read the `tool_calls` array off an assistant message, or return `undefined`. */
+function toolCallsOf(msg: OpenAIMessage): OpenAIMessage['tool_calls'] {
+  return Array.isArray(msg.tool_calls) ? msg.tool_calls : undefined;
 }
 
 function truncateArgs(args: string): string {
@@ -174,9 +167,10 @@ export const openaiMicrocompactOps: MicrocompactOps<OpenAIMessage> = {
     }
 
     const refs: ToolResultRef[] = [];
-    for (const msg of messages) {
+    for (const [messageIndex, msg] of messages.entries()) {
       if (msg.role !== 'tool') continue;
       refs.push({
+        messageIndex,
         byteLength: toolMessageContentBytes(msg.content),
         isPlaceholder: isToolMessagePlaceholder(msg.content),
         toolName: msg.tool_call_id !== undefined ? toolNameById.get(msg.tool_call_id) : undefined,
@@ -310,14 +304,14 @@ export async function compactOpenAIHistory(
     env.AFK_MICROCOMPACT_KEEP_LAST,
     env.AFK_MICROCOMPACT_DELEGATION_BYTES,
   );
-  const { blocksCleared, bytesReclaimed } = microcompactToolResults(deps.priorTurns, opts);
+  const { blocksCleared, bytesReclaimed, firstClearedIndex } = microcompactToolResults(deps.priorTurns, opts);
   if (blocksCleared > 0 && !result.compacted) {
     return {
       compacted: false,
       reason: 'microcompacted',
       messagesBefore,
       messagesAfter: deps.priorTurns.length,
-      microcompaction: { blocksCleared, bytesReclaimed },
+      microcompaction: { blocksCleared, bytesReclaimed, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) },
     };
   }
 

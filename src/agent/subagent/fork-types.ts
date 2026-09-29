@@ -17,6 +17,7 @@ import type { SubagentProgressSink, OutputEvent } from '../types/session-types.j
 import type { TraceSink } from '../trace/index.js';
 import type { Surface } from '../awareness/types.js';
 import type { PhaseRole } from '../tools/nesting.js';
+import type { MessageJournal } from '../journal/index.js';
 
 export interface ForkParent {
   sessionId?: string;
@@ -26,6 +27,19 @@ export interface ForkParent {
    * to `sessionId` when not set.
    */
   id?: string;
+  /** See {@link JournalParent}. */
+  readonly messageJournal?: MessageJournal;
+}
+
+/**
+ * Optional message-journal view of a forking parent. When present, the child
+ * journals to `parent.messageJournal.forSubagent(childId)`
+ * (`sessions/<parentId>/subagents/<childId>.jsonl`); when absent (stub parents,
+ * DAG nodes) the child runs unjournaled. Never the parent's own journal: see
+ * the invariant in ./fork-child-config.ts.
+ */
+export interface JournalParent {
+  readonly messageJournal?: MessageJournal;
 }
 
 export interface ForkSubagentOptions<T = unknown> {
@@ -40,7 +54,8 @@ export interface ForkSubagentOptions<T = unknown> {
    * the child config. This is why the shadow-verify nudge reaches the parent.
    */
   parent: Pick<IAgentSession, 'sessionId'> &
-    Partial<Pick<IAgentSession, 'getInputStreamRef' | 'abortSignal' | 'hookRegistry'>>;
+    Partial<Pick<IAgentSession, 'getInputStreamRef' | 'abortSignal' | 'hookRegistry'>> &
+    JournalParent;
   /** Child config. `resume`/`forkSession` are managed by this module. */
   config: AgentConfig;
   /** Optional prefix to help identify subagents in logs. */

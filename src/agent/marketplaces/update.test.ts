@@ -424,6 +424,23 @@ describe('updateMarketplace — --ref on update re-pins', () => {
   });
 });
 
+describe('updateMarketplace — --ref on update when already at the tip', () => {
+  it('records the new ref so the next bare update follows the branch, not the latest tag', async () => {
+    seedMarketplace('mp', { ref: 'abcdef1234567890', commit: 'tip-sha', pinnedRef: false });
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v2.0.0'], 'tip-sha', { afk: 'tip-sha' });
+    const deps = { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') };
+
+    const pinned = await updateMarketplace('mp', { ref: 'afk' }, deps);
+    const bare = await updateMarketplace('mp', {}, deps);
+
+    expect(pinned.status).toBe('up-to-date');
+    expect(bare).toMatchObject({ status: 'up-to-date', ref: 'afk' });
+    expect(readIndex(indexPath).marketplaces['mp']).toMatchObject({ ref: 'afk', pinnedRef: true });
+  });
+});
+
 describe('updateMarketplace — legacy migration rule', () => {
   it('treats a legacy entry with ref "afk" (non-semver, non-default) as pinned', async () => {
     const entry: MarketplaceIndexEntry = {

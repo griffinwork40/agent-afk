@@ -18,8 +18,8 @@ import { hasProcessLocalRefreshedToken } from '../agent/auth/credential-resolver
  * precedence order as `loadAnthropicCredential`:
  *   1. ANTHROPIC_API_KEY env
  *   2. CLAUDE_CODE_OAUTH_TOKEN env
- *   3. Process-local refreshed token (keychain refresh succeeded but write-back failed)
- *   4. macOS Keychain / ~/.claude/.credentials.json (Claude Code login)
+ *   3. macOS Keychain / ~/.claude/.credentials.json (Claude Code login)
+ *   4. Process-local refreshed token (keychain refresh succeeded but write-back failed)
  */
 export function describeCredentialSource(): string {
   if (env.ANTHROPIC_API_KEY) return 'ANTHROPIC_API_KEY';

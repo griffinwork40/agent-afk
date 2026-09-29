@@ -51,6 +51,7 @@ import { DISPLAY_ENV_REGISTRY } from './env.display.js';
 import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
 import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
+import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -116,10 +117,10 @@ export const ENV_REGISTRY = [
   },
   {
     name: 'AFK_COMPACT_MODEL',
-    description: 'Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class).',
+    description: 'Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider\'s credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). Falls back to a cheap haiku-class default when unset. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).',
     type: 'string',
     required: false,
-    example: 'claude-haiku-4-5',
+    example: 'gpt-6-luna',
     category: 'model',
   },
   {
@@ -1517,17 +1518,8 @@ export const ENV_REGISTRY = [
     example: '1',
     category: 'misc',
   },
-  {
-    name: 'AFK_SESSION_LEDGER_DISABLED',
-    description:
-      'Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). ' +
-      'Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram ' +
-      '/watch command) will report no activity for sessions started while disabled.',
-    type: 'boolean',
-    required: false,
-    example: '1',
-    category: 'debug',
-  },
+  // Entries live in env.session-storage.ts (extracted for the 350-line ceiling).
+  ...SESSION_STORAGE_ENV_REGISTRY,
   {
     name: 'AFK_RUN_RECEIPT_DISABLED',
     description:

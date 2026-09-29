@@ -25,6 +25,8 @@ import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { ModelProvider } from '../../provider.js';
 import type { AgentModelInput, IAgentSession } from '../../types.js';
 import type { AgentConfig } from '../../types/config-types.js';
+import type { MessageJournal } from '../../journal/types.js';
+import type { JournalParent } from '../../subagent/fork-types.js';
 import { providerForModel } from '../../providers/index.js';
 import { resolveChildModel } from '../../subagent/resolve-child-model.js';
 import { applyParentCredentialFallback } from '../child-credential.js';
@@ -45,9 +47,14 @@ import type { SubagentExecutor, SubagentExecutorContext } from '../subagent-exec
 import type { AgentInput } from './input-parse.js';
 import { isChildReplaySafe } from './retry-safety.js';
 
-/** Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`. */
+/**
+ * Mutable child parent-session stub: `sessionId` is backfilled to `handle.id`
+ * and `messageJournal` to the child's own (subagent) journal, so depth-2+
+ * forks journal via `child.messageJournal.forSubagent(grandchildId)`.
+ */
 export type ChildParentSession = ReturnType<typeof createStubParentSession> & {
   sessionId: string | undefined;
+  messageJournal?: MessageJournal;
 };
 
 /**
@@ -83,6 +90,9 @@ export interface BuildChildConfigArgs {
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
+    // Forking child's journal view (read lazily): nested skill forks journal
+    // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
+    journalParent?: JournalParent,
   ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
@@ -455,7 +465,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     const childSkillExecutor = args.childSkillExecutorFactory
       ? args.childSkillExecutorFactory(
           depth + 1, maxDepth, signal, currentCwd, childReadScope,
-          namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, // Fix A
+          namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, childParentSession, // Fix A; journal view
         )
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /

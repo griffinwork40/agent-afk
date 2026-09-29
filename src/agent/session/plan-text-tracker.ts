@@ -27,6 +27,11 @@ export const MIN_PLAN_TEXT_CHARS = 80;
  * Refusals per user turn before the gate stops refusing and instead shows the
  * picker with an explicit warning. Bounds the loop when a model keeps calling
  * the tool without writing text; the user is never stranded without a picker.
+ *
+ * This counter is scoped to the current user turn: `beginTurn()` resets it to
+ * zero, so each new user message gets its own independent refusal budget.
+ * Known tradeoff: a model that never writes text can exhaust the budget within
+ * one turn and reach `warn` even on its first-ever exit attempt of that turn.
  */
 export const MAX_PLAN_TEXT_REFUSALS = 2;
 
@@ -73,6 +78,10 @@ export class PlanTextTracker {
         return;
       case 'tool.use.start':
       case 'tool.use':
+        // `tool.use` is the confirmed (non-pending) event that follows a
+        // pending `tool.use.start`; it carries no additional text to accumulate
+        // but still applies the armed reset so a new response round is
+        // correctly scoped. Both cases share identical reset semantics.
         this.applyArmedReset();
         return;
       case 'tool.output':
@@ -115,5 +124,8 @@ export class PlanTextTracker {
 }
 
 function countVisible(text: string): number {
-  return text.replace(/\s+/g, '').length;
+  // Strip ordinary whitespace AND zero-width codepoints (U+200B ZERO WIDTH
+  // SPACE, U+FEFF BOM/ZWSP, U+00AD SOFT HYPHEN, U+200C/D ZWNJ/ZWJ, etc.) so
+  // they never inflate the visible character count toward the 80-char threshold.
+  return text.replace(/[\s\u00ad\u200b-\u200d\u2060\ufeff]+/g, '').length;
 }

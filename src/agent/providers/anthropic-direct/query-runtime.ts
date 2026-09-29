@@ -67,6 +67,7 @@ import {
   setLiveSystemPrompt,
 } from './query-live-updates.js';
 import { interruptedTurnCompletedEvent } from './query-events.js';
+import type { JournalMessage } from '../../journal/index.js';
 import {
   compactQueryHistory,
   queryRewindTargets,
@@ -187,6 +188,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       userSystem: opts.userSystem,
       toolDispatcher: opts.toolDispatcher,
       ...(opts.initialMessages ? { initialMessages: opts.initialMessages } : {}),
+      ...(opts.messageJournal ? { messageJournal: opts.messageJournal } : {}),
       ...(opts.autoCompactThreshold !== undefined ? { autoCompactThreshold: opts.autoCompactThreshold } : {}),
       ...(opts.initialUsageInputTokens !== undefined ? { initialUsageInputTokens: opts.initialUsageInputTokens } : {}),
     });
@@ -350,6 +352,14 @@ export class AnthropicDirectQuery implements ProviderQuery {
 
   listRewindTargets(): RewindTarget[] {
     return queryRewindTargets(this.state);
+  }
+
+  /** Live conversation in journal form (router `/model` swap carry); undefined without a journal. */
+  journalSnapshot(): JournalMessage[] | undefined {
+    const sync = this.state.journalSync;
+    if (!sync.enabled) return undefined;
+    sync.sync(this.state.messages);
+    return sync.snapshot();
   }
 
   async rewindConversation(

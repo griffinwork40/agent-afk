@@ -1,26 +1,37 @@
 /**
  * Sandbox materializer for the what-if prediction engine.
  *
- * Builds two isolated environments (baseline, candidate) under
- * `<runDir>/sandboxes/{baseline,candidate}/`. The candidate home
- * then has the ChangeSpec applied via operator registry.
+ * Each arm (baseline, candidate) gets its own isolated root directory
+ * created via mkdtemp under os.tmpdir(). The two roots are siblings only
+ * of each other inside the system temp dir, which contains no
+ * whatif-identifying structure an episode can recognise. Walking up from
+ * either arm's home never reaches a directory that lists the other arm
+ * (without hitting os.tmpdir() or the filesystem root).
+ *
+ * This replaces the previous layout (`<runDir>/sandboxes/<id>/`) where both
+ * arm dirs were siblings under one shared parent, allowing `$AFK_HOME/../..`
+ * enumeration to expose the other arm (issue #2466 / #2454).
  *
  * Contract:
  *   - Both sandboxes are built identically from the real home/cwd.
  *   - Only the candidate is mutated (via applyChanges).
- *   - cleanup() removes all temporary directories and git worktrees.
+ *   - cleanup() removes both per-arm roots and any git worktrees.
  *   - No writes ever escape to the real AFK_HOME or project cwd.
+ *   - Arm labels ('baseline'/'candidate') never appear in filesystem paths.
  *
  * @module whatif/sandbox
  */
 
 import {
   mkdirSync,
+  mkdtempSync,
   rmSync,
   existsSync,
 } from 'node:fs';
-import { join, resolve, relative } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
+import { relative } from 'node:path';
 
 import type {
   Environment,
@@ -101,19 +112,56 @@ function cloneLaunch(s: LaunchSettings, unset: string[]): LaunchSettings {
 }
 
 // ---------------------------------------------------------------------------
-// Sandbox layout per label
+// Per-arm sandbox layout
 // ---------------------------------------------------------------------------
 
 interface SandboxPaths {
+  /** Opaque root directory created by mkdtemp (inside os.tmpdir()). */
+  root: string;
+  /** AFK home directory for this arm: <root>/home */
   home: string;
-  project: string; // git worktree dir (only used when specTouchesProject)
+  /** Git worktree directory for this arm (used only when specTouchesProject): <root>/project */
+  project: string;
 }
 
-function sandboxPaths(runDir: string, label: 'baseline' | 'candidate'): SandboxPaths {
+/**
+ * Allocate a fresh, isolated sandbox root under os.tmpdir().
+ *
+ * Using mkdtemp gives each arm a private top-level directory.  The prefix
+ * `afk-` is short and carries no arm-label or whatif-identifying suffix;
+ * the random suffix from mkdtemp is the only discriminator.  An episode
+ * inside one arm that walks $AFK_HOME/../.. will arrive at os.tmpdir(),
+ * which contains many unrelated entries — there is no sibling structure
+ * that reveals the other arm.
+ */
+function allocateSandboxPaths(): SandboxPaths {
+  const root = mkdtempSync(join(tmpdir(), 'afk-'));
   return {
-    home: join(runDir, 'sandboxes', label, 'home'),
-    project: join(runDir, 'sandboxes', label, 'project'),
+    root,
+    home: join(root, 'home'),
+    project: join(root, 'project'),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Safety guard for cleanup
+// ---------------------------------------------------------------------------
+
+const resolvedTmpdir = resolve(tmpdir());
+
+/**
+ * Assert that `dir` is a direct child of os.tmpdir() (one level deep,
+ * no traversal tricks).  Throws if not — cleanup refuses to delete
+ * paths that don't satisfy this invariant.
+ */
+function assertUnderTmpdir(dir: string, label: string): void {
+  const resolved = resolve(dir);
+  if (!resolved.startsWith(resolvedTmpdir + '/') && resolved !== resolvedTmpdir) {
+    throw new Error(
+      `[whatif] cleanup: ${label} path "${resolved}" is not inside os.tmpdir() ` +
+        `"${resolvedTmpdir}". Refusing to delete.`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -121,17 +169,17 @@ function sandboxPaths(runDir: string, label: 'baseline' | 'candidate'): SandboxP
 // ---------------------------------------------------------------------------
 
 /**
- * Build baseline and candidate sandboxes.
+ * Build baseline and candidate sandboxes, each in its own isolated root.
  *
  * Baseline and candidate homes are constructed identically; then the
- * ChangeSpec is applied to candidate only. Project worktrees (HEAD,
- * detached) are created for both envs if the spec touches the project.
- * cleanup() tears everything down.
+ * ChangeSpec is applied to candidate only.  Project worktrees (HEAD,
+ * detached) are created for both envs when the spec touches the project.
+ * cleanup() tears both roots down.
  */
 export async function materializeSandboxes(
   opts: MaterializeOptions,
 ): Promise<SandboxResult> {
-  const { realHome, realCwd, runDir, spec, baseLaunch } = opts;
+  const { realHome, realCwd, runDir: _runDir, spec, baseLaunch } = opts;
   const touchesProject = specTouchesProject(spec);
   const symPaths = homePathsToCopyFor(spec);
 
@@ -155,12 +203,13 @@ export async function materializeSandboxes(
     relFromRoot = rel.startsWith('..') ? '' : rel; // e.g. "packages/foo"
   }
 
-  const sandboxesRoot = join(runDir, 'sandboxes');
-  mkdirSync(sandboxesRoot, { recursive: true });
+  // Each arm gets its own isolated root under os.tmpdir() (issue #2466).
+  // The roots are NOT siblings of each other under any whatif-owned parent.
+  const baselinePaths = allocateSandboxPaths();
+  const candidatePaths = allocateSandboxPaths();
 
-  // Build both homes identically
-  const baselinePaths = sandboxPaths(runDir, 'baseline');
-  const candidatePaths = sandboxPaths(runDir, 'candidate');
+  mkdirSync(baselinePaths.home, { recursive: true });
+  mkdirSync(candidatePaths.home, { recursive: true });
 
   buildSandboxHome(realHome, baselinePaths.home);
   buildSandboxHome(realHome, candidatePaths.home);
@@ -209,7 +258,7 @@ export async function materializeSandboxes(
   // Apply spec to candidate only
   await applyChanges(spec, candidate, { realHome, realCwd });
 
-  // Cleanup function
+  // Cleanup function — removes both isolated roots
   async function cleanup(): Promise<void> {
     // Remove git worktrees first
     if (gitRoot) {
@@ -217,17 +266,15 @@ export async function materializeSandboxes(
         removeWorktree(gitRoot, wt);
       }
     }
-    // Remove the entire sandboxes directory (only under runDir)
-    if (existsSync(sandboxesRoot)) {
-      const resolved = resolve(sandboxesRoot);
-      const resolvedRunDir = resolve(runDir);
-      if (!resolved.startsWith(resolvedRunDir + '/') && resolved !== resolvedRunDir) {
-        throw new Error(
-          `[whatif] cleanup: sandboxes path "${resolved}" is not inside runDir "${runDir}". ` +
-            `Refusing to delete.`,
-        );
+    // Remove each arm's root directory (guarded: must be inside os.tmpdir())
+    for (const { root, label } of [
+      { root: baselinePaths.root, label: 'baseline root' },
+      { root: candidatePaths.root, label: 'candidate root' },
+    ]) {
+      if (existsSync(root)) {
+        assertUnderTmpdir(root, label);
+        rmSync(root, { recursive: true, force: true });
       }
-      rmSync(sandboxesRoot, { recursive: true, force: true });
     }
   }
 

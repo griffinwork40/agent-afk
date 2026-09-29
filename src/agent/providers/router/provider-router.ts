@@ -37,7 +37,11 @@
  * new model sees prior turns as plain prose, not structured tool/thinking
  * content. This is the documented, accepted degradation for any inner rebuild
  * (cross-family, or same-family onto a different endpoint); same-signature runs
- * keep full native fidelity inside the live inner.
+ * keep full native fidelity inside the live inner. When the outgoing inner
+ * keeps a message journal, its live {@link ProviderQuery.journalSnapshot} is
+ * handed over as `resumeMessages` instead (structured, degraded only where
+ * the new family cannot replay a block); the process-start resume snapshot is
+ * never re-used on a swap (docs/message-journal.md).
  *
  * @module agent/providers/router/provider-router
  */
@@ -59,6 +63,7 @@ import type {
   RewindTarget,
 } from '../../provider.js';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
+import type { JournalMessage } from '../../journal/index.js';
 import { QueryInputStream } from '../../session/input-iterable.js';
 import { applySlotCredentials } from '../../session/slot-credentials.js';
 import { debugLog } from '../../../utils/debug.js';
@@ -267,11 +272,12 @@ export class ProviderRouter implements ProviderQuery {
 
   /**
    * Build the inner provider for `model`. When `seed` is true (a swap), the
-   * inner is seeded with the text shadow history so the new model sees prior
-   * turns as prose. Credentials/endpoint are resolved for the model's OWN family
+   * inner is seeded with `live` (the outgoing inner's journal snapshot, taken
+   * BEFORE it closed) when non-empty, else with the text shadow history so
+   * the new model sees prior turns as prose. Credentials/endpoint are resolved for the model's OWN family
    * + tier via {@link resolveInner}.
    */
-  private buildInner(model: string | undefined, seed: boolean): ActiveInner {
+  private buildInner(model: string | undefined, seed: boolean, live?: JournalMessage[]): ActiveInner {
     const { provider, innerConfig, signature } = this.resolveInner(model);
     const input = new QueryInputStream(() => this.lastSessionId);
 
@@ -283,7 +289,16 @@ export class ProviderRouter implements ProviderQuery {
     // legitimate override that must survive a model swap too.
     if (this.systemPromptOverridden) innerConfig.systemPrompt = this.currentSystemPrompt;
 
-    if (seed) innerConfig.resumeHistory = [...this.shadowHistory];
+    if (seed) {
+      // Keep the prose shadow for the overflow-guard seed / legacy replay,
+      // but hand the new inner the LIVE structured conversation: baseConfig's
+      // process-start resumeMessages is stale by now, and both providers
+      // prefer it over resumeHistory. Empty/absent snapshot (no journal):
+      // drop it so the shadow history is what gets replayed.
+      innerConfig.resumeHistory = [...this.shadowHistory];
+      if (live !== undefined && live.length > 0) innerConfig.resumeMessages = live;
+      else delete innerConfig.resumeMessages;
+    }
 
     const query = provider.query({ prompt: input.createIterable(), config: innerConfig });
     return {
@@ -360,8 +375,9 @@ export class ProviderRouter implements ProviderQuery {
         this.activeModel = this.currentModel;
         let switchNotice: string | undefined;
         if (needSwap) {
+          const live = this.active?.query.journalSnapshot?.(); // before close: the live conversation
           await this.closeActive();
-          this.active = this.buildInner(this.currentModel, /* seed */ true);
+          this.active = this.buildInner(this.currentModel, /* seed */ true, live);
           debugLog(`🔀 ProviderRouter: switched inner provider → ${this.active.family} (model=${this.currentModel})`);
           // A rebuild is otherwise invisible to the model (init swallowed, history
           // carried as anonymous prose). On a genuine model change, prepend a
@@ -540,6 +556,10 @@ export class ProviderRouter implements ProviderQuery {
       messagesBefore: 0,
       messagesAfter: 0,
     };
+  }
+
+  journalSnapshot(): JournalMessage[] | undefined {
+    return this.active?.query.journalSnapshot?.();
   }
 
   listRewindTargets(): RewindTarget[] {

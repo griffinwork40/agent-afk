@@ -70,7 +70,7 @@ vi.mock('../../../whatif/operators/index.js', () => ({
 }));
 
 // Import under test AFTER mocks are declared.
-import { whatifCmd } from './whatif.js';
+import { whatifCmd, makeProgressThrottle } from './whatif.js';
 import { runWhatif } from '../../../whatif/run.js';
 
 // ---------------------------------------------------------------------------
@@ -205,5 +205,64 @@ describe('/whatif slash command', () => {
     const { ctx } = makeCtx();
     const result = await whatifCmd.handler(ctx, '--append "Always ask." --yes');
     expect(result).toBe('continue');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeProgressThrottle — preflight milestone lines always print
+// ---------------------------------------------------------------------------
+
+describe('makeProgressThrottle', () => {
+  function makeInfoCtx() {
+    const infoLines: string[] = [];
+    const ctx = {
+      out: {
+        info: (t: string) => infoLines.push(t),
+        line: () => undefined,
+        raw: () => undefined,
+        success: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      },
+      ui: { clearScreen: () => undefined, repaintStatusLine: () => undefined },
+      setSoftStopHandler: () => undefined,
+      session: {} as never,
+      stats: {} as never,
+    };
+    return { ctx: ctx as never, infoLines };
+  }
+
+  it('prints the first message of a new stage regardless of done', () => {
+    const { ctx, infoLines } = makeInfoCtx();
+    const throttle = makeProgressThrottle(ctx);
+    throttle('preflight', 'Checking cost…', 10);
+    expect(infoLines).toHaveLength(1);
+    expect(infoLines[0]).toContain('Checking cost');
+  });
+
+  it('prints consecutive preflight messages with no done counter (milestone lines)', () => {
+    const { ctx, infoLines } = makeInfoCtx();
+    const throttle = makeProgressThrottle(ctx);
+    // First message initialises the stage.
+    throttle('preflight', 'Cost estimate: $0.04', undefined);
+    // Second preflight message, no done counter — must not be silently dropped.
+    throttle('preflight', 'Headroom warning: only 12% left', undefined);
+    expect(infoLines).toHaveLength(2);
+    expect(infoLines[1]).toContain('Headroom warning');
+  });
+
+  it('throttles per-episode messages with a done counter (every 10th)', () => {
+    const { ctx, infoLines } = makeInfoCtx();
+    const throttle = makeProgressThrottle(ctx);
+    // First episodes call initialises the stage (stage-change path always prints).
+    throttle('episodes', 'episode 1/30', 1);
+    const afterFirst = infoLines.length; // = 1
+    // Episodes 2–10: episodeCount increments to 1–9 inside the branch → none are % 10 → suppressed.
+    for (let i = 2; i <= 10; i++) throttle('episodes', `episode ${i}/30`, i);
+    expect(infoLines).toHaveLength(afterFirst); // none printed
+    // Episode 11: episodeCount reaches 10 → prints.
+    throttle('episodes', 'episode 11/30', 11);
+    expect(infoLines).toHaveLength(afterFirst + 1);
+    expect(infoLines[afterFirst]).toContain('episode 11/30');
   });
 });

@@ -41,6 +41,7 @@ import {
 } from './retry-budget.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
+import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
 
@@ -146,6 +147,89 @@ export type OpenRoundResult =
   | { kind: 'overload-exhausted' }
   | { kind: 'terminated' };
 
+/**
+ * Stall-watchdog callback for one round. Witness layer: reuse the
+ * `idle_watchdog_fired` phase, the established vocabulary for "a
+ * progress-aware watchdog fired on unexplained silence"
+ * (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
+ * fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
+ * never delay the abort.
+ */
+function traceStreamStall(input: RunTurnInput): (info: { elapsedSinceLastProgressMs: number; stallTimeoutMs: number }) => void {
+  return (info) => {
+    void emitSessionPhase(input.traceWriter, {
+      phase: 'idle_watchdog_fired',
+      durationMs: info.elapsedSinceLastProgressMs,
+      resolvedModel: input.model,
+      metadata: {
+        source: 'model-stream',
+        stallTimeoutMs: info.stallTimeoutMs,
+        elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
+      },
+    });
+  };
+}
+
+/** Throttle callback: extend the TTFB bound by the provider's retry-after (see the Invariant at the call site). */
+function extendOnThrottle(ttfb: { extend(ms: number): void }): (retryAfterMs: number | undefined) => void {
+  return (retryAfterMs) => {
+    const extension = throttleExtensionMs(retryAfterMs);
+    if (extension !== undefined) ttfb.extend(extension);
+  };
+}
+
+/**
+ * One-shot retry for HTTP 400 "invalid signature in thinking block".
+ *
+ * Contract: called only when `isInvalidSignatureError` already matched. Strips
+ * earlier-turn thinking blocks, re-arms watchdogs (the originals were disposed
+ * in the `openRound` catch block), and attempts one more `messages.create`.
+ * Returns the `OpenRoundTransport` on success, or `null` when there is nothing
+ * to strip or the retry also fails — letting the caller surface the original
+ * error unchanged.
+ *
+ * Why (#2464): a provider switch (Anthropic → OpenAI → Anthropic) replays
+ * recovered signed thinking, and whether Anthropic still accepts it is
+ * unverified. See loop/signature-retry.ts for `buildSignatureRetryMessages`.
+ */
+async function* attemptSignatureRetry(
+  input: RunTurnInput,
+  turn: Pick<TurnAccumulator, 'windDownReason'>,
+  ttfbTimeoutMs: number,
+  stallTimeoutMs: number,
+  requestStartedAt: number,
+): AsyncGenerator<ProviderEvent, OpenRoundTransport | null, void> {
+  const retryMessages = buildSignatureRetryMessages(input.messages);
+  if (retryMessages === null) return null;
+  // Invariant: mutate in place so subsequent rounds in this tool loop see stripped
+  // history and do not re-fail with the same stale signatures. The journal differ
+  // records this as a truncate+re-append, which is acceptable for this rare path.
+  input.messages.splice(0, input.messages.length, ...retryMessages);
+  const retryParams = buildRoundParams({
+    ...input,
+    messages: isCacheEnabled({ baseUrl: input.baseUrl })
+      ? withMessagesBreakpoint(input.messages, getCacheTtl())
+      : input.messages,
+    tools: turn.windDownReason !== null ? null : input.tools,
+  });
+  const retryTtfb = armFirstByteTimeout(input.signal, ttfbTimeoutMs);
+  const retryStall = armStreamStallWatchdog(retryTtfb.signal, stallTimeoutMs, traceStreamStall(input));
+  try {
+    const retryEvents = yield* awaitCreateWithThrottleSignals(
+      createWithRetry(input.client, retryParams, input.headers, retryStall.signal, input.signal),
+      input,
+      extendOnThrottle(retryTtfb),
+    );
+    return { kind: 'opened', events: retryEvents, ttfb: retryTtfb, stall: retryStall, requestStartedAt };
+  } catch {
+    // Retry also failed — dispose fresh watchdogs and return null so the caller
+    // surfaces the original error unchanged.
+    retryTtfb.dispose();
+    retryStall.dispose();
+    return null;
+  }
+}
+
 /** Everything the connection phase needs from the enclosing turn. */
 export interface OpenRoundContext {
   input: RunTurnInput;
@@ -211,6 +295,12 @@ export async function* openRound({
     });
   }
 
+  // Journal commit point: history is final for this request (orphan repair and
+  // image degradation applied, cache marker not yet stamped — the clone below
+  // never reaches stored history). Captures the new user turn and the previous
+  // round's tool_result turn with its FULL content.
+  input.journalSync?.sync(input.messages);
+
   // Stamp a prompt-cache breakpoint on the last content block of the last
   // message before sending — non-mutating clone-and-stamp so the marker never
   // accumulates back into stored history. Cache lookup walks back over
@@ -246,23 +336,7 @@ export async function* openRound({
   // pre-first-byte window remains governed solely by the TTFB bound and the two
   // can never both be pending. Every subsequent event re-arms it, so only
   // genuine silence — not slowness — can fire it.
-  const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, (info) => {
-    // Witness layer: reuse the `idle_watchdog_fired` phase — the established
-    // vocabulary for "a progress-aware watchdog fired on unexplained silence"
-    // (subagent/idle-watchdog.ts). `source` distinguishes this provider-stream
-    // fire from a forked sub-agent's. Fire-and-forget; a slow trace write must
-    // never delay the abort.
-    void emitSessionPhase(input.traceWriter, {
-      phase: 'idle_watchdog_fired',
-      durationMs: info.elapsedSinceLastProgressMs,
-      resolvedModel: input.model,
-      metadata: {
-        source: 'model-stream',
-        stallTimeoutMs: info.stallTimeoutMs,
-        elapsedSinceLastProgressMs: info.elapsedSinceLastProgressMs,
-      },
-    });
-  });
+  const stall = armStreamStallWatchdog(ttfb.signal, stallTimeoutMs, traceStreamStall(input));
 
   try {
     // Race the create await against the out-of-band throttle queue so a
@@ -295,10 +369,7 @@ export async function* openRound({
       // leave the bound untouched when no window was communicated, so
       // unexplained silence still trips on schedule. Same policy the forked
       // subagent idle watchdog applies via pause-window.ts.
-      (retryAfterMs) => {
-        const extension = throttleExtensionMs(retryAfterMs);
-        if (extension !== undefined) ttfb.extend(extension);
-      },
+      extendOnThrottle(ttfb),
     );
     return { kind: 'opened', events, ttfb, stall, requestStartedAt };
   } catch (err) {
@@ -330,6 +401,15 @@ export async function* openRound({
       return { kind: 'overload-exhausted' };
     }
     const e = annotateFastError(err, input.fastMode === true);
+    if (isInvalidSignatureError(e)) {
+      const hit = yield* attemptSignatureRetry(input, turn, ttfbTimeoutMs, stallTimeoutMs, requestStartedAt);
+      if (hit !== null) return hit;
+      // A user interrupt during the retry is a clean stop, not the stale 400.
+      if (input.signal.aborted) {
+        yield { type: 'turn.completed', usage: turn.terminalUsage(), sessionId: input.ctx.sessionId };
+        return { kind: 'terminated' };
+      }
+    }
     if (e.message.includes('thinking')) {
       dumpThinkingDiagnostic(input.messages, e);
     }

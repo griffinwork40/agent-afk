@@ -182,15 +182,17 @@ function walk(
       // Cache-layout plugins must be explicitly installed (present + enabled in
       // AFK's own index).
       const entry = indexPlugins[key.key];
-      if (!entry || entry.enabled === false) return;
+      if (entry && entry.enabled !== false) {
+        pushPlugin(out, dir);
+        return;
+      }
+    } else {
+      // Flat layout: include unless explicitly disabled.
+      const entry = indexPlugins[key.key];
+      if (entry && entry.enabled === false) return;
       pushPlugin(out, dir);
       return;
     }
-    // Flat layout: include unless explicitly disabled.
-    const entry = indexPlugins[key.key];
-    if (entry && entry.enabled === false) return;
-    pushPlugin(out, dir);
-    return;
   }
 
   let entries: string[];
@@ -289,12 +291,12 @@ export function indexKeyForPath(
   const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);
   if (segments.length === 0) return null;
 
-  if (segments[0] === MARKETPLACE_CACHE_SEGMENT && segments.length >= 3) {
+  if (segments[0] === MARKETPLACE_CACHE_SEGMENT && segments.length >= 2) {
     const mp = segments[1];
     if (mp) {
       const marketplaceDir = join(root, MARKETPLACE_CACHE_SEGMENT, mp);
       const fromManifest = pluginNameFromMarketplace(marketplaceDir, leaf);
-      const pluginName = fromManifest ?? segments[2];
+      const pluginName = fromManifest ?? segments[2] ?? mp;
       if (pluginName) {
         return { layout: 'cache', key: `${mp}:${pluginName}` };
       }

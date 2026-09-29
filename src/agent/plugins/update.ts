@@ -215,6 +215,9 @@ export async function updatePlugin(
   const upToDate = isBranch ? remoteSha === localSha : targetRef === entry.ref;
 
   if (upToDate) {
+    if (options.ref !== undefined) {
+      upsertPlugin(name, { ...entry, ref: targetRef, commit: localSha, pinnedRef: true, updatedAt: now().toISOString() }, indexPath);
+    }
     return {
       name,
       status: 'up-to-date',

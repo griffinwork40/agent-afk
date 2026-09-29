@@ -83,9 +83,21 @@ export interface CommittedBandHost {
   anchorRow: number | undefined;
   /** Whether the compositor currently holds raw mode + the keypress listener. */
   armed: boolean;
-  /** True while suspendInput() is in effect: the live frame is erased and
-   *  repaint() no-ops, so the frame top is unknown (commit-geometry.ts). */
+  /**
+   * True while suspendInput() is in effect. commitAbove() queues to
+   * `suspendCommitQueue` instead of writing stdout; the band has already been
+   * forgotten (model zeroed without erasing) so there is no frame to
+   * reference for geometry. resumeInput() drains the queue through the normal
+   * commit path once the frame is re-established.
+   */
   readonly suspended: boolean;
+  /**
+   * Queue of commitAbove text arguments deferred while suspended.
+   * Drained by resumeInput() (replayed via normal commit path) and by
+   * disarm() / teardown when the compositor is torn down while still suspended.
+   * Contract: ONLY commitAbove appends; resumeInput and disarm drain.
+   */
+  suspendCommitQueue: string[];
   /** The single log-update region tracker; null when not armed. */
   logUpdate: LogUpdateFn | null;
   /** DECSTBM scroll-region guard; absent when no status line is active. */
@@ -168,6 +180,18 @@ function preCommitBannerSync(self: CommittedBandHost, rows: number): void {
 
 export function commitAbove(self: CommittedBandHost, text: string): void {
   self.debugLog('commitAbove:enter', { textLen: text.length, anchorRow: self.anchorRow ?? null, committing: self.committing, topRow: self.logUpdate?.topRow ?? null });
+
+  // Contract (queue-and-replay, issue #2382): while suspended, repaint() is
+  // suppressed and the frame does not exist. Writing to stdout at stale
+  // pre-suspend coordinates or running the band-hold path would produce
+  // duplicates when the owner's scroll moved band rows into native scrollback.
+  // Queue the text; resumeInput() replays it through the NORMAL commit path
+  // after the frame is re-established with fresh geometry. disarm() while still
+  // suspended archives queued blocks to scrollback directly.
+  if (self.suspended) {
+    self.suspendCommitQueue.push(text);
+    return;
+  }
 
   if (!self.armed || !self.logUpdate) {
     // Disarmed: no frame, no band, no reflow — this is a raw terminal write,
@@ -346,6 +370,32 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   // Clear the stale-guard so the next endTurnFlush call (after the next commit)
   // does not skip its redraw on an already-flushed band.
   self.lifecycleStateDirty = false;
+}
+
+/**
+ * Forget the committed-band model WITHOUT erasing the on-screen rows.
+ *
+ * Called by {@link suspendInput} after settling any pending (unpainted) rows
+ * to scrollback. The painted rows that remain on screen become plain terminal
+ * content — the compositor no longer tracks, repositions, or repaints them.
+ * The resume repaint starts with an empty band and fresh geometry, so every
+ * block committed during the suspension (via the queue-and-replay path) lands
+ * contiguously above the newly established frame.
+ *
+ * Distinction from {@link clearCommittedBand}: clear() is called during normal
+ * teardown paths where the on-screen rows will be erased by the frame render or
+ * have already been archived. forget() is called at suspend time when the rows
+ * must stay on screen and must NOT be re-emitted or re-tracked.
+ */
+export function forgetCommittedBand(self: CommittedBandHost): void {
+  self.committedBand = [];
+  self.committedBandMeta = [];
+  self.committedBandTopRow = 0;
+  self.committedBandBottomRow = 0;
+  self.committedBandPaintedRows = 0;
+  self.bandReflowCache = null;
+  // Keep lifecycleStateDirty unchanged: it tracks whether a commit has landed
+  // since the last flush. Forgetting the model does not reset that semantic.
 }
 
 /**

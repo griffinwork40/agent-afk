@@ -50,8 +50,9 @@ export interface ComposeExecutorContext {
   // DAG executor (dag-subagent.ts) forks each node with `parent: { sessionId }`
   // only — it strips getInputStreamRef/hookRegistry — so SubagentStop can
   // neither inject nor resolve a registry here. Wiring it would also emit one
-  // nudge per node (noisy for an N-node DAG). Left dark intentionally.
-  parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'>;
+  // nudge per node (noisy for an N-node DAG). Left dark intentionally. The
+  // journal view IS forwarded: each node journals via forSubagent(nodeChildId).
+  parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'> & import('../subagent/fork-types.js').JournalParent;
   defaultModel?: AgentModelInput;
   defaultSubagentModel: AgentModelInput;
   apiKey?: string;

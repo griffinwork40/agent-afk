@@ -35,6 +35,24 @@ export interface RunTurnInput {
   throttleQueue?: import('./throttle-queue.js').ThrottleQueue;
   /** Callback invoked after each tool round returns 'continue', before the next openRound(). Returns steering text to inject, or undefined. */
   beforeNextRound?: () => string | undefined;
+  /** Journal differ; `sync(messages)` at each commit point (docs/message-journal.md). */
+  journalSync?: import('../../journal/index.js').JournalSync<MessageParam>;
+  /**
+   * Contract: the turn-scoped accumulator (wall-clock origin, completed-round
+   * count, wind-down reason, summed usage) for the USER TURN this input belongs
+   * to. Created once per user turn by `prepareTurnRequest`; `runTurn` reuses it
+   * when present and only falls back to a fresh one when absent (direct
+   * callers/tests).
+   *
+   * Invariant: the retry tiers (overload pause → usage limit → auth) recover by
+   * calling `runTurn` AGAIN with this same object. Every turn budget must be
+   * measured from the original turn, so the replay must continue this
+   * accumulator — a fresh one restarts the soft-deadline clock and the round
+   * cap and drops the pre-replay rounds' usage (2026-09-28: a 401 replay ~33 min
+   * into a 45-min child pushed its 40-min soft deadline to ~73 min, past the
+   * hard abort). See turn-budget-replay.test.ts.
+   */
+  turnState?: import('./loop/turn-accumulator.js').TurnAccumulator;
 }
 
 /** Streaming-only subset of the Anthropic client used by the loop. */

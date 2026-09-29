@@ -30,6 +30,7 @@ import { SessionStateManager } from './session-state.js';
 import { updatePresenceCwd } from '../awareness/presence.js';
 import { resolveModelId } from './model-resolution.js';
 import type { AgentConfig } from '../types.js';
+import type { JournalLifecycle } from './journal-lifecycle.js';
 import type { ProviderQuery } from '../provider.js';
 
 // ---------------------------------------------------------------------------
@@ -144,6 +145,21 @@ describe('setModel', () => {
     const before = stateManager.getSessionMetadata().model;
     await setModel('ghost', deps);
     expect(stateManager.getSessionMetadata().model).toBe(before);
+  });
+
+  it('marks the journal only when the resolved model actually changes', async () => {
+    const markModelSwitch = vi.fn();
+    const { deps, stateManager } = makeMockDeps();
+    const withJournal: ConfigDeps = {
+      ...deps,
+      getJournal: () => ({ markModelSwitch }) as unknown as JournalLifecycle,
+    };
+    const current = stateManager.getSessionMetadata().model;
+    expect(current).toBeDefined();
+    await setModel(current, withJournal);
+    expect(markModelSwitch).not.toHaveBeenCalled();
+    await setModel('some-other-model', withJournal);
+    expect(markModelSwitch).toHaveBeenCalledWith('some-other-model');
   });
 });
 

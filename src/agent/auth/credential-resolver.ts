@@ -35,8 +35,18 @@ let refreshedClaudeCodeOauthToken: string | undefined;
  * keychain. Precedence:
  *   1. `ANTHROPIC_API_KEY` env
  *   2. `CLAUDE_CODE_OAUTH_TOKEN` env
- *   3. A token refreshed during this process (write-back fallback)
- *   4. macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json`
+ *   3. macOS Keychain (`Claude Code-credentials`) / `~/.claude/.credentials.json`
+ *   4. A token refreshed during this process (write-back fallback)
+ *
+ * Invariant: the live store MUST outrank the process-local cache. The cache is
+ * populated on EVERY startup preload — `refreshClaudeCodeOauthToken` returns the
+ * current access token even when no network refresh was needed (token not yet
+ * near-expiry) — so ranking it above the store pinned every later read to the
+ * boot-time account: after the operator ran `claude login` to switch accounts
+ * and `/reauth`, the parent swapped to the new account (its refresher reads the
+ * store directly) while every forked subagent resolved the stale boot token here
+ * and died on the old account's 429. The cache is only a fallback for when the
+ * store yields no valid token (write-back failed and the stored one is expired).
  *
  * Returns `undefined` when no credential is available. Mirrors the body of
  * `loadCredential()` in `src/cli/config.ts`, which becomes a thin delegate
@@ -46,8 +56,8 @@ export function loadAnthropicCredential(): string | undefined {
   return (
     env.ANTHROPIC_API_KEY ||
     env.CLAUDE_CODE_OAUTH_TOKEN ||
-    refreshedClaudeCodeOauthToken ||
-    loadClaudeCodeOauthToken()
+    loadClaudeCodeOauthToken() ||
+    refreshedClaudeCodeOauthToken
   );
 }
 

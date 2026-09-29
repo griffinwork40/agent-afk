@@ -5,6 +5,7 @@
  */
 
 import type { ChangeOperator, Environment, OperatorContext } from '../types.js';
+import { SANDBOX_OWNED_KEYS } from '../sandbox.home.js';
 
 // ---------------------------------------------------------------------------
 // Credential / reserved key guard
@@ -18,9 +19,12 @@ const CREDENTIAL_KEY_RE = /(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|OAUTH)/i;
 
 /**
  * Reserved prefixes / exact keys that must not be overridden from whatif.
+ *
+ * SANDBOX_OWNED_KEYS (AFK_HOME, AFK_STATE_DIR, AFK_FRAMEWORK_DIR) are the
+ * canonical source of truth — reuse that set so the two stay in sync.
  */
 const RESERVED_PREFIXES = ['AFK_WHATIF_'];
-const RESERVED_EXACT = new Set(['AFK_HOME', 'AFK_STATE_DIR']);
+const RESERVED_EXACT: ReadonlySet<string> = SANDBOX_OWNED_KEYS;
 
 function checkEnvKey(key: string): void {
   if (CREDENTIAL_KEY_RE.test(key)) {

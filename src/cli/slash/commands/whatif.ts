@@ -56,7 +56,7 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
 // ---------------------------------------------------------------------------
 
 /** Emit a progress line at most once every ~10 episodes within the same stage. */
-function makeProgressThrottle(ctx: SlashContext): (stage: string, message: string, done?: number) => void {
+export function makeProgressThrottle(ctx: SlashContext): (stage: string, message: string, done?: number) => void {
   let lastStage = '';
   let episodeCount = 0;
 
@@ -64,6 +64,11 @@ function makeProgressThrottle(ctx: SlashContext): (stage: string, message: strin
     if (stage !== lastStage) {
       lastStage = stage;
       episodeCount = 0;
+      ctx.out.info(`[whatif] ${stage}: ${message}`);
+      return;
+    }
+    // Milestone lines (no done counter, e.g. the preflight MDE note) always show.
+    if (done === undefined) {
       ctx.out.info(`[whatif] ${stage}: ${message}`);
       return;
     }
@@ -181,6 +186,9 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
         maxTurns: parsed.options.maxTurns,
         episodeTimeoutMs: parsed.options.episodeTimeoutMs,
         keepSandboxes: parsed.options.keepSandboxes,
+        ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
+        ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
+        ...(parsed.options.noBaselineSample ? { noBaselineSample: true } : {}),
       },
       deps,
     );

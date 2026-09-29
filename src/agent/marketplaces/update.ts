@@ -143,6 +143,9 @@ export async function updateMarketplace(
   const upToDate = isBranch ? remoteSha === localSha : targetRef === entry.ref;
 
   if (upToDate) {
+    if (options.ref !== undefined) {
+      upsertMarketplace(name, { ...entry, ref: targetRef, commit: localSha, pinnedRef: true, updatedAt: now().toISOString() }, indexPath);
+    }
     return { name, status: 'up-to-date', ref: targetRef, commit: localSha };
   }
 

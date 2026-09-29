@@ -60,6 +60,11 @@ const ALLOWED_FILES: ReadonlyArray<{ file: string; reason: string }> = [
       'Forwards process.env to child processes via `{ ...process.env, ...context.env }`. This is whole-env forwarding, not a read of a specific var.',
   },
   {
+    file: 'src/agent/tools/handlers/bash-env-scrub.ts',
+    reason:
+      'Whole-env forwarding to provide a scrubbed copy for bash child processes (issue #2425). Inherits process.env and strips episode-revealing vars; this is dynamic whole-env access, not a specific-var read.',
+  },
+  {
     file: 'src/agent/tools/handlers/web-scrape.ts',
     reason: 'Accepts `env` as an injectable opt for testing; default is `process.env` (whole object).',
   },

@@ -15,6 +15,13 @@ export interface CommitRoute {
   archiveCount: number;
   rawGenuineOverflow: number;
   maxBandModel: number;
+  // Contract (prior-band archive, issue #2382 counted-handoff): true when the
+  // prior committed band was merged into overflowRun (anchorRow <= 1 and band
+  // is frame-adjacent). When false and useBandHold is true, Phase 1 must
+  // explicitly archive any painted prior-band rows to scrollback before Phase 3
+  // CUP-writes over them — otherwise they are silently lost (anchorRow > 1
+  // prevents the merge path so the prior band never enters overflowRun).
+  overflowPriorContiguous: boolean;
 }
 
 /**
@@ -84,7 +91,6 @@ export function routeCommit(
     committedBandBottomRow: self.committedBandBottomRow,
     committedBandPaintedRows: self.committedBandPaintedRows,
     geometryStale: self.bandGeometryStale,
-    frameErased: geo.frameErased,
     ...(geo.hugSlack > 0 ? { roomTop: geo.roomTop } : {}),
     hugSlack: geo.hugSlack,
   });
@@ -124,5 +130,6 @@ export function routeCommit(
     archiveCount,
     rawGenuineOverflow,
     maxBandModel,
+    overflowPriorContiguous,
   };
 }

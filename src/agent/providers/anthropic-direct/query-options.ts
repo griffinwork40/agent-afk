@@ -35,6 +35,11 @@ const STARTER_MODELS: ReadonlyArray<{ value: string; displayName: string; descri
     description: 'Newer balanced Claude — adaptive thinking, new tokenizer',
   },
   {
+    value: 'claude-sonnet-5-5',
+    displayName: 'Claude Sonnet 5.5',
+    description: 'Faster, cheaper Sonnet — adaptive thinking, 1M context',
+  },
+  {
     value: 'claude-opus-5',
     displayName: 'Claude Opus 5',
     description: 'Highest-capability Claude for agentic coding',
@@ -59,6 +64,8 @@ export interface AnthropicDirectQueryOptions {
   toolDispatcher: ToolDispatcher;
   sessionId?: string;
   initialMessages?: MessageParam[];
+  /** Durable message-journal sink (`AgentConfig.messageJournal`); seeded into SessionState. */
+  messageJournal?: import('../../journal/index.js').MessageJournal;
   /**
    * Conservative token estimate seeded from the last completed turn of a
    * restored session (#1294). When non-zero, used as the initial `lastUsage`

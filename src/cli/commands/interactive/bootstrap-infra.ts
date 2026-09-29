@@ -132,6 +132,9 @@ export function createBootstrapInfra(a: {
     // inheritance. The registry is constructed after this proxy, so reading
     // it lazily through sessionRef.current is required.
     get hookRegistry() { return a.sessionRef.current?.hookRegistry; },
+    // Journal parent view: forks journal to `messageJournal.forSubagent(id)`,
+    // never to the parent's own file (see fork-child-config.ts).
+    get messageJournal() { return a.sessionRef.current?.messageJournal; },
   };
 
   // Invariant: ONE root manager per session, shared by all three executors.

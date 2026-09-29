@@ -21,7 +21,7 @@ import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '
 import type { LoadedHooksConfig } from './config-loader.js';
 import { compileMatcher } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
-import { isWhatifEpisode } from '../whatif-episode-gate.js';
+import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
 import { resolveContextSessionId } from './hook-utils.js';
 
 export interface AgentConfigForBridge {
@@ -50,13 +50,28 @@ export function loadAndRegisterConfigHooks(
   const sessionId = agentConfig.sessionId;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
-  // Episode mode: allow only context-shaping hooks. Side-effect tails
-  // (notifications, external writes triggered by Stop/PostToolUse, etc.) must
-  // not fire during a sandboxed episode — the episode is a replay for observation,
-  // not a live session. SessionStart and UserPromptSubmit shape preamble/context,
-  // which IS necessary for the episode to see the correct prompt structure.
-  const episodeAllowedEvents = new Set<HarnessHookEvent>(['SessionStart', 'UserPromptSubmit']);
+  // Episode mode: disable the context-injecting events (SessionStart and
+  // UserPromptSubmit) by default so both the baseline and candidate arms see
+  // byte-identical first user messages.  Cwd- or recency-sensitive hooks
+  // (e.g. a plugin hook whose output depends on cwd and accumulated state)
+  // would otherwise inject arm-specific text that confounds every delta
+  // measurement.
+  //
+  // Tool-gating hooks (PreToolUse, PostToolUse, PostToolUseFailure, Stop, …)
+  // keep registering in episodes — they cannot inject context into the first
+  // user message and their presence makes the episode more realistic.
+  //
+  // Setting AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 (or auto-set by the harness when
+  // the change spec itself targets hooks or plugins) restores pre-fix behaviour
+  // so both arms can observe the hooks under test.
   const inEpisode = isWhatifEpisode();
+  const keepContextHooks = keepContextHooksInEpisode();
+
+  /** Events whose injectContext reaches the first user message of a session. */
+  const CONTEXT_INJECTING_EVENTS: ReadonlySet<HarnessHookEvent> = new Set([
+    'SessionStart',
+    'UserPromptSubmit',
+  ]);
 
   const validEvents: HarnessHookEvent[] = [
     'SessionStart',
@@ -96,10 +111,35 @@ export function loadAndRegisterConfigHooks(
     }
   }
 
+  // In episode mode (without opt-in), skip the context-injecting events only
+  // (SessionStart and UserPromptSubmit) and warn so the operator knows what
+  // was disabled.  Tool-gating events are unaffected and register below.
+  if (inEpisode && !keepContextHooks) {
+    const disabledHooks: string[] = [];
+    for (const event of CONTEXT_INJECTING_EVENTS) {
+      const groups = hookConfig.hooks[event];
+      if (groups === undefined) continue;
+      for (const group of groups) {
+        for (const hook of group.hooks) {
+          disabledHooks.push(`${event}: ${hook.command}`);
+        }
+      }
+    }
+    if (disabledHooks.length > 0) {
+      console.warn(
+        `[hooks] what-if episode: SessionStart and UserPromptSubmit hooks disabled so both arms` +
+          ` see identical first user messages (set AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 to keep):\n` +
+          disabledHooks.map((s) => `  - ${s}`).join('\n'),
+      );
+    }
+    // Do NOT return here — tool-gating events (PreToolUse, PostToolUse, etc.)
+    // still need to register to preserve episode realism.
+  }
+
   for (const event of validEvents) {
-    // In episode mode, skip events that are pure side-effect tails. Only
-    // SessionStart and UserPromptSubmit may run (they shape context / preamble).
-    if (inEpisode && !episodeAllowedEvents.has(event)) continue;
+    // Episode mode without opt-in: skip context-injecting events to keep arms
+    // byte-identical on their first user message.
+    if (inEpisode && !keepContextHooks && CONTEXT_INJECTING_EVENTS.has(event)) continue;
 
     const groups = hookConfig.hooks[event];
     if (groups === undefined || groups.length === 0) continue;

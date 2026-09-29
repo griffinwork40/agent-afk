@@ -9,15 +9,11 @@
  *   - Longer inputs are middle-truncated so BOTH the head and the tail survive.
  *     The omitted region is labelled with its character count so the operator
  *     can judge whether to investigate before approving.
- *   - Non-string inputs are JSON-stringified first (same as the old `clipInput`).
  *   - Redaction (secrets) is the CALLER's responsibility — apply
  *     {@link redactInlineSecrets} before passing the input here.
  *
  * @module agent/afk-gate-preview
  */
-
-/** Characters shown at each end when the input is middle-truncated. */
-export const PREVIEW_HALF = 700;
 
 /**
  * Full budget: inputs up to this length are shown verbatim. Chosen to fit
@@ -29,6 +25,11 @@ export const PREVIEW_BUDGET = 2000;
 /**
  * Produce a bounded, human-readable preview of a tool input.
  *
+ * The head/tail half is derived from `budget` so the output never exceeds
+ * `budget` characters regardless of what the caller passes. Previously
+ * `PREVIEW_HALF` was a module-level constant (700), which caused
+ * `previewInput(s, 10)` to emit up to 1400 chars — longer than the budget.
+ *
  * @param s       Already-redacted string to preview.
  * @param budget  Max characters before switching to middle-truncation.
  *                Defaults to {@link PREVIEW_BUDGET}.
@@ -37,25 +38,22 @@ export const PREVIEW_BUDGET = 2000;
 export function previewInput(s: string, budget = PREVIEW_BUDGET): string {
   if (!s) return '';
   if (s.length <= budget) return s;
-  const head = s.slice(0, PREVIEW_HALF);
-  const tail = s.slice(s.length - PREVIEW_HALF);
-  const omitted = s.length - PREVIEW_HALF * 2;
+  const half = Math.floor(budget / 2);
+  const head = s.slice(0, half);
+  const tail = s.slice(s.length - half);
+  const omitted = s.length - half * 2;
   return `${head}\n[… ${omitted} chars omitted …]\n${tail}`;
 }
 
 /**
- * Serialize a tool input to a string, then run {@link previewInput}.
+ * Produce a bounded preview of an already-serialized tool-input string.
  *
- * Non-string values are JSON-stringified; if that throws, `String()` is used
- * as a last resort.
+ * The caller is responsible for serializing `input` to a string before calling
+ * this function (and for applying `redactInlineSecrets`). Accepting a `string`
+ * instead of `unknown` removes the previous dual-serialization footgun where
+ * non-string values were JSON-stringified BOTH here and in `afk-mode-gate.ts`.
  */
-export function buildInputPreview(input: unknown, budget = PREVIEW_BUDGET): string {
-  let s: string;
-  try {
-    s = typeof input === 'string' ? input : JSON.stringify(input);
-  } catch {
-    s = String(input);
-  }
-  if (!s) return '';
-  return previewInput(s, budget);
+export function buildInputPreview(input: string, budget = PREVIEW_BUDGET): string {
+  if (!input) return '';
+  return previewInput(input, budget);
 }

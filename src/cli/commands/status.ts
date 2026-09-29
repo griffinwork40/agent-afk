@@ -7,6 +7,7 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { statusPanel } from '../render.js';
 import { getApiKeyForModel, getModel, getApiKey, getCodexApiKey } from '../shared-helpers.js';
 import { resolveCliPermissionMode } from '../config.js';
+import { describeCredentialSource } from '../auth-wizard.describe-source.js';
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -87,7 +88,7 @@ export function registerStatusCommand(program: Command): void {
                       ? 'Found (OPENAI_API_KEY / CODEX_API_KEY)'
                       : 'Reading ~/.codex/auth.json (run `afk provider auth diagnose`)'
                     : apiKey
-                      ? 'Found (ANTHROPIC_API_KEY)'
+                      ? `Found (${describeCredentialSource()})`
                       : 'Falling back to Claude OAuth',
                   kind: apiKey ? 'ok' : 'warn',
                 },

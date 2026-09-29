@@ -726,6 +726,21 @@ describe('updatePlugin — --ref on update re-pins', () => {
   });
 });
 
+describe('updatePlugin — --ref on update when already at the tip', () => {
+  it('records the new ref so the next bare update follows the branch, not the latest tag', async () => {
+    seed('plugin', { ref: 'abcdef1234567890', commit: 'tip-sha', pinnedRef: false });
+    const { runner } = makeRunner(['v2.0.0'], 'tip-sha', { afk: 'tip-sha' });
+    const deps = { pluginsDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') };
+
+    const pinned = await updatePlugin('plugin', { ref: 'afk' }, deps);
+    const bare = await updatePlugin('plugin', {}, deps);
+
+    expect(pinned.status).toBe('up-to-date');
+    expect(bare).toMatchObject({ status: 'up-to-date', ref: 'afk' });
+    expect(readIndex(indexPath).plugins['plugin']).toMatchObject({ ref: 'afk', pinnedRef: true });
+  });
+});
+
 describe('updatePlugin — legacy migration rule: undefined pinnedRef + non-semver non-default ref = pinned', () => {
   it('treats a legacy entry with ref "afk" as pinned (non-semver, non-default)', async () => {
     // Old entry: installed with --ref afk before this fix. pinnedRef is absent.

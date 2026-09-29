@@ -98,19 +98,17 @@ import { DenialCircuitBreakerError, HookBlockedError, errorMessage } from '../..
 import {
   COMPACT_SYSTEM_PROMPT,
   wrapTranscriptForSummary,
-  resolveMicrocompactOptions,
 } from '../shared/compaction.js';
-import { compactOpenAIHistory, readShrinkFraction, microcompactToolResults } from './compact.js';
-import {
-  oneShotChatCompletion,
-  oneShotResponses,
-} from './oneshot.js';
+import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
+import { oneShotResponses } from './oneshot.js';
 import { getErrorStatus } from './query/retry.js';
+import { buildCompactSummarize } from './query/compact-summarize.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
 import { summarizeToolInput } from '../shared/tool-input-summary.js';
 import { dispatchAndAppendToolCalls } from './query/dispatch-append.js';
+import { OpenAIJournalWiring } from './query/journal-wiring.js';
 import {
   TOOL_USE_LOOP_CAPPED,
   WIND_DOWN_NOTE,
@@ -233,8 +231,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   private readonly traceWriter: TraceSink | undefined;
   private readonly fastTier: FastTierSession;
 
-  /** Running conversation state for multi-turn sessions. */
-  private priorTurns: OpenAIMessage[] = [];
+  /** Running conversation state for multi-turn sessions (journal-seeded on resume). */
+  private priorTurns: OpenAIMessage[];
+  /** Message-journal commit points + resume seeding (query/journal-wiring.ts). */
+  private readonly journal: OpenAIJournalWiring;
 
   private currentModel: string;
   private currentPermissionMode: string;
@@ -339,15 +339,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     // session was saved with a recent enough sidecar; absent on legacy sidecars.
     // Conservative: over-estimate (triggers compaction) > under-estimate
     // (lets a full context reach the wire, rejected with HTTP 400).
-    const lastResumedTurn = opts.config.resumeHistory?.at(-1);
-    if (lastResumedTurn?.inputTokens !== undefined && lastResumedTurn.inputTokens > 0) {
-      this.lastUsage = {
-        inputTokens: lastResumedTurn.inputTokens,
-        stopReason: null,
-        resultSubtype: 'success',
-        isError: false,
-      };
-    }
+    this.journal = new OpenAIJournalWiring(opts.config);
+    this.lastUsage = this.journal.resumedUsage();
+    this.priorTurns = this.journal.initialTurns();
 
     if (opts.auth.apiKey === null) {
       this.client = null as unknown as OpenAI;
@@ -846,6 +840,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     turnStartTime: number,
   ): Generator<ProviderEvent> {
     this.lastUsage = accumulatedUsage;
+    this.journal.sync(this.priorTurns); // commit point: turn end (final assistant message)
     yield {
       type: 'turn.completed',
       usage: { ...accumulatedUsage, durationMs: Date.now() - turnStartTime },
@@ -872,11 +867,10 @@ export class OpenAICompatibleQuery implements ProviderQuery {
      */
     windDown: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null,
   ): AsyncGenerator<ProviderEvent, IterationResult | null> {
+    this.journal.sync(this.priorTurns); // commit point: what is about to be sent
     const messages = buildMessages({
       config: this.opts.config,
-      ...(this.opts.config.resumeHistory !== undefined
-        ? { resumeHistory: this.opts.config.resumeHistory }
-        : {}),
+      ...this.journal.legacyResumeHistory(),
       priorTurns: this.priorTurns,
       vision,
     });
@@ -998,7 +992,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     signal: AbortSignal,
     vision: boolean,
   ): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
-    return yield* dispatchAndAppendToolCalls({
+    const denialTrip = yield* dispatchAndAppendToolCalls({
       state,
       signal,
       vision,
@@ -1011,6 +1005,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // config, the same source this query reads autoCompact/permissionMode.
       subagentId: this.opts.config.subagentId,
     });
+    this.journal.sync(this.priorTurns); // commit point: tool round (full results) on disk
+    return denialTrip;
   }
 
   // ---- ProviderQuery surface ------------------------------------------------
@@ -1029,11 +1025,13 @@ export class OpenAICompatibleQuery implements ProviderQuery {
    * credentials, and headers as the conversation — a custom-baseURL or local
    * shim session compacts against its own server, never a re-resolved one.
    *
-   * The compaction model is `AFK_COMPACT_MODEL` when set (it must be an id this
-   * session's endpoint can serve), otherwise the live session model. Cross-
-   * provider summarization (e.g. a Claude model summarizing an OpenAI session)
-   * is intentionally NOT wired here: a mismatched id simply fails the summarize
-   * call, which the core treats as a safe no-op, leaving history untouched.
+   * The compaction model is `AFK_COMPACT_MODEL` when set, otherwise the live
+   * session model. Cross-provider summarization is now supported via
+   * `resolveCrossProviderSummarize` (shared/compact-summarizer.ts): when
+   * AFK_COMPACT_MODEL resolves to a foreign family (e.g. a Claude id on an
+   * OpenAI session), a foreign one-shot closure is used instead of the session
+   * client — with a one-time privacy warning that the transcript crosses
+   * providers. On same-family or unset, the session client is used unchanged.
    *
    * Both wires are supported. Chat Completions sessions summarize through
    * `oneShotChatCompletion`; responses-mode sessions (ChatGPT-OAuth, or the
@@ -1078,21 +1076,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       // which overshoots "no-op cheaply" into "guarantee an eventual overflow".
       // Mirrors the fallback `compactOpenAIHistory` runs on its own no-op
       // reasons (compact.ts) — same options source, same result shape.
-      const microOpts = resolveMicrocompactOptions(
-        env.AFK_MICROCOMPACT_TOOL_RESULT_BYTES,
-        env.AFK_MICROCOMPACT_KEEP_LAST,
-        env.AFK_MICROCOMPACT_DELEGATION_BYTES,
-      );
-      const { blocksCleared, bytesReclaimed } = microcompactToolResults(this.priorTurns, microOpts);
-      if (blocksCleared > 0) {
-        return {
-          compacted: false,
-          reason: 'microcompacted',
-          messagesBefore,
-          messagesAfter: this.priorTurns.length,
-          microcompaction: { blocksCleared, bytesReclaimed },
-        };
-      }
+      const micro = this.journal.microcompactFallback(this.priorTurns);
+      if (micro) return micro;
       return {
         compacted: false,
         reason: 'responses-compaction-unavailable',
@@ -1109,21 +1094,24 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       contextWindowTokensUsed(this.lastUsage ?? {}),
       autoCompactLimitFor(this.currentModel),
     );
-    return compactOpenAIHistory({
+
+    // Session closure (this client + wire), swapped for a foreign one-shot
+    // when AFK_COMPACT_MODEL names another provider family. See
+    // query/compact-summarize.ts for the contract.
+    const summarize = buildCompactSummarize({
+      wireMode: this.wireMode,
+      client: this.client,
+      compactModel,
+      compactModelRaw: env.AFK_COMPACT_MODEL,
+      summarizeViaResponses: (t, s, m) => this.summarizeViaResponses(t, s, m),
+      sessionKey: this,
+    });
+
+    const compactResult = await compactOpenAIHistory({
       priorTurns: this.priorTurns,
       usedFraction,
       shrinkAtFraction: readShrinkFraction(),
-      summarize: (transcript, signal) =>
-        this.wireMode === 'responses'
-          ? this.summarizeViaResponses(transcript, signal, compactModel)
-          : oneShotChatCompletion({
-              client: this.client,
-              model: compactModel,
-              system: COMPACT_SYSTEM_PROMPT,
-              user: wrapTranscriptForSummary(transcript),
-              maxTokens: 1024,
-              signal,
-            }),
+      summarize,
       isClosed: this.closed,
       isIdle: this.abort.isIdle(),
       // Invariant: compaction opens a real abort scope through the same
@@ -1139,6 +1127,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       trigger,
       traceWriter: this.traceWriter,
     });
+    this.journal.afterCompact(this.priorTurns, compactResult); // splice or in-place microcompaction
+    return compactResult;
   }
 
   /**
@@ -1316,6 +1306,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       error: `${PROVIDER_NAME} provider does not support file checkpoint rewind yet.`,
     };
   }
+
+  /** Live conversation in journal form (router `/model` swap carry); undefined without a journal. */
+  journalSnapshot(): ReturnType<OpenAIJournalWiring['snapshot']> { return this.journal.snapshot(this.priorTurns); }
 
   close(): void {
     // Invariant: the `closed` flag and the close promise must be updated

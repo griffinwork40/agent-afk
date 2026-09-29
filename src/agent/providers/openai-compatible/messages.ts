@@ -13,6 +13,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig, ResumeHistoryTurn } from '../../types/config-types.js';
 import type { ProviderUserTurn } from '../../provider.js';
 import { refreshEnvironmentDate } from '../shared/date-rollover.js';
+import { repairOrphanToolCalls } from './query/repair-orphan-tool-calls.js';
 
 /**
  * A single OpenAI Chat Completions content part. The multimodal `content`
@@ -52,7 +53,31 @@ export interface OpenAIMessage {
    * the serialization seam in `query.ts:defaultClientFactory`.
    */
   reasoning_content?: string;
-  // Future: tool_calls array on assistant messages. Slice 3 territory.
+  /**
+   * Tool calls issued by the assistant. Present on assistant turns that
+   * invoke one or more tools; absent on plain-text assistant turns.
+   * Matches the OpenAI Chat Completions wire shape for `tool_calls`.
+   */
+  tool_calls?: OpenAIToolCall[];
+}
+
+/**
+ * A single tool call entry on an assistant message. Mirrors the OpenAI
+ * Chat Completions `ChatCompletionMessageToolCall` shape structurally so
+ * this module stays SDK-import-free.
+ */
+export interface OpenAIToolCall {
+  id: string;
+  /**
+   * The OpenAI Chat Completions wire always uses `'function'`; `string` was
+   * previously kept as a wider escape hatch but the union collapses to `string`
+   * and loses discriminant value.  Tightened to the only value the API emits.
+   */
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
 }
 
 /**
@@ -300,10 +325,12 @@ export function buildMessages(args: {
     // then the next request rebuild hits this map). `OpenAIMessage.content`'s
     // type omits `null`, so the `as unknown as OpenAIMessage` casts at the
     // priorTurns push sites hid the gap from the compiler.
-    return messages.map((m) =>
-      Array.isArray(m.content) ? { ...m, content: flattenOpenAIParts(m.content) } : m,
+    return repairOrphanToolCalls(
+      messages.map((m) =>
+        Array.isArray(m.content) ? { ...m, content: flattenOpenAIParts(m.content) } : m,
+      ),
     );
   }
 
-  return messages;
+  return repairOrphanToolCalls(messages);
 }
