@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { PassThrough } from 'node:stream';
 import { FrameClock, FRAME_PERIOD_MS } from './markdown-stream.frame-clock.js';
 import { StreamingMarkdownRenderer } from './markdown-stream.js';
+import { MAX_LAG_MS, INK_MS } from './smoke-reveal.js';
 import { resetSmokeToneCache } from './smoke-reveal.tones.js';
 
 const P = FRAME_PERIOD_MS;
@@ -113,7 +114,10 @@ describe('StreamingMarkdownRenderer frame clock', () => {
       r.push(w + ' ');
       await vi.advanceTimersByTimeAsync(4);
     }
-    await vi.advanceTimersByTimeAsync(2_000);
+    // With MAX_LAG_MS=2000ms, MAX_CPS=180, ~352 chars: animation takes up to
+    // MAX_LAG_MS ms, then INK_MS=340ms fade. Wait MAX_LAG_MS + INK_MS + margin
+    // so the reveal has fully settled before we check for silence.
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS + INK_MS + 200);
     // The first paint is the throttle's leading edge (the reveal is not yet
     // animating); every later paint is on the frame grid, >= one period apart.
     for (let i = 2; i < paints.length; i++) {

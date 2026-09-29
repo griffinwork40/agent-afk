@@ -4,8 +4,10 @@ import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { calculateContentWidth, calculateProseContentWidth, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle } from './markdown-stream-format.js';
 import { PendingFormatCache } from './markdown-stream.pending-cache.js';
 import { contentMargin } from './render/measure.js';
-import { SmokeReveal, isInkTextEnabled, isSmokeTextEnabled } from './smoke-reveal.js';
+import { HOLD_RECHECK_MS, SmokeReveal, isInkTextEnabled, isSmokeTextEnabled } from './smoke-reveal.js';
 import { splitAtHeadingBoundary } from './markdown-stream.heading-hold.js';
+import { CommitDefer, HoldQueue, REVEAL_SETTLE_MAX_MS } from './markdown-stream.commit-defer.js';
+import { countVisible } from './smoke-reveal.ansi.js';
 import { detectReducedMotion } from './_lib/capture-mode.js';
 import {
   type InputBufferState,
@@ -129,13 +131,16 @@ export class StreamingMarkdownRenderer {
   /** Memoized pending render: an unchanged buffer is not reformatted on a reveal frame. */
   private readonly pendingCache = new PendingFormatCache();
   /**
-   * Smoke accent heading hold (see markdown-stream.heading-hold.ts): text
-   * from the character that would commit a still-condensing heading onward.
-   * Released on a timer, or synchronously by every path that commits or
-   * inspects the buffer.
+   * Smoke accent heading hold (markdown-stream.heading-hold.ts): text from the
+   * character that would commit a still-condensing heading onward. Released
+   * on a timer, or synchronously by every path that commits or inspects the
+   * buffer.
    */
-  private held = '';
-  private holdTimer: NodeJS.Timeout | null = null;
+  private readonly holds = new HoldQueue();
+  /** Deferred block commits while a block is still fading in (markdown-stream.commit-defer.ts). */
+  private readonly defer = new CommitDefer(() => this.runPipeline(''));
+  /** Set by noteStreamDone(): the stream finished cleanly, so its tail may settle. */
+  private streamDone = false;
   private accent = false;
 
   constructor(opts?: StreamingMarkdownRendererOptions) {
@@ -254,21 +259,9 @@ export class StreamingMarkdownRenderer {
    * composer path (via slot) can generate identical output.
    */
   renderPending(): string {
-    const { inCode } = this.pendingCache.blockState(this.buffer);
-    const contentWidth = inCode
-      ? calculateContentWidth(this.indent.length)
-      : calculateProseContentWidth(this.indent.length);
-    const pending = this.pendingCache.render(this.buffer, contentWidth, this.isTTY && !this.flushing);
+    const { pending, contentWidth, reveal } = this.pendingRender();
     let formatted = pending.formatted;
-    // Smoke-text reveal: prose only. Code fences and table previews keep
-    // their dimmed live view (the table's box-drawing would otherwise read
-    // as the "youngest" characters). A height-truncated render is skipped
-    // too: it keeps only the first rows, so its end is NOT the newest text,
-    // and the distance-from-end mask would re-smoke settled on-screen text.
-    // The row count is computed once per render by the pending cache.
-    if (this.smoke && formatted && !inCode && !pending.inTable && pending.rows < pending.rowCap) {
-      formatted = this.smoke.apply(formatted, { maxWidth: contentWidth });
-    }
+    if (this.smoke && reveal) formatted = this.smoke.apply(formatted, { maxWidth: contentWidth });
     // Content centering (AFK_CENTER_CONTENT): live pending prose is part of
     // the overlay frame, so it receives the centering margin here (the overlay
     // is never routed through commitAbove, which handles scrollback centering).
@@ -328,56 +321,105 @@ export class StreamingMarkdownRenderer {
   /**
    * Push a chunk directly into the parse pipeline (block detection + repaint).
    */
-  private pushDirect(chunk: string, noHold = false): void {
+  private pushDirect(chunk: string, noHold = false, at = Date.now()): void {
     if (this.flushing) return;
-    if (this.held) {
-      this.held += chunk;
+    if (this.holds.active) {
+      this.holds.append(chunk, at);
       return;
     }
     const split = this.accent && !noHold ? splitAtHeadingBoundary(this.buffer, chunk, this.committed === '') : null;
     if (split) {
-      this.feed(split.now);
+      this.feed(split.now, at);
       const wait = this.smoke?.smokeHoldRemaining() ?? 0;
       if (wait > 0) {
-        this.held = split.held;
-        this.holdTimer = setTimeout(() => {
-          this.holdTimer = null;
-          this.releaseHeld(false);
-        }, wait);
+        this.holds.hold({ text: split.held, at }, wait, () => this.releaseHeld(false));
         return;
       }
       chunk = split.held;
     }
-    this.feed(chunk);
+    this.feed(chunk, at);
+  }
+
+  /**
+   * Reveal dwell left for the last letter of the completed block ending at
+   * `boundary` in `buffer` (0 = commit it now). Its distance from the end is
+   * the visible text after the boundary; raw markdown syntax there can only
+   * make the estimate slightly early, never late.
+   */
+  private blockRevealRemaining(buffer: string, boundary: number): number {
+    if (!this.smoke || this.flushing || !this.pendingRender(buffer).reveal) return 0;
+    // Code and table blocks are never masked, so there is no fade to wait for.
+    if (/^ {0,3}(`{3,}|~{3,}|\|)/.test(buffer.slice(0, boundary).trimStart())) return 0;
+    return this.smoke.revealHoldRemaining(countVisible(buffer.slice(boundary)));
+  }
+
+  /**
+   * The pending render and whether the reveal mask applies to it: prose only.
+   * Code fences and table previews keep their dimmed live view (a table's
+   * box-drawing would otherwise read as the "youngest" characters). A
+   * height-truncated render is skipped too: it keeps only the first rows, so
+   * its end is NOT the newest text, and the distance-from-end mask would
+   * re-smoke settled on-screen text. Memoized by the pending cache, so the
+   * hold check and the next paint share one format.
+   */
+  private pendingRender(buffer = this.buffer): { pending: ReturnType<PendingFormatCache['render']>; contentWidth: number; reveal: boolean } {
+    const { inCode } = this.pendingCache.blockState(buffer);
+    const contentWidth = inCode
+      ? calculateContentWidth(this.indent.length)
+      : calculateProseContentWidth(this.indent.length);
+    const pending = this.pendingCache.render(buffer, contentWidth, this.isTTY && !this.flushing);
+    const reveal = pending.formatted !== '' && !inCode && !pending.inTable && pending.rows < pending.rowCap;
+    return { pending, contentWidth, reveal };
+  }
+
+  /** Wait, bounded, for held text and deferred commits to drain and the tail to finish revealing. */
+  private async settleReveal(): Promise<void> {
+    const deadline = Date.now() + REVEAL_SETTLE_MAX_MS;
+    while (this.smoke && !this.flushing) {
+      const busy = this.holds.active || this.defer.pending;
+      if (!busy && !this.pendingRender().reveal) return;
+      const r = busy ? HOLD_RECHECK_MS : this.smoke.revealHoldRemaining();
+      const left = deadline - Date.now();
+      if (r <= 0 || left <= 0) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(r, left, HOLD_RECHECK_MS)));
+    }
   }
 
   /** Discard held text without committing it (discardPending / dispose). */
   private dropHeld(): void {
-    if (this.holdTimer) clearTimeout(this.holdTimer);
-    this.holdTimer = null;
-    this.held = '';
+    this.holds.clear();
   }
 
-  /** Release held heading-boundary text. `force` also bypasses any further hold (sync drains). */
+  /** Release held text in order. `force` also bypasses any further hold (sync drains). */
   private releaseHeld(force: boolean): void {
-    if (this.holdTimer) {
-      clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-    }
-    while (this.held) {
-      const h = this.held;
-      this.held = '';
-      this.pushDirect(h, force);
-      if (!force) break;
-    }
+    // A non-forced release may re-hold at the next boundary; later pieces then
+    // queue behind it (pushDirect appends while a hold is active).
+    for (const p of this.holds.take()) this.pushDirect(p.text, force, p.at);
   }
 
   /** Record `chunk` for the reveal and run it through block detection + repaint. */
-  private feed(chunk: string): void {
+  private feed(chunk: string, at = Date.now()): void {
     if (!chunk) return;
-    this.smoke?.record(chunk);
+    // Time spent in a hold becomes extra reveal budget, so released text animates.
+    const heldMs = Date.now() - at;
+    this.smoke?.record(chunk, heldMs > 0 ? { extraBudgetMs: heldMs } : {});
+    this.runPipeline(chunk);
+  }
+
+  /** Commit every completed block now, in order, ignoring deferral (synchronous drains). */
+  private commitDeferred(): void {
+    this.defer.cancel();
+    this.defer.forced = true;
+    try { this.runPipeline(''); } finally { this.defer.forced = false; }
+  }
+
+  /** Append `chunk` (may be '') and commit every completed block the defer gate allows. */
+  private runPipeline(chunk: string): void {
+    if (this.flushing) return;
     this.buffer = runParsePipeline(this.buffer, chunk, {
+      deferCommit: (buffer, boundary) => this.defer.shouldDefer(this.blockRevealRemaining(buffer, boundary)),
       onPreCommit: (newBuffer) => {
+        this.defer.committed();
         this.buffer = newBuffer;
         // Text is leaving the overlay's front: drop the smoke growth baseline
         // BEFORE the sync repaints, or the shrink reads as consumed syntax.
@@ -390,13 +432,26 @@ export class StreamingMarkdownRenderer {
   }
 
   /**
+   * Mark the stream as cleanly finished (the orchestrator's `done`). From here
+   * `getPendingBuffer()` / `stripPendingFrom()` inspect held text without
+   * releasing it, and `flush()` first lets the tail finish revealing (bounded
+   * by `REVEAL_SETTLE_MAX_MS`). Interrupted and errored turns never call this,
+   * so they flush at once.
+   */
+  noteStreamDone(): void {
+    this.streamDone = true;
+  }
+
+  /**
    * Finalize the stream: render and commit any remaining content,
    * and clear the log-update overlay
    */
   async flush(): Promise<void> {
     // Drain any micro-buffered input before finalizing.
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
+    if (this.streamDone) await this.settleReveal();
     this.releaseHeld(true);
+    this.commitDeferred();
 
     // Cancel throttle timer
     if (this.throttleTimer) {
@@ -451,7 +506,7 @@ export class StreamingMarkdownRenderer {
    * O(1), no side effects.
    */
   hasEmitted(): boolean {
-    return this.inputState.inputBuffer.length > 0 || this.held.length > 0 || this.buffer.length > 0 || this.committed.length > 0;
+    return this.inputState.inputBuffer.length > 0 || this.holds.active || this.buffer.length > 0 || this.committed.length > 0;
   }
 
   /**
@@ -461,6 +516,8 @@ export class StreamingMarkdownRenderer {
     // Drain the micro-buffer first so the returned string reflects all
     // pushed content — mirrors the pattern in commitPending() and flush().
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
+    // After a clean end, peek: releasing would commit a still-revealing paragraph.
+    if (this.streamDone) return this.buffer + this.holds.text;
     this.releaseHeld(true);
     return this.buffer;
   }
@@ -475,6 +532,7 @@ export class StreamingMarkdownRenderer {
   commitPending(): void {
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
     this.releaseHeld(true);
+    this.commitDeferred();
     if (!this.buffer.trim()) return;
     const pending = this.buffer;
     // Empty the buffer and re-compose the overlay (now empty) BEFORE committing,
@@ -507,11 +565,18 @@ export class StreamingMarkdownRenderer {
     // Drain the micro-buffer first so the strip sees the full pending
     // content — mirrors the pattern in commitPending() and flush().
     drainInputBuffer(this.inputState, { onBatch: (b) => this.pushDirect(b) });
-    this.releaseHeld(true);
+    if (this.streamDone) {
+      // Offsets index `buffer + held` (see getPendingBuffer). Held text was never
+      // recorded, so stripping it needs no reveal reset.
+      if (offset >= this.buffer.length) return this.holds.stripFrom(offset - this.buffer.length);
+      this.holds.clear(); // held text lies after the stripped heading
+    } else this.releaseHeld(true);
     if (offset < 0 || offset >= this.buffer.length) return false;
+    const stripped = this.buffer.slice(offset);
     this.buffer = this.buffer.slice(0, offset).trimEnd();
-    // The stripped tail's bursts would otherwise remap onto the kept text.
-    this.smoke?.reset();
+    // Forget only the stripped tail: the kept text (possibly a deferred block
+    // still fading in) keeps its reveal, and nothing remaps onto it.
+    this.smoke?.forgetNewest(countVisible(stripped));
     return true;
   }
 
@@ -529,13 +594,17 @@ export class StreamingMarkdownRenderer {
    */
   discardPending(): void {
     discardInputBuffer(this.inputState);
+    // Completed blocks would already be in scrollback without deferral: keep
+    // that (append-only) contract and discard only the in-progress tail. Runs
+    // BEFORE the throttle reset below, since the drain schedules a repaint.
+    this.dropHeld();
+    this.commitDeferred();
     if (this.throttleTimer) {
       clearTimeout(this.throttleTimer);
       this.throttleTimer = null;
     }
     this.lastPaintTime = 0;
     this.buffer = '';
-    this.dropHeld();
     this.smoke?.reset();
     // Clear the live overlay in whichever mode is active — mirror the slot
     // clears in commitPending()/flush() so the discarded text vanishes from
@@ -554,6 +623,7 @@ export class StreamingMarkdownRenderer {
     }
     this.lastPaintTime = 0;
     this.dropHeld();
+    this.defer.reset();
     this.smoke?.dispose();
 
     if (this.resizeUnsub) {

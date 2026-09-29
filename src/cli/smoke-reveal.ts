@@ -15,9 +15,10 @@
  *    playhead (`RevealTimeline`, smoke-reveal.playhead.ts) that births each
  *    character as it crosses it. The playhead accelerates and decelerates
  *    smoothly with the backlog, so a network lump sweeps in quickly instead
- *    of landing as a block, a stall eases to rest over several frames, and
- *    the reveal never trails the model by more than `MAX_LAG_MS` (headings:
- *    a slower ceiling and the longer `ACCENT_MAX_LAG_MS`).
+ *    of landing as a block and a stall eases to rest over several frames.
+ *    Intake bounds nominal queued animation duration with `MAX_LAG_MS`
+ *    (headings: `ACCENT_MAX_LAG_MS`), settling older overflow immediately.
+ *    These budgets are capacities, not strict arrival-to-birth deadlines.
  *  - `apply(formatted)` runs on the formatted pending overlay just before it
  *    is painted. It walks the visible characters, tracking the active SGR
  *    style, and restyles the youngest ones by age. Characters not yet born
@@ -55,11 +56,15 @@
  * content pushes never add a second paint in a period. The clock stops (its
  * one timer is released) on the first frame where nothing is settling.
  *
- * Contract: this module never delays a block commit. Committed blocks render
- * through `formatBlockForCommit`, untouched by the mask, so a paragraph's
- * last few letters may snap solid a moment early. That is deliberate:
- * holding a tall overlay across `commitAbove()` can drop the block (see
- * `syncPendingOverlay` in markdown-stream.ts).
+ * Contract: this module never delays a block commit itself. Committed blocks
+ * render through `formatBlockForCommit`, untouched by the mask. The OWNER may
+ * defer one: markdown-stream.commit-defer.ts keeps a completed block pending
+ * (text keeps flowing behind it) until `revealHoldRemaining(d)` for its last
+ * letter reaches 0, bounded in time, so a paragraph finishes fading before it
+ * commits. Without that, at model stream rates most of each paragraph was
+ * still fading at its commit and snapped solid. Renders the mask skips are
+ * never deferred, and the commit itself still goes through
+ * `syncPendingOverlay` in markdown-stream.ts.
  *
  * @module cli/smoke-reveal
  */
@@ -97,14 +102,24 @@ export const LIFETIME_MS = SMOKE_MS;
 export const GLYPH_PHASE = SMOKE_GLYPH_PHASE;
 /** Historical floor spacing between prose characters. The playhead's prose ceiling is `MAX_CPS`. */
 export const STAGGER_MS = 6;
-/** Upper bound on how far a reveal may trail the character's arrival. */
-export const MAX_LAG_MS = 350;
+/**
+ * Nominal queued-animation duration budget for prose, not an arrival deadline.
+ * Invariant: run capacity is `MAX_LAG_MS * MAX_CPS` characters (playhead
+ * record), so this scales inversely with `MAX_CPS` to hold capacity at 360.
+ * Lowering the ceiling alone shrinks capacity and turns "slower" into
+ * overflow chunks snapping solid.
+ */
+export const MAX_LAG_MS = 2000;
 /** Minimum spacing for heading lines (`HEADING_MAX_CPS`): slower, so the smoke has room to roll. */
 export const ACCENT_STAGGER_MS = 18;
-/** Reveal-lag cap for heading lines. */
+/** Nominal queued-animation duration budget for heading lines. */
 export const ACCENT_MAX_LAG_MS = 900;
 /** Share of a smoke letter's life a held heading waits for before it may commit (eased: nearly solid). */
 export const SMOKE_HOLD_SHARE = 0.75;
+/** Share of an ink letter's fade a deferred block commit waits for. */
+export const INK_HOLD_SHARE = 0.75;
+/** Re-check interval for a deferred commit whose last letter is not born yet. */
+export const HOLD_RECHECK_MS = 32;
 /** Settle-driver cadence: the frame clock's 60 fps period. */
 export const FRAME_MS = FRAME_PERIOD_MS;
 /**
@@ -125,6 +140,13 @@ export interface RecordOptions {
    * playhead's `MAX_CPS` for prose, `HEADING_MAX_CPS` for headings.
    */
   staggerMs?: number;
+  /**
+   * Extra queued-animation budget for this chunk, in ms. The renderer passes
+   * how long a chunk sat in a commit hold, so text released from a hold
+   * animates instead of landing as overflow (the backlog is still bounded:
+   * later intakes settle against their own budgets).
+   */
+  extraBudgetMs?: number;
 }
 
 export interface RevealStyles {
@@ -217,7 +239,7 @@ export class SmokeReveal {
       if (count === 0) continue;
       const ceiling = run.heading ? HEADING_MAX_CPS : MAX_CPS;
       const maxCps = opts.staggerMs === undefined ? ceiling : opts.staggerMs <= 0 ? Infinity : 1000 / opts.staggerMs;
-      const capMs = run.heading ? ACCENT_MAX_LAG_MS : MAX_LAG_MS;
+      const capMs = (run.heading ? ACCENT_MAX_LAG_MS : MAX_LAG_MS) + Math.max(0, opts.extraBudgetMs ?? 0);
       this.timeline.record(t, { count, style: run.style, capMs, maxCps });
       this.sinceApply += count;
     }
@@ -235,6 +257,27 @@ export class SmokeReveal {
     const tl = this.timeline;
     const birth = tl.styleAt(tl.recorded - 1) === 'smoke' ? tl.newestBirthEstimate(t) : null;
     return birth === null ? 0 : Math.max(0, birth + SMOKE_MS * SMOKE_HOLD_SHARE - t);
+  }
+
+  /**
+   * Milliseconds until the character `d` positions from the end (0 = newest),
+   * of either style, is far enough through its fade (`SMOKE_HOLD_SHARE` /
+   * `INK_HOLD_SHARE`) to be committed without a visible snap. While it is still unborn its birth is not yet
+   * known, so this returns the short `HOLD_RECHECK_MS` re-check interval
+   * rather than a pessimistic estimate. 0 when settled or nothing is tracked.
+   */
+  revealHoldRemaining(d = 0): number {
+    const t = this.now();
+    this.timeline.advance(t);
+    const tl = this.timeline;
+    const i = tl.recorded - 1 - d;
+    if (i < tl.first || tl.isSettled(i)) return 0;
+    const birth = tl.birthAt(i);
+    const style = tl.styleAt(i);
+    if (birth === null || style === undefined) return 0;
+    if (birth === Infinity) return HOLD_RECHECK_MS;
+    const dwell = style === 'smoke' ? SMOKE_MS * SMOKE_HOLD_SHARE : INK_MS * INK_HOLD_SHARE;
+    return Math.max(0, birth + dwell - t);
   }
 
   /**
@@ -320,6 +363,16 @@ export class SmokeReveal {
     this.lastVisible = null;
   }
 
+  /**
+   * Forget the `count` newest characters (a stripped pending tail) while the
+   * kept text keeps its own reveal history. The growth baseline is dropped
+   * because the overlay just shrank at the END, not by a front commit.
+   */
+  forgetNewest(count: number): void {
+    this.timeline.trimNewest(count);
+    this.lastVisible = null;
+  }
+
   /** Forget all history (e.g. the pending buffer was discarded). */
   reset(): void {
     this.timeline.reset();
@@ -385,6 +438,7 @@ export class SmokeReveal {
   /** Birth time and style of the character `d` positions from the end (Infinity = unborn), or null if settled. */
   private birthOf(d: number): { birth: number; style: RevealStyle } | null {
     const i = this.timeline.recorded - 1 - d;
+    if (this.timeline.isSettled(i)) return null;
     const birth = this.timeline.birthAt(i);
     const style = this.timeline.styleAt(i);
     return birth === null || style === undefined ? null : { birth, style };

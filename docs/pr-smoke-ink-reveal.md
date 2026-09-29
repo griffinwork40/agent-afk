@@ -41,7 +41,22 @@ All 18 existing `closePendingInlineSyntax` tests pass; two new edge-case tests a
 
 **Overshoot:** No character ever exceeds its settled brightness. The `easeOutCubic` blend from `INK_FLOOR=0.06` (ink) or `SMOKE_PEAK=0.36` (smoke) toward the settled color is monotonically increasing — brightness only rises, never overshoots.
 
-**Full-screen redraw count:** The "pace the reveal, never the text" invariant (07f77cc2) means layout and block commits are identical to reveal-off. The compositor sees the same number of `setOverlay` + `commitAbove` calls. No flicker regression.
+**Full-screen redraw count:** The "pace the reveal, never the text" invariant (07f77cc2) means layout and block commits are identical to reveal-off. The compositor sees the same number of `setOverlay` + `commitAbove` calls. No flicker regression. Deferred commits (below) change WHEN a block commits, never how it is laid out or how many commits happen.
+
+**Deferred commits (2026-09-29):** At model stream rates (~250-500 chars/s against the 240 chars/s prose ceiling) most of each paragraph was still fading when the next `\n\n` committed it, so it snapped solid: a smooth title, then a body that "glitched and skipped". `markdown-stream.commit-defer.ts` now keeps a completed block pending until its last letter is 75% through its fade (at most 1.5 s), while the next block's text keeps flowing and revealing; the prose lag budget (`MAX_LAG_MS`) rose from 350 ms to 1.5 s so a fast stream trails instead of popping; and a cleanly finished stream settles its tail for up to 1.5 s before the verdict card.
+
+A first attempt HELD the text after each boundary instead. It measured far worse (52-83% at 240 chars/s): with nothing new to reveal, the front decelerated and idled at every paragraph break, and the lag piled up until the hold limit forced the snap anyway.
+
+Measured on the real renderer streaming a 1,100-char story, and the same story three times over (share of letters at least 40% faded in when committed; "bursty" = 90-150 char chunks):
+
+| Stream | Before | Deferred commits | Verdict card after stream end |
+|---|---|---|---|
+| 240 chars/s | 52% | 100% (3x: 100%) | +16 ms → +0.65 s |
+| 300 chars/s | ~35% | 100% (3x: 100%) | +16 ms → +0.74 s |
+| 300 chars/s, bursty | ~35% | 100% (3x: 100%) | +16 ms → +0.82 s |
+| 450 chars/s | ~15% | 100% (3x: 68%) | +16 ms → +1.5 s |
+
+Only a long reply faster than the reveal outruns the 1.5 s lag budget, and then the oldest backlog settles solid (the reveal is deliberately slower than the model).
 
 ## Gates
 

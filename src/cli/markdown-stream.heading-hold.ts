@@ -9,14 +9,13 @@
  * chunk at the character that would complete a HEADING block's boundary, so
  * the renderer can hold the rest until the heading has condensed.
  *
- * Contract (narrow on purpose): only a block whose last line is a markdown
- * heading (or a bold-only title) qualifies, so the held overlay is a single
- * row and its commit is the smallest repaint the compositor can do. Body
- * paragraphs are never held; the reveal paces their styling, never their
- * commits (see the "pace the reveal, never the text" invariant in
- * smoke-reveal.ts). The owner must release held text synchronously before any
- * path that commits or inspects the buffer, so nothing can be committed above
- * a heading that preceded it.
+ * Contract: only a block whose last line is a markdown heading (or a
+ * bold-only title) qualifies. This hold waits on the SMOKE dwell and has no
+ * time limit; every other animated block (ink prose, and headings when the
+ * accent is off) gets a bounded deferred commit from
+ * markdown-stream.commit-defer.ts instead. The owner must release held text
+ * synchronously before any path that commits or inspects the buffer, so
+ * nothing can be committed above a heading that preceded it.
  *
  * Extended: a bold-only first line (`**text**`) is also held, matching the
  * smoke-reveal.lines.ts LineClassifier extension that treats it as a heading.

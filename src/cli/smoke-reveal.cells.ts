@@ -41,12 +41,11 @@ export const INK_MS = 340;
  * band while text flows; time still settles the tail when the flow stops.
  */
 export const INK_TRAIL_CHARS = 30;
-/** Ramp position a fresh ink letter starts from: a whisper above the background. */
-export const INK_FLOOR = 0.06;
+/** Ramp position a fresh ink letter starts from: a visible dim tone above the background. */
+export const INK_FLOOR = 0.22;
 /**
- * Former hand-over point of the unknown-color ramp. No longer used by the
- * fade (the ramp could climb past the terminal's own faint level and then
- * darken); kept exported for compatibility.
+ * Historical alias kept for compatibility; matches `INK_FLOOR` now that the
+ * floor was raised to a visible dim tone.
  */
 export const INK_DIM = 0.22;
 /** Share of the ink fade spent as a floor speck before the faint stage (unknown colors only). */
@@ -55,7 +54,7 @@ export const INK_SPECK_PHASE = 0.3;
 /** Smoke accent lifetime (base; per-letter jitter only shortens it). */
 export const SMOKE_MS = 780;
 /** Share of the smoke lifetime spent as a particle before the letter appears. */
-export const SMOKE_GLYPH_PHASE = 0.42;
+export const SMOKE_GLYPH_PHASE = 0.15;
 /** Ramp position of the densest particle, and where the letter phase starts. */
 const SMOKE_PEAK = 0.36;
 

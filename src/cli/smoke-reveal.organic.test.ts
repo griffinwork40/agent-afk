@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
-import { SmokeReveal, LIFETIME_MS, MAX_LAG_MS, FRAME_MS, SMOKE_GLYPHS } from './smoke-reveal.js';
+import { SmokeReveal, LIFETIME_MS, FRAME_MS, SMOKE_GLYPHS, MAX_LAG_MS } from './smoke-reveal.js';
 import { SMOKE_GLYPH_LEVELS } from './smoke-reveal.frame.js';
 import { resetSmokeToneCache } from './smoke-reveal.tones.js';
 
@@ -34,7 +34,13 @@ describe('SmokeReveal organic variation', () => {
     const r = new SmokeReveal(() => {}, c.now);
     const text = 'x'.repeat(60);
     r.record(text);
-    c.advance(FRAME_MS * 3);
+    // With TARGET_LAG_MS=400ms the playhead accelerates slowly from rest.
+    // Advance TARGET_LAG_MS/2 ms so enough characters are in the glyph phase
+    // (smoke particle age < SMOKE_MS * GLYPH_PHASE) to show organic variety.
+    // FRAME_MS*3 ≈ 50ms was calibrated to the old 170ms lag; here we use MAX_LAG_MS/4.
+    const advanceMs = MAX_LAG_MS / 4; // 500ms: plenty of chars in glyph phase
+    const steps = Math.ceil(advanceMs / FRAME_MS);
+    for (let i = 0; i < steps; i++) c.advance(FRAME_MS);
     const seen = new Set(glyphsIn(r.apply(text)));
     // A uniform ladder has exactly one glyph per density level.
     expect(seen.size).toBeGreaterThan(SMOKE_GLYPH_LEVELS.length);
@@ -97,9 +103,9 @@ describe('SmokeReveal organic variation', () => {
     const c = clockAt();
     const r = new SmokeReveal(() => {}, c.now);
     const text = 'y'.repeat(40);
-    r.record(text);
-    // Past every birth, inside the jittered settle window of the oldest letters.
-    c.advance(MAX_LAG_MS + LIFETIME_MS * 0.9);
+    // Isolate lifetime jitter from playhead duration: all births are simultaneous.
+    r.record(text, { staggerMs: 0 });
+    c.advance(LIFETIME_MS * 0.9);
     const mid = r.apply(text);
     // A still-condensing letter carries either an RGB blend or the faint
     // attribute (its default color is unknown, so it never gets a guessed

@@ -8,17 +8,20 @@
  *     render with NO further pushes.
  *  2. Prose uses the calm ink fade. Smoke particles only ever appear on
  *     heading lines, and only with AFK_SMOKE_TEXT=1.
- *  3. The reveal paces styling, never text: body blocks commit exactly when
- *     they would with the reveal off, unmasked. The one exception is the
- *     smoke accent's heading hold, which every commit/inspect path releases
- *     synchronously first, so ordering against tool rows is preserved.
+ *  3. The reveal paces styling, never text: every pushed character is laid
+ *     out at once, and blocks commit unmasked and identical to reveal-off. A
+ *     completed block's COMMIT may be deferred (bounded) until it has faded
+ *     in, while later text keeps flowing; the smoke accent may also hold the
+ *     text after a heading. Every commit/inspect path drains both first, so
+ *     ordering against tool rows is preserved.
  *  4. With the reveal off, text appears the instant it is pushed.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import chalk from 'chalk';
 import { PassThrough } from 'node:stream';
 import { StreamingMarkdownRenderer } from './markdown-stream.js';
-import { SMOKE_GLYPHS } from './smoke-reveal.js';
+import { COMMIT_DEFER_MAX_MS, REVEAL_SETTLE_MAX_MS } from './markdown-stream.commit-defer.js';
+import { SMOKE_GLYPHS, MAX_LAG_MS, INK_MS } from './smoke-reveal.js';
 import { resetSmokeToneCache } from './smoke-reveal.tones.js';
 
 const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
@@ -89,7 +92,14 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     const baseline = await baselineFor(TEXT);
     const { r, overlays } = makeRenderer();
     r.push(TEXT);
-    await vi.advanceTimersByTimeAsync(40);
+    // Smooth velocity (no deadline spike): the front starts from rest and
+    // accelerates toward MAX_CPS over TAU_MS. For this text the markdown
+    // formatter strips 4 `**` characters that SmokeReveal records as raw
+    // syntax (reconcile trims them later). With TARGET_LAG_MS=400ms the
+    // visible window opens later than the old 80ms (calibrated to 170ms lag);
+    // MAX_LAG_MS/8 = 250ms is past the syntax offset while still well before
+    // the end of the burst.
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS / 8); // 250ms: well past syntax offset
     const first = stripAnsi(overlays.at(-1) ?? '');
     expect(first, 'an early frame shows the start of the burst').toContain('The');
     expect(first, 'but not the whole burst at once').not.toContain('barn');
@@ -107,6 +117,19 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(overlays.length, 'idle once settled').toBe(settledCount);
     await flushNow(r);
+  });
+
+  it('flushes an overflowing burst intact and stops its animation timers', async () => {
+    const { r, overlays, commits } = makeRenderer();
+    const big = 'x'.repeat(2000);
+    r.push(big);
+    await vi.advanceTimersByTimeAsync(20);
+    await flushNow(r);
+    expect(commits.map(stripAnsi).join('').replace(/\s/g, '')).toBe(big);
+    const frames = overlays.length;
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(overlays.length).toBe(frames);
+    r.dispose();
   });
 
   it('keeps prose ink-only even when AFK_SMOKE_TEXT=1', async () => {
@@ -142,11 +165,17 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     await flushNow(r);
   });
 
-  it('never delays or masks a body commit (layout is identical to reveal-off)', async () => {
+  it('defers a paragraph commit until it has faded in, while the next text keeps flowing', async () => {
     const { r, overlays, commits } = makeRenderer();
     r.push('First paragraph lands whole.\n\nSecond');
-    // Committed synchronously at the \n\n boundary, before any time passes.
-    expect(commits).toHaveLength(1);
+    // Deferred at the \n\n boundary: committing now would snap it solid mid-fade.
+    expect(commits).toHaveLength(0);
+    let flowing = false;
+    for (let i = 0; i < 60 && !flowing; i++) {
+      await vi.advanceTimersByTimeAsync(16);
+      flowing = commits.length === 0 && stripAnsi(overlays.at(-1) ?? '').includes('Sec');
+    }
+    expect(flowing, 'the next block reveals while the first is still pending').toBe(true);
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     expect(commits).toHaveLength(1);
     expect(stripAnsi(commits[0] ?? '')).toContain('First paragraph lands whole.');
@@ -162,7 +191,7 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     r.push('alpha bravo charlie delta echo foxtrot golf hotel');
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     r.push('.\n\nSecond paragraph');
-    // Past the paragraph hold, into the fresh paragraph's own fade.
+    // Into the fresh paragraph's own fade (its predecessor's commit is deferred, not the text).
     let saw = false;
     for (let i = 0; i < 20 && !saw; i++) {
       await vi.advanceTimersByTimeAsync(33);
@@ -185,6 +214,82 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     const shape = (s: string): number[] => stripAnsi(s).replace(/\n {3}$/, '\n').split('\n').map((l) => l.length);
     expect(shape(first)).toEqual(shape(baseline ?? ''));
     await flushNow(r);
+  });
+
+  it('commits a burst of paragraphs one by one, each once it has faded in', async () => {
+    const { r, commits } = makeRenderer();
+    const p1 = 'a'.repeat(80);
+    const p2 = 'b'.repeat(80);
+    r.push(p1 + '\n\n' + p2 + '\n\nTail');
+    expect(commits).toHaveLength(0);
+    // The front never stops at a boundary, so P2 fades in right behind P1.
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(commits.map((c) => stripAnsi(c).replace(/\s/g, ''))).toEqual([p1, p2]);
+    await flushNow(r);
+  });
+
+  it('bounds a deferred commit by COMMIT_DEFER_MAX_MS even if the block is still fading', async () => {
+    const { r, commits, overlays } = makeRenderer();
+    // A full-capacity paragraph (MAX_LAG_MS * MAX_CPS = 360 chars): the front
+    // eases out as its backlog drains, so the last letters are still inking in
+    // past COMMIT_DEFER_MAX_MS (natural settle is ~2.7 s). The bound must force
+    // the commit anyway rather than waiting for the fade.
+    const p1 = 'a'.repeat(360);
+    r.push(p1 + '\n\nTail');
+    await vi.advanceTimersByTimeAsync(COMMIT_DEFER_MAX_MS - 50);
+    expect(commits).toHaveLength(0);
+    expect(hasInk(overlays.at(-1) ?? ''), 'still fading just before the bound').toBe(true);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(commits.map((c) => stripAnsi(c).replace(/\s/g, ''))).toEqual([p1]);
+    await flushNow(r);
+  });
+
+  it('commitPending() and discardPending() drain deferred blocks first, in order', async () => {
+    const { r, commits } = makeRenderer();
+    r.push('Done block one.\n\nIn progress');
+    expect(commits).toHaveLength(0);
+    r.commitPending();
+    expect(commits.map((c) => stripAnsi(c).trim())).toEqual(['Done block one.', 'In progress']);
+    const d = makeRenderer();
+    d.r.push('Kept block.\n\nDiscarded tail');
+    d.r.discardPending();
+    expect(d.commits.map((c) => stripAnsi(c).trim()), 'completed blocks stay append-only').toEqual(['Kept block.']);
+    await flushNow(r);
+    await flushNow(d.r);
+  });
+
+  it('never defers a code fence block', async () => {
+    const { r, commits } = makeRenderer();
+    r.push('```\nconst answer = 42;\n```\n\nAfter');
+    expect(commits).toHaveLength(1);
+    expect(stripAnsi(commits[0] ?? '')).toContain('const answer = 42;');
+    await flushNow(r);
+  });
+
+  it('after a clean stream end: strips the terminal block in place and lets the tail settle', async () => {
+    const { r, commits } = makeRenderer();
+    const text = 'The last paragraph of the story.\n\n**Done**\n- wrote it';
+    r.push(text);
+    r.noteStreamDone();
+    expect(r.getPendingBuffer(), 'the deferred block is still pending').toBe(text);
+    expect(commits).toHaveLength(0);
+    expect(r.stripPendingFrom(text.indexOf('**Done**'))).toBe(true);
+    expect(commits, 'stripping commits nothing').toHaveLength(0);
+    const done = r.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(commits, 'flush waits for the tail to finish fading').toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(REVEAL_SETTLE_MAX_MS);
+    await done;
+    expect(commits.map((c) => stripAnsi(c).trim())).toEqual(['The last paragraph of the story.']);
+  });
+
+  it('without a clean stream end, flush commits at once (interrupts never wait)', async () => {
+    const { r, commits } = makeRenderer();
+    r.push('Interrupted paragraph.\n\nMore');
+    const done = r.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    await done;
+    expect(commits.map((c) => stripAnsi(c).trim())).toEqual(['Interrupted paragraph.', 'More']);
   });
 
   it('commitPending() commits every pushed character', async () => {
@@ -309,7 +414,10 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     vi.stubEnv('AFK_REDUCED_MOTION', '1');
     const moving = makeRenderer({ reducedMotion: false });
     moving.r.push(TEXT);
-    await vi.advanceTimersByTimeAsync(40);
+    // Smooth velocity opens the visible window after enough acceleration time.
+    // 80ms was calibrated for the old 170ms lag; with TARGET_LAG_MS=400ms the
+    // window opens later. MAX_LAG_MS/8 = 250ms is reliably past the syntax offset.
+    await vi.advanceTimersByTimeAsync(MAX_LAG_MS / 8); // 250ms
     expect(moving.overlays.some(hasInk)).toBe(true);
     await flushNow(moving.r);
 
@@ -362,21 +470,38 @@ describe('StreamingMarkdownRenderer text reveal: smoke accent (AFK_SMOKE_TEXT=1)
     await flushNow(r);
   });
 
+  it('completes a held overflowing heading without an arrival deadline', async () => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    const { r, commits } = makeRenderer();
+    const title = 'x'.repeat(200);
+    r.push('## ' + title + '\n\nBody');
+    expect(commits).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(commits).toHaveLength(1);
+    expect(stripAnsi(commits[0] ?? '').replace(/\s/g, '')).toBe(title);
+    expect(hasSmoke(commits[0] ?? '')).toBe(false);
+    await flushNow(r);
+  });
+
   it('releases a held heading synchronously before commitPending, preserving order', async () => {
     vi.stubEnv('AFK_SMOKE_TEXT', '1');
     const { r, commits } = makeRenderer();
     r.push('## Title\n\nAfter the title.');
     expect(r.hasEmitted()).toBe(true);
-    expect(r.getPendingBuffer()).toBe('After the title.');
+    // Released synchronously; the heading's commit is then deferred (still condensing).
+    expect(r.getPendingBuffer()).toBe('## Title\n\nAfter the title.');
+    expect(commits).toHaveLength(0);
     r.commitPending();
     expect(commits.map((c) => stripAnsi(c).trim())).toEqual(['Title', 'After the title.']);
     await flushNow(r);
   });
 
-  it('does not hold heading blocks without the accent', async () => {
+  it('without the accent a heading is deferred only like any ink paragraph', async () => {
     const { r, commits } = makeRenderer();
     r.push('## Title\n\nBody');
-    expect(commits).toHaveLength(1);
+    expect(commits).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(commits.map((c) => stripAnsi(c).trim())).toEqual(['Title']);
     await flushNow(r);
   });
 

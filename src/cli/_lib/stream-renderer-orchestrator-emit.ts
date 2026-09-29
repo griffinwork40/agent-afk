@@ -198,6 +198,9 @@ export function finalizeOrchestrator(
   // "current activity" as live. Cleared BEFORE the overlay-refreshing
   // commits scheduled below so their flush() paints a banner-free frame.
   ctx.lastProgressByTask.clear();
+  // Clean completion: let the markdown tail finish revealing when dispose()
+  // flushes it (bounded; interrupted/errored turns never reach here).
+  ctx.streamingMarkdown.current?.noteStreamDone();
 
   if (!ctx.streamingMarkdown.current && source.contentBuffer.trim()) {
     // Non-TTY path: no streaming renderer active. Emit accumulated content
