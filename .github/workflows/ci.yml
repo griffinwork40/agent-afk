@@ -6,8 +6,7 @@ on:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
-  # Manual runs from the Actions tab. Primary use: firing the advisory
-  # `test-windows` leg on demand while grinding Windows compat (issue #703).
+  # Manual runs from the Actions tab.
   workflow_dispatch:
 
 concurrency:
@@ -151,21 +150,39 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Cross-platform matrix (see issue #703 for the Windows-compat effort).
-    # Both ubuntu-latest and macos-latest are REQUIRED gates (issue #2209).
-    # macos-latest was advisory under `continue-on-error` while compat was
-    # validated; it passed 13/14 completed runs on main (the one failure was a
-    # general Lint & Build failure, not macOS-specific), so it is promoted here.
-    # `fail-fast: false` so one OS failing never cancels the other. Public repos
-    # get unlimited free GitHub-hosted minutes on both runners.
-    # windows-latest is NOT in this matrix — it runs in `test-windows` below,
-    # which is trigger-scoped because it is uniformly red today. See that job's
-    # comment.
+    # Cross-platform matrix (closes issue #703).
+    # All three legs are REQUIRED gates with no continue-on-error.
+    # fail-fast: false so one OS failing never cancels another. Public repos
+    # get unlimited free GitHub-hosted minutes on all runners.
+    #
+    # Coverage policy: ubuntu runs `pnpm test:coverage` (enforces the stmts 74 /
+    # branch 79 floors). macOS also runs coverage. Windows gates on assertions
+    # only (`pnpm test`, no coverage floor) because ~110 platform-gated tests
+    # leave win32-skipped branches uncovered; requiring coverage floors on Windows
+    # would mask assertion failures behind coverage noise. The ubuntu leg is the
+    # authoritative coverage gate.
+    #
+    # Windows is pinned to windows-2022 because node-gyp <=10.3.1 does not
+    # recognise VS 2025 (version "18"), which is the only VS on windows-latest
+    # since the 2026-09 image refresh. windows-2022 ships VS 2022 natively, so
+    # no msvs_version pin is needed. Track upstream fix:
+    #   https://github.com/nodejs/node-gyp/issues/2911
+    # Once node-gyp ships a release that handles VS 18, switch the include entry
+    # to windows-latest and drop this comment.
+    #
+    # Windows gates on assertions only; coverage floors are enforced on ubuntu
+    # because ~110 platform-gated tests leave win32-skipped branches uncovered.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-    timeout-minutes: 15
+        test-cmd: [pnpm test:coverage]
+        include:
+          - os: windows-2022
+            test-cmd: pnpm test
+    # Windows setup (~4-6 min) + test run (~9 min) fits comfortably in 30 min.
+    # ubuntu/macos keep 15 min (unchanged).
+    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || 15 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -184,11 +201,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test (with coverage gate)
-        run: pnpm test:coverage
+      - name: Test
+        run: ${{ matrix.test-cmd }}
 
       - name: Upload coverage report
-        if: always()
+        if: always() && matrix.os != 'windows-2022'
         uses: actions/upload-artifact@v4
         with:
           # Per-OS name — a matrix can't upload multiple artifacts under one name (v4 immutable).
@@ -238,69 +255,8 @@ jobs:
       - name: Test (Node 26 — includes undici gzip-bridge regression, issue #2525)
         run: pnpm test
 
-  # Windows compat leg (issue #703). Trigger-scoped, NOT part of the `test` matrix.
-  #
-  # Why: Windows is not a supported platform yet — 85 of 699 test files fail, ~90% of
-  # them because tests hardcode POSIX `/tmp` rather than because product code is broken.
-  # A uniformly-red advisory check on every PR carries zero marginal information: you
-  # cannot distinguish a newly-introduced POSIX-ism from the known-red baseline, so the
-  # red X on unrelated PRs (dependabot bumps, feature work) trains reviewers to ignore
-  # CI. Scoping the trigger keeps the signal where it is actionable and drops it where
-  # it is noise:
-  #   - push to main      → the authoritative post-merge scoreboard #703 tracks
-  #   - `windows-compat`  → opt in per-PR while grinding a compat fix, to get the
-  #     PR label            per-PR falsifier back on exactly the PR that needs it
-  #   - workflow_dispatch → on-demand run from the Actions tab (see `on:` above)
-  # On every other PR the job is SKIPPED (grey), not failed (red).
-  #
-  # Runs `pnpm test` rather than `pnpm test:coverage`: the coverage floors
-  # (stmts 74 / branch 79) can red this leg on coverage alone once win32-skipped
-  # branches go uncovered, which would mask the assertion signal this job exists to
-  # collect. The required ubuntu leg still enforces the coverage gate.
-  #
-  # Closing condition (issue #703): once the suite is green here, DELETE this job and
-  # add `windows-latest` back to the `test` matrix above — that restores both the
-  # coverage gate and required-gate status in one move.
-  test-windows:
-    name: Test (windows-latest)
-    if: >-
-      github.event_name == 'push'
-      || github.event_name == 'workflow_dispatch'
-      || contains(github.event.pull_request.labels.*.name, 'windows-compat')
-    # Pinned to windows-2022 because node-gyp ≤10.3.1 doesn't recognise
-    # VS 2025 (version "18"), which is the only VS on windows-latest since
-    # the 2026-09 image refresh. windows-2022 ships VS 2022 natively, so
-    # the msvs_version pin is no longer needed. Track upstream fix:
-    #   https://github.com/nodejs/node-gyp/issues/2911
-    # Once node-gyp ships a release that handles VS 18, switch back to
-    # windows-latest and drop this comment.
-    runs-on: windows-2022
-    # Advisory until the compat grind lands — never blocks a merge.
-    continue-on-error: true
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          dest: ${{ runner.temp }}/setup-pnpm
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Test (no coverage gate — see job comment)
-        run: pnpm test
-
-  # A required Windows integration check, kept separate from the known-red,
-  # advisory compatibility suite above so those failures cannot skip or mask it.
+  # A required Windows integration check, kept separate from the main test matrix
+  # so a unit-suite failure cannot skip or mask it.
   smoke-windows:
     name: Smoke test (Windows CLI)
     runs-on: windows-2022
