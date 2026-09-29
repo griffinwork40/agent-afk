@@ -462,3 +462,81 @@ describe('patch_apply — _reread_warning on partial_failure (#2065)', () => {
     applyPatchSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: patch_apply with NO cwd context (unconfined subagent scenario)
+//
+// Root cause: before the fix, `patch_apply` computed its fallback resolveBase
+// as `process.cwd()`, which made `computeContainment` treat the session as
+// CONFINED (resolveBase !== undefined). Then `context.writeRoots ?? [resolveBase]`
+// resolved to `[]` (an empty but DEFINED writeRoots from an
+// `ensureInitialized(undefined)` call), denying every path.
+//
+// `write_file` and `edit_file` never had this fallback, so a session with
+// `context.writeRoots = []` AND `context.resolveBase = undefined` would hit
+// the `resolveBase === undefined` → unconfined early return in
+// `computeContainment` and succeed. The fix aligns patch_apply: drop the
+// `process.cwd()` fallback so the unconfined path fires correctly.
+// ---------------------------------------------------------------------------
+describe('patch_apply handler — unconfined session (no cwd, empty writeRoots)', () => {
+  // Context that mimics an unconfined subagent dispatched before the parent
+  // session's provider-assigned id is known: resolveBase and cwd are both
+  // undefined, but writeRoots is an EXPLICIT empty array (the result of
+  // `ensureInitialized(undefined)` in the provider's grant state).
+  const unconfinedCtx = () => ({
+    resolveBase: undefined as string | undefined,
+    cwd: undefined as string | undefined,
+    writeRoots: [] as string[],
+    readRoots: [] as string[],
+  });
+
+  it('applies an absolute-path content change without a cwd context (regression: write roots [])', async () => {
+    const filePath = await writeTemp('unconf-abs.txt', 'old\n');
+    // No factory cwd — simulates bare patchApplyHandler (no session anchor).
+    const handler = createPatchApplyHandler();
+    const result = await handler(
+      { changes: [{ path: filePath, content: 'new\n' }] },
+      signal,
+      unconfinedCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('applied');
+    const actual = await readFile(filePath, 'utf-8');
+    expect(actual).toBe('new\n');
+  });
+
+  it('applies an absolute-path edit without a cwd context (regression: write roots [])', async () => {
+    const filePath = await writeTemp('unconf-edit.txt', 'hello world\n');
+    const handler = createPatchApplyHandler();
+    const result = await handler(
+      { changes: [{ path: filePath, edits: [{ old: 'world', new: 'universe' }] }] },
+      signal,
+      unconfinedCtx(),
+    );
+    expect(result.isError).toBeFalsy();
+    const actual = await readFile(filePath, 'utf-8');
+    expect(actual).toBe('hello universe\n');
+  });
+
+  it('previously returned validation_failed with path_containment when writeRoots is [] and process.cwd() was the fallback resolveBase', async () => {
+    // This test documents the PRE-FIX failure shape so a future regression is
+    // immediately obvious. After the fix the handler must succeed (not return
+    // path_containment).
+    const filePath = await writeTemp('unconf-regress.txt', 'before\n');
+    const handler = createPatchApplyHandler();
+    const result = await handler(
+      { changes: [{ path: filePath, content: 'after\n' }] },
+      signal,
+      unconfinedCtx(),
+    );
+    // Post-fix: succeeds.
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string);
+    expect(parsed.status).toBe('applied');
+    // Pre-fix shape for documentation:
+    //   expect(parsed.status).toBe('validation_failed');
+    //   expect(parsed.errors[0].error).toBe('path_containment');
+    //   expect(parsed.errors[0].detail).toContain('write roots []');
+  });
+});

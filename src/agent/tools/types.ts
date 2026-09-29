@@ -110,6 +110,20 @@ export interface ToolHandlerContext {
    */
   sessionId?: string;
   /**
+   * The subagent id of the fork that is executing this tool call. Set for every
+   * forked child by `SubagentManager.forkSubagent` (via `assembleChildConfig`)
+   * and forwarded by the dispatcher's `handlerContext`. Undefined on top-level
+   * sessions.
+   *
+   * Consumers that need a stable per-execution-unit bucket (e.g. the
+   * `image_generate` per-session generation counter) use `sessionId ??
+   * subagentId` so a subagent that runs before its parent's provider-assigned
+   * session id is propagated still gets a non-empty bucket key — preventing the
+   * "sessionId missing" hard refusal that occurred when `resume` was undefined
+   * (stub parent had no id yet when the fork was created).
+   */
+  subagentId?: string;
+  /**
    * Session-scoped registry of PIDs spawned by the bash tool.
    *
    * When present, `evaluateProcess` in the `wait_for` handler restricts PID

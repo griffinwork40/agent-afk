@@ -423,6 +423,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // Lets human-blocking handlers tell the elicitation router WHICH session's
       // presence file to mark as waiting-on-a-human.
       ...(this.sessionId !== undefined ? { sessionId: this.sessionId } : {}),
+      // Forwarded so handlers that need a stable per-execution-unit key (e.g.
+      // image_generate's per-session generation counter) can fall back to the
+      // subagentId when sessionId is absent — avoiding the "sessionId missing"
+      // hard refusal that fires when the fork's resume token is undefined
+      // (stub parent had no assigned session id at fork time).
+      ...(this.subagentId !== undefined ? { subagentId: this.subagentId } : {}),
       // #1430: PID registry gates wait_for process condition to session-owned PIDs.
       ...(this.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: this.spawnedPidRegistry } : {}),
     };

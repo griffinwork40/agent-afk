@@ -240,8 +240,8 @@ export function createImageGenerateHandler(
     }
 
     // 3. Per-session rate limit
-    // F-3: Fail closed when sessionId is absent — no shared 'unknown' bucket.
-    const sessionId = context?.sessionId;
+    // F-3: Fall back to subagentId (fork key) when sessionId is absent; fail if neither.
+    const sessionId = context?.sessionId ?? context?.subagentId;
     if (!sessionId) {
       return {
         content: 'image_generate requires a session context (sessionId missing)',
