@@ -4,7 +4,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { validateScheduleCwd, expandCwd, checkTaskCwdAtRuntime } from './cwd-validator.js';
@@ -19,7 +19,10 @@ describe('expandCwd', () => {
   });
 
   it('returns absolute path unchanged', () => {
-    expect(expandCwd('/tmp/foo')).toBe('/tmp/foo');
+    // Use resolve() on both sides so the assertion is platform-neutral:
+    // on POSIX resolve('/tmp/foo') === '/tmp/foo'; on Windows it produces
+    // the drive-relative form ('C:\tmp\foo') — same as expandCwd.
+    expect(expandCwd('/tmp/foo')).toBe(resolve('/tmp/foo'));
   });
 });
 
