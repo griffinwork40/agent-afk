@@ -203,7 +203,7 @@ export async function runBaselineSamplePhase(
     // --force deliberately does not bypass a measured no-headroom refusal
     // (see baseline-sample.ts); --no-baseline-sample is the override.
     if (result.firstTrip) {
-      await persistRefusal(runDir, result);
+      await persistRefusal(runDir, result, predictions);
       const { fullRunProbes, message, predictionId } = result.firstTrip;
       throw new WhatifMdeError(fullRunProbes, message, { kind: 'headroom', predictionId });
     }
@@ -217,17 +217,32 @@ export async function runBaselineSamplePhase(
 /**
  * Write `refused.json` so a refused run keeps what the gate measured and what
  * the sample cost (otherwise the run dir is empty and the spend is invisible).
+ * Includes the prediction text fields so the refusal can be interpreted on its
+ * own — without terminal output — addressing issue #2602.
  * Best-effort: a write failure must not mask the refusal itself.
  */
-async function persistRefusal(runDir: string, result: BaselineSampleResult): Promise<void> {
+async function persistRefusal(
+  runDir: string,
+  result: BaselineSampleResult,
+  predictions: import('./types.js').Prediction[],
+): Promise<void> {
   const { writeFile } = await import('node:fs/promises');
   const { join } = await import('node:path');
+  const predictionsRecord = predictions.map((p) => ({
+    id: p.id,
+    behavior: p.behavior,
+    direction: p.direction,
+    confidence: p.confidence,
+    testQuestion: p.testQuestion,
+    probes: p.probes,
+  }));
   const record = {
     refusedAt: new Date().toISOString(),
     reason: result.firstTrip?.message,
     predictionId: result.firstTrip?.predictionId,
     sampleAgentCostUsd: result.agentCostUsd,
     sampleCostNote: 'Agent episodes only; judge calls are not included.',
+    predictions: predictionsRecord,
     baselineSample: result.perPrediction,
   };
   try {

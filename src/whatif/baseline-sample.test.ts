@@ -720,13 +720,23 @@ describe('runWhatif — measured baseline gate end to end (#2511)', () => {
     const refused = await Promise.all(runDirs.map((d) =>
       fsp.readFile(path.join(getWhatifDir(), d, 'refused.json'), 'utf8').catch(() => undefined)));
     const records = refused.filter((r): r is string => r !== undefined).map((r) => JSON.parse(r) as {
-      predictionId: string; reason: string; sampleAgentCostUsd: number; baselineSample: PredictionBaselineSample[];
+      predictionId: string; reason: string; sampleAgentCostUsd: number;
+      baselineSample: PredictionBaselineSample[];
+      predictions: { id: string; behavior: string; direction: string; confidence: string; testQuestion: string; probes: string[] }[];
     });
     expect(records).toHaveLength(1);
     expect(records[0]?.predictionId).toBe('p1');
     expect(records[0]?.reason).toContain('--no-baseline-sample');
     expect(records[0]?.sampleAgentCostUsd).toBeGreaterThan(0);
     expect(records[0]?.baselineSample[0]?.tripped).toBe(true);
+    // #2602: refused.json must include prediction text so the run can be interpreted.
+    expect(records[0]?.predictions).toHaveLength(1);
+    expect(records[0]?.predictions[0]?.behavior).toBe('Asks before acting');
+    expect(records[0]?.predictions[0]?.testQuestion).toBe('Does it ask first?');
+    expect(records[0]?.predictions[0]?.direction).toBe('added');
+    // Probes are capped to the --probes limit (default 6) before predictions are
+    // passed to persistRefusal, so the record reflects the capped set.
+    expect(records[0]?.predictions[0]?.probes.length).toBeGreaterThan(0);
   });
 });
 
