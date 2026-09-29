@@ -51,10 +51,17 @@ export const INK_DIM = 0.22;
 /** Share of the ink fade spent as a floor speck before the faint stage (unknown colors only). */
 export const INK_SPECK_PHASE = 0.3;
 
-/** Smoke accent lifetime (base; per-letter jitter only shortens it). */
-export const SMOKE_MS = 780;
-/** Share of the smoke lifetime spent as a particle before the letter appears. */
-export const SMOKE_GLYPH_PHASE = 0.15;
+/**
+ * Smoke lifetime (base; per-letter jitter only shortens it). Smoke is the
+ * default prose style, so this is the "condense speed" of body text: about
+ * 1.5x main's original 320 ms, which the operator liked but found a little
+ * fast. Slower is only safe because commit-defer waits for a block's last
+ * letters to condense before committing it; without that wait every
+ * paragraph ends with its still-smoking tail snapping to plain text.
+ */
+export const SMOKE_MS = 500;
+/** Share of the smoke lifetime spent as a particle before the letter appears (main's original look). */
+export const SMOKE_GLYPH_PHASE = 0.36;
 /** Ramp position of the densest particle, and where the letter phase starts. */
 const SMOKE_PEAK = 0.36;
 

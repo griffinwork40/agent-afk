@@ -114,8 +114,13 @@ export const MAX_LAG_MS = 2000;
 export const ACCENT_STAGGER_MS = 18;
 /** Nominal queued-animation duration budget for heading lines. */
 export const ACCENT_MAX_LAG_MS = 900;
-/** Share of a smoke letter's life a held heading waits for before it may commit (eased: nearly solid). */
-export const SMOKE_HOLD_SHARE = 0.75;
+/**
+ * Share of a smoke letter's life a held heading or deferred smoke block waits
+ * for before it may commit. 1 = fully condensed: a probe of realistic streams
+ * showed 0.75 left 10-20 nearly-final letters per paragraph to snap to full
+ * color at commit, and 1 leaves none, for about 125 ms of extra commit delay.
+ */
+export const SMOKE_HOLD_SHARE = 1;
 /** Share of an ink letter's fade a deferred block commit waits for. */
 export const INK_HOLD_SHARE = 0.75;
 /** Re-check interval for a deferred commit whose last letter is not born yet. */
@@ -177,7 +182,16 @@ export function isSmokeTextEnabled(): boolean {
   return canReveal();
 }
 
-/** Ink reveal (default for prose): on unless `AFK_INK_TEXT` is explicitly disabled, on a capable terminal. */
+/**
+ * Style of the default text reveal: smoke, unless `AFK_SMOKE_TEXT` is
+ * explicitly disabled, which falls back to the calmer ink fade.
+ */
+export function defaultRevealStyle(): RevealStyle {
+  const raw = env.AFK_SMOKE_TEXT;
+  return raw && isExplicitlyDisabled(raw) ? 'ink' : 'smoke';
+}
+
+/** Text reveal (on by default): on unless `AFK_INK_TEXT` is explicitly disabled, on a capable terminal. */
 export function isInkTextEnabled(): boolean {
   const raw = env.AFK_INK_TEXT;
   if (raw && isExplicitlyDisabled(raw)) return false;

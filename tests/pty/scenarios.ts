@@ -25,7 +25,7 @@ import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
-import { SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
+import { LIFETIME_MS, SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
 import { OverlayComposer } from '../../src/cli/_lib/overlay-composer.js';
 import { armSmokeEffects, THOUGHT_SUMMARY_SLOT } from '../../src/cli/_lib/stream-renderer-smoke.js';
 import { ToolLane } from '../../src/cli/commands/interactive/tool-lane.js';
@@ -791,7 +791,11 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'src/cli/smoke-reveal.ts',
     async drive(ctx): Promise<void> {
       await streamWithSmoke(ctx, `${SMOKE_PARA_1}\n\n${SMOKE_PARA_2} SMOKETWO_END`);
-      await settle(900); // no pushes from here on: only the settle driver repaints
+      // No pushes from here on: only the settle driver repaints. Budget: the
+      // playhead's drain after the last arrival (~1.1 s for this burst at
+      // TARGET_LAG_MS 400 / MIN_CPS 60) plus one full smoke lifetime, since
+      // prose now condenses out of smoke; the old fixed 900 ms predates both.
+      await settle(1300 + LIFETIME_MS);
     },
     expect: {
       exactlyOnce: ['SMOKEONE_START', 'SMOKEONE_END', 'SMOKETWO_START', 'SMOKETWO_END'],

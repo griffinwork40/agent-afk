@@ -65,9 +65,9 @@ export const DISPLAY_ENV_REGISTRY = [
   {
     name: 'AFK_INK_TEXT',
     description:
-      'Streamed assistant prose in the interactive REPL arrives like ink drying: letters are revealed at a steady ' +
-      'pace (never more than a quarter second behind the model) and rise from near the background into their own ' +
-      'color, never brighter. Layout and scrollback are identical to having it off. On by default on 256-color or ' +
+      'Streamed assistant prose in the interactive REPL is revealed at a steady pace instead of popping in: by ' +
+      'default each letter condenses out of faint smoke (see AFK_SMOKE_TEXT), and a finished paragraph waits for ' +
+      'its last letters before moving into scrollback. Layout and scrollback are identical to having it off. On by default on 256-color or ' +
       'truecolor terminals. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, ' +
       'and AFK_REDUCED_MOTION=1. Set AFK_INK_TEXT=0 (or false/no/off) to show text the instant it arrives.',
     type: 'boolean',
@@ -79,11 +79,12 @@ export const DISPLAY_ENV_REGISTRY = [
   {
     name: 'AFK_SMOKE_TEXT',
     description:
-      'When set to "1" (or true/yes/on), markdown headings in streamed assistant output condense out of rolling ' +
-      'smoke (braille particles thickening into each letter, with a thin wisp drifting ahead of the front), and ' +
-      'machine-status UI (tool rows, the thought summary) fades in. Body prose keeps the calm AFK_INK_TEXT ' +
-      'reveal, so smoke stays an accent. Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, ' +
-      'non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1. Default off.',
+      'Style of the streamed-text reveal (the reveal itself is AFK_INK_TEXT). Unset (default): prose and headings ' +
+      'condense out of smoke, braille particles thickening into each letter with a thin wisp drifting ahead of the ' +
+      'front. Set to "0" (or false/no/off) for the calmer ink fade instead, where letters rise from near the ' +
+      'background into their own color. Set to "1" (or true/yes/on) to also hold headings until they finish ' +
+      'rolling in and fade in machine-status UI (tool rows, the thought summary). Needs a 256-color or truecolor ' +
+      'terminal. Off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1.',
     type: 'boolean',
     required: false,
     default: '',

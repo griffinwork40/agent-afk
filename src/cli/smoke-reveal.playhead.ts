@@ -23,8 +23,14 @@ import type { RevealStyle } from './smoke-reveal.cells.js';
 export const TARGET_LAG_MS = 400;
 /** Velocity relaxation time. */
 export const TAU_MS = TARGET_LAG_MS / 4;
-/** Slowest target crawl while any character is waiting. */
-export const MIN_CPS = 30;
+/**
+ * Slowest target crawl while any character is waiting. With the 400 ms lag
+ * the backlog drains exponentially once a stream ends, so this floor sets how
+ * fast an answer's final letters come out: at 30 the last ten crawled at
+ * ~33 cps and the last letter landed ~1.25 s after the final arrival; at 60
+ * they come out at ~62 cps and the tail finishes ~0.2 s sooner.
+ */
+export const MIN_CPS = 60;
 /** Prose speed ceiling; intake settles excess backlog instead of speeding up. */
 export const MAX_CPS = 180;
 /** Heading speed ceiling: an 18 ms cadence. */

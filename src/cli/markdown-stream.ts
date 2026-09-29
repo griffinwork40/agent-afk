@@ -5,7 +5,7 @@ import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { calculateContentWidth, calculateProseContentWidth, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle } from './markdown-stream-format.js';
 import { PendingFormatCache } from './markdown-stream.pending-cache.js';
 import { contentMargin } from './render/measure.js';
-import { HOLD_RECHECK_MS, SmokeReveal, isInkTextEnabled, isSmokeTextEnabled } from './smoke-reveal.js';
+import { HOLD_RECHECK_MS, SmokeReveal, defaultRevealStyle, isInkTextEnabled, isSmokeTextEnabled } from './smoke-reveal.js';
 import { splitAtHeadingBoundary } from './markdown-stream.heading-hold.js';
 import { CommitDefer, HoldQueue, REVEAL_SETTLE_MAX_MS } from './markdown-stream.commit-defer.js';
 import { countVisible } from './smoke-reveal.ansi.js';
@@ -167,9 +167,10 @@ export class StreamingMarkdownRenderer {
       const accent = isSmokeTextEnabled();
       if ((isInkTextEnabled() || accent) && !reducedMotion) {
         this.accent = accent;
+        const style = defaultRevealStyle();
         this.smoke = new SmokeReveal(() => this.paintFrame(), Date.now, {
-          prose: 'ink',
-          headings: accent ? 'smoke' : 'ink',
+          prose: style,
+          headings: accent ? 'smoke' : style,
         });
       }
     }

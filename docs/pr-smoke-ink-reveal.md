@@ -73,9 +73,14 @@ All run locally and pass:
 - `pnpm fix:pins:check` ✓ (SHA-256 pins intact)
 - `pnpm audit:sdk:check` ✓ (SDK lock in sync)
 
-## Decision: ink stays the default
+## Decision: smoke is the default (superseded "ink stays the default", 2026-09-29)
 
-In-process metrics show ink=on is identical to reveal-off on repaint count, gap distribution, and markdown leaks. The brightness guarantee (no overshoot) is enforced by the blend math. PTY tests confirm the reveal settles cleanly with no glyphs remaining.
+After live review, Griffin rated the ink fade "meh" and the smoke reveal "pretty cool but a little fast". So:
+
+- **Smoke is the default style for prose and headings.** `AFK_SMOKE_TEXT=0` falls back to ink; `AFK_SMOKE_TEXT=1` adds the heading hold and machine-status fades; `AFK_INK_TEXT=0` turns the reveal off entirely.
+- **Slower smoke, safely.** `SMOKE_MS` 500 (main's original was 320) with main's particle phase (`SMOKE_GLYPH_PHASE` 0.36). Slowing smoke on main made it jankier: main commits a paragraph immediately, and a simulation showed the letters still smoking at each paragraph end nearly doubling (~67 to ~131 per 300 chars). Here commit-defer waits for the block's last letter, and `SMOKE_HOLD_SHARE` is 1 (fully condensed): a probe of streamed answers measured 10 to 20 letters per paragraph snapping to full color at 0.75, and 0 at 1.
+- **Jank fixes underneath.** Each block commit, and each streamed pipeline pass, reaches the terminal as one DEC 2026 synchronized write (`CommitWriteTx`). Before: 72% of writes were unsynchronized, and a finished paragraph vanished for a frame and reappeared 6 to 8 rows higher. After: 0 unsynchronized commit writes; 6+ row moves per long answer went 24 to 2.
+- **Pacing.** `TARGET_LAG_MS` 400 / `MAX_CPS` 180 / `MAX_LAG_MS` 2000 remove the sprint-and-stall front; `MIN_CPS` 60 (was 30) stops an answer's final letters from crawling (last letter ~0.2 s sooner after the stream ends).
 
 **Caveat:** The headless emulator cannot judge feel. Griffin should do a live look in his terminal (tmux) before merging. The original `~/Desktop/smoke-text-vid.mov` remains the reference for qualitative feel.
 

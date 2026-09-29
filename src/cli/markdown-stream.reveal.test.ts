@@ -58,6 +58,7 @@ async function flushNow(r: StreamingMarkdownRenderer): Promise<void> {
 
 /** The last overlay painted with the reveal fully off, for byte comparison. */
 async function baselineFor(text: string): Promise<string | undefined> {
+  const prevSmoke = process.env['AFK_SMOKE_TEXT'] ?? '';
   vi.stubEnv('AFK_INK_TEXT', '0');
   vi.stubEnv('AFK_SMOKE_TEXT', '');
   const base = makeRenderer();
@@ -66,6 +67,7 @@ async function baselineFor(text: string): Promise<string | undefined> {
   const last = base.overlays.at(-1);
   base.r.dispose();
   vi.stubEnv('AFK_INK_TEXT', '');
+  vi.stubEnv('AFK_SMOKE_TEXT', prevSmoke);
   return last;
 }
 
@@ -87,7 +89,27 @@ afterEach(() => {
 
 const TEXT = 'The quick **brown** fox jumps over the lazy dog and keeps running past the old stone barn';
 
-describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
+describe('StreamingMarkdownRenderer text reveal: default style', () => {
+  it('smokes prose by default (AFK_SMOKE_TEXT unset) and fades it as ink with AFK_SMOKE_TEXT=0', async () => {
+    const smoky = makeRenderer();
+    smoky.r.push(TEXT);
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(33);
+    expect(smoky.overlays.some(hasSmoke), 'default prose condenses out of smoke').toBe(true);
+    await flushNow(smoky.r);
+    vi.stubEnv('AFK_SMOKE_TEXT', '0');
+    const inky = makeRenderer();
+    inky.r.push(TEXT);
+    for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(33);
+    expect(inky.overlays.some(hasSmoke)).toBe(false);
+    expect(inky.overlays.some(hasInk)).toBe(true);
+    await flushNow(inky.r);
+  });
+});
+
+describe('StreamingMarkdownRenderer text reveal: ink (AFK_SMOKE_TEXT=0)', () => {
+  // The ink fade is the opt-out style now; pin it so these contracts keep testing ink.
+  beforeEach(() => { vi.stubEnv('AFK_SMOKE_TEXT', '0'); });
+
   it('paces a burst in, fades fresh letters, then settles to the reveal-off render on its own', async () => {
     const baseline = await baselineFor(TEXT);
     const { r, overlays } = makeRenderer();
@@ -132,8 +154,7 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
     r.dispose();
   });
 
-  it('keeps prose ink-only even when AFK_SMOKE_TEXT=1', async () => {
-    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+  it('keeps prose ink-only with AFK_SMOKE_TEXT=0', async () => {
     const { r, overlays } = makeRenderer();
     r.push(TEXT);
     for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(33);
@@ -431,7 +452,7 @@ describe('StreamingMarkdownRenderer text reveal: ink (default)', () => {
 });
 
 describe('StreamingMarkdownRenderer text reveal: smoke accent (AFK_SMOKE_TEXT=1)', () => {
-  it('condenses a heading out of smoke, then the body arrives as ink', async () => {
+  it('condenses a heading out of smoke before the body, and the body smokes too', async () => {
     vi.stubEnv('AFK_SMOKE_TEXT', '1');
     const { r, overlays } = makeRenderer();
     r.push('## The Lighthouse Keeper\nFor forty years the light kept burning.');
@@ -442,12 +463,8 @@ describe('StreamingMarkdownRenderer text reveal: smoke accent (AFK_SMOKE_TEXT=1)
     }
     const headingSmoke = frames.some((f) => hasSmoke(f) && !stripAnsi(f).includes('forty'));
     expect(headingSmoke, 'the heading smokes before the body arrives').toBe(true);
-    // Once body text is on screen, any smoke left is on the heading row only.
-    for (const f of frames) {
-      for (const line of stripAnsi(f).split('\n')) {
-        if (line.includes('forty') || line.includes('burning')) expect(hasSmoke(line)).toBe(false);
-      }
-    }
+    const bodySmoke = frames.some((f) => stripAnsi(f).split('\n').some((l) => /forty|burning/.test(l) && hasSmoke(l)));
+    expect(bodySmoke, 'smoke is the prose style, not just a heading accent').toBe(true);
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     const settled = stripAnsi(overlays.at(-1) ?? '');
     expect(hasSmoke(settled)).toBe(false);
@@ -496,7 +513,7 @@ describe('StreamingMarkdownRenderer text reveal: smoke accent (AFK_SMOKE_TEXT=1)
     await flushNow(r);
   });
 
-  it('without the accent a heading is deferred only like any ink paragraph', async () => {
+  it('without the accent a heading is deferred only like any paragraph', async () => {
     const { r, commits } = makeRenderer();
     r.push('## Title\n\nBody');
     expect(commits).toHaveLength(0);
@@ -505,7 +522,8 @@ describe('StreamingMarkdownRenderer text reveal: smoke accent (AFK_SMOKE_TEXT=1)
     await flushNow(r);
   });
 
-  it('does not smoke headings without AFK_SMOKE_TEXT', async () => {
+  it('does not smoke headings with AFK_SMOKE_TEXT=0', async () => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '0');
     const { r, overlays } = makeRenderer();
     r.push('## Plain heading\nbody');
     for (let i = 0; i < 30; i++) await vi.advanceTimersByTimeAsync(33);
