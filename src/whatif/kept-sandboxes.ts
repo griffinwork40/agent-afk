@@ -39,7 +39,12 @@ export async function cleanupOrRecord(
   }
 
   // Write the mapping outside either sandbox root.
+  // Best-effort: this runs in a `finally`, so a write failure must not mask
+  // the run's primary result or error. The roots are still returned so the
+  // CLI can print them.
   const mappingPath = path.join(runDir, 'sandboxes.json');
-  await fsp.writeFile(mappingPath, JSON.stringify(roots, null, 2) + '\n', 'utf8');
+  await fsp
+    .writeFile(mappingPath, JSON.stringify(roots, null, 2) + '\n', 'utf8')
+    .catch(() => {});
   return roots;
 }
