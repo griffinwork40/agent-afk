@@ -277,6 +277,18 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
   } = input;
   const episodesPerArm = episodes.length;
   const minProbesPerPrediction = resolveMinProbesPerPrediction(predictions, episodes);
+  // Pre-count episodes per prediction in one pass (O(episodes)) to avoid the
+  // O(predictions × episodes) reduce+filter pattern flagged in #2487.
+  const episodeCountByPrediction = new Map<string, number>();
+  for (const ep of episodes) {
+    if (ep.targets !== undefined) {
+      episodeCountByPrediction.set(ep.targets, (episodeCountByPrediction.get(ep.targets) ?? 0) + 1);
+    }
+  }
+  const syntheticPerArm = predictions.reduce(
+    (s, p) => s + (episodeCountByPrediction.get(p.id) ?? 0),
+    0,
+  );
   const { estimateBaselineSampleCost } = await import('./baseline-sample.js');
   const baselineSampleCostUsd = noBaselineSample ? 0 : estimateBaselineSampleCost({
     predictions,
@@ -289,7 +301,7 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
     runPreflightChecks({
       episodesPerArm,
       minProbesPerPrediction,
-      syntheticPerArm: predictions.reduce((s, p) => episodes.filter((e) => e.targets === p.id).length + s, 0),
+      syntheticPerArm,
       predictionCount: predictions.length,
       predictions,
       force,
