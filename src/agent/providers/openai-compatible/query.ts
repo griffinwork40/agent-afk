@@ -100,12 +100,9 @@ import {
   wrapTranscriptForSummary,
 } from '../shared/compaction.js';
 import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
-import {
-  oneShotChatCompletion,
-  oneShotResponses,
-} from './oneshot.js';
+import { oneShotResponses } from './oneshot.js';
 import { getErrorStatus } from './query/retry.js';
-import { resolveCrossProviderSummarize } from '../shared/compact-summarizer.js';
+import { buildCompactSummarize } from './query/compact-summarize.js';
 import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
 import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
@@ -1098,29 +1095,17 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       autoCompactLimitFor(this.currentModel),
     );
 
-    // Session summarize closure: reuses this session's client so the call
-    // inherits the same endpoint, credentials, and wire as the conversation.
-    const sessionSummarize = (transcript: string, signal?: AbortSignal) =>
-      this.wireMode === 'responses'
-        ? this.summarizeViaResponses(transcript, signal ?? new AbortController().signal, compactModel)
-        : oneShotChatCompletion({
-            client: this.client,
-            model: compactModel,
-            system: COMPACT_SYSTEM_PROMPT,
-            user: wrapTranscriptForSummary(transcript),
-            maxTokens: 1024,
-            signal,
-          });
-
-    // Cross-provider resolution: if AFK_COMPACT_MODEL names a foreign-family
-    // model, replace sessionSummarize with a foreign one-shot closure.
-    // On same family (or unset), returns sessionSummarize unchanged.
-    const summarize = resolveCrossProviderSummarize(
-      'openai-compatible',
-      sessionSummarize,
-      env.AFK_COMPACT_MODEL,
-      this,
-    );
+    // Session closure (this client + wire), swapped for a foreign one-shot
+    // when AFK_COMPACT_MODEL names another provider family. See
+    // query/compact-summarize.ts for the contract.
+    const summarize = buildCompactSummarize({
+      wireMode: this.wireMode,
+      client: this.client,
+      compactModel,
+      compactModelRaw: env.AFK_COMPACT_MODEL,
+      summarizeViaResponses: (t, s, m) => this.summarizeViaResponses(t, s, m),
+      sessionKey: this,
+    });
 
     const compactResult = await compactOpenAIHistory({
       priorTurns: this.priorTurns,

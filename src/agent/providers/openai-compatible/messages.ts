@@ -68,7 +68,12 @@ export interface OpenAIMessage {
  */
 export interface OpenAIToolCall {
   id: string;
-  type: 'function' | string;
+  /**
+   * The OpenAI Chat Completions wire always uses `'function'`; `string` was
+   * previously kept as a wider escape hatch but the union collapses to `string`
+   * and loses discriminant value.  Tightened to the only value the API emits.
+   */
+  type: 'function';
   function: {
     name: string;
     arguments: string;

@@ -3,15 +3,16 @@
  *
  * When a NEW root session's first prompt arrives in the same cwd within
  * 30 minutes of a previous root session's end and closely matches that
- * session's first prompt (normalized-token Jaccard >= REASK_THRESHOLD),
+ * session's prompt fingerprint (normalized-token Jaccard >= REASK_THRESHOLD),
  * this LF upserts a -1 vote onto the PREVIOUS session's record.
  *
  * Thresholds and design decisions (documented per proposal):
  *   - Time window: 30 minutes (REASK_WINDOW_MS). The window is checked using
  *     the outcome record's settles_after field for new sessions and falling
- *     back to record mtime from the first_prompt/first_cwd write timestamp.
- *     Since we don't record session end time in the outcome record directly,
- *     we use listRecords() to scan recent records and compare first_prompt.
+ *     back to record mtime from the first_prompt_tokens/first_cwd write
+ *     timestamp. Since we don't record session end time in the outcome record
+ *     directly, we use listRecords() to scan recent records and compare
+ *     first_prompt_tokens.
  *   - Jaccard threshold: 0.6 (REASK_THRESHOLD). Normalized tokens = lowercased
  *     alphanumeric runs, stopwords removed. 0.6 means 60% of unique token
  *     types overlap — tight enough to avoid false-positives on common words,
@@ -45,6 +46,12 @@ export const REASK_THRESHOLD = 0.6;
 /** Number of recent outcome records to scan for prior sessions. */
 const REASK_SCAN_LIMIT = 20;
 
+/**
+ * Maximum number of tokens stored in a prompt fingerprint (issue #2449).
+ * Caps fingerprint length symmetrically for both new and stored prompts.
+ */
+export const FINGERPRINT_MAX_TOKENS = 64;
+
 // ---------------------------------------------------------------------------
 // Token normalization
 // ---------------------------------------------------------------------------
@@ -66,6 +73,32 @@ export function normalizeTokens(text: string): Set<string> {
     .match(/[a-z0-9]+/g) ?? [];
   const filtered = tokens.filter((t) => t.length >= 2 && !STOP_WORDS.has(t));
   return new Set(filtered);
+}
+
+/**
+ * Build a prompt fingerprint: deduplicated, sorted, capped token list.
+ *
+ * Takes normalized tokens in first-appearance order (preserving diversity),
+ * deduplicates, keeps at most FINGERPRINT_MAX_TOKENS, then sorts the result
+ * so the stored array is deterministic regardless of input order.
+ *
+ * The fingerprint is stored in `first_prompt_tokens`; raw prompt text is
+ * never persisted (issue #2449).
+ */
+export function promptFingerprint(text: string): string[] {
+  const tokens = text
+    .toLowerCase()
+    .match(/[a-z0-9]+/g) ?? [];
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const t of tokens) {
+    if (t.length >= 2 && !STOP_WORDS.has(t) && !seen.has(t)) {
+      seen.add(t);
+      ordered.push(t);
+      if (ordered.length >= FINGERPRINT_MAX_TOKENS) break;
+    }
+  }
+  return ordered.slice().sort();
 }
 
 /**
@@ -101,7 +134,7 @@ export function lfReask(
 ): void {
   if (!newCwd) return; // cwd required to scope the match
 
-  const newTokens = normalizeTokens(newPrompt);
+  const newTokens = new Set(promptFingerprint(newPrompt));
   if (newTokens.size === 0) return;
 
   const recentIds = listRecords(REASK_SCAN_LIMIT);
@@ -113,7 +146,8 @@ export function lfReask(
     const record = readRecord(priorId);
     if (!record) continue;
     if (record.first_cwd !== newCwd) continue;
-    if (!record.first_prompt) continue;
+    const storedTokens = record.first_prompt_tokens;
+    if (!storedTokens || storedTokens.length === 0) continue;
 
     // Check time window using the record file's mtime as a proxy for session end
     try {
@@ -123,8 +157,8 @@ export function lfReask(
       continue; // file disappeared between list and stat
     }
 
-    // Similarity check
-    const priorTokens = normalizeTokens(record.first_prompt);
+    // Similarity check using stored fingerprint
+    const priorTokens = new Set(storedTokens);
     const similarity = jaccardSimilarity(newTokens, priorTokens);
     if (similarity < REASK_THRESHOLD) continue;
 

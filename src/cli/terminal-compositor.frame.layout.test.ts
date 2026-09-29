@@ -300,6 +300,57 @@ describe('hidden-lines indicator gutter', () => {
     const result = truncateOverlayPreservingHead(lines, 5).map((l) => stripAnsi(l));
     expect(result[1]).toBe(`${M}│ 10 earlier lines hidden`);
   });
+
+  // Finding #5 from issue #2509: blank-tail-skip test only covered headCount=1
+  // (budget 5).  Add a variant with a larger budget to exercise headCount > 1.
+  it('skips blank tail rows when picking the reference row (budget=8, headCount=2)', () => {
+    // budget=8: headCount=floor(8*0.25)=2, tailCount=8-2-1=5
+    // Make the first 2 tail rows blank so `below` must skip them.
+    const lines = [
+      '◉ root',
+      '◉ turn 2',
+      ...Array.from({ length: 10 }, () => 'x'),
+      '',
+      '',
+      `${M}│ tail-a`,
+      `${M}│ tail-b`,
+      `${M}│ tail-c`,
+    ];
+    const result = truncateOverlayPreservingHead(lines, 8).map((l) => stripAnsi(l));
+    const indicatorIdx = 2; // after 2 head lines
+    expect(result[indicatorIdx]).toContain('earlier lines hidden');
+    // The gutter must be derived from the first non-blank tail row (tail-a) which
+    // carries a `│` rail at the content-margin column.
+    expect(result[indicatorIdx].startsWith(`${M}│`)).toBe(true);
+  });
+
+  // Finding #4 from issue #2509: integrate the node-on-rail branch of
+  // `hiddenIndicatorGutter` (line 176 of the source: `node.has(ch) &&
+  // railDown.has(up)`) through `truncateOverlayPreservingHead` end-to-end.
+  // Previously this branch was only exercised by a direct `hiddenIndicatorGutter`
+  // call; this test verifies the same path fires inside the full truncation flow.
+  //
+  // Setup: budget=4 → headCount=1, tailCount=2.
+  //   head[0]  = '│  ╰─ bash'   (last connector — `│` at col 0 is in RAIL_DOWN)
+  //   tail[0]  = '◉ Agent(B)'   (node glyph at col 0 — directly below the `│`)
+  //
+  // The loop in `hiddenIndicatorGutter` reaches `◉` at col 0, finds `above[0]`
+  // is `│` (RAIL_DOWN), and appends the rail — producing gutter `'│ '`.
+  it('node-on-rail: indicator carries the parent rail through a ◉ node in the first non-blank tail row (integration)', () => {
+    const lines = [
+      '│  ╰─ bash',                     // head (last visible head row; `│` at col 0)
+      ...Array.from({ length: 5 }, (_, i) => `│  hidden ${i}`),  // hidden rows
+      '◉ Agent(B)',                      // first tail row — node at col 0 under `│`
+      '│  ├─ tool ×1',                  // second tail row
+    ];
+    // budget=4: headCount=1, tailCount=2, hidden=5
+    const result = truncateOverlayPreservingHead(lines, 4);
+    expect(result.length).toBe(4);
+    const indicator = stripAnsi(result[1]);
+    expect(indicator).toContain('5 earlier lines hidden');
+    // Gutter must be `│ ` — the node-on-rail branch fired.
+    expect(indicator.startsWith('│')).toBe(true);
+  });
 });
 
 describe('hidden-lines indicator gutter (ASCII glyph mode)', () => {

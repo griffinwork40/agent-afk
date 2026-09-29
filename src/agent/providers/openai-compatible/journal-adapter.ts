@@ -61,7 +61,7 @@ export const OPENAI_COMPATIBLE_ORIGIN = 'openai-compatible';
 const RAW_KEY = '_raw';
 
 function toolCallsOf(msg: OpenAIMessage): NativeToolCall[] | undefined {
-  const tc = (msg as { tool_calls?: unknown }).tool_calls;
+  const tc = msg.tool_calls;
   return Array.isArray(tc) && tc.length > 0 ? (tc as NativeToolCall[]) : undefined;
 }
 

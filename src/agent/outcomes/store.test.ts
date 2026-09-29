@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readRecord, writeRecord, listRecords, upsertVotes } from './store.js';
@@ -248,5 +248,51 @@ describe('upsertVotes – explicit_feedback override', () => {
     expect(rec?.label).toBe('succeeded');
     expect(rec?.votes.some((v) => v.lf === 'commit_survival')).toBe(true);
     expect(rec?.votes).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy first_prompt stripping (issue #2449)
+// ---------------------------------------------------------------------------
+
+describe('legacy first_prompt field is stripped on read-modify-write', () => {
+  it('upsertVotes removes first_prompt and the raw secret does not appear in the file', () => {
+    // Write a raw JSON file simulating a legacy record that has first_prompt
+    const legacyRecord = {
+      schema_version: 1,
+      session_id: 'sess-legacy-strip',
+      label: 'unknown',
+      confidence: 0,
+      state: 'settled',
+      settles_after: null,
+      session_kind: 'text',
+      self_report: 'none',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      first_prompt: 'secret sk-abcdef12345 fix the login module',
+      first_cwd: '/project',
+    };
+    const legacyPath = join(tmpDir, 'sess-legacy-strip.json');
+    writeFileSync(legacyPath, JSON.stringify(legacyRecord) + '\n', 'utf8');
+
+    // Trigger a read-modify-write via upsertVotes
+    upsertVotes(
+      'sess-legacy-strip',
+      [makeVote({ lf: 'test_strip', evidence: 'e1', vote: 0, strength: 'weak' })],
+      undefined,
+      { outcomesDir: tmpDir },
+    );
+
+    // Read the raw file back and assert the secret is gone
+    const rawAfter = readFileSync(legacyPath, 'utf8');
+    expect(rawAfter).not.toContain('first_prompt');
+    expect(rawAfter).not.toContain('sk-abcdef12345');
+
+    // The parsed record should also not have first_prompt
+    const rec = readRecord('sess-legacy-strip', tmpDir);
+    expect(rec).toBeDefined();
+    expect('first_prompt' in (rec ?? {})).toBe(false);
+    expect(rec?.first_cwd).toBe('/project'); // first_cwd is kept
   });
 });

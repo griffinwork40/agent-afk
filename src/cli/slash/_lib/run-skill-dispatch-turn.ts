@@ -40,10 +40,7 @@ import { recordTurn } from '../session-stats.js';
 import { runWithSink } from '../../../agent/_lib/skill-sink-channel.js';
 import { buildSkillInvocationMessage } from './skill-message-bridge.js';
 import { redactSecrets } from '../../../agent/redact-secrets.js';
-import { isVerificationCommand } from '../../../agent/outcomes/verification-patterns.js';
-
-/** Max characters to keep in the `resultTail` field on verification tool events. */
-const RESULT_TAIL_CHARS = 240;
+import { isVerificationCommand, RESULT_TAIL_CHARS } from '../../../agent/outcomes/verification-patterns.js';
 
 /**
  * Minimum ms between onContextProgress fires during a skill-dispatch turn.

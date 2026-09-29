@@ -223,7 +223,13 @@ export function enforceManyImageLimit(messages: MessageParam[]): number {
 
   for (const { parent, index, block } of refs) {
     const base64 = block.source.data;
-    const buf = Buffer.from(base64, 'base64');
+    // Decode only the first 80 base64 chars (~60 raw bytes) to read header bytes.
+    // PNG needs bytes 0-23 (32 chars), WebP needs bytes 0-29 (40 chars), GIF
+    // needs bytes 0-9 (16 chars) — 80 chars covers all three formats without
+    // decoding the entire payload (which can be several MiB per image).
+    // JPEG's SOF0/SOF2 marker may sit beyond this prefix; readImageDimensions
+    // returns null in that case and we conservatively leave the block alone.
+    const buf = Buffer.from(base64.slice(0, 80), 'base64');
     const format = mediaTypeToFormat(block.source.media_type);
 
     // Unknown media type — skip dimension parsing entirely (don't degrade it).

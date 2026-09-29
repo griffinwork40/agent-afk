@@ -1125,6 +1125,31 @@ describe('CronScheduler — per-task cwd', () => {
     // No session was spawned — we bailed before spawn
     expect(sessionSpawned).toBe(false);
   });
+
+  it('builtin task with a nonexistent cwd does NOT produce a cwd-guard error (#2350)', async () => {
+    // Regression: the builtin executor branch must be checked BEFORE the cwd
+    // guard so that a builtin task with a stale (or missing) cwd field is still
+    // dispatched rather than erroring on the missing directory.
+    // The cwd field is meaningless for builtins (they ignore it), so the guard
+    // must be skipped entirely when executor === 'builtin'.
+    const nonexistentDir = join(dir, 'does-not-exist');
+    // Do not create nonexistentDir — it must not exist on disk.
+
+    const scheduler = new CronScheduler({ telemetryPath });
+    scheduler.register({
+      taskId: 'builtin-nonexistent-cwd',
+      command: 'worktree-prune',
+      executor: 'builtin',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      cwd: nonexistentDir, // stale cwd that would trigger the guard for agent tasks
+    });
+
+    const record = await scheduler.tick('builtin-nonexistent-cwd');
+    // The task ran as a builtin (success or skipped). An error here would mean
+    // the cwd guard fired before the executor branch — that is the regression.
+    expect(record.status).not.toBe('error');
+  });
 });
 
 // ── overlap guard (#2299) ─────────────────────────────────────────────────────

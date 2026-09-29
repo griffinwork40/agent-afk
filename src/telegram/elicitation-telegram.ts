@@ -246,7 +246,19 @@ function formatRequest(req: ElicitationRequest): string {
   // syntax would render literally. The body carries filesystem paths
   // (underscores, brackets) that would also break a Markdown/HTML parser, so
   // emitting plain text is the correct (and safe) choice here.
-  if (req.title) parts.push(req.title);
+  //
+  // Spoofing guard: mirror the REPL form-mode's `_harnessInternal` gate
+  // (src/cli/elicitation/form-mode.ts). An external MCP server can set
+  // `serverName: 'agent-afk'` and supply a convincing title, but it cannot
+  // set `_harnessInternal` — that flag is set only by the AFK harness in
+  // `afk-mode-gate.ts` and is never deserialised from MCP wire data.
+  // Only harness requests get the title rendered; external requests use a
+  // fixed banner so a spoofed title cannot mislead the operator.
+  if (req._harnessInternal === true) {
+    if (req.title) parts.push(`⚠ ${req.title}`);
+  } else {
+    parts.push('⚠ MCP elicitation');
+  }
   parts.push(req.message);
   // Telegram has a 4096-char body limit. Truncate defensively (path strings
   // can be long; we don't want to fail-silent on send).
