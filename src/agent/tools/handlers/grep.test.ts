@@ -16,7 +16,11 @@ describe('grepHandler', () => {
   afterEach(() => {
     delete process.env['AFK_READ_DENYLIST'];
     _resetReadDenylistCacheForTests();
-    rmSync(tempDir, { recursive: true, force: true });
+    // Tests in this block kill rg (scan-cap SIGKILL, abort). On Windows the
+    // tree can stay briefly locked (EBUSY/EPERM); Node's documented retry
+    // absorbs that without masking a real leak (the handler itself now waits,
+    // bounded, for the killed child to exit).
+    rmSync(tempDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   /**
