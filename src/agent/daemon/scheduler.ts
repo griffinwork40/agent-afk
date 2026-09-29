@@ -31,7 +31,7 @@ import { runShellTask } from './shell-task.js';
 import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
-import { spawnDaemonSession } from './session-spawn.js';
+import { spawnDaemonSession, daemonDefaultCwd } from './session-spawn.js';
 import { executeAgentTask } from './scheduler.execute-agent-task.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
@@ -377,12 +377,12 @@ export class CronScheduler {
     if (executor === 'shell') {
       this.idleDetector.increment();
       try {
-        // Resolve shell cwd: task.cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd().
-        // Passed as cwd in the execFile options so shell commands run in the
-        // correct directory without the grep/glob tool-timeout regression.
-        const shellCwd = task.cwd ?? this.options.sessionConfig?.cwd;
+        // Resolve shell cwd: task.cwd ?? daemon-wide sessionConfig.cwd ?? daemon-state-dir.
+        // Use daemonDefaultCwd() as the last resort so shell tasks started from $HOME
+        // (service-installed daemon) don't implicitly inherit the home directory as cwd.
+        const shellCwd = task.cwd ?? this.options.sessionConfig?.cwd ?? daemonDefaultCwd();
         return await runShellTask(
-          shellCwd !== undefined ? { ...task, cwd: shellCwd } : task,
+          { ...task, cwd: shellCwd },
           trigger,
           { now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task) },
         );

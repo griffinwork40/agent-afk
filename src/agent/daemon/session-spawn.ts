@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
-import { getStateDatabasePath } from '../../paths.js';
+import { getStateDatabasePath, getDaemonStateDir } from '../../paths.js';
 import { createDefaultHookRegistry } from '../default-hook-registry.js';
 import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../memory/index.js';
 import { McpManager, loadMcpConfig } from '../mcp/index.js';
@@ -23,7 +24,7 @@ export interface DaemonSpawnOptions {
   trigger?: 'cron' | 'sessionstart' | 'pull';
   /**
    * Per-task working directory. Takes precedence over `sessionConfig.cwd`
-   * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? process.cwd().
+   * (daemon-wide AFK_DAEMON_CWD). Precedence: taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd().
    */
   taskCwd?: string;
 }
@@ -44,6 +45,25 @@ export function daemonTraceLabel(taskId: string): string {
   return `${safe || 'task'}-${randomUUID()}`;
 }
 
+/**
+ * Last-resort cwd for daemon sessions when neither per-task `cwd` nor the
+ * daemon-wide `AFK_DAEMON_CWD` is configured.
+ *
+ * Returns the daemon state directory (`~/.afk/state/daemon/agent-afk@default/`)
+ * and creates it if it does not yet exist. This is a small, project-neutral
+ * directory — not `$HOME` — so unscoped glob/grep calls made by the agent do
+ * not walk the whole home directory.
+ *
+ * Callers that have an explicit cwd (task.cwd or sessionConfig.cwd) never reach
+ * this function, so the precedence `task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd()`
+ * is preserved.
+ */
+export function daemonDefaultCwd(): string {
+  const dir = getDaemonStateDir();
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOptions): Promise<{
   session: AgentSession;
   memoryStore: MemoryStore;
@@ -56,8 +76,14 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // suffix, so each tick gets its own label) so hook commands receive a
   // non-empty AFK_SESSION_ID and traces stay greppable by task name.
   const sessionId = daemonTraceLabel(taskId);
-  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd().
-  const agentCwd = options.taskCwd ?? options.sessionConfig?.cwd ?? process.cwd();
+  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? daemon-state-dir.
+  // The daemon state dir (~/.afk/state/daemon/agent-afk@default/) is used as the
+  // last-resort fallback instead of process.cwd(). When installed as a service,
+  // process.cwd() is $HOME, which causes unscoped glob/grep to walk the whole home
+  // directory (~1.5 M entries). The daemon state dir is a small, project-neutral
+  // directory that already exists (the daemon creates it on startup). Users who
+  // explicitly set task.cwd or AFK_DAEMON_CWD are unaffected — those values win.
+  const agentCwd = options.taskCwd ?? options.sessionConfig?.cwd ?? daemonDefaultCwd();
   // Witness layer: open a fresh trace per spawned daemon session so its
   // subagent + skill lifecycle events are durable on disk — the AFK
   // (away-from-keyboard) surface where post-hoc inspection matters most.
@@ -188,7 +214,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // Per-task cwd wins over sessionConfig.cwd (daemon-wide AFK_DAEMON_CWD).
     // Placed AFTER the sessionConfig spread so the task-level value is never
     // overwritten by the daemon-wide one. agentCwd already encodes the correct
-    // precedence (taskCwd ?? sessionConfig.cwd ?? process.cwd()).
+    // precedence (taskCwd ?? sessionConfig.cwd ?? daemonDefaultCwd()).
     cwd: agentCwd,
   };
   try {
