@@ -337,6 +337,69 @@ describe('driveStream — stream-stall timeout', () => {
   });
 });
 
+describe('driveStream — stall-before-content retryable path', () => {
+  it('yields stream.retry and retries when stall fires before any content is yielded', async () => {
+    // Stream delivers raw frames that translate to NO ProviderEvents
+    // (contentYieldedThisAttempt stays false), then stalls. Stall fires before
+    // content → retryable. Second attempt delivers real content and succeeds.
+    let callCount = 0;
+
+    const strategy: StreamDriveStrategy<{ text: string }> = {
+      createStream: async (signal) => {
+        callCount++;
+        if (callCount === 1) {
+          // Yield one "empty" raw frame then park — translate returns nothing.
+          return {
+            [Symbol.asyncIterator]() {
+              let i = 0;
+              return {
+                next(): Promise<IteratorResult<{ text: string }>> {
+                  if (i === 0) {
+                    i++;
+                    return Promise.resolve({ done: false, value: { text: '' } });
+                  }
+                  // Park until abort (stall watchdog fires).
+                  return new Promise((_resolve, reject) => {
+                    if (signal.aborted) { reject(new Error('aborted')); return; }
+                    signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+                  });
+                },
+              };
+            },
+          };
+        }
+        // Second attempt: immediate content, clean finish.
+        return (async function* () { yield { text: 'ok' }; })();
+      },
+      translate: (event, state: StreamState) => {
+        // Only yield an event for non-empty text, so attempt 1 yields nothing.
+        if (!event.text) return [];
+        state.assistantText += event.text;
+        state.finishReason = 'stop';
+        return [{ type: 'assistant.message' as const, text: event.text }];
+      },
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const ctx = makeCtx({ ttfbTimeoutMs: 60_000, stallTimeoutMs: 500 });
+    const resultPromise = drive(ctx, strategy);
+
+    // Advance past the stall window (500ms) + retry backoff.
+    await vi.advanceTimersByTimeAsync(10_000);
+    const { events, result } = await resultPromise;
+
+    // Must have issued stream.retry.
+    const retryEvents = events.filter((e) => e.type === 'stream.retry');
+    expect(retryEvents.length).toBeGreaterThanOrEqual(1);
+
+    // Second attempt succeeded — no error, real text returned.
+    expect(result).not.toBeNull();
+    expect(result?.text).toBe('ok');
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(callCount).toBe(2);
+  });
+});
+
 describe('driveStream — user abort is not misreported as timeout', () => {
   it('returns null with no error event when the user aborts mid-stream', async () => {
     // Parked stream + user abort. Must return null (interrupt), never an error.
