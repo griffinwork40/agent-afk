@@ -10,6 +10,20 @@
  */
 
 // ---------------------------------------------------------------------------
+// resultTail constant
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum characters to keep in the `resultTail` field on verification tool
+ * events. Exported so journal-turns.ts (and any future consumer) can reuse
+ * the same value without duplicating the magic number. The two CLI sites
+ * (turn-handler.stream-events.ts and run-skill-dispatch-turn.ts) each define
+ * a local RESULT_TAIL_CHARS = 240 from this same value, and may be updated
+ * to import this export instead.
+ */
+export const RESULT_TAIL_CHARS = 240;
+
+// ---------------------------------------------------------------------------
 // Command detection
 // ---------------------------------------------------------------------------
 

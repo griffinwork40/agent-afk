@@ -49,6 +49,7 @@ import {
   runCompactionCore,
   wrapTranscriptForSummary,
 } from '../../shared/compaction.js';
+import { resolveCrossProviderSummarize } from '../../shared/compact-summarizer.js';
 import {
   contextFullnessFraction,
   contextWindowTokensUsed,
@@ -117,6 +118,47 @@ export async function compactHistory(
     autoCompactLimitFor(state.requestedModel),
   );
 
+  // Session summarize closure: Anthropic streaming path. Used unchanged when
+  // AFK_COMPACT_MODEL is unset or resolves to the same (anthropic) family.
+  const sessionSummarize = async (transcript: string, signal?: AbortSignal): Promise<string> => {
+    const effectiveSignal = signal ?? controller.signal;
+    if (effectiveSignal.aborted) {
+      throw new Error('aborted');
+    }
+    const compactModel = readCompactModel();
+    const headers = buildRequestHeaders(
+      retry.authMode,
+      initSessionId,
+      randomUUID(),
+    );
+    // Read `client` via the retry layer's getter so we always see the
+    // post-401-swap reference, never a stale snapshot.
+    const client = retry.client as unknown as AnthropicClientLike;
+    const stream = (await Promise.resolve(
+      client.messages.create(
+        {
+          model: compactModel,
+          max_tokens: DEFAULT_COMPACT_MAX_TOKENS,
+          system: COMPACT_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: wrapTranscriptForSummary(transcript) }],
+          stream: true,
+        },
+        { headers, signal: effectiveSignal },
+      ),
+    )) as AsyncIterable<RawMessageStreamEvent>;
+    return collectStreamText(stream);
+  };
+
+  // Cross-provider resolution: if AFK_COMPACT_MODEL names a foreign-family
+  // model, replace sessionSummarize with a foreign one-shot closure. On same
+  // family (or unset), returns sessionSummarize unchanged — no extra overhead.
+  const summarize = resolveCrossProviderSummarize(
+    'anthropic-direct',
+    sessionSummarize,
+    env.AFK_COMPACT_MODEL,
+    retry,
+  );
+
   let result: ProviderCompactResult;
   try {
     result = await runCompactionCore<import('@anthropic-ai/sdk/resources').MessageParam>({
@@ -125,33 +167,7 @@ export async function compactHistory(
       keepLastN: readKeepLastN(),
       usedFraction,
       shrinkAtFraction: readShrinkFraction(),
-      summarize: async (transcript: string) => {
-        if (controller.signal.aborted) {
-          throw new Error('aborted');
-        }
-        const compactModel = readCompactModel();
-        const headers = buildRequestHeaders(
-          retry.authMode,
-          initSessionId,
-          randomUUID(),
-        );
-        // Read `client` via the retry layer's getter so we always see the
-        // post-401-swap reference, never a stale snapshot.
-        const client = retry.client as unknown as AnthropicClientLike;
-        const stream = (await Promise.resolve(
-          client.messages.create(
-            {
-              model: compactModel,
-              max_tokens: DEFAULT_COMPACT_MAX_TOKENS,
-              system: COMPACT_SYSTEM_PROMPT,
-              messages: [{ role: 'user', content: wrapTranscriptForSummary(transcript) }],
-              stream: true,
-            },
-            { headers, signal: controller.signal },
-          ),
-        )) as AsyncIterable<RawMessageStreamEvent>;
-        return collectStreamText(stream);
-      },
+      summarize: (transcript: string) => summarize(transcript, controller.signal),
       isAborted: () => controller.signal.aborted,
       abortInFlight: () => controller.abort(),
       onSuccess: (info) => {

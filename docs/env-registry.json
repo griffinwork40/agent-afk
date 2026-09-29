@@ -144,10 +144,10 @@
     },
     {
       "name": "AFK_COMPACT_MODEL",
-      "description": "Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class).",
+      "description": "Model id or slot alias used by the /compact summarizer and auto-compaction. Accepts any model on any supported provider (anthropic, openai, xai). Cross-provider compaction is supported: set to a gpt-* id on a Claude session (or a claude-* id on an OpenAI session) and AFK will route the summarize call to that provider using its own credentials. The transcript is sent to the target provider — a one-time privacy warning is emitted on first cross-provider use. Requires that provider's credentials to be available (ANTHROPIC_API_KEY / OPENAI_API_KEY / XAI_API_KEY, or ChatGPT-subscription OAuth via AFK_OPENAI_CHATGPT_OAUTH). Falls back to a cheap haiku-class default when unset. Also drives ghost-text suggestions on Claude sessions (see AFK_SUGGEST_MODEL to override that independently).",
       "type": "string",
       "required": false,
-      "example": "claude-haiku-4-5",
+      "example": "gpt-6-luna",
       "category": "model"
     },
     {

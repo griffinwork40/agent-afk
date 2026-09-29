@@ -76,6 +76,12 @@ describe('repairOrphanToolCalls — clean histories', () => {
     expect(repairOrphanToolCalls(msgs)).toEqual(msgs);
   });
 
+  it('fast path: returns the same array reference when no assistant tool_calls are present', () => {
+    // Fast path avoids allocation when no message carries tool_calls.
+    const msgs = [userMsg('q'), assistantText('a'), userMsg('q2'), assistantText('a2')];
+    expect(repairOrphanToolCalls(msgs)).toBe(msgs);
+  });
+
   it('leaves a fully-covered tool-call turn unchanged', () => {
     const msgs = [
       userMsg(),
@@ -154,21 +160,22 @@ describe('repairOrphanToolCalls — partial coverage', () => {
     expect(out[4]).toEqual(userMsg('next'));
   });
 
-  it('inserts synthetic only for the missing id when two of three are covered', () => {
+  it('inserts synthetic interleaved in tool_calls declaration order when two of three are covered', () => {
+    // tool_calls order: c1, c2, c3. Real results arrive as c1, c3 (c2 missing).
+    // Output must follow declaration order: c1_real, c2_synthetic, c3_real.
     const msgs = [
       userMsg(),
       assistantWithCalls('c1', 'c2', 'c3'),
       toolResult('c1'),
       toolResult('c3'),
-      // c2 missing — out of order but present
     ];
     const out = repairOrphanToolCalls(msgs);
 
     expect(out).toHaveLength(5);
-    // c1 and c3 results pass through; synthetic for c2 is inserted last (tool_calls order)
+    // Results emitted in tool_calls declaration order (c1, c2, c3).
     expect(out[2]).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
-    expect(out[3]).toMatchObject({ role: 'tool', tool_call_id: 'c3' });
-    expect(out[4]).toMatchObject({ role: 'tool', tool_call_id: 'c2', content: INTERRUPTED });
+    expect(out[3]).toMatchObject({ role: 'tool', tool_call_id: 'c2', content: INTERRUPTED });
+    expect(out[4]).toMatchObject({ role: 'tool', tool_call_id: 'c3' });
   });
 });
 
@@ -397,19 +404,15 @@ describe('repairOrphanToolCalls — integration: orphan repaired in outgoing req
     return out;
   }
 
-  it('synthetic tool result appears in second request when priorTurns has orphaned tool_calls', async () => {
-    // Scenario: A resumeHistory session whose sidecar captured an assistant
-    // tool-calls message but no corresponding tool result — the session was
-    // interrupted at exactly that boundary.  We simulate this by populating
-    // priorTurns directly via the constructor and then verifying the next
-    // `buildMessages` call sees the repaired history.
-    //
-    // We drive a single turn so that buildMessages runs with the injected
-    // priorTurns and we can inspect the captured request body.
+  it('repairOrphanToolCalls is a no-op on clean history and repairs an orphan on a manually-assembled priorTurns', async () => {
+    // Wiring check: drive a real OpenAICompatibleQuery turn, verify the outgoing
+    // request body is clean, then assert the repair function produces valid output
+    // when priorTurns is seeded with an orphaned assistant tool-call message.
+    // The genuine interrupt-before-result orphan is covered by unit tests above;
+    // this test confirms the function is idempotent on the query's normal output.
 
     const ORPHANED_CALL_ID = 'call_orphan_42';
 
-    // The model responds with plain text on the single turn we run.
     scriptedTurns = [
       [
         {
@@ -422,61 +425,6 @@ describe('repairOrphanToolCalls — integration: orphan repaired in outgoing req
         } as unknown as OpenAIChunk,
       ],
     ];
-
-    // Inject orphaned priorTurns by constructing the query with an
-    // __setPriorTurns-equivalent via the OpenAICompatibleQuery constructor,
-    // which exposes a `priorTurns` option for testing when populated via the
-    // config. We use the resumeHistory mechanism instead: a sidecar that
-    // contains the assistant turn text is a clean approximation, but the real
-    // test of the repair function is on `this.priorTurns`. The simplest
-    // approach that reaches that path is to use a controlled prompt stream
-    // with a second turn, where we seed the first turn's assistant message
-    // into priorTurns by having the first API call produce a tool_calls
-    // response with NO tool dispatcher registered — the query will append the
-    // assistant message but won't follow up with tool results, leaving priorTurns
-    // in the orphaned state before the second turn.
-
-    // For the simpler code path: directly construct a query with an orphaned
-    // turn already in priorTurns by using the __test_priorTurns constructor
-    // option that exists in OpenAICompatibleQuery.
-    // Since no such hook exists yet, we instead just run the repairOrphanToolCalls
-    // function directly on a priorTurns-shaped array and then assert on
-    // what buildMessages would send — this is already covered by the unit tests.
-    //
-    // The integration seam we CAN test without a private hook: run a 2-request
-    // scenario where the FIRST request produces tool_calls but no dispatcher
-    // is wired, which means: the session will emit the tool.use.start event
-    // but have no handler and the dispatcher path will use a synthetic error.
-    // Wait — without a dispatcher, the query uses the built-in ToolDispatcher
-    // fallback which WILL return an error. That gives us a real priorTurns with
-    // the assistant turn + tool result, which is CLEAN history (not orphaned).
-    //
-    // Simplest real integration path: run ONE turn, capture the request body,
-    // and verify that a manually-constructed priorTurns with an orphan comes
-    // through the query.ts → buildMessages → repairOrphanToolCalls pipeline.
-    // We achieve this by seeding an orphaned assistant message via the
-    // `resumeHistory` config — note that buildMessages converts resumeHistory
-    // to text-only pairs, so this doesn't produce the tool_calls shape. The
-    // only true priorTurns orphan path is a prior iteration's tool_calls turn.
-    //
-    // Resolution: we verify the repair function directly in the unit tests
-    // above, and here we write a lightweight "wiring" test that verifies
-    // repairOrphanToolCalls is called with the correct input by asserting on the
-    // request body sent when priorTurns contains an orphaned assistant message.
-    // We inject this by constructing the session in a way that produces an
-    // orphaned priorTurns after the first turn, then verifying the second
-    // request's messages have the synthetic tool result.
-
-    // A two-turn session:
-    //   Turn 1: model returns tool_calls → query appends assistantWithCalls to priorTurns
-    //           → NO tool dispatcher → session falls back to a built-in error result
-    //           → priorTurns gets [assistant(tool_calls), tool(error-result)]  ← CLEAN
-    //   That won't produce an orphan through normal operation (dispatch-append handles it).
-    //
-    // The genuine orphan arises from interrupt-before-result or bad resume.
-    // Both are unit-tested above. Here we verify the wiring: that repairOrphanToolCalls
-    // is CALLED from runIteration by checking it processes a single-request
-    // with a clean history (length unchanged) and doesn't corrupt clean history.
 
     async function* oneTurn(): AsyncIterable<ProviderUserTurn> {
       yield { content: 'hello' };

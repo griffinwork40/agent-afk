@@ -6,6 +6,7 @@ import type { TranscriptHandle } from './transcript.js';
 import { setupSurface } from './surface-setup.js';
 import { setupFooterSubsystems, type FooterSubsystems } from './footer-subsystems.js';
 import { runInputLoop } from './loop-iteration.js';
+import { installConsoleBridge } from './console-bridge.js';
 import type { TurnState } from './repl-loop-shared.js';
 
 // Re-export so existing importers keep their `import { ..., type TurnState }
@@ -90,6 +91,10 @@ export async function runReplLoop(
   // setupSurface reads it lazily (the loop-stage callback only fires mid-turn,
   // long after this is assigned).
   let footer: FooterSubsystems | undefined;
+  // Inverse of the console bridge installed once the compositor is armed.
+  // Hoisted for the same reason as `footer`: the finally must run it even when
+  // a later setup step throws.
+  let restoreConsole: (() => void) | undefined;
 
   // External constraint: the try starts here (not earlier) so a rejection from
   // setupSurface's armCompositor still reaches the finally and surface.dispose()
@@ -104,6 +109,14 @@ export async function runReplLoop(
       suggestGhostEnabled,
       { getLoopStageBar: () => footer?.loopStageBar, getMascotBar: () => footer?.mascotBar },
     );
+
+    // Invariant: while the persistent compositor owns the terminal, a raw
+    // console.warn/error from agent-layer code (e.g. a failing hook) lands at
+    // the compositor's parked cursor mid-row and wraps outside the content
+    // margin. Route them through commitAbove instead; see console-bridge.ts.
+    // Non-TTY surfaces have no compositor and keep the raw console.
+    const compositor = surface.getCompositor();
+    if (compositor) restoreConsole = installConsoleBridge(compositor);
 
     footer = setupFooterSubsystems(ctx, turnState);
 
@@ -174,6 +187,9 @@ export async function runReplLoop(
     const resetToConsole = (line: string) => console.log(line);
     ctx.completionWriter.fn = resetToConsole;
     ctx.completionWriter.idleFn = resetToConsole;
+    // Same ordering constraint for the console bridge: restore the raw
+    // console before the compositor it commits into is disposed.
+    restoreConsole?.();
     // Stage 3e: disarm the persistent compositor on REPL exit. Best-
     // effort — surface.dispose() is idempotent and swallows raw-mode
     // teardown errors so a corrupt terminal state doesn't mask the

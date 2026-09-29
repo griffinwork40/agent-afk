@@ -142,11 +142,11 @@ describe('appendArtifacts', () => {
 });
 
 // ---------------------------------------------------------------------------
-// schema: first_prompt and first_cwd
+// schema: first_prompt_tokens and first_cwd (issue #2449)
 // ---------------------------------------------------------------------------
 
-describe('VerifiedOutcomeSchema with first_prompt / first_cwd', () => {
-  it('accepts a record with first_prompt and first_cwd', async () => {
+describe('VerifiedOutcomeSchema with first_prompt_tokens / first_cwd', () => {
+  it('accepts a record with first_prompt_tokens and first_cwd', async () => {
     const { VerifiedOutcomeSchema } = await import('./schema.js');
     const raw = {
       schema_version: 1,
@@ -160,18 +160,47 @@ describe('VerifiedOutcomeSchema with first_prompt / first_cwd', () => {
       artifacts: { commits: [], prs: [], repo: null },
       votes: [],
       history: [],
-      first_prompt: 'Fix the login bug',
+      first_prompt_tokens: ['bug', 'fix', 'login'],
       first_cwd: '/my/project',
     };
     const parsed = VerifiedOutcomeSchema.safeParse(raw);
     expect(parsed.success).toBe(true);
     if (parsed.success) {
-      expect(parsed.data.first_prompt).toBe('Fix the login bug');
+      expect(parsed.data.first_prompt_tokens).toEqual(['bug', 'fix', 'login']);
       expect(parsed.data.first_cwd).toBe('/my/project');
+      // Raw prompt text must never appear in the parsed record
+      expect('first_prompt' in parsed.data).toBe(false);
     }
   });
 
-  it('accepts a record without first_prompt / first_cwd (optional fields)', async () => {
+  it('strips legacy first_prompt field on parse (Zod strips unknown keys)', async () => {
+    const { VerifiedOutcomeSchema } = await import('./schema.js');
+    const legacyRaw = {
+      schema_version: 1,
+      session_id: 'sess-legacy',
+      label: 'unknown',
+      confidence: 0,
+      state: 'settled',
+      settles_after: null,
+      session_kind: 'text',
+      self_report: 'none',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      first_prompt: 'Fix the login bug with secret sk-abcdef12345',  // legacy field
+      first_cwd: '/my/project',
+    };
+    const parsed = VerifiedOutcomeSchema.safeParse(legacyRaw);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      // first_prompt must be stripped by Zod (schema uses z.object, not .passthrough())
+      expect('first_prompt' in parsed.data).toBe(false);
+      // first_prompt_tokens absent since we didn't supply it
+      expect(parsed.data.first_prompt_tokens).toBeUndefined();
+    }
+  });
+
+  it('accepts a record without first_prompt_tokens / first_cwd (optional fields)', async () => {
     const { VerifiedOutcomeSchema } = await import('./schema.js');
     const raw = {
       schema_version: 1,

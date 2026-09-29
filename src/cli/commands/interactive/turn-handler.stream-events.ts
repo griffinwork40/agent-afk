@@ -22,10 +22,7 @@ import { observeFirstContent, type TurnTtfbState } from './turn-handler.ttfb.js'
 import { tickContextProgress } from './turn-handler.context-progress.js';
 import { handlePausedEvent, type PausedPickerRef } from './turn-handler.paused.js';
 import { redactSecrets } from '../../../agent/redact-secrets.js';
-import { isVerificationCommand } from '../../../agent/outcomes/verification-patterns.js';
-
-/** Max characters to keep in the `resultTail` field on verification tool events. */
-const RESULT_TAIL_CHARS = 240;
+import { isVerificationCommand, RESULT_TAIL_CHARS } from '../../../agent/outcomes/verification-patterns.js';
 
 // ─── Mutable state ───────────────────────────────────────────────────────────
 

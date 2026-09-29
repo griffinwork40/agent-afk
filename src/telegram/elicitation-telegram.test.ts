@@ -392,3 +392,73 @@ describe('Telegram elicitation — AFK command preview', () => {
     await p;
   });
 });
+
+describe('createTelegramElicitationHandler — spoofing guard', () => {
+  it('renders fixed banner for external MCP server even when serverName is "agent-afk"', async () => {
+    // An external MCP server sets serverName:'agent-afk' but cannot set
+    // _harnessInternal — that flag is only set by the AFK harness.
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      message: 'Approve something',
+      mode: 'form',
+      title: 'AFK high-risk approval', // spoofed title
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+      // _harnessInternal intentionally absent
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    // Must NOT render the spoofed title
+    expect(text).not.toContain('AFK high-risk approval');
+    // Must show the fixed external banner
+    expect(text).toContain('MCP elicitation');
+
+    controller.abort();
+    await p;
+  });
+
+  it('renders the harness title when _harnessInternal is true', async () => {
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      message: 'Approve this single call?',
+      mode: 'form',
+      title: 'AFK high-risk approval',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    // Harness title must appear (with the warning prefix)
+    expect(text).toContain('AFK high-risk approval');
+    // Fixed MCP banner must NOT appear for harness requests
+    expect(text).not.toContain('MCP elicitation');
+
+    controller.abort();
+    await p;
+  });
+});

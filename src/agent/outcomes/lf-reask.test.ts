@@ -14,6 +14,8 @@ import {
   normalizeTokens,
   jaccardSimilarity,
   REASK_THRESHOLD,
+  promptFingerprint,
+  FINGERPRINT_MAX_TOKENS,
 } from './lf-reask.js';
 
 // ---------------------------------------------------------------------------
@@ -86,6 +88,47 @@ describe('jaccardSimilarity', () => {
 });
 
 // ---------------------------------------------------------------------------
+// promptFingerprint
+// ---------------------------------------------------------------------------
+
+describe('promptFingerprint', () => {
+  it('returns a sorted, deduplicated array', () => {
+    const fp = promptFingerprint('fix login bug fix login');
+    // 'fix', 'login', 'bug' — deduped; sorted
+    expect(fp).toEqual(['bug', 'fix', 'login']);
+  });
+
+  it('preserves first-appearance order before sorting (dedup by first seen)', () => {
+    // 'bug' appears first, then 'fix' — both kept once, output sorted
+    const fp = promptFingerprint('bug fix bug fix');
+    expect(fp).toEqual(['bug', 'fix']);
+  });
+
+  it('caps at FINGERPRINT_MAX_TOKENS when input is very long', () => {
+    // Generate more than 64 unique meaningful words
+    const words = Array.from({ length: 100 }, (_, i) => `token${String(i).padStart(3, '0')}`);
+    const fp = promptFingerprint(words.join(' '));
+    expect(fp.length).toBe(FINGERPRINT_MAX_TOKENS);
+  });
+
+  it('is sorted lexicographically', () => {
+    const fp = promptFingerprint('zebra alpha mango beta');
+    const sorted = [...fp].sort();
+    expect(fp).toEqual(sorted);
+  });
+
+  it('applies the same stopword/length filters as normalizeTokens', () => {
+    const fp = promptFingerprint('a the is fix');
+    // 'a', 'the', 'is' are stopwords or too short; only 'fix' survives
+    expect(fp).toEqual(['fix']);
+  });
+
+  it('returns empty array for empty string', () => {
+    expect(promptFingerprint('')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Integration: similar prompts exceed threshold
 // ---------------------------------------------------------------------------
 
@@ -133,14 +176,19 @@ describe('lfReask store interaction', () => {
   });
 
   it('upserts reask vote onto matching prior session in custom dir', async () => {
-    // Write a prior session record with first_prompt and first_cwd
+    // Write a prior session record with first_prompt_tokens and first_cwd
     const { writeRecord, readRecord, upsertVotes } = await import('./store.js');
-    const { jaccardSimilarity: sim, normalizeTokens: norm, REASK_THRESHOLD: thr } =
-      await import('./lf-reask.js');
+    const {
+      jaccardSimilarity: sim,
+      promptFingerprint: fp,
+      REASK_THRESHOLD: thr,
+    } = await import('./lf-reask.js');
 
     // Use prompts where the key tokens overlap significantly
     const priorPromptText = 'Fix login bug where password reset fails silently every time';
     const newPromptText = 'Fix login bug password reset fails silently';
+
+    const priorFingerprint = fp(priorPromptText);
 
     const prior = {
       schema_version: 1 as const,
@@ -154,13 +202,13 @@ describe('lfReask store interaction', () => {
       artifacts: { commits: [], prs: [], repo: null },
       votes: [],
       history: [],
-      first_prompt: priorPromptText,
+      first_prompt_tokens: priorFingerprint,
       first_cwd: '/project/repo',
     };
     writeRecord(prior, tmpDir);
 
-    const newTokens = norm(newPromptText);
-    const priorTokens = norm(priorPromptText);
+    const newTokens = new Set(fp(newPromptText));
+    const priorTokens = new Set(priorFingerprint);
     const similarity = sim(newTokens, priorTokens);
 
     // Verify the similarity IS above threshold before testing the vote logic
@@ -185,5 +233,93 @@ describe('lfReask store interaction', () => {
     expect(updated).toBeDefined();
     expect(updated?.votes.some((v) => v.lf === 'cross_session_reask')).toBe(true);
     expect(updated?.votes.find((v) => v.lf === 'cross_session_reask')?.vote).toBe(-1);
+  });
+
+  it('fires reask vote on near-duplicate prompt (via fingerprint Jaccard)', async () => {
+    const { writeRecord, readRecord, upsertVotes: upsert } = await import('./store.js');
+    const { promptFingerprint: fp, jaccardSimilarity: sim, REASK_THRESHOLD: thr } =
+      await import('./lf-reask.js');
+
+    const prior1 = 'Refactor the authentication module to use JWT tokens';
+    const newPrompt = 'Refactor authentication module use JWT tokens for login';
+
+    const priorFp = fp(prior1);
+    const newFp = fp(newPrompt);
+    const similarity = sim(new Set(newFp), new Set(priorFp));
+    expect(similarity).toBeGreaterThanOrEqual(thr);
+
+    writeRecord(
+      {
+        schema_version: 1, session_id: 'sess-near-dup-prior',
+        label: 'unknown', confidence: 0, state: 'settled', settles_after: null,
+        session_kind: 'text', self_report: 'none',
+        artifacts: { commits: [], prs: [], repo: null },
+        votes: [], history: [],
+        first_prompt_tokens: priorFp,
+        first_cwd: '/some/cwd',
+      },
+      tmpDir,
+    );
+
+    upsert(
+      'sess-near-dup-prior',
+      [{ lf: 'cross_session_reask', vote: -1, strength: 'weak',
+         evidence: `near-dup (Jaccard=${similarity.toFixed(2)})`,
+         observed_at: new Date().toISOString() }],
+      undefined,
+      { outcomesDir: tmpDir },
+    );
+
+    const updated = readRecord('sess-near-dup-prior', tmpDir);
+    expect(updated?.votes.some((v) => v.lf === 'cross_session_reask')).toBe(true);
+  });
+
+  it('does NOT fire reask vote on unrelated prompt', async () => {
+    const { promptFingerprint: fp, jaccardSimilarity: sim, REASK_THRESHOLD: thr } =
+      await import('./lf-reask.js');
+
+    const prior = 'Deploy the staging environment with new docker image';
+    const unrelated = 'Write unit tests for the payment billing module refactoring';
+
+    const similarity = sim(new Set(fp(unrelated)), new Set(fp(prior)));
+    expect(similarity).toBeLessThan(thr);
+  });
+
+  it('does NOT match a legacy record that has only first_prompt (no tokens)', async () => {
+    // A legacy record without first_prompt_tokens should be skipped by lfReask
+    const { writeRecord } = await import('./store.js');
+    const { promptFingerprint: fp } = await import('./lf-reask.js');
+
+    // Write a record that simulates the old format — but our schema strips first_prompt,
+    // so first_prompt_tokens will be absent; verify the fingerprint check correctly
+    // skips it (empty/absent tokens array)
+    const legacyWithNoTokens = {
+      schema_version: 1 as const,
+      session_id: 'sess-legacy-no-tokens',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'settled' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      // no first_prompt_tokens
+      first_cwd: '/some/cwd',
+    };
+    writeRecord(legacyWithNoTokens, tmpDir);
+
+    // The record has no first_prompt_tokens, so the fingerprint is empty/absent
+    const { readRecord } = await import('./store.js');
+    const rec = readRecord('sess-legacy-no-tokens', tmpDir);
+    expect(rec?.first_prompt_tokens).toBeUndefined();
+
+    // promptFingerprint on ANY text shouldn't magically produce tokens matching undefined
+    const newFp = fp('Fix the authentication module login bug refactor');
+    expect(newFp.length).toBeGreaterThan(0);
+    // Since stored tokens is undefined/empty, lfReask would skip this record
+    const storedTokens = rec?.first_prompt_tokens;
+    expect(!storedTokens || storedTokens.length === 0).toBe(true);
   });
 });

@@ -484,6 +484,32 @@ describe('ICC parameterization correctness (betaFromICC, #2479 fix)', () => {
     // ICC extremely close to 1 → concentration → 0 → alpha/beta → 0
     expect(() => betaFromICC(0.5, 1 - 1e-12)).toThrow(RangeError);
   });
+
+  // Finding #2499-1: betaSample must throw when called with degenerate params (alpha=0 or
+  // beta=0) so callers who forget to check `degenerate: true` get a hard error instead of
+  // a silent wrong-path result.
+  it('betaSample throws RangeError when called with alpha=0 (degenerate guard, #2499)', () => {
+    const rand = mulberry32(1);
+    expect(() => betaSample(rand, 0, 1)).toThrow(RangeError);
+  });
+
+  it('betaSample throws RangeError when called with beta=0 (degenerate guard, #2499)', () => {
+    const rand = mulberry32(1);
+    expect(() => betaSample(rand, 1, 0)).toThrow(RangeError);
+  });
+
+  it('betaSample throws RangeError when called with negative alpha (degenerate guard, #2499)', () => {
+    const rand = mulberry32(1);
+    expect(() => betaSample(rand, -0.1, 1)).toThrow(RangeError);
+  });
+
+  it('betaFromICC degenerate result (mean=0) must not be passed to betaSample (#2499)', () => {
+    const rand = mulberry32(1);
+    const params = betaFromICC(0, LOW_ICC);
+    expect(params.degenerate).toBe(true);
+    // Passing degenerate params to betaSample now throws rather than silently returning 0.
+    expect(() => betaSample(rand, params.alpha, params.beta)).toThrow(RangeError);
+  });
 });
 
 // ---------------------------------------------------------------------------

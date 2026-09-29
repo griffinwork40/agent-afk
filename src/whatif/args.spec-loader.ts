@@ -49,10 +49,18 @@ export function loadSpecFile(filePath: string): ChangeSpec {
   }
 
   // Validate each change entry; drop invalid ones (matching compile path).
+  // Warn per dropped entry so callers can diagnose malformed spec files
+  // without needing --verbose or source inspection.
   const valid: Change[] = [];
-  for (const entry of outer.data.changes) {
+  for (let i = 0; i < outer.data.changes.length; i++) {
+    const entry = outer.data.changes[i];
     const result = AnyChangeSchema.safeParse(entry);
-    if (result.success) valid.push(result.data);
+    if (result.success) {
+      valid.push(result.data);
+    } else {
+      const issues = result.error.issues.map((iss) => `${iss.path.join('.') || '<root>'}: ${iss.message}`).join('; ');
+      console.warn(`[whatif/args] spec file entry [${i}] dropped — schema validation failed: ${issues}`);
+    }
   }
 
   if (valid.length === 0 && outer.data.changes.length > 0) {

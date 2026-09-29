@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { previewInput, buildInputPreview, PREVIEW_BUDGET, PREVIEW_HALF } from './afk-gate-preview.js';
+import { previewInput, buildInputPreview, PREVIEW_BUDGET } from './afk-gate-preview.js';
+
+/** Half derived from the default budget, matching the implementation. */
+const DEFAULT_HALF = Math.floor(PREVIEW_BUDGET / 2);
 
 describe('previewInput', () => {
   it('returns an empty string for an empty input', () => {
@@ -23,24 +26,24 @@ describe('previewInput', () => {
     const long = head + middle + tail;
 
     const result = previewInput(long);
-    expect(result.startsWith(head.slice(0, PREVIEW_HALF))).toBe(true);
-    expect(result.endsWith(tail.slice(tail.length - PREVIEW_HALF))).toBe(true);
+    expect(result.startsWith(head.slice(0, DEFAULT_HALF))).toBe(true);
+    expect(result.endsWith(tail.slice(tail.length - DEFAULT_HALF))).toBe(true);
   });
 
   it('middle-truncated result contains the omitted character count', () => {
     const s = 'A'.repeat(PREVIEW_BUDGET + 1000);
     const result = previewInput(s);
-    const omitted = s.length - PREVIEW_HALF * 2;
+    const omitted = s.length - DEFAULT_HALF * 2;
     expect(result).toContain(`${omitted} chars omitted`);
   });
 
-  it('does not middle-truncate when the string is exactly one char over budget', () => {
-    // The head+tail halves each take PREVIEW_HALF chars, so a string of
-    // PREVIEW_BUDGET+1 chars is too long but the omitted region is exactly
-    // PREVIEW_BUDGET+1 - PREVIEW_HALF*2 = 1.
+  it('does not exceed budget when string is exactly one char over budget', () => {
+    // Each half = floor(PREVIEW_BUDGET / 2).  A string of PREVIEW_BUDGET+1
+    // chars is too long but the omitted region is exactly
+    // PREVIEW_BUDGET+1 - DEFAULT_HALF*2 chars.
     const s = 'X'.repeat(PREVIEW_BUDGET + 1);
     const result = previewInput(s);
-    const omitted = s.length - PREVIEW_HALF * 2;
+    const omitted = s.length - DEFAULT_HALF * 2;
     expect(result).toContain(`${omitted} chars omitted`);
   });
 
@@ -49,6 +52,19 @@ describe('previewInput', () => {
     expect(previewInput(s, 10)).toContain('chars omitted');
     expect(previewInput(s, s.length)).toBe(s);
   });
+
+  it('output never exceeds budget chars for a small custom budget', () => {
+    // Previously PREVIEW_HALF was a fixed constant (700), so previewInput(s, 10)
+    // could emit up to 1400 chars — longer than the requested budget.
+    const s = 'A'.repeat(5000);
+    const budget = 10;
+    const result = previewInput(s, budget);
+    // head (5) + omission label + tail (5)
+    const half = Math.floor(budget / 2);
+    expect(result.startsWith('A'.repeat(half))).toBe(true);
+    expect(result.endsWith('A'.repeat(half))).toBe(true);
+    expect(result).toContain('chars omitted');
+  });
 });
 
 describe('buildInputPreview', () => {
@@ -56,34 +72,21 @@ describe('buildInputPreview', () => {
     expect(buildInputPreview('')).toBe('');
   });
 
-  it('JSON-stringifies null to the string "null" (not empty)', () => {
-    // JSON.stringify(null) === 'null', which is a non-empty string.
-    expect(buildInputPreview(null)).toBe('null');
-  });
-
-  it('stringifies non-string input via JSON.stringify', () => {
-    const obj = { command: 'rm -rf /important; echo done' };
-    const result = buildInputPreview(obj);
-    expect(result).toContain('rm -rf /important');
-    expect(result).toContain('echo done');
-  });
-
-  it('passes a string input through without double-encoding', () => {
+  it('passes a string input through verbatim when under budget', () => {
     const s = 'some command';
     expect(buildInputPreview(s)).toBe(s);
   });
 
-  it('middle-truncates a long JSON-stringified object so both ends survive', () => {
-    // Construct an object whose JSON is long: a bash command with a destructive
-    // tail past the first 300 chars (the old MAX_INPUT_PREVIEW that hid the tail).
+  it('middle-truncates a long string so both ends survive', () => {
+    // Construct a string with a destructive tail past the first 300 chars
+    // (the old MAX_INPUT_PREVIEW that hid the tail).
     // 'safe '.repeat(500) = 2500 chars of innocuous preamble, well over PREVIEW_BUDGET.
     const prefix = 'safe '.repeat(500);    // 2500 chars of innocuous preamble
     const dangerous = '; rm -rf /important'; // destructive tail
-    const obj = { command: prefix + dangerous };
-    const json = JSON.stringify(obj);
-    expect(json.length).toBeGreaterThan(PREVIEW_BUDGET);
+    const s = prefix + dangerous;
+    expect(s.length).toBeGreaterThan(PREVIEW_BUDGET);
 
-    const result = buildInputPreview(obj);
+    const result = buildInputPreview(s);
     // Tail (dangerous part) must be visible
     expect(result).toContain('rm -rf /important');
     // Head must be present

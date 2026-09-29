@@ -29,6 +29,7 @@ import { AnthropicDirectProvider, __setAnthropicClientFactory } from './index.js
 import { tool } from '../../tools/custom-tool.js';
 import { fromArray, makeTextStream, makeToolUseStream } from './loop.test-helpers.js';
 import { SOFT_DEADLINE_WIND_DOWN } from '../shared/soft-deadline.js';
+import { OVERLOAD_EXHAUSTED } from './overload-pause.js';
 
 vi.mock('../../awareness/workspace-source.js', () => ({
   gatherWorkspace: vi.fn(() => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null })),
@@ -189,6 +190,105 @@ describe('anthropic-direct: turn budgets survive a retry-tier replay', () => {
     expect(tools[2]).toBeUndefined(); // the next request is the wind-down
     const msg = events.find((e) => e.type === 'assistant.message');
     expect(msg?.type === 'assistant.message' ? msg.text : '').toContain('Here is what I have.');
+    expect(completedOf(events).usage.stopReason).toBe(SOFT_DEADLINE_WIND_DOWN);
+  });
+});
+
+describe('anthropic-direct: turn budgets survive an overload-park replay', () => {
+  // This suite uses full fake timers (Date + setTimeout) so the connection-phase
+  // backoff sleeps (jitterBackoff) and the overload-park probe sleep
+  // (sleepWithAbort inside turnWithOverloadPause) can be advanced without
+  // slowing the test. The watchdog timers are also faked; they do not fire
+  // because vi.advanceTimersByTimeAsync interleaves microtask processing.
+  //
+  // Scenario: round 1 burns 40s (soft deadline = 60s). Round 2's request
+  // exhausts the 529 connection-phase budget (3 throws), producing an
+  // OVERLOAD_EXHAUSTED sentinel. The overload-pause tier parks for a 120s
+  // probe interval. The clock is advanced 90s during the park so the total
+  // elapsed time is ~130s — well past the 60s soft deadline. When the probe
+  // replays the turn, the soft-deadline check at the next round boundary should
+  // already be expired and trigger the wind-down, not another tool round.
+  const createMock2 = vi.fn();
+  class MockAnthropic2 {
+    messages = { create: createMock2 };
+  }
+
+  const probeTool = tool('overload_probe', 'a probe tool', z.object({}), async () => ({
+    content: 'probe ok',
+  }));
+
+  function make529(): Error {
+    const e = new Error('Overloaded');
+    (e as unknown as { status: number }).status = 529;
+    return e;
+  }
+
+  beforeEach(() => {
+    createMock2.mockReset();
+    // Full fake timers: Date + setTimeout, so backoff sleeps can be advanced.
+    vi.useFakeTimers();
+    __setAnthropicClientFactory(() => new MockAnthropic2() as unknown as Anthropic);
+    // Pin Math.random so nextProbeDelayMs returns a fixed interval (120s max).
+    vi.spyOn(Math, 'random').mockReturnValue(0.999999);
+    // 1-minute ceiling for the overload park (enough for one probe).
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '120000';
+  });
+  afterEach(() => {
+    __setAnthropicClientFactory(null);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete process.env['AFK_OVERLOAD_PAUSE_MS'];
+  });
+
+  it('soft deadline measured from original turn fires even when the park elapses past it', async () => {
+    // Round 1 (call 1): returns a tool-use stream and advances Date by 40s.
+    // Round 2 (calls 2-4): three 529 throws exhaust the connection-phase budget.
+    // Overload-park probe (call 5): returns a tool-use stream (round 2 replay).
+    // Wind-down (call 6): tools-stripped text stream.
+    const tools: unknown[] = [];
+    let call = 0;
+    createMock2.mockImplementation(async (params: { tools?: unknown }) => {
+      call += 1;
+      tools.push(params.tools);
+      if (call === 1) {
+        // Round 1: slow tool-use round — advance Date so 40s appear to pass.
+        vi.setSystemTime(Date.now() + 40_000);
+        return fromArray(makeToolUseStream('toolu_1', 'overload_probe', '{}'));
+      }
+      if (call === 2 || call === 3 || call === 4) {
+        // Three consecutive 529s exhaust OVERLOAD_MAX_RETRIES=3.
+        throw make529();
+      }
+      if (call === 5) {
+        // First probe after park: returns a tool-use stream. The soft deadline
+        // was 60s; now 130s have elapsed (40s pre-overload + 90s park), so
+        // the NEXT round boundary should arm the wind-down immediately.
+        return fromArray(makeToolUseStream('toolu_5', 'overload_probe', '{}'));
+      }
+      // Wind-down (call 6): no tools, final answer.
+      return fromArray(makeTextStream('Wrapped up after overload.'));
+    });
+
+    const provider = new AnthropicDirectProvider({ customTools: [probeTool] });
+    const promise = drain(
+      provider.query({
+        prompt: (async function* () { yield { content: 'go' }; })(),
+        config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-test', softDeadlineMs: 60_000 },
+      }),
+    );
+
+    // Advance through connection-phase backoff sleeps (5s + 10s = 15s) and then
+    // the park probe interval (pinned ~120s, clamped to the 120s ceiling).
+    // Advancing 90s past the overload puts the total elapsed time at ~130s >
+    // 60s soft deadline; the NEXT round boundary after the probe fires wind-down.
+    await vi.advanceTimersByTimeAsync(200_000);
+    const events = await promise;
+
+    // The overload exhaustion terminal should be swallowed (park recovered).
+    expect(events.some((e) => e.type === 'turn.completed' && e.usage.stopReason === OVERLOAD_EXHAUSTED)).toBe(false);
+    // The wind-down request (call 6) must have no tools — deadline was expired.
+    expect(call).toBe(6);
+    expect(tools[5]).toBeUndefined();
     expect(completedOf(events).usage.stopReason).toBe(SOFT_DEADLINE_WIND_DOWN);
   });
 });
