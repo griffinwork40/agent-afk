@@ -531,3 +531,59 @@ describe('StreamingMarkdownRenderer text reveal: smoke accent (AFK_SMOKE_TEXT=1)
     await flushNow(r);
   });
 });
+
+describe('StreamingMarkdownRenderer text reveal: word (AFK_WORD_TEXT=1)', () => {
+  beforeEach(() => { vi.stubEnv('AFK_WORD_TEXT', '1'); });
+  /** Every visible token of `overlay` is a whole word of `text` (no half-typed words). */
+  const wholeWordsOf = (overlay: string, text: string): boolean => {
+    const words = new Set(stripAnsi(text).replace(/\*\*/g, '').split(/\s+/));
+    return stripAnsi(overlay).split(/\s+/).filter(Boolean).every((w) => words.has(w));
+  };
+
+  it('reveals whole words over a few steps, never smoke, then settles to the reveal-off render', async () => {
+    const baseline = await baselineFor(TEXT);
+    const { r, overlays } = makeRenderer();
+    r.push(TEXT);
+    await vi.advanceTimersByTimeAsync(20);
+    const first = stripAnsi(overlays.at(-1) ?? '');
+    expect(first, 'the first words show at once').toContain('The');
+    expect(first, 'but not the whole burst').not.toContain('barn');
+    // Same layout as reveal-off (the trailing reset picks up the indent, as with ink).
+    const shape = (s: string): number[] => stripAnsi(s).replace(/\n {3}$/, '\n').split('\n').map((l) => l.length);
+    expect(shape(overlays.at(-1) ?? ''), 'hidden words keep their cells').toEqual(shape(baseline ?? ''));
+    await vi.advanceTimersByTimeAsync(300);
+    for (const o of overlays) expect(wholeWordsOf(o, TEXT), stripAnsi(o)).toBe(true);
+    expect(overlays.some(hasSmoke)).toBe(false);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(overlays.at(-1)).toBe(baseline);
+    await flushNow(r);
+  });
+
+  it('holds a still-growing word until whitespace follows it', async () => {
+    const { r, overlays } = makeRenderer();
+    r.push('Hello wor');
+    await vi.advanceTimersByTimeAsync(40);
+    expect(stripAnsi(overlays.at(-1) ?? '')).not.toContain('wor');
+    r.push('ld and more ');
+    await vi.advanceTimersByTimeAsync(40);
+    expect(stripAnsi(overlays.at(-1) ?? '')).toContain('world');
+    await flushNow(r);
+  });
+
+  it('commits paragraphs intact and in order', async () => {
+    const { r, commits } = makeRenderer();
+    r.push('first para words here\n\nsecond para words here\n\ntail');
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    await flushNow(r);
+    expect(commits.map((c) => stripAnsi(c).trim())).toEqual(['first para words here', 'second para words here', 'tail']);
+  });
+
+  it('is still turned off by AFK_INK_TEXT=0', async () => {
+    vi.stubEnv('AFK_INK_TEXT', '0');
+    const { r, overlays } = makeRenderer();
+    r.push('Hello wor');
+    await vi.advanceTimersByTimeAsync(40);
+    expect(stripAnsi(overlays.at(-1) ?? '')).toContain('Hello wor');
+    await flushNow(r);
+  });
+});

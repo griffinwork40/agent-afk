@@ -92,6 +92,20 @@ export const DISPLAY_ENV_REGISTRY = [
     category: 'display',
   },
   {
+    name: 'AFK_WORD_TEXT',
+    description:
+      'Word-at-a-time style for the streamed-text reveal (the reveal itself is AFK_INK_TEXT), built for reading ' +
+      'along while text streams. Set to "1" (or true/yes/on) and prose appears one whole word at a time at a ' +
+      'steady pace, with only the newest words fading briefly from dim into their own color; a word is never ' +
+      'shown half-typed. Overrides AFK_SMOKE_TEXT for prose and headings. Needs a 256-color or truecolor ' +
+      'terminal. Off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1.',
+    type: 'boolean',
+    required: false,
+    default: '',
+    example: '1',
+    category: 'display',
+  },
+  {
     name: 'AFK_TERM_COLOR_QUERY',
     description:
       'At interactive REPL startup, AFK asks the terminal for its real text, background, and 16-color palette ' +

@@ -5,7 +5,8 @@ import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { calculateContentWidth, calculateProseContentWidth, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle } from './markdown-stream-format.js';
 import { PendingFormatCache } from './markdown-stream.pending-cache.js';
 import { contentMargin } from './render/measure.js';
-import { HOLD_RECHECK_MS, SmokeReveal, defaultRevealStyle, isInkTextEnabled, isSmokeTextEnabled } from './smoke-reveal.js';
+import { HOLD_RECHECK_MS } from './smoke-reveal.js';
+import { createTextReveal, type TextReveal } from './text-reveal.js';
 import { splitAtHeadingBoundary } from './markdown-stream.heading-hold.js';
 import { CommitDefer, HoldQueue, REVEAL_SETTLE_MAX_MS } from './markdown-stream.commit-defer.js';
 import { countVisible } from './smoke-reveal.ansi.js';
@@ -127,8 +128,8 @@ export class StreamingMarkdownRenderer {
   private bufferMs: number;
   private inputState: InputBufferState;
 
-  /** Text reveal mask (ink prose, optional smoke headings). Null when the reveal is off. */
-  private smoke: SmokeReveal | null = null;
+  /** Text reveal mask (word, ink or smoke; see text-reveal.ts). Null when the reveal is off. */
+  private smoke: TextReveal | null = null;
   /** Memoized pending render: an unchanged buffer is not reformatted on a reveal frame. */
   private readonly pendingCache = new PendingFormatCache();
   /**
@@ -164,14 +165,10 @@ export class StreamingMarkdownRenderer {
       // Reduced motion wins: the reveal is pure motion, so a user who asked
       // for less of it gets plain text, same as the machine-status fades.
       const reducedMotion = opts?.reducedMotion ?? detectReducedMotion();
-      const accent = isSmokeTextEnabled();
-      if ((isInkTextEnabled() || accent) && !reducedMotion) {
-        this.accent = accent;
-        const style = defaultRevealStyle();
-        this.smoke = new SmokeReveal(() => this.paintFrame(), Date.now, {
-          prose: style,
-          headings: accent ? 'smoke' : style,
-        });
+      const picked = reducedMotion ? null : createTextReveal(() => this.paintFrame());
+      if (picked) {
+        this.accent = picked.accent;
+        this.smoke = picked.reveal;
       }
     }
   }

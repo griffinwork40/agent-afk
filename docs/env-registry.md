@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**205 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**206 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -171,6 +171,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SMOKE_TEXT` | boolean |  |  | `1` | Style of the streamed-text reveal (the reveal itself is AFK_INK_TEXT). Unset (default): prose and headings condense out of smoke, braille particles thickening into each letter with a thin wisp drifting ahead of the front. Set to "0" (or false/no/off) for the calmer ink fade instead, where letters rise from near the background into their own color. Set to "1" (or true/yes/on) to also hold headings until they finish rolling in and fade in machine-status UI (tool rows, the thought summary). Needs a 256-color or truecolor terminal. Off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1. |
 | `AFK_STREAM_BUFFER_MS` | number |  | `0` | `16` | Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50. |
 | `AFK_TERM_COLOR_QUERY` | boolean |  |  | `0` | At interactive REPL startup, AFK asks the terminal for its real text, background, and 16-color palette (OSC 10/11/4, answered in well under 150ms by modern terminals and tmux) so the ink and smoke reveal can fade each letter exactly into the color it will settle on. Only runs when a reveal is enabled on a TTY. Set AFK_TERM_COLOR_QUERY=0 (or false/no/off) to skip the query and use the theme's built-in colors. |
+| `AFK_WORD_TEXT` | boolean |  |  | `1` | Word-at-a-time style for the streamed-text reveal (the reveal itself is AFK_INK_TEXT), built for reading along while text streams. Set to "1" (or true/yes/on) and prose appears one whole word at a time at a steady pace, with only the newest words fading briefly from dim into their own color; a word is never shown half-typed. Overrides AFK_SMOKE_TEXT for prose and headings. Needs a 256-color or truecolor terminal. Off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1. |
 
 ## Debug
 

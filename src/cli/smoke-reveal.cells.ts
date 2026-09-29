@@ -134,6 +134,15 @@ function letter(ch: string, state: SgrState, from: number, p: number): string {
 }
 
 /**
+ * Word-reveal cell (word-reveal.ts): the letter at fade progress `p` in
+ * [0, 1) rising from ramp position `from` into its own color, with the
+ * caller's style restored after it.
+ */
+export function fadeCell(ch: string, p: number, state: SgrState, from: number): string {
+  return letter(ch, state, from, p) + serializeSgr(state);
+}
+
+/**
  * Ink cell at `age` ms and `behind` characters from the front (0 = newest),
  * or null once settled (caller emits the original text).
  */
