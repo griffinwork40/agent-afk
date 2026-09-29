@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { createImageGenerateHandler } from './image-generate.js';
 
 // Mock resolveOpenAIAuth so tests control auth resolution without touching disk.
@@ -46,17 +48,19 @@ const TINY_PNG_B64 =
 
 describe('image_generate handler', () => {
   const signal = new AbortController().signal;
-  let tmpDir: string;
+  let tmpDir: string | undefined;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp('/tmp/afk-image-gen-test-');
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-image-gen-test-'));
     // Default: resolveOpenAIAuth returns no auth (tests that need it override).
     mockResolveAuth.mockReturnValue({ apiKey: null, source: 'no-usable-auth' });
     mockChatGptImage.mockReset();
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    if (tmpDir !== undefined) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 
   // ── Auth resolution ────────────────────────────────────────────────────
