@@ -209,6 +209,26 @@ At the ceiling, extract a **named helper taking explicit parameters** — not a
 closure over the enclosing locals, which relocates lines without reducing what you
 must hold in mind. `pnpm audit:funcsize:list` ranks the current worst.
 
+### The POSIX-assumption guard
+
+The Windows CI leg runs only on main pushes and `windows-compat`-labelled PRs, so
+`tests/posix-guard.test.ts` enforces a static Windows guard inside **`pnpm test`**
+(ubuntu CI and auto-release) on every PR (#703). AST rules in
+`scripts/lib/posix-guard-rules.ts`: **R1** a literal `/bin/sh`/`sh`/`bash` as the
+command of `execFile`/`spawn`/`exec` or as `shell:` in product code (use
+`resolveShell()` from `src/utils/resolve-shell.ts`); **R2** `mkdtemp` on a
+`/`-rooted literal anywhere (use `path.join(os.tmpdir(), 'afk-<name>-')`); **R3**
+host `path.resolve`/`path.normalize` on a `/`-rooted literal in product code (the
+#2588 shape; use `path.posix.*` for POSIX-shaped paths); **R4** any test gated on
+platform (`skipIf`/`runIf`, `cond ? it : it.skip`, or a bare `if (win32) return;`).
+Never skip on win32; make the test portable. Existing sites are grandfathered in
+`.posix-guard-baseline.json` as per-file, per-rule **counts** (never line
+numbers). Unlike the size ratchets it is **growth-only**: a count above baseline
+fails, and a count below it (or a deleted file) passes with a hint, so lanes
+removing violations never have to touch the baseline. Regenerate with
+`pnpm audit:posix:update` (refuses growth without `--allow-growth --reason "<why>"`);
+`pnpm audit:posix:list` prints every current site.
+
 ### Long-comment prefix convention
 
 Any source-comment block ≥15 contiguous lines must open with one of:
