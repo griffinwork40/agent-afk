@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { useTmpAfkHome } from '../journal/__test-utils__/helpers.js';
 import { getOrDeriveFacet } from './store.js';
@@ -153,13 +153,27 @@ describe('getOrDeriveFacet with journal', () => {
     const facet1 = getOrDeriveFacet(SESSION_ID, { cacheDir: cacheDir() });
     expect(facet1?.tool_counts?.['bash']).toBe(1);
 
-    // Now append a new tool call to the journal (changing its mtime)
+    // Now append a new tool call to the journal (changing its mtime).
+    // Contract: use utimesSync to set the mtime at least 1 second into the
+    // future BEFORE reading the new mtime for the staleness check.  On
+    // Windows, NTFS timestamps have 100ns resolution but consecutive
+    // synchronous writeFileSync calls within the same JS microtask tick often
+    // land within the same millisecond, making mtimeMs identical between the
+    // two writes.  The facet cache's isFresh() comparison then sees the same
+    // effectiveMtimeMs as the cached facet and returns the stale value.  An
+    // explicit utimesSync on the file guarantees a distinct, observable mtime
+    // with no sleep or platform-specific timing assumptions.  See #703 L8b.
+    const beforeMtimeMs = statSync(jPath).mtimeMs;
     writeFileSync(jPath,
       metaLine() +
       toolUseLine(0, 'j4', 'bash') +
       toolUseLine(1, 'j5', 'write_file', { file_path: '/new.ts' }),
       'utf8',
     );
+    // Advance mtime by 1 second so it is distinct from the cached facet's
+    // source_session_mtime_ms on every platform, including Windows.
+    const newMtime = new Date(beforeMtimeMs + 1000);
+    utimesSync(jPath, newMtime, newMtime);
 
     // Re-derive should pick up the new tool call
     const facet2 = getOrDeriveFacet(SESSION_ID, { cacheDir: cacheDir() });
