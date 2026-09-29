@@ -30,17 +30,13 @@ import { predictChanges, resolveMaxPredictions, DEFAULT_PROBES } from './predict
 import { buildAndPersistVerifiedReport } from './run.report.js';
 import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
 import { groundProbes, makeSetChecker } from './probe-grounding.js';
-import {
-  collectRealTurns,
-  syntheticEpisodes,
-  loadSuiteEpisodes,
-  type CorpusExclusions,
-} from './episodes.js';
+import { collectVerifyEpisodes } from './run.episodes.js';
 import { estimateVerifyCost } from './cost.js';
 import { buildHeadline, standardLimits } from './report.js';
 import { isUnderpowered, mdeGateRefusedMessage, mdePreflightLine, isHeadroomUnderpowered, headroomPreflightLine } from './mde.js';
 import { persistRun } from './run.persist.js';
 import { verifyRun } from './run.verify.js';
+import { maybeWriteSandboxManifest } from './sandbox-manifest.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
@@ -171,32 +167,6 @@ async function runPredictPhase(
   );
 
   return { structural, predictions, analystCostUsd, changeKinds, droppedProbes };
-}
-
-/**
- * Collect all episode sources for the verify phase.
- */
-async function collectVerifyEpisodes(
-  options: WhatifOptions & { sessionsDir?: string },
-  predictions: import('./types.js').Prediction[],
-): Promise<{ episodes: import('./types.js').Episode[]; corpusExclusions: CorpusExclusions }> {
-  const corpusExclusions: CorpusExclusions = {
-    whatifSessions: 0, excludedSessionIds: 0,
-    nonStandaloneTurns: 0, whatifTopicTurns: 0,
-  };
-  const realTurns = await collectRealTurns({
-    limit: options.turns,
-    sessionsDir: options.sessionsDir,
-    stats: corpusExclusions,
-  });
-  const synthetic = syntheticEpisodes(predictions);
-  const suitesDir = path.join(options.realHome, 'whatif', 'suites');
-  const suiteEps = await loadSuiteEpisodes(suitesDir).catch(() => []);
-  // Invariant: synthetic probe episodes MUST come before replay turns.
-  // run.verify.ts builds tasks in episode order and the budget stop drops the
-  // tail; if replay turns come first they consume budget that would otherwise
-  // score predictions (replay turns target no prediction after #2427).
-  return { episodes: [...synthetic, ...realTurns, ...suiteEps], corpusExclusions };
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +381,9 @@ export async function runWhatif(
         ...standardLimits({ verified: false, judgeExternal: false }),
         ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
       ];
+      const sandboxesKeptAt = options.keepSandboxes
+        ? await maybeWriteSandboxManifest(runDir, sandboxes.roots)
+        : undefined;
       const partialReport: Omit<WhatifReport, 'headline'> = {
         spec,
         structural,
@@ -419,6 +392,7 @@ export async function runWhatif(
         runDir,
         limits,
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
+        ...(sandboxesKeptAt !== undefined ? { sandboxesKeptAt } : {}),
       };
       const headline = buildHeadline(partialReport);
       const report: WhatifReport = { ...partialReport, headline };
@@ -509,14 +483,21 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
+    const sandboxesKeptAt = options.keepSandboxes
+      ? await maybeWriteSandboxManifest(runDir, sandboxes.roots)
+      : undefined;
+    const verifiedReport = await buildAndPersistVerifiedReport({
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
     });
+    return sandboxesKeptAt !== undefined
+      ? { ...verifiedReport, sandboxesKeptAt }
+      : verifiedReport;
   } finally {
-    // Tear down sandboxes unless keepSandboxes
+    // Tear down sandboxes unless keepSandboxes. The manifest is written
+    // before each return inside the try block; this finally only owns cleanup.
     if (!options.keepSandboxes) {
       await sandboxes.cleanup().catch(() => {
         // Best-effort; do not mask the primary error
@@ -524,3 +505,5 @@ export async function runWhatif(
     }
   }
 }
+
+

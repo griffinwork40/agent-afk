@@ -22,6 +22,7 @@ import { getAfkHome, getSkillsDir, getPluginsDir } from '../../paths.js';
 import { palette } from '../palette.js';
 import { REPL_SPINNER_OPTIONS } from './interactive/shared.js';
 import { renderTerminal } from '../../whatif/report.js';
+import { formatSandboxKeptMessage } from '../../whatif/sandbox-manifest.js';
 import { describeChange } from '../../whatif/operators/index.js';
 import {
   parseWhatifArgs,
@@ -291,6 +292,7 @@ async function runWhatifCommand(
         const termLines2 = renderTerminal(report, palette);
         for (const line of termLines2) process.stdout.write(line + '\n');
         process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+        if (report.sandboxesKeptAt) process.stdout.write(formatSandboxKeptMessage(report.sandboxesKeptAt, report.sandboxesKeptAt.mappingPath) + '\n');
         return;
       }
       // Non-interactive, no --yes: print message and fail.
@@ -312,6 +314,7 @@ async function runWhatifCommand(
   const termLines = renderTerminal(report, palette);
   for (const line of termLines) process.stdout.write(line + '\n');
   process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+  if (report.sandboxesKeptAt) process.stdout.write(formatSandboxKeptMessage(report.sandboxesKeptAt, report.sandboxesKeptAt.mappingPath) + '\n');
 }
 
 // ---------------------------------------------------------------------------
