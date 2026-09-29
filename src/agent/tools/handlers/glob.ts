@@ -20,6 +20,7 @@ import { isCanonicalPathReadDenied, isReadDenied } from './read-denylist.js';
 import { safeRealpath } from './write-denylist.js';
 import { splitAbsolutePattern } from './glob-absolute.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { Readahead, READAHEAD_CONCURRENCY } from './glob-readahead.js';
 
 /**
  * Directory basenames pruned from recursion by default: VCS metadata,
@@ -122,6 +123,12 @@ class GlobAbortedError extends Error {}
  * entry. Symlink entries are the one case where the leaf itself dereferences,
  * so they still go through the full {@link isReadDenied}. Verdicts are
  * identical to the old per-entry `isReadDenied(entryPath)`.
+ *
+ * Performance (#2586): a {@link Readahead} schedules `readdir` calls for child
+ * directories ahead of the walker, up to {@link READAHEAD_CONCURRENCY}
+ * concurrent reads, so I/O and CPU overlap. The walker still visits entries in
+ * the same depth-first order, so output under the 500-entry cap is
+ * **byte-identical** to the sequential walker.
  */
 async function collectMatches(dir: string, pattern: string, signal?: AbortSignal): Promise<string[]> {
   const matches: string[] = [];
@@ -131,7 +138,18 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
   const literalSegments = literalPatternSegments(pattern);
   // Compile the pattern once; the walker tests every entry against it.
   const matcher = globToRegExp(pattern);
+  // Read-ahead cache: pre-schedules readdir for child directories so I/O
+  // overlaps with the walker's CPU work, bounded at READAHEAD_CONCURRENCY.
+  const ra = new Readahead(READAHEAD_CONCURRENCY, signal);
 
+  /**
+   * Returns true when the caller should stop (cap hit or abort).
+   *
+   * The inner logic mirrors the original sequential walk exactly — same
+   * entry order, same denylist checks, same pruning — but replaces the
+   * inline `fs.readdir` call with `ra.get()`, which resolves instantly when
+   * a prior `ra.schedule()` call already completed the I/O.
+   */
   async function walk(currentPath: string, realPath: string, relPath: string): Promise<boolean> {
     if (matches.length >= maxResults) {
       return true;
@@ -140,58 +158,71 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
       throw new GlobAbortedError();
     }
 
+    let entries;
     try {
-      const entries = await fs.readdir(currentPath, { withFileTypes: true });
+      entries = await ra.get(currentPath);
+    } catch (err) {
+      if (err instanceof GlobAbortedError) throw err;
+      return false; // inaccessible directory — skip silently
+    }
 
-      for (const entry of entries) {
-        if (matches.length >= maxResults) {
-          return true;
-        }
+    for (const entry of entries) {
+      if (matches.length >= maxResults) {
+        return true;
+      }
 
-        const entryPath = path.join(currentPath, entry.name);
-        const entryReal = path.join(realPath, entry.name);
-        const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
+      const entryPath = path.join(currentPath, entry.name);
+      const entryReal = path.join(realPath, entry.name);
+      const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
-        // The requested root has already passed resolveAndContain, but a
-        // readable parent may contain protected descendants. Check every
-        // entry before matching or recursion so neither filenames nor file
-        // contents beneath a read-denylist floor are exposed.
-        const denied = entry.isSymbolicLink()
-          ? isReadDenied(entryPath).denied
-          : isCanonicalPathReadDenied(entryReal).denied;
-        if (denied) {
+      // The requested root has already passed resolveAndContain, but a
+      // readable parent may contain protected descendants. Check every
+      // entry before matching or recursion so neither filenames nor file
+      // contents beneath a read-denylist floor are exposed.
+      const denied = entry.isSymbolicLink()
+        ? isReadDenied(entryPath).denied
+        : isCanonicalPathReadDenied(entryReal).denied;
+      if (denied) {
+        continue;
+      }
+
+      // Test if this entry matches the pattern
+      if (matcher.test(entryRel)) {
+        matches.push(entryRel);
+      }
+
+      // Recurse into directories to find deeper matches, but skip the
+      // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
+      // named them literally in the pattern. The search root itself is
+      // never pruned here (it is walked directly, not as a child entry).
+      if (entry.isDirectory()) {
+        if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
           continue;
         }
-
-        // Test if this entry matches the pattern
-        if (matcher.test(entryRel)) {
-          matches.push(entryRel);
+        // Schedule the child readdir ahead of the walk so I/O runs in
+        // parallel with the rest of this loop. The walker will await it
+        // via ra.get() when recursion actually begins.
+        if (!signal?.aborted && matches.length < maxResults) {
+          ra.schedule(entryPath);
         }
-
-        // Recurse into directories to find deeper matches, but skip the
-        // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
-        // named them literally in the pattern. The search root itself is
-        // never pruned here (it is walked directly, not as a child entry).
-        if (entry.isDirectory()) {
-          if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
-            continue;
-          }
-          const shouldStop = await walk(entryPath, entryReal, entryRel);
-          if (shouldStop) {
-            return true;
-          }
+        const shouldStop = await walk(entryPath, entryReal, entryRel);
+        if (shouldStop) {
+          return true;
         }
       }
-    } catch (err) {
-      // An abort must escape the walk; anything else is an inaccessible
-      // directory, which is silently skipped.
-      if (err instanceof GlobAbortedError) throw err;
     }
 
     return false;
   }
 
-  await walk(dir, safeRealpath(dir), '');
+  try {
+    // Pre-schedule the root directory read so it overlaps with any
+    // synchronous setup the caller does before the first await.
+    ra.schedule(dir);
+    await walk(dir, safeRealpath(dir), '');
+  } finally {
+    ra.drain();
+  }
   return matches;
 }
 
