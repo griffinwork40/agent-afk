@@ -363,7 +363,14 @@ describe('runShellTask – per-task cwd', () => {
       { now: Date.now.bind(Date), writeTelemetry: col.writeTelemetry },
     );
     expect(result.status).toBe('success');
-    expect((result.responseExcerpt ?? '').trim()).toBe(targetDir);
+    // On Windows, Git Bash reports the CWD in POSIX style (/c/Users/…) while
+    // Node's realpathSync returns a Windows path (C:\Users\…). Normalise both
+    // sides to a lowercase forward-slash form so the comparison is host-OS-
+    // agnostic. On POSIX the normalisation is a no-op.
+    const normalise = (p: string) =>
+      p.replace(/^\/([a-z])\//i, (_, d: string) => `${d.toLowerCase()}:/`)
+       .replace(/\\/g, '/').toLowerCase();
+    expect(normalise((result.responseExcerpt ?? '').trim())).toBe(normalise(targetDir));
   });
 
   it('runs without cwd when task.cwd is absent (backward compat)', async () => {
