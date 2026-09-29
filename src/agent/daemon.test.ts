@@ -826,6 +826,9 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
   });
 
   it('POST /tasks carries cwd through to GET /tasks', async () => {
+    // Use tmpdir() so the path is guaranteed to exist on all platforms
+    // (POSIX: /tmp, Windows: C:\Users\...\Temp). The validator checks existence.
+    const cwdValue = tmpdir();
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -834,7 +837,7 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         taskId: 'cwd-task',
         command: '/cmd',
         cron: '* * * * *',
-        cwd: '/tmp',
+        cwd: cwdValue,
       }),
     });
     expect(res.status).toBe(201);
@@ -842,7 +845,7 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
     const tasks = (await listRes.json()) as Array<{ taskId: string; cwd?: string }>;
     const task = tasks.find((t) => t.taskId === 'cwd-task');
-    expect(task?.cwd).toBe('/tmp');
+    expect(task?.cwd).toBe(cwdValue);
   });
 
   it('POST /tasks rejects a nonexistent cwd with 400 and does not register the task', async () => {
