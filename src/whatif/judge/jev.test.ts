@@ -143,6 +143,26 @@ describe('createJevJudge', () => {
     expect(capturedState).toContain(INTERCEPTED_INTENT_RULE);
   });
 
+  it('grading instructions precede content in state (not appended after)', async () => {
+    // Finding #1 from issue #2454: the disregard note must be a leading preamble,
+    // not a trailing footnote, so Jev treats it as a directive rather than content.
+    let capturedState = '';
+    const callTool = vi.fn().mockImplementation(async (name: string, args: Record<string, unknown>) => {
+      capturedState = (args['state'] as string) ?? '';
+      return { content: '{"p1":0.9,"p2":0.1}' };
+    });
+    const judge = createJevJudge({ callTool });
+    await judge.grade(baseInput);
+    const instrIdx = capturedState.indexOf('Grading instructions');
+    const contentIdx = capturedState.indexOf('## User prompt');
+    expect(instrIdx).toBeGreaterThanOrEqual(0);
+    expect(contentIdx).toBeGreaterThan(instrIdx);
+    // Disregard note is inside the instructions block, before content.
+    const disregardIdx = capturedState.indexOf('disregard');
+    expect(disregardIdx).toBeGreaterThan(instrIdx);
+    expect(disregardIdx).toBeLessThan(contentIdx);
+  });
+
   it('passes questions as check-type array', async () => {
     const callTool = vi.fn().mockResolvedValue({ content: '{"p1":0.5}' });
     const judge = createJevJudge({ callTool });

@@ -329,6 +329,11 @@ export class CronScheduler {
     try {
     // Resolve executor early so the cwd guard can skip builtin tasks (which
     // ignore cwd entirely and would produce spurious errors if the dir vanishes).
+    // TODO(#2350): remove __BUILTIN_WORKTREE_PRUNE__ sentinel once all stored
+    // schedules have migrated to executor:'builtin'/command:'worktree-prune'.
+    // The sentinel was the pre-#2330 encoding; new schedules use the canonical
+    // form. Remove after one major release cycle (safe to drop when the field
+    // 'executor' is universally present in persisted schedules.json files).
     const isLegacySentinel = task.command === '__BUILTIN_WORKTREE_PRUNE__';
     const executor = task.executor
       ?? (isLegacySentinel ? 'builtin' as const : 'agent' as const);

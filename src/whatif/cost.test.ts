@@ -79,6 +79,36 @@ describe('estimateVerifyCost', () => {
     expect(Object.keys(result.breakdown).sort()).toEqual(['agent', 'discover', 'judge', 'predict']);
   });
 
+  it('agent output token assumption: 800 tokens per call is the calibration target', () => {
+    // agentOut = 800 is the model's output-token assumption, calibrated against
+    // the pilot median (575) with headroom for multi-tool episodes.  This test
+    // pins the agent breakdown to its expected value under the known pricing so
+    // any silent change to agentOut is caught directly rather than only through
+    // the pilot ratio bound (which tolerates up to a ~23% reduction in agentOut
+    // without failing).
+    const result = estimateVerifyCost({
+      ...baseInput,
+      // 1 sample, 1 episode, equal system tokens → agent USD = 2 × callCost(agentModel, 5000+1500, 800)
+      episodes: 1,
+      samples: 1,
+      systemTokens: { baseline: 5_000, candidate: 5_000 },
+      judgeExternal: true, // isolate agent cost
+    });
+    // 2 agent calls (1 baseline + 1 candidate), each with 6500 in + 800 out.
+    // claude-sonnet-5 rates: $2/$10 per MTok (pricing.ts).
+    const agentInputTok = 6_500;
+    const agentOutputTok = 800;
+    const perCallUsd = (agentInputTok / 1_000_000) * 2.0 + (agentOutputTok / 1_000_000) * 10.0;
+    const expectedAgentUsd = 2 * perCallUsd; // baseline + candidate
+    // discover + predict overhead from analystModel (same model here)
+    const discoverUsd = (20_000 / 1_000_000) * 2.0 + (1_000 / 1_000_000) * 10.0;
+    const predictUsd = (15_000 / 1_000_000) * 2.0 + (2_000 / 1_000_000) * 10.0;
+    expect(result.breakdown.agent).toBeCloseTo(expectedAgentUsd, 8);
+    expect(result.breakdown.discover).toBeCloseTo(discoverUsd, 8);
+    expect(result.breakdown.predict).toBeCloseTo(predictUsd, 8);
+    expect(result.breakdown.judge).toBe(0);
+  });
+
   it('pilot regression: estimate within 1.0–1.3× of pilot actual $6.21 (issue #2489)', () => {
     // Fixture: paid pilot run 20260928-153056-015fbb.
     // Parameters: claude-sonnet-4-6 agent, 13 targeted episodes, 2 samples,
@@ -98,6 +128,9 @@ describe('estimateVerifyCost', () => {
     const actual = 6.21;
     const ratio = pilotResult.usd / actual;
     // Target: mildly conservative — no more than 1.3× actual, at least 1.0×.
+    // NOTE: ratio < 1.0 means the model underestimates (e.g. multi-tool episodes
+    // exceeding the 1-call assumption); it does not mean the formula is wrong.
+    // The lower bound is a goal of the conservative model, not a mathematical invariant.
     expect(ratio).toBeGreaterThanOrEqual(1.0);
     expect(ratio).toBeLessThanOrEqual(1.3);
     // Call count sanity: 2 + 2×1×2×13 + 13×2×2 = 2 + 52 + 52 = 106

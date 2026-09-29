@@ -436,7 +436,7 @@ describe('content-hug guard in banner-path eviction (contentHugFrameSettled)', (
     //   change what the test exercises.
     internals.committedBandTopRow = CH_ANCHOR_ROW; // 5
     internals.committedBandBottomRow = CH_ROWS - 3; // 21 = desiredTopRow(22) - 1
-    internals.committedBandPaintedRows = PAINTED_ROWS; // 15 rows PENDING
+    internals.committedBandPaintedRows = PAINTED_ROWS; // 5 painted; BAND_LEN(20) - PAINTED_ROWS(5) = 15 rows PENDING
     internals.hasCommitted = true;
     // content-hug: set placementMode so contentHugFrameSettled gate is active.
     internals.placementMode = 'content-hug';

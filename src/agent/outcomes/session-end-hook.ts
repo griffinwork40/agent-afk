@@ -3,14 +3,15 @@
  *
  * Wired alongside the facet hook in default-hook-registry.ts. At SessionEnd
  * for a root (non-forked) session:
- *   1. Loads the session JSON turns (via loadStoredSession).
+ *   1. Loads the session turns (sidecar first, then journal fallback via loadOutcomeTurns).
  *   2. Recovers artifacts (commit SHAs, PR URLs, repo) from tool result previews.
  *   3. Runs all immediate LFs (closure, error_tail, verification,
  *      in_session_correction, self_report). Closure info is read from
  *      context.tracePath when available.
  *   4. Upserts into the outcome store as 'provisional' (settles_after = 7 days
  *      when artifacts present) or settled immediately otherwise.
- *   5. Stores first_prompt / first_cwd for cross_session_reask lookups.
+ *   5. Stores first_prompt_tokens / first_cwd for cross_session_reask lookups.
+ *      Raw prompt text is never written to disk (issue #2449).
  *
  * Fire-and-forget: never throws into or delays teardown.
  *
@@ -20,11 +21,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { HookHandler } from '../hooks.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
-import { loadStoredSession } from '../facets/store.js';
+import { loadOutcomeTurns } from './load-outcome-turns.js';
 import { recoverArtifacts } from './artifacts.js';
 import { runImmediateLFs, type ClosureInfo } from './lf-immediate.js';
 import { upsertVotes } from './store.js';
-import { lfReask } from './lf-reask.js';
+import { lfReask, promptFingerprint } from './lf-reask.js';
 import type { VerifiedOutcome } from './schema.js';
 
 // ---------------------------------------------------------------------------
@@ -116,9 +117,9 @@ async function _runImmediatePass(
   tracePath: string | undefined,
   cwd: string | undefined,
 ): Promise<void> {
-  // Load session turns — may be missing if sidecar was swept or corrupted
-  const session = loadStoredSession(sessionId);
-  const turns = session?.turns ?? [];
+  // Load session turns — sidecar first, journal fallback for scheduled/daemon
+  // sessions that never write a sidecar (see load-outcome-turns.ts).
+  const { turns } = loadOutcomeTurns(sessionId);
 
   // Recover artifacts and run LFs
   const artifacts = recoverArtifacts(turns);
@@ -141,6 +142,8 @@ async function _runImmediatePass(
   const sessionKind = detectSessionKind(turns);
   const firstPrompt = extractFirstPrompt(turns);
 
+  const fingerprint = firstPrompt !== undefined ? promptFingerprint(firstPrompt) : [];
+
   const base: Omit<VerifiedOutcome, 'votes' | 'history'> = {
     schema_version: 1,
     session_id: sessionId,
@@ -151,7 +154,7 @@ async function _runImmediatePass(
     session_kind: sessionKind,
     self_report: selfReport,
     artifacts,
-    ...(firstPrompt !== undefined ? { first_prompt: firstPrompt } : {}),
+    ...(fingerprint.length > 0 ? { first_prompt_tokens: fingerprint } : {}),
     ...(cwd !== undefined ? { first_cwd: cwd } : {}),
   };
 

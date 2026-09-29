@@ -275,7 +275,10 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
     episodes, predictions, structural, force, samples, agentModel, analystModel,
     judgeExternal, analystCostUsd, maxUsd, noBaselineSample, onProgress, closeJudges,
   } = input;
-  const episodesPerArm = episodes.length;
+  // Total episode count across real turns + synthetic + suite — the unit
+  // used for budget/cost estimation (distinct from minProbesPerPrediction,
+  // which drives per-prediction MDE power).
+  const totalEpisodes = episodes.length;
   const minProbesPerPrediction = resolveMinProbesPerPrediction(predictions, episodes);
   const { estimateBaselineSampleCost } = await import('./baseline-sample.js');
   const baselineSampleCostUsd = noBaselineSample ? 0 : estimateBaselineSampleCost({
@@ -287,7 +290,7 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
   });
   try {
     runPreflightChecks({
-      episodesPerArm,
+      episodesPerArm: totalEpisodes,
       minProbesPerPrediction,
       syntheticPerArm: predictions.reduce((s, p) => episodes.filter((e) => e.targets === p.id).length + s, 0),
       predictionCount: predictions.length,
@@ -308,5 +311,5 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
     await closeJudges();
     throw err;
   }
-  return { episodesPerArm, minProbesPerPrediction, noBaselineSample, baselineSampleCostUsd };
+  return { episodesPerArm: totalEpisodes, minProbesPerPrediction, noBaselineSample, baselineSampleCostUsd };
 }

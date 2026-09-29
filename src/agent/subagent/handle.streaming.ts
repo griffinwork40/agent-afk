@@ -320,6 +320,9 @@ export async function runToResult<T>(
     // never got a chance to run. `partialOutput` is typed as `T | string`
     // on `SubagentResult` so this assignment is honest — no cast needed.
     if (handle._lastStreamedContent.length > 0) {
+      // Streamed text takes precedence; synthesizeTimeoutPartial only fires
+      // when the text buffer is empty — so the TimeoutError branch below is
+      // unreachable when _lastStreamedContent is non-empty.
       result.partialOutput = handle._lastStreamedContent;
     } else if (err instanceof StreamIncompleteError) {
       // Empty text buffer: synthesize partial from accumulated tool results.

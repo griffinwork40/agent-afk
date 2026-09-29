@@ -113,18 +113,23 @@ function pct(proportion: number): string {
 export function mdePreflightLine(probesPerPrediction: number, targetMde = 0.10): string {
   const achieved = mdeForN(probesPerPrediction);
   const achievedPp = pp(achieved);
-  const needed10 = nForMde(0.10);
-  const needed20 = nForMde(0.20);
   const targetPp = pp(targetMde);
   const neededForTarget = nForMde(targetMde);
   if (probesPerPrediction < MIN_DISPLAY_N) {
     return `No episodes planned; cannot estimate MDE.`;
   }
+  // When the target is one of the two canonical reference points (10pp / 20pp),
+  // append both as context benchmarks.  For any other custom target, the
+  // parenthetical would be misleading, so we omit it.
+  const isCanonicalTarget = targetMde === 0.10 || targetMde === 0.20;
+  const parenthetical = isCanonicalTarget
+    ? ` (${nForMde(0.10)} for 10pp, ${nForMde(0.20)} for 20pp).`
+    : '.';
   return (
     `${probesPerPrediction} probe${probesPerPrediction === 1 ? '' : 's'}/prediction can detect ` +
     `about ${achievedPp} shifts (80% power); ` +
-    `to detect ${targetPp} you need about ${neededForTarget} probes/prediction ` +
-    `(${needed10} for 10pp, ${needed20} for 20pp).`
+    `to detect ${targetPp} you need about ${neededForTarget} probes/prediction` +
+    parenthetical
   );
 }
 

@@ -22,7 +22,7 @@ All environment variables recognized by `agent-afk` are listed here, grouped by 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
 | `AFK_COMPACT_KEEP_LAST_TURNS` | number | Number of recent turns the compactor keeps verbatim during /compact. Default tuned in compact-handler.ts. | — |
-| `AFK_COMPACT_MODEL` | string | Override the model used by the /compact summarizer. Falls back to a cheap default (haiku-class). | — |
+| `AFK_COMPACT_MODEL` | string | Model id or slot alias for the /compact summarizer and auto-compaction. Cross-provider supported: set to a gpt-* id on a Claude session (or claude-* on an OpenAI session) — the summarize call is routed to that provider using its credentials. The transcript is sent to the target provider (one-time privacy warning on first cross-provider use). Requires that provider's credentials. Falls back to haiku-class when unset. Also drives ghost-text suggestions on Claude sessions (use AFK_SUGGEST_MODEL to override independently). | — |
 | `AFK_DEFAULT_SUBAGENT_MODEL` | string | Override the default model used when a subagent is dispatched without an explicit model. | — |
 | `AFK_DISABLE_PROMPT_CACHE` | boolean | Disable Anthropic prompt caching when set to 1/true/yes/on. Unset = caching enabled. | `0` |
 | `AFK_EFFORT` | string | Effort hint guiding adaptive-thinking depth, forwarded as Anthropic output_config.effort (model-gated; ignored where unsupported). Accepts low \| medium \| high \| xhigh \| max. | — |

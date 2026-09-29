@@ -41,6 +41,10 @@ describe('mdeForN', () => {
     expect(mdeForN(0)).toBe(1);
   });
 
+  it('returns 1 for n=-1 (guard covers n <= 0)', () => {
+    expect(mdeForN(-1)).toBe(1);
+  });
+
   it('n=20: MDE ≈ 44pp (80% power, worst-case variance)', () => {
     // (1.96 + 0.8416) × sqrt(0.5/20) = 2.8016 × 0.1581 ≈ 0.443
     const mde = mdeForN(20);
@@ -169,6 +173,21 @@ describe('mdePreflightLine', () => {
     const line = mdePreflightLine(200, 0.05);
     expect(line).toContain('200 probes/prediction');
     expect(line).toContain('5pp');
+    // Custom targets omit the canonical (10pp, 20pp) parenthetical.
+    expect(line).not.toContain('for 10pp');
+    expect(line).not.toContain('for 20pp');
+  });
+
+  it('includes canonical benchmarks for default 10pp target', () => {
+    const line = mdePreflightLine(200);
+    expect(line).toContain('for 10pp');
+    expect(line).toContain('for 20pp');
+  });
+
+  it('includes canonical benchmarks for 20pp target', () => {
+    const line = mdePreflightLine(200, 0.20);
+    expect(line).toContain('for 10pp');
+    expect(line).toContain('for 20pp');
   });
 
   it('handles n=1 (singular)', () => {

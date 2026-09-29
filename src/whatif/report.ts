@@ -22,6 +22,7 @@ import { scoredOn, renderVerifiedPredictionTable } from './report.predictions.js
 import { describeChange } from './operators/index.js';
 import { verdictEmoji, verdictLabel } from './report-verdict.js';
 import { mdeLimitLine, headroomLimitLine } from './mde.js';
+import { CROSS_CHECK_MIN_AGREEMENT, CROSS_CHECK_MIN_ITEMS } from './stats.js';
 export { buildHeadline } from './report.headline.js';
 
 // ---------------------------------------------------------------------------
@@ -191,7 +192,7 @@ export function renderMarkdown(report: WhatifReport): string {
         : '';
     lines.push(`${judgeDesc}${crossCheck}\n`);
     lines.push(
-      'The cross-check re-grades a ~10% sample of outputs with a second judge model; per-prediction agreement is shown in the "Judge agree" column and, when fewer than 5 items were sampled, flagged as "too few cross-checks". A confirmed or refuted verdict is automatically downgraded to unclear when per-prediction agreement is below 75% (judges disagree).\n',
+      `The cross-check re-grades a ~10% sample of outputs with a second judge model; per-prediction agreement is shown in the "Judge agree" column and, when fewer than ${CROSS_CHECK_MIN_ITEMS} items were sampled, flagged as "too few cross-checks". A confirmed or refuted verdict is automatically downgraded to unclear when per-prediction agreement is below ${Math.round(CROSS_CHECK_MIN_AGREEMENT * 100)}% (judges disagree).\n`,
     );
   }
 

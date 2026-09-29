@@ -198,6 +198,49 @@ jobs:
           path: coverage/
           retention-days: 14
 
+  # Node 26 compatibility leg (issue #2525).
+  #
+  # Why a separate job rather than adding node-version to the `test` matrix:
+  # the `test` job uploads a coverage artifact named coverage-report-${{ matrix.os }}.
+  # Artifacts in actions/upload-artifact@v4 are immutable-named; adding a second
+  # dimension to the matrix would require changing the artifact name (to include
+  # node-version) in every branch of the matrix, touching the existing required gate.
+  # A standalone job keeps the `test` matrix and its artifacts unchanged, Node 22
+  # remains the primary, and this job is the dedicated Node 26 falsifier.
+  #
+  # Runs `pnpm test` (no coverage gate) for the same reason the Windows leg does:
+  # coverage floors could mask assertion failures on a new Node version, and the
+  # ubuntu `test` leg already enforces the gate.
+  #
+  # Closing condition (issue #2525): if Node 26 is promoted to an LTS and the suite
+  # is green, fold this into the `test` matrix by adding node-version: [22, 26] and
+  # updating the artifact name to include node-version.
+  test-node26:
+    name: Test (ubuntu-latest, Node 26)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test (Node 26 — includes undici gzip-bridge regression, issue #2525)
+        run: pnpm test
+
   # Windows compat leg (issue #703). Trigger-scoped, NOT part of the `test` matrix.
   #
   # Why: Windows is not a supported platform yet — 85 of 699 test files fail, ~90% of

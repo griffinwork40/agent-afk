@@ -72,6 +72,9 @@ export function synthesizeEmptyBufferPartial(
  * History: 2026-09-28, a compose child hard-killed at 45 min after 48 tool
  * results reached its parent as a bare "Operation timed out" — indistinguishable
  * from a child that did nothing (timeout-partial.test.ts).
+ *
+ * @returns undefined when no tool results were gathered (caller should omit
+ *   `partialOutput` from the result in that case).
  */
 export function synthesizeTimeoutPartial(
   subagentId: string,
@@ -81,7 +84,7 @@ export function synthesizeTimeoutPartial(
   if (toolResults.length === 0) return undefined;
   const totalBytes = toolResults.reduce((s, r) => s + (r.sizeBytes ?? 0), 0);
   const errorCount = toolResults.filter((r) => r.isError).length;
-  const errorSuffix = errorCount > 0 ? `, ${errorCount} errored` : '';
+  const errorSuffix = errorCount > 0 ? ` (${errorCount} errored)` : '';
   const byName = new Map<string, number>();
   for (const c of toolCalls) byName.set(c.name, (byName.get(c.name) ?? 0) + 1);
   const tools = [...byName.entries()].map(([name, n]) => `${name} ×${n}`).join(', ');

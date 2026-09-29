@@ -53,7 +53,7 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
 }
 
 function isMdeError(err: unknown): err is WhatifMdeErrorType {
-  return err instanceof Error && 'episodesPerArm' in err;
+  return err instanceof Error && err.name === 'WhatifMdeError';
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +274,8 @@ async function runWhatifCommand(
           process.stderr.write('Aborted.\n');
           process.exit(0);
         }
-        // Re-run with force=true after user confirms.
+        // Re-run with force=true after user confirms, then fall through to
+        // the shared render block below instead of duplicating it here.
         const { runWhatif: rerun } = await import('../../whatif/run.js');
         spinner?.start();
         try {
@@ -284,21 +285,15 @@ async function runWhatifCommand(
           throw err2;
         }
         spinner?.stop();
-        if (parsed.json) {
-          process.stdout.write(JSON.stringify(report, null, 2) + '\n');
-          return;
-        }
-        const termLines2 = renderTerminal(report, palette);
-        for (const line of termLines2) process.stdout.write(line + '\n');
-        process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
-        return;
+        // Fall through to shared render block.
+      } else {
+        // Non-interactive, no --yes: print message and fail.
+        process.stderr.write(`${palette.error('whatif:')} ${detail}\n`);
+        process.exit(2);
       }
-      // Non-interactive, no --yes: print message and fail.
-      process.stderr.write(`${palette.error('whatif:')} ${detail}\n`);
-      process.exit(2);
+    } else {
+      throw err;
     }
-
-    throw err;
   }
 
   spinner?.stop();
