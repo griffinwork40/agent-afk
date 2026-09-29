@@ -227,14 +227,15 @@ describe('createBashRestrictionHook — interpreter guard interactivity gate (H2
     expect(hook(ctx(cred)).decision).not.toBe('block');
   });
 
-  it('forcing the guard on headless does not change the substring check (stays open)', () => {
+  it('forcing the guard on headless does NOT change the substring check — it is now always active on headless (#2302)', () => {
     const hook = createBashRestrictionHook({
       getGrantManager: () => undefined,
       forceInterpreterGuard: true,
     });
-    // A plain restricted-path cat (no interpreter) stays open on headless —
-    // forceInterpreterGuard only governs the interpreter guard.
-    expect(hook(ctx(`cat ${homedir()}/.ssh/id_rsa`)).decision).not.toBe('block');
+    // Since #2302, a plain restricted-path cat blocks on headless too —
+    // the substring check uses the builtin floor without grant-filtering on
+    // headless surfaces. forceInterpreterGuard only governs the interpreter guard.
+    expect(hook(ctx(`cat ${homedir()}/.ssh/id_rsa`)).decision).toBe('block');
   });
 });
 
@@ -395,11 +396,20 @@ describe('createBashRestrictionHook — context.grantManager precedence (#514)',
 });
 
 describe('createBashRestrictionHook — wiring failsafes', () => {
-  it('fails open when grant manager is undefined (bootstrap race)', () => {
+  it('blocks credential paths on headless (no grant manager) — closes #2302 bypass', () => {
     const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
     const decision = hook(ctx(`cat ${homedir()}/.ssh/id_rsa`));
-    // Substring check is gated by grant manager — when unwired, fail open.
-    expect(decision.decision).not.toBe('block');
+    // Since #2302: substring check uses the builtin floor on headless, no longer
+    // fails open. Prompt-injected payloads cannot bypass the write-denylist via bash.
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
+  });
+
+  it('blocks ~/.afk/config writes on headless (closes the afk.env injection bypass)', () => {
+    const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
+    const decision = hook(ctx(`echo AFK_SYSTEM_PROMPT=evil >> ${homedir()}/.afk/config/afk.env`));
+    expect(decision.decision).toBe('block');
+    expect(decision.reason).toContain('headless surface');
   });
 
   it('does NOT block on non-bash tools', () => {

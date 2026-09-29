@@ -286,7 +286,7 @@ export function createDefaultHookRegistry(
   // dispatcher, so on those surfaces:
   //   - path-approval PreToolUse: fails open (no prompt; the typed-tool
   //     handler's own resolveAndContain still enforces containment);
-  //   - bash restricted-root substring check: fails open (no backstop);
+  //   - bash restricted-root substring check: uses the builtin floor on headless (#2302);
   //   - bash interpreter denylist: ALSO fails open by default — it is gated on
   //     a wired grant manager (interactive surfaces only), so headless
   //     automation that runs `python -c` / `sh -c` one-liners is not hard-
