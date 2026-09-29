@@ -27,6 +27,25 @@ export interface BuildDaemonSessionFactoryOpts {
 }
 
 /**
+ * The daemon session factory: a callable that builds one AgentSession per task,
+ * plus an explicit, opt-in {@link DaemonSessionFactory.dispose} that releases
+ * the SQLite-backed stores the factory itself lazily created.
+ */
+export type DaemonSessionFactory = ((
+  config: AgentConfig,
+  ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter,
+) => AgentSession) & {
+  /**
+   * Close the shared MemoryStore / StateStore this factory created (if any)
+   * and reset them so a later spawn re-opens fresh handles. Sessions never
+   * close these stores themselves — the factory is the owner. Idempotent.
+   * Callers (tests, or a daemon shutdown path) must only call this once no
+   * session built by this factory is still running.
+   */
+  dispose(): void;
+};
+
+/**
  * Build the fully-wired session factory daemon tasks need so that
  * skill-dispatching commands like `/forge-friction --auto` or `/review pr 123`
  * can call the `skill`, `agent`, and `compose` tools.
@@ -41,7 +60,7 @@ export interface BuildDaemonSessionFactoryOpts {
  */
 export function buildDaemonSessionFactory(
   opts: BuildDaemonSessionFactoryOpts,
-): (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter) => AgentSession {
+): DaemonSessionFactory {
   // Invariant: exactly one MemoryStore per daemon process. The constructor
   // opens a SQLite handle synchronously (see memory-store.ts), so building a
   // fresh store inside the per-task closure would leak one file descriptor on
@@ -51,7 +70,9 @@ export function buildDaemonSessionFactory(
   // task session, which also gives cross-task memory continuity for free. The
   // store is intentionally not closed here: the daemon owns it for its whole
   // process lifetime and the SIGINT/SIGTERM shutdown path ends in
-  // process.exit(), which reclaims the descriptor.
+  // process.exit(), which reclaims the descriptor. Callers that need the
+  // handles released earlier (tests on Windows, where an open kv.db blocks
+  // tmpdir removal) call the returned factory's opt-in `dispose()`.
   //
   // WorkspaceStore is intentionally NOT shared across tasks: one task's
   // published entries are irrelevant to the next task's compose nodes, and
@@ -59,7 +80,7 @@ export function buildDaemonSessionFactory(
   // task's run. Create a fresh store per task invocation instead.
   let memoryStore: MemoryStore | undefined;
   let stateStore: StateStore | undefined;
-  return (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
+  const factory = (config: AgentConfig, ownedTraceWriter?: import('../../agent/trace/index.js').TraceWriter): AgentSession => {
     // Ephemeral abort controller — the daemon root session has no parent
     // to propagate cancellation from.
     const abortCtrl = new AbortController();
@@ -193,4 +214,12 @@ export function buildDaemonSessionFactory(
     });
     return session;
   };
+  return Object.assign(factory, {
+    dispose(): void {
+      memoryStore?.close();
+      memoryStore = undefined;
+      stateStore?.close();
+      stateStore = undefined;
+    },
+  });
 }
