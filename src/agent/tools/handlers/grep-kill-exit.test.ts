@@ -51,16 +51,26 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
 }
 
-function lastChild(): FakeChild {
-  const c = spawned.children.at(-1);
-  if (!c) throw new Error('spawn was not called');
-  return c as FakeChild;
+interface Tracked<T> { settled: () => boolean; value: () => T | undefined; promise: Promise<T> }
+
+function track<T>(p: Promise<T>): Tracked<T> {
+  let done = false;
+  let value: T | undefined;
+  p.then((v) => { done = true; value = v; }, (e: unknown) => { done = true; value = e as T; });
+  return { settled: () => done, value: () => value, promise: p };
 }
 
-function track<T>(p: Promise<T>): { settled: () => boolean; promise: Promise<T> } {
-  let done = false;
-  void p.then(() => { done = true; });
-  return { settled: () => done, promise: p };
+/**
+ * Wait (bounded) for the handler to reach `spawn`. The handler awaits a lazy
+ * `import('@vscode/ripgrep')` and does sync fs work first, so a fixed number of
+ * macrotask turns is not enough on slow runners (observed on Windows CI).
+ */
+async function spawnedChild(run: Tracked<unknown>): Promise<FakeChild> {
+  await vi.waitFor(() => {
+    if (run.settled()) throw new Error(`handler settled before spawn: ${JSON.stringify(run.value())}`);
+    if (spawned.children.length === 0) throw new Error('spawn was not called');
+  }, { timeout: 5_000, interval: 5 });
+  return spawned.children.at(-1) as FakeChild;
 }
 
 describe('grep handler waits for a killed child to exit', () => {
@@ -76,8 +86,7 @@ describe('grep handler waits for a killed child to exit', () => {
   it('scan-cap kill: does not resolve until the child emits exit', async () => {
     const handler = createGrepHandler(undefined, { scanCapBytes: 10 });
     const run = track(handler({ pattern: 'x', path: process.cwd() }, new AbortController().signal));
-    await flush();
-    const child = lastChild();
+    const child = await spawnedChild(run);
 
     child.stdout.emit('data', Buffer.from('x'.repeat(64)));
     await flush();
@@ -95,8 +104,7 @@ describe('grep handler waits for a killed child to exit', () => {
     const ctrl = new AbortController();
     const handler = createGrepHandler();
     const run = track(handler({ pattern: 'x', path: process.cwd() }, ctrl.signal));
-    await flush();
-    const child = lastChild();
+    const child = await spawnedChild(run);
 
     ctrl.abort();
     await flush();
@@ -111,8 +119,7 @@ describe('grep handler waits for a killed child to exit', () => {
   it('normal completion is not delayed by the exit wait', async () => {
     const handler = createGrepHandler();
     const run = track(handler({ pattern: 'x', path: process.cwd() }, new AbortController().signal));
-    await flush();
-    const child = lastChild();
+    const child = await spawnedChild(run);
     child.stdout.emit('data', Buffer.from('a.txt:1:x\n'));
     child.emit('close', 0);
     await flush();
