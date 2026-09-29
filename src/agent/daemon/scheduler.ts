@@ -505,13 +505,14 @@ export class CronScheduler {
   ): void {
     try {
       appendFileSync(this.telemetryPath(), `${JSON.stringify(record)}\n`, 'utf-8');
-      const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
-      fireOnTaskComplete(record, opts, task, details);
     } catch (err) {
-      // Telemetry failure must not crash the daemon. Log to stderr and move on.
+      // Telemetry write failure must not crash the daemon or suppress the
+      // completion push — log and fall through so fireOnTaskComplete still runs.
       const msg = errorMessage(err);
       // eslint-disable-next-line no-console
       console.error(`[daemon] telemetry write failed: ${msg}`);
     }
+    const opts: FireOnTaskCompleteOptions = { onTaskComplete: this.options.onTaskComplete };
+    fireOnTaskComplete(record, opts, task, details);
   }
 }

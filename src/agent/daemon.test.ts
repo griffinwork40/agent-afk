@@ -361,10 +361,11 @@ describe('CronScheduler onTaskComplete callback', () => {
     expect(callback).toHaveBeenCalledTimes(1);
   });
 
-  it('onTaskComplete is NOT fired when appendFileSync throws', async () => {
+  it('onTaskComplete IS fired even when appendFileSync throws (#2305)', async () => {
     // Point telemetryPath at a location that will fail to write (a directory
     // path masquerading as a file path — writing to a directory errors on all
-    // platforms).
+    // platforms). The new contract: telemetry failure must never suppress the
+    // completion push; fireOnTaskComplete runs after the catch block.
     const badTelemetryPath = mkdtempSync(join(tmpdir(), 'agent-afk-badtel-'));
     const callback = vi.fn();
     scheduler = new CronScheduler({
@@ -382,8 +383,8 @@ describe('CronScheduler onTaskComplete callback', () => {
 
     // tick still resolves (telemetry failure is swallowed)
     await expect(scheduler.tick('t')).resolves.toMatchObject({ status: 'success' });
-    // callback must NOT have been called because the write threw before it was reached
-    expect(callback).not.toHaveBeenCalled();
+    // callback MUST have been called exactly once despite the write throwing
+    expect(callback).toHaveBeenCalledTimes(1);
 
     rmSync(badTelemetryPath, { recursive: true, force: true });
   });
