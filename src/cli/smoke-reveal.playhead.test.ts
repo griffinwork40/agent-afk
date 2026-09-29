@@ -84,12 +84,9 @@ describe('RevealTimeline', () => {
     // instant it arrives (zero first-token latency), so allow one character
     // plus the continuous bound. The integer front adds at most one character
     // of rounding. The legacy per-burst schedule changed by 3 chars/frame.
-    //
-    // The 0.6 bound was calibrated for TAU_MS=42.5ms (prose capacity 84 chars).
-    // With TAU_MS=100ms the relaxation is gentler, but the smaller prose capacity
-    // (capMs*MAX_CPS/1000 = 350*180/1000 = 63 chars) causes slightly larger
-    // overflow-settlement pos jumps at burst intakes. Raised to 1.0: still
-    // well under one character/frame, still rules out the legacy 3 chars/frame.
+    // The acceleration and braking caps (MAX_ACCEL, MAX_BRAKE) keep the
+    // steady pacer near 0.5 here, including easing to rest at the end; 1.0
+    // still rules out the legacy 3 chars/frame and a front that stops dead.
     expect(maxChange(fadv.slice(4))).toBeLessThan(1.0);
     expect(maxChange(fadv)).toBeLessThan(1.6);
     expect(maxChange(adv)).toBeLessThanOrEqual(2);
@@ -185,23 +182,23 @@ describe('RevealTimeline', () => {
   it('bounds combined duration across mixed runs, rather than granting each its own backlog', () => {
     const tl = new RevealTimeline();
     // Capacities derived from the run specs above and the exported constants:
-    //   prose capacity  = capMs * MAX_CPS / 1000         = 350 * 180 / 1000 = 63
+    //   prose capacity   = capMs * MAX_CPS / 1000         = 350 * MAX_CPS / 1000
     //   heading capacity = capMs * HEADING_MAX_CPS / 1000 = 900 * (1000/18) / 1000 = 50
-    const PROSE_CAP = 350 * MAX_CPS / 1000;           // 63 chars
-    const HEADING_CAP = 900 * HEADING_MAX_CPS / 1000; // 50 chars
-    tl.record(0, prose(60));
-    // heading(25) uses 25/50 = 0.5 of budget; prose keeps 0.5 * PROSE_CAP = 31.5 chars.
-    // settle to ceil(60 - 31.5) = 29.
+    const PROSE_CAP = 350 * MAX_CPS / 1000;
+    const HEADING_CAP = 900 * HEADING_MAX_CPS / 1000;
+    const P1 = Math.round(PROSE_CAP * 0.95);
+    tl.record(0, prose(P1));
+    // heading(25) uses 25/50 = 0.5 of budget; prose keeps 0.5 * PROSE_CAP.
     tl.record(0, heading(25));
-    const pos1 = Math.ceil(60 - 0.5 * PROSE_CAP); // 29
+    const pos1 = Math.ceil(P1 - 0.5 * PROSE_CAP);
     expect(tl.position).toBe(pos1);
     expect(tl.isSettled(pos1 - 1)).toBe(true);
     expect(tl.isSettled(pos1)).toBe(false);
-    // prose(42) uses 42/63 ≈ 2/3 of budget; heading keeps (1 - 2/3) * 50 ≈ 16.67 chars.
-    // settle heading at ceil(85 - 16.67) = 69.
-    tl.record(0, prose(42));
-    const budgetAfterProse = 1 - 42 / PROSE_CAP;                // ≈ 1/3
-    const pos2 = Math.ceil(85 - budgetAfterProse * HEADING_CAP); // 69
+    // A second prose run using 2/3 of the budget leaves the heading 1/3 of its capacity.
+    const P2 = Math.round(PROSE_CAP * 2 / 3);
+    tl.record(0, prose(P2));
+    const budgetAfterProse = 1 - P2 / PROSE_CAP;
+    const pos2 = Math.ceil(P1 + 25 - budgetAfterProse * HEADING_CAP);
     expect(tl.position).toBe(pos2);
     expect(tl.isSettled(pos2 - 1)).toBe(true);
     expect(tl.isSettled(pos2)).toBe(false);
@@ -252,12 +249,12 @@ describe('RevealTimeline', () => {
 
   it('repeated overload bounds retained memory and only overflows on intake', () => {
     const tl = new RevealTimeline();
-    // Retained = queued backlog (<= 84 capacity) + everything that arrived
+    // Retained = queued backlog (<= prose capacity) + everything that arrived
     // within one fade lifetime: overflow never cuts an in-flight fade short,
     // so settled overflow queued behind a still-fading letter waits for it.
     // Still a fixed bound (arrival rate x lifetime), independent of run length.
     const life = 340;
-    const bound = 84 + (Math.ceil(life / 16) + 1) * 100;
+    const bound = (350 * MAX_CPS) / 1000 + (Math.ceil(life / 16) + 1) * 100;
     for (let t = 0; t < 2000; t += 16) {
       tl.record(t, prose(100));
       tl.prune(t, () => life);
@@ -303,8 +300,8 @@ describe('RevealTimeline', () => {
 
   it('trimNewest and retirement do not strand a run or reuse settlement for new text', () => {
     const tl = new RevealTimeline();
-    tl.record(0, prose(200));
-    tl.trimNewest(100); // trim into settled prefix
+    tl.record(0, prose(100 + 2 * (350 * MAX_CPS) / 1000));
+    tl.trimNewest(tl.recorded - 100); // trim into settled prefix
     expect(tl.recorded).toBe(100);
     expect(tl.newestBirthEstimate(0)).toBeNull();
     tl.record(0, prose(4));

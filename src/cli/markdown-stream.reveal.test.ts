@@ -21,7 +21,8 @@ import chalk from 'chalk';
 import { PassThrough } from 'node:stream';
 import { StreamingMarkdownRenderer } from './markdown-stream.js';
 import { COMMIT_DEFER_MAX_MS, REVEAL_SETTLE_MAX_MS } from './markdown-stream.commit-defer.js';
-import { SMOKE_GLYPHS, MAX_LAG_MS, INK_MS } from './smoke-reveal.js';
+import { SMOKE_GLYPHS, MAX_LAG_MS, INK_MS, SmokeReveal } from './smoke-reveal.js';
+import { MAX_CPS } from './smoke-reveal.playhead.js';
 import { resetSmokeToneCache } from './smoke-reveal.tones.js';
 
 const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
@@ -251,17 +252,18 @@ describe('StreamingMarkdownRenderer text reveal: ink (AFK_SMOKE_TEXT=0)', () => 
 
   it('bounds a deferred commit by COMMIT_DEFER_MAX_MS even if the block is still fading', async () => {
     const { r, commits, overlays } = makeRenderer();
-    // A full-capacity paragraph (MAX_LAG_MS * MAX_CPS = 360 chars): the front
-    // eases out as its backlog drains, so the last letters are still inking in
-    // past COMMIT_DEFER_MAX_MS (natural settle is ~2.7 s). The bound must force
-    // the commit anyway rather than waiting for the fade.
-    const p1 = 'a'.repeat(360);
+    // The pacer finishes even a full-capacity burst well inside the bound, so
+    // pin the bound itself: the reveal reports an unfinished fade forever, and
+    // the commit must still happen at COMMIT_DEFER_MAX_MS.
+    const hold = vi.spyOn(SmokeReveal.prototype, 'revealHoldRemaining').mockReturnValue(32);
+    const p1 = 'a'.repeat((MAX_LAG_MS * MAX_CPS) / 1000);
     r.push(p1 + '\n\nTail');
     await vi.advanceTimersByTimeAsync(COMMIT_DEFER_MAX_MS - 50);
     expect(commits).toHaveLength(0);
-    expect(hasInk(overlays.at(-1) ?? ''), 'still fading just before the bound').toBe(true);
+    expect(overlays.length, 'still painting just before the bound').toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(50);
     expect(commits.map((c) => stripAnsi(c).replace(/\s/g, ''))).toEqual([p1]);
+    hold.mockRestore();
     await flushNow(r);
   });
 

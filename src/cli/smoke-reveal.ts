@@ -105,11 +105,12 @@ export const STAGGER_MS = 6;
 /**
  * Nominal queued-animation duration budget for prose, not an arrival deadline.
  * Invariant: run capacity is `MAX_LAG_MS * MAX_CPS` characters (playhead
- * record), so this scales inversely with `MAX_CPS` to hold capacity at 360.
- * Lowering the ceiling alone shrinks capacity and turns "slower" into
- * overflow chunks snapping solid.
+ * record), 720 at the 600 cps ceiling. The steady pacer keeps its backlog
+ * near `TARGET_LAG_MS` of text, far below this, so only a pathological lump
+ * overflows. Lowering the ceiling alone shrinks capacity and turns "slower"
+ * into overflow chunks snapping solid.
  */
-export const MAX_LAG_MS = 2000;
+export const MAX_LAG_MS = 1200;
 /** Minimum spacing for heading lines (`HEADING_MAX_CPS`): slower, so the smoke has room to roll. */
 export const ACCENT_STAGGER_MS = 18;
 /** Nominal queued-animation duration budget for heading lines. */
