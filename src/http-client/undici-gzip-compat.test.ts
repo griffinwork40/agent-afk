@@ -1,78 +1,98 @@
 /**
- * Regression test for nodejs/undici#5345 — the undici 7.27.0 gzip bridge bug.
+ * Regression test for issue #2525 / nodejs/undici#5345 (the undici 7.27.0
+ * dispatch-handler-bridge bug).
  *
- * On Node 26.0.0 with undici 7.27.0 (npm), importing the npm package corrupts
- * the built-in fetch dispatcher: gzip-encoded responses lose their headers and
- * arrive as a still-compressed string instead of decompressed JSON. This was
- * fixed in undici 7.27.1 (UnwrapController gains rawHeaders/rawTrailers).
+ * On Node 26.0.0 (bundled undici 8.0.2), once npm undici 7.27.0 is loaded,
+ * Node's BUILT-IN fetch loses every response header and hands back the body
+ * still gzip-compressed. It happens through two paths, and agent-afk uses both:
+ *   1. Global slot: importing npm undici writes its Agent into
+ *      globalThis[Symbol.for('undici.globalDispatcher.2')], and the built-in
+ *      fetch then dispatches through it. This is the Anthropic/OpenAI SDK path.
+ *   2. Per-request: egress-guard.ts passes an npm-undici `Agent` as
+ *      `dispatcher` to globalThis.fetch. This is the web_scrape/web_request path.
+ * Fixed in 7.27.1 (UnwrapController gains rawHeaders/rawTrailers).
  *
- * This test:
- *   - Spins up a local node:http server that serves gzip JSON
- *   - Uses Node's built-in fetch (affected by the dispatcher override undici installs)
- *   - Asserts that content-type is present AND the body parses as valid JSON
+ * Invariant: both cases must route the built-in fetch through an npm-undici
+ * Agent, or they pass on the broken version too. (The first draft never
+ * imported undici and passed on 7.27.0 + Node 26.) Verified on Node 26.0.0:
+ * both cases fail with 7.27.0 installed and pass with 7.30.0. The test only
+ * discriminates on Node 26+, which is why CI has a `test-node26` job. On
+ * Node 22/24 it is a plain passing check.
  *
- * It passes on every Node version with a correct undici build. On Node 26 +
- * undici 7.27.0 it fails at the assertions, which is the discriminating signal
- * this CI leg was added to catch (see issue #2525 and .github/workflows/ci.yml).
- *
+ * No network: a local node:http server serves gzip JSON.
  * @see https://github.com/nodejs/undici/pull/5345
  */
 
-import { createServer } from 'node:http';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
-import { AddressInfo } from 'node:net';
-import { describe, it, expect } from 'vitest';
+import { Agent, setGlobalDispatcher } from 'undici';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-/** Spin up a minimal HTTP server that returns gzip JSON, resolve when ready. */
-function startGzipServer(): Promise<{ url: string; close: () => void }> {
-  return new Promise((resolve, reject) => {
-    const payload = JSON.stringify({ ok: true, value: 42 });
-    const compressed = gzipSync(payload);
+const PAYLOAD = { ok: true, value: 42 };
+const GLOBAL_DISPATCHER_V2 = Symbol.for('undici.globalDispatcher.2');
+const GLOBAL_DISPATCHER_V1 = Symbol.for('undici.globalDispatcher.1');
 
-    const server = createServer((_req, res) => {
-      res.writeHead(200, {
-        'content-type': 'application/json',
-        'content-encoding': 'gzip',
-        'content-length': String(compressed.length),
-      });
-      res.end(compressed);
+let server: Server;
+let url: string;
+
+beforeAll(async () => {
+  const compressed = gzipSync(JSON.stringify(PAYLOAD));
+  server = createServer((_req, res) => {
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'content-encoding': 'gzip',
+      'content-length': String(compressed.length),
     });
-
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address() as AddressInfo;
-      resolve({
-        url: `http://127.0.0.1:${port}/`,
-        close: () => server.close(),
-      });
-    });
-
-    server.once('error', reject);
+    res.end(compressed);
   });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+  url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+});
+
+afterAll(async () => {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+async function expectIntactResponse(res: Response): Promise<void> {
+  // Missing on 7.27.0 + Node 26: every header is dropped.
+  expect(res.headers.get('content-type')).toMatch(/application\/json/);
+  // Still-gzipped on 7.27.0 + Node 26, so JSON parsing throws.
+  expect(await res.json()).toEqual(PAYLOAD);
 }
 
-describe('undici gzip-bridge compatibility (issue #2525)', () => {
-  it(
-    'built-in fetch returns headers and decompressed JSON body from a local gzip server',
-    async () => {
-      const { url, close } = await startGzipServer();
-      try {
-        // `fetch` here is Node's global built-in — the one whose dispatcher
-        // undici overrides when imported as an npm package. On undici 7.27.0 +
-        // Node 26, the response headers are empty and body is the raw gzip bytes.
-        const res = await fetch(url);
+describe('undici gzip-bridge compatibility with built-in fetch (issue #2525)', () => {
+  it('global-dispatcher path: npm-undici Agent in the process-wide slot', async () => {
+    // In production npm undici loads before the first fetch, so its Agent ends
+    // up in the slot. Inside a vitest worker the built-in fetch may already have
+    // filled the slot with its own Agent, and npm undici only sets it when empty.
+    // So install ours explicitly (what setGlobalDispatcher does), then restore
+    // it. Both properties are writable, just not configurable.
+    const slots = [GLOBAL_DISPATCHER_V2, GLOBAL_DISPATCHER_V1] as const;
+    const g = globalThis as unknown as Record<symbol, unknown>;
+    const saved = slots.map((s) => g[s]);
+    const dispatcher = new Agent();
+    setGlobalDispatcher(dispatcher);
+    try {
+      await expectIntactResponse(await fetch(url));
+    } finally {
+      slots.forEach((s, i) => {
+        g[s] = saved[i];
+      });
+      await dispatcher.close();
+    }
+  });
 
-        // 1) Content-Type header must be present (missing on 7.27.0 + Node 26).
-        expect(res.headers.get('content-type')).toMatch(/application\/json/);
-
-        // 2) Body must decompress and parse (still-gzipped on 7.27.0 + Node 26).
-        const json = (await res.json()) as { ok: boolean; value: number };
-        expect(json.ok).toBe(true);
-        expect(json.value).toBe(42);
-      } finally {
-        close();
-      }
-    },
-    // Generous timeout — server startup is instant locally; CI may be slower.
-    10_000,
-  );
+  it('per-request path: npm-undici Agent passed as `dispatcher` (egress-guard shape)', async () => {
+    const dispatcher = new Agent();
+    try {
+      // Same cast egress-guard.ts uses: lib.dom RequestInit has no `dispatcher`.
+      await expectIntactResponse(await fetch(url, { dispatcher } as RequestInit));
+    } finally {
+      await dispatcher.close();
+    }
+  });
 });
