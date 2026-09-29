@@ -110,7 +110,7 @@ export async function* runTurn(
   // discipline. `turn` survives the whole turn, `retry` is released at every
   // clean round boundary, `trace` outlives both because its abort listener can
   // fire during any phase.
-  const turn = new TurnAccumulator();
+  const turn = input.turnState ?? new TurnAccumulator(); // survives retry-tier replays (RunTurnInput.turnState)
   const retry = new RoundRetryBudget();
   // Both TTFB re-drive sites (connection-phase and mid-stream) and both backoff
   // classes share one budget instance — see RoundRetryBudget's contract.
