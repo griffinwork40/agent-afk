@@ -18,11 +18,16 @@
  * path itself from the validated session id, so a request cannot name an
  * arbitrary file.
  *
+ * Implementation note: the lookup uses {@link findToolResultAsync} so the
+ * journal read is fully non-blocking (readline over a ReadStream). The sync
+ * `findToolResult` from reader.ts is retained for `afk trace show --results`,
+ * which is a one-shot CLI where synchronous reads are acceptable.
+ *
  * @module web-server/routes.tool-results
  */
 
 import type { ServerResponse } from 'node:http';
-import { findToolResult, journalExists } from '../agent/journal/index.js';
+import { findToolResultAsync, journalExists } from '../agent/journal/index.js';
 import { requireValidSessionId, sendJson } from './routes.js';
 import { toolResultToText } from './tool-result-text.js';
 import { errorMessage } from '../utils/errors.js';
@@ -65,7 +70,7 @@ function safeJournalExists(sessionId: string): boolean {
   }
 }
 
-export function handleGetToolResult(res: ServerResponse, sessionId: string, toolUseId: string): void {
+export async function handleGetToolResult(res: ServerResponse, sessionId: string, toolUseId: string): Promise<void> {
   if (!requireValidSessionId(res, sessionId)) return;
   if (!isSafeToolUseId(toolUseId)) {
     sendJson(res, 400, {
@@ -75,9 +80,9 @@ export function handleGetToolResult(res: ServerResponse, sessionId: string, tool
     return;
   }
 
-  let found: ReturnType<typeof findToolResult>;
+  let found: Awaited<ReturnType<typeof findToolResultAsync>>;
   try {
-    found = findToolResult(sessionId, toolUseId);
+    found = await findToolResultAsync(sessionId, toolUseId);
   } catch (error) {
     sendJson(res, 500, { error: 'journal_read_failed', message: errorMessage(error) });
     return;

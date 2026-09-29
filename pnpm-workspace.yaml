@@ -1,0 +1,15 @@
+# pnpm 11 settings (pnpm 11 reads non-auth config only from this file, not
+# .npmrc or package.json#pnpm). This repo is a single package, not a
+# multi-package workspace; dashboard/ keeps its own lockfile and its own
+# pnpm-workspace.yaml.
+#
+# allowBuilds replaces package.json#pnpm.onlyBuiltDependencies (removed in
+# pnpm 11). pnpm 11 fails the install on any dependency build script that is
+# not listed here, so a new native dependency must be added explicitly.
+#   better-sqlite3: native SQLite binding (prebuild or node-gyp fallback)
+#   node-pty:       native PTY binding, compiled from source on Linux CI
+#   esbuild:        postinstall verifies the platform binary
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  node-pty: true

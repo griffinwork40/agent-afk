@@ -35,7 +35,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
 import type { AgentConfig } from '../../types/config-types.js';
-import { emitSessionPhase } from '../../trace/emit.js';
+
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { CompactionTrigger } from '../../trace/types.js';
@@ -54,86 +54,54 @@ import type {
   ProviderUsage,
   ProviderCompactResult,
 } from '../../provider.js';
-import { sumProviderUsage } from '../../usage.js';
 import { contextLimitFor, autoCompactLimitFor } from '../../model-limits.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import { collectSupportedCommands } from '../shared/supported-commands.js';
-import { isTruncationStopReason, truncationNotice } from '../shared/truncation.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
   resolveOpenAIAuth,
   formatAuthDiagnostic,
-  type OpenAIAuthResolution,
   type AuthResolverDeps,
 } from './auth.js';
-import { buildMessages, buildUserContent, type OpenAIMessage } from './messages.js';
-import { supportsVision } from '../../model-capabilities.js';
-import {
-  translateChunk,
-  usageFromState,
-  finalizedToolCalls,
-  type OpenAIChunk,
-  type StreamState,
-} from './translate.js';
+import { type OpenAIMessage } from './messages.js';
 import {
   toolDefsToOpenAIFunctions,
   type OpenAIFunctionTool,
 } from './loop.js';
-import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
-import { resolveWireMode, envFlagEnabled, isClaudeFamilyModel, type WireMode } from './responses-config.js';
+import { resolveWireMode, envFlagEnabled, type WireMode } from './responses-config.js';
 import { env } from '../../../config/env.js';
 import { isGrokModelId } from '../xai/pricing.js';
 import type { ToolDispatcher } from '../anthropic-direct/tool-dispatcher.js';
-import type { ToolResult } from '../anthropic-direct/types.js';
 import {
   contextWindowTokensUsed,
-  contextFullnessFraction,
   buildContextUsageFields,
   shouldAutoCompact,
   resolveAutoCompactThreshold,
 } from '../shared/auto-compact.js';
 import { AbortCoordinator, CLOSED_SENTINEL } from '../shared/abort-coordinator.js';
-import { DenialCircuitBreakerError, HookBlockedError, errorMessage } from '../../../utils/errors.js';
-import {
-  COMPACT_SYSTEM_PROMPT,
-  wrapTranscriptForSummary,
-} from '../shared/compaction.js';
-import { compactOpenAIHistory, readShrinkFraction } from './compact.js';
-import { oneShotResponses } from './oneshot.js';
-import { getErrorStatus } from './query/retry.js';
-import { buildCompactSummarize } from './query/compact-summarize.js';
-import { PLAN_MODE_ADDENDUM_TEXT } from '../shared/plan-mode-addendum.js';
-import { AFK_MODE_ADDENDUM_TEXT } from '../shared/afk-mode-addendum.js';
+import { HookBlockedError } from '../../../utils/errors.js';
+
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/handlers/exit-plan-mode.js';
-import { summarizeToolInput } from '../shared/tool-input-summary.js';
-import { dispatchAndAppendToolCalls } from './query/dispatch-append.js';
 import { OpenAIJournalWiring } from './query/journal-wiring.js';
-import {
-  TOOL_USE_LOOP_CAPPED,
-  WIND_DOWN_NOTE,
-  formatRoundLabel,
-  resolveMaxToolIterations,
-  shouldWindDown,
-} from '../shared/tool-loop-cap.js';
-import {
-  SOFT_DEADLINE_NOTE,
-  SOFT_DEADLINE_WIND_DOWN,
-  softDeadlineExpired,
-} from '../shared/soft-deadline.js';
+
 import {
   normalizePermissionMode,
   resolveReasoningEffort,
 } from './query/model-params.js';
-import { checkContextOverflow } from './query/context-overflow.js';
 import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
-import { driveStream, type IterationResult } from './query/stream-drive.js';
-import {
-  buildChatCompletionsRequestBody,
-  buildResponsesRequestBody,
-} from './query/request-body.js';
 import { FastTierSession, type FastTierOptions } from './query/fast-tier-session.js';
-import { chatGptClaudeModelError, clarifyResponsesError } from './query/chatgpt-backend-errors.js';
+import {
+  runTurnInner,
+  type TurnDriverContext,
+} from './query/turn-driver.js';
+import {
+  runCompactHistory,
+  type CompactHandlerContext,
+} from './query/compact-handler.js';
+import { OPENAI_COMPATIBLE_MODELS } from './query/capabilities.js';
+import type { OpenAICompatibleQueryOptions } from './query/query-options.js';
+export type { OpenAICompatibleQueryOptions } from './query/query-options.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
 // (sibling tests + index.ts) keep resolving these from './query.js'.
@@ -145,159 +113,108 @@ export { resolveReasoningEffort };
 
 const PROVIDER_NAME = 'openai-compatible';
 
-/** Construction options. */
-export interface OpenAICompatibleQueryOptions {
-  /** Pre-resolved auth. Carries the source tag for session.init. */
-  auth: OpenAIAuthResolution;
-  /** Optional baseURL override (NVIDIA NIM, Together, etc.). Defaults to OpenAI. */
-  baseURL?: string;
-  /**
-   * Optional default headers for the OpenAI client (e.g. xAI CLI-proxy
-   * identity). Applied when the wire mode does not supply its own headers
-   * (ChatGPT subscription Responses path wins if both are set).
-   */
-  defaultHeaders?: Record<string, string>;
-  /** Model id, passed straight through to the API. */
-  model: string;
-  /** Synthetic session id emitted on `session.init` before the first wire call. */
-  synthesizedSessionId: string;
-  /** Caller-side prompt stream (lazy). */
-  promptStream: AsyncIterable<ProviderUserTurn>;
-  /** Full AgentConfig. */
-  config: AgentConfig;
-  /**
-   * Tool dispatcher to route every tool call through. When omitted, tool
-   * calls are not offered to the model (no `tools[]` in the request) and
-   * the loop reduces to slice-2 text-only behavior. The harness's typical
-   * wiring constructs a `SessionToolDispatcher` here so hooks, permissions,
-   * and the shared handler set all just work.
-   */
-  toolDispatcher?: ToolDispatcher;
-  /**
-   * Provider callback invoked by `setPermissionMode()` to update the
-   * provider-level `_currentPermissionMode` — the field the path-approval hook
-   * reads via the provider's `getGrants().allowAll`. The path-approval half of
-   * a live `/bypass` toggle (the file-tool half is the dispatcher's
-   * `setAllowAll()`). Supplied by `OpenAICompatibleProvider.query()`.
-   */
-  onPermissionMode?: (mode: string) => void;
-  /**
-   * Provider callback invoked by `setCwd()` to rebuild the `# Environment`
-   * block after a cwd re-anchor (#876). Rewrites `opts.config.systemPrompt`
-   * in place on the provider side; `buildMessages` reads `this.opts.config`
-   * by reference each turn, so no further plumbing is needed here beyond
-   * calling it. Supplied by `OpenAICompatibleProvider.query()`; absent for
-   * callers (tests, external-dispatcher branch) that never re-anchor cwd.
-   */
-  onCwdChange?: (cwd: string) => void;
-  /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
-  mcpManager?: import('../../mcp/index.js').McpManager;
-  /**
-   * Force the OpenAI Responses API instead of Chat Completions (the public,
-   * API-key opt-in — equivalent to `AFK_OPENAI_USE_RESPONSES=1`). The
-   * ChatGPT-subscription path (`auth.source === 'chatgpt-oauth'`) selects
-   * Responses automatically regardless of this flag.
-   */
-  useResponsesApi?: boolean;
-  /**
-   * Witness-layer trace writer. When provided, `loop_start`/`loop_end`/
-   * `model_ttfb` session_phase events and `tool_call` started/completed
-   * events are emitted — mirroring the anthropic-direct provider's trace
-   * coverage. All emit calls are fire-and-forget; a broken writer never
-   * stalls or crashes the session.
-   */
-  traceWriter?: TraceSink;
-  /** Fast mode (service_tier "priority"); absent for forks. See query/fast-tier-session.ts. */
-  fastTier?: FastTierOptions;
-}
 
-import { provesResponsesCompactionUnsupported } from './query/compaction-guard.js';
 
-/** Internal record used to drive the per-turn iteration loop. */
-export class OpenAICompatibleQuery implements ProviderQuery {
-  private readonly client: OpenAI;
-  private readonly opts: OpenAICompatibleQueryOptions;
-  private readonly initSessionId: string;
-  private readonly toolDispatcher: ToolDispatcher | undefined;
+
+
+/**
+ * OpenAI-compatible ProviderQuery implementation.
+ *
+ * Satisfies {@link TurnDriverContext} so the extracted turn-driver and
+ * iteration helpers can accept `this` directly — no plain object literal
+ * intermediary, which would break mutable field access (currentModel,
+ * currentPermissionMode, closed, responsesCompactionUnavailable).
+ */
+export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, CompactHandlerContext {
+  readonly client: OpenAI;
+  readonly opts: OpenAICompatibleQueryOptions;
+  readonly initSessionId: string;
+  readonly toolDispatcher: ToolDispatcher | undefined;
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly onCwdChange?: (cwd: string) => void;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
-  private readonly wireMode: WireMode;
+  readonly wireMode: WireMode;
   /** Static OpenAI list prices apply only when using the official public API endpoint. */
-  private readonly useOpenAIPricing: boolean;
+  readonly useOpenAIPricing: boolean;
   /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
-  private readonly traceWriter: TraceSink | undefined;
-  private readonly fastTier: FastTierSession;
+  readonly traceWriter: TraceSink | undefined;
+  readonly fastTier: FastTierSession;
 
   /** Running conversation state for multi-turn sessions (journal-seeded on resume). */
-  private priorTurns: OpenAIMessage[];
+  readonly priorTurns: OpenAIMessage[];
   /** Message-journal commit points + resume seeding (query/journal-wiring.ts). */
-  private readonly journal: OpenAIJournalWiring;
+  readonly journal: OpenAIJournalWiring;
 
-  private currentModel: string;
-  private currentPermissionMode: string;
+  /**
+   * Private backing for `currentModel`. Changed only through `setModel()`.
+   * Public via `get currentModel()` — interfaces see the getter, not the field.
+   */
+  private _currentModel: string;
+  /**
+   * Private backing for `currentPermissionMode`. Changed only through
+   * `setPermissionMode()`, which also calls `toolDispatcher.setAllowAll`.
+   * Public via `get currentPermissionMode()`.
+   */
+  private _currentPermissionMode: string;
+
+  /** Current model — live getter; interfaces (TurnDriverContext, IterationContext) are satisfied here. */
+  get currentModel(): string { return this._currentModel; }
+  /** Current permission mode — live getter. */
+  get currentPermissionMode(): string { return this._currentPermissionMode; }
 
   /**
    * Latched `true` when a Responses-wire summarize (history compaction) fails in
-   * a way that PROVES the backend refuses the request — e.g. the ChatGPT/Codex
-   * backend rejecting the throwaway summarize turn with a 400. Once set, further
-   * compaction skips the summarize transport (see `compactHistory`, which still
-   * runs deterministic microcompaction) instead of re-issuing a doomed request
-   * every turn boundary. Per-session; never reset — which is exactly why the
-   * latch predicate is narrow: only {@link provesResponsesCompactionUnsupported}
-   * errors set it. Aborts, timeouts, 429/5xx, network blips, and partial/failed
-   * responses are all transient and do NOT latch. Issue #653.
-   */
-  private responsesCompactionUnavailable = false;
-
-  /**
-   * Per-session abort coordination — see {@link AbortCoordinator}. Owns the
-   * in-flight controller slot, the pending-abort drain (an `interrupt()` /
-   * `close()` that lands between turns), and the close promise the outer
-   * loop races against `promptStream.next()`.
+   * a way that PROVES the backend refuses the request. Per-session; never reset.
    *
-   * Shared with anthropic-direct so the two providers cannot drift apart on
-   * the compare-and-clear invariant this encapsulates.
+   * Contract: the ONLY writer is `markResponsesCompactionUnavailable()` (called by
+   * compact-handler.ts). All other reads are through the context interfaces (which
+   * expose it as `readonly`). The field itself is private to prevent direct external writes.
    */
-  private readonly abort = new AbortCoordinator();
+  private _responsesCompactionUnavailable = false;
+
+  /** Read accessor for the responses-compaction-unavailable latch. */
+  get responsesCompactionUnavailable(): boolean { return this._responsesCompactionUnavailable; }
+  /**
+   * Latch the responses-compaction-unavailable flag. Called exactly once by
+   * `runSummarizeViaResponses` in compact-handler.ts when the Responses-wire
+   * backend provably refuses compaction. Never reset during the session.
+   */
+  markResponsesCompactionUnavailable(): void { this._responsesCompactionUnavailable = true; }
 
   /**
-   * Stays here rather than in the coordinator: sub-generators read it on
-   * every loop iteration, and `close()` updates the flag and the promise
-   * together. See the coordinator's "what this module does NOT own" note.
+   * Per-session abort coordination — see {@link AbortCoordinator}.
    */
-  private closed = false;
+  readonly abort = new AbortCoordinator();
+
+  /**
+   * Private backing for `closed`. Set by `close()`, which also unblocks the
+   * prompt-stream race via `abort.markClosed()`.
+   * Public via `get closed()` — sub-generators read it live on every iteration.
+   */
+  private _closed = false;
+
+  /** Whether the session has been closed — live getter. */
+  get closed(): boolean { return this._closed; }
 
   /**
    * Last completed turn's accumulated usage — drives `getContextUsage()`.
-   * Set on every `turn.completed` emission (see runTurn below). Mirrors
-   * `anthropic-direct/query.ts:186` so the REPL status line gets a real
-   * context-% reading on OpenAI models instead of falling through to the
-   * sampler's local-stats approximation.
-   *
-   * Seeded from the last stored turn's token count on session resume (#1294)
-   * so the context-overflow guard fires correctly on the first resumed turn
-   * instead of being skipped (the guard skips when `lastUsage` is null,
-   * treating it as a fresh session with no prior context to check against).
+   * Mutable — updated by finishTurn (via FinishTurnContext) and mid-round live refresh.
    */
-  private lastUsage: ProviderUsage | null = null;
+  lastUsage: ProviderUsage | null = null;
 
   /**
    * Auto-compaction threshold as a fraction of the context window (0–1), or
-   * `undefined` when disabled. Resolved once from `config.autoCompact` through
-   * the shared {@link resolveAutoCompactThreshold} — the same source the
-   * anthropic-direct provider uses. Read by the turn-boundary auto-compaction
-   * check in {@link run} and reported via `getInfo().isAutoCompactEnabled`.
+   * `undefined` when disabled.
    */
   private readonly autoCompactThreshold: number | undefined;
 
   constructor(opts: OpenAICompatibleQueryOptions) {
     this.opts = opts;
     this.initSessionId = opts.synthesizedSessionId;
-    this.currentModel = opts.model;
-    this.currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
+    this._currentModel = opts.model;
+    this._currentPermissionMode = normalizePermissionMode(opts.config.permissionMode);
     this.toolDispatcher = opts.toolDispatcher;
     this.onPermissionMode = opts.onPermissionMode;
     this.onCwdChange = opts.onCwdChange;
@@ -305,9 +222,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
 
-    // Pre-compute the OpenAI tool catalog once. Only `SessionToolDispatcher`
-    // (and not the structural `ToolDispatcher` minimal interface) exposes
-    // `toolDefs`, so we duck-type the read.
+    // Pre-compute the OpenAI tool catalog once.
     if (this.toolDispatcher) {
       const td = this.toolDispatcher as { toolDefs?: readonly unknown[] };
       if (Array.isArray(td.toolDefs) && td.toolDefs.length > 0) {
@@ -317,28 +232,15 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       }
     }
 
-    // Resolve the wire (Chat Completions vs Responses) once. The ChatGPT-
-    // subscription path also supplies a baseURL override (the private ChatGPT
-    // backend) + required headers; the public Responses opt-in supplies neither.
-    // Env read goes through the central `env` module (env-access audit).
+    // Resolve the wire (Chat Completions vs Responses) once.
     const responsesOptIn =
       (opts.useResponsesApi ?? false) || envFlagEnabled(env.AFK_OPENAI_USE_RESPONSES);
     const wire = resolveWireMode(opts.auth, responsesOptIn);
     this.wireMode = wire.mode;
-    // Any explicit endpoint — including the private ChatGPT subscription
-    // backend selected by resolveWireMode — may be free or have unrelated
-    // rates. Model ids alone cannot prove its pricing, so leave cost unknown.
-    // Metered Grok list prices apply only in API-key mode (not SuperGrok OAuth
-    // / forceXaiOAuth, where subscription quota may not match list rates).
     this.useOpenAIPricing =
       (wire.baseURL === undefined && opts.baseURL === undefined) ||
       (isGrokModelId(opts.model) && opts.config.forceXaiOAuth !== true);
 
-    // Seed the context-overflow guard from the last stored turn's token count
-    // (#1294). The last turn of resumeHistory carries `inputTokens` when the
-    // session was saved with a recent enough sidecar; absent on legacy sidecars.
-    // Conservative: over-estimate (triggers compaction) > under-estimate
-    // (lets a full context reach the wire, rejected with HTTP 400).
     this.journal = new OpenAIJournalWiring(opts.config);
     this.lastUsage = this.journal.resumedUsage();
     this.priorTurns = this.journal.initialTurns();
@@ -352,8 +254,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       };
       const baseURL = wire.baseURL ?? opts.baseURL;
       if (baseURL !== undefined) clientOpts.baseURL = baseURL;
-      // Wire-mode headers (ChatGPT subscription) win over caller defaults so
-      // the private backend is never missing its required identity headers.
       if (wire.headers !== undefined) clientOpts.defaultHeaders = wire.headers;
       else if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
       const admissionFetch = buildOpenAIAdmissionFetch(baseURL);
@@ -363,15 +263,11 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 
   /**
-   * The OpenAI tool catalog to advertise for THIS turn. The plan-exit tool is
-   * registered RESIDENT (see index.ts buildDispatcher) but is only actionable in
-   * plan mode, so drop it from the advertised list on non-plan turns — mirroring
-   * the anthropic-direct per-turn filter and composeSystem()'s live gating of the
-   * plan-mode addendum. This is what makes `exit_plan_mode` become callable the
-   * instant plan mode is entered mid-session, with no query rebuild. Returns
-   * `undefined` when the catalog is empty/absent, matching the callers' guards.
+   * The OpenAI tool catalog to advertise for THIS turn. Filters out the
+   * plan-exit tool on non-plan turns — mirroring the anthropic-direct
+   * per-turn filter. Required by TurnDriverContext.
    */
-  private activeOpenAITools(): OpenAIFunctionTool[] | undefined {
+  activeOpenAITools(): OpenAIFunctionTool[] | undefined {
     if (!this.openAITools) return undefined;
     if (this.currentPermissionMode === 'plan') return this.openAITools;
     const filtered = this.openAITools.filter(
@@ -385,7 +281,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       sessionId: this.initSessionId,
       model: this.currentModel,
       permissionMode: this.currentPermissionMode,
-      cwd: process.cwd(),
+      cwd: this.opts.config.cwd || process.cwd(),
       tools: this.openAITools ? this.openAITools.map((t) => t.function.name) : [],
       slashCommands: [],
       skills: [],
@@ -414,13 +310,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
         yield* this.runTurn(turnResult.value.content);
 
-        // Auto-compaction fires at the natural turn boundary — runTurn has
-        // returned and every exit path called `abort.clear(controller)`, so
-        // `abort.isIdle()` is true and compaction never runs mid-tool-call.
-        // Mirrors anthropic-direct/query.ts. `compactHistory` never throws (every
-        // summarize failure is a typed no-op leaving history byte-for-byte
-        // unchanged); only a PreCompact `block` decision throws HookBlockedError,
-        // caught here to skip this turn's compaction without surfacing an error.
+        // Auto-compaction fires at the natural turn boundary.
         if (this.autoCompactThreshold !== undefined && !this.closed) {
           const usage = this.lastUsage;
           const compactionLimit = autoCompactLimitFor(this.currentModel);
@@ -434,14 +324,9 @@ export class OpenAICompatibleQuery implements ProviderQuery {
                   trigger: 'auto',
                 });
                 const compactResult = await this.compactHistory('token_threshold');
-                // Overflow guard (#962): invalidate stale usage so it doesn't
-                // false-positive. Conditioned on `compacted` — a no-op must
-                // preserve the near-limit evidence or the next turn skips the
-                // guard entirely, letting the over-limit request through.
                 if (compactResult.compacted) this.lastUsage = null;
               } catch (compactErr) {
                 if (!(compactErr instanceof HookBlockedError)) throw compactErr;
-                // Hook blocked auto-compaction — continue the session normally.
               }
             }
           }
@@ -461,757 +346,62 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 
   /**
    * Drive a single user turn through the model + tool loop.
-   *
-   * Loop shape (mirrors anthropic-direct/loop.ts:runTurn):
-   *   1. Append user message to priorTurns.
-   *   2. iteration: call model → stream → translate chunks.
-   *   3. If finish_reason was tool_calls: dispatch via toolDispatcher,
-   *      append assistant{tool_calls} + tool{result} to priorTurns, GOTO 2.
-   *   4. Else: emit assistant.message + turn.completed, exit.
-   *
-   * Sums usage across iterations and emits a single `turn.completed` at the
-   * end with the aggregate (mirrors how anthropic-direct accumulates usage
-   * across the tool-call loop into one final event).
+   * Delegates to the extracted `runTurnInner` in query/turn-driver.ts;
+   * `this` satisfies `TurnDriverContext` so all live field reads work.
    */
   private async *runTurn(content: ProviderUserTurn['content']): AsyncGenerator<ProviderEvent> {
-    // begin() mints the controller, installs it as the current slot, and
-    // drains any abort that arrived between turns onto it — so a pre-aborted
-    // turn is caught by the guard below before any work starts.
     const controller = this.abort.begin();
     if (controller.signal.aborted) return;
 
-    // Wall-clock anchor for the REPL footer's `◦ Xs · $cost · N tok` line.
-    // Set after the abort gate so an immediately-aborted turn doesn't yield
-    // a duration anyway (it just returns silently — there's no
-    // turn.completed yield on that path). Mirrors `loopStartTime` in
-    // anthropic-direct/loop.ts.
     const turnStartTime = Date.now();
     const taskId = randomUUID();
 
-    // Witness-layer turn bracket (loop_start / interrupt_halt / loop_end) —
-    // shared with anthropic-direct via providers/shared/turn-trace.ts. See
-    // TurnTrace's own doc comment for the interrupt→halt latency rationale
-    // (the field-visible proof the ESC-lag fix keeps the halt within an
-    // event-loop turn; openai@6 swallows a mid-stream abort, so without
-    // abortableStream the halt lagged the parked read).
     const trace = new TurnTrace(controller.signal, this.traceWriter, 'openai-compatible');
-    this.fastTier.beginTurn(this.currentModel); // once per turn; /fast applies next turn
+    this.fastTier.beginTurn(this.currentModel);
     try {
-      yield* this._runTurnInner(content, controller, turnStartTime, taskId);
+      // Pass `this` — which implements TurnDriverContext — so every mutable
+      // field read inside runTurnInner is always live (no stale snapshot).
+      yield* runTurnInner(this, content, controller, turnStartTime, taskId);
     } finally {
       trace.finish(Date.now() - turnStartTime);
     }
   }
 
-  private async *_runTurnInner(
-    content: ProviderUserTurn['content'],
-    controller: AbortController,
-    turnStartTime: number,
-    taskId: string,
-  ): AsyncGenerator<ProviderEvent> {
-
-    // Vision capability is fixed for the turn (the model can only change
-    // between turns via setModel). Computed once here and threaded into the
-    // iteration + tool-dispatch so the user turn, history sanitize, and
-    // tool-result image follow-up all agree. See issue #127 / model-capabilities.ts.
-    const vision = supportsVision(this.currentModel);
-
-    // Context-overflow guard (#962): fail fast BEFORE sending a request the
-    // provider would reject with HTTP 400. Runs BEFORE the history push so
-    // the user message is not left in history on overflow. Yields an error
-    // event (rather than throwing) so the abort slot is cleared before
-    // control returns; throwing here leaves the slot set and makes compact()
-    // return 'turn-in-flight'. See query/context-overflow.ts and
-    // shared/auto-compact.ts for details.
-    const overflowErr = checkContextOverflow(
-      this.lastUsage,
-      this.currentModel,
-      this.opts.config.maxOutputTokens,
-      this.opts.config.model ?? this.currentModel,
-    );
-    if (overflowErr) {
-      this.abort.clear(controller);
-      yield { type: 'error', error: overflowErr };
-      return;
-    }
-
-    this.priorTurns.push({
-      role: 'user',
-      content: buildUserContent(content, { vision, model: this.currentModel }),
-    });
-
-    // Aggregate usage across all tool-loop iterations for this turn via the
-    // shared sumProviderUsage helper. Critical: cache fields (cachedInputTokens,
-    // cacheCreationTokens) must be take-latest, NOT cumulative — they describe
-    // the per-call cache footprint of the same cached prefix on each iteration,
-    // and summing them N-times across N iterations inflates the apparent
-    // context by ~N×. See src/agent/usage.ts docstring.
-    let accumulatedUsage: ProviderUsage = {
-      stopReason: null,
-      resultSubtype: 'success',
-      isError: false,
-    };
-    let finalAssistantText = '';
-    // Track the reasoning trace from the last iteration so DeepSeek-R1-class
-    // thinking-mode providers see it echoed on the final assistant turn —
-    // omitting it on the NEXT user-turn's request yields a 400 ("The
-    // `reasoning_content` in the thinking mode must be passed back to the
-    // API"). Stays empty for non-thinking providers (real OpenAI o-series
-    // doesn't expose reasoning), in which case the field is omitted entirely.
-    let finalReasoningText = '';
-
-    const maxIterations = resolveMaxToolIterations(this.opts.config.maxToolUseIterations);
-    // TIME sibling of the round cap: `0`/unset means no soft deadline (the
-    // top-level default, where a human owns the turn); subagent forks arm it
-    // from their wall-clock budget. Taken RAW, deliberately — this value is
-    // already the OUTPUT of `resolveSoftDeadlineMs` at the arming site, and that
-    // function maps a HARD budget to a soft deadline, so re-applying it here
-    // would subtract a second reserve and fire the wind-down early.
-    // `softDeadlineExpired` already treats `<= 0` and NaN as "never fires".
-    const softDeadlineMs = this.opts.config.softDeadlineMs ?? 0;
-    // Non-null once a budget is spent; the loop then runs ONE tools-stripped
-    // "wind-down" round (runIteration's `windDown` arg) so the model synthesizes
-    // a final answer instead of stopping silently — a silent stop reads as a
-    // hang. Holds the REASON (rounds vs. wall-clock) rather than a bare boolean
-    // so the terminal stopReason names which budget ran out. Shared with
-    // anthropic-direct via shared/tool-loop-cap.ts + shared/soft-deadline.ts so
-    // the two providers cannot drift apart.
-    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
-    let round = 0;
-    // Cumulative count of tool CALLS dispatched across the whole turn — distinct
-    // from `round`. `result.state` is a FRESH StreamState per iteration (see
-    // runIteration → createStreamState), so finalizedToolCalls(result.state)
-    // returns only THIS round's calls; a round can batch several, so we
-    // accumulate. Emitted as the progress event's `toolUses` (below) so the
-    // CLI's formatToolCallStat renders a truthful "N tool calls" (PR 508 codex
-    // review, P2).
-    let toolCallCount = 0;
-    // Invariant: tool calls that were being streamed when the output cap cut the
-    // round off. `isToolCallStop` returns false for any explicit non-tool finish
-    // reason, so a call truncated mid-arguments sets needsToolDispatch=false and
-    // is discarded in-memory — it never reaches `dispatchAndAppendToolCalls`,
-    // which is the ONLY site that builds an assistant `tool_calls` message. That
-    // silent drop is correct (a half-built call would poison history with an
-    // empty tool_call_id) but invisible, so capture the names at the break to
-    // name them in the terminal notice. Must be captured inside the loop:
-    // `result.state` is a fresh StreamState per iteration.
-    let droppedToolNames: string[] = [];
-
-    for (;;) {
-      if (controller.signal.aborted) {
-        this.abort.clear(controller);
-        yield* this.finishTurn(accumulatedUsage, turnStartTime);
-        return;
-      }
-
-      const result = yield* this.runIteration(controller, vision, windDownReason);
-      if (result === null) {
-        // runIteration bailed: either an abort/close (no event was yielded) or
-        // a real stream error (an `error` event was already yielded). Mirror
-        // anthropic-direct/loop.ts:410-432 — on abort/close emit a terminal
-        // `turn.completed` so the persistent stream consumer
-        // (agent-session.ts:sendMessageStreamInternal) unblocks its turn loop;
-        // on a real stream error the already-yielded `error` event is itself
-        // terminal, so skip turn.completed to avoid double-advancing turn state.
-        this.abort.clear(controller);
-        if (controller.signal.aborted || this.closed) {
-          yield* this.finishTurn(accumulatedUsage, turnStartTime);
-        }
-        return;
-      }
-
-      const pricedModel = this.useOpenAIPricing ? this.currentModel : undefined;
-      const roundUsage = usageFromState(result.state, pricedModel, this.fastTier.confirmedFast());
-      accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-      // Context-window footprint for THIS round. Unlike Anthropic, OpenAI's
-      // `prompt_tokens` (→ inputTokens) already INCLUDES cached tokens
-      // (`cached_tokens` is a subset), so the window total is input + output —
-      // adding cache would double-count. Computed from the single round (not
-      // cumulative) and re-stamped each iteration; sumProviderUsage discards it.
-      accumulatedUsage.contextWindowTokens =
-        (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
-      // Mirror anthropic-direct: refresh lastUsage each round so
-      // getContextUsage() shows live mid-turn context on the status line.
-      // The post-loop assignment below still sets the final value.
-      this.lastUsage = accumulatedUsage;
-      if (result.text.length > 0) finalAssistantText = result.text;
-      finalReasoningText = result.state.reasoningText;
-
-      if (!result.needsToolDispatch) {
-        // Model answered in text: a normal completion, or — when winding down —
-        // the wind-down round's synthesized final answer. Emit terminal events.
-        if (isTruncationStopReason(result.state.finishReason)) {
-          droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
-        }
-        break;
-      }
-
-      if (windDownReason !== null) {
-        // Pathological: the wind-down round (tools stripped) still asked for a
-        // tool. With none advertised this is only reachable if the model
-        // fabricates a call. Honor the spent budget with a hard stop; do NOT
-        // dispatch.
-        break;
-      }
-
-      // Tool-call path: dispatch, append history, loop.
-      const denialTrip = yield* this.dispatchAndAppend(result.state, controller.signal, vision);
-      // Denial circuit breaker (#546): a forked child hit N consecutive
-      // path-approval read denials with no progress. Surface a LOUD terminal
-      // `error` event (the subagent handle rethrows it into a structured
-      // failure) and stop — never keep looping to the wall-clock budget. History
-      // was appended by dispatchAndAppend, so the transcript is consistent. Skip
-      // finishTurn: the error event is itself terminal (mirrors the stream-error
-      // path above at `result === null`).
-      if (denialTrip) {
-        this.abort.clear(controller);
-        yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
-        return;
-      }
-      round += 1;
-
-      {
-        // `result.state` is per-round (fresh each runIteration), so this array
-        // is THIS round's dispatched calls. Accumulate its length into the
-        // running total — a round can batch multiple parallel calls.
-        const roundCalls = finalizedToolCalls(result.state);
-        toolCallCount += roundCalls.length;
-        const lastCall = roundCalls.at(-1);
-        const lastToolName = lastCall?.name;
-        // Semantic summary — mirror anthropic-direct/loop.ts: tool name +
-        // most informative argument via summarizeToolInput, so the progress
-        // banner carries real signal instead of a bare iteration counter.
-        // AccumulatedToolCall carries UNPARSED argumentsRaw (the streamed
-        // JSON fragments joined); parse best-effort — a malformed payload
-        // (mid-stream abort, shim quirks) degrades to the bare tool name.
-        let lastCallInput: unknown;
-        try {
-          lastCallInput = lastCall ? JSON.parse(lastCall.argumentsRaw || '{}') : undefined;
-        } catch {
-          lastCallInput = undefined;
-        }
-        const lastToolHeadline = lastCall
-          ? `${lastCall.name}${summarizeToolInput(lastCall.name, lastCallInput)}`
-          : 'unknown';
-        yield {
-          type: 'progress',
-          progress: {
-            taskId,
-            description: 'Working',
-            summary: `${formatRoundLabel(round, maxIterations)}: ${lastToolHeadline}`,
-            lastToolName,
-            totalTokens: accumulatedUsage.totalTokens ?? 0,
-            // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far
-            // in this turn (not the round number), so downstream
-            // formatToolCallStat renders "N tool calls" truthfully even when a
-            // round batched parallel calls. The `summary` above legitimately
-            // names the ROUND — leave it.
-            toolUses: toolCallCount,
-            durationMs: Date.now() - turnStartTime,
-          },
-          sessionId: this.initSessionId,
-        };
-      }
-
-      if (controller.signal.aborted) {
-        this.abort.clear(controller);
-        yield* this.finishTurn(accumulatedUsage, turnStartTime);
-        return;
-      }
-
-      // Two independent budgets trip the SAME wind-down: the tool-round cap and
-      // the soft wall-clock deadline. Round-cap wins a tie — it is the more
-      // specific budget. Either way the next round runs with tools stripped +
-      // the matching budget note (runIteration(windDown=reason)) so the model
-      // produces a real final answer instead of a silent stop. Setting the
-      // reason fires this at most once; the guard above hard-stops if the
-      // wind-down round still asks for a tool. Mirrors anthropic-direct's
-      // loop/tool-round.ts decision point exactly.
-      const roundsSpent = shouldWindDown(round, maxIterations);
-      const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
-      if (roundsSpent || timeSpent) {
-        windDownReason = roundsSpent ? TOOL_USE_LOOP_CAPPED : SOFT_DEADLINE_WIND_DOWN;
-        continue;
-      }
-    }
-
-    this.abort.clear(controller);
-
-    if (finalAssistantText.length > 0) {
-      const assistantTurn: OpenAIMessage = {
-        role: 'assistant',
-        content: finalAssistantText,
-      };
-      if (finalReasoningText.length > 0) {
-        assistantTurn.reasoning_content = finalReasoningText;
-      }
-      this.priorTurns.push(assistantTurn);
-    }
-
-    // Invariant: the truncation notice is APPENDED to the single terminal
-    // assistant.message, never yielded as a second one — last-wins consumers
-    // (the non-streaming sendMessage() path, a subagent's final-message
-    // capture) keep only the LAST assistant message of a turn, so a second
-    // event would discard the model's real partial answer and surface only the
-    // warning. Same rule as the anthropic-direct terminal path. Deliberately
-    // applied AFTER the priorTurns push above: the notice is operator-facing
-    // and must not enter conversation history.
-    //
-    // Issue #970: textless truncations now use the `notice` channel instead of
-    // silently dropping. See the identical logic in
-    // `anthropic-direct/loop/turn-terminal.ts` for the full invariant chain.
-    //
-    // Invariant (#960): the zero-output chain is PRESERVED. A `notice` event is
-    // not an `assistant.message`, so stream-consumer's `case 'notice':` returns
-    // a `{type:'notice'}` OutputEvent — NOT a `{type:'message'}`. The
-    // `handle.ts` `finalMessage` capture reads only `{type:'message'}` events,
-    // so a textless turn still leaves `finalMessage` unset, still reaches the
-    // ZERO-OUTPUT branch that stamps STREAM_INCOMPLETE and throws, and still
-    // resolves as `failed`. The retry predicate, `canRedispatch`, and
-    // `sideEffectFree` logic are untouched — this is additive visibility only.
-    const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
-      ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
-          // The ChatGPT OAuth Responses backend rejects every output-cap
-          // parameter, so advertising our cap setting there is ineffective.
-          canIncreaseOutputLimit: !(
-            this.opts.auth.source === 'chatgpt-oauth' &&
-            accumulatedUsage.stopReason === 'max_output_tokens'
-          ),
-        })
-      : null;
-    if (finalAssistantText.length > 0) {
-      yield {
-        type: 'assistant.message',
-        text:
-          truncationText
-            ? `${finalAssistantText}\n\n${truncationText}`
-            : finalAssistantText,
-        sessionId: this.initSessionId,
-      };
-    } else {
-      // Textless turn: emit the plain assistant.message (possibly empty) so the
-      // zero-output detection chain is unaffected, then — if truncated — also
-      // emit a notice so the operator sees the event on live surfaces.
-      yield {
-        type: 'assistant.message',
-        text: finalAssistantText, // empty string → stream-consumer drops it
-        sessionId: this.initSessionId,
-      };
-      if (truncationText !== null) {
-        yield {
-          type: 'notice',
-          text: truncationText,
-          kind: 'truncation' as const,
-          sessionId: this.initSessionId,
-        };
-      }
-    }
-    // If the turn was cut short by a spent budget, preserve that signal for
-    // closure classification (session/closure-reason.ts) and telemetry, even
-    // though the wind-down round itself ended naturally. The reason distinguishes
-    // rounds (`iteration_cap`) from wall-clock (`timeout`).
-    yield* this.finishTurn(
-      windDownReason !== null
-        ? { ...accumulatedUsage, stopReason: windDownReason }
-        : accumulatedUsage,
-      turnStartTime,
-    );
-  }
-
-  /**
-   * Invariant: `runTurn` MUST funnel every non-error exit through here so a
-   * single terminal `turn.completed` is emitted for the turn. The persistent
-   * stream consumer (agent-session.ts:sendMessageStreamInternal) breaks its
-   * `providerIterator.next()` loop only on a terminal output (`turn.completed`
-   * → 'done', or `error`). Because the provider's top-level generator loops
-   * back to await the next prompt after a turn rather than returning, a
-   * `runTurn` exit with no terminal event strands the consumer on a `next()`
-   * that never resolves — the permanent "esc to interrupt" hang observed on
-   * local OpenAI-shim models that stall or get interrupted mid-stream. Real
-   * stream errors are the one exception: their already-yielded `error` event
-   * is itself terminal (mirrors anthropic-direct/loop.ts:410-423).
-   *
-   * `lastUsage` is set here (before the yield) so getContextUsage() reads the
-   * correct value even if the outer consumer breaks early — matching the timing
-   * in anthropic-direct/query.ts where lastUsage is set on turn.completed.
-   */
-  private *finishTurn(
-    accumulatedUsage: ProviderUsage,
-    turnStartTime: number,
-  ): Generator<ProviderEvent> {
-    this.lastUsage = accumulatedUsage;
-    this.journal.sync(this.priorTurns); // commit point: turn end (final assistant message)
-    yield {
-      type: 'turn.completed',
-      usage: { ...accumulatedUsage, durationMs: Date.now() - turnStartTime },
-      sessionId: this.initSessionId,
-    };
-  }
-
-  /**
-   * One iteration = one model call + chunk drain. Returns `null` if the
-   * stream errored or was aborted (events for those cases already yielded
-   * via the catch blocks). Otherwise returns a record describing whether
-   * tools need to be dispatched.
-   *
-   * Note: yields delta events (text/reasoning) as they arrive but does NOT
-   * yield `assistant.message` / `turn.completed` — those are the parent
-   * `runTurn`'s responsibility once the iteration loop has settled.
-   */
-  private async *runIteration(
-    controller: AbortController,
-    vision: boolean,
-    /**
-     * Non-null on the single wind-down round; names WHICH budget was spent so
-     * the appended note matches (tools vs. clock). `null` = a normal round.
-     */
-    windDown: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null,
-  ): AsyncGenerator<ProviderEvent, IterationResult | null> {
-    this.journal.sync(this.priorTurns); // commit point: what is about to be sent
-    const messages = buildMessages({
-      config: this.opts.config,
-      ...this.journal.legacyResumeHistory(),
-      priorTurns: this.priorTurns,
-      vision,
-    });
-
-    // Inject plan-mode / AFK-mode posture addendum onto the system message.
-    // The two are mutually exclusive permission modes, so at most one applies.
-    if (messages[0]?.role === 'system') {
-      const addendum =
-        this.currentPermissionMode === 'plan' ? PLAN_MODE_ADDENDUM_TEXT :
-        this.currentPermissionMode === 'autonomous' ? AFK_MODE_ADDENDUM_TEXT :
-        null;
-      if (addendum !== null) {
-        messages[0] = {
-          ...messages[0],
-          content: (messages[0].content as string) + '\n\n' + addendum,
-        };
-      }
-    }
-
-    // Wind-down round: strip tools (with none advertised the model MUST answer
-    // in text — it cannot emit another tool call) and append the budget note
-    // matching the trigger to this REQUEST ONLY — worded around clock rather
-    // than tools when TIME is what ran out, so the model never reports "I ran
-    // out of tool calls" when it did not. `messages` is rebuilt from
-    // `priorTurns` each iteration, so the note never persists into stored
-    // history. Mirrors anthropic-direct/loop/tool-round.ts's tools-stripped
-    // wind-down; see shared/tool-loop-cap.ts + shared/soft-deadline.ts.
-    if (windDown !== null) {
-      const note = windDown === TOOL_USE_LOOP_CAPPED ? WIND_DOWN_NOTE : SOFT_DEADLINE_NOTE;
-      messages.push({ role: 'user', content: note });
-    }
-    const activeTools = windDown !== null ? undefined : this.activeOpenAITools();
-
-    // Shared context for the retry/stream-drive skeleton (query/stream-drive.ts).
-    // Both wire branches build their request body, then hand off to driveStream
-    // with a per-wire strategy — the connection/mid-stream retry, once-only
-    // model_ttfb emission, and clean-completion return live in one place.
-    const driveCtx = {
-      controller,
-      traceWriter: this.traceWriter,
-      initSessionId: this.initSessionId,
-      currentModel: this.currentModel,
-      isClosed: () => this.closed,
-    };
-
-    if (this.wireMode === 'responses') {
-      const isChatGptBackend = this.opts.auth.source === 'chatgpt-oauth';
-
-      // The ChatGPT/Codex backend serves only OpenAI gpt-5.x and rejects other
-      // model families with an opaque 400 (no body). Subagents/skills commonly
-      // request a Claude model (e.g. `sonnet`), and a global AFK_PROVIDER=
-      // openai-compatible force-routes it here. Fail fast with an actionable
-      // message instead of the bare 400.
-      if (isChatGptBackend && isClaudeFamilyModel(this.currentModel)) {
-        yield { type: 'error', error: chatGptClaudeModelError(this.currentModel) };
-        return null;
-      }
-
-      // Responses API path. Request-body assembly (incl. the ChatGPT-backend
-      // quirks) lives in query/request-body.ts.
-      const requestBody = buildResponsesRequestBody({
-        model: this.currentModel,
-        messages,
-        activeTools,
-        maxOutputTokens: this.opts.config.maxOutputTokens,
-        effort: this.opts.config.effort, temperature: this.opts.config.temperature,
-        isChatGptBackend,
-      });
-
-      // Retry / stream-drive is shared with the Chat-Completions branch — see
-      // query/stream-drive.ts. Only the four per-wire deltas differ here:
-      // client call, event type, translator, and error clarification.
-      const result = yield* driveStream<ResponsesStreamEvent>(driveCtx, {
-        createStream: async (signal) => (await this.fastTier.create(requestBody, (body) =>
-          this.client.responses.create(body as never, { signal }))) as unknown as AsyncIterable<ResponsesStreamEvent>,
-        translate: (event, state) => {
-          this.fastTier.observeResponsesEvent(event);
-          return translateResponsesEvent(event, state, this.initSessionId);
-        },
-        clarifyError: (err) => clarifyResponsesError(err, isChatGptBackend, this.currentModel),
-      });
-      yield* this.fastTier.drainNotice(this.initSessionId);
-      return result;
-    } else {
-      // Chat Completions path. Request-body assembly lives in
-      // query/request-body.ts.
-      const requestBody = buildChatCompletionsRequestBody({
-        model: this.currentModel,
-        messages,
-        activeTools,
-        maxOutputTokens: this.opts.config.maxOutputTokens,
-        effort: this.opts.config.effort, temperature: this.opts.config.temperature,
-      });
-
-      // Retry / stream-drive is shared with the Responses branch — see
-      // query/stream-drive.ts. This wire differs only in the client call, the
-      // event type, the translator, and plain Error coercion (no clarify step).
-      const result = yield* driveStream<OpenAIChunk>(driveCtx, {
-        createStream: async (signal) => (await this.fastTier.create(requestBody, (body) =>
-          this.client.chat.completions.create(body as never, { signal }))) as unknown as AsyncIterable<OpenAIChunk>,
-        translate: (event, state) => {
-          this.fastTier.observeChatChunk(event);
-          return translateChunk(event, state, this.initSessionId);
-        },
-        clarifyError: (err) => (err instanceof Error ? err : new Error(String(err))),
-      });
-      yield* this.fastTier.drainNotice(this.initSessionId);
-      return result;
-    }
-  }
-
-  /**
-   * After an iteration produced tool calls: emit `tool.use.start` per call,
-   * dispatch through the shared dispatcher, emit outputs, and append the
-   * assistant/tool-result messages to running history for the next iteration.
-   */
-  private async *dispatchAndAppend(
-    state: StreamState,
-    signal: AbortSignal,
-    vision: boolean,
-  ): AsyncGenerator<ProviderEvent, ToolResult | undefined> {
-    const denialTrip = yield* dispatchAndAppendToolCalls({
-      state,
-      signal,
-      vision,
-      toolDispatcher: this.toolDispatcher,
-      traceWriter: this.traceWriter,
-      priorTurns: this.priorTurns,
-      sessionId: this.initSessionId,
-      // Owning subagent id (fork only) so tool_call trace events are
-      // attributable in the shared parent trace — issue #612. Read from
-      // config, the same source this query reads autoCompact/permissionMode.
-      subagentId: this.opts.config.subagentId,
-    });
-    this.journal.sync(this.priorTurns); // commit point: tool round (full results) on disk
-    return denialTrip;
-  }
-
   // ---- ProviderQuery surface ------------------------------------------------
 
   async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
-    // Aborts the in-flight turn, or parks the reason for the next begin()
-    // when the interrupt lands between turns.
     this.abort.requestAbort(reason);
   }
 
   /**
-   * Summarize older history into a short preamble, in place. Delegates the
-   * boundary → summarize → splice sequence (with guardrails) to the shared
-   * {@link compactOpenAIHistory} / `runCompactionCore`; the summarization call
-   * reuses THIS session's `client`, so it lands on the same endpoint,
-   * credentials, and headers as the conversation — a custom-baseURL or local
-   * shim session compacts against its own server, never a re-resolved one.
-   *
-   * The compaction model is `AFK_COMPACT_MODEL` when set, otherwise the live
-   * session model. Cross-provider summarization is now supported via
-   * `resolveCrossProviderSummarize` (shared/compact-summarizer.ts): when
-   * AFK_COMPACT_MODEL resolves to a foreign family (e.g. a Claude id on an
-   * OpenAI session), a foreign one-shot closure is used instead of the session
-   * client — with a one-time privacy warning that the transcript crosses
-   * providers. On same-family or unset, the session client is used unchanged.
-   *
-   * Both wires are supported. Chat Completions sessions summarize through
-   * `oneShotChatCompletion`; responses-mode sessions (ChatGPT-OAuth, or the
-   * `AFK_OPENAI_USE_RESPONSES` opt-in) summarize through `oneShotResponses`,
-   * which streams over the Responses wire the backend actually accepts —
-   * issue #653. The splice machinery is wire-agnostic; only the summarize
-   * transport differs. If a responses-wire summarize fails in a way that proves
-   * the backend refuses the request (see
-   * {@link provesResponsesCompactionUnsupported}), the session latches
-   * `responsesCompactionUnavailable` so subsequent boundaries skip the doomed
-   * request — falling back to deterministic microcompaction, which needs no
-   * model call. Transient failures never latch.
+   * Summarize older history into a short preamble, in place.
+   * Delegates to query/compact-handler.ts; passes `this` as context so
+   * mutable fields (currentModel, closed, responsesCompactionUnavailable)
+   * are always read live.
    */
   async compact(): Promise<ProviderCompactResult> {
-    // Manual entrypoint (REPL /compact, Telegram, router). Auto-compaction
-    // calls compactHistory('token_threshold') directly from the turn-boundary
-    // check in run(), so the two paths differ only in the emitted trace trigger.
-    const result = await this.compactHistory('manual');
-    // #962: invalidate stale usage so the overflow guard doesn't false-positive.
-    if (result.compacted) this.lastUsage = null; // no-op must keep evidence
+    const result = await runCompactHistory(this, 'manual');
+    if (result.compacted) this.lastUsage = null;
     return result;
   }
 
-  private async compactHistory(
-    trigger: CompactionTrigger,
-  ): Promise<ProviderCompactResult> {
-    const messagesBefore = this.priorTurns.length;
-    if (this.opts.auth.apiKey === null) {
-      // No usable client was constructed — an auth problem, distinct from a
-      // closed session lifecycle. Surface a specific, actionable reason rather
-      // than reusing 'session-closed'.
-      return { compacted: false, reason: 'no-usable-auth', messagesBefore, messagesAfter: messagesBefore };
-    }
-    if (this.wireMode === 'responses' && this.responsesCompactionUnavailable) {
-      // Invariant: the latch disables the SUMMARIZE TRANSPORT only — never the
-      // deterministic fallback. A prior responses-wire summarize proved the
-      // backend refuses the throwaway summarize turn, so re-issuing a doomed
-      // request every turn boundary is pure waste. But microcompaction is
-      // no-LLM and no-network: it clears large/old tool_result CONTENT in place,
-      // so it still works when the backend refuses everything. Skipping it here
-      // would leave the session unable to reclaim context by ANY mechanism,
-      // which overshoots "no-op cheaply" into "guarantee an eventual overflow".
-      // Mirrors the fallback `compactOpenAIHistory` runs on its own no-op
-      // reasons (compact.ts) — same options source, same result shape.
-      const micro = this.journal.microcompactFallback(this.priorTurns);
-      if (micro) return micro;
-      return {
-        compacted: false,
-        reason: 'responses-compaction-unavailable',
-        messagesBefore,
-        messagesAfter: messagesBefore,
-      };
-    }
-    const compactModel = env.AFK_COMPACT_MODEL ?? this.currentModel;
-    // Token-fullness fallback for the adaptive keep-window (mirrors
-    // anthropic-direct/query/compact-handler.ts): measured against the same
-    // working budget the auto-compaction trigger uses, so a short-but-full
-    // session compacts instead of no-oping on turn count alone.
-    const usedFraction = contextFullnessFraction(
-      contextWindowTokensUsed(this.lastUsage ?? {}),
-      autoCompactLimitFor(this.currentModel),
-    );
-
-    // Session closure (this client + wire), swapped for a foreign one-shot
-    // when AFK_COMPACT_MODEL names another provider family. See
-    // query/compact-summarize.ts for the contract.
-    const summarize = buildCompactSummarize({
-      wireMode: this.wireMode,
-      client: this.client,
-      compactModel,
-      compactModelRaw: env.AFK_COMPACT_MODEL,
-      summarizeViaResponses: (t, s, m) => this.summarizeViaResponses(t, s, m),
-      sessionKey: this,
-    });
-
-    const compactResult = await compactOpenAIHistory({
-      priorTurns: this.priorTurns,
-      usedFraction,
-      shrinkAtFraction: readShrinkFraction(),
-      summarize,
-      isClosed: this.closed,
-      isIdle: this.abort.isIdle(),
-      // Invariant: compaction opens a real abort scope through the same
-      // coordinator the turn loop uses, so `interrupt()` cancels an
-      // in-flight summarize. Note `begin()` also DRAINS a reason parked
-      // between turns — an ESC that lands at the turn boundary now
-      // pre-aborts the auto-compaction that fires there (and consumes the
-      // reason) instead of letting it run. This matches
-      // anthropic-direct/query/compact-handler.ts:148; the previous
-      // openai-only behaviour installed a controller without draining.
-      beginAbort: () => this.abort.begin(),
-      clearAbort: (controller) => this.abort.clear(controller),
-      trigger,
-      traceWriter: this.traceWriter,
-    });
-    this.journal.afterCompact(this.priorTurns, compactResult); // splice or in-place microcompaction
-    return compactResult;
-  }
-
-  /**
-   * Responses-wire summarize for {@link compactHistory}. Delegates to
-   * {@link oneShotResponses} (streams over the Responses wire the backend
-   * accepts), reusing THIS session's `client` so the call inherits the same
-   * endpoint, credentials, and ChatGPT-OAuth headers as the conversation.
-   *
-   * On a failure that PROVES the backend refuses this request shape (see
-   * {@link provesResponsesCompactionUnsupported}) it latches
-   * `responsesCompactionUnavailable` — and emits a `compaction_disabled` trace
-   * event, since the auto path discards the result and would otherwise hide the
-   * disable — then re-throws so the compaction core records a safe no-op
-   * (history untouched). Aborts/timeouts (`signal.aborted`), 429/5xx, network
-   * blips, and partial/failed responses are all transient: they do NOT latch, so
-   * neither a user interrupt nor a passing outage permanently disables
-   * compaction for the session.
-   */
-  private async summarizeViaResponses(
-    transcript: string,
-    signal: AbortSignal,
-    model: string,
-  ): Promise<string> {
-    try {
-      return await oneShotResponses({
-        client: this.client,
-        model,
-        system: COMPACT_SYSTEM_PROMPT,
-        user: wrapTranscriptForSummary(transcript),
-        isChatGptBackend: this.opts.auth.source === 'chatgpt-oauth',
-        maxTokens: 1024,
-        signal,
-      });
-    } catch (err) {
-      if (!signal.aborted && provesResponsesCompactionUnsupported(err)) {
-        this.responsesCompactionUnavailable = true;
-        // Fire-and-forget: a permanent per-session disable is otherwise
-        // invisible — the auto path discards compactHistory()'s result, so
-        // without this the reason surfaces only if a human runs /compact.
-        const status = getErrorStatus(err);
-        void emitSessionPhase(this.traceWriter, {
-          phase: 'compaction_disabled',
-          metadata: {
-            wire: 'responses',
-            reason: 'responses-compaction-unavailable',
-            error: errorMessage(err),
-            ...(status !== undefined ? { status } : {}),
-          },
-        });
-      }
-      throw err;
-    }
+  private async compactHistory(trigger: CompactionTrigger): Promise<ProviderCompactResult> {
+    return runCompactHistory(this, trigger);
   }
 
   async setModel(model?: string): Promise<void> {
-    // Resolve slot/legacy aliases (small/medium/large, custom tier names,
-    // haiku/sonnet/opus) to the bound concrete id BEFORE it reaches the request
-    // body — mirroring buildQueryFromConfig (the construction path) and
-    // anthropic-direct's setModel. Without this, a mid-session same-backend
-    // switch to an alias would send the literal alias as the wire model and the
-    // backend would reject it. resolveModelId is a no-op for full ids / `auto`.
-    if (model !== undefined) this.currentModel = resolveModelId(model) ?? model;
+    if (model !== undefined) this._currentModel = resolveModelId(model) ?? model;
   }
 
   async setPermissionMode(mode: string): Promise<void> {
-    this.currentPermissionMode = normalizePermissionMode(mode);
-    // Live enforcement, two fields kept in sync (else `/bypass off` fails
-    // UNSAFE — badge clears while the agent stays unrestricted):
-    //  1. file-tool containment ← dispatcher's allowAll (read fresh per call).
-    //     autonomous (AFK) bypasses containment alongside bypassPermissions.
-    const allowAll = pathContainmentBypassed(this.currentPermissionMode);
+    this._currentPermissionMode = normalizePermissionMode(mode);
+    const allowAll = pathContainmentBypassed(this._currentPermissionMode);
     this.toolDispatcher?.setAllowAll?.(allowAll);
-    //  2. path-approval hook ← provider's _currentPermissionMode (callback).
-    this.onPermissionMode?.(this.currentPermissionMode);
+    this.onPermissionMode?.(this._currentPermissionMode);
   }
 
   setCwd(cwd: string): void {
     this.toolDispatcher?.setResolveBase?.(cwd);
-    // #876: also rebuild the `# Environment` block (awareness cwd + system
-    // prompt), which the dispatcher rebase above does not touch. Order vs.
-    // the rebase above is not load-bearing — the two update independent
-    // state — but the rebuild ITSELF has an internal ordering invariant; see
-    // `rebuildEnvironmentBlock` in openai-compatible/index.ts.
     this.onCwdChange?.(cwd);
   }
 
@@ -1220,32 +410,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 
   async supportedModels(): Promise<ProviderModelInfo[]> {
-    return [
-      {
-        value: 'gpt-5.6',
-        displayName: 'GPT-5.6 (Sol)',
-        description: 'OpenAI flagship — alias for gpt-5.6-sol',
-      },
-      { value: 'gpt-5.6-sol', displayName: 'GPT-5.6 Sol', description: 'Frontier capability' },
-      {
-        value: 'gpt-5.6-terra',
-        displayName: 'GPT-5.6 Terra',
-        description: 'Balanced intelligence/cost',
-      },
-      {
-        value: 'gpt-5.6-luna',
-        displayName: 'GPT-5.6 Luna',
-        description: 'Fast, high-volume workloads',
-      },
-      { value: 'gpt-5.5', displayName: 'GPT-5.5', description: 'Prior flagship (ChatGPT backend)' },
-      { value: 'gpt-4o', displayName: 'GPT-4o', description: 'OpenAI flagship multimodal' },
-      { value: 'gpt-4o-mini', displayName: 'GPT-4o mini', description: 'Fast/cheap GPT-4o' },
-      { value: 'gpt-4.1', displayName: 'GPT-4.1', description: 'Long-context GPT-4' },
-      { value: 'gpt-4.1-mini', displayName: 'GPT-4.1 mini', description: 'Fast 4.1 variant' },
-      { value: 'o1', displayName: 'o1', description: 'Reasoning model' },
-      { value: 'o1-mini', displayName: 'o1 mini', description: 'Fast reasoning' },
-      { value: 'o3-mini', displayName: 'o3 mini', description: 'Newer reasoning, faster' },
-    ];
+    return OPENAI_COMPATIBLE_MODELS;
   }
 
   async supportedAgents(): Promise<ProviderAgentInfo[]> {
@@ -1253,16 +418,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   }
 
   async getContextUsage(): Promise<ProviderContextUsage> {
-    // Mirrors anthropic-direct/query.ts:getContextUsage. Reads `this.lastUsage`
-    // (set on every turn.completed in runTurn above) and computes a context-%
-    // against the model's window via contextLimitFor(). All the ingredients
-    // are provider-neutral — `ProviderUsage` is defined at src/agent/provider.ts
-    // and `contextLimitFor` lives at src/agent/model-limits.ts.
-    //
-    // Uses the context-window footprint (`contextWindowTokens`, set per-round in
-    // the loop above). For OpenAI that is prompt + completion (= input +
-    // output) since `prompt_tokens` already includes cached tokens; falls back
-    // to input+output when absent. See auto-compact.ts:contextWindowTokensUsed.
     const last = this.lastUsage;
     const contextLimit = contextLimitFor(this.currentModel);
     let percentage: number | undefined;
@@ -1270,11 +425,8 @@ export class OpenAICompatibleQuery implements ProviderQuery {
       const used = contextWindowTokensUsed(last);
       percentage = Math.min(100, Math.max(0, (used / contextLimit) * 100));
     }
-    // Translate the camelCase ProviderUsage into the snake_case apiUsage +
-    // top-level totalTokens the REPL consumers read. See buildContextUsageFields.
     const { totalTokens, apiUsage } = buildContextUsageFields(last);
     return {
-      // Context-window usage shape: tools/agents are per-entry token stats AFK does not populate (NOT AgentConfig.agents).
       tools: [],
       agents: [],
       isAutoCompactEnabled: this.autoCompactThreshold !== undefined,
@@ -1311,11 +463,7 @@ export class OpenAICompatibleQuery implements ProviderQuery {
   journalSnapshot(): ReturnType<OpenAIJournalWiring['snapshot']> { return this.journal.snapshot(this.priorTurns); }
 
   close(): void {
-    // Invariant: the `closed` flag and the close promise must be updated
-    // together — sub-generators poll the flag each loop iteration while the
-    // outer loop is parked on the promise, so resolving one without the
-    // other leaves a reader stuck.
-    this.closed = true;
+    this._closed = true;
     this.abort.requestAbort('closed');
     this.abort.markClosed();
     debugLog(`🟢 ${PROVIDER_NAME}: closed`);
@@ -1325,10 +473,6 @@ export class OpenAICompatibleQuery implements ProviderQuery {
 /**
  * Resolve auth + construct a query. Provider entrypoint uses this; tests
  * use the constructor directly via the test-injection hook.
- *
- * The provider that *calls* this is responsible for constructing the
- * `toolDispatcher` (typically a `SessionToolDispatcher`) and threading it
- * through `opts.toolDispatcher`. See `OpenAICompatibleProvider.query()`.
  */
 export function buildQueryFromConfig(
   config: AgentConfig,
@@ -1348,12 +492,7 @@ export function buildQueryFromConfig(
      */
     authDeps?: AuthResolverDeps;
     /**
-     * Session id resolved by the calling provider (see
-     * `shared/presence-lifecycle.ts#resolveTopLevelSessionId`). Highest
-     * precedence so the presence file, `session.init`, and the ledger directory
-     * all carry one id — the Telegram watcher resolves a session's ledger path
-     * from its presence file, so an id mismatch silently tails a nonexistent
-     * ledger. Omitted for forks, which keep the local mint below.
+     * Session id resolved by the calling provider.
      */
     sessionIdOverride?: string;
     /** Fast mode wiring from the provider (top-level sessions only). */
@@ -1365,12 +504,6 @@ export function buildQueryFromConfig(
     options.sessionIdOverride ??
     config.resume ??
     `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  // Resolve model-slot aliases (small/medium/large, custom names, and the
-  // legacy haiku/sonnet/opus aliases) to their bound concrete id BEFORE the id
-  // reaches the request body — mirroring anthropic-direct, which already calls
-  // resolveModelId internally. Without this, a subagent/skill that picks an
-  // alias (e.g. `sonnet`) on this provider would route correctly but still send
-  // the literal alias to the backend. Idempotent for concrete ids and `auto`.
   const rawModel = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
   const model = resolveModelId(rawModel) ?? rawModel;
 
@@ -1388,8 +521,6 @@ export function buildQueryFromConfig(
   if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;
   if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
   if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
-  // Thread traceWriter from AgentConfig so witness events are emitted for
-  // openai-compatible sessions when a session-scoped trace writer is present.
   if (config.traceWriter !== undefined) opts.traceWriter = config.traceWriter;
   if (options.fastTier !== undefined) opts.fastTier = options.fastTier;
   return new OpenAICompatibleQuery(opts);

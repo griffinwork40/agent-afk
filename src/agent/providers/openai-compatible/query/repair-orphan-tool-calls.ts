@@ -84,14 +84,15 @@ function getToolCallIds(msg: OpenAIMessage): string[] | null {
  *     `tool_calls` message, or whose `tool_call_id` doesn't match any id in
  *     that assistant message — are dropped.
  *
- * The function operates on a copy of the input array and returns a new array,
- * leaving the original untouched. A history that already satisfies the
- * invariants is returned unchanged (same elements, new array wrapper only).
+ * The function returns the input array reference unchanged when no repair is
+ * needed (fast path: no assistant tool_calls and no tool messages in history).
+ * When repair is required it returns a new array; the original is left
+ * untouched in either case.
  *
  * @param messages  The message array assembled by {@link buildMessages} before
  *                  being sent to the Chat Completions / Responses API.
- * @returns         A repaired message array (may be the same object references
- *                  when no repair was needed, wrapped in a new array).
+ * @returns         The original array reference when no repair is needed (fast
+ *                  path), or a new repaired array when invariants were violated.
  */
 export function repairOrphanToolCalls(messages: OpenAIMessage[]): OpenAIMessage[] {
   if (messages.length === 0) return messages;

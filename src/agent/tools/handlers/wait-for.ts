@@ -28,6 +28,7 @@ import {
   MIN_POLL_INTERVAL_MS,
 } from './wait-for-poller.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { isUserWaiting, yieldNotice } from '../user-yield.js';
 
 // ---------------------------------------------------------------------------
 // Input shape
@@ -210,11 +211,16 @@ export const waitForHandler: ToolHandler = async (
     }
   };
 
+  // Yield contract: the dispatcher attaches userAttention only on top-level
+  // interactive sessions. When the operator types while we wait, stop and hand
+  // the turn back (their message is delivered at end of turn, not mid-turn).
+  const attention = context?.userAttention;
   const pollResult = await pollUntil(evaluate, {
     timeout_ms: timeoutMs,
     poll_interval_ms: pollIntervalMs,
     backoff,
     signal,
+    ...(attention !== undefined ? { shouldYield: () => isUserWaiting(attention) } : {}),
   });
 
   const summary =
@@ -222,6 +228,15 @@ export const waitForHandler: ToolHandler = async (
     `(${pollResult.elapsed_ms}ms elapsed, ${pollResult.attempts} attempt${pollResult.attempts === 1 ? '' : 's'})` +
     (pollResult.result ? ` — ${pollResult.result.detail}` : '') +
     (pollResult.error ? ` — error: ${pollResult.error}` : '');
+
+  if (pollResult.status === 'yielded_to_user') {
+    return {
+      content:
+        `${summary}. Condition not met yet. ` +
+        yieldNotice('Call wait_for again afterward if the condition is still needed.'),
+      isError: false,
+    };
+  }
 
   return {
     content: summary,

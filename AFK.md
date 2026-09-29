@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥22, pnpm-only (lockfile is pnpm-specific).
+Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. Runs **outside** Claude Code as its own process. Binary: `afk`. Node ≥22.13 (pnpm 11 minimum), pnpm 11 only (pinned via `package.json#packageManager`; lockfile is pnpm-specific; dependency build scripts must be allowlisted under `allowBuilds` in `pnpm-workspace.yaml`, and `dashboard/` has its own copy). CI publishes with `npm publish`/`npm version`, not the pnpm equivalents; see the Invariant in `.github/workflows/publish.yml`.
 
 ## Commands
 
@@ -10,7 +10,7 @@ Standalone TypeScript CLI + daemon + Telegram bot built on `@anthropic-ai/sdk`. 
 pnpm install                                       # pnpm exclusively
 pnpm build                                         # tsc + copy *.md prompts → dist/
 pnpm test                                          # vitest run (all)
-pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10 drops args after -- and runs ALL files)
+pnpm test src/agent/session.test.ts                # single file (NO --; pnpm 10+ drops args after -- and runs ALL files)
 pnpm test src/agent/session.test.ts -t "sends a message"   # single test by name (scope to a file, then filter by -t)
 pnpm test:file src/agent/session.test.ts           # --proof alias for a scoped run (script: vitest run)
 pnpm test:watch                                    # vitest watch
@@ -59,11 +59,9 @@ Traces live at `$AFK_HOME/state/witness/<sessionLabel>/trace.jsonl`. Writer + re
 
 **Many-image degradation trace.** When `enforceManyImageLimit` runs in `openRound` and replaces one or more image blocks with `imageOmitted` text blocks (because the request has >20 images and some exceed the 2 000 px many-image ceiling), it emits a `many_image_degraded` `session_phase` event. Payload: `{ phase: 'many_image_degraded', metadata: { degradedCount, threshold, maxDimension } }`. PURE OBSERVABILITY — the mutation already happened to the messages array; this event makes it visible in the trace so operators can diagnose sessions that silently hit the many-image ceiling. Emitter: `src/agent/providers/anthropic-direct/loop/round-request.ts`.
 
-One slice of the args gap is now closable on demand: **subagent dispatch prompts**. Set `AFK_CAPTURE_SUBAGENT_PROMPTS=1` and every prompt a parent sends a child is written as a redacted markdown file (frontmatter + verbatim body) to `~/.afk/state/witness/<sessionLabel>/prompts/`. Because a fork resumes its parent's sessionId, one directory holds every prompt that session dispatched — across all six dispatch paths (agent fg/bg, worktree-isolated, compose/DAG, skill forks, in-process callers like mint phases), and across multi-turn children. **Off by default**, deliberately: nothing prunes the witness tree (12,596 dirs / 461 MB on this machine 2026-08-01) and redaction is regex-based, so connection strings, PEM blocks, and PII are *not* caught. Writer: `src/agent/session/subagent-prompt-capture.ts`; capture point is the child's own `sendMessageStreamInternal`, beside the ledger call that forks are gated out of. The trace itself still carries only `promptHead` (80 chars) on `subagent_lifecycle.started` — these files are not referenced by any trace event, so the directory is the index.
+Both gaps — the dispatch prompt and the child's full conversation — are covered by **subagent journals** (introduced in #2452, retired the two opt-in capture flags in #2460). Every fork writes `~/.afk/state/sessions/<id>/subagents/<subagentId>.jsonl`, recording the dispatch prompt (the child's first user message), every tool call with full arguments, every tool result, and the child's assistant text — a strict superset of what the old `AFK_CAPTURE_SUBAGENT_PROMPTS` / `AFK_CAPTURE_SUBAGENT_OUTPUT` flags wrote. Journal writer: `src/agent/session/journal/`; paths: `src/paths.journal.ts`. The journal syncs via `journalSync.sync(messages)` before each model request and after each tool round (`anthropic-direct/loop/round-request.ts`, `loop/tool-round.ts`; `openai-compatible/query.ts` commits at turn end and at each tool round), with `journal.flush()` called on abort. **View with `afk trace show --results`** or read the JSONL files directly.
 
-The other half of that gap — **what a child actually SAID** — is closable with `AFK_CAPTURE_SUBAGENT_OUTPUT=1`. This appends a redacted markdown transcript per child to `~/.afk/state/witness/<sessionLabel>/outputs/<subagentId>.md`, recording assistant prose interleaved with **each tool call and its arguments** (the args the trace omits entirely). Same fork/session-label semantics and same off-by-default rationale as the prompts flag above. Writer: `src/agent/session/subagent-output-capture.ts`; same capture point (the child's own `sendMessageStreamInternal`), recorder is session-scoped so a multi-turn child yields one transcript.
-
-Capture is **incremental — flushed at every tool-call boundary — and that is the whole point**, not an optimization. The failure this exists to debug is a child that runs to its timeout and produces zero final output; at that moment every aggregate source is empty *by construction*: `conversationHistory` only gains an entry on `assistant.message` (once per completed `run()`), `SubagentStop.lastMessage` is `undefined`, and the trace's `partialOutputBytes` is `0`. Any capture pinned to an end-of-run boundary records nothing in exactly the case it is needed. Flushing per tool call means a killed child still leaves one record per call it made.
+Journal writes go through an async `SerialQueue`, so a SIGKILL can lose queued records — the same exposure the old capture flags had (they also flushed asynchronously). A graceful abort calls `journal.flush()` before exit (`src/agent/session/agent-session.ts`), bounding the loss window.
 
 One residual bug, worth recognizing: a parent ending mid-wave seals over live children and silently drops their terminal rows (`write()` throws on a sealed writer; `emitSubagentLifecycle` swallows it), so ~3% of dispatched subagents have no recorded fate — ~8% in daemon/cron parallel waves vs ~1% interactive. Detector: an **unmatched `started` in a trace that contains `session_sealed`** — not "a `started` is the last line", which misses it because the seal is written afterward.
 
@@ -118,7 +116,8 @@ All AFK state under `~/.afk/` (never `~/.claude/`), resolved exclusively through
   config/    afk.env, afk.config.json, mcp.json
   state/     sessions/  todos/  transcripts/  daemon/  witness/   ($AFK_STATE_DIR overrides this tier)
   plugins/   logs/  cache/
-  agent-framework/   # AFK telemetry + briefs
+  agent-framework/   # AFK telemetry + briefs (forge-telemetry.jsonl, routing-decisions.jsonl,
+                   #   preexisting-ledger.jsonl — see docs/preexisting-ledger.md)
 <cwd>/.afk/                      # project-scope: per-project skills + plugins, auto-discovered
 ```
 

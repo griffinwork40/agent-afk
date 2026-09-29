@@ -176,8 +176,11 @@ export function detectArmImbalance(
     .filter(Boolean)
     .join('; ');
 
+  const opening = allInOneArm
+    ? 'failures are concentrated in one arm'
+    : 'failure rates differ significantly between arms';
   const summary =
-    `Arm-imbalance warning: failures are concentrated in one arm (${reasons}). ` +
+    `Arm-imbalance warning: ${opening} (${reasons}). ` +
     `This may bias the verdict toward "no change". Consider raising --timeout or ` +
     `investigating whether the tested change causes exploration that exceeds the limit.`;
 

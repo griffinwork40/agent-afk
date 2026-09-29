@@ -895,6 +895,7 @@ describe('bash path-containment scan — C4 (#354)', () => {
 
   afterEach(() => {
     warnSpy.mockRestore();
+    vi.unstubAllEnvs();
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
@@ -930,6 +931,13 @@ describe('bash path-containment scan — C4 (#354)', () => {
     // writeRoots — so it warns (and still executes). Had expansion NOT fired, the
     // token would anchor to resolveBase (in-root) and produce zero warnings, so
     // the single warning is itself proof the expansion happened.
+    //
+    // Pin home OUTSIDE os.tmpdir(): on win32 the global test setup points
+    // USERPROFILE at a temp sentinel (redirect-paths-env.ts), so the real
+    // os.homedir() is a scratch dir and the expanded path would be exempt.
+    const fakeHome = path.resolve('/afk-scan-fake-home');
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('USERPROFILE', fakeHome);
     const handler = createBashHandler('default', root);
     const result = await handler(
       { command: 'echo hi ~/.ssh/id_rsa' },
@@ -987,6 +995,38 @@ describe('bash path-containment scan — C4 (#354)', () => {
     const result = await handler({ command: 'echo hi /etc/hosts' }, createSignal());
     expect(escapeWarnings()).toHaveLength(0);
     expect(result.isError).toBeFalsy();
+  });
+
+  it('does NOT warn for device sinks or scratch dirs (2>/dev/null, /tmp, /dev/stderr)', async () => {
+    const handler = createBashHandler('default', root);
+    const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+    const result = await handler(
+      { command: 'echo hi 2>/dev/null >/dev/stderr; ls /tmp/afk-nope 2>/dev/null; true /private/tmp/x' },
+      createSignal(),
+      ctx,
+    );
+    expect(escapeWarnings()).toHaveLength(0);
+    expect(result.isError).toBeFalsy();
+  });
+
+  it('still warns for a traversal out of a scratch dir (/tmp/../etc/hosts)', async () => {
+    const handler = createBashHandler('default', root);
+    const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+    await handler({ command: 'echo hi /tmp/../etc/hosts' }, createSignal(), ctx);
+    expect(escapeWarnings()).toHaveLength(1);
+  });
+
+  it('a benign sink does not consume the one-time latch for a later real escape', async () => {
+    const handler = createBashHandler('default', root);
+    const ctx = { resolveBase: root, readRoots: [root], writeRoots: [root], allowAll: false };
+    await handler({ command: 'ls 2>/dev/null' }, createSignal(), ctx);
+    expect(escapeWarnings()).toHaveLength(0);
+    await handler({ command: 'cat /etc/hosts 2>/dev/null' }, createSignal(), ctx);
+    const warnings = escapeWarnings();
+    expect(warnings).toHaveLength(1);
+    // Only the genuine escape is named — the exempt sink is not listed.
+    expect(warnings[0]).toContain('/etc/hosts');
+    expect(warnings[0]).not.toContain('/dev/null');
   });
 });
 

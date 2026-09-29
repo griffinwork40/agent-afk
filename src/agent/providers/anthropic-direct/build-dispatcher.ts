@@ -52,6 +52,7 @@ import {
   type ToolPermissionConfig,
 } from '../../tools/permissions.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
+import { userAttentionFrom } from '../../tools/user-yield.js';
 
 /** Per-call options — the session-scoped half of the dispatcher inputs. */
 export interface BuildDispatcherOptions {
@@ -342,6 +343,9 @@ export function buildDispatcher(
     readOnlyBash: deps.readOnlyBash,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
+    // Yield contract: the queued-message probe rides on planExitControls (the
+    // REPL installs it post-construction; top-level sessions only). Late-bound.
+    ...(planExitControls ? { userAttention: userAttentionFrom(planExitControls) } : {}),
     // #1506: Live bash output tail for REPL TUI progress display.
     ...(opts?.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: opts.bashOutputTailReporter }

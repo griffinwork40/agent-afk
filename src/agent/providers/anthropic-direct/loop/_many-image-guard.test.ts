@@ -334,6 +334,156 @@ describe('enforceManyImageLimit — top-level image blocks (not inside tool_resu
   });
 });
 
+// ─── WebP (VP8L / VP8X) — 80-char base64 prefix coverage ──────────────────────
+//
+// The guard decodes only the first 80 base64 chars (~60 raw bytes) to read
+// header bytes. VP8 and VP8L headers fit in 30 bytes (40 base64 chars), which
+// is well within the 80-char window. These tests confirm that the prefix
+// truncation does not interfere with dimension parsing for WebP formats.
+//
+// Helpers — minimal VP8 / VP8L buffers (same layout as view-image.test.ts).
+
+function makeWebpVP8Buffer(width: number, height: number): Buffer {
+  const buf = Buffer.alloc(30);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(22, 4);
+  buf.write('WEBP', 8, 'ascii');
+  buf.write('VP8 ', 12, 'ascii');
+  buf.writeUInt32LE(10, 16);
+  buf.writeUInt16LE((width - 1) & 0x3fff, 26);
+  buf.writeUInt16LE((height - 1) & 0x3fff, 28);
+  return buf;
+}
+
+function makeWebpVP8LBuffer(width: number, height: number): Buffer {
+  const buf = Buffer.alloc(30);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(22, 4);
+  buf.write('WEBP', 8, 'ascii');
+  buf.write('VP8L', 12, 'ascii');
+  buf.writeUInt32LE(10, 16);
+  buf[20] = 0x2f; // VP8L signature
+  const packed = ((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14);
+  buf.writeUInt32LE(packed, 21);
+  return buf;
+}
+
+describe('enforceManyImageLimit — WebP VP8 via 80-char base64 prefix', () => {
+  it('degrades an oversized VP8 WebP image (>2000px) in a 21-image conversation', () => {
+    // VP8 header is 30 bytes = 40 base64 chars, well within the 80-char prefix window.
+    const msgs = makeImageMessages(20, 100, 100);
+    msgs.push({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result' as const,
+          tool_use_id: 'tu-vp8',
+          content: [
+            {
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: 'image/webp' as const,
+                data: makeWebpVP8Buffer(2500, 1500).toString('base64'),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(countImageBlocks(msgs)).toBe(21);
+    const degraded = enforceManyImageLimit(msgs);
+    expect(degraded).toBe(1);
+    expect(countImageBlocks(msgs)).toBe(20);
+    expect(countImageOmittedBlocks(msgs)).toBe(1);
+  });
+
+  it('leaves a within-limit VP8 WebP image alone (≤2000px)', () => {
+    const msgs = makeImageMessages(20, 100, 100);
+    msgs.push({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result' as const,
+          tool_use_id: 'tu-vp8-ok',
+          content: [
+            {
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: 'image/webp' as const,
+                data: makeWebpVP8Buffer(1000, 800).toString('base64'),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(countImageBlocks(msgs)).toBe(21);
+    const degraded = enforceManyImageLimit(msgs);
+    expect(degraded).toBe(0);
+    expect(countImageBlocks(msgs)).toBe(21);
+  });
+});
+
+describe('enforceManyImageLimit — WebP VP8L via 80-char base64 prefix', () => {
+  it('degrades an oversized VP8L WebP image (>2000px) in a 21-image conversation', () => {
+    // VP8L header is 30 bytes = 40 base64 chars, well within the 80-char prefix window.
+    const msgs = makeImageMessages(20, 100, 100);
+    msgs.push({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result' as const,
+          tool_use_id: 'tu-vp8l',
+          content: [
+            {
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: 'image/webp' as const,
+                data: makeWebpVP8LBuffer(3000, 2500).toString('base64'),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(countImageBlocks(msgs)).toBe(21);
+    const degraded = enforceManyImageLimit(msgs);
+    expect(degraded).toBe(1);
+    expect(countImageBlocks(msgs)).toBe(20);
+    expect(countImageOmittedBlocks(msgs)).toBe(1);
+  });
+
+  it('leaves a within-limit VP8L WebP image alone (≤2000px)', () => {
+    const msgs = makeImageMessages(20, 100, 100);
+    msgs.push({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result' as const,
+          tool_use_id: 'tu-vp8l-ok',
+          content: [
+            {
+              type: 'image' as const,
+              source: {
+                type: 'base64' as const,
+                media_type: 'image/webp' as const,
+                data: makeWebpVP8LBuffer(1024, 768).toString('base64'),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(countImageBlocks(msgs)).toBe(21);
+    const degraded = enforceManyImageLimit(msgs);
+    expect(degraded).toBe(0);
+    expect(countImageBlocks(msgs)).toBe(21);
+  });
+});
+
 describe('enforceManyImageLimit — short buffer triggers null dims', () => {
   it('leaves an image alone when the buffer is too short for dimension parsing', () => {
     // A PNG buffer that's too short for the IHDR parser (<24 bytes) → dims is null → no degradation
@@ -363,6 +513,58 @@ describe('enforceManyImageLimit — short buffer triggers null dims', () => {
 
     const degraded = enforceManyImageLimit(msgs);
     // Buffer too short → readImageDimensions returns null → no degradation
+    expect(degraded).toBe(0);
+    expect(countImageBlocks(msgs)).toBe(21);
+  });
+});
+
+describe('enforceManyImageLimit — JPEG silent skip (SOF marker beyond 60-byte prefix)', () => {
+  it('leaves a JPEG image alone when the SOF marker falls beyond the 60-byte decoded prefix', () => {
+    // The guard decodes only the first 80 base64 chars (~60 raw bytes). A JPEG
+    // whose SOF0/SOF2 marker sits beyond byte 60 returns null from
+    // readImageDimensions and is conservatively left in place (no degradation).
+    //
+    // Craft a JPEG stub: 0xFF 0xD8 (SOI) + a 60-byte APP0-like segment that
+    // pushes the SOF marker past the 60-byte window. The exact dimensions are
+    // irrelevant — we only need the guard to skip it silently.
+    const jpeg = Buffer.alloc(100, 0);
+    jpeg[0] = 0xff; jpeg[1] = 0xd8; // SOI marker
+    // Byte 2: 0xFF, byte 3: 0xE0 (APP0), length 60 (bytes 4-5)
+    jpeg[2] = 0xff; jpeg[3] = 0xe0;
+    jpeg.writeUInt16BE(60, 4); // segment length 60 → parser skips to byte 62
+    // SOF0 marker at byte 62 (beyond the 60-byte window) — will NOT be seen
+    jpeg[62] = 0xff; jpeg[63] = 0xc0;
+    jpeg.writeUInt16BE(17, 64); // SOF0 length
+    // Precision (1) + height (2) + width (2)
+    jpeg[66] = 8;
+    jpeg.writeUInt16BE(3000, 67); // height 3000px (oversized — but invisible)
+    jpeg.writeUInt16BE(4000, 69); // width 4000px (oversized — but invisible)
+
+    const msgs: MessageParam[] = [];
+    for (let i = 0; i < 21; i++) {
+      msgs.push({
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result' as const,
+            tool_use_id: `tu-${i}`,
+            content: [
+              {
+                type: 'image' as const,
+                source: {
+                  type: 'base64' as const,
+                  media_type: 'image/jpeg' as const,
+                  data: jpeg.toString('base64'),
+                },
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    const degraded = enforceManyImageLimit(msgs);
+    // SOF beyond 60-byte prefix → dims is null → silent skip, no degradation
     expect(degraded).toBe(0);
     expect(countImageBlocks(msgs)).toBe(21);
   });

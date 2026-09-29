@@ -258,4 +258,10 @@ describe('fmtP', () => {
   it('renders values just above 0.001 as three decimals, not <0.001', () => {
     expect(fmtP(0.0011)).toBe('0.001');
   });
+
+  it('clamps negative input to <0.001 (p-values are always ≥0; guard against floating-point underflow)', () => {
+    // Negative p is not meaningful, but the formatter should not produce a negative string.
+    expect(fmtP(-0.1)).toBe('<0.001');
+    expect(fmtP(-1e-10)).toBe('<0.001');
+  });
 });

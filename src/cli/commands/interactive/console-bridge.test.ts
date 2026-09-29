@@ -49,6 +49,30 @@ describe('installConsoleBridge', () => {
     expect(warn).toHaveBeenCalledWith('inner: outer');
   });
 
+  it('cross-method re-entrancy: a warn inside an error sink falls back without recursing', () => {
+    // The inBridge flag is shared across warn and error. If commitAbove calls
+    // target.warn while handling a target.error call (or vice-versa), the
+    // inner call must fall back to the original rather than recurse back into
+    // commitAbove. This covers the "cross-method" variant of the re-entrancy
+    // guard described in the contract comment.
+    const { target, warn } = fakeConsole();
+    const commitAbove = vi.fn((_text: string) => {
+      // Sink calls warn while handling an error — cross-method re-entrancy.
+      target.warn('re-entrant-warn');
+    });
+    installConsoleBridge({ commitAbove }, target);
+
+    target.error('trigger');
+
+    // commitAbove was called once for the original error.
+    expect(commitAbove).toHaveBeenCalledTimes(1);
+    expect(commitAbove).toHaveBeenCalledWith('trigger');
+    // The re-entrant warn must have bypassed commitAbove and gone to the
+    // original warn directly (inBridge was still true).
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('re-entrant-warn');
+  });
+
   it('restore reinstates the originals, is idempotent, and never clobbers a later wrapper', () => {
     const { target, warn, error } = fakeConsole();
     const restore = installConsoleBridge({ commitAbove: vi.fn() }, target);

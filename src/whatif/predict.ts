@@ -137,8 +137,6 @@ how the agent's behavior will change. Return a JSON array of Prediction objects.
 - probes: exactly ${probesPerPrediction} realistic user requests that would exercise the predicted behavior.
   Probes MUST be genuinely DIVERSE: different files, different tasks, different phrasings.
   Do NOT write rewordings or near-duplicates of the same request.
-  When a ## Repo context section is present below, probes MUST reference only paths
-  listed there, or no specific file paths at all. Never invent file names.
   CRITICAL — pick probes on which the CURRENT (baseline) agent leaves room to move:
     • For 'added' or 'strengthened' predictions: choose requests where the current
       agent usually does NOT show the behavior yet. The baseline P(yes) on these
@@ -209,6 +207,12 @@ export interface PredictInput {
   probesPerPrediction?: number;
   /** Maximum number of predictions to retain (resolved via resolveMaxPredictions). */
   maxPredictions?: number;
+  /**
+   * Optional redundancy-preflight section from {@link checkRedundancy} (#2414).
+   * When present, injected into the analyst prompt so the model can return []
+   * when the change merely restates an existing baseline instruction.
+   */
+  redundancySection?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +232,7 @@ export async function predictChanges(
   complete: CompleteFn,
   model: string,
 ): Promise<Prediction[]> {
-  const { spec, changeDescriptions, structural, trackRecord, repoManifest } = input;
+  const { spec, changeDescriptions, structural, trackRecord, repoManifest, redundancySection } = input;
 
   const probesPerPrediction = input.probesPerPrediction ?? DEFAULT_PROBES;
   const maxPredictions = input.maxPredictions ?? resolveMaxPredictions(probesPerPrediction);
@@ -247,6 +251,13 @@ export async function predictChanges(
 
   if (trackRecord) {
     sections.push(`## Engine track record (calibration)\n${headTail(trackRecord, 2000)}`);
+  }
+
+  // Redundancy preflight (#2414): inject before repo context so the model
+  // sees the warning early and can return [] when the change restates an
+  // existing rule.
+  if (redundancySection) {
+    sections.push(redundancySection);
   }
 
   if (repoManifest) {

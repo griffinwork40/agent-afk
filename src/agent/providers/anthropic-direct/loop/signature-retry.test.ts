@@ -57,6 +57,13 @@ describe('isInvalidSignatureError', () => {
     expect(isInvalidSignatureError(e)).toBe(false);
   });
 
+  it('does NOT match a 400 mentioning only "signature" without "thinking"', () => {
+    // Regression guard: an auth or crypto 400 that mentions "signature" but
+    // has nothing to do with thinking blocks must not trigger the retry.
+    const e = makeErr('400 Bad Request: invalid request signature', 400);
+    expect(isInvalidSignatureError(e)).toBe(false);
+  });
+
   it('does NOT match a non-Error value', () => {
     expect(isInvalidSignatureError('string error')).toBe(false);
     expect(isInvalidSignatureError(null)).toBe(false);

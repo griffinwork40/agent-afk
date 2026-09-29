@@ -52,6 +52,8 @@ import { getStateDatabasePath } from '../../../paths.js';
 import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
 import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
+import { selectBaseSchemas } from './base-schemas.js';
+import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
 import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
@@ -606,24 +608,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
       }
     }
 
-    // Invariant: skill-dispatch sub-agents must never pause to ask the operator
-    // "which skill?" nor mutate the operator's environment. Strip `ask_question`
-    // (operator-prompt escape hatch) and `terminal_font_size` (an environment tool
-    // a bare numeric skill arg can lure a confused model into). Parity with the
-    // toolDefs filter in AnthropicDirectProvider. No skill calls either tool.
-    const baseSchemas = opts.isSkillDispatch
-      ? this.schemas.filter(
-          (t) =>
-            t.name !== 'ask_question' &&
-            t.name !== 'terminal_font_size' &&
-            t.name !== 'clipboard_write' &&
-            t.name !== 'clipboard_read',
-        )
-      : opts.isNonInteractive
-        ? this.schemas.filter(
-            (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
-          )
-        : this.schemas;
+    // Surface-scoped builtin filter (skill-dispatch / non-interactive): see base-schemas.ts.
+    const baseSchemas = selectBaseSchemas(this.schemas, opts);
 
     const dispatcherOpts: ConstructorParameters<typeof SessionToolDispatcher>[0] = {
       handlers,
@@ -698,6 +684,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     // Parity with AnthropicDirectProvider.buildDispatcher.
     dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
+    // Yield contract: queued-message probe, late-bound off planExitControls (top-level only).
+    if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
 
     return new SessionToolDispatcher(dispatcherOpts);
   }

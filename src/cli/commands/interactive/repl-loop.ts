@@ -187,9 +187,13 @@ export async function runReplLoop(
     const resetToConsole = (line: string) => console.log(line);
     ctx.completionWriter.fn = resetToConsole;
     ctx.completionWriter.idleFn = resetToConsole;
-    // Same ordering constraint for the console bridge: restore the raw
-    // console before the compositor it commits into is disposed.
-    restoreConsole?.();
+    // Invariant: restoreConsole must run BEFORE surface.dispose(). The bridge
+    // routes through compositor.commitAbove; after dispose() that object is
+    // dead. Wrapped in try/catch so a throwing restore (e.g. a later wrapper
+    // that has modified console.warn after install) does not abort the
+    // surface.dispose() that follows — an un-disposed compositor in raw mode
+    // would leave the terminal unusable.
+    try { restoreConsole?.(); } catch { /* best-effort; surface.dispose() must still run */ }
     // Stage 3e: disarm the persistent compositor on REPL exit. Best-
     // effort — surface.dispose() is idempotent and swallows raw-mode
     // teardown errors so a corrupt terminal state doesn't mask the

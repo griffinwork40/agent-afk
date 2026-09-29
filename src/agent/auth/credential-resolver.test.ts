@@ -11,7 +11,7 @@ import {
   preloadClaudeKeychainOAuth,
   _resetRefreshedClaudeCodeOauthToken,
 } from './credential-resolver.js';
-import { refreshClaudeCodeOauthToken, loadClaudeCodeOauthToken } from './keychain.js';
+import { refreshClaudeCodeOauthToken, loadClaudeCodeOauthToken, _resetKeychainReadCache } from './keychain.js';
 
 // Keep the network/keychain refresh hermetic — preloadClaudeKeychainOAuth's
 // guard is what's under test, not the real token exchange.
@@ -146,6 +146,7 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     vi.clearAllMocks();
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue(undefined);
     _resetRefreshedClaudeCodeOauthToken();
+    _resetKeychainReadCache();
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   });

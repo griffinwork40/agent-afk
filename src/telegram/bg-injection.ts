@@ -30,6 +30,13 @@ const sources = new Map<string, BgInjectionSource>();
 
 /** Register (or replace) the injection source for a route key. */
 export function registerBgInjectionSource(key: string, source: BgInjectionSource): void {
+  if (sources.has(key)) {
+    // A pre-existing entry for this route key means a prior session disposed
+    // without calling unregisterBgInjectionSource (e.g. it crashed). The new
+    // registration is safe — overwrite-on-collision prevents cross-session
+    // contamination — but we log so operators can spot persistent leaks.
+    console.warn(`[bg-injection] replacing stale source for route '${key}' — prior session may have exited without dispose()`);
+  }
   sources.set(key, source);
 }
 

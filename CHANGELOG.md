@@ -11,6 +11,193 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.276.4] - 2026-09-29
+
+### Fixed
+- askedBeforeActing now detects prose questions after read-only tools (#2606) (adf452be)
+- wire --no-baseline-sample into the afk whatif CLI command (#2608) (607306b6)
+- preserve ask_question in whatif episodes so asking behavior is measurable (#2612) (24a94ce8)
+- keep POSIX semantics for /-rooted scan candidates on win32 (#2605) (887c0aed)
+
+## [5.276.3] - 2026-09-29
+
+### Fixed
+- session.init reports session cwd instead of process.cwd() (#2611) (d1d68320)
+- include prediction text in refused.json (#2607) (6b6329dd)
+
+## [5.276.2] - 2026-09-29
+
+### Fixed
+- forward --force from the /whatif REPL slash command (6df2ecf3)
+- extract describeIgnoredRefusal helper; add ignored meta fields to teardown (a5dc7415)
+- drop unfounded ._build/ pattern; pass ignored detail to isolation debug log (5f213188)
+- classify SwiftPM .build/ as rebuildable and name the real path in ignored-local-state lock reasons (218a8e0f)
+- probe grounding buffer cap, async git, warning on unexpected failure, grounding clause hygiene, all-dropped test (9fdf32bc)
+
+### Changed
+- Merge pull request #2603 from griffinwork40/afk/whatif-slash-force (cf640033)
+- Merge pull request #2483 from griffinwork40/afk/issue-2402-b545 (6aad35f4)
+- Merge pull request #2532 from griffinwork40/afk/iso-agent-tool-3-fgt9ns (11983933)
+- Merge branch 'main' into afk/issue-2402-b545 (a8543b48)
+
+## [5.276.1] - 2026-09-29
+
+### Added
+- local, prose-free record of deferred "pre-existing" defects (89cd5eb3)
+
+### Fixed
+- address Codex review (sidecar-less surfaces, ambiguous loci, deferred size category) (c610875e)
+- stop path-escape advisory firing on /dev/null and /tmp (509d7e57)
+- shut down lazily-launched browser after afk chat completes (89539544)
+- address console-bridge advisory findings from #2517 review (34ecda0f)
+
+### Changed
+- Merge pull request #2589 from griffinwork40/afk/preexisting-ledger (b68b6e53)
+- Merge pull request #2588 from griffinwork40/afk/bash-scan-sink-exempt (17797dfc)
+- Merge pull request #2587 from griffinwork40/afk/iso-agent-tool-4-u026vb (e2546a82)
+- Merge pull request #2570 from griffinwork40/afk/iso-agent-tool-5-hdypjv (2f095fd4)
+
+## [5.276.0] - 2026-09-29
+
+### Added
+- add overload pause tier to openai-compatible provider (70a30f0d)
+
+### Fixed
+- pin SHARED_CONTEXT_DIRECTIVE in ordering test and tighten separator count (9136739b)
+
+### Changed
+- Merge pull request #2569 from griffinwork40/afk/iso-agent-tool-4-xon4bj (b24066b6)
+- Merge pull request #2574 from griffinwork40/afk/iso-agent-tool-4-mh9o62 (262fa048)
+- Merge remote-tracking branch 'origin/main' into afk/fix-2574-conflict (f43e7208)
+- Merge origin/main into afk/iso-agent-tool-4-mh9o62 (#2574) (785a9ed3)
+- merge origin/main + apply review findings (#2574) (6039e638)
+
+## [5.275.6] - 2026-09-29
+
+### Fixed
+- elide data: URI payloads in web_scrape extracted markdown (ba6e5d07)
+- retire AFK_CAPTURE_SUBAGENT_OUTPUT and AFK_CAPTURE_SUBAGENT_PROMPTS (8a0bbac2)
+
+### Changed
+- Merge pull request #2584 from griffinwork40/afk/iso-agent-tool-3-ez4uwm (55b1611e)
+- Merge pull request #2583 from griffinwork40/afk/drop-dist-postinstall (b6969ee5)
+- Merge pull request #2582 from griffinwork40/afk/glob-rg-2543 (bcb9d260)
+- Merge pull request #2581 from griffinwork40/afk/iso-agent-tool-3-k7xlsp (387dca76)
+- stop copying postinstall into dist/ (0201388b)
+- stop per-entry sync stat probes in the read-denylist check (#2543) (e4183e66)
+
+## [5.275.5] - 2026-09-29
+
+### Added
+- add redundancy preflight check to /whatif (c45dfd4e)
+
+### Fixed
+- fix over-stemming, heading false-match, progress excerpt, and weak tests (cc91d375)
+
+### Changed
+- Merge pull request #2571 from griffinwork40/afk/iso-agent-tool-5-hvsx44 (42ea0bc3)
+- Merge pull request #2523 from 0x7067/fix/pnpm-11-install (5422b42d)
+
+## [5.275.4] - 2026-09-29
+
+### Fixed
+- bound tool-lane preview formatting so huge tool results cannot starve the REPL (#2578) (247a06f6)
+- make query.ts mutable fields private with live getters (81261a07)
+- fd leak, tie-break parity, typeof guard (9a51b6aa)
+- async non-blocking tool-result lookup for web route (b94fad6e)
+
+### Changed
+- Merge pull request #2572 from griffinwork40/afk/iso-agent-tool-2-86ybes (9441ccc7)
+- Merge pull request #2575 from griffinwork40/afk/iso-agent-tool-3-qdnucb (706c42af)
+- decompose openai-compatible/query.ts under the 350-line ceiling (e1589a52)
+
+## [5.275.3] - 2026-09-29
+
+### Fixed
+- advisory findings from 2026-09-29 pr-triage review (fa3647e1)
+
+### Changed
+- Merge pull request #2573 from griffinwork40/afk/iso-agent-tool-2-xnqdzl (4fb3854c)
+
+## [5.275.2] - 2026-09-29
+
+### Fixed
+- unref deferred exit timers and use fake timers in crash-handler tests (95d325db)
+- record kept sandbox roots in <runDir>/sandboxes.json (cb19fa3a)
+- defer crash-notification exit and guard against duplicate handler registration (def2b0ad)
+- address advisory findings from #2518 and #2512 (whatif) (adbd876b)
+
+### Changed
+- Merge pull request #2544 from griffinwork40/afk/iso-agent-tool-15-x0ud5c (7d8775f1)
+- Merge pull request #2537 from griffinwork40/afk/iso-agent-tool-6-2xmiio (6542bb2b)
+- Merge pull request #2547 from griffinwork40/afk/whatif-2478-consolidate (35f55f43)
+- merge remote afk/iso-agent-tool-6-2xmiio (already-resolved conflict) (e139b662)
+- resolve conflict with origin/main in src/whatif/run.ts (188bd348)
+- merge origin/main into afk/iso-agent-tool-6-2xmiio (54974335)
+- Merge remote-tracking branch 'origin/main' into afk/fix-2547-conflict (d9346ac9)
+- Merge branch 'main' into afk/iso-agent-tool-15-x0ud5c (1d6b44a8)
+- Merge branch 'main' into afk/iso-agent-tool-6-2xmiio (1fac705f)
+- Merge branch 'main' into afk/whatif-2478-consolidate (eba47b60)
+
+## [5.275.1] - 2026-09-29
+
+### Fixed
+- log stale-source overwrites in bg-injection; defer push body formatting (efffc209)
+- address advisory findings from overlap guard review (08d50bc1)
+
+### Changed
+- Merge pull request #2545 from griffinwork40/afk/iso-agent-tool-13-6nh80t (a4acbbb7)
+- Merge pull request #2538 from griffinwork40/afk/iso-agent-tool-7-aol66x (3ac45ad5)
+- Merge branch 'main' into afk/iso-agent-tool-13-6nh80t (fb3ea471)
+- Merge branch 'main' into afk/iso-agent-tool-7-aol66x (f6f77b22)
+
+## [5.275.0] - 2026-09-29
+
+### Added
+- yield-to-user contract; wait_for ends early when the user types (174bedd4)
+
+### Fixed
+- image-bearing queued messages also wake a yielding tool (aa516af0)
+- advance turn index only after a turn passes its gate, add ordinal-list and anaphora test coverage, scope corpusExclusions JSDoc (850d9a32)
+
+### Changed
+- Merge pull request #2540 from griffinwork40/afk/iso-agent-tool-12-oia21r (fb0fc39f)
+- Merge pull request #2541 from griffinwork40/afk/tool-user-yield (a9bc7668)
+- Merge branch 'main' into afk/tool-user-yield (4837051e)
+- Merge branch 'main' into afk/iso-agent-tool-12-oia21r (a98bc831)
+
+## [5.274.8] - 2026-09-29
+
+### Fixed
+- address advisory findings from PR #2385 review (#2539) (6d476bf2)
+- document regex matcher alias asymmetry in hook config docs (#2533) (80694d78)
+- replace non-null assertions with explicit guards, drop redundant cast, move test hooks inside describe (#2534) (9a73762d)
+- add --probes/--max-predictions to flags, Set-based dedupe, Map-based syntheticPerArm (#2536) (01fd7342)
+- advisory findings from journal provenance adapters review (61008718)
+
+### Changed
+- Merge pull request #2546 from griffinwork40/afk/iso-agent-tool-11-sd0rtt (85a9dcd4)
+- Merge branch 'main' into afk/iso-agent-tool-11-sd0rtt (9d92842c)
+
+## [5.274.7] - 2026-09-29
+
+### Fixed
+- address advisory findings from #2494 review (9ba5a742)
+
+### Changed
+- Merge pull request #2566 from griffinwork40/afk/pnpm-11-migration (0446aec3)
+- Merge pull request #2548 from griffinwork40/afk/iso-agent-tool-16-sw8jmm (deeea47a)
+- raise Node floor to 22.13 to match pnpm 11 (4066f2f0)
+- migrate to pnpm 11 (531c8031)
+
+## [5.274.6] - 2026-09-29
+
+### Fixed
+- improve thinking-chunk exclusion test coverage (fccdf961)
+
+### Changed
+- Merge pull request #2549 from griffinwork40/afk/iso-agent-tool-20-qclu1t (966ca8a7)
+
 ## [5.274.5] - 2026-09-29
 
 ### Fixed

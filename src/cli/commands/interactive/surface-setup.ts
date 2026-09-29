@@ -206,7 +206,7 @@ export async function setupSurface(
   // (so resume-swap can re-wire it) and installed on the session via
   // setPlanExitQueueCheck. Only armed when a compositor exists (TTY mode).
   if (armedCompositor) {
-    ctx.hasPendingUserMessage = () => armedCompositor.peekQueuedText() !== undefined;
+    ctx.hasPendingUserMessage = () => armedCompositor.hasPendingSubmission();
     ctx.session.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
   }
 

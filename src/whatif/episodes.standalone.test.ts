@@ -107,6 +107,19 @@ describe('isStandalone', () => {
   it('rejects "1. run the tests again now please"', () => {
     expect(isStandalone('1. run the tests again now please')).toBe(false);
   });
+
+  // Finding 2: ordinal-list ANAPHORA_RE branch at 40+ chars (previously uncovered)
+  it('rejects a 40+ char ordinal-list prompt via ANAPHORA_RE', () => {
+    const text = '1. run the tests with verbose output flags set to true';
+    expect(text.length).toBeGreaterThanOrEqual(40);
+    expect(isStandalone(text)).toBe(false);
+  });
+
+  it('rejects a 2) ordinal prompt of 40+ chars via ANAPHORA_RE', () => {
+    const text = '2) please re-run the full integration test suite now';
+    expect(text.length).toBeGreaterThanOrEqual(40);
+    expect(isStandalone(text)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -139,10 +152,13 @@ describe('collectRealTurns — whatif session exclusion', () => {
   });
 
   it('excludes later turns that start with anaphora', async () => {
+    // Fixtures are 40+ chars so the length gate passes and ANAPHORA_RE is
+    // what actually rejects them. (Finding 3: prior fixtures were sub-40-char
+    // and thus rejected by the length gate before ANAPHORA_RE ran.)
     await writeSession('sess-mixed', [
       ledgerLine('user', 'What is the capital of France?'),
-      ledgerLine('user', 'it is a great city, tell me more'),
-      ledgerLine('user', 'proceed with the plan'),
+      ledgerLine('user', 'it is a great city, tell me more about its history'),
+      ledgerLine('user', 'proceed with the plan and apply all the changes now'),
     ]);
     const stats = {
       whatifSessions: 0,
@@ -214,5 +230,20 @@ describe('collectRealTurns — whatif session exclusion', () => {
     };
     await collectRealTurns({ limit: 10, sessionsDir: tmpDir, stats });
     expect(stats.whatifSessions).toBe(1);
+  });
+
+  // Finding 1: a rejected first turn must not cause the second turn to be
+  // evaluated under the stricter isStandalone / MIN_LEN_LATER rules.
+  it('collects a valid second turn even when the first turn is rejected by isUsable', async () => {
+    await writeSession('sess-first-rejected', [
+      // First turn starts with "/" — rejected by isUsable — so the second turn
+      // must still be treated as the "first usable" turn and evaluated by
+      // isUsable (15-char minimum), not isStandalone (40-char minimum).
+      ledgerLine('user', '/plan mode on'),
+      ledgerLine('user', 'What is the capital of France?'),
+    ]);
+    const eps = await collectRealTurns({ limit: 10, sessionsDir: tmpDir });
+    expect(eps).toHaveLength(1);
+    expect(eps[0]!.prompt).toContain('France');
   });
 });

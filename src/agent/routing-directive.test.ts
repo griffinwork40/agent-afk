@@ -152,26 +152,30 @@ describe('assembleSystemPrompt', () => {
       expect(out).toContain(END_OF_TURN_DIRECTIVE);
     });
 
-    it('orders sections as: base, routing, end-of-turn', () => {
+    it('orders sections as: base, routing, shared-context, end-of-turn', () => {
       // Invariant: end-of-turn must be the final block so it lands in the
       // model's highest-attention tail region. Routing rides between base
       // and end-of-turn — its content is structural guidance, not a
-      // turn-terminator.
+      // turn-terminator. SHARED_CONTEXT_DIRECTIVE sits after routing (and
+      // after narration) but before end-of-turn.
       const out = assembleSystemPrompt(BASE, true, 'repl');
       expect(out).toBeDefined();
       const baseIdx = out!.indexOf(BASE);
       const routingIdx = out!.indexOf(ROUTING_DIRECTIVE);
+      const sharedIdx = out!.indexOf(SHARED_CONTEXT_DIRECTIVE);
       const endIdx = out!.indexOf(END_OF_TURN_DIRECTIVE);
       expect(baseIdx).toBeLessThan(routingIdx);
-      expect(routingIdx).toBeLessThan(endIdx);
+      expect(routingIdx).toBeLessThan(sharedIdx);
+      expect(sharedIdx).toBeLessThan(endIdx);
     });
 
     it('separates sections with a blank line', () => {
       const out = assembleSystemPrompt(BASE, true, 'repl');
       expect(out).toBeDefined();
-      // Three sections → at least two `\n\n` separators.
+      // Five sections (base, routing, narration, shared-context, end-of-turn)
+      // → at least four `\n\n` separators.
       const separators = (out!.match(/\n\n/g) ?? []).length;
-      expect(separators).toBeGreaterThanOrEqual(2);
+      expect(separators).toBeGreaterThanOrEqual(4);
     });
   });
 

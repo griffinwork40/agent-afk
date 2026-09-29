@@ -190,7 +190,7 @@ describe('predictChanges', () => {
     expect(call[0].user).toContain('TypeScript');
     expect(call[0].user).toContain('src/index.ts');
     expect(call[0].user).toContain('README.md');
-    expect(call[0].user).toContain('probes must reference only paths');
+    expect(call[0].user).toContain('probes MUST reference only paths');
   });
 
   it('omits repo context section when repoManifest is absent', async () => {
@@ -204,7 +204,11 @@ describe('predictChanges', () => {
     expect(call[0].user).not.toContain('## Repo context');
   });
 
-  it('SYSTEM prompt includes grounding instruction for probes', async () => {
+  // finding #5 (advisory review #2455): the grounding clause ("Never invent
+  // file names") is now emitted by formatRepoManifest into the USER message
+  // alongside the manifest — not in the system prompt — so it is structurally
+  // absent when no manifest is present.
+  it('SYSTEM prompt does not include repo-context grounding clause when no manifest', async () => {
     const fn = makeFake('[]');
     await predictChanges(
       { spec: { title: 't', changes: [] }, changeDescriptions: [], structural: emptyStructural() },
@@ -212,10 +216,33 @@ describe('predictChanges', () => {
       MODEL,
     );
     const call = (fn as ReturnType<typeof vi.fn>).mock.calls[0] as [Parameters<CompleteFn>[0]];
-    // The system prompt instructs the model about the ## Repo context section
-    expect(call[0].system).toContain('## Repo context');
-    // The system prompt forbids inventing file names
-    expect(call[0].system).toContain('Never invent file names');
+    // The system prompt must NOT contain the "## Repo context" header or
+    // "Never invent file names" when no manifest is injected — the clause
+    // lives in formatRepoManifest (user message) now.
+    expect(call[0].system).not.toContain('Never invent file names');
+    expect(call[0].system).not.toContain('When a ## Repo context section is present');
+  });
+
+  it('USER message includes grounding clause when manifest is provided', async () => {
+    const fn = makeFake('[]');
+    const repoManifest = {
+      languages: ['TypeScript'],
+      paths: ['src/index.ts'],
+      allPaths: new Set(['src/index.ts']),
+    };
+    await predictChanges(
+      {
+        spec: { title: 't', changes: [] },
+        changeDescriptions: [],
+        structural: emptyStructural(),
+        repoManifest,
+      },
+      fn,
+      MODEL,
+    );
+    const call = (fn as ReturnType<typeof vi.fn>).mock.calls[0] as [Parameters<CompleteFn>[0]];
+    // The grounding clause is now in the USER message (via formatRepoManifest).
+    expect(call[0].user).toContain('Never invent file names');
   });
 
   // -------------------------------------------------------------------------

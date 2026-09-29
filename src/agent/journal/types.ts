@@ -161,6 +161,11 @@ export interface MessageJournal {
  *     journal messages for the whole span; {@link JournalSync} then uses them
  *     instead of `toJournal`, so a provider switch writes nothing and hands
  *     over losslessly. See `JournalProvenance` (provenance.ts).
+ *     **Lossless-resume contract**: `adopt` is required for a lossless
+ *     cross-provider resume. Omitting it (or returning `undefined` for a span)
+ *     silently falls back to `toJournal` per message, which loses
+ *     thinking signatures and may rewrite the journal in the new provider's
+ *     lossier shape.
  */
 export interface JournalAdapter<T> {
   toJournal(message: T): JournalMessage | null;

@@ -16,7 +16,8 @@ import path from 'path';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
-import { isReadDenied } from './read-denylist.js';
+import { isCanonicalPathReadDenied, isReadDenied } from './read-denylist.js';
+import { safeRealpath } from './write-denylist.js';
 import { splitAbsolutePattern } from './glob-absolute.js';
 import { errorMessage } from '../../../utils/errors.js';
 
@@ -106,10 +107,23 @@ function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
+/** Thrown out of the walk when the tool call's AbortSignal fires. */
+class GlobAbortedError extends Error {}
+
 /**
  * Recursively collect files matching a glob pattern.
+ *
+ * Invariant (#2543): the walk tracks each directory's CANONICAL path beside its
+ * logical one. It recurses only into `entry.isDirectory()` entries, and
+ * withFileTypes Dirents report a symlink as a symlink, never as a directory, so
+ * no symlink is ever traversed. The canonical path of a non-symlink child is
+ * therefore exactly `join(realParent, name)`, and the denylist verdict can be
+ * computed with {@link isCanonicalPathReadDenied} without a `realpathSync` per
+ * entry. Symlink entries are the one case where the leaf itself dereferences,
+ * so they still go through the full {@link isReadDenied}. Verdicts are
+ * identical to the old per-entry `isReadDenied(entryPath)`.
  */
-async function collectMatches(dir: string, pattern: string): Promise<string[]> {
+async function collectMatches(dir: string, pattern: string, signal?: AbortSignal): Promise<string[]> {
   const matches: string[] = [];
   const maxResults = 500;
   // Directory names the caller explicitly named as literal pattern segments
@@ -118,9 +132,12 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
   // Compile the pattern once; the walker tests every entry against it.
   const matcher = globToRegExp(pattern);
 
-  async function walk(currentPath: string, relPath: string): Promise<boolean> {
+  async function walk(currentPath: string, realPath: string, relPath: string): Promise<boolean> {
     if (matches.length >= maxResults) {
       return true;
+    }
+    if (signal?.aborted) {
+      throw new GlobAbortedError();
     }
 
     try {
@@ -132,13 +149,17 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
         }
 
         const entryPath = path.join(currentPath, entry.name);
+        const entryReal = path.join(realPath, entry.name);
         const entryRel = relPath ? `${relPath}/${entry.name}` : entry.name;
 
         // The requested root has already passed resolveAndContain, but a
         // readable parent may contain protected descendants. Check every
         // entry before matching or recursion so neither filenames nor file
         // contents beneath a read-denylist floor are exposed.
-        if (isReadDenied(entryPath).denied) {
+        const denied = entry.isSymbolicLink()
+          ? isReadDenied(entryPath).denied
+          : isCanonicalPathReadDenied(entryReal).denied;
+        if (denied) {
           continue;
         }
 
@@ -155,20 +176,22 @@ async function collectMatches(dir: string, pattern: string): Promise<string[]> {
           if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
             continue;
           }
-          const shouldStop = await walk(entryPath, entryRel);
+          const shouldStop = await walk(entryPath, entryReal, entryRel);
           if (shouldStop) {
             return true;
           }
         }
       }
-    } catch {
-      // Silently skip inaccessible directories
+    } catch (err) {
+      // An abort must escape the walk; anything else is an inaccessible
+      // directory, which is silently skipped.
+      if (err instanceof GlobAbortedError) throw err;
     }
 
     return false;
   }
 
-  await walk(dir, '');
+  await walk(dir, safeRealpath(dir), '');
   return matches;
 }
 
@@ -204,7 +227,7 @@ interface GlobInput {
  * `AgentSession.setCwd()` propagates on the next turn.
  */
 export function createGlobHandler(cwd?: string): ToolHandler {
-  return async (input: unknown, _signal: AbortSignal, context?: ToolHandlerContext) => {
+  return async (input: unknown, signal: AbortSignal, context?: ToolHandlerContext) => {
   // Validate input shape
   if (!input || typeof input !== 'object') {
     return { content: 'Invalid input: expected an object', isError: true };
@@ -267,7 +290,7 @@ export function createGlobHandler(cwd?: string): ToolHandler {
     }
 
     // Collect matching files
-    const relMatches = await collectMatches(basePath, pattern);
+    const relMatches = await collectMatches(basePath, pattern, signal);
     const matches = absolute ? relMatches.map((m) => path.join(basePath, m)) : relMatches;
 
     // No matches
@@ -285,6 +308,10 @@ export function createGlobHandler(cwd?: string): ToolHandler {
 
     return { content: output };
   } catch (err) {
+    // Same wording as the grep handler's abort result.
+    if (err instanceof GlobAbortedError) {
+      return { content: 'Search aborted', isError: true };
+    }
     // Handle specific error types
     const known = fsErrorToToolResult(err, basePath, 'Path');
     if (known) return known;

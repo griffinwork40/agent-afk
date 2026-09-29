@@ -2,7 +2,7 @@
  * Tests for repo-manifest.ts
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -38,15 +38,15 @@ function makeTmpGitRepo(files: string[]): string {
 // ---------------------------------------------------------------------------
 
 describe('buildRepoManifest', () => {
-  it('returns empty manifest outside a git repo', () => {
+  it('returns empty manifest outside a git repo', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-nogit-'));
-    const manifest = buildRepoManifest(dir);
+    const manifest = await buildRepoManifest(dir);
     expect(manifest.languages).toEqual([]);
     expect(manifest.paths).toEqual([]);
     expect(manifest.allPaths.size).toBe(0);
   });
 
-  it('detects TypeScript and Markdown as primary languages', () => {
+  it('detects TypeScript and Markdown as primary languages', async () => {
     const dir = makeTmpGitRepo([
       'src/index.ts',
       'src/foo.ts',
@@ -54,34 +54,49 @@ describe('buildRepoManifest', () => {
       'README.md',
       'docs/guide.md',
     ]);
-    const manifest = buildRepoManifest(dir);
+    const manifest = await buildRepoManifest(dir);
     expect(manifest.languages).toContain('TypeScript');
     expect(manifest.languages).toContain('Markdown');
   });
 
-  it('includes tracked paths in allPaths', () => {
+  it('includes tracked paths in allPaths', async () => {
     const dir = makeTmpGitRepo(['src/index.ts', 'package.json', 'README.md']);
-    const manifest = buildRepoManifest(dir);
+    const manifest = await buildRepoManifest(dir);
     expect(manifest.allPaths.has('src/index.ts')).toBe(true);
     expect(manifest.allPaths.has('package.json')).toBe(true);
     expect(manifest.allPaths.has('README.md')).toBe(true);
   });
 
-  it('does NOT include non-existent paths in allPaths', () => {
+  it('does NOT include non-existent paths in allPaths', async () => {
     const dir = makeTmpGitRepo(['src/index.ts']);
-    const manifest = buildRepoManifest(dir);
+    const manifest = await buildRepoManifest(dir);
     expect(manifest.allPaths.has('src/main.py')).toBe(false);
     expect(manifest.allPaths.has('config.yaml')).toBe(false);
   });
 
-  it('caps paths sample at MAX_SAMPLE_PATHS entries', () => {
+  it('caps paths sample at MAX_SAMPLE_PATHS entries', async () => {
     // Create 60 tracked .ts files
     const files = Array.from({ length: 60 }, (_, i) => `src/file${i}.ts`);
     const dir = makeTmpGitRepo(files);
-    const manifest = buildRepoManifest(dir);
+    const manifest = await buildRepoManifest(dir);
     expect(manifest.paths.length).toBeLessThanOrEqual(50);
     // allPaths still has all 60
     expect(manifest.allPaths.size).toBe(60);
+  });
+
+  // finding #2 (advisory review #2455): unexpected git failures (not "not a
+  // git repo") must emit a console.warn, so silent grounding loss is visible.
+  describe('warning on unexpected failure', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('does not warn for a non-git directory (expected fail-open)', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'whatif-nogit-warn-'));
+      await buildRepoManifest(dir);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -116,7 +131,25 @@ describe('formatRepoManifest', () => {
     };
     const text = formatRepoManifest(manifest);
     expect(text).toContain('IMPORTANT');
-    expect(text).toContain('probes must reference only paths');
+    expect(text).toContain('probes MUST reference only paths');
+  });
+
+  // finding #5 (advisory review #2455): the grounding clause must be present
+  // when a manifest is returned, and absent (empty string) when none.
+  it('grounding clause is present when manifest has data', () => {
+    const manifest = {
+      languages: ['TypeScript'],
+      paths: ['src/index.ts'],
+      allPaths: new Set(['src/index.ts']),
+    };
+    const text = formatRepoManifest(manifest);
+    expect(text).toContain('Never invent file names');
+  });
+
+  it('grounding clause is absent (empty string) when manifest is empty', () => {
+    const manifest = { languages: [], paths: [], allPaths: new Set<string>() };
+    const text = formatRepoManifest(manifest);
+    expect(text).toBe('');
   });
 });
 

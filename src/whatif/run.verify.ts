@@ -299,6 +299,10 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
   );
 
   // Build per-failure records and detect arm imbalance (#2411).
+  // NOTE: Episode.targets is currently typed as a single string (not an array).
+  // This map stores the single target value per episode.  If targets ever
+  // becomes multi-valued, this will drop all but one target — update the map
+  // construction and FailedEpisodeRecord.probe accordingly.
   const episodeTargets = new Map(
     episodes.filter((e) => e.targets !== undefined).map((e) => [e.id, e.targets!]),
   );

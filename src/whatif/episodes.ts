@@ -229,7 +229,6 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
       const redacted = redactInlineSecrets(stripped);
 
       const isFirstTurn = turnIndexInSession === 0;
-      turnIndexInSession++;
 
       if (isFirstTurn) {
         if (!isUsable(redacted)) continue;
@@ -243,6 +242,11 @@ export async function collectRealTurns(opts: CollectOpts): Promise<Episode[]> {
           continue;
         }
       }
+
+      // Advance only after the turn has passed its gate so that a rejected
+      // first turn does not cause the second turn to be evaluated under the
+      // stricter isStandalone / MIN_LEN_LATER rules. (#2453 finding 1)
+      turnIndexInSession++;
 
       // Case-insensitive dedup.
       const lower = redacted.toLowerCase();

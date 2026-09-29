@@ -51,6 +51,7 @@ import {
   denialReason as _denialReason,
 } from './dispatcher.core-exec.js';
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
+import { isYieldableTool, type UserAttention } from './user-yield.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -224,6 +225,11 @@ export interface SessionToolDispatcherOptions {
    */
   spawnedPidRegistry?: SpawnedPidRegistry;
   /**
+   * Operator-attention probe for the yield contract (`./user-yield.ts`).
+   * Attached per call to yieldable tools only; see `callHandlerContext`.
+   */
+  userAttention?: UserAttention;
+  /**
    * Live bash output tail reporter factory (issue #1506).
    *
    * When present, `callHandlerContext` calls this factory with the
@@ -299,6 +305,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly maxOutputBytes: number | undefined;
   /** Session-scoped PID registry for wait_for process condition gating (#1430). */
   private readonly spawnedPidRegistry: SpawnedPidRegistry | undefined;
+  /** Yield-contract probe; handed only to `YIELDABLE_TOOLS` handlers. */
+  private readonly userAttention: UserAttention | undefined;
   /** Live bash output tail reporter factory (issue #1506). */
   private readonly bashOutputTailReporter:
     | ((toolUseId: string) => (tail: string | undefined) => void)
@@ -372,6 +380,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
         : undefined;
     this._allowAll = opts.allowAll === true;
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
+    this.userAttention = opts.userAttention;
     this.bashOutputTailReporter = opts.bashOutputTailReporter;
 
     // When caller passes arrays by reference (provider sharing pattern), use
@@ -434,6 +443,11 @@ export class SessionToolDispatcher implements ToolDispatcher {
       toolUseId: call.id,
       ...(this.traceWriter !== undefined ? { traceWriter: this.traceWriter } : {}),
       ...(tailCallback !== undefined ? { onBashOutputTail: tailCallback } : {}),
+      // Yield contract: ONLY opted-in tools may observe the operator's queue,
+      // so a non-yieldable tool (bash) can never be told to stop early.
+      ...(this.userAttention !== undefined && isYieldableTool(call.name)
+        ? { userAttention: this.userAttention }
+        : {}),
     };
   }
 

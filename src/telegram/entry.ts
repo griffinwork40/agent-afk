@@ -45,9 +45,34 @@ import { pushIfConfigured } from './push.js';
  * per 60 s to avoid crash-loop self-DOS. Mirrors the daemon's crash-handler
  * contract (src/cli/commands/daemon.ts).
  *
+ * Re-entry safe: a module-scoped flag prevents duplicate listener registration
+ * if this function is called more than once (e.g. in tests that import the
+ * module without full teardown).
+ *
  * Exported for testing only — callers should use `main()`.
  */
+
+/** Guards against duplicate listener registration on repeated calls. */
+let crashHandlersInstalled = false;
+
+/** Milliseconds to wait after firing the crash notification before exiting,
+ *  giving the fire-and-forget HTTP push a chance to flush. */
+const CRASH_EXIT_DELAY_MS = 200;
+
+/**
+ * Reset the re-entry guard. Exported for testing only — do not call in
+ * production code.
+ *
+ * @internal
+ */
+export function _resetCrashHandlersForTest(): void {
+  crashHandlersInstalled = false;
+}
+
 export function installCrashHandlers(): void {
+  if (crashHandlersInstalled) return;
+  crashHandlersInstalled = true;
+
   let lastCrashPushAt = 0;
   const CRASH_PUSH_GUARD_MS = 60_000;
   const notifyCrash = (kind: string, err: unknown): void => {
@@ -63,11 +88,11 @@ export function installCrashHandlers(): void {
   };
   process.on('uncaughtException', (err) => {
     notifyCrash('uncaughtException', err);
-    process.exit(1);
+    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
   process.on('unhandledRejection', (err) => {
     notifyCrash('unhandledRejection', err);
-    process.exit(1);
+    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
 }
 

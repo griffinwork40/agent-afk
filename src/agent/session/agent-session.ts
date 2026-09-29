@@ -60,7 +60,6 @@ import { JournalLifecycle } from './journal-lifecycle.js';
 import type { MessageJournal } from '../journal/index.js';
 import { SessionStateManager } from './session-state.js';
 import { AccountingAccumulator } from './accounting-accumulator.js';
-import type { SubagentOutputRecorder } from './subagent-output-capture.js';
 import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
@@ -95,12 +94,6 @@ export class AgentSession implements IAgentSession {
   /** Number of inbound messages submitted, including attempts that end in a
    * provider error and therefore never increment `turnCount`. */
   private inboundMessageCount = 0;
-  /**
-   * Opt-in subagent output recorder, created lazily on the first turn and
-   * reused for the life of the session so a multi-turn child produces ONE
-   * transcript. `undefined` = not yet attempted; `null` = capture disabled.
-   */
-  private subagentOutputRecorder: SubagentOutputRecorder | null | undefined;
   /**
    * Hook-generated context (e.g. SubagentStop `injectContext`) waiting to be
    * prepended to the next outbound user message. Never delivered as its own
@@ -179,6 +172,7 @@ export class AgentSession implements IAgentSession {
       getSessionId: () => this.sessionId,
       ownedTraceWriter: this.ownedTraceWriter,
       ownsTraceSeal: this.ownsTraceSeal,
+      getAssistantTexts: () => this.conversationHistory.filter((m) => m.role === 'assistant').map((m) => m.content),
     });
 
     // Witness layer: mark the start of provider/SDK initialization so
@@ -254,8 +248,6 @@ export class AgentSession implements IAgentSession {
       incInboundMessageCount: () => ++this.inboundMessageCount,
       getTurnCount: () => this.turnCount,
       incTurnCount: () => { this.turnCount++; },
-      getSubagentOutputRecorder: () => this.subagentOutputRecorder,
-      setSubagentOutputRecorder: (r) => { this.subagentOutputRecorder = r; },
       getProviderQuery: () => this.providerQuery,
       getLedgerMetadata: () => this.stateManager.getSessionMetadata(),
       observeProviderEvent: (e) => this.planExit.planText.observe(e),

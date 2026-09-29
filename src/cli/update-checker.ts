@@ -102,6 +102,11 @@ function majorOf(version: string): number {
  * `auto` policy must never cross one — `triggerAutoUpdate()` refuses, and the
  * banner tells the user to upgrade by hand. An unparseable major counts as a
  * crossing (NaN !== anything), which fails closed toward "do not install".
+ *
+ * @precondition Callers MUST establish that `latest` is newer than `current`
+ * (e.g. via `isNewerVersion(current, latest)`) before calling this function.
+ * The comparison is symmetric — it returns `true` for a downgrade too — so
+ * skipping that guard would misclassify a downgrade as a major-upgrade block.
  */
 export function isMajorUpgrade(current: string, latest: string): boolean {
   return majorOf(current) !== majorOf(latest);

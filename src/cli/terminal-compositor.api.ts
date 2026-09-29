@@ -119,6 +119,10 @@ export function getPendingCount(self: ApiHost): number {
   return self.pendingSubmissions.length;
 }
 
+export function hasPendingSubmission(self: ApiHost): boolean {
+  return QueuedAccess.hasPendingSubmission(self);
+}
+
 export function peekQueuedText(self: ApiHost): QueuedSnapshot | undefined {
   return QueuedAccess.peekQueuedText(self);
 }

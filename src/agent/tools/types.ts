@@ -16,6 +16,7 @@ export type { ToolDispatcher } from '../providers/anthropic-direct/tool-dispatch
 import type { ToolResult } from '../providers/shared/tool-result.js';
 import type { TraceSink } from '../trace/index.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
+import type { UserAttention } from './user-yield.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -139,6 +140,16 @@ export interface ToolHandlerContext {
    *     from this callback to preserve the "never blocks execution" guarantee.
    */
   onBashOutputTail?: (tail: string | undefined) => void;
+  /**
+   * Operator-attention probe for the yield contract (see `./user-yield.ts`).
+   *
+   * Attached by the dispatcher ONLY for tools in `YIELDABLE_TOOLS` and only on
+   * top-level interactive sessions. A yieldable handler checks it and, when the
+   * operator has a queued message, stops early and tells the model to end its
+   * turn. Absent for every non-yieldable tool (bash never sees it), for
+   * subagents, and for headless surfaces.
+   */
+  userAttention?: UserAttention;
 }
 
 /**

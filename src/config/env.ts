@@ -1532,32 +1532,6 @@ export const ENV_REGISTRY = [
     category: 'debug',
   },
   {
-    name: 'AFK_CAPTURE_SUBAGENT_PROMPTS',
-    description:
-      'Opt-in: when set to 1, every prompt a parent session sends to a subagent is written ' +
-      'as a redacted markdown file under state/witness/<label>/prompts/. Off by default ' +
-      'because nothing prunes the witness tree and prompts may carry secrets the regex ' +
-      'redactor cannot catch (connection strings, PEM blocks, PII).',
-    type: 'boolean',
-    required: false,
-    example: '1',
-    category: 'debug',
-  },
-  {
-    name: 'AFK_CAPTURE_SUBAGENT_OUTPUT',
-    description:
-      'Capture subagent conversational OUTPUT (assistant text plus each ' +
-      'tool call with its arguments) as a redacted markdown ' +
-      'transcript under state/witness/<label>/outputs/. Flushed at every tool-call boundary, ' +
-      'so a child killed by a timeout still leaves a usable partial record — the case where ' +
-      'final-message capture yields nothing. Off by default. Set to 1 to enable. ' +
-      'Note: best-effort regex redaction only — connection strings, PEM blocks, and PII are not caught.',
-    type: 'boolean',
-    required: false,
-    example: '1',
-    category: 'debug',
-  },
-  {
     name: 'AFK_SUBAGENT_RESULT_CAP_BYTES',
     description:
       'Foreground subagent result size cap in bytes. When a subagent\'s final message exceeds ' +
@@ -1565,8 +1539,7 @@ export const ENV_REGISTRY = [
       '(state/sessions/<id>/subagent-handoffs/<subagentId>.txt) and the parent receives a ' +
       'head+tail slice with a read_file pointer. Prevents large subagent outputs from bloating ' +
       'parent context. Set to 0 to disable the cap entirely. Default 32768 (32KB). ' +
-      'Note: sidecar files contain unredacted subagent output (same caveats as ' +
-      'AFK_CAPTURE_SUBAGENT_OUTPUT). No automatic GC covers subagent-handoffs/ today; ' +
+      'Note: sidecar files contain unredacted subagent output. No automatic GC covers subagent-handoffs/ today; ' +
       'retention is tied to session-directory cleanup.',
     type: 'number',
     required: false,
@@ -1580,8 +1553,7 @@ export const ENV_REGISTRY = [
       'Opt-in per-subagent conversation log. Writes OutputEvent JSONL to ' +
       'state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and ' +
       'background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments ' +
-      'are written without redaction — consistent with AFK_CAPTURE_SUBAGENT_PROMPTS / ' +
-      'AFK_CAPTURE_SUBAGENT_OUTPUT). Set to 1 to enable.',
+      'are written without redaction. Set to 1 to enable.',
     type: 'boolean',
     required: false,
     example: '1',
@@ -1830,6 +1802,18 @@ export const ENV_REGISTRY = [
     required: false,
     example: '600000',
     category: 'misc',
+  },
+  {
+    name: 'AFK_PREEXISTING_LEDGER_DISABLE',
+    description:
+      'Set to 1 to disable the pre-existing-defect SessionEnd hook. ' +
+      'When set, the hook will not scan session turns or append records to ' +
+      '~/.afk/agent-framework/preexisting-ledger.jsonl. ' +
+      'Useful in test environments or when the ledger is not desired.',
+    type: 'boolean',
+    required: false,
+    example: '1',
+    category: 'debug',
   },
 ] as const satisfies readonly EnvVarMeta[];
 

@@ -255,7 +255,7 @@ function formatRequest(req: ElicitationRequest): string {
   // Only harness requests get the title rendered; external requests use a
   // fixed banner so a spoofed title cannot mislead the operator.
   if (req._harnessInternal === true) {
-    if (req.title) parts.push(`⚠ ${req.title}`);
+    parts.push(req.title ? `⚠ ${req.title}` : '⚠ AFK safety approval');
   } else {
     parts.push('⚠ MCP elicitation');
   }

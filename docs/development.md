@@ -4,10 +4,11 @@ Internal reference for working on `agent-afk` itself — building, testing, rele
 
 ## Prerequisites
 
-- **Node.js ≥ 22.0.0** (enforced by `package.json#engines`). Node 20 is EOL and `better-sqlite3` ≥ 12.10 ships no prebuilt binaries for it — installs on Node 20 fall back to a node-gyp source build, which fails on machines without Python/build tools.
-- **pnpm** — the lockfile is pnpm-specific. `npm install` will desync it.
-  - Fast path: `corepack enable` (bundled with Node ≥ 16.9), then use `pnpm` directly.
-  - Or globally: `npm install -g pnpm@latest`.
+- **Node.js ≥ 22.13.0** (enforced by `package.json#engines`; pnpm 11 itself requires ≥ 22.13, so `pnpm install` cannot start on earlier 22.x). Node 20 is EOL and `better-sqlite3` ≥ 12.10 ships no prebuilt binaries for it — installs on Node 20 fall back to a node-gyp source build, which fails on machines without Python/build tools.
+- **pnpm 11** — pinned by `package.json#packageManager`; the lockfile is pnpm-specific, so `npm install` will desync it.
+  - Fast path: `corepack enable` (bundled with Node ≥ 16.9), then use `pnpm` directly; corepack runs the pinned version.
+  - An existing global pnpm ≥ 10 also works: it switches to the pinned version automatically (`manage-package-manager-versions`).
+  - Dependency build scripts are allowlisted in `pnpm-workspace.yaml` (`allowBuilds`; `dashboard/` has its own). pnpm 11 fails the install on any unlisted build script, so a new native dependency must be added there.
 - A valid Anthropic API key, or an OpenAI key for the Codex provider.
 
 ## Setup
@@ -212,9 +213,9 @@ Under the hood:
    - `src/telegram.ts` → `dist/telegram.mjs`
    - `src/index.ts` → `dist/index.mjs`
 3. Post-process: shebang injection + chmod +x on `cli.mjs` and `telegram.mjs`.
-4. `scripts/postinstall.mjs` is copied into `dist/` so it ships in the tarball.
+4. `scripts/postinstall.mjs` is **not** copied into `dist/`; the `postinstall` lifecycle script runs it in place, and it ships via its own `package.json#files` entry.
 5. `package.json#bin.afk` → `dist/cli.mjs` matches the esbuild output.
-6. `files: ["dist/"]` means only `dist/` ships. Source, tests, scripts, and prompts are excluded by `.npmignore`.
+6. `package.json#files` whitelists what ships: `dist/`, `scripts/postinstall.mjs`, `NOTICE`, and the demo asset. The whitelist overrides `.npmignore`, which otherwise excludes `scripts/`; everything else under source, tests, scripts, and prompts stays out.
 
 **Two parallel build pipelines, by design:**
 
@@ -233,7 +234,7 @@ pnpm lint                   # type-check without emitting
 
 For more on the architecture (providers, hooks, subagents, abort graph), see [`architecture.md`](architecture.md). For the full env-var reference and slash-command taxonomy, see [`reference.md`](reference.md).
 
-## postinstall and pnpm 10
+## postinstall and pnpm 10+
 
 `scripts/postinstall.mjs` ships in the tarball and runs as a lifecycle hook. It:
 
@@ -241,7 +242,7 @@ For more on the architecture (providers, hooks, subagents, abort graph), see [`a
 2. **macOS only:** restarts the `afk daemon` launchd service so it picks up the new code — only when `npm_config_global === "true"` AND the package root has no `.git` marker (i.e. `isGlobalInstall()` is true, ruling out a local source checkout or worktree). On Linux/systemd, the hook never restarts any service.
 3. If a manually-started Telegram bot (`afk telegram start`) is still running the old version, prints a notice and suggests `afk telegram restart`.
 
-**pnpm 10 blocks build scripts by default.** Running `pnpm add -g agent-afk` will print:
+**pnpm 10 and later block build scripts by default.** Running `pnpm add -g agent-afk` will print:
 
 ```
 ! Ignored build scripts: agent-afk@<version>.

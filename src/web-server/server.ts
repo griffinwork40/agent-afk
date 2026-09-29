@@ -302,7 +302,7 @@ async function dispatch(
 
   const toolResultMatch = /^\/api\/sessions\/([^/]+)\/tool-results\/([^/]+)$/.exec(path);
   if (toolResultMatch?.[1] && toolResultMatch[2] && method === 'GET') {
-    handleGetToolResult(res, decodeURIComponent(toolResultMatch[1]), decodeURIComponent(toolResultMatch[2]));
+    await handleGetToolResult(res, decodeURIComponent(toolResultMatch[1]), decodeURIComponent(toolResultMatch[2]));
     return;
   }
 

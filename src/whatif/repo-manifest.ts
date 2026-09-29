@@ -8,8 +8,11 @@
  */
 
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { statSync } from 'node:fs';
+
+const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,9 +23,6 @@ const MAX_SAMPLE_PATHS = 50;
 
 /** Maximum bytes of path text to include in the prompt sample. */
 const MAX_SAMPLE_BYTES = 2048;
-
-/** Maximum bytes returned by git ls-files before we truncate. */
-const LS_FILES_MAX_BUFFER = 1_000_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -89,6 +89,23 @@ function detectLanguages(paths: string[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// isNotGitRepo — classify git exit-code / stderr
+// ---------------------------------------------------------------------------
+
+/**
+ * Return true when the error looks like "not a git repo" (exit 128, the
+ * standard git code for "not a git repo or git not found"). Anything else is
+ * an unexpected failure (permissions, timeout, etc.).
+ */
+function isNotGitRepo(err: unknown): boolean {
+  if (err && typeof err === 'object' && 'code' in err) {
+    // git exits 128 when cwd is not inside a repository.
+    return (err as { code: unknown }).code === 128;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // buildRepoManifest
 // ---------------------------------------------------------------------------
 
@@ -97,20 +114,38 @@ function detectLanguages(paths: string[]): string[] {
  *
  * Uses `git ls-files` to enumerate tracked paths. Falls back gracefully
  * (empty manifest) when not inside a git repo or when git is unavailable.
+ * Logs a warning when git is available but fails for an unexpected reason
+ * (permissions, timeout, etc.) so the silent fail-open is observable.
+ *
+ * The call is async to avoid blocking the event loop on large repositories.
+ * No buffer cap is applied — streaming the full path list is safe because
+ * the output is split line-by-line (not held in memory as a monolithic
+ * string beyond what Node already buffers for execFile).
  */
-export function buildRepoManifest(cwd: string): RepoManifest {
+export async function buildRepoManifest(cwd: string): Promise<RepoManifest> {
   let allLines: string[];
 
   try {
-    const out = execFileSync('git', ['ls-files'], {
+    const { stdout } = await execFileAsync('git', ['ls-files'], {
       cwd,
       encoding: 'utf8',
-      maxBuffer: LS_FILES_MAX_BUFFER,
-      stdio: ['ignore', 'pipe', 'ignore'],
+      // No maxBuffer cap: the default (1 MB) was the source of ENOBUFS in
+      // large repos. Pass Infinity to let Node accumulate the full output.
+      maxBuffer: Infinity,
     });
-    allLines = out.split('\n').filter((l) => l.length > 0);
-  } catch {
-    // Not a git repo or git unavailable — return empty manifest.
+    allLines = stdout.split('\n').filter((l) => l.length > 0);
+  } catch (err) {
+    if (!isNotGitRepo(err)) {
+      // Unexpected failure (permissions, timeout, etc.) — warn so it is
+      // visible in logs rather than silently switching grounding off.
+      console.warn(
+        '[whatif] buildRepoManifest: git ls-files failed unexpectedly; ' +
+          'probe grounding is disabled for this run.',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    // Both "not a git repo" and unexpected errors fall back to an empty
+    // manifest so downstream logic (makeSetChecker) passes everything through.
     return { languages: [], paths: [], allPaths: new Set() };
   }
 
@@ -139,6 +174,9 @@ export function buildRepoManifest(cwd: string): RepoManifest {
  * Format a repo manifest as a prompt section string.
  *
  * Returns an empty string when the manifest has no data (outside git).
+ * When data is present, the returned string includes the grounding
+ * instruction clause so it is structurally absent when no manifest is
+ * injected (finding #5 from the advisory review of #2430).
  */
 export function formatRepoManifest(manifest: RepoManifest): string {
   if (manifest.paths.length === 0 && manifest.languages.length === 0) {
@@ -157,8 +195,12 @@ export function formatRepoManifest(manifest: RepoManifest): string {
     );
   }
 
+  // Grounding instruction: emitted here (with the manifest) so it is
+  // structurally absent when no manifest is injected (finding #5 — advisory
+  // review of #2430). The system prompt no longer duplicates this clause.
   lines.push(
-    'IMPORTANT: probes must reference only paths from the sample above, or no specific paths at all.',
+    'IMPORTANT: probes MUST reference only paths listed in the sample above, ' +
+      'or no specific file paths at all. Never invent file names.',
   );
 
   return lines.join('\n');

@@ -200,23 +200,6 @@ describe('runBaselineSample — headroom math', () => {
     // p1 added, probe rates 0.9 and 0.6 → min=0.6, headroom=0.4
     const pred = makePrediction('p1', 'added', []);
     const eps = makeSyntheticEpisodes([pred]).slice(0, 2);
-    const pYes: Record<string, number> = {};
-    pYes[eps[0]!.id] = 0.9;
-    pYes[eps[1]!.id] = 0.6;
-    const runner = makeRunner();
-    const judge = makeJudge({ p1: 0.0 }); // overridden below
-    // Custom judge returning per-episode rates
-    const judgeByEp: Judge = {
-      name: 'claude', external: false, close: vi.fn(async () => {}),
-      async grade(input: JudgeInput) {
-        const r: Record<string, number> = {};
-        // detect which episode by prompt
-        for (const q of input.questions) {
-          r[q.id] = input.prompt.includes(eps[0]!.id) ? 0.9 : 0.6;
-        }
-        return r;
-      },
-    };
     // Use runner that returns trace with text reflecting pYes
     const runnerCustom: AgentRunner = {
       ...makeRunner(),
@@ -226,20 +209,7 @@ describe('runBaselineSample — headroom math', () => {
       }),
       snapshot: makeRunner().snapshot,
     };
-    // The judge grades based on what probe we pass
-    const judgePerEp: Judge = {
-      name: 'claude', external: false, close: vi.fn(async () => {}),
-      async grade(input: JudgeInput) {
-        const r: Record<string, number> = {};
-        for (const q of input.questions) {
-          // eps[0] prompt includes eps[0].id
-          r[q.id] = input.prompt.includes(eps[0]!.id.replace('ep-', '')) ? 0.9 : 0.6;
-        }
-        return r;
-      },
-    };
-    void judgePerEp; void judgeByEp; void judge;
-    // Simpler: just make judge always return fixed rates and verify the math
+    // Make judge always return fixed alternating rates and verify the math
     const rates: number[] = [0.9, 0.6];
     let callCount = 0;
     const judgeFixed: Judge = {
@@ -672,14 +642,11 @@ describe('runWhatif — --no-baseline-sample skips sample', () => {
     const complete = makeIntegrationComplete();
     const deps = makeIntegrationDeps(runner, complete);
     const options = makeIntegrationOptions({ noBaselineSample: true });
-    await runWhatif(options, deps).catch(() => undefined);
-    // Runner should only be called during the full verify run, not during baseline sample.
-    // The key check: runner.run was called but not with any trace showing label=baseline
-    // before the full run starts. Since we cannot isolate phases here, we check
-    // that the report lacks baselineSample.
-    // (Indirectly: since noBaselineSample=true, no sample phase fires.)
-    // Just ensure it doesn't throw and runner gets called.
-    expect(vi.isMockFunction(runner.run)).toBe(true);
+    const report = await runWhatif(options, deps).catch(() => undefined);
+    // The sample phase must not have run: baselineSample absent from verify result.
+    expect(report?.verify?.baselineSample).toBeUndefined();
+    // runner.run is still called — by the full verify phase, not the sample phase.
+    expect((runner.run as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
   });
 
 });
@@ -753,13 +720,23 @@ describe('runWhatif — measured baseline gate end to end (#2511)', () => {
     const refused = await Promise.all(runDirs.map((d) =>
       fsp.readFile(path.join(getWhatifDir(), d, 'refused.json'), 'utf8').catch(() => undefined)));
     const records = refused.filter((r): r is string => r !== undefined).map((r) => JSON.parse(r) as {
-      predictionId: string; reason: string; sampleAgentCostUsd: number; baselineSample: PredictionBaselineSample[];
+      predictionId: string; reason: string; sampleAgentCostUsd: number;
+      baselineSample: PredictionBaselineSample[];
+      predictions: { id: string; behavior: string; direction: string; confidence: string; testQuestion: string; probes: string[] }[];
     });
     expect(records).toHaveLength(1);
     expect(records[0]?.predictionId).toBe('p1');
     expect(records[0]?.reason).toContain('--no-baseline-sample');
     expect(records[0]?.sampleAgentCostUsd).toBeGreaterThan(0);
     expect(records[0]?.baselineSample[0]?.tripped).toBe(true);
+    // #2602: refused.json must include prediction text so the run can be interpreted.
+    expect(records[0]?.predictions).toHaveLength(1);
+    expect(records[0]?.predictions[0]?.behavior).toBe('Asks before acting');
+    expect(records[0]?.predictions[0]?.testQuestion).toBe('Does it ask first?');
+    expect(records[0]?.predictions[0]?.direction).toBe('added');
+    // Probes are capped to the --probes limit (default 6) before predictions are
+    // passed to persistRefusal, so the record reflects the capped set.
+    expect(records[0]?.predictions[0]?.probes.length).toBeGreaterThan(0);
   });
 });
 

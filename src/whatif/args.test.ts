@@ -470,17 +470,25 @@ describe('loadSpecFile', () => {
   });
 
   it('warns and drops invalid change entries, returns the valid ones', () => {
-    const p = join(dir, 'mixed.json');
-    writeFileSync(p, JSON.stringify({
-      title: 'Mixed',
-      changes: [
-        { kind: 'model', model: 'claude-opus-4-5' },
-        { kind: 'unknown-kind', foo: 'bar' },
-      ],
-    }));
-    const spec = loadSpecFile(p);
-    expect(spec.changes).toHaveLength(1);
-    expect(spec.changes[0]).toMatchObject({ kind: 'model', model: 'claude-opus-4-5' });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const p = join(dir, 'mixed.json');
+      writeFileSync(p, JSON.stringify({
+        title: 'Mixed',
+        changes: [
+          { kind: 'model', model: 'claude-opus-4-5' },
+          { kind: 'unknown-kind', foo: 'bar' },
+        ],
+      }));
+      const spec = loadSpecFile(p);
+      expect(spec.changes).toHaveLength(1);
+      expect(spec.changes[0]).toMatchObject({ kind: 'model', model: 'claude-opus-4-5' });
+      // The dropped entry must emit exactly one console.warn
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]![0]).toContain('dropped');
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('throws when the file does not exist', () => {

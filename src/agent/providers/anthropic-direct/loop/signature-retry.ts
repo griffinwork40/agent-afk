@@ -18,6 +18,7 @@
  * @module agent/providers/anthropic-direct/loop/signature-retry
  */
 
+import { BadRequestError } from '@anthropic-ai/sdk';
 import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources';
 
 /** Block types that carry Anthropic-session-specific signatures. */
@@ -26,24 +27,35 @@ const THINKING_TYPES = new Set<string>(['thinking', 'redacted_thinking']);
 /**
  * Classify an error as the Anthropic HTTP 400 "invalid signature" rejection.
  *
- * Positive match requires BOTH the HTTP status (400) and a message that
- * mentions `signature` in a thinking-block context. A plain 400 for an
- * unrelated reason (e.g. bad tool schema, missing field) must NOT trigger
- * the retry.
+ * Positive match requires BOTH the HTTP status (400) and evidence that the
+ * rejection is thinking-signature-specific. A plain 400 for an unrelated
+ * reason (e.g. bad tool schema, missing field, or a 400 that mentions only
+ * "signature" in an auth context) must NOT trigger the retry.
  *
- * The Anthropic SDK surfaces the HTTP status as `error.status` on its typed
- * error subclasses; we also check `error.message` for the numeric literal
- * "400" as a belt-and-braces fallback for plain `Error` wrappings and mocks
- * in tests.
+ * Classification order:
+ *  1. SDK's `BadRequestError` (guarantees status 400) + message mentions both
+ *     "signature" AND "thinking" — tightest first path, no false positives.
+ *  2. Plain `Error` fallback: `.status` property equals 400 OR message text
+ *     contains "400", PLUS BOTH keywords — for wrappings and test mocks.
+ *
+ * Note: `error.error.type` from the SDK body is currently `invalid_request_error`
+ * for ALL 400 responses, so it cannot further narrow. When Anthropic exposes a
+ * dedicated type for signature failures (e.g. `invalid_thinking_signature`), add
+ * a fast-path check on `(err as BadRequestError).error?.type` here.
  */
 export function isInvalidSignatureError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
+  if (err instanceof BadRequestError) {
+    // BadRequestError guarantees status === 400; only need the keyword check.
+    const msg = err.message;
+    return msg.includes('signature') && msg.toLowerCase().includes('thinking');
+  }
+  // Fallback for plain Error wrappings (e.g. test mocks that predate the SDK class).
   const msg = err.message;
   if (!msg.includes('signature') || !msg.toLowerCase().includes('thinking')) return false;
-  // The SDK's BadRequestError sets `.status = 400`.
   const status = (err as unknown as Record<string, unknown>)['status'];
   if (status === 400) return true;
-  // Fallback: the stringified error text contains the status code.
+  // Last-resort: the stringified error text contains the status code.
   return msg.includes('400');
 }
 

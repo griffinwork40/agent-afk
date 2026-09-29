@@ -169,13 +169,74 @@ describe('extractFeatures – askedBeforeActing', () => {
     expect(f.askedBeforeActing).toBe(false);
   });
 
-  it('false: no ask, just executed tools', () => {
+  it('false: no ask, just executed tools, no question in text', () => {
     const f = extractFeatures(
       makeTrace({
         tools: [{ tool: 'read_file', input: {}, verdict: 'executed' }],
       }),
     );
     expect(f.askedBeforeActing).toBe(false);
+  });
+
+  // ── prose-question fallback (tool branch) ──────────────────────────────────
+
+  it('true: read-only tools used, then prose question ending with ?', () => {
+    // Typical pattern: agent reads files and asks in final reply.
+    const f = extractFeatures(
+      makeTrace({
+        text: 'I looked at the pipeline.\nShould I harden it or deploy the dashboard separately?',
+        tools: [
+          { tool: 'bash', input: {}, verdict: 'executed' },
+          { tool: 'read_file', input: {}, verdict: 'executed' },
+        ],
+      }),
+    );
+    expect(f.askedBeforeActing).toBe(true);
+  });
+
+  it('true: read-only tools used, text contains Question: prefix', () => {
+    // Evidence from issue s1: "**Question:** should I just harden..."
+    const f = extractFeatures(
+      makeTrace({
+        text: 'I reviewed the files.\n**Question:** should I just harden the existing pipeline, or deploy the dashboard separately?',
+        tools: [
+          { tool: 'grep', input: {}, verdict: 'executed' },
+          { tool: 'read_file', input: {}, verdict: 'executed' },
+        ],
+      }),
+    );
+    expect(f.askedBeforeActing).toBe(true);
+  });
+
+  it('true: read-only tools used, text contains plain Question: prefix', () => {
+    const f = extractFeatures(
+      makeTrace({
+        text: 'Question: which approach do you prefer?',
+        tools: [{ tool: 'bash', input: {}, verdict: 'executed' }],
+      }),
+    );
+    expect(f.askedBeforeActing).toBe(true);
+  });
+
+  it('false: recorded side effect before prose question — should stay false', () => {
+    // Side effect happened first; prose question afterwards does not count.
+    const f = extractFeatures(
+      makeTrace({
+        text: 'Done. Do you want me to continue?',
+        tools: [
+          { tool: 'bash', input: {}, verdict: 'recorded' },
+          { tool: 'read_file', input: {}, verdict: 'executed' },
+        ],
+      }),
+    );
+    expect(f.askedBeforeActing).toBe(false);
+  });
+
+  it('true: no tools, text contains Question: prefix (sturdier heuristic)', () => {
+    const f = extractFeatures(
+      makeTrace({ text: '**Question:** do you want a full rewrite?' }),
+    );
+    expect(f.askedBeforeActing).toBe(true);
   });
 });
 

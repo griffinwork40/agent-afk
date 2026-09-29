@@ -44,6 +44,7 @@ import { emitSessionPhase } from '../../agent/trace/emit.js';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { errorMessage } from '../../utils/errors.js';
 import { buildOneShotJsonOutput } from './chat.json-output.js';
+import { closeLazyBrowser } from './chat.browser-teardown.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -786,6 +787,7 @@ export function registerChatCommand(program: Command): void {
         if (mcpManager) {
           await mcpManager.disconnectAll();
         }
+        await closeLazyBrowser(); // after session.close() — browser may be in use until session drains (#2580)
         try { sharedMemoryStore?.close(); } catch {}
         try { sharedStateStore?.close(); } catch {}
         try { workspaceStore?.close(); } catch {}

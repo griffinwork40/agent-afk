@@ -1,3 +1,7 @@
+import * as fs from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ServerResponse } from 'node:http';
 import type { JournalBlock } from '../agent/journal/index.js';
@@ -5,12 +9,12 @@ import type { JournalBlock } from '../agent/journal/index.js';
 type ToolResultBlock = Extract<JournalBlock, { type: 'tool_result' }>;
 type Found = { block: ToolResultBlock; subagentId?: string } | null;
 
-const mockFind = vi.fn<(sessionId: string, toolUseId: string) => Found>();
+const mockFind = vi.fn<(sessionId: string, toolUseId: string) => Promise<Found>>();
 const mockExists = vi.fn<(sessionId: string) => boolean>();
 
 vi.mock('../agent/journal/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../agent/journal/index.js')>()),
-  findToolResult: (s: string, t: string) => mockFind(s, t),
+  findToolResultAsync: (s: string, t: string) => mockFind(s, t),
   journalExists: (s: string) => mockExists(s),
 }));
 
@@ -41,36 +45,36 @@ beforeEach(() => {
 });
 
 describe('handleGetToolResult', () => {
-  it('returns the full hydrated text of a found result', () => {
+  it('returns the full hydrated text of a found result', async () => {
     const full = 'line\n'.repeat(500);
-    mockFind.mockReturnValue({ block: block(full) });
+    mockFind.mockResolvedValue({ block: block(full) });
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     const { status, body } = json();
     expect(status).toBe(200);
     expect(mockFind).toHaveBeenCalledWith('sess-1', 'toolu_1');
     expect(body).toEqual({ toolUseId: 'toolu_1', isError: false, text: full, totalChars: full.length, truncated: false });
   });
 
-  it('reports the subagent journal and error flag', () => {
-    mockFind.mockReturnValue({ block: block('boom', true), subagentId: 'sub-9' });
+  it('reports the subagent journal and error flag', async () => {
+    mockFind.mockResolvedValue({ block: block('boom', true), subagentId: 'sub-9' });
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     expect(json().body).toMatchObject({ isError: true, subagentId: 'sub-9', text: 'boom' });
   });
 
-  it('caps oversized results and flags truncation', () => {
-    mockFind.mockReturnValue({ block: block('x'.repeat(MAX_TOOL_RESULT_CHARS + 10)) });
+  it('caps oversized results and flags truncation', async () => {
+    mockFind.mockResolvedValue({ block: block('x'.repeat(MAX_TOOL_RESULT_CHARS + 10)) });
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     const { body } = json();
     expect(body['truncated']).toBe(true);
     expect((body['text'] as string).length).toBe(MAX_TOOL_RESULT_CHARS);
     expect(body['totalChars']).toBe(MAX_TOOL_RESULT_CHARS + 10);
   });
 
-  it('never emits base64 image payloads', () => {
-    mockFind.mockReturnValue({
+  it('never emits base64 image payloads', async () => {
+    mockFind.mockResolvedValue({
       block: {
         type: 'tool_result',
         toolUseId: 'toolu_1',
@@ -81,48 +85,46 @@ describe('handleGetToolResult', () => {
       },
     });
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     const text = json().body['text'] as string;
     expect(text).toContain('[image: image/png, 2.9 KB]');
     expect(text).not.toContain('AAAA');
   });
 
-  it('404s with journal_not_found when the session has no journal', () => {
-    mockFind.mockReturnValue(null);
+  it('404s with journal_not_found when the session has no journal', async () => {
+    mockFind.mockResolvedValue(null);
     mockExists.mockReturnValue(false);
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     expect(json()).toMatchObject({ status: 404, body: { error: 'journal_not_found' } });
   });
 
-  it('404s with tool_result_not_found when the journal lacks that call', () => {
-    mockFind.mockReturnValue(null);
+  it('404s with tool_result_not_found when the journal lacks that call', async () => {
+    mockFind.mockResolvedValue(null);
     mockExists.mockReturnValue(true);
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     expect(json()).toMatchObject({ status: 404, body: { error: 'tool_result_not_found' } });
   });
 
-  it('500s (does not throw) when the reader throws', () => {
-    mockFind.mockImplementation(() => {
-      throw new Error('disk gone');
-    });
+  it('500s (does not throw) when the reader throws', async () => {
+    mockFind.mockRejectedValue(new Error('disk gone'));
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', 'toolu_1');
+    await handleGetToolResult(res, 'sess-1', 'toolu_1');
     expect(json()).toMatchObject({ status: 500, body: { error: 'journal_read_failed', message: 'disk gone' } });
   });
 
-  it.each(['../etc', 'a/b', '', 'x'.repeat(129)])('rejects unsafe session id %j before reading', (id) => {
+  it.each(['../etc', 'a/b', '', 'x'.repeat(129)])('rejects unsafe session id %j before reading', async (id) => {
     const { res, json } = makeRes();
-    handleGetToolResult(res, id, 'toolu_1');
+    await handleGetToolResult(res, id, 'toolu_1');
     expect(json()).toMatchObject({ status: 400, body: { error: 'bad_session_id' } });
     expect(mockFind).not.toHaveBeenCalled();
   });
 
-  it.each(['../x', 'a/b', '', 'a b', 'x'.repeat(257)])('rejects unsafe tool use id %j before reading', (id) => {
+  it.each(['../x', 'a/b', '', 'a b', 'x'.repeat(257)])('rejects unsafe tool use id %j before reading', async (id) => {
     expect(isSafeToolUseId(id)).toBe(false);
     const { res, json } = makeRes();
-    handleGetToolResult(res, 'sess-1', id);
+    await handleGetToolResult(res, 'sess-1', id);
     expect(json()).toMatchObject({ status: 400, body: { error: 'bad_tool_use_id' } });
     expect(mockFind).not.toHaveBeenCalled();
   });
@@ -142,7 +144,7 @@ describe('GET /api/sessions/:id/tool-results/:toolUseId (routing)', () => {
   });
 
   it('requires the bearer token and serves the result when authorized', async () => {
-    mockFind.mockReturnValue({ block: block('full output') });
+    mockFind.mockResolvedValue({ block: block('full output') });
     handle = await startWebServer({ port: 0 });
     const url = `http://127.0.0.1:${handle.port}/api/sessions/sess-1/tool-results/${encodeURIComponent('toolu_1')}`;
 

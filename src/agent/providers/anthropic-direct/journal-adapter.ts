@@ -193,6 +193,20 @@ function messageFromJournal(message: JournalMessage): MessageParam | null {
   return content.length > 0 ? { role: message.role, content } : null;
 }
 
+/**
+ * Module-scope singleton shared across all concurrent sessions.
+ *
+ * Safety rationale (#2486): `JournalProvenance` is keyed by object identity
+ * in a `WeakMap<T, Origin<T>>`. Each `JournalSync` instance holds its own
+ * `MessageParam[]` array, so two concurrent sessions have disjoint key sets
+ * by construction — a lookup in one session can never collide with records
+ * from another. The singleton is safe here for the same reason a module-scope
+ * `WeakMap` is always safe: isolation is structural, not temporal.
+ *
+ * If this ever needs to become per-`JournalSync` (e.g. to allow GC-ing records
+ * mid-session), move the instantiation into `fromJournalMessages` or pass the
+ * provenance instance as a constructor argument to the adapter.
+ */
 const provenance = new JournalProvenance<MessageParam>();
 
 /**

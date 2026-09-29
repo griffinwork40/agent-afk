@@ -22,7 +22,7 @@ Open source. Runs locally. Works with any model provider, including local models
 ## Quick Start
 
 ```bash
-npm install -g agent-afk    # Node ≥ 22 required
+npm install -g agent-afk    # Node ≥ 22.13 required
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation
@@ -30,7 +30,7 @@ afk chat "hello"             # first real conversation
 
 That's it. You're in.
 
-**Using pnpm?** `pnpm add -g agent-afk` works, but pnpm 10 blocks build scripts by default and skips `postinstall` (with an easy-to-miss warning — see [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)). Run `pnpm approve-builds -g` after install to approve the hook, or use `npm install -g agent-afk` instead. If an `afk daemon` is already running and pnpm skipped the hook, restart it manually with `afk service restart daemon` — on macOS the hook restarts the daemon automatically when it runs, but on Linux you must always run this command after an upgrade even when the hook ran. If you have a manually-started Telegram bot, also run `afk telegram restart`.
+**Using pnpm?** `pnpm add -g agent-afk` works, but pnpm 10 and later block build scripts by default and skips `postinstall` (with an easy-to-miss warning — see [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)). Run `pnpm approve-builds -g` after install to approve the hook, or use `npm install -g agent-afk` instead. If an `afk daemon` is already running and pnpm skipped the hook, restart it manually with `afk service restart daemon` — on macOS the hook restarts the daemon automatically when it runs, but on Linux you must always run this command after an upgrade even when the hook ran. If you have a manually-started Telegram bot, also run `afk telegram restart`.
 
 **Try without installing:** `npx agent-afk chat "hello"` runs a one-shot turn with zero global install.
 

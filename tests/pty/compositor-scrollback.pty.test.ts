@@ -11,7 +11,7 @@
  * and assert against the SCROLLBACK / viewport — the ground truth that the
  * in-process @xterm/headless unit tests cannot certify (docs/scrollback.md).
  *
- * Gating: node-pty is a native dep in `pnpm.onlyBuiltDependencies`, so it is
+ * Gating: node-pty is a native dep allowed to build via `allowBuilds` in pnpm-workspace.yaml, so it is
  * present after `pnpm install`. In CI (or with AFK_PTY_REQUIRED=1) a missing
  * node-pty is a hard failure; locally it degrades to a skip so a dev who has
  * not built the native module is not blocked.
@@ -121,7 +121,7 @@ describe('TerminalCompositor scrollback over a real pty (issue #541)', () => {
       it('node-pty must be installed and functional in CI', () => {
         throw new Error(
           `node-pty is unavailable but required (CI or AFK_PTY_REQUIRED=1): ${(avail as { reason: string }).reason}. ` +
-            'Ensure "node-pty" is in pnpm.onlyBuiltDependencies and the native build succeeded.',
+            'Ensure "node-pty" is in pnpm-workspace.yaml allowBuilds and the native build succeeded.',
         );
       });
     } else {

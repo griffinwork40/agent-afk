@@ -88,8 +88,8 @@ function renderMessage(msg: OpenAIMessage): string {
   const toolCalls = toolCallsOf(msg);
   if (toolCalls) {
     for (const tc of toolCalls) {
-      const name = tc.function?.name ?? 'unknown';
-      const args = truncateArgs(tc.function?.arguments ?? '');
+      const name = tc.function.name;
+      const args = truncateArgs(tc.function.arguments);
       lines.push(`[tool call: ${name} ${args}]`);
     }
   }
@@ -109,7 +109,7 @@ function countChars(msg: OpenAIMessage): number {
   const toolCalls = toolCallsOf(msg);
   if (toolCalls) {
     for (const tc of toolCalls) {
-      total += (tc.function?.name?.length ?? 0) + (tc.function?.arguments?.length ?? 0);
+      total += tc.function.name.length + tc.function.arguments.length;
     }
   }
   return total;
@@ -160,7 +160,7 @@ export const openaiMicrocompactOps: MicrocompactOps<OpenAIMessage> = {
       const calls = toolCallsOf(msg);
       if (!calls) continue;
       for (const tc of calls) {
-        if (tc.id && tc.function?.name) {
+        if (tc.id && tc.function.name) {
           toolNameById.set(tc.id, tc.function.name);
         }
       }

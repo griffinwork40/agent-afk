@@ -17,6 +17,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Readability } from '@mozilla/readability';
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
+import { buildElisionMarker, elideDataUriPayloads } from './extract-data-uri.js';
 
 /** A realistic article page with nav, sidebar, and footer chrome around it. */
 function articlePage(): string {
@@ -144,5 +145,109 @@ describe('extractReadableMarkdown — Readability.parse() throws (safeExtract ca
     expect(out.markdown).toContain('fallback body content');
 
     parseSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// data: URI elision — unit tests for extract-data-uri helpers
+// ---------------------------------------------------------------------------
+
+describe('buildElisionMarker', () => {
+  it('preserves the MIME type and reports payload length', () => {
+    const marker = buildElisionMarker('image/svg+xml;base64', 'abc123');
+    expect(marker).toBe('data:image/svg+xml;base64,\u2026elided 6 bytes');
+  });
+
+  it('works for non-base64 URIs (plain-text payloads)', () => {
+    const marker = buildElisionMarker('text/plain', 'hello');
+    expect(marker).toBe('data:text/plain,\u2026elided 5 bytes');
+  });
+});
+
+describe('elideDataUriPayloads — post-pass rewriter', () => {
+  it('is a no-op (returns same reference) for markdown with no data: URIs', () => {
+    const md = '# Hello\n\nSome [link](https://example.com) and text.';
+    expect(elideDataUriPayloads(md)).toBe(md);
+  });
+
+  it('elides a base64 data: URI in a markdown link target', () => {
+    const payload = 'A'.repeat(200);
+    const md = `![alt text](data:image/png;base64,${payload})`;
+    const result = elideDataUriPayloads(md);
+    expect(result).toContain('data:image/png;base64,\u2026elided 200 bytes');
+    expect(result).not.toContain(payload);
+  });
+
+  it('elides a non-base64 data: URI', () => {
+    const payload = 'Hello+World%21';
+    const md = `[link](data:text/plain,${payload})`;
+    const result = elideDataUriPayloads(md);
+    expect(result).toContain('data:text/plain,\u2026elided');
+    expect(result).not.toContain(payload);
+  });
+
+  it('does not double-elide an already-elided marker', () => {
+    // An elision marker produced by the Turndown rule must not be re-matched
+    // by the post-pass, or we get "…elided 7 bytes" inside the marker.
+    const alreadyElided = 'data:image/svg+xml;base64,\u2026elided 75677 bytes';
+    expect(elideDataUriPayloads(alreadyElided)).toBe(alreadyElided);
+  });
+
+  it('handles multiple data: URIs in one string', () => {
+    const md =
+      `![a](data:image/png;base64,${'A'.repeat(100)}) ` +
+      `![b](data:image/gif;base64,${'B'.repeat(50)})`;
+    const result = elideDataUriPayloads(md);
+    expect(result).toContain('\u2026elided 100 bytes');
+    expect(result).toContain('\u2026elided 50 bytes');
+  });
+
+  it('completes in linear time on a 75KB single-line base64 payload', () => {
+    // Regression guard for O(n^2) backtracking — must finish in well under 1s.
+    const payload = 'A'.repeat(75_677);
+    const md = `![GitHub 404 image](data:image/svg+xml;base64,${payload})`;
+    const start = Date.now();
+    const result = elideDataUriPayloads(md);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(500); // generous ceiling; typical is <5ms
+    expect(result).toContain('\u2026elided 75677 bytes');
+    expect(result).not.toContain(payload);
+  });
+});
+
+describe('extractReadableMarkdown — data: URI elision (integration)', () => {
+  it('elides a data: URI in an <img> src attribute', async () => {
+    const payload = 'PHN2Zyv'.repeat(500); // ~3 KB of fake base64
+    const html = `<!DOCTYPE html><html><head><title>Test</title></head><body>
+      <article>
+        <h1>Article with inline image</h1>
+        <p>Some body text that is long enough for Readability to treat this as an article.
+        More filler text to satisfy the Readability heuristics so we exercise the
+        article path rather than falling back to whole-body conversion.</p>
+        <img src="data:image/svg+xml;base64,${payload}" alt="A diagram" />
+        <p>Text after the image.</p>
+      </article>
+    </body></html>`;
+    const out = await extractReadableMarkdown(html, 'https://example.com/page');
+    expect(out.markdown).toContain('\u2026elided');
+    expect(out.markdown).not.toContain(payload);
+    // Alt text must be preserved.
+    expect(out.markdown).toContain('A diagram');
+  });
+
+  it('produces byte-identical output for pages without data: URIs', async () => {
+    // Pages with no data: URIs must come out exactly the same.
+    const html = `<!DOCTYPE html><html><head><title>Clean Page</title></head><body>
+      <article>
+        <h1>No data URIs here</h1>
+        <p>Just a paragraph with enough text to be treated as an article by Readability.
+        Additional filler so the heuristics select this container reliably.</p>
+        <img src="https://example.com/image.png" alt="Normal image" />
+      </article>
+    </body></html>`;
+    const out1 = await extractReadableMarkdown(html, 'https://example.com/clean');
+    const out2 = await extractReadableMarkdown(html, 'https://example.com/clean');
+    expect(out1.markdown).toBe(out2.markdown);
+    expect(out1.markdown).not.toContain('\u2026elided');
   });
 });

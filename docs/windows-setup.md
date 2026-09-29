@@ -39,7 +39,7 @@ nvm install 22
 
 # Install pnpm
 corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@11 --activate
 ```
 
 ### 3. Install agent-afk

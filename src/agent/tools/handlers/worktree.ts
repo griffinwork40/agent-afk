@@ -137,6 +137,16 @@ async function resolveManagedWorktree(
   return entry;
 }
 
+/** Build the human-readable detail string for an `ignored-local-state` refusal. */
+function describeIgnoredRefusal(
+  because: 'non-rebuildable-entry' | 'git-failed',
+  detail: string,
+): string {
+  return because === 'git-failed'
+    ? `the ignored-file probe failed (${detail}), so removal would be a guess`
+    : `ignored local state \`git status\` cannot see: ${detail}`;
+}
+
 /** Build the `worktree` tool handler bound to a session cwd. */
 export function createWorktreeHandler(
   cwd?: string,
@@ -319,8 +329,7 @@ export function createWorktreeHandler(
             }
             if (outcome.reason === 'ignored-local-state') {
               return {
-                content: `Refused: ${entry.path} holds non-rebuildable ignored files (e.g. .env, a gitignored plan) that ` +
-                  `\`git status\` cannot see, so removal would silently delete them. Move/back up what you need, or ` +
+                content: `Refused: ${entry.path} holds non-rebuildable ignored files — ${describeIgnoredRefusal(outcome.because, outcome.detail)}. Move/back up what you need, or ` +
                   'pass force: true to discard them along with the checkout.',
                 isError: true,
               };

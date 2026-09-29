@@ -6,6 +6,13 @@
  * pushes a Telegram notice with the correct "telegram" prefix, and rate-limits
  * to one push per 60 s — mirroring the daemon's crash-handler contract.
  *
+ * Fix: #2513 — two advisory findings addressed:
+ *   1. Re-entry guard: a module-scoped `crashHandlersInstalled` flag prevents
+ *      duplicate listener registration on repeated calls.
+ *   2. Deferred exit: process.exit(1) now fires after a 200 ms setTimeout so
+ *      the fire-and-forget push HTTP request has a chance to flush before the
+ *      process terminates.
+ *
  * No real Telegram messages are sent. pushIfConfigured is fully mocked.
  */
 
@@ -28,7 +35,7 @@ vi.mock('./push.js', () => ({
 // ---------------------------------------------------------------------------
 
 import { pushIfConfigured } from './push.js';
-import { installCrashHandlers } from './entry.js';
+import { installCrashHandlers, _resetCrashHandlersForTest } from './entry.js';
 
 const mockPush = vi.mocked(pushIfConfigured);
 
@@ -71,16 +78,24 @@ function captureProcessOn(): {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('installCrashHandlers (#2303)', () => {
+describe('installCrashHandlers (#2303, #2513)', () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     mockPush.mockClear();
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string | null) => undefined as never);
+    // Reset module-scoped re-entry guard so each test starts from a clean state.
+    _resetCrashHandlersForTest();
   });
 
   afterEach(() => {
+    // Clear any pending timers (e.g. the deferred process.exit setTimeout) before
+    // restoring real timers — prevents leaked 200 ms real timers from firing after
+    // the spy is restored and triggering "process.exit unexpectedly called" errors
+    // in the vitest runner between tests.
+    vi.clearAllTimers();
     exitSpy.mockRestore();
+    vi.useRealTimers();
     vi.resetModules();
   });
 
@@ -105,6 +120,9 @@ describe('installCrashHandlers (#2303)', () => {
   });
 
   it('uncaughtException handler calls pushIfConfigured with "telegram" prefix and error text', async () => {
+    // Use fake timers so the deferred process.exit(1) setTimeout never becomes
+    // a real pending timer that could leak across test boundaries.
+    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -124,6 +142,9 @@ describe('installCrashHandlers (#2303)', () => {
   });
 
   it('unhandledRejection handler calls pushIfConfigured with "telegram" prefix', async () => {
+    // Use fake timers so the deferred process.exit(1) setTimeout never becomes
+    // a real pending timer that could leak across test boundaries.
+    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -142,6 +163,9 @@ describe('installCrashHandlers (#2303)', () => {
   });
 
   it('rate-limits crash pushes: second call within 60 s is suppressed', async () => {
+    // Use fake timers so the deferred process.exit(1) setTimeout never becomes
+    // a real pending timer that could leak across test boundaries.
+    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -158,7 +182,8 @@ describe('installCrashHandlers (#2303)', () => {
     }
   });
 
-  it('uncaughtException handler exits with code 1 after notifying', async () => {
+  it('uncaughtException handler defers process.exit(1) by ~200 ms so the push can flush', async () => {
+    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -167,7 +192,47 @@ describe('installCrashHandlers (#2303)', () => {
       handler!(new Error('fatal'));
       await Promise.resolve();
 
+      // Exit must NOT have fired immediately.
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      // Advance past the delay — exit should fire now.
+      vi.advanceTimersByTime(200);
       expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('unhandledRejection handler defers process.exit(1) by ~200 ms so the push can flush', async () => {
+    vi.useFakeTimers();
+    const { captured, restore } = captureProcessOn();
+    try {
+      installCrashHandlers();
+      const [handler] = captured['unhandledRejection'] ?? [];
+
+      handler!(new Error('unhandled'));
+      await Promise.resolve();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(200);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('re-entry guard: second installCrashHandlers() call registers no additional listeners', () => {
+    const { captured, restore } = captureProcessOn();
+    try {
+      installCrashHandlers();
+      const countAfterFirst = (captured['uncaughtException'] ?? []).length;
+
+      // Second call should be a no-op.
+      installCrashHandlers();
+      const countAfterSecond = (captured['uncaughtException'] ?? []).length;
+
+      expect(countAfterSecond).toBe(countAfterFirst);
     } finally {
       restore();
     }

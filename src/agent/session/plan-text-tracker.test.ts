@@ -116,6 +116,16 @@ describe('PlanTextTracker', () => {
     expect(t.check()).toBe('refuse');
   });
 
+  it('counts visible chars after a zero-width prefix toward the threshold (ok path)', () => {
+    // A regex that accidentally removes visible characters would also strip the
+    // real plan text below and trigger a false 'refuse'. This test verifies the
+    // strip leaves visible ASCII intact: plan + U+200B padding → 'ok'.
+    const t = new PlanTextTracker();
+    t.beginTurn();
+    feed(t, [text(plan + '\u200b'.repeat(50)), toolStart('exit_plan_mode')]);
+    expect(t.check()).toBe('ok');
+  });
+
   it('pending tool.use.start followed by the confirmed tool.use does not double-apply the armed reset', () => {
     // Verifies the intentional inclusion of both `tool.use.start` (pending) and
     // the subsequent `tool.use` (confirmed) in the switch: both must call

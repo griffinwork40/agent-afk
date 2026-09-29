@@ -177,8 +177,8 @@ The terminal output shows:
 
 The full Markdown report is written to `~/.afk/state/whatif/<run-id>/report.md`.
 When one or more episodes failed and the failures were arm-imbalanced, the
-report opens with a `[!WARNING]` block before the Predictions table.  A
-**Failed Episodes** section (between Predictions and Unexpected Differences)
+report emits a `[!WARNING]` block immediately after the Predictions table.  A
+**Failed Episodes** section (between the warning and Unexpected Differences)
 lists each failure with its arm, error class, duration, and error message.
 `results.json` carries `verify.failedEpisodeRecords` (structured) and
 `verify.armImbalance` (when the imbalance threshold was exceeded).

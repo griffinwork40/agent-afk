@@ -22,7 +22,8 @@ import { detectTestResult } from './test-runner-detector.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
-import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
+import { wouldBeRestricted } from './_cwd-utils.js';
+import { scanCandidatePaths } from './bash-scan-exempt.js';
 import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
@@ -106,7 +107,9 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  * normally — it never refuses execution. Refusing would break the primary
  * human-driven `afk -w` worktree flow (a top-level bypass session legitimately
  * carries a non-empty `writeRoots`), and `wouldBeRestricted` already returns
- * not-restricted under `allowAll`, so bypass sessions produce no noise. The
+ * not-restricted under `allowAll`, so bypass sessions produce no noise. Device
+ * sinks (`/dev/null`, `/dev/stderr`, …) and shared scratch dirs (`/tmp`,
+ * `os.tmpdir()`) are skipped (`bash-scan-exempt.ts`). The
  * scan is deliberately not a shell parser: it does not catch `$()`, env-var
  * indirection, backticks, or globs. Rationale and the accepted threat model
  * are documented in `docs/decisions/0001-bash-tool-path-containment.md`.
@@ -147,22 +150,15 @@ export function createBashHandler(
    * normal. `wouldBeRestricted` short-circuits to not-restricted under
    * `allowAll` (bypass) and when no `resolveBase` is set (unconfined session),
    * so those sessions naturally produce zero warnings — intended, not
-   * special-cased here.
+   * special-cased here. Candidates come from `scanCandidatePaths`, which
+   * expands `~` and drops benign sinks/scratch dirs so they cannot consume
+   * the one-time latch.
    */
   function scanPathsBestEffort(command: string, context: ToolHandlerContext): void {
     if (_pathEscapeWarned) return; // one-time per handler instance
     const fallbackBase = context.resolveBase ?? context.cwd ?? cwd;
-    const home = os.homedir();
     const escaping: string[] = [];
-    for (const candidate of extractCandidatePaths(command)) {
-      // Expand ~ / ~/… to an absolute path so wouldBeRestricted does not
-      // anchor it to resolveBase and mis-resolve it as in-root.
-      const expanded =
-        candidate === '~'
-          ? home
-          : candidate.startsWith('~/')
-            ? home + candidate.slice(1)
-            : candidate;
+    for (const expanded of scanCandidatePaths(command, os.homedir())) {
       const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
       if (verdict.restricted) escaping.push(verdict.resolved);
     }

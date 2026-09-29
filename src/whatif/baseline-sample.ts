@@ -109,6 +109,13 @@ const COLD_START_EXTRA_EPISODES = 4;
  * K samples × predictions.length probe episodes, baseline arm only, 1 sample
  * each.  Judge calls: K × predictions.length × 1 env × 1 sample.
  * Uses the full estimateVerifyCost function with the baseline system tokens.
+ *
+ * Formula:
+ *   warmUsd = estimateVerifyCost(episodes = K × nPredictions, samples = 1).usd / 2
+ *             (÷2 because baseline arm only — half the symmetric estimate)
+ *   warmPerEpisode = warmUsd / (K × nPredictions)
+ *   result = warmUsd + COLD_START_EXTRA_EPISODES × warmPerEpisode
+ *             (adds the one-time cold-start premium for the first episode)
  */
 export function estimateBaselineSampleCost(input: {
   predictions: Prediction[];

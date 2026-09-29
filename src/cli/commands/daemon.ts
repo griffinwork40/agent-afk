@@ -134,6 +134,48 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
   return v !== null && v.kind === 'done' && !successfulToolNames.some((n) => DONE_EVIDENCE_TOOLS.has(n));
 };
 
+/** Guards against duplicate listener registration if called more than once. */
+let daemonCrashHandlersInstalled = false;
+
+/**
+ * Register uncaughtException / unhandledRejection process handlers that push a
+ * best-effort Telegram crash notice before exiting. Rate-limited to one push
+ * per 60 s to avoid crash-loop self-DOS. Exit is deferred by 200 ms so the
+ * fire-and-forget HTTP request has a chance to flush before the process
+ * terminates.
+ *
+ * Re-entry safe: a module-scoped flag prevents duplicate listener registration
+ * if this function is called more than once, mirroring entry.ts's
+ * crashHandlersInstalled pattern.
+ */
+function registerDaemonCrashHandlers(): void {
+  if (daemonCrashHandlersInstalled) return;
+  daemonCrashHandlersInstalled = true;
+
+  let lastCrashPushAt = 0;
+  const CRASH_PUSH_GUARD_MS = 60_000;
+  const CRASH_EXIT_DELAY_MS = 200;
+  const notifyCrash = (kind: string, err: unknown): void => {
+    const nowMs = Date.now();
+    if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
+    lastCrashPushAt = nowMs;
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    void pushIfConfigured(
+      `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
+    ).catch((pushErr: unknown) => {
+      console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
+    });
+  };
+  process.on('uncaughtException', (err) => {
+    notifyCrash('uncaughtException', err);
+    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
+  });
+  process.on('unhandledRejection', (err) => {
+    notifyCrash('unhandledRejection', err);
+    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
+  });
+}
+
 export function registerDaemonCommand(program: Command): void {
   program
     .command('daemon')
@@ -260,31 +302,7 @@ export function registerDaemonCommand(program: Command): void {
 
       activateDumpPrompt(options.dumpPrompt);
 
-      // Crash-notification rate guard: at most one push per 60s, regardless
-      // of how many uncaught errors fire (prevents crash-loop self-DOS that
-      // would saturate Telegram's API rate limit and silence *all* future
-      // notifications from this bot).
-      let lastCrashPushAt = 0;
-      const CRASH_PUSH_GUARD_MS = 60_000;
-      const notifyCrash = (kind: string, err: unknown): void => {
-        const nowMs = Date.now();
-        if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
-        lastCrashPushAt = nowMs;
-        const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-        void pushIfConfigured(
-          `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
-        ).catch((pushErr: unknown) => {
-          console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
-        });
-      };
-      process.on('uncaughtException', (err) => {
-        notifyCrash('uncaughtException', err);
-        process.exit(1);
-      });
-      process.on('unhandledRejection', (err) => {
-        notifyCrash('unhandledRejection', err);
-        process.exit(1);
-      });
+      registerDaemonCrashHandlers();
 
       // Optional working-directory override for daemon-spawned sessions.
       // When set, every scheduled task's AgentSession (and its forked

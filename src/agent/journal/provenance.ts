@@ -46,7 +46,16 @@ function pushOwn(out: unknown[], value: object): void {
   for (const [key, v] of Object.entries(value)) out.push(key, v);
 }
 
-/** Two-level shallow shape of a native message; see the module Contract. */
+/**
+ * Two-level shallow shape of a native message; see the module Contract.
+ *
+ * Comparison is intentionally by reference equality (`===`), not deep-equal or
+ * JSON serialization. This means two re-allocated objects with identical
+ * content will fail the shape check and fall through to `toJournal` — which is
+ * the correct and safe behaviour: we hand back provenance ONLY when we can
+ * confirm the object is the exact same one we built, bit for bit. The cost is
+ * O(blocks), bounded by the number of content elements, not by their size.
+ */
 function shapeOf(message: object): unknown[] {
   const out: unknown[] = [];
   for (const [key, v] of Object.entries(message)) {

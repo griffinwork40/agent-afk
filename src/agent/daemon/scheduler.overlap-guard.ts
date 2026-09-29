@@ -32,6 +32,7 @@ export function makeOverlapSkipRecord(
     trigger,
     ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
     triggeredAt: new Date(nowMs).toISOString(),
+    // 0 by intent: the task never ran, so there is no elapsed session time to record.
     durationMs: 0,
     status: 'skipped',
     skipReason: 'overlap',

@@ -21,13 +21,32 @@ import { format } from 'node:util';
  *
  * Contract:
  * - Arguments are formatted with `util.format`, matching what `console.warn`
- *   would have printed; one trailing newline run is dropped so the commit does
- *   not append a spurious blank row.
+ *   would have printed; ALL trailing newlines are stripped so the commit does
+ *   not append a spurious blank separator row. The compositor's
+ *   `decomposeCommitText` strips exactly one trailing `\n` (treating it as a
+ *   line terminator, not its own row) and promotes a second `\n` to a visual
+ *   separator. Stripping only one `\n` here would let multi-newline console
+ *   output (e.g. `"msg\n\n"`) inject an unintended separator row; stripping
+ *   all `\n+` is correct for console-forwarded text, which carries no TUI
+ *   rhythm semantics.
  * - Re-entrancy (the compositor itself warning from inside `commitAbove`) and a
  *   throwing sink both fall back to the original method, so a warning is never
- *   lost and can never recurse.
+ *   lost and can never recurse. The `inBridge` flag is shared across `warn` and
+ *   `error`: a cross-method re-entrant call (e.g. `commitAbove` calls
+ *   `console.error` while handling a `warn`) also falls back to the original.
+ *   This is intentional — "can never recurse" holds for any bridged method.
+ * - If the catch-path `original.apply()` itself throws (e.g. stderr is
+ *   broken), the error propagates to the caller. This is intentional: at that
+ *   point the terminal is already in an unrecoverable state and surfacing the
+ *   error is preferable to silently swallowing it.
  * - The returned restore is idempotent and only reinstates a method it still
  *   owns, so a later wrapper (e.g. a test spy) is not clobbered.
+ *   Single-installer assumption: `installConsoleBridge` must be called at most
+ *   once per `target` object. A second install after a later wrapper has been
+ *   applied will capture the wrapper as its `original`, so the first restore
+ *   will reinstate the wrapper (not the true original). The REPL loop enforces
+ *   this by calling `installConsoleBridge` exactly once (guarded by the
+ *   compositor null-check) and tearing it down in `finally` before dispose.
  */
 export interface ConsoleBridgeSink {
   commitAbove(text: string): void;

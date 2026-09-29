@@ -20,6 +20,7 @@ import { createAfkModeGate } from './afk-mode-gate.js';
 import { cleanupComposeSpills } from './tools/compose-executor.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
+import { createPreexistingLedgerHook } from './preexisting-ledger/session-end-hook.js';
 import { createOutcomeSessionEndHook, createChildAttributionHook } from './outcomes/index.js';
 import { createSpineSessionEndHook } from './spine/index.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
@@ -115,6 +116,7 @@ function registerFacetAndOutcomeHooks(
   registry.register('SessionEnd', createOutcomeSessionEndHook());
   registry.register('PostToolUse', createChildAttributionHook());
   registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: spineRepoRoot }));
+  registerPreexistingLedgerHook(registry);
 }
 
 /**
@@ -161,6 +163,16 @@ function registerSubagentCompleteHook(
  */
 function registerWhatifEpisodeGate(registry: HookRegistry): void {
   registry.register('PreToolUse', createWhatifEpisodeGate());
+}
+
+/**
+ * Register the pre-existing-defect ledger SessionEnd hook. Scans assistant
+ * turns for pre-existing-defect flags and appends JSONL entries to
+ * ~/.afk/agent-framework/preexisting-ledger.jsonl. Best-effort; never throws;
+ * opt-out via AFK_PREEXISTING_LEDGER_DISABLE=1.
+ */
+function registerPreexistingLedgerHook(registry: HookRegistry): void {
+  registry.register('SessionEnd', createPreexistingLedgerHook());
 }
 
 export function createDefaultHookRegistry(

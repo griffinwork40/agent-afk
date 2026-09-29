@@ -42,6 +42,7 @@ import type { ElicitationRequest, PermissionMode } from '../../types/sdk-types.j
 import { elicitationRouter } from '../../elicitation-router.js';
 import { buildPlanExitPrompt } from '../../plan-mode-exit-prompt.js';
 import { getProjectPlansDir } from '../../../paths.js';
+import { isUserWaiting, userAttentionFrom, yieldNotice } from '../user-yield.js';
 
 /** Stable tool name — must be present in the session's tool allowlist. */
 export const EXIT_PLAN_MODE_TOOL_NAME = 'exit_plan_mode';
@@ -147,12 +148,9 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
     // elicitation picker entirely. Delivering the queued message first lets the
     // model see the user's input before deciding whether to exit plan mode — and
     // prevents the picker from interrupting the user mid-thought.
-    if (controls.hasPendingUserMessage?.()) {
-      return {
-        content:
-          'The user has a queued message waiting to be delivered. End your turn now so ' +
-          'the message is delivered first. You can call exit_plan_mode again afterward.',
-      };
+    // Yield contract (../user-yield.ts): same probe + notice as wait_for.
+    if (isUserWaiting(userAttentionFrom(controls))) {
+      return { content: yieldNotice('You can call exit_plan_mode again afterward.') };
     }
 
     // Visible-text gate: refuse when the plan was never written where the user

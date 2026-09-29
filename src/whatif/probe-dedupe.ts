@@ -71,13 +71,14 @@ export interface DedupeResult {
 export function dedupeProbes(probes: string[], threshold = 0.8): DedupeResult {
   const kept: string[] = [];
   const dropped: string[] = [];
-  const keptNorm: string[] = [];
+  const keptNormSet = new Set<string>(); // O(1) exact-dup lookup (#2487)
+  const keptNorm: string[] = [];        // ordered list for Jaccard near-dup scan
 
   for (const probe of probes) {
     const norm = normaliseProbe(probe);
 
     // Exact duplicate (by normalised form)?
-    if (keptNorm.includes(norm)) {
+    if (keptNormSet.has(norm)) {
       dropped.push(probe);
       continue;
     }
@@ -96,6 +97,7 @@ export function dedupeProbes(probes: string[], threshold = 0.8): DedupeResult {
     } else {
       kept.push(probe);
       keptNorm.push(norm);
+      keptNormSet.add(norm);
     }
   }
 

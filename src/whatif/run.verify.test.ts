@@ -220,6 +220,21 @@ describe('verifyRun: prediction with zero graded probes', () => {
     expect(vp.verdict).toBe('unclear');
     expect(vp.scope?.background).toBeUndefined();
   });
+
+  // finding #4 (advisory review #2455): all-dropped prediction (probes: [])
+  // flows through syntheticEpisodes → produces 0 targeted episodes →
+  // scorePrediction must return 'unclear', never confirmed/refuted.
+  it('all-dropped prediction (probes: []) produces unclear via scorePrediction', () => {
+    // Simulate a prediction whose probes were all dropped by grounding.
+    // syntheticEpisodes([{ ...pred, probes: [] }]) produces no episodes,
+    // so the scorer sees zero targeted episodes in either arm.
+    const allDropped = pred('p1', { probes: [] });
+    const noEpisodes: Episode[] = []; // syntheticEpisodes produces this
+    const vp = scorePrediction(allDropped, noEpisodes, [], new Map());
+    expect(vp.verdict).toBe('unclear');
+    expect(vp.rates.n).toEqual({ baseline: 0, candidate: 0 });
+    expect(vp.scope?.targetedEpisodes).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

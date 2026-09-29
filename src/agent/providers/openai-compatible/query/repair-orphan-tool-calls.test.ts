@@ -349,6 +349,36 @@ describe('repairOrphanToolCalls — undefined tool_call_id preservation (#2438)'
     expect(out).toHaveLength(3);
     expect(out[2]).toMatchObject({ role: 'tool', tool_call_id: 'c1', content: INTERRUPTED });
   });
+
+  it('handles mixed shape: Ollama-style result (no id) alongside a correlated result in one assistant turn', () => {
+    // Scenario: interleaved emit order where one assistant turn declares two calls
+    // (c1, c2). A correlated tool result for c1 arrives, plus an Ollama-style
+    // tool message with no id (undefined tool_call_id). c2 has no result.
+    //
+    // Shape: [user, assistant{c1,c2}, ollamaTool, toolResult(c1)]
+    //
+    // Expected repair: ollamaTool preserved (undefined id → kept),
+    // toolResult(c1) kept, synthetic injected for c2 (in declaration order:
+    // c1_real, c2_synthetic), ollamaTool placed per its original position.
+    const ollamaTool: OpenAIMessage = { role: 'tool', content: 'ollama result' };
+    const msgs = [
+      userMsg(),
+      assistantWithCalls('c1', 'c2'),
+      ollamaTool,          // undefined tool_call_id — must be preserved
+      toolResult('c1'),    // real result for c1
+      // c2 missing — will get a synthetic
+    ];
+    const out = repairOrphanToolCalls(msgs);
+
+    // Resulting array: [user, assistant, ollamaTool, c1_real, c2_synthetic]
+    // The ollamaTool is kept as-is; the emit is in declaration order for c1/c2.
+    expect(out).toHaveLength(5);
+    expect(out[0]).toEqual(userMsg());
+    expect(out[1]).toEqual(msgs[1]);
+    expect(out[2]).toEqual(ollamaTool);
+    expect(out[3]).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
+    expect(out[4]).toMatchObject({ role: 'tool', tool_call_id: 'c2', content: INTERRUPTED });
+  });
 });
 
 // ─── Integration test — repairOrphanToolCalls fires in the outgoing request ──

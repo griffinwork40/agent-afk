@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { previewInput, buildInputPreview, PREVIEW_BUDGET } from './afk-gate-preview.js';
+import { previewInput, buildInputPreview, PREVIEW_BUDGET, LABEL_OVERHEAD } from './afk-gate-preview.js';
 
-/** Half derived from the default budget, matching the implementation. */
-const DEFAULT_HALF = Math.floor(PREVIEW_BUDGET / 2);
+/** Half derived from the default budget and label overhead, matching the implementation. */
+const DEFAULT_HALF = Math.floor((PREVIEW_BUDGET - LABEL_OVERHEAD) / 2);
 
 describe('previewInput', () => {
   it('returns an empty string for an empty input', () => {
@@ -35,35 +35,46 @@ describe('previewInput', () => {
     const result = previewInput(s);
     const omitted = s.length - DEFAULT_HALF * 2;
     expect(result).toContain(`${omitted} chars omitted`);
+    expect(result.length).toBeLessThanOrEqual(PREVIEW_BUDGET);
   });
 
   it('does not exceed budget when string is exactly one char over budget', () => {
-    // Each half = floor(PREVIEW_BUDGET / 2).  A string of PREVIEW_BUDGET+1
-    // chars is too long but the omitted region is exactly
-    // PREVIEW_BUDGET+1 - DEFAULT_HALF*2 chars.
+    // half = floor((PREVIEW_BUDGET - LABEL_OVERHEAD) / 2).
+    // A string of PREVIEW_BUDGET+1 chars triggers truncation.
     const s = 'X'.repeat(PREVIEW_BUDGET + 1);
     const result = previewInput(s);
     const omitted = s.length - DEFAULT_HALF * 2;
     expect(result).toContain(`${omitted} chars omitted`);
+    expect(result.length).toBeLessThanOrEqual(PREVIEW_BUDGET);
   });
 
   it('respects a custom budget', () => {
     const s = 'hello world this is a long string';
-    expect(previewInput(s, 10)).toContain('chars omitted');
+    // budget=10 is smaller than LABEL_OVERHEAD (32) — falls back to a plain head slice
+    expect(previewInput(s, 10)).toBe(s.slice(0, 10));
+    expect(previewInput(s, 10).length).toBeLessThanOrEqual(10);
+    // budget=s.length — string fits verbatim
     expect(previewInput(s, s.length)).toBe(s);
+    // budget large enough for label but smaller than the string
+    const long = 'x'.repeat(200);
+    expect(previewInput(long, 100)).toContain('chars omitted');
+    expect(previewInput(long, 100).length).toBeLessThanOrEqual(100);
   });
 
   it('output never exceeds budget chars for a small custom budget', () => {
     // Previously PREVIEW_HALF was a fixed constant (700), so previewInput(s, 10)
     // could emit up to 1400 chars — longer than the requested budget.
+    // A later fix derived half from budget alone but omitted the label overhead,
+    // so previewInput(s, 10) still emitted 36 chars (10 chars + 26-char label).
     const s = 'A'.repeat(5000);
-    const budget = 10;
+    const budget = 100;
     const result = previewInput(s, budget);
-    // head (5) + omission label + tail (5)
-    const half = Math.floor(budget / 2);
+    // half = floor((100 - 32) / 2) = 34
+    const half = Math.floor((budget - LABEL_OVERHEAD) / 2);
     expect(result.startsWith('A'.repeat(half))).toBe(true);
     expect(result.endsWith('A'.repeat(half))).toBe(true);
     expect(result).toContain('chars omitted');
+    expect(result.length).toBeLessThanOrEqual(budget);
   });
 });
 

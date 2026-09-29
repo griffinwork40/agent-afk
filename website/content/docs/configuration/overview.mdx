@@ -340,7 +340,7 @@ hook in under the `enableShellHooks` gate below.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `matcher` | `string` | Optional. Omit or `"*"` to match any tool name. `/regex/flags` for a regex match against AFK tool names (e.g. `"/^write_/"` matches all write tools). A bare name like `"bash"`, or a pipe-separated list of names, matches exact names, and Claude Code names match their AFK tool (`Bash` → `bash`, `Edit` → `edit_file`, `Agent`/`Task` → `agent`). Any other bare string is an anchored regex (`"Web.*"`). Only relevant for `PreToolUse`, `PostToolUse`, and `PostToolUseFailure`. |
+| `matcher` | `string` | Optional. Omit or `"*"` to match any tool name. `/regex/flags` for a regex match against AFK tool names (e.g. `"/^write_/"` matches all write tools). **Note:** regex matchers test only AFK canonical tool names — alias resolution is not applied, so `"/^Bash$/"` matches nothing because the AFK name is `bash`. Use a bare name or pipe-list (e.g. `"Bash"` or `"Bash\|bash"`) when you need alias resolution. A bare name like `"bash"`, or a pipe-separated list of names, matches exact names, and Claude Code names match their AFK tool (`Bash` → `bash`, `Edit` → `edit_file`, `Agent`/`Task` → `agent`). Any other bare string is an anchored regex (`"Web.*"`). Only relevant for `PreToolUse`, `PostToolUse`, and `PostToolUseFailure`. |
 | `hooks` | `array` | One or more hook definitions to run when this group matches. |
 
 #### Hook definition fields

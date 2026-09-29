@@ -203,7 +203,7 @@ export async function runBaselineSamplePhase(
     // --force deliberately does not bypass a measured no-headroom refusal
     // (see baseline-sample.ts); --no-baseline-sample is the override.
     if (result.firstTrip) {
-      await persistRefusal(runDir, result);
+      await persistRefusal(runDir, result, predictions);
       const { fullRunProbes, message, predictionId } = result.firstTrip;
       throw new WhatifMdeError(fullRunProbes, message, { kind: 'headroom', predictionId });
     }
@@ -217,17 +217,32 @@ export async function runBaselineSamplePhase(
 /**
  * Write `refused.json` so a refused run keeps what the gate measured and what
  * the sample cost (otherwise the run dir is empty and the spend is invisible).
+ * Includes the prediction text fields so the refusal can be interpreted on its
+ * own — without terminal output — addressing issue #2602.
  * Best-effort: a write failure must not mask the refusal itself.
  */
-async function persistRefusal(runDir: string, result: BaselineSampleResult): Promise<void> {
+async function persistRefusal(
+  runDir: string,
+  result: BaselineSampleResult,
+  predictions: import('./types.js').Prediction[],
+): Promise<void> {
   const { writeFile } = await import('node:fs/promises');
   const { join } = await import('node:path');
+  const predictionsRecord = predictions.map((p) => ({
+    id: p.id,
+    behavior: p.behavior,
+    direction: p.direction,
+    confidence: p.confidence,
+    testQuestion: p.testQuestion,
+    probes: p.probes,
+  }));
   const record = {
     refusedAt: new Date().toISOString(),
     reason: result.firstTrip?.message,
     predictionId: result.firstTrip?.predictionId,
     sampleAgentCostUsd: result.agentCostUsd,
     sampleCostNote: 'Agent episodes only; judge calls are not included.',
+    predictions: predictionsRecord,
     baselineSample: result.perPrediction,
   };
   try {
@@ -280,6 +295,19 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
   // which drives per-prediction MDE power).
   const totalEpisodes = episodes.length;
   const minProbesPerPrediction = resolveMinProbesPerPrediction(predictions, episodes);
+  // Pre-count episodes per prediction in one pass (O(episodes)) to avoid the
+  // O(predictions × episodes) reduce+filter pattern flagged in #2487.
+  const episodeCountByPrediction = new Map<string, number>();
+  for (const ep of episodes) {
+    if (ep.targets !== undefined) {
+      episodeCountByPrediction.set(ep.targets, (episodeCountByPrediction.get(ep.targets) ?? 0) + 1);
+    }
+  }
+  const syntheticPerArm = predictions.reduce(
+    (s, p) => s + (episodeCountByPrediction.get(p.id) ?? 0),
+    0,
+  );
+  // Dynamic import breaks a circular dependency: baseline-sample → run → run.preflight.
   const { estimateBaselineSampleCost } = await import('./baseline-sample.js');
   const baselineSampleCostUsd = noBaselineSample ? 0 : estimateBaselineSampleCost({
     predictions,
@@ -292,7 +320,7 @@ export async function runVerifyPreflight(input: VerifyPreflightInput): Promise<{
     runPreflightChecks({
       episodesPerArm: totalEpisodes,
       minProbesPerPrediction,
-      syntheticPerArm: predictions.reduce((s, p) => episodes.filter((e) => e.targets === p.id).length + s, 0),
+      syntheticPerArm,
       predictionCount: predictions.length,
       predictions,
       force,

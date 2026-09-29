@@ -160,6 +160,14 @@ export interface SessionEndContext {
    * not process.cwd().
    */
   cwd?: string;
+  /**
+   * Assistant message texts from this session's in-memory history, in order.
+   * Provided because several surfaces (one-shot `afk chat`, daemon, web) never
+   * write a session sidecar, so `loadStoredSession` cannot see their turns.
+   * In-process only: command hooks receive an explicit field allowlist
+   * (`buildStdinPayload`), so this text never reaches external processes.
+   */
+  assistantTexts?: readonly string[];
 }
 
 export interface SubagentStartContext {

@@ -28,6 +28,7 @@ import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges, resolveMaxPredictions, DEFAULT_PROBES } from './predict.js';
 import { buildAndPersistVerifiedReport } from './run.report.js';
+import { cleanupOrRecord } from './kept-sandboxes.js';
 import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
 import { groundProbes, makeSetChecker } from './probe-grounding.js';
 import {
@@ -42,6 +43,7 @@ import { persistRun } from './run.persist.js';
 import { verifyRun } from './run.verify.js';
 
 import { runVerifyPreflight, runBaselineSamplePhase } from './run.preflight.js';
+import { checkRedundancy, formatRedundancySection } from './redundancy.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
@@ -140,6 +142,21 @@ async function runPredictPhase(
     normalizeSnapshot(candidateSnap, candidate, real),
   );
 
+  // ── Redundancy preflight (#2414) ─────────────────────────────────────────
+  // Check added paragraphs against the baseline system prompt using
+  // deterministic token-set Jaccard similarity.  Warnings are surfaced via
+  // onProgress BEFORE the model call so a user can abort a paid run early.
+  const redundancyWarnings = checkRedundancy(structural.baseline.system, structural.systemDiff);
+  for (const w of redundancyWarnings) {
+    const sectionNote = w.sourceSection ? ` (§ ${w.sourceSection})` : '';
+    const scoreNote = ` [${(w.similarity * 100).toFixed(0)}% similar]`;
+    deps.onProgress?.({
+      stage: 'predict',
+      message: `[redundancy] Added paragraph may restate an existing rule${sectionNote}${scoreNote}`,
+    });
+  }
+  const redundancySection = formatRedundancySection(redundancyWarnings);
+
   deps.onProgress?.({ stage: 'predict', message: 'Generating predictions' });
 
   const changeKinds = spec.changes.map((c) => c.kind);
@@ -153,13 +170,17 @@ async function runPredictPhase(
     return result;
   };
 
-  const repoManifest = buildRepoManifest(options.realCwd);
+  const repoManifest = await buildRepoManifest(options.realCwd);
 
   const probesPerPrediction = options.probes ?? DEFAULT_PROBES;
   const maxPredictions = resolveMaxPredictions(probesPerPrediction, options.maxPredictions);
 
   const rawPredictions = await predictChanges(
-    { spec, changeDescriptions, structural, trackRecord, repoManifest, probesPerPrediction, maxPredictions },
+    {
+      spec, changeDescriptions, structural, trackRecord, repoManifest,
+      probesPerPrediction, maxPredictions,
+      ...(redundancySection !== undefined ? { redundancySection } : {}),
+    },
     wrappedComplete,
     options.analystModel,
   );
@@ -281,6 +302,7 @@ export async function runWhatif(
     signal: deps.signal,
   };
 
+  let pendingReport: WhatifReport | undefined;
   try {
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
@@ -306,10 +328,10 @@ export async function runWhatif(
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
-      const report: WhatifReport = { ...partialReport, headline };
+      pendingReport = { ...partialReport, headline };
 
-      await persistRun(runDir, report, []);
-      return report;
+      await persistRun(runDir, pendingReport, []);
+      return pendingReport;
     }
 
     // ── f) Verify phase ───────────────────────────────────────────────────
@@ -396,19 +418,20 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
-      spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
+    if (!verifyResult) throw new Error('verifyRun did not return a verifyResult');
+    if (!verifyJudgeResults) throw new Error('verifyRun did not return judgeResults');
+
+    pendingReport = await buildAndPersistVerifiedReport({
+      spec, structural, predictions, verifyResult, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
-      judgeResults: verifyJudgeResults!,
+      judgeResults: verifyJudgeResults,
       ...(baselineSampleResult ? { baselineSamplePerPrediction: baselineSampleResult.perPrediction } : {}),
     });
+    return pendingReport;
   } finally {
-    // Tear down sandboxes unless keepSandboxes
-    if (!options.keepSandboxes) {
-      await sandboxes.cleanup().catch(() => {
-        // Best-effort; do not mask the primary error
-      });
-    }
+    // Cleanup sandboxes or record their roots when keepSandboxes is set.
+    const kept = await cleanupOrRecord(runDir, sandboxes.roots, sandboxes.cleanup, options.keepSandboxes ?? false);
+    if (kept && pendingReport) pendingReport.keptSandboxes = kept;
   }
 }

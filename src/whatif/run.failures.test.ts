@@ -143,6 +143,26 @@ describe('detectArmImbalance: rate-difference criterion', () => {
     expect(result?.summary).toContain('bias');
   });
 
+  it('uses "failure rates differ significantly" when only rate criterion fires (not allInOneArm)', () => {
+    // 4/10 candidate (40%) vs 0.5/10 baseline (5%) → 35 pp rate diff fires,
+    // but failures exist in BOTH arms so allInOneArm is false.
+    const records = [
+      // baseline failure — ensures failures are in both arms
+      makeTrace('b1', 'baseline', 0, 'timed out'),
+      // enough candidate failures to exceed both the rate threshold and MIN_FAILURES
+      makeTrace('c1', 'candidate', 0, 'timed out'),
+      makeTrace('c2', 'candidate', 0, 'timed out'),
+      makeTrace('c3', 'candidate', 0, 'timed out'),
+      makeTrace('c4', 'candidate', 0, 'timed out'),
+      // extra baseline success traces (total baseline = 20, so 1/20 = 5%)
+    ].map((t) => buildFailedEpisodeRecords([t], new Map())[0]!);
+    const result = detectArmImbalance(records, 20, 10);
+    expect(result).not.toBeUndefined();
+    expect(result?.allInOneArm).toBe(false);
+    expect(result?.summary).toContain('failure rates differ significantly between arms');
+    expect(result?.summary).not.toContain('failures are concentrated in one arm');
+  });
+
   it('does NOT fire when rate diff is below threshold (17pp < 20pp)', () => {
     // 1/6 candidate (17%) vs 0/6 baseline (0%) → 17 pp < 20 pp
     // AND only 1 failure < IMBALANCE_MIN_FAILURES=2 so one-arm criterion also off
@@ -217,6 +237,20 @@ describe('detectArmImbalance: pilot scenario (6 candidate, 0 baseline)', () => {
     expect(result?.baselineFailRate).toBe(0);
     expect(result?.summary).toContain('Arm-imbalance warning');
     expect(result?.summary).toContain('--timeout');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildFailedEpisodeRecords — zero-duration edge case
+// ---------------------------------------------------------------------------
+
+describe('buildFailedEpisodeRecords: durationMs = 0', () => {
+  it('records durationMs as 0 and renders as "0.0s" in the report table', () => {
+    const traces = [makeTrace('s1', 'candidate', 0, 'instant failure', 0)];
+    const [rec] = buildFailedEpisodeRecords(traces, new Map());
+    expect(rec?.durationMs).toBe(0);
+    // Verify the rendering used in report.ts: (durationMs / 1000).toFixed(1) + 's'
+    expect((rec!.durationMs / 1000).toFixed(1) + 's').toBe('0.0s');
   });
 });
 

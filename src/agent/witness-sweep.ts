@@ -2,11 +2,10 @@
  * Bounded retention for the witness tree (`$AFK_STATE_DIR/witness/`).
  *
  * Nothing pruned this tree before: the trace writer, compaction sidecars, and
- * the opt-in prompt/output captures all appended forever. On one developer
- * machine it reached 546 MB / 13,052 directories with no opt-in artifact even
- * enabled (#849). This module is the sibling of `log-retention.ts` for a tree
- * of directories rather than a single JSONL file, and is the standing gate on
- * ever defaulting `AFK_CAPTURE_SUBAGENT_PROMPTS` / `_OUTPUT` to on.
+ * subagent journals all appended forever. On one developer machine it reached
+ * 546 MB / 13,052 directories (#849). This module is the sibling of
+ * `log-retention.ts` for a tree of directories rather than a single JSONL
+ * file.
  *
  * Retention unit is the WHOLE session directory. Per-artifact caps inside a
  * session were rejected: a trace stripped of its sidecars is a more confusing

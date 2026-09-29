@@ -54,6 +54,7 @@ import { builtinToolSchemas } from '../../../tools/schemas.js';
 import { registerPresenceLifecycle, resolveTopLevelSessionId } from './presence-lifecycle.js';
 import type { BuildDispatcherOptions } from '../build-dispatcher.js';
 import type { RuntimeSubagents } from '../../../awareness/index.js';
+import { isWhatifEpisode } from '../../../whatif-episode-gate.js';
 
 export interface DispatcherWiringArgs {
   config: AgentConfig;
@@ -219,6 +220,11 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // (elicitation-router.ts). Strip it so the model proceeds on an assumption
   // or emits Blocked rather than burning a turn on an unanswerable prompt.
   // Narrower than the skill-dispatch strip: `terminal_font_size` is retained.
+  // Exception: what-if episodes (#2600) keep `ask_question` so the gate can
+  // log it as 'executed' and observe.ts can measure firstAction='ask' /
+  // askedBeforeActing. The episode gate blocks it immediately with proceed-on-
+  // assumption guidance — the call is observable without being interactive.
+  const episodeMode = isWhatifEpisode();
   const toolDefs = config.isSkillDispatch
     ? baseToolDefs.filter(
         (t) =>
@@ -227,11 +233,15 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           t.name !== 'clipboard_write' &&
           t.name !== 'clipboard_read',
       )
-    : config.isNonInteractive
+    : config.isNonInteractive && !episodeMode
       ? baseToolDefs.filter(
           (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
         )
-      : baseToolDefs;
+      : config.isNonInteractive && episodeMode
+        ? baseToolDefs.filter(
+            (t) => t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+          )
+        : baseToolDefs;
 
   return {
     queryDispatcher,

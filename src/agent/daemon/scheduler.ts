@@ -16,16 +16,11 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import * as cron from 'node-cron';
 import { IdleDetector } from './idle-detector.js';
-import { makeDaemonElicitationHandler } from './handoff-wiring.js';
-import { elicitationRouter } from '../elicitation-router.js';
 import { recoverDaemonQueues } from './pull-recovery.js';
 import { getQueueDir, getTelemetryPath } from '../../paths.js';
 import type { ScheduledTask as CronTask } from 'node-cron';
 import type { TraceWriter } from '../trace/index.js';
 import type { AgentSession } from '../session/agent-session.js';
-import type { MemoryStore } from '../memory/index.js';
-import type { McpManager } from '../mcp/index.js';
-import type { StateStore } from '../state/state-store.js';
 import type { AgentConfig } from '../types.js';
 import type { Telegraf } from 'telegraf';
 
@@ -37,6 +32,7 @@ import { checkTaskCwdAtRuntime, warnIfBuiltinHasCwd } from './cwd-validator.js';
 export { resolveWorktreePruneRoot } from './worktree-prune-task.js';
 export { daemonTraceLabel } from './session-spawn.js';
 import { spawnDaemonSession } from './session-spawn.js';
+import { executeAgentTask } from './scheduler.execute-agent-task.js';
 import {
   DEFAULT_SESSIONSTART_COOLDOWN_MS,
   evaluateSessionStartGates,
@@ -236,7 +232,15 @@ export class CronScheduler {
   /**
    * Run one tick of `taskId` immediately, bypassing the cron timer and gates.
    * Used by `--once` CLI mode and by tests. Recorded as `trigger: 'cron'`.
-   * Note: subject to the per-task in-flight overlap guard (see {@link CronScheduler.inFlightTaskIds}).
+   *
+   * Note: subject to the per-task in-flight overlap guard
+   * ({@link CronScheduler.inFlightTaskIds}). If a cron run of the same task is
+   * already in progress when `tick()` is called, it will be silently skipped
+   * (a `status: 'skipped', skipReason: 'overlap'` telemetry record is written).
+   * Operators running `--once` in the foreground while the daemon is live should
+   * be aware of this — the skip is logged to telemetry but produces no terminal
+   * output. To guarantee execution regardless of in-flight state, stop the
+   * daemon before invoking `--once`.
    */
   async tick(taskId: string): Promise<TelemetryRecord> {
     const entry = this.registry.get(taskId);
@@ -317,7 +321,8 @@ export class CronScheduler {
   private async runOnce(task: ScheduledTask, trigger: TelemetryTrigger): Promise<TelemetryRecord> {
     // Overlap guard: skip and record telemetry when this task's previous run is
     // still in progress. Prevents stacked concurrent sessions on slow ticks
-    // (the in-flight set is released in the agent-path finally block below).
+    // (the in-flight set is released in the outer finally block below, covering
+    // all executor branches including the agent path in executeAgentTask).
     // The guard is intentionally checked BEFORE the cwd and executor branches
     // so it applies uniformly to all executor types.
     if (this.inFlightTaskIds.has(task.taskId)) {
@@ -384,112 +389,18 @@ export class CronScheduler {
       } finally { this.idleDetector.decrement(); }
     }
 
-    const triggeredAt = new Date(this.now());
-    const startTimeMs = this.now();
-    const baseRecord: Pick<
-      TelemetryRecord,
-      'taskId' | 'command' | 'trigger' | 'cronExpression' | 'triggeredAt'
-    > = {
-      taskId: task.taskId,
-      command: redactInlineSecrets(task.command),
+    return await executeAgentTask(
+      {
+        options: this.options,
+        queueDir: this.queueDir,
+        idleDetector: this.idleDetector,
+        now: this.now,
+        spawnSession: (t, tr) => this.spawnSession(t, tr),
+        writeTelemetry: (r, t, d) => this.writeTelemetry(r, t, d),
+      },
+      task,
       trigger,
-      ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
-      triggeredAt: triggeredAt.toISOString(),
-    };
-
-    let session: AgentSession | null = null;
-    let memoryStore: MemoryStore | null = null;
-    let stateStore: StateStore | null = null;
-    let mcpManager: McpManager | null = null;
-    let disposeRegistration: (() => void) | null = null;
-    let handlerInstalled = false;
-    this.idleDetector.increment();
-    try {
-      const spawned = await this.spawnSession(task, trigger);
-      session = spawned.session;
-      memoryStore = spawned.memoryStore;
-      stateStore = spawned.stateStore;
-      mcpManager = spawned.mcpManager ?? null;
-      disposeRegistration = spawned.dispose;
-
-      // Invariant: handoff handler installed BEFORE sendMessage so the
-      // ask-question-gate's hasHandler() probe passes for pull tasks;
-      // uninstalled in the finally block so cron ticks never inherit it.
-      if (trigger === 'pull') {
-        elicitationRouter.install(makeDaemonElicitationHandler({
-          taskId: task.taskId,
-          originalCommand: redactInlineSecrets(task.command),
-          queueDir: this.queueDir,
-          ...(this.options.bot !== undefined ? { bot: this.options.bot } : {}),
-          ...(this.options.primaryChatId !== undefined ? { chatId: this.options.primaryChatId } : {}),
-          ...(this.options.primaryThreadId !== undefined ? { threadId: this.options.primaryThreadId } : {}),
-        }));
-        handlerInstalled = true;
-      }
-
-      const response = await session.sendMessage(task.command);
-      const responseText = redactInlineSecrets(response.content);
-      // "Done"-verification probe (opt-in via injected `doneUnverifiedProbe`,
-      // ultimately gated on `daemon.verifyDone` at the push layer). Fully
-      // guarded: a probe bug or a metadata surprise must NEVER crash a tick, so
-      // any throw is swallowed and treated as "not unverified" (push unchanged,
-      // fail-open). Feeds the probe the SAME text the notification sees (already
-      // secret-redacted) plus the raw successful-tool names the stream consumer
-      // recorded on the returned Message's metadata.
-      let doneUnverified = false;
-      try {
-        const probe = this.options.doneUnverifiedProbe;
-        if (probe !== undefined) {
-          const successfulToolNames = Array.isArray(response.metadata?.successfulToolNames)
-            ? response.metadata.successfulToolNames
-            : [];
-          doneUnverified = probe({ responseText, successfulToolNames });
-        }
-      } catch {
-        doneUnverified = false;
-      }
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'success',
-        responseExcerpt: responseText.length > 280
-          ? `${responseText.slice(0, 280)}… [truncated]`
-          : responseText,
-      };
-      this.writeTelemetry(record, task, { responseText, ...(doneUnverified ? { doneUnverified: true } : {}) });
-      return record;
-    } catch (err) {
-      const record: TelemetryRecord = {
-        ...baseRecord,
-        durationMs: this.now() - startTimeMs,
-        status: 'error',
-        errorMessage: redactInlineSecrets(errorMessage(err)),
-      };
-      this.writeTelemetry(record, task);
-      return record;
-    } finally {
-      if (handlerInstalled) elicitationRouter.uninstall();
-      this.idleDetector.decrement();
-      if (session) {
-        try {
-          await session.close();
-        } catch {
-          // already-closed sessions throw; ignore.
-        }
-      }
-      // Archive the cross-surface registry handle (frees its key) so the
-      // long-running daemon never accumulates handles. Best-effort.
-      disposeRegistration?.();
-      if (mcpManager) {
-        try {
-          await mcpManager.disconnectAll();
-        } catch {
-          // MCP server shutdown is best-effort during daemon tick teardown.
-        }
-      }
-      memoryStore?.close();
-      stateStore?.close();
-    }
+    );
     } finally {
       this.inFlightTaskIds.delete(task.taskId);
     }

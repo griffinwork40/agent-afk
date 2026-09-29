@@ -3600,3 +3600,132 @@ describe('OpenAICompatibleQuery — witness-layer trace emission', () => {
     expect(halts).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression: extracted turn-driver context sees live mutations (issue #2565)
+//
+// The prior scouting split (commit 987d09c0) built TurnDriverContext as a plain
+// object literal with getters. Inside those getters `this` referred to the
+// literal, not the query instance — so mutable fields (currentModel,
+// currentPermissionMode, closed, responsesCompactionUnavailable) were always
+// read from construction-time snapshots. 145 of 517 provider tests broke.
+//
+// Fix: the class itself implements TurnDriverContext and passes `this` directly.
+// This test mutates currentModel via setModel() mid-session and asserts the
+// extracted runTurnInner function uses the updated value on the next turn.
+// ---------------------------------------------------------------------------
+describe('OpenAICompatibleQuery — extracted turn-driver sees live mutations (issue #2565)', () => {
+  beforeEach(() => {
+    createCalls = [];
+    pendingChunks = [];
+    pendingError = null;
+    installMockClient();
+    __setRetryBaseDelay(0);
+  });
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('runTurnInner reads currentModel live after setModel() mutates it mid-session', async () => {
+    // Turn 1: start on gpt-4o-mini.
+    const controlled = makeControlledPromptStream();
+    const q = buildQueryFromConfig(baseConfig({ model: 'gpt-4o-mini' }), controlled.stream);
+    const iter = q[Symbol.asyncIterator]();
+    await iter.next(); // session.init
+
+    pendingChunks = [
+      { choices: [{ delta: { content: 'hi' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('turn-1');
+    let ev: IteratorResult<ProviderEvent>;
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    const turn1Model = (createCalls[0]!.args as { model: string }).model;
+    expect(turn1Model).toBe('gpt-4o-mini');
+
+    // Mutate model mid-session via setModel(). The extracted runTurnInner
+    // MUST read `ctx.currentModel` (live `this.currentModel`) not a snapshot.
+    await q.setModel('gpt-4o');
+
+    pendingChunks = [
+      { choices: [{ delta: { content: 'there' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('turn-2');
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    const turn2Model = (createCalls[1]!.args as { model: string }).model;
+    // The driver must have picked up the mutation and used gpt-4o, not gpt-4o-mini.
+    expect(turn2Model).toBe('gpt-4o');
+    expect(turn2Model).not.toBe('gpt-4o-mini');
+
+    q.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: setPermissionMode() mid-session is seen by next iteration
+//
+// Companion regression to the setModel test above. The permission-mode getter
+// must be live (backed by `_currentPermissionMode`) so the plan-mode addendum
+// injected in turn-iteration.ts:runIteration is computed from the CURRENT
+// mode, not a construction-time snapshot.
+// ---------------------------------------------------------------------------
+describe('OpenAICompatibleQuery — setPermissionMode mid-session seen by next turn', () => {
+  beforeEach(() => {
+    createCalls = [];
+    pendingChunks = [];
+    pendingError = null;
+    installMockClient();
+    __setRetryBaseDelay(0);
+  });
+  afterEach(() => {
+    resetSlotBindings();
+  });
+
+  it('currentPermissionMode reflects setPermissionMode() call before next turn', async () => {
+    const controlled = makeControlledPromptStream();
+    // Provide a systemPrompt so buildMessages always emits a system message — required for
+    // the plan-mode addendum injection in turn-iteration.ts:runIteration.
+    const q = buildQueryFromConfig(
+      baseConfig({ model: 'gpt-4o-mini', systemPrompt: 'you are helpful' }),
+      controlled.stream,
+    );
+    const iter = q[Symbol.asyncIterator]();
+    await iter.next(); // session.init
+
+    // Turn 1 in default mode.
+    pendingChunks = [
+      { choices: [{ delta: { content: 'ok' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('set me up');
+    let ev: IteratorResult<ProviderEvent>;
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    // Sanity: mode starts as 'default'.
+    expect(q.currentPermissionMode).toBe('default');
+
+    // Switch to plan mode mid-session.
+    await q.setPermissionMode('plan');
+    expect(q.currentPermissionMode).toBe('plan');
+
+    // Turn 2: the iteration must read the live value, not the snapshot.
+    pendingChunks = [
+      { choices: [{ delta: { content: 'planning...' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    controlled.send('make a plan');
+    do { ev = await iter.next(); } while (!ev.done && ev.value.type !== 'turn.completed');
+
+    // The turn-2 request body must contain the plan-mode addendum somewhere in
+    // the messages array — this proves runIteration read currentPermissionMode
+    // live rather than from a construction-time snapshot.
+    const turn2Args = createCalls[1]?.args as { messages?: Array<{ role: string; content: string }> } | undefined;
+    const allContent = (turn2Args?.messages ?? []).map((m) => m.content).join('\n');
+    expect(allContent).toContain(PLAN_MODE_ADDENDUM_TEXT);
+
+    q.close();
+  });
+});

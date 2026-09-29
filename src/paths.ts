@@ -361,9 +361,7 @@ export function getFarmDir(taskSlug: string): string {
 export {
   getBashCapturesDir,
   getInboundAttachmentsDir,
-  getPromptsDir,
   getReceiptsDir,
-  getSubagentOutputsDir,
   getTraceDir,
   getWitnessRoot,
   sessionLabelFromTracePath,

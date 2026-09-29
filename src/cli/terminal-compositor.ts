@@ -1014,6 +1014,9 @@ export class TerminalCompositor {
    */
   peekQueuedText(): QueuedAccess.QueuedSnapshot | undefined { return Api.peekQueuedText(this); }
 
+  /** Whether a committed, undelivered, non-blank message is queued (tool yield contract). */
+  hasPendingSubmission(): boolean { return Api.hasPendingSubmission(this); }
+
   reserveQueued(snapshot: QueuedAccess.QueuedSnapshot): void { Api.reserveQueued(this, snapshot); }
 
   releaseQueued(snapshot: QueuedAccess.QueuedSnapshot): void { Api.releaseQueued(this, snapshot); }

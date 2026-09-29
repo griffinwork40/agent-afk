@@ -113,6 +113,7 @@ export function registerWhatifCommand(program: Command): void {
     .option('--probes <n>', 'Synthetic probe episodes per prediction (1–12; default 6)')
     .option('--max-predictions <n>', 'Max predictions to retain (1–8; default 3 when probes>2, else 8)')
     .option('--keep-sandboxes', 'Keep sandbox directories after run')
+    .option('--no-baseline-sample', 'Skip the baseline-sample preflight (#2511)')
     .option('--yes', 'Skip confirmation of compiled spec')
     .option('--force', 'Bypass the MDE underpowered gate (--verify only)')
     .option('--json', 'Print results as JSON to stdout')
@@ -235,6 +236,7 @@ async function runWhatifCommand(
     force: parsed.force,
     ...(parsed.options.probes !== undefined ? { probes: parsed.options.probes } : {}),
     ...(parsed.options.maxPredictions !== undefined ? { maxPredictions: parsed.options.maxPredictions } : {}),
+    ...(parsed.options.noBaselineSample ? { noBaselineSample: true } : {}),
   };
 
   try {
@@ -307,6 +309,11 @@ async function runWhatifCommand(
   const termLines = renderTerminal(report, palette);
   for (const line of termLines) process.stdout.write(line + '\n');
   process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+  if (report.keptSandboxes) {
+    process.stdout.write(`Sandboxes kept — baseline: ${report.keptSandboxes.baseline}\n`);
+    process.stdout.write(`              candidate: ${report.keptSandboxes.candidate}\n`);
+    process.stdout.write(`(mapping written to ${report.runDir}/sandboxes.json)\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +363,7 @@ function buildArgvFromOpts(
   push('--probes', opts['probes']);
   push('--max-predictions', opts['maxPredictions']);
   push('--keep-sandboxes', opts['keepSandboxes']);
+  push('--no-baseline-sample', opts['noBaselineSample']);
   push('--yes', opts['yes']);
   push('--force', opts['force']);
   push('--json', opts['json']);

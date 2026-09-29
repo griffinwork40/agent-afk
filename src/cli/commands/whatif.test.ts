@@ -114,6 +114,17 @@ describe('registerWhatifCommand', () => {
     expect(optNames).toContain('--judge');
     expect(optNames).toContain('--yes');
     expect(optNames).toContain('--json');
+    // #2599: --no-baseline-sample must be registered so Commander accepts it
+    expect(optNames).toContain('--no-baseline-sample');
+  });
+
+  it('does not reject --no-baseline-sample (regression: #2599)', () => {
+    const program = buildProgram();
+    // Commander.exitOverride() converts unknown-option errors into thrown errors.
+    // If --no-baseline-sample is unregistered this parse call throws.
+    expect(() =>
+      program.parse(['node', 'afk', 'whatif', '--append', 'x', '--no-baseline-sample', '--yes']),
+    ).not.toThrow();
   });
 
   it('whatif command description includes predict', () => {

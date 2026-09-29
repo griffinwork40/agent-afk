@@ -133,7 +133,7 @@ describe('removeManagedWorktreeGuarded — guards + argv', () => {
       return { stdout: '', stderr: '' };
     });
     const outcome = await removeManagedWorktreeGuarded({ execFile: mock, repoRoot, worktreePath: wtPath });
-    expect(outcome).toEqual({ removed: false, reason: 'ignored-local-state' });
+    expect(outcome).toEqual({ removed: false, reason: 'ignored-local-state', detail: '.env', because: 'non-rebuildable-entry' });
     expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
   });
 
@@ -288,12 +288,12 @@ describe('teardownIsolatedWorktree', () => {
       return { stdout: '', stderr: '' };
     });
     const result = await teardownIsolatedWorktree({ execFile: mock, repoRoot, worktreePath: wtPath });
-    expect(result).toEqual({ removed: false, preserved: true, reason: 'ignored-local-state' });
+    expect(result).toEqual({ removed: false, preserved: true, reason: 'ignored-local-state', ignoredDetail: '.env', ignoredBecause: 'non-rebuildable-entry' });
     expect(mock.calls.some((c) => c.args.includes('remove'))).toBe(false);
     const lock = mock.calls.find((c) => c.args.includes('lock'));
     expect(lock?.args.join(' ')).toContain('afk: isolated-worktree preserved (ignored-local-state');
-    // Legible without needing to already know the reason code.
-    expect(lock?.args.join(' ')).toMatch(/non-rebuildable ignored files/);
+    // Lock reason names the real file that triggered the refusal.
+    expect(lock?.args.join(' ')).toContain('.env');
   });
 });
 

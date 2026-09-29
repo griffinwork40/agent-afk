@@ -33,9 +33,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -172,9 +171,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -224,9 +222,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -286,9 +283,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -318,9 +314,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -404,7 +399,7 @@ jobs:
 
   # Real-PTY scrollback harness (issue #541). Isolated from the main `test` job
   # because it depends on the native `node-pty` module (compiled from source on
-  # Linux via pnpm.onlyBuiltDependencies — the same path better-sqlite3 already
+  # Linux via pnpm-workspace.yaml allowBuilds — the same path better-sqlite3 already
   # uses) and drives a real pseudo-terminal, which is slower and timing-
   # sensitive. It is a real gate (not continue-on-error) but runs serially with
   # in-suite retries (vitest.pty.config.ts). If PTY flakiness ever destabilises
@@ -419,9 +414,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -432,7 +426,7 @@ jobs:
 
       - name: Install dependencies
         # Builds node-pty from source (no Linux prebuild ships) via
-        # pnpm.onlyBuiltDependencies; ubuntu-latest has the C++/python toolchain.
+        # pnpm-workspace.yaml allowBuilds; ubuntu-latest has the C++/python toolchain.
         run: pnpm install --frozen-lockfile
 
       - name: Test (real PTY scrollback harness)
@@ -479,9 +473,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -514,9 +507,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 9
           dest: ${{ runner.temp }}/setup-pnpm
 
       - name: Setup Node.js
@@ -537,7 +529,7 @@ jobs:
       - name: Assert bundle entry points exist and are executable
         run: |
           set -e
-          for entry in cli.mjs telegram.mjs index.mjs index.d.ts postinstall.mjs; do
+          for entry in cli.mjs telegram.mjs index.mjs index.d.ts; do
             if [ ! -f "dist/$entry" ]; then
               echo "::error::dist/$entry missing after build:dist" >&2
               exit 1
@@ -551,6 +543,19 @@ jobs:
             fi
           done
           echo "All bundle entry points present and executable."
+
+      - name: Assert postinstall script ships in the npm tarball
+        # package.json#scripts.postinstall runs scripts/postinstall.mjs directly
+        # (#2523). .npmignore excludes scripts/, so the file ships ONLY because
+        # package.json#files whitelists it. Dropping that entry would silently
+        # turn the hook into a no-op (`|| true` swallows the missing module).
+        run: |
+          set -e
+          if ! npm pack --dry-run --ignore-scripts --json | grep -q '"path": "scripts/postinstall.mjs"'; then
+            echo "::error::scripts/postinstall.mjs is not in the npm tarball; the postinstall hook would be a silent no-op" >&2
+            exit 1
+          fi
+          echo "scripts/postinstall.mjs ships in the tarball."
 
       - name: Assert bundled-plugins shipped in the publish bundle
         # Guards the exact regression this job exists to catch: build:dist

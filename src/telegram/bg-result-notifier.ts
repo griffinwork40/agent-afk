@@ -80,11 +80,17 @@ export class TelegramBgResultNotifier {
 
     // Fire-and-forget: a push failure here is non-fatal — the job already
     // settled, its result is still injected next turn and join-able.
-    void pushIfConfigured(formatNotification(job), {
-      target: this.chatId,
-      ...(this.threadId !== undefined ? { messageThreadId: this.threadId } : {}),
-    }).catch((err: unknown) => {
-      console.error(`[bg-notifier] push failed for job ${job.jobId}:`, err);
+    // formatNotification (which calls formatBgResultBody) is deferred via
+    // queueMicrotask so that a burst of settled events does not allocate
+    // 16KB bodies synchronously on the event loop — formatting and push both
+    // happen off the current synchronous call frame.
+    queueMicrotask(() => {
+      void pushIfConfigured(formatNotification(job), {
+        target: this.chatId,
+        ...(this.threadId !== undefined ? { messageThreadId: this.threadId } : {}),
+      }).catch((err: unknown) => {
+        console.error(`[bg-notifier] push failed for job ${job.jobId}:`, err);
+      });
     });
 
     this.pendingInjections.push(job);
