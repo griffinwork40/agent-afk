@@ -127,7 +127,8 @@ export function estimateVerifyCost(input: VerifyCostInput): VerifyCostEstimate {
   // Contract: runEpisodes() in run.verify.ts issues exactly one runner.run()
   // per (episode, env, sample) tuple — one baseline call and one candidate
   // call per (episode, sample) pair.
-  const agentCallsPerEp = 2 * samples; // 2 envs × 1 call × samples
+  // 1 call per env = 2 calls per episode-sample pair (baseline + candidate).
+  const agentCallsPerEp = (1 + 1) * samples; // 1 baseline call + 1 candidate call × samples
   const totalAgentCalls = agentCallsPerEp * episodes;
 
   const agentBaselineIn = systemTokens.baseline + 1_500;
@@ -139,7 +140,7 @@ export function estimateVerifyCost(input: VerifyCostInput): VerifyCostEstimate {
 
   // Each episode × sample spawns 1 baseline call + 1 candidate call.
   const agentUsdPerEpSample =
-    1 * agentBaselineResult.usd + 1 * agentCandidateResult.usd;
+    agentBaselineResult.usd + agentCandidateResult.usd;
   const agentUsdTotal = agentUsdPerEpSample * episodes * samples;
 
   // ── per-output judge calls ────────────────────────────────────────────────
