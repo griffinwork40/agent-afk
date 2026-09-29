@@ -895,6 +895,7 @@ describe('bash path-containment scan — C4 (#354)', () => {
 
   afterEach(() => {
     warnSpy.mockRestore();
+    vi.unstubAllEnvs();
     try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
@@ -930,6 +931,13 @@ describe('bash path-containment scan — C4 (#354)', () => {
     // writeRoots — so it warns (and still executes). Had expansion NOT fired, the
     // token would anchor to resolveBase (in-root) and produce zero warnings, so
     // the single warning is itself proof the expansion happened.
+    //
+    // Pin home OUTSIDE os.tmpdir(): on win32 the global test setup points
+    // USERPROFILE at a temp sentinel (redirect-paths-env.ts), so the real
+    // os.homedir() is a scratch dir and the expanded path would be exempt.
+    const fakeHome = path.resolve('/afk-scan-fake-home');
+    vi.stubEnv('HOME', fakeHome);
+    vi.stubEnv('USERPROFILE', fakeHome);
     const handler = createBashHandler('default', root);
     const result = await handler(
       { command: 'echo hi ~/.ssh/id_rsa' },

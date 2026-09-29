@@ -73,6 +73,22 @@ export function _resetScanExemptCacheForTests(): void {
 }
 
 /**
+ * Lexically normalize a scan candidate, choosing path semantics by its SHAPE
+ * rather than by host platform.
+ *
+ * Invariant: a candidate beginning with `/` is a POSIX path even on win32 —
+ * the bash tool runs Git Bash / MSYS there, where `/dev/null` and `/tmp` are
+ * real. Host `path.resolve` would turn `/dev/null` into `D:\dev\null`, which
+ * never matches {@link DEVICE_SINKS} or the POSIX scratch roots, so every
+ * `2>/dev/null` fired the advisory again (issue #703 Windows leg). Native
+ * win32 paths (`C:\…`) keep host semantics so they still match `os.tmpdir()`.
+ */
+function normalizeCandidate(absPath: string): { normalized: string; sep: string } {
+  if (absPath.startsWith('/')) return { normalized: path.posix.resolve(absPath), sep: '/' };
+  return { normalized: path.resolve(absPath), sep: path.sep };
+}
+
+/**
  * Whether an ABSOLUTE path candidate from the bash scan is benign and must not
  * be reported as a writeRoots escape.
  *
@@ -85,10 +101,10 @@ export function _resetScanExemptCacheForTests(): void {
  */
 export function isBashScanExemptPath(absPath: string): boolean {
   if (!path.isAbsolute(absPath)) return false;
-  const normalized = path.resolve(absPath);
+  const { normalized, sep } = normalizeCandidate(absPath);
   if (DEVICE_SINKS.has(normalized) || DEV_FD_RE.test(normalized)) return true;
   return scratchRoots().some(
-    (root) => normalized === root || normalized.startsWith(root + path.sep),
+    (root) => normalized === root || normalized.startsWith(root + sep),
   );
 }
 
