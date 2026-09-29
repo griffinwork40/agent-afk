@@ -31,8 +31,20 @@
  *
  * Nested transactions: `commitAbove` may trigger a synchronous re-entrant
  * repaint (Phase 2) which calls `stream.write` via the CupFrameRenderer batcher.
- * Re-entrant calls are absorbed into the same buffer — there is no double-wrap.
- * The `depth` counter tracks nesting; only the outermost `end()` flushes.
+ * Re-entrant calls are absorbed into the same buffer. The `depth` counter
+ * tracks nesting; only the outermost `end()` flushes.
+ *
+ * Invariant (DEC 2026 does not nest): mode 2026 is a plain set/reset, not a
+ * counter, so the first `\x1b[?2026l` inside the buffer would end the
+ * synchronized update early and expose the rest of the commit. The frame
+ * batcher emits its own SYNC_START/SYNC_END pairs, so the flush strips every
+ * inner marker and wraps the whole buffer in exactly one pair.
+ *
+ * Invariant (restore identity): the stream's own `write` is restored by
+ * identity (own property put back, or deleted so the prototype method shows
+ * through again). Restoring a wrapper instead would silently drop the
+ * `(chunk, encoding, cb)` arguments for every later writer. Callbacks passed
+ * during the transaction are invoked from the single flush write's callback.
  *
  * Non-TTY: on non-TTY streams `stream.isTTY` is falsy. In that case the tx is a
  * no-op: the original `write` method is not replaced and no sync escapes are
@@ -50,18 +62,47 @@ import { SYNC_START, SYNC_END } from './cup-frame-renderer.escapes.js';
 
 /** Minimal stream shape required by CommitWriteTx. */
 export type TxStream = NodeJS.WriteStream & Writable;
-/** Simplified write function type used for the stored original and the flush. */
-type WriteStr = (data: string) => boolean;
 
 /**
  * A write-transaction handle.  Obtained via {@link CommitWriteTx.begin} and
- * released via {@link CommitWriteTx.end}.
+ * released via `end()`.
  */
 export interface WriteTxHandle {
-  /** Complete the transaction: flush the buffered bytes (wrapped in SYNC
-   *  START/END on TTY) and restore `stream.write`. Safe to call multiple times;
-   *  only the first call flushes — subsequent calls are no-ops. */
+  /** Complete the transaction: flush the buffered bytes (wrapped in one SYNC
+   *  START/END pair on TTY) and restore `stream.write`. Safe to call multiple
+   *  times; only the first call has any effect. */
   end(): void;
+}
+
+type WriteCb = (err?: Error | null) => void;
+
+interface TxState {
+  depth: number;
+  buf: string;
+  cbs: WriteCb[];
+  hadOwnWrite: boolean;
+  ownWrite: unknown;
+}
+
+const active = new WeakMap<object, TxState>();
+
+function toText(chunk: unknown, encoding: unknown): string {
+  if (typeof chunk === 'string') return chunk;
+  if (chunk instanceof Uint8Array) {
+    return Buffer.from(chunk).toString(typeof encoding === 'string' ? (encoding as BufferEncoding) : 'utf8');
+  }
+  return String(chunk);
+}
+
+function restore(stream: TxStream, st: TxState): void {
+  const target = stream as unknown as Record<string, unknown>;
+  if (st.hadOwnWrite) target['write'] = st.ownWrite;
+  else delete target['write'];
+}
+
+/** Strip nested sync markers; the flush adds exactly one outer pair. */
+function unwrapSync(buf: string): string {
+  return buf.split(SYNC_START).join('').split(SYNC_END).join('');
 }
 
 /**
@@ -69,115 +110,45 @@ export interface WriteTxHandle {
  *
  * Usage (inside commitAbove):
  *   const tx = CommitWriteTx.begin(self.stdout);
- *   try {
- *     // ... all commit phases ...
- *   } finally {
- *     tx.end();
- *   }
+ *   try { ... all commit phases ... } finally { tx.end(); }
  */
 export class CommitWriteTx {
-  // Depth counter for nested transactions on the same stream.
-  // Tagged on the stream object itself so sibling modules can nest without a
-  // shared singleton reference.
-  static readonly DEPTH_KEY = '__commitTxDepth__' as const;
-  static readonly BUF_KEY   = '__commitTxBuf__'   as const;
-  static readonly ORIG_KEY  = '__commitTxOrig__'  as const;
-
-  /**
-   * Begin a write transaction on `stream`.
-   *
-   * On TTY streams: replaces `stream.write` with a buffer accumulator.
-   * On non-TTY streams: returns a no-op handle immediately (no patching).
-   */
   static begin(stream: TxStream): WriteTxHandle {
-    // Invariant (non-TTY): synchronized-output escapes are a TTY-only feature.
-    // On non-TTY streams (pipes, files, test passthrough without isTTY) the
-    // write sites are never patched; the handle's end() is a true no-op.
-    if (!stream.isTTY) {
-      return { end: () => undefined };
-    }
-
-    const s = stream as TxStream & {
-      [CommitWriteTx.DEPTH_KEY]?: number;
-      [CommitWriteTx.BUF_KEY]?: string;
-      [CommitWriteTx.ORIG_KEY]?: WriteStr;
-    };
-
-    const depth: number = (s[CommitWriteTx.DEPTH_KEY] ?? 0) + 1;
-    s[CommitWriteTx.DEPTH_KEY] = depth;
-
-    // Invariant (nested tx): only the outermost begin() patches the write method.
-    // Inner begins just increment the depth counter; their writes are already
-    // routed to the buffer by the outer patch.
-    if (depth === 1) {
-      s[CommitWriteTx.BUF_KEY]  = '';
-      // Capture the current write method BEFORE patching so the stored
-      // original never routes through the interceptor (infinite recursion guard).
-      const rawWrite = stream.write as unknown as WriteStr;
-      s[CommitWriteTx.ORIG_KEY] = (data: string) => rawWrite.call(stream, data);
-
-      // Patch: intercept every stream.write() call; accumulate into buffer.
-      // Invariant (ordering): because commitAbove is fully synchronous, calls
-      // arrive in the same order they would reach the terminal. The buffer
-      // faithfully preserves that order.
-      (stream as unknown as Record<string, unknown>)['write'] = function txWrite(
-        chunk: string | Buffer | Uint8Array,
-        ...rest: unknown[]
-      ): boolean {
-        s[CommitWriteTx.BUF_KEY] += typeof chunk === 'string'
-          ? chunk
-          : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
-            ? Buffer.from(chunk).toString()
-            : String(chunk);
-        // Mirror the return convention of the real write(): return true to
-        // signal the buffer has not reached the highWaterMark (it never
-        // does — we are in a simple string buffer). Callers that check the
-        // return value (stream backpressure) will not see a false here.
-        void rest;
+    if (!stream.isTTY) return { end: () => undefined };
+    let st = active.get(stream);
+    if (st) {
+      st.depth++;
+    } else {
+      const hadOwnWrite = Object.prototype.hasOwnProperty.call(stream, 'write');
+      const created: TxState = { depth: 1, buf: '', cbs: [], hadOwnWrite, ownWrite: hadOwnWrite ? stream.write : undefined };
+      st = created;
+      active.set(stream, created);
+      (stream as unknown as Record<string, unknown>)['write'] = function txWrite(chunk: unknown, a?: unknown, b?: unknown): boolean {
+        created.buf += toText(chunk, typeof a === 'function' ? undefined : a);
+        const cb = typeof a === 'function' ? a : typeof b === 'function' ? b : undefined;
+        if (cb) created.cbs.push(cb as WriteCb);
         return true;
       };
     }
-
+    const state = st;
     let ended = false;
-
     return {
       end(): void {
         if (ended) return;
         ended = true;
-
-        const currentDepth = (s[CommitWriteTx.DEPTH_KEY] ?? 1) - 1;
-        s[CommitWriteTx.DEPTH_KEY] = currentDepth;
-
-        // Invariant (nested tx): only the outermost end() flushes and restores.
-        // Inner ends decrement the counter but leave the buffer open for the
-        // outer transaction to drain.
-        if (currentDepth > 0) return;
-
-        const buf    = s[CommitWriteTx.BUF_KEY] ?? '';
-        const orig   = s[CommitWriteTx.ORIG_KEY];
-
-        // Restore stream.write unconditionally before the flush so that if
-        // the flush throws, the stream is left in a clean state. The stream
-        // property is a plain enumerable own property set by the patch above;
-        // deletion restores the prototype chain's original write.
-        // (We assign orig back rather than delete to avoid any prototype
-        // weirdness with exotic stream implementations.)
-        if (orig) {
-          (stream as unknown as Record<string, unknown>)['write'] = orig;
+        state.depth--;
+        if (state.depth > 0) return;
+        active.delete(stream);
+        restore(stream, state);
+        const cbs = state.cbs;
+        const body = unwrapSync(state.buf);
+        if (body.length === 0) {
+          for (const cb of cbs) cb(null);
+          return;
         }
-        delete s[CommitWriteTx.BUF_KEY];
-        delete s[CommitWriteTx.ORIG_KEY];
-
-        if (buf.length === 0) return;
-
-        // Single atomic write: SYNC_START + all buffered bytes + SYNC_END.
-        // Invariant (DEC 2026 nesting): the CupWriteBatcher's own SYNC_START/
-        // SYNC_END for the Phase-2 repaint land INSIDE this outer pair. Per
-        // the DEC 2026 spec, terminals implement synchronized output as a
-        // reference-counted hold: SYNC_START increments, SYNC_END decrements,
-        // and the repaint is suppressed until the count reaches zero. Nested
-        // pairs are therefore well-defined and do not cause double-display.
-        orig?.(SYNC_START + buf + SYNC_END);
+        stream.write(SYNC_START + body + SYNC_END, (err?: Error | null) => {
+          for (const cb of cbs) cb(err ?? null);
+        });
       },
     };
   }
