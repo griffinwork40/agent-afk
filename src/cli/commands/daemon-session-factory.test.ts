@@ -23,6 +23,7 @@ import { buildDaemonSessionFactory } from './daemon-session-factory.js';
 import type { AgentConfig } from '../../agent/types.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import type { ToolPermissionConfig } from '../../agent/tools/permissions.js';
+import { closeStore } from '../../agent/goals/goal-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — read private provider internals (same pattern as
@@ -94,13 +95,16 @@ describe('buildDaemonSessionFactory', () => {
     process.env['AFK_HOME'] = tmpHome;
   });
   afterAll(async () => {
-    // Close all open sessions before removing the tmpdir on Windows.
+    // Close all open sessions before removing the tmpdir.
+    // AgentSession.close() calls config.provider.close() which closes the
+    // per-provider stateStore. closeStore() resets the goal-store module-level
+    // singleton (also backed by kv.db) so Windows can unlink the db file.
     await Promise.all(openSessions.map((s) => Promise.resolve(s.close()).catch(() => undefined)));
     openSessions.length = 0;
+    closeStore();
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
-    // Best-effort: on Windows a lingering SQLite handle (kv.db) may cause EBUSY.
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it('returns a factory function', () => {
@@ -275,7 +279,11 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
     process.env['AFK_HOME'] = tmpAfkHome;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Close sessions and reset the goal-store singleton before unlinking on Windows.
+    // Session closes flush the provider-owned stateStore; closeStore() handles the
+    // module-level goal-store handle opened by injectGoalPrompt at session construction.
+    closeStore();
     delete process.env['AFK_HOME'];
     rmSync(tmpAfkHome, { recursive: true, force: true });
   });
