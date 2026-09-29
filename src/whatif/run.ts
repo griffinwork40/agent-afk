@@ -28,6 +28,7 @@ import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
 import { predictChanges, resolveMaxPredictions, DEFAULT_PROBES } from './predict.js';
 import { buildAndPersistVerifiedReport } from './run.report.js';
+import { cleanupOrRecord } from './kept-sandboxes.js';
 import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
 import { groundProbes, makeSetChecker } from './probe-grounding.js';
 import {
@@ -362,6 +363,7 @@ export async function runWhatif(
     signal: deps.signal,
   };
 
+  let pendingReport: WhatifReport | undefined;
   try {
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
@@ -387,10 +389,10 @@ export async function runWhatif(
         ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
-      const report: WhatifReport = { ...partialReport, headline };
+      pendingReport = { ...partialReport, headline };
 
-      await persistRun(runDir, report, []);
-      return report;
+      await persistRun(runDir, pendingReport, []);
+      return pendingReport;
     }
 
     // ── f) Verify phase ───────────────────────────────────────────────────
@@ -474,18 +476,16 @@ export async function runWhatif(
 
     analystCostUsd += verifyCost;
 
-    return buildAndPersistVerifiedReport({
+    pendingReport = await buildAndPersistVerifiedReport({
       spec, structural, predictions, verifyResult: verifyResult!, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults!,
     });
+    return pendingReport;
   } finally {
-    // Tear down sandboxes unless keepSandboxes
-    if (!options.keepSandboxes) {
-      await sandboxes.cleanup().catch(() => {
-        // Best-effort; do not mask the primary error
-      });
-    }
+    // Cleanup sandboxes or record their roots when keepSandboxes is set.
+    const kept = await cleanupOrRecord(runDir, sandboxes.roots, sandboxes.cleanup, options.keepSandboxes ?? false);
+    if (kept && pendingReport) pendingReport.keptSandboxes = kept;
   }
 }

@@ -312,6 +312,11 @@ async function runWhatifCommand(
   const termLines = renderTerminal(report, palette);
   for (const line of termLines) process.stdout.write(line + '\n');
   process.stdout.write(`\nFull report: ${report.runDir}/report.md\n`);
+  if (report.keptSandboxes) {
+    process.stdout.write(`Sandboxes kept — baseline: ${report.keptSandboxes.baseline}\n`);
+    process.stdout.write(`              candidate: ${report.keptSandboxes.candidate}\n`);
+    process.stdout.write(`(mapping written to ${report.runDir}/sandboxes.json)\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------

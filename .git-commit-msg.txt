@@ -1,0 +1,28 @@
+fix(whatif): record kept sandbox roots in <runDir>/sandboxes.json
+
+Before #2467, --keep-sandboxes left both arms under <runDir>/sandboxes/.
+After #2467, each arm got its own mkdtempSync root — but nothing recorded
+where those roots were when keepSandboxes was set.
+
+Changes:
+- sandbox.ts: expose `roots: { baseline, candidate }` on SandboxResult so
+  callers can reference both arm roots without piercing the internal
+  SandboxPaths abstraction.
+- kept-sandboxes.ts (new): `cleanupOrRecord(runDir, roots, cleanup, keep)`
+  — either runs cleanup() (keep=false) or writes <runDir>/sandboxes.json
+  with the arm-to-root mapping and returns it (keep=true).  The mapping
+  file lives in runDir, which is not reachable from inside either sandbox,
+  so this does not reopen #2466.
+- run.ts: import and call cleanupOrRecord; attach the returned mapping to
+  report.keptSandboxes.  Net line-count change: +1 (import) + 2 (finally
+  body, replacing 4 lines) = net -1.
+- types.ts: add optional `keptSandboxes?: { baseline, candidate }` to
+  WhatifReport.
+- cli/commands/whatif.ts, cli/slash/commands/whatif.ts: print sandbox
+  locations when report.keptSandboxes is set.
+- Tests: unit tests for kept-sandboxes.ts; run.test.ts tests for both
+  keepSandboxes=true (writes sandboxes.json, sets report.keptSandboxes,
+  file not inside either arm root) and keepSandboxes=false (no file,
+  cleanup called); CLI stdout tests for the new print.
+
+Closes #2478

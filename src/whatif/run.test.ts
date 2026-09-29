@@ -561,6 +561,49 @@ describe('runWhatif — MDE gate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// keepSandboxes: sandboxes.json recording (#2478)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — keepSandboxes sandboxes.json', () => {
+  it('writes sandboxes.json to runDir and sets report.keptSandboxes when keepSandboxes is true', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    // report.keptSandboxes must be set
+    expect(report.keptSandboxes).toBeDefined();
+    expect(typeof report.keptSandboxes!.baseline).toBe('string');
+    expect(typeof report.keptSandboxes!.candidate).toBe('string');
+
+    // sandboxes.json must exist in runDir (not inside either sandbox root)
+    const mappingPath = path.join(report.runDir, 'sandboxes.json');
+    const raw = await fsp.readFile(mappingPath, 'utf8');
+    const mapping = JSON.parse(raw) as { baseline: string; candidate: string };
+    expect(mapping.baseline).toBe(report.keptSandboxes!.baseline);
+    expect(mapping.candidate).toBe(report.keptSandboxes!.candidate);
+
+    // The mapping file must NOT live under either arm root
+    expect(mappingPath.startsWith(mapping.baseline)).toBe(false);
+    expect(mappingPath.startsWith(mapping.candidate)).toBe(false);
+  });
+
+  it('does not write sandboxes.json and cleanup is called when keepSandboxes is false', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    // report.keptSandboxes must be absent
+    expect(report.keptSandboxes).toBeUndefined();
+
+    // sandboxes.json must NOT exist in runDir
+    const mappingPath = path.join(report.runDir, 'sandboxes.json');
+    await expect(fsp.access(mappingPath)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Synthetic episodes come first (#2477 step 1)
 // ---------------------------------------------------------------------------
 

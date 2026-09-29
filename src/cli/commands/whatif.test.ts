@@ -2,7 +2,7 @@
  * Tests for src/cli/commands/whatif.ts — registerWhatifCommand.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Command } from 'commander';
 
 // ---------------------------------------------------------------------------
@@ -133,5 +133,74 @@ describe('registerWhatifCommand — budget error', () => {
     const program = new Command();
     program.exitOverride();
     expect(() => registerWhatifCommand(program)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// keptSandboxes CLI output (#2478)
+// ---------------------------------------------------------------------------
+
+describe('registerWhatifCommand — keptSandboxes stdout', () => {
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    stdoutSpy.mockRestore();
+  });
+
+  it('prints sandbox paths when report.keptSandboxes is set', async () => {
+    const { runWhatif } = await import('../../whatif/run.js');
+    vi.mocked(runWhatif).mockResolvedValueOnce({
+      spec: { title: 'Test', changes: [] },
+      structural: {
+        baseline: { model: 'm', system: '', tools: [], firstUserMessage: '' },
+        candidate: { model: 'm', system: '', tools: [], firstUserMessage: '' },
+        systemDiff: '',
+        toolsAdded: [],
+        toolsRemoved: [],
+        toolsChanged: [],
+        userMessageDiff: '',
+        tokens: { baseline: 100, candidate: 100 },
+        modelChanged: false,
+      },
+      predictions: [],
+      costUsd: 0.01,
+      runDir: '/tmp/whatif-run-test',
+      limits: [],
+      headline: 'No change predicted.',
+      keptSandboxes: {
+        baseline: '/tmp/afk-abc123/home',
+        candidate: '/tmp/afk-xyz789/home',
+      },
+    });
+
+    const program = buildProgram();
+    try {
+      // from:'node' means argv[0]=node, argv[1]=script, argv[2]=subcommand
+      await program.parseAsync(['node', 'afk', 'whatif', '--append', 'test note', '--yes']);
+    } catch {
+      // commander exitOverride may throw on process.exit; that's fine
+    }
+
+    const written = stdoutSpy.mock.calls.map((args) => String(args[0])).join('');
+    expect(written).toContain('/tmp/afk-abc123/home');
+    expect(written).toContain('/tmp/afk-xyz789/home');
+    expect(written).toContain('sandboxes.json');
+  });
+
+  it('does not print sandbox paths when report.keptSandboxes is absent', async () => {
+    const program = buildProgram();
+    try {
+      await program.parseAsync(['node', 'afk', 'whatif', '--append', 'test note', '--yes']);
+    } catch {
+      // commander exitOverride may throw on process.exit; that's fine
+    }
+
+    const written = stdoutSpy.mock.calls.map((args) => String(args[0])).join('');
+    expect(written).not.toContain('Sandboxes kept');
+    expect(written).not.toContain('sandboxes.json');
   });
 });

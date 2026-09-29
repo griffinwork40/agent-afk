@@ -216,6 +216,11 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
   for (const line of lines) ctx.out.line(line);
   ctx.out.line('');
   ctx.out.info(`Full report: ${report.runDir}/report.md`);
+  if (report.keptSandboxes) {
+    ctx.out.info(`Sandboxes kept — baseline: ${report.keptSandboxes.baseline}`);
+    ctx.out.info(`              candidate: ${report.keptSandboxes.candidate}`);
+    ctx.out.info(`(mapping written to ${report.runDir}/sandboxes.json)`);
+  }
 }
 
 // ---------------------------------------------------------------------------
