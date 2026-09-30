@@ -448,25 +448,38 @@ export class OpenAICompatibleProvider implements ModelProvider {
       systemPrompt: assembleSystemPrompt(buildEnvFragment()),
     };
 
-    // Invariant (#876): `setCwd()` (query.ts) invokes this so a mid-session
-    // cwd re-anchor refreshes BOTH the `get_runtime_state` tool (already live
-    // via the `getCwd` cell) and the system prompt's `# Environment` block —
-    // previously only the dispatcher's resolve base moved, leaving the model
-    // reading a stale directory for the rest of the session. Ordering is
-    // load-bearing: `_currentCwd` is updated FIRST, then `buildEnvFragment()`
-    // re-reads `getWorkspace()` — which itself resolves through the same
-    // cell — so updating after the read would compute the workspace snapshot
-    // for the OLD directory (mirrors anthropic-direct's cwd-dependents.ts
-    // ordering invariant). `patchedConfig.systemPrompt` is reassigned IN
-    // PLACE (the same object `OpenAICompatibleQuery` holds as `this.opts.config`
-    // by reference), so the next turn's `buildMessages` call picks up the new
-    // string with no further plumbing.
+    // Invariant (#876 + #2420): `setCwd()` (query.ts) invokes this so a
+    // mid-session cwd re-anchor refreshes BOTH the `get_runtime_state` tool
+    // (already live via the `getCwd` cell) and the system prompt's
+    // `# Environment` block — previously only the dispatcher's resolve base
+    // moved, leaving the model reading a stale directory for the rest of the
+    // session. Ordering is load-bearing: `_currentCwd` is updated FIRST, then
+    // `buildEnvFragment()` re-reads `getWorkspace()` — which itself resolves
+    // through the same cell — so updating after the read would compute the
+    // workspace snapshot for the OLD directory (mirrors anthropic-direct's
+    // cwd-dependents.ts ordering invariant). `patchedConfig.systemPrompt` is
+    // reassigned IN PLACE (the same object `OpenAICompatibleQuery` holds as
+    // `this.opts.config` by reference), so the next turn's `buildMessages`
+    // call picks up the new string with no further plumbing.
+    //
+    // Invariant (#2420 P1): `_currentBaseRef` is a mutable cell shared between
+    // this closure and `systemPromptRebuildFactory`. `setSystemPrompt(base)` on
+    // the query stores `base` into the ref (via `applySetSystemPrompt`'s
+    // `currentBasePromptRef` arg) so that a subsequent `setCwd()` rebuild uses
+    // the REPLACEMENT base prompt — not the construction-time default. Without
+    // this shared ref, `setSystemPrompt(newBase)` works only until the next
+    // `setCwd()`, which would silently resurrect the old base prompt.
+    const _currentBaseRef: { current: string | undefined } = { current: undefined };
     const rebuildEnvironmentBlock = (newCwd: string): void => {
       _currentCwd = newCwd;
       this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
-      patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment());
+      patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment(), _currentBaseRef.current);
     };
-    Object.assign(buildOpts, { onCwdChange: rebuildEnvironmentBlock, systemPromptRebuildFactory: (base?: string) => assembleSystemPrompt(buildEnvFragment(), base) });
+    buildOpts.onCwdChange = rebuildEnvironmentBlock;
+    buildOpts.systemPromptRebuildFactory = (base?: string) => {
+      _currentBaseRef.current = base;
+      return assembleSystemPrompt(buildEnvFragment(), base);
+    };
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
   }

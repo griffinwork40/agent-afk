@@ -139,6 +139,8 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly onCwdChange?: (cwd: string) => void;
   private readonly systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
+  /** Mutable ref so setSystemPrompt() and setCwd() share the same base value. */
+  private readonly _currentBasePromptRef: { current: string | undefined } = { current: undefined };
   /** Inter-round steering callback; set via setBeforeNextRound(). */
   private _beforeNextRound: BeforeNextRoundCallback = undefined;
   get beforeNextRound(): BeforeNextRoundCallback { return this._beforeNextRound; }
@@ -420,7 +422,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   setSystemPrompt(basePrompt: string | undefined): boolean {
-    return applySetSystemPrompt(this.opts.config, basePrompt, this.systemPromptRebuildFactory);
+    return applySetSystemPrompt(this.opts.config, basePrompt, this.systemPromptRebuildFactory, this._currentBasePromptRef);
   }
 
   setBeforeNextRound(cb: BeforeNextRoundCallback): void {
@@ -432,7 +434,17 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 
   async rewindConversation(turnIndex: number): Promise<import('../../provider.js').ProviderRewindConversationResult> {
-    return rewindOpenAIConversation(this.priorTurns, this.abort, this.closed, turnIndex);
+    const result = rewindOpenAIConversation(this.priorTurns, this.abort, this.closed, turnIndex);
+    if (result.rewound) {
+      // Clear stale usage so getContextUsage() and checkContextOverflow() reflect
+      // the rewound (shorter) transcript — mirrors the compact path (query.ts:398).
+      this.lastUsage = null;
+      // Sync the journal immediately so a crash between now and the next model
+      // request does not resurrect the discarded turns — mirrors the anthropic-direct
+      // rewind path (anthropic-direct/query/rewind-conversation.ts).
+      this.journal.sync(this.priorTurns);
+    }
+    return result;
   }
 
   async supportedCommands(): Promise<ProviderCommandInfo[]> {

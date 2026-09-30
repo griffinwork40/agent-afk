@@ -649,23 +649,19 @@ describe('Conformance: S10 — optional ProviderQuery methods (gap: #2420)', () 
     expect(typeof query.setSystemPrompt).toBe('function');
   });
 
-  // Expected divergence (#2420 OPEN):
-  // openai-compatible does not implement these optional methods.
-  it('openai-compatible: listRewindTargets, rewindConversation, setSystemPrompt absent (gap: #2420 open)', async () => {
+  // #2420 CLOSED: openai-compatible now implements these optional methods.
+  it('openai-compatible: listRewindTargets, rewindConversation, setSystemPrompt, setBeforeNextRound present (#2420 closed)', async () => {
     installOAIFactory(async () => { throw new Error('unused'); });
     const query = makeOAIQuery();
 
-    // These methods are intentionally absent on OpenAICompatibleQuery.
-    // When #2420 is fixed, these assertions will need updating.
-    const q = query as unknown as Record<string, unknown>;
-    expect(q['listRewindTargets']).toBeUndefined();
-    expect(q['rewindConversation']).toBeUndefined();
-    // setSystemPrompt: may be a no-op stub or absent
-    if (q['setSystemPrompt'] !== undefined) {
-      // If present (stub), must not throw
-      expect(() => (q['setSystemPrompt'] as (s: string | undefined) => void)(undefined)).not.toThrow();
-    }
-    // The rewindFiles method must return canRewind: false
+    // All four resilience methods are now implemented on OpenAICompatibleQuery.
+    expect(typeof query.listRewindTargets).toBe('function');
+    expect(typeof query.rewindConversation).toBe('function');
+    expect(typeof query.setSystemPrompt).toBe('function');
+    expect(typeof query.setBeforeNextRound).toBe('function');
+    // setSystemPrompt must not throw when called with undefined
+    expect(() => query.setSystemPrompt(undefined)).not.toThrow();
+    // The rewindFiles method must still return canRewind: false (file rewind unsupported)
     const rewindResult = await query.rewindFiles('any-id', { dryRun: true });
     expect(rewindResult.canRewind).toBe(false);
   });

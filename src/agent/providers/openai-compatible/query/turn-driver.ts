@@ -109,6 +109,21 @@ export function applyBeforeNextRound(
 }
 
 /**
+ * Apply inter-round steering and immediately sync the journal.
+ *
+ * Invariant: `dispatchAndAppend` already synced the journal at round-end, but
+ * steering text appended AFTER that sync is invisible to JournalSync (same object
+ * reference, no diff detected). Syncing here ensures the steering content is
+ * persisted before the next model request — mirrors anthropic-direct's
+ * inter-round sync (loop/inter-round.ts).
+ */
+export function applyAndSyncSteering(ctx: TurnDriverContext): void {
+  const steeringText = ctx.beforeNextRound?.();
+  applyBeforeNextRound(ctx.priorTurns, steeringText, ctx.traceWriter, ctx.opts.config.subagentId);
+  if (steeringText) ctx.journal.sync(ctx.priorTurns);
+}
+
+/**
  * Dispatch tool calls, append history, and sync the journal.
  * Extracted helper so `runTurnInner` stays under 200 lines.
  */
@@ -241,7 +256,7 @@ export async function* runTurnInner(
       yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
       return;
     }
-    applyBeforeNextRound(ctx.priorTurns, ctx.beforeNextRound?.(), ctx.traceWriter, ctx.opts.config.subagentId);
+    applyAndSyncSteering(ctx);
     round += 1;
 
     {

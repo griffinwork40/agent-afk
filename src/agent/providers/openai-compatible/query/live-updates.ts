@@ -25,13 +25,22 @@ import type { AgentConfig } from '../../../types/config-types.js';
  * that case we still mutate `config.systemPrompt` directly with `basePrompt`
  * so the method remains useful. Returns `true` when the factory is present
  * (matching the anthropic-direct contract: factory = full rebuild).
+ *
+ * Invariant: `currentBasePromptRef.current` must be updated BEFORE calling
+ * `systemPromptRebuildFactory`, because a subsequent `setCwd()` call rebuilds
+ * the system prompt by invoking the factory with the STORED base — if we only
+ * pass `basePrompt` into `factory(basePrompt)` without persisting it, the next
+ * `setCwd()` rebuild silently reverts to the construction-time value.
  */
 export function applySetSystemPrompt(
   config: AgentConfig,
   basePrompt: string | undefined,
   systemPromptRebuildFactory?: (basePrompt: string | undefined) => string,
+  currentBasePromptRef?: { current: string | undefined },
 ): boolean {
   if (systemPromptRebuildFactory) {
+    // Persist so setCwd()-triggered rebuilds use the updated base, not the old one.
+    if (currentBasePromptRef) currentBasePromptRef.current = basePrompt;
     config.systemPrompt = systemPromptRebuildFactory(basePrompt);
     return true;
   }
