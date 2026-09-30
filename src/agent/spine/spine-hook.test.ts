@@ -1095,3 +1095,122 @@ describe('createSpineSessionEndHook — pending-log writes', () => {
     expect(typeof pending?.['ts']).toBe('string');
   });
 });
+
+// ── Cross-annotation chain tests (outcome D) ──────────────────────────────────
+// Verify that applying "reinforce" after "weaken" (and vice versa) strips the
+// OTHER annotation, not just its own kind — preventing chains like:
+//   "(partially weakened DATE) (reinforced DATE) (partially weakened DATE)".
+
+describe('createSpineSessionEndHook — cross-annotation chain prevention (outcome D)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
+  });
+
+  it('reinforce after weaken: strips "(partially weakened DATE)" before appending "(reinforced DATE)"', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = '2026-09-14';
+    // Entry already has a "weakened" annotation from a previous session
+    const weakenedDesc = `All env vars go through env.ts (partially weakened ${yesterday})`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: weakenedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-001',
+          existingDescription: weakenedDesc,
+          description: 'Pattern confirmed again',
+          rationale: 'See src/config/env.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Must NOT contain "partially weakened" any more
+    expect(mockEntry.description).not.toContain('partially weakened');
+    // Must contain today's reinforcement
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    // Exactly one annotation total
+    const annotations = mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
+    expect(annotations).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('weaken after reinforce: strips "(reinforced DATE)" before appending "(partially weakened DATE)"', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = '2026-09-14';
+    // Entry already has a "reinforced" annotation from a previous session
+    const reinforcedDesc = `All env vars go through env.ts (reinforced ${yesterday})`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: reinforcedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'INV-001',
+          existingDescription: reinforcedDesc,
+          description: 'Exception found in legacy module',
+          rationale: 'See legacy.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Must NOT contain "reinforced" any more
+    expect(mockEntry.description).not.toContain('reinforced');
+    // Must contain today's weakening
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
+    // Exactly one annotation total
+    const annotations = mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
+    expect(annotations).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+});

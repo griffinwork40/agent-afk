@@ -821,3 +821,22 @@ export function getWhatifDir(): string {
   return join(getAfkStateDir(), 'whatif');
 }
 
+// ---------------------------------------------------------------------------
+// SPINE hook diff-fingerprint path
+// ---------------------------------------------------------------------------
+
+/**
+ * Path to the last-classified diff fingerprint for the SPINE SessionEnd hook.
+ *
+ * The hook writes a SHA-256 hex digest of the diff it classified into this
+ * file. On the next session end it compares the current diff's digest against
+ * the stored value; an unchanged diff is skipped (no redundant classifier call,
+ * no duplicate Telegram alert).
+ *
+ * Lives at `$AFK_STATE_DIR/spine-last-diff-fingerprint` — a single-line text
+ * file, not JSONL, because it is an opaque hash with no structured fields.
+ */
+export function getSpineDiffFingerprintPath(): string {
+  return join(getAfkStateDir(), 'spine-last-diff-fingerprint');
+}
+
