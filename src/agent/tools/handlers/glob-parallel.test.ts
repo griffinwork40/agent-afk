@@ -214,10 +214,10 @@ describe('glob parallel readdir — over-cap fallback (#2637)', () => {
         }
       }
 
-      ra.drain();
-
       // All 10 files should be returned (5 dirs × 2 files each).
       expect(results).toHaveLength(NUM_DIRS * FILES_PER);
+
+      ra.drain();
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
@@ -282,6 +282,10 @@ describe('Readahead — epoch guard / inFlight invariant (#2637)', () => {
       // Drain before the promise settles. The epoch guard must ensure its
       // finally() callback (which would decrement inFlight) is suppressed.
       ra.drain();
+      // After the first drain(), inFlight must be 0 regardless of whether the
+      // in-flight promise's finally() has already fired.
+      // Cast to access the private counter — test-only introspection.
+      expect((ra as unknown as { inFlight: number }).inFlight).toBe(0);
 
       // After drain(), schedule a new set of reads. If inFlight went negative
       // before the drain epoch guard, the budget math would be wrong and these
@@ -294,12 +298,65 @@ describe('Readahead — epoch guard / inFlight invariant (#2637)', () => {
       const entriesA = await ra.get(dirA);
       const entriesB = await ra.get(dirB);
 
+      // Second drain(): inFlight must again be 0.
       ra.drain();
+      expect((ra as unknown as { inFlight: number }).inFlight).toBe(0);
 
       expect(entriesA.length).toBe(1); // f.ts
       expect(entriesB.length).toBe(0); // empty dir
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Readahead.get() — error narrowing (#2652)', () => {
+  /**
+   * Verifies that get()'s over-cap fallback catch only swallows genuine
+   * Node.js filesystem errors (instanceof Error with a string .code). A
+   * non-fs error that happens to carry a .code property — such as a
+   * DOMException or a synthetic mock — must propagate, not be silently
+   * swallowed as an empty listing.
+   */
+  it('rethrows a non-fs Error that has a .code property', async () => {
+    // Simulate a DOMException-shaped error: it is `instanceof Error` and
+    // carries a .code, but .code is a number (DOMException.code) not a string.
+    // This must be rethrown by the narrowed catch.
+    const domLike = Object.assign(new Error('AbortError'), { code: 20 }); // 20 = DOMException.ABORT_ERR
+
+    const ra = new Readahead(0); // maxConcurrent=0 → every get() uses over-cap fallback
+
+    // Temporarily replace fs.readdir to throw the domLike error.
+    // We use a subpath that can't exist so the real fs.readdir won't succeed.
+    const { promises: fsPromises } = await import('fs');
+    const realReaddir = fsPromises.readdir.bind(fsPromises);
+    // @ts-expect-error — intentionally patching for test
+    fsPromises.readdir = () => Promise.reject(domLike);
+
+    try {
+      await expect(ra.get('/nonexistent-for-test')).rejects.toThrow('AbortError');
+    } finally {
+      // @ts-expect-error — restore
+      fsPromises.readdir = realReaddir;
+    }
+  });
+
+  it('swallows a genuine fs Error (ENOENT) and returns []', async () => {
+    const fsError = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+
+    const ra = new Readahead(0);
+
+    const { promises: fsPromises } = await import('fs');
+    const realReaddir = fsPromises.readdir.bind(fsPromises);
+    // @ts-expect-error — intentionally patching for test
+    fsPromises.readdir = () => Promise.reject(fsError);
+
+    try {
+      const result = await ra.get('/nonexistent-for-test');
+      expect(result).toEqual([]);
+    } finally {
+      // @ts-expect-error — restore
+      fsPromises.readdir = realReaddir;
     }
   });
 });

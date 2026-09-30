@@ -61,6 +61,11 @@ type ReaddirResult = Dirent[];
  * @internal
  */
 export class Readahead {
+  // Readonly configuration — set at construction and never mutated.
+  private readonly maxConcurrent: number;
+  private readonly signal: AbortSignal | undefined;
+
+  // Mutable state — mutated on every schedule/get/drain call.
   /** Pending or resolved reads keyed by absolute directory path. */
   private readonly cache = new Map<string, Promise<ReaddirResult>>();
   /** Count of I/O calls in flight (resolved promises still count until get). */
@@ -74,8 +79,6 @@ export class Readahead {
    * reused after a drain().
    */
   private epoch = 0;
-  private readonly maxConcurrent: number;
-  private readonly signal: AbortSignal | undefined;
 
   constructor(maxConcurrent: number = READAHEAD_CONCURRENCY, signal?: AbortSignal) {
     this.maxConcurrent = maxConcurrent;
@@ -149,10 +152,19 @@ export class Readahead {
     try {
       return await fs.readdir(dirPath, { withFileTypes: true });
     } catch (err) {
-      // Re-throw non-filesystem errors (unexpected runtime failures) so the
-      // caller can distinguish I/O denials from programming errors. ENOENT /
-      // EACCES / ENOTDIR are all treated as empty listings.
-      if (err && typeof err === 'object' && 'code' in err) {
+      // Narrow to genuine Node.js filesystem errors before swallowing.
+      // Contract: only errors that are `instanceof Error` with a string `.code`
+      // property (i.e. `NodeJS.ErrnoException`) are treated as expected I/O
+      // denials and mapped to an empty listing. All other thrown values —
+      // including DOMException, AbortError, mocks with a `.code` property that
+      // is not actually a Node.js errno, and bare non-Error objects — are
+      // re-thrown so the caller can distinguish I/O denials from programming
+      // errors.
+      //
+      // This mirrors the narrowing pattern in `_fs-error.ts`:
+      //   `if (!(err instanceof Error)) return undefined;`
+      //   `const code = (err as Error & { code?: string }).code;`
+      if (err instanceof Error && typeof (err as NodeJS.ErrnoException).code === 'string') {
         return [];
       }
       throw err;
