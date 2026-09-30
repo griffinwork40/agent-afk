@@ -49,8 +49,6 @@ import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
 
 import { getStateDatabasePath } from '../../../paths.js';
-import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
-import { buildSkillManifest } from '../../tools/skill-bridge.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
@@ -62,10 +60,10 @@ import {
   createGetRuntimeStateHandler,
   wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
-  formatEnvironmentFragment,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
+import { buildSystemPromptHooks } from './index.system-prompt.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 const PROVIDER_NAME = 'openai-compatible';
@@ -374,112 +372,26 @@ export class OpenAICompatibleProvider implements ModelProvider {
       currentPresenceSessionId: this._presenceSessionId,
     });
 
-    // Invariant: assemble the full provider-side system prompt so non-Anthropic
-    // sessions (this provider backs the REPL when the model is gpt-*/o*/local
-    // org/model) receive the SAME fragments as anthropic-direct — tool
-    // conventions, the interactive slash-command / bash-passthrough /
-    // background-subagent guidance, the memory prompt, and the skill manifest.
-    // Previously this provider sent only `userSystem + env`, so on a
-    // non-Anthropic REPL the model was never told what the
-    // `<background-subagent-result>` (and slash/bash) envelopes mean. The
-    // tool/memory fragments are resolved via the shared helpers in
-    // tools/system-prompt.ts so the set cannot drift from anthropic-direct.
-    // Ordering mirrors AnthropicDirectProvider.query(): [toolBase, userSystem?,
-    // memoryPrompt, hotMemory?, env, manifest?]. The `# Agent AFK` doctrine +
-    // operator overlay (`existingSys`) is placed EARLY — right after the tool
-    // conventions and before the cross-session memory (instructions +
-    // hot-memory project context) and the skill manifest. Hot memory rides
-    // `config.hotMemory` (a dedicated field), not prepended into systemPrompt,
-    // so it can sit after the memory instructions rather than ahead of the
-    // doctrine. `envFragment` is the ONLY cwd-dependent piece — see
-    // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
-    // rest are computed once and treated as stable across a cwd re-anchor.
-    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState);
-    // Invariant: kept in lockstep with anthropic-direct's call site.
-    // `excludeName` omits the executing skill's own entry for a skill-dispatch
-    // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
-    // resolve against the session's dir, not the host process's (#876).
-    const manifest = this.providerOpts.skillExecutor
-      ? buildSkillManifest(undefined, {
-          ...(typeof config.cwd === 'string' && config.cwd.length > 0
-            ? { cwd: config.cwd }
-            : {}),
-          ...(typeof config.skillDispatchName === 'string' &&
-          config.skillDispatchName.length > 0
-            ? { excludeName: config.skillDispatchName }
-            : {}),
-        })
-      : '';
-    const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
-    const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
-    const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
-
-    // Contract: given the cwd-dependent `# Environment` fragment, return the
-    // full joined system prompt over the STABLE fragments captured above.
-    // Used both for the initial build and for every #876 rebuild, so the two
-    // can never drift out of ordering sync with each other.
-    const assembleSystemPrompt = (envFragment: string, baseSys = existingSys): string => {
-      const parts = [toolBase];
-      if (baseSys !== undefined && baseSys.length > 0) parts.push(baseSys);
-      parts.push(memoryPrompt);
-      const workspacePrompt = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined);
-      if (workspacePrompt) parts.push(workspacePrompt);
-      for (const frag of [hotMemory, goalPrompt]) { if (frag.length > 0) parts.push(frag); }
-      parts.push(envFragment);
-      if (manifest.length > 0) parts.push(manifest);
-      return parts.join('\n\n');
-    };
-
-    // Phase 2 — the `# Environment` block. Uses `resolvedSession.id` (not
-    // `config.sessionId`) so the block shows the resolved id (#2353).
-    const buildEnvFragment = (): string =>
-      formatEnvironmentFragment({
-        cwd: _currentCwd,
-        ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
-        surface: this.providerOpts.surface ?? 'cli',
-        ...(config.depth !== undefined ? { depth: config.depth } : {}),
-        ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-        workspace: runtimeStateSource.getWorkspace(),
-      });
-
-    const patchedConfig: typeof config = {
-      ...config,
-      systemPrompt: assembleSystemPrompt(buildEnvFragment()),
-    };
-
-    // Invariant (#876 + #2420): `setCwd()` (query.ts) invokes this so a
-    // mid-session cwd re-anchor refreshes BOTH the `get_runtime_state` tool
-    // (already live via the `getCwd` cell) and the system prompt's
-    // `# Environment` block — previously only the dispatcher's resolve base
-    // moved, leaving the model reading a stale directory for the rest of the
-    // session. Ordering is load-bearing: `_currentCwd` is updated FIRST, then
-    // `buildEnvFragment()` re-reads `getWorkspace()` — which itself resolves
-    // through the same cell — so updating after the read would compute the
-    // workspace snapshot for the OLD directory (mirrors anthropic-direct's
-    // cwd-dependents.ts ordering invariant). `patchedConfig.systemPrompt` is
-    // reassigned IN PLACE (the same object `OpenAICompatibleQuery` holds as
-    // `this.opts.config` by reference), so the next turn's `buildMessages`
-    // call picks up the new string with no further plumbing.
-    //
-    // Invariant (#2420 P1): `_currentBaseRef` is a mutable cell shared between
-    // this closure and `systemPromptRebuildFactory`. `setSystemPrompt(base)` on
-    // the query stores `base` into the ref (via `applySetSystemPrompt`'s
-    // `currentBasePromptRef` arg) so that a subsequent `setCwd()` rebuild uses
-    // the REPLACEMENT base prompt — not the construction-time default. Without
-    // this shared ref, `setSystemPrompt(newBase)` works only until the next
-    // `setCwd()`, which would silently resurrect the old base prompt.
-    const _currentBaseRef: { current: string | undefined } = { current: undefined };
-    const rebuildEnvironmentBlock = (newCwd: string): void => {
-      _currentCwd = newCwd;
-      this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
-      patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment(), _currentBaseRef.current);
-    };
-    buildOpts.onCwdChange = rebuildEnvironmentBlock;
-    buildOpts.systemPromptRebuildFactory = (base?: string) => {
-      _currentBaseRef.current = base;
-      return assembleSystemPrompt(buildEnvFragment(), base);
-    };
+    // Invariant: system-prompt assembly — see `./index.system-prompt.ts` for the
+    // full fragment ordering and rebuild invariants (#876, #2420). Extracted to
+    // keep `query()` within the 200-line function ceiling.
+    const { patchedConfig, onCwdChange, systemPromptRebuildFactory } = buildSystemPromptHooks({
+      config,
+      resolvedSessionId: resolvedSession.id,
+      surface: this.providerOpts.surface ?? 'cli',
+      runtimeStateSource,
+      hasWorkspaceStore: this.workspaceStore !== undefined,
+      hasSkillExecutor: this.providerOpts.skillExecutor !== undefined,
+      readOnlyMemory: this.providerOpts.readOnlyMemory,
+      readOnlyState: this.providerOpts.readOnlyState,
+      getCurrentCwd: () => _currentCwd,
+      applyNewCwd: (newCwd: string) => {
+        _currentCwd = newCwd;
+        this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
+      },
+    });
+    buildOpts.onCwdChange = onCwdChange;
+    buildOpts.systemPromptRebuildFactory = systemPromptRebuildFactory;
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
   }
