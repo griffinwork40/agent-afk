@@ -61,6 +61,8 @@ export interface CoreExecDeps {
   sessionId: string | undefined;
   /** Parent session id; stamped on PostToolUse context. */
   parentSessionId: string | undefined;
+  /** Root (depth-0) session id; stamped on PostToolUse context for deep attribution. */
+  rootSessionId: string | undefined;
   /** Session grant manager; injected into PostToolUse context. */
   sessionGrantManager: GrantManager | undefined;
   /** Witness trace writer; forwarded to dispatchPostToolUse(Failure). */
@@ -180,6 +182,7 @@ export function firePostToolUse(
     ...(input !== undefined ? { input } : {}),
     ...(deps.sessionId !== undefined ? { sessionId: deps.sessionId } : {}),
     ...(deps.parentSessionId !== undefined ? { parentSessionId: deps.parentSessionId } : {}),
+    ...(deps.rootSessionId !== undefined ? { rootSessionId: deps.rootSessionId } : {}),
     // Mirror PreToolUse so path-approval "Once"-grant revoke uses the same grant manager.
     ...(deps.sessionGrantManager ? { grantManager: deps.sessionGrantManager } : {}),
     ...(resultFlags?.isError === true ? { isError: true } : {}),

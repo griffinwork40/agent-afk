@@ -63,6 +63,12 @@ export interface BuildDispatcherOptions {
   sessionId?: string;
   parentSessionId?: string;
   /**
+   * Root (depth-0) session id, forwarded from {@link AgentConfig.rootSessionId}.
+   * Undefined on top-level sessions. Threaded into the dispatcher so every
+   * PostToolUse context carries it for deep child attribution.
+   */
+  rootSessionId?: string;
+  /**
    * This fork's own subagent id. Stamped onto every `hook_decision` the
    * dispatcher emits so a policy block is attributable to the child that
    * provoked it (parity with what `tool_call` already records). Undefined on
@@ -320,6 +326,7 @@ export function buildDispatcher(
     ...(opts?.env !== undefined ? { env: opts.env } : {}),
     sessionId: opts?.sessionId,
     parentSessionId: opts?.parentSessionId,
+    ...(opts?.rootSessionId !== undefined ? { rootSessionId: opts.rootSessionId } : {}),
     ...(opts?.subagentId !== undefined ? { subagentId: opts.subagentId } : {}),
     // Central output-cap backstop (#661), FORK-SCOPED. Armed from the
     // explicit `subagentToolOutputCapBytes` signal that

@@ -710,6 +710,21 @@ export interface AgentConfig {
   parentSessionId?: string;
 
   /**
+   * Root session ID — the depth-0 session that owns the outcome record.
+   *
+   * Set once on a depth-1 child (to the root's sessionId) and inherited
+   * unchanged by all deeper descendants. A depth-1 child with no grandchildren
+   * sets this equal to `parentSessionId`; a grandchild's `rootSessionId` is
+   * its grandparent's id, not its immediate parent's. Child-attribution uses
+   * this to credit commit SHAs and PR URLs to the root record rather than to
+   * an intermediate session id that never writes a sidecar.
+   *
+   * Undefined on top-level (depth-0) sessions — `parentSessionId` is also
+   * undefined there, so hooks can treat both as the "no attribution" signal.
+   */
+  rootSessionId?: string;
+
+  /**
    * This session's own subagent id when it was forked as a subagent — the
    * `SubagentHandle.id` assigned by `SubagentManager.forkSubagent`. Set on the
    * child config at the fork site (subagent.ts); undefined for a top-level

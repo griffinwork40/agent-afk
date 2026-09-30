@@ -225,6 +225,13 @@ export interface SubagentExecutorContext {
    * them. When unset, `inherit` falls back to the policy default chain.
    */
   parentModel?: AgentModelInput;
+  /**
+   * Root (depth-0) session id, forwarded from the root session and threaded
+   * unchanged through every depth. Undefined at depth-0. Threaded into
+   * {@link BuildChildConfigArgs.parentRootSessionId} so the grandchild manager
+   * can seed depth-2+ forks with the real root id for child-attribution.
+   */
+  parentRootSessionId?: string;
 }
 
 /**

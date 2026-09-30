@@ -118,6 +118,14 @@ export interface BuildChildConfigArgs {
    */
   workspaceStore?: import('../../workspace/index.js').WorkspaceStore; delegationBudget?: import('../../tools/delegation-budget.js').DelegationBudget;
   /**
+   * Root (depth-0) session id, forwarded from the dispatching executor's
+   * parent session id when the executor sits at depth 1, or from the
+   * executor context's own `parentRootSessionId` at depth 2+. Threaded into
+   * the grandchild {@link SubagentManager} as `parentRootSessionId` so
+   * depth-2+ forks inherit the real root id for child-attribution.
+   */
+  parentRootSessionId?: string;
+  /**
    * Construct the recursive child executor. Injected by the owning
    * `SubagentExecutor.execute()` as `(ctx) => new SubagentExecutor(ctx)` so
    * this module never imports the executor at runtime (circular-import seam;
@@ -410,7 +418,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // ('cli'/'telegram'/'daemon', not 'unknown') via forkSubagent's
       // parentSurface fill. Mirrors the traceWriter/cwd chaining above and the
       // recursive child executor ctx below (which already forwards args.surface).
-      ...(args.surface !== undefined ? { surface: args.surface } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+      ...(args.surface !== undefined ? { surface: args.surface } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}), ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     });
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({
@@ -459,7 +467,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       ...(resolvedAccess?.nestedAgentTypes !== undefined
         ? { nestedAgentAllowlist: resolvedAccess.nestedAgentTypes }
         : {}),
-      parentModel: childModel,
+      parentModel: childModel, ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     });
     const childReadScope = { parentReadRoots: args.childInheritedReadRoots, parentCwd: currentCwd }; // #547
     const childSkillExecutor = args.childSkillExecutorFactory
