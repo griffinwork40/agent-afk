@@ -16,17 +16,16 @@ import {
   sanitizeLabel,
   batchBadge,
   activeToolBadge,
-  formatOutcome,
   childFailureBadge,
 } from './tool-lane-format.js';
-import { truncateDisplayWidth, stripAnsi, displayWidth } from '../../display.js';
+import { pushOutcomeRows } from './tool-lane-outcome-rows.js';
+import { truncateDisplayWidth, displayWidth } from '../../display.js';
 import { formatElapsed } from '../../terminal-compositor.scrollback.js';
 import {
   renderOverlayChildren,
   buildChildMap,
   getGlyphs,
   toolLaneWidth,
-  pushOutcomeLines,
   joinOverlayLines,
   type ToolEntry,
   type Entry,
@@ -268,9 +267,9 @@ export function renderToolLaneOverlay(
       // tool_diff chunks), so no diff block is rendered here.
       if (entry.result) {
         // Completed nesting entry: dim the structural chrome — it is done.
-        // pushOutcomeLines splits multi-line formatOutcome; headLine computed first so its display-width derives the outcome budget.
-        const headLine = palette.dimCompleted(g.turnRoot) + entry.prefix + palette.dimCompleted(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ';
-        pushOutcomeLines(lines, headLine, formatOutcome(entry.result, undefined, Math.max(20, cols - displayWidth(stripAnsi(headLine))), entry.toolName), palette.dimCompleted(g.spine) + '  ', cols, batchBadge(entry.result) + childFailureBadge(entry.failedChildCount));
+        // pushOutcomeRows: status beats label on the head row; continuation rows get the full row width.
+        const head = { lead: palette.dimCompleted(g.turnRoot), label: entry.prefix, sep: palette.dimCompleted(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ', suffix: batchBadge(entry.result) + childFailureBadge(entry.failedChildCount) };
+        pushOutcomeRows(lines, head, entry.result, { continuationIndent: palette.dimCompleted(g.spine) + '  ', cols, toolName: entry.toolName });
       } else {
         // Active (in-flight) nesting entry: use activeAgent for ◉ so the agent
         // name row is clearly readable. The ' …' tail is structural/informational

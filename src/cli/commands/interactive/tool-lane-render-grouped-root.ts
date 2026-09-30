@@ -1,4 +1,4 @@
-import { displayWidth, stripAnsi, truncateDisplayWidth } from '../../display.js';
+import { displayWidth, truncateDisplayWidth } from '../../display.js';
 import { palette } from '../../palette.js';
 import { styleForToolName } from '../../tool-category.js';
 import {
@@ -11,7 +11,8 @@ import {
   shortenPaths,
 } from './tool-lane-format.js';
 import type { ToolEntry } from './tool-lane-render.js';
-import { clampLineToTerminal, pushOutcomeLines, toolLaneWidth } from './tool-lane-render.js';
+import { clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
+import { pushOutcomeRows } from './tool-lane-outcome-rows.js';
 
 function groupedResultSuffix(
   entries: ToolEntry[],
@@ -125,14 +126,12 @@ export function renderGroupedRootTools(
         // bare inline join that would embed a raw \n into the row. This
         // mirrors the child-render and overlay paths — see
         // tool-lane-render-children.ts and tool-lane.ts.
-        pushOutcomeLines(
-          lines,
-          '   ' + e.prefix + palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ',
-          formatOutcome(e.result, homeDir, Math.max(20, cols - displayWidth(stripAnsi(e.prefix)) - 12), e.toolName),
-          '   ',
-          cols,
-          batchBadge(e.result),
-        );
+        pushOutcomeRows(lines, {
+          lead: '   ',
+          label: e.prefix,
+          sep: palette.dim(' — ') + doneGlyph(e.result.isError, e.result.failureClass) + ' ',
+          suffix: batchBadge(e.result),
+        }, e.result, { continuationIndent: '   ', cols, homeDir, toolName: e.toolName });
         if (e.diff && !e.result.isError) {
           // Root-level scrollback diff: indent 4 spaces so it sits under
           // the outcome line (3 for the row indent, 1 more to clear the

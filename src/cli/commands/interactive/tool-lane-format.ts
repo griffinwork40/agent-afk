@@ -118,6 +118,10 @@ export function formatOutcome(
   homeDir?: string,
   maxPreview = 60,
   toolName?: string,
+  // Width for continuation rows (tail preview lines). They render on their
+  // own rows, so callers that know the row width pass it here; see
+  // outcomeTailWidth in tool-lane-outcome-rows.ts. Omitted = legacy budget.
+  tailWidth?: number,
 ): string {
   // Three-tone split mirrors doneGlyph()/formatGroupedSibling(): a benign
   // refusal (isError with a class in BENIGN_FAILURE_CLASSES) tones its body
@@ -218,7 +222,7 @@ export function formatOutcome(
       const tailLines = chunk.tailPreview
         .map(l => {
           const sanitized = sanitizeLabel(
-            truncateDisplayWidth(shortenPaths(capPreviewInput(l)), maxPreview > 0 ? maxPreview : 120),
+            truncateDisplayWidth(shortenPaths(capPreviewInput(l)), tailWidth ?? (maxPreview > 0 ? maxPreview : 120)),
           );
           // Try to colorize recognizable patterns (git stat, test
           // results, tsc errors) before falling back to default dim.
