@@ -65,6 +65,9 @@ export const SessionPhaseNameSchema = z.enum([
   // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
   // types.ts — metadata carries degradedCount, threshold, maxDimension.
   'many_image_degraded',
+  // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
+  // See SessionPhaseName JSDoc in types.ts for the full rationale.
+  'stop_inject_dropped',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

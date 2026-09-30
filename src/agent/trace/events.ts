@@ -107,6 +107,7 @@ export const HookEventNameSchema = z.enum([
   'PostToolUseFailure',
   'SessionStart',
   'SessionEnd',
+  'Stop',
   'SubagentStart',
   'SubagentStop',
 ]);

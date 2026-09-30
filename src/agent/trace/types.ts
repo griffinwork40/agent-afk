@@ -268,6 +268,7 @@ export type HookEventName =
   | 'PostToolUseFailure'
   | 'SessionStart'
   | 'SessionEnd'
+  | 'Stop'
   | 'SubagentStart'
   | 'SubagentStop';
 
@@ -884,7 +885,14 @@ export type SessionPhaseName =
   // event makes the repair visible in the trace so operators can diagnose
   // sessions that hit the many-image ceiling without inspecting raw message
   // payloads.
-  | 'many_image_degraded';
+  | 'many_image_degraded'
+  // Stop-hook injectContext was returned on a one-shot surface (daemon/cron task,
+  // `afk chat`) that has no next user turn. The context is dropped — delivery
+  // requires a subsequent prompt, which never arrives. Emitted by the session-
+  // layer Stop dispatch (turn-stream-runner.ts) so the gap is visible in the
+  // trace. `metadata` carries `injectContextBytes` (byte length of the dropped
+  // string) and `surface` (the session's origin surface).
+  | 'stop_inject_dropped';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */
