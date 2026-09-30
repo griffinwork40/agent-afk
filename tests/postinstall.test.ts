@@ -1,11 +1,10 @@
-// Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
-const isWin32 = process.platform === 'win32';
+const _testDir = dirname(fileURLToPath(import.meta.url));
 
 // Invariant (no real service side effects): restartLaunchdServices'
 // DEFAULT restartFn runs `node <repo>/dist/cli.mjs service restart <name>`,
@@ -73,8 +72,10 @@ let isMainModule: IsMainModuleFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
-  // Pattern mirrors src/cli/postinstall.test.ts exactly.
-  const mod = await import('../scripts/postinstall.mjs');
+  // pathToFileURL converts the absolute path to a file:// URL so Windows ESM
+  // loaders accept it (bare absolute paths like C:\... are rejected by the loader).
+  const url = pathToFileURL(resolve(_testDir, '..', 'scripts', 'postinstall.mjs')).href;
+  const mod = await import(url);
   killStaleDaemon = mod.killStaleDaemon as KillStaleDaemonFn;
   isManualBotRunning = mod.isManualBotRunning as IsManualBotRunningFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
@@ -83,7 +84,7 @@ beforeAll(async () => {
   isMainModule = mod.isMainModule as IsMainModuleFn;
 });
 
-describe.skipIf(isWin32)('killStaleDaemon', () => {
+describe('killStaleDaemon', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -140,7 +141,7 @@ describe.skipIf(isWin32)('killStaleDaemon', () => {
   });
 });
 
-describe.skipIf(isWin32)('isManualBotRunning', () => {
+describe('isManualBotRunning', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -210,7 +211,7 @@ describe.skipIf(isWin32)('isManualBotRunning', () => {
   });
 });
 
-describe.skipIf(isWin32)('restartLaunchdServices', () => {
+describe('restartLaunchdServices', () => {
   const HOME = '/Users/tester';
   const TELEGRAM_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.telegram.plist');
   const DAEMON_PLIST = join(HOME, 'Library', 'LaunchAgents', 'com.afk.daemon.plist');
@@ -319,7 +320,7 @@ describe.skipIf(isWin32)('restartLaunchdServices', () => {
 // during local `pnpm install` runs inside source checkouts and worktrees.
 // All tests inject pkgRoot, env, and existsFn so no real filesystem or npm
 // lifecycle environment leaks into the assertions.
-describe.skipIf(isWin32)('isGlobalInstall', () => {
+describe('isGlobalInstall', () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -387,7 +388,7 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
 //
 // All tests inject platform, env, pkgRoot, existsFn, and restartFn so no real
 // filesystem or npm lifecycle environment leaks into the assertions.
-describe.skipIf(isWin32)('maybeRestartServices', () => {
+describe('maybeRestartServices', () => {
   const FAKE_PKG_ROOT = '/fake/pkg/root';
 
   afterEach(() => {
@@ -498,7 +499,7 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
 // returns false when the install path contains URL-encoding-required characters
 // (spaces, non-ASCII). isMainModule() uses fileURLToPath + realpathSync so the
 // comparison is always on decoded, symlink-resolved absolute paths.
-describe.skipIf(isWin32)('isMainModule', () => {
+describe('isMainModule', () => {
   it('returns false when argv1 is undefined', () => {
     expect(isMainModule('file:///some/path/script.mjs', undefined)).toBe(false);
   });
