@@ -73,6 +73,13 @@ export class TelegramBgResultNotifier {
   private pendingInjections: BackgroundJob[] = [];
   /** Route key this notifier is registered under, when bound to a chat. */
   private readonly routeKey: string | undefined;
+  /**
+   * Set to `true` by {@link dispose}. Guards the deferred microtask body so
+   * that a push enqueued via `queueMicrotask` before `dispose()` runs does not
+   * fire after teardown — i.e. covers the window where `settled` fires and
+   * `dispose()` is called in the same synchronous frame.
+   */
+  private disposed = false;
 
   private readonly onSettled = (job: BackgroundJob): void => {
     // Skip cancelled jobs — same as the REPL notifier contract.
@@ -85,6 +92,10 @@ export class TelegramBgResultNotifier {
     // 16KB bodies synchronously on the event loop — formatting and push both
     // happen off the current synchronous call frame.
     queueMicrotask(() => {
+      // Guard: if dispose() ran in the same synchronous frame as the settled
+      // event (before this microtask ran), skip the push — the session is
+      // already torn down and there is no valid operator to notify.
+      if (this.disposed) return;
       void pushIfConfigured(formatNotification(job), {
         target: this.chatId,
         ...(this.threadId !== undefined ? { messageThreadId: this.threadId } : {}),
@@ -134,6 +145,7 @@ export class TelegramBgResultNotifier {
 
   /** Unsubscribe from the registry and drop the route registration. Idempotent. */
   dispose(): void {
+    this.disposed = true;
     this.registry.off('settled', this.onSettled);
     if (this.routeKey !== undefined) unregisterBgInjectionSource(this.routeKey, this);
     // Mark any buffered-but-undrained jobs delivered so the witness trace

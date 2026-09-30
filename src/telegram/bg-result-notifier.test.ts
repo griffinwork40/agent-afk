@@ -178,7 +178,7 @@ describe('TelegramBgResultNotifier', () => {
     expect(opts).toEqual({ target: undefined });
   });
 
-  it('stops pushing after dispose', async () => {
+  it('stops pushing when dispose() is called before the settled event', async () => {
     notifier.dispose();
 
     const { handle, fireTerminal } = makeBgHandle();
@@ -191,6 +191,28 @@ describe('TelegramBgResultNotifier', () => {
     fireTerminal(succeed(job.jobId, 'done'));
 
     // Let the microtask queue drain to confirm no deferred push fires either.
+    await new Promise<void>((r) => queueMicrotask(r));
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('does not push when settled and dispose() happen in the same synchronous frame', async () => {
+    // This exercises the dispose-race window: onSettled enqueues a
+    // queueMicrotask push, then dispose() runs — both in the same synchronous
+    // frame before the microtask has a chance to execute. Without the
+    // `disposed` guard the push would still fire after teardown.
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({
+      handle,
+      prompt: 'settled then dispose',
+      model: 'sonnet',
+    });
+
+    // Both calls are synchronous — fireTerminal enqueues the microtask,
+    // dispose() sets the disposed flag, all before the microtask runs.
+    fireTerminal(succeed(job.jobId, 'done'));
+    notifier.dispose();
+
+    // Drain the microtask queue — the guarded body must not call push.
     await new Promise<void>((r) => queueMicrotask(r));
     expect(pushMock).not.toHaveBeenCalled();
   });
