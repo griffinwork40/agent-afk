@@ -48,7 +48,7 @@ export interface ShellTaskOptions {
  *
  * When `task.cwd` is set it is passed as `cwd` to the child process, so the
  * shell inherits the per-task working directory. Precedence mirrors the agent
- * path: task.cwd ?? daemon-wide sessionConfig.cwd ?? process.cwd() (the
+ * path: task.cwd ?? daemon-wide sessionConfig.cwd ?? daemonDefaultCwd() (the
  * scheduler resolves the precedence before calling runShellTask).
  */
 export async function runShellTask(

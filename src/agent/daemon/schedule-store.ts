@@ -39,7 +39,7 @@ export interface ScheduledTaskConfig {
   /**
    * Per-task working directory (absolute path). When set, the spawned session's
    * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
-   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd().
    * Must be an existing directory; tilde (~) is expanded at save time.
    */
   cwd?: string;

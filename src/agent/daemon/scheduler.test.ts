@@ -46,7 +46,23 @@ vi.mock('node-cron', () => ({
   })),
 }));
 
+// Mock shell-task so the shell executor path does not actually spawn a child
+// process. The spy records the resolved task (including cwd) so tests can
+// assert which cwd the scheduler chose before handing off to runShellTask.
+vi.mock('./shell-task.js', () => ({
+  runShellTask: vi.fn(async (task: { taskId: string; command: string; cwd?: string }) => ({
+    taskId: task.taskId,
+    command: task.command,
+    trigger: 'cron' as const,
+    triggeredAt: new Date().toISOString(),
+    durationMs: 0,
+    status: 'success' as const,
+    responseExcerpt: 'ok',
+  })),
+}));
+
 import { CronScheduler, daemonTraceLabel, resolveWorktreePruneRoot } from './scheduler.js';
+import { runShellTask } from './shell-task.js';
 // Reusables imported here (test-only — tests are not bound by the
 // src/agent → src/cli layering invariant that the scheduler source honours) so
 // the injected probe mirrors the production `doneUnverifiedProbe` in daemon.ts.
@@ -1192,6 +1208,39 @@ describe('CronScheduler — per-task cwd', () => {
     // The task ran as a builtin (success or skipped). An error here would mean
     // the cwd guard fired before the executor branch — that is the regression.
     expect(record.status).not.toBe('error');
+  });
+
+  it('shell executor with no task.cwd or sessionConfig.cwd runs in getDaemonStateDir() (#2585)', async () => {
+    // When executor === 'shell' and no cwd is configured at any level, the
+    // scheduler must resolve daemonDefaultCwd() — the daemon state dir — before
+    // passing the task to runShellTask, NOT process.cwd() / $HOME.
+    const shellTaskSpy = vi.mocked(runShellTask);
+    shellTaskSpy.mockClear();
+
+    const scheduler = new CronScheduler({
+      telemetryPath,
+      // No sessionConfig.cwd — simulates a bare daemon with no AFK_DAEMON_CWD.
+    });
+    scheduler.register({
+      taskId: 'shell-no-cwd',
+      command: 'echo ok',
+      executor: 'shell',
+      trigger: 'cron',
+      cronExpression: '* * * * *',
+      // No cwd — fallback must apply.
+    });
+
+    await scheduler.tick('shell-no-cwd');
+
+    // runShellTask must have been called exactly once.
+    expect(shellTaskSpy).toHaveBeenCalledTimes(1);
+    // The task passed to runShellTask must have cwd resolved to the daemon state dir.
+    const capturedTask = shellTaskSpy.mock.calls[0]?.[0];
+    expect(capturedTask?.cwd).toBe(getDaemonStateDir());
+    // Must not be $HOME or process.cwd().
+    const { homedir } = await import('node:os');
+    expect(capturedTask?.cwd).not.toBe(homedir());
+    expect(capturedTask?.cwd).not.toBe(process.cwd());
   });
 });
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { env } from '../../config/env.js';
 import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
@@ -58,10 +59,23 @@ export function daemonTraceLabel(taskId: string): string {
  * this function, so the precedence `task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd()`
  * is preserved.
  */
+// Contract: daemonDefaultCwd() never throws. On EACCES/ENOSPC it falls back to
+// os.tmpdir() so every scheduler tick has a valid cwd even when the daemon
+// state directory cannot be created (e.g. permission denied after a system
+// misconfiguration or a full disk). The caller that has an explicit cwd
+// (task.cwd or sessionConfig.cwd) never reaches this function.
 export function daemonDefaultCwd(): string {
   const dir = getDaemonStateDir();
-  mkdirSync(dir, { recursive: true });
-  return dir;
+  try {
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch (err) {
+    const fallback = tmpdir();
+    console.warn(
+      `[daemon] daemonDefaultCwd: could not create ${dir} (${(err as NodeJS.ErrnoException).code ?? String(err)}); falling back to ${fallback}`,
+    );
+    return fallback;
+  }
 }
 
 export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOptions): Promise<{
@@ -76,7 +90,7 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
   // suffix, so each tick gets its own label) so hook commands receive a
   // non-empty AFK_SESSION_ID and traces stay greppable by task name.
   const sessionId = daemonTraceLabel(taskId);
-  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? daemon-state-dir.
+  // Precedence: per-task cwd ?? daemon-wide sessionConfig.cwd ?? daemonDefaultCwd().
   // The daemon state dir (~/.afk/state/daemon/agent-afk@default/) is used as the
   // last-resort fallback instead of process.cwd(). When installed as a service,
   // process.cwd() is $HOME, which causes unscoped glob/grep to walk the whole home
