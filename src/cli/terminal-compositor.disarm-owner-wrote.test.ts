@@ -272,16 +272,23 @@ describe('F2(c): fully-pending band (F3 scenario): pending rows survive disarm-o
     expect(countLabel(vs, 'PENDING-BAND-BOTTOM'), `PENDING-BAND-BOTTOM must appear exactly once:\n${dump}`).toBe(1);
   });
 
-  it('fully-pending band (paintedRows=0) is not lost when owner scrolls before disarm (content-hug)', async () => {
-    const overlay = Array.from({ length: ROWS - 2 }, (_, i) => `overlay-hug-${i}`).join('\n');
+  it('partially-or-fully-pending band is not lost when owner scrolls before disarm (content-hug)', async () => {
+    // Use a full-viewport overlay so the frame rises as high as possible.
+    // Note: with contentHugBandReserve active, at least 1 overlay row is
+    // always withheld, so the frame is 1 row shorter and the newest band row
+    // stays painted (paintedRows >= 1) — "fully-pending" is intentionally
+    // prevented by the fix. The F2 invariant under test (that pending rows
+    // survive disarm-owner-wrote) still applies to any partially-pending band.
+    const overlay = Array.from({ length: ROWS }, (_, i) => `overlay-hug-${i}`).join('\n');
     const { c, vs, stdout, repaint } = await makeRig({ overlay, contentHug: true });
 
     c.commitAbove('PENDING-BAND-HUG\n');
     repaint();
 
     const raw = c as unknown as { committedBand: string[]; committedBandPaintedRows: number };
-    expect(raw.committedBandPaintedRows, 'precondition: paintedRows must be 0').toBe(0);
     expect(raw.committedBand.length, 'precondition: band must be non-empty').toBeGreaterThan(0);
+    // paintedRows may be 0 (fully pending) or >= 1 (partially pending) depending
+    // on the band size and reserve; either case exercises the F2 fix.
 
     c.suspendInput();
 

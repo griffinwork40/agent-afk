@@ -155,3 +155,44 @@ export function phase2PendingContentRows(
 ): number | null {
   return self.placementMode === 'content-hug' ? projectedBandLength(self, geo, route) : null;
 }
+
+/**
+ * Invariant (band reserve): in content-hug mode, when a large overlay causes
+ * the hugging frame to rise over the committed band, the covered rows go PENDING
+ * (hidden from both screen and scrollback) rather than being archived. The
+ * newest committed output — including the user's prompt echo — therefore
+ * disappears for the whole duration of a fan-out. Reducing the overlay budget
+ * by this reserve shortens trimmedOverlay and therefore the frame, keeping the
+ * newest band rows on screen. The existing pending/re-pin machinery adapts
+ * without further changes.
+ *
+ * The reserve is `Math.min(committedBand.length, Math.max(3, Math.floor(rows / 4)))`:
+ * - `Math.floor(rows / 4)` gives roughly a quarter of the terminal height, which
+ *   is enough to keep the prompt echo plus surrounding context visible.
+ * - The floor of 3 ensures at least 3 rows are reserved on very small terminals.
+ * - The cap at `committedBand.length` prevents reserving more rows than exist in
+ *   the band (no-op when the band is empty).
+ *
+ * Decision — pendingContentRows vs committedBand.length: `pendingContentRows` is
+ * the projected post-commit band length during an in-flight commit (Phase 2); it
+ * is non-null only inside commitAbove and captures rows about to be painted, not
+ * yet visible. Using it here would over-reserve during the Phase 2 repaint and
+ * under-reserve between commits (null → 0). committedBand.length is the already-
+ * painted, always-available band length, which is exactly the set of rows at risk
+ * of going pending — the correct basis for this reserve.
+ *
+ * Known limit: band rows older than the reserve can still go pending during a
+ * fan-out whose overlay exceeds (avail - reserve). Only the newest `reserve` rows
+ * are guaranteed to stay visible.
+ *
+ * Returns 0 outside content-hug (no-op for all other placement modes).
+ */
+export function contentHugBandReserve(
+  self: Pick<ContentHugHost, 'placementMode' | 'committedBand'>,
+  rows: number,
+): number {
+  if (self.placementMode !== 'content-hug') return 0;
+  const bandLen = self.committedBand.length;
+  if (bandLen === 0) return 0;
+  return Math.min(bandLen, Math.max(3, Math.floor(rows / 4)));
+}

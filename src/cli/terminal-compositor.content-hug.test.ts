@@ -19,6 +19,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { contentHugBandReserve } from './terminal-compositor.content-hug.js';
 import { PassThrough } from 'node:stream';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { TerminalCompositor } from './terminal-compositor.js';
@@ -254,5 +255,48 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     const lines = await rig.lines();
     assertNoGaps(lines, [...banner, 'ECHO-0000', 'CARD-0001', 'CARD-0002'], PROMPT);
     rig.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// contentHugBandReserve — unit tests
+// ---------------------------------------------------------------------------
+
+describe('contentHugBandReserve', () => {
+  it('returns 0 outside content-hug', () => {
+    expect(contentHugBandReserve({ placementMode: 'bottom-pinned', committedBand: ['a', 'b', 'c'] }, 24)).toBe(0);
+    expect(contentHugBandReserve({ placementMode: 'cursor-follow', committedBand: ['a', 'b'] }, 24)).toBe(0);
+  });
+
+  it('returns 0 when committedBand is empty (content-hug)', () => {
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: [] }, 24)).toBe(0);
+  });
+
+  it('returns max(3, floor(rows/4)) capped at band length — standard terminal', () => {
+    // rows=24: floor(24/4)=6; band.length=10 → min(10,max(3,6))=6
+    const band = Array.from({ length: 10 }, (_, i) => `row ${i}`);
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: band }, 24)).toBe(6);
+  });
+
+  it('applies floor(rows/4) on a large terminal', () => {
+    // rows=80: floor(80/4)=20; band.length=30 → min(30,max(3,20))=20
+    const band = Array.from({ length: 30 }, (_, i) => `row ${i}`);
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: band }, 80)).toBe(20);
+  });
+
+  it('caps at committedBand.length when band is shorter than rows/4', () => {
+    // rows=24: floor(24/4)=6; band.length=2 → min(2,6)=2
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: ['a', 'b'] }, 24)).toBe(2);
+  });
+
+  it('floor of 3 applies on a very small terminal', () => {
+    // rows=8: floor(8/4)=2 < 3 → max(3,2)=3; band.length=5 → min(5,3)=3
+    const band = Array.from({ length: 5 }, (_, i) => `row ${i}`);
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: band }, 8)).toBe(3);
+  });
+
+  it('floor of 3 clamps to band length when band is shorter than 3', () => {
+    // rows=8: formula gives 3; band.length=1 → min(1,3)=1
+    expect(contentHugBandReserve({ placementMode: 'content-hug', committedBand: ['only'] }, 8)).toBe(1);
   });
 });

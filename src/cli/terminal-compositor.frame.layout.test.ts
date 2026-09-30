@@ -369,3 +369,84 @@ describe('hidden-lines indicator gutter (ASCII glyph mode)', () => {
     expect(hiddenIndicatorGutter('', '|  - item', ASCII_GLYPHS)).toBe('|  ');
   });
 });
+
+// ---------------------------------------------------------------------------
+// bandReserveRows — computeViewportLayout
+// ---------------------------------------------------------------------------
+
+describe('computeViewportLayout — bandReserveRows', () => {
+  it('reserve=0 (default) leaves behaviour unchanged', () => {
+    const lines = Array.from({ length: 20 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const withDefault = computeViewportLayout(chrome, 0, false, 30, noScrollRegion);
+    const withZero = computeViewportLayout(chrome, 0, false, 30, noScrollRegion, 0);
+    expect(withDefault.trimmedOverlay).toStrictEqual(withZero.trimmedOverlay);
+    expect(withDefault.trimmedOverlay).toBe(lines); // fits without truncation
+  });
+
+  it('reserve reduces the overlay budget', () => {
+    // rows=30, fixedRows: gapRow(1)+input(1)=2, avail=(30-1)-2=27
+    // reserve=5 → overlayBudget=22
+    const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 30, noScrollRegion, 5);
+    expect(layout.trimmedOverlay.length).toBe(22);
+  });
+
+  it('small terminal: clamp keeps at least 1 overlay row when overlay is non-empty', () => {
+    // rows=5, fixedRows: gapRow(1)+input(1)=2, avail=(5-1)-2=2
+    // A reserve of 10 is clamped to max(0, avail-1)=1 → overlayBudget=1
+    const lines = ['line0', 'line1', 'line2'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 5, noScrollRegion, 10);
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+
+  it('reserve of 0 when avail is 0 results in empty trimmedOverlay (no crash)', () => {
+    // rows=3, fixedRows=2, avail=0 — zero budget regardless of reserve
+    const lines = ['line0', 'line1'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 3, noScrollRegion, 5);
+    expect(layout.trimmedOverlay.length).toBe(0);
+  });
+
+  it('reserve larger than band does not exceed avail-1', () => {
+    // rows=10, avail=(10-1)-2=7, reserve capped at avail-1=6 → budget=1
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 10, noScrollRegion, 100);
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bandReserveRows — computePickerViewportLayout
+// ---------------------------------------------------------------------------
+
+describe('computePickerViewportLayout — bandReserveRows', () => {
+  it('reserve=0 (default) leaves behaviour unchanged', () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const withDefault = computePickerViewportLayout(chrome, 3, 30, noScrollRegion);
+    const withZero = computePickerViewportLayout(chrome, 3, 30, noScrollRegion, 0);
+    expect(withDefault.trimmedOverlay).toStrictEqual(withZero.trimmedOverlay);
+  });
+
+  it('picker path: reserve reduces the overlay budget', () => {
+    // rows=30, fixedRows: gapRow(1)+pickerRows(3)=4, avail=(30-1)-4=25
+    // reserve=5 → overlayBudget=20
+    const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
+    const chrome = bareChrome(lines);
+    const layout = computePickerViewportLayout(chrome, 3, 30, noScrollRegion, 5);
+    expect(layout.trimmedOverlay.length).toBe(20);
+  });
+
+  it('picker path: clamp keeps at least 1 overlay row on a small terminal', () => {
+    // rows=7, fixedRows: gapRow(1)+pickerRows(3)=4, avail=(7-1)-4=2
+    // reserve of 10 clamped to avail-1=1 → budget=1
+    const lines = ['a', 'b', 'c', 'd'];
+    const chrome = bareChrome(lines);
+    const layout = computePickerViewportLayout(chrome, 3, 7, noScrollRegion, 10);
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+});
