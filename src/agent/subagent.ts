@@ -428,7 +428,8 @@ export class SubagentManager {
         parentProvider: this.parentProvider,
         parentTraceWriter: this.parentTraceWriter,
         parentSurface: this.parentSurface,
-        parentCanUseTool: this.parentCanUseTool, parentRootSessionId: this.parentRootSessionId,
+        parentCanUseTool: this.parentCanUseTool,
+        parentRootSessionId: this.parentRootSessionId,
         workspaceStore: this.workspaceStore,
       });
 

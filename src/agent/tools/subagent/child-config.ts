@@ -418,7 +418,9 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       // ('cli'/'telegram'/'daemon', not 'unknown') via forkSubagent's
       // parentSurface fill. Mirrors the traceWriter/cwd chaining above and the
       // recursive child executor ctx below (which already forwards args.surface).
-      ...(args.surface !== undefined ? { surface: args.surface } : {}), ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}), ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+      ...(args.surface !== undefined ? { surface: args.surface } : {}),
+      ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+      ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     });
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({
@@ -467,7 +469,8 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       ...(resolvedAccess?.nestedAgentTypes !== undefined
         ? { nestedAgentAllowlist: resolvedAccess.nestedAgentTypes }
         : {}),
-      parentModel: childModel, ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+      parentModel: childModel,
+      ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
     });
     const childReadScope = { parentReadRoots: args.childInheritedReadRoots, parentCwd: currentCwd }; // #547
     const childSkillExecutor = args.childSkillExecutorFactory

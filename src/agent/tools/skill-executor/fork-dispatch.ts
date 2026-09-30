@@ -83,6 +83,7 @@ function buildSkillForkManager(
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
+    ...(ctx.parentRootSessionId !== undefined ? { parentRootSessionId: ctx.parentRootSessionId } : {}),
   });
 }
 

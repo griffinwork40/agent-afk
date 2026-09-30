@@ -440,8 +440,10 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
       ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
       ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
-      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}), ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
-      ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}), parentRootSessionId: this.ctx.parentRootSessionId ?? this.ctx.parentSession.sessionId, // #2442
+      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
+      ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
+      ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
+      parentRootSessionId: this.ctx.parentRootSessionId ?? this.ctx.parentSession.sessionId, // #2442
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 
