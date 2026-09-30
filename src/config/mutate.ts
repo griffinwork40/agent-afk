@@ -270,7 +270,7 @@ function assertConfigWritable(path: string, allowHumanOnly: boolean | undefined)
 export interface ConfigWriteResult {
   path: string;
   class: ConfigKeyClass;
-  value: string | number | boolean | number[] | ModelSlotBinding | Record<string, unknown>;
+  value: string | number | boolean | number[] | string[] | ModelSlotBinding | Record<string, unknown>;
   persistedTo: string;
 }
 

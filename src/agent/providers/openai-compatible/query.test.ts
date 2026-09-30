@@ -3729,3 +3729,137 @@ describe('OpenAICompatibleQuery — setPermissionMode mid-session seen by next t
     q.close();
   });
 });
+
+// ---- setSystemPrompt (#2420) ------------------------------------------------
+
+describe('OpenAICompatibleQuery — setSystemPrompt', () => {
+  beforeEach(() => {
+    installMockClient();
+    pendingChunks = [
+      { choices: [{ delta: { content: 'hi' } }] } as OpenAIChunk,
+      { choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } } as OpenAIChunk,
+    ];
+  });
+
+  it('setSystemPrompt mutates opts.config.systemPrompt when no factory is wired', () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig({ systemPrompt: 'original' }),
+    });
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+    expect(configRef.systemPrompt).toBe('original');
+
+    const result = q.setSystemPrompt('replaced');
+    expect(result).toBe(false); // no factory → false
+    expect(configRef.systemPrompt).toBe('replaced');
+    q.close();
+  });
+
+  it('setSystemPrompt invokes factory and returns true when factory is wired', () => {
+    const factory = vi.fn((base: string | undefined) => `BUILT:${base ?? ''}`);
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig({ systemPrompt: 'old' }),
+      systemPromptRebuildFactory: factory,
+    });
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+
+    const result = q.setSystemPrompt('new base');
+    expect(result).toBe(true);
+    expect(factory).toHaveBeenCalledWith('new base');
+    expect(configRef.systemPrompt).toBe('BUILT:new base');
+    q.close();
+  });
+
+  it('provider.query() wires factory so setSystemPrompt swaps the base fragment', () => {
+    const provider = new OpenAICompatibleProvider();
+    const q = provider.query({
+      prompt: singleInput('hi'),
+      config: baseConfig({ systemPrompt: 'original-base' }),
+    });
+
+    const configRef = (q as unknown as { opts: { config: AgentConfig } }).opts.config;
+    const beforeSwap = configRef.systemPrompt as string;
+    expect(beforeSwap).toContain('original-base');
+
+    const result = q.setSystemPrompt('swapped-base');
+    expect(result).toBe(true); // factory is wired by provider
+    const afterSwap = configRef.systemPrompt as string;
+    expect(afterSwap).toContain('swapped-base');
+    expect(afterSwap).not.toContain('original-base');
+    q.close();
+  });
+});
+
+// ---- setBeforeNextRound (#2420) --------------------------------------------
+
+describe('OpenAICompatibleQuery — setBeforeNextRound', () => {
+  it('stores and exposes the callback via the beforeNextRound getter', () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    expect(q.beforeNextRound).toBeUndefined();
+
+    const cb = () => 'steering text';
+    q.setBeforeNextRound(cb);
+    expect(q.beforeNextRound).toBe(cb);
+
+    q.setBeforeNextRound(undefined);
+    expect(q.beforeNextRound).toBeUndefined();
+    q.close();
+  });
+});
+
+// ---- listRewindTargets / rewindConversation (#2420) -----------------------
+
+describe('OpenAICompatibleQuery — listRewindTargets and rewindConversation', () => {
+  it('listRewindTargets returns empty array before any turn', () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    expect(q.listRewindTargets()).toEqual([]);
+    q.close();
+  });
+
+  it('rewindConversation returns session-closed verdict on a closed query', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    q.close();
+    const result = await q.rewindConversation(0);
+    expect(result.rewound).toBe(false);
+    expect(result.reason).toBe('session-closed');
+  });
+
+  it('rewindConversation returns invalid-target for out-of-range index', async () => {
+    const q = new OpenAICompatibleQuery({
+      auth: { apiKey: 'k', source: 'config', last4: 'kkkk' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'sid',
+      promptStream: singleInput('hi'),
+      config: baseConfig(),
+    });
+    const result = await q.rewindConversation(99);
+    expect(result.rewound).toBe(false);
+    expect(result.reason).toBe('invalid-target');
+    q.close();
+  });
+});

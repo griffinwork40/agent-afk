@@ -38,6 +38,7 @@ import {
   __setOpenAIClientFactory,
   OpenAICompatibleQuery,
   __setRetryBaseDelay,
+  __setRetryAfterMaxWaitMs,
 } from '../../providers/openai-compatible/query.js';
 import {
   MAX_CONNECTION_RETRIES,
@@ -507,18 +508,64 @@ describe('Conformance: S7 — stream stall before first byte (TTFB timeout)', ()
 });
 
 // ============================================================================
-// SCENARIO 8 — Usage/quota limit 429 with long Retry-After (gap: #2418)
+// SCENARIO 8 — Usage/quota limit 429 with long Retry-After (parity: #2418)
 //
-// anthropic-direct: parks session until reset (hours if needed).
-// openai-compatible: caps at 120s, retries ≤MAX_CONNECTION_RETRIES, then fails.
+// Before #2418: openai-compatible capped Retry-After at 120s, retried
+// ≤MAX_CONNECTION_RETRIES, then failed. anthropic-direct parked until reset.
 //
-// The parity gap (#2418 OPEN) is documented: openai-compatible never parks.
+// After #2418 (CLOSED): openai-compatible now classifies long-Retry-After 429s
+// (>5 min) as quota/usage-limit events and parks with `paused`/`resumed` events,
+// honoring `autoResumeOnUsageLimit` and the 2-hour bound — matching anthropic-direct.
+//
+// S8a: short Retry-After (≤5 min) → still handled by connection retry, no park.
+// S8b: long Retry-After (>5 min) → parks with paused/resumed on both providers.
 // ============================================================================
-describe('Conformance: S8 — usage/quota limit 429 with long Retry-After', () => {
+import { __setQuotaTwoHoursMs } from '../openai-compatible/query/usage-limit-tier.js';
+
+describe('Conformance: S8a — short Retry-After 429 (transient rate-limit, no park)', () => {
   afterEach(() => {
     if (vi.isFakeTimers()) vi.useRealTimers();
     __setOpenAIClientFactory(null);
     __setRetryBaseDelay(null);
+    __setRetryAfterMaxWaitMs(null);
+  });
+
+  // Short retry-after (2s, well under the 5-min threshold) is handled by the
+  // connection-phase retry loop in retry.ts — NOT the quota-limit park.
+  // openai-compatible retries ≤MAX_CONNECTION_RETRIES times, then fails.
+  it('openai-compatible: short Retry-After 429 → error after bounded retries (connection retry path)', async () => {
+    vi.useFakeTimers();
+    __setRetryBaseDelay(0);
+    try {
+      let callCount = 0;
+      installOAIFactory(async () => {
+        callCount++;
+        const headers = new Headers({ 'retry-after': '2' }); // 2s — transient
+        throw Object.assign(new Error('rate limited'), { status: 429, headers });
+      });
+      const resultPromise = drain(makeOAIQuery());
+      // Advance past 3 retries × 2s = 6s
+      await vi.advanceTimersByTimeAsync(10_000);
+      const events = await resultPromise;
+
+      // Short Retry-After → connection retry, not a quota park.
+      expect(pick(events, 'error')).not.toHaveLength(0);
+      expect(pick(events, 'paused')).toHaveLength(0); // no quota park
+      expect(callCount).toBeGreaterThanOrEqual(1);
+      expect(callCount).toBeLessThanOrEqual(MAX_CONNECTION_RETRIES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('Conformance: S8b — long Retry-After 429 (quota/usage limit) emits paused (#2418)', () => {
+  afterEach(() => {
+    if (vi.isFakeTimers()) vi.useRealTimers();
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+    __setRetryAfterMaxWaitMs(null);
+    __setQuotaTwoHoursMs(null);
   });
 
   it('anthropic-direct: 429 usage-limit emits a defined terminal event or parks (fake timers)', async () => {
@@ -545,36 +592,46 @@ describe('Conformance: S8 — usage/quota limit 429 with long Retry-After', () =
         const hasPaused = pick(events, 'paused').length > 0;
         expect(hasError || hasPaused).toBe(true);
       }
-      // 'parking' = session is correctly parked — valid behavior (#2418 documents this)
+      // 'parking' = session is correctly parked — valid behavior
       expect(['settled', 'parking']).toContain(outcome);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  // Expected divergence from anthropic-direct (#2418 OPEN):
-  // openai-compatible caps Retry-After at 120s and fails — never parks for hours.
-  // Use a small Retry-After (2s) here so fake timers only need to advance 3×2s=6s.
-  // The parity gap is NOT about the cap value but about the behavior:
-  // openai-compatible will FAIL while anthropic-direct would PARK and wait out hours.
-  it('openai-compatible: 429 with Retry-After → error after bounded retries (gap: #2418 open)', async () => {
+  // After #2418: openai-compatible parks on long Retry-After and emits paused.
+  // Use test injection to collapse all waits to 0ms so the test runs instantly
+  // without fake timers: __setRetryBaseDelay(0) kills backoff delays, and
+  // __setRetryAfterMaxWaitMs(0) collapses the connection-phase retry-after cap,
+  // and __setQuotaTwoHoursMs(100) gives a tiny 100ms budget window for the quota tier.
+  it('openai-compatible: long Retry-After 429 → emits paused (autoResume=true), parks (#2418 fixed)', async () => {
     vi.useFakeTimers();
+    __setRetryBaseDelay(0);
+    // Collapse connection-phase retry-after waits to 0 so retries fire instantly.
+    __setRetryAfterMaxWaitMs(0);
+    // Tiny 2-hour budget — immediately exhausted after quota tier fires once.
+    __setQuotaTwoHoursMs(50);
     try {
-      let callCount = 0;
       installOAIFactory(async () => {
-        callCount++;
-        const headers = new Headers({ 'retry-after': '2' }); // 2s Retry-After
+        // 10-minute retry-after — above the 5-min threshold → quota park after connection retries.
+        // Connection-phase retries are instant (maxWait=0), then error surfaces to quota tier.
+        const headers = new Headers({ 'retry-after': '600' });
         throw Object.assign(new Error('quota exceeded'), { status: 429, headers });
       });
       const resultPromise = drain(makeOAIQuery());
-      // Advance past 3 retries × 2s = 6s
-      await vi.advanceTimersByTimeAsync(10_000);
+      // Advance past the tiny quota budget (50ms). Connection retries are instant (maxWait=0),
+      // so after 3 instant retries the error surfaces to the quota tier, which parks for
+      // Math.min(600_000, 50) = 50ms, then checks budget (elapsed > 50ms) → surfaces error.
+      await vi.advanceTimersByTimeAsync(200);
       const events = await resultPromise;
 
-      // openai-compatible MUST fail (not park indefinitely like anthropic-direct would for long waits)
+      // openai-compatible MUST emit paused (quota park)
+      const paused = pick(events, 'paused');
+      expect(paused.length).toBeGreaterThan(0);
+      expect(paused[0]?.reason).toBe('usage-limit');
+      expect(paused[0]?.autoResume).toBe(true);
+      // Eventually surfaces an error (budget exhausted, not parked indefinitely)
       expect(pick(events, 'error')).not.toHaveLength(0);
-      expect(callCount).toBeGreaterThanOrEqual(1);
-      expect(callCount).toBeLessThanOrEqual(MAX_CONNECTION_RETRIES + 1);
     } finally {
       vi.useRealTimers();
     }
@@ -630,6 +687,147 @@ describe('Conformance: S9 — AFK retry count is bounded and predictable (docume
 });
 
 // ============================================================================
+// SCENARIO 11 — cachedInputTokens semantics parity (issue #2424)
+//
+// Anthropic: input_tokens EXCLUDES cache; cache_read_input_tokens is additive.
+// OpenAI:    prompt_tokens INCLUDES cached tokens; cached_tokens is a subset.
+//
+// Both must surface cached tokens in ProviderUsage.cachedInputTokens.
+// The contextWindowTokens computation must differ correctly:
+//   Anthropic: input + output + cachedInput + cacheCreation
+//   OpenAI:    input + output  (cached already included in input)
+// ============================================================================
+describe('Conformance: S11 — cachedInputTokens semantics (issue #2424)', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: cachedInputTokens populated from cache_read_input_tokens (additive to input)', async () => {
+    // Wire input_tokens = 20, cache_read_input_tokens = 80, output_tokens = 10.
+    // Anthropic: input_tokens EXCLUDES cache reads. Window = 20 + 10 + 80 = 110.
+    const evts: import('@anthropic-ai/sdk/resources').RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_s11_anth',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-test',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: {
+            input_tokens: 20,
+            output_tokens: 10,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 80,
+          },
+        },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'hi' },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      { type: 'content_block_stop', index: 0 } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 10 },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      { type: 'message_stop' } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+    ];
+    const client = makeAnthropicMock(() =>
+      (async function* () { for (const e of evts) yield e; })(),
+    );
+    const events = await collectAnthropicEvents(makeAnthropicQuery(client));
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // Anthropic: cachedInputTokens is from cache_read_input_tokens (additive).
+    expect(usage.cachedInputTokens).toBe(80);
+    // Anthropic: inputTokens is the EXCLUSIVE count (excludes cache reads).
+    expect(usage.inputTokens).toBe(20);
+    // Anthropic contextWindowTokens = input + output + cachedInput + cacheCreation
+    // = 20 + 10 + 80 + 0 = 110. Must NOT equal input + output alone (= 30).
+    expect(usage.contextWindowTokens).toBe(110);
+  });
+
+  it('openai-compatible: cachedInputTokens populated from prompt_tokens_details.cached_tokens (subset)', async () => {
+    // Wire prompt_tokens = 100 (includes 80 cached), completion_tokens = 10.
+    // OpenAI: cached_tokens is a SUBSET of prompt_tokens. Window = 100 + 10 = 110.
+    const chunks: OpenAIChunk[] = [
+      { choices: [{ delta: { content: 'hi' } }] } as OpenAIChunk,
+      {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          prompt_tokens_details: { cached_tokens: 80 },
+        },
+      } as OpenAIChunk,
+    ];
+    installOAIFactory(async () => (async function* () { for (const c of chunks) yield c; })());
+    const events = await drain(makeOAIQuery());
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // OpenAI: cachedInputTokens is the cached_tokens subset.
+    expect(usage.cachedInputTokens).toBe(80);
+    // OpenAI: inputTokens is the INCLUSIVE prompt_tokens (includes cached).
+    expect(usage.inputTokens).toBe(100);
+    // OpenAI: contextWindowTokens = prompt + completion = 100 + 10 = 110.
+    // Must NOT add cachedInputTokens again (that would be 190, double-counting).
+    expect(usage.contextWindowTokens).toBe(110);
+  });
+});
+
+// ============================================================================
+// SCENARIO 12 — contextWindowTokens set after a turn on both providers (#2424)
+//
+// Both providers must populate ProviderUsage.contextWindowTokens on a happy-
+// path turn so auto-compaction and getContextUsage() percentage are driven by
+// the provider-computed footprint rather than the input+output fallback.
+// ============================================================================
+describe('Conformance: S12 — contextWindowTokens populated after a turn (issue #2424)', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: contextWindowTokens is defined and positive after a text turn', async () => {
+    const evts = makeAnthropicTextStream('hello');
+    const client = makeAnthropicMock(() =>
+      (async function* () { for (const e of evts) yield e; })(),
+    );
+    const events = await collectAnthropicEvents(makeAnthropicQuery(client));
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // Must be a positive number (input + output + cache fields from the stream).
+    expect(typeof usage.contextWindowTokens).toBe('number');
+    expect((usage.contextWindowTokens ?? 0)).toBeGreaterThan(0);
+  });
+
+  it('openai-compatible: contextWindowTokens is defined and positive after a text turn', async () => {
+    const chunks = makeOpenAITextChunks('hello');
+    installOAIFactory(async () => (async function* () { for (const c of chunks) yield c; })());
+    const events = await drain(makeOAIQuery());
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // Must be a positive number (prompt_tokens + completion_tokens).
+    expect(typeof usage.contextWindowTokens).toBe('number');
+    expect((usage.contextWindowTokens ?? 0)).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================================
 // SCENARIO 10 — Optional ProviderQuery methods present / missing (gap: #2420)
 //
 // anthropic-direct: implements listRewindTargets, rewindConversation, setSystemPrompt.
@@ -649,23 +847,19 @@ describe('Conformance: S10 — optional ProviderQuery methods (gap: #2420)', () 
     expect(typeof query.setSystemPrompt).toBe('function');
   });
 
-  // Expected divergence (#2420 OPEN):
-  // openai-compatible does not implement these optional methods.
-  it('openai-compatible: listRewindTargets, rewindConversation, setSystemPrompt absent (gap: #2420 open)', async () => {
+  // #2420 CLOSED: openai-compatible now implements these optional methods.
+  it('openai-compatible: listRewindTargets, rewindConversation, setSystemPrompt, setBeforeNextRound present (#2420 closed)', async () => {
     installOAIFactory(async () => { throw new Error('unused'); });
     const query = makeOAIQuery();
 
-    // These methods are intentionally absent on OpenAICompatibleQuery.
-    // When #2420 is fixed, these assertions will need updating.
-    const q = query as unknown as Record<string, unknown>;
-    expect(q['listRewindTargets']).toBeUndefined();
-    expect(q['rewindConversation']).toBeUndefined();
-    // setSystemPrompt: may be a no-op stub or absent
-    if (q['setSystemPrompt'] !== undefined) {
-      // If present (stub), must not throw
-      expect(() => (q['setSystemPrompt'] as (s: string | undefined) => void)(undefined)).not.toThrow();
-    }
-    // The rewindFiles method must return canRewind: false
+    // All four resilience methods are now implemented on OpenAICompatibleQuery.
+    expect(typeof query.listRewindTargets).toBe('function');
+    expect(typeof query.rewindConversation).toBe('function');
+    expect(typeof query.setSystemPrompt).toBe('function');
+    expect(typeof query.setBeforeNextRound).toBe('function');
+    // setSystemPrompt must not throw when called with undefined
+    expect(() => query.setSystemPrompt(undefined)).not.toThrow();
+    // The rewindFiles method must still return canRewind: false (file rewind unsupported)
     const rewindResult = await query.rewindFiles('any-id', { dryRun: true });
     expect(rewindResult.canRewind).toBe(false);
   });

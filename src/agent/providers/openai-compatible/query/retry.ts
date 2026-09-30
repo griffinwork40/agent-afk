@@ -81,6 +81,19 @@ export function computeBackoffDelay(attempt: number): number {
 export const RETRY_AFTER_MAX_WAIT_MS = 120_000;
 
 /**
+ * Test injection hook for `RETRY_AFTER_MAX_WAIT_MS`. Pass `null` to restore
+ * the production default. Used by conformance tests that need short waits to
+ * drive the connection-phase retry loop quickly without real timer delays.
+ */
+let retryAfterMaxWaitOverride: number | null = null;
+export function __setRetryAfterMaxWaitMs(ms: number | null): void {
+  retryAfterMaxWaitOverride = ms;
+}
+function resolveRetryAfterMaxWaitMs(): number {
+  return retryAfterMaxWaitOverride ?? RETRY_AFTER_MAX_WAIT_MS;
+}
+
+/**
  * Server-advised backoff for a retryable error, or `undefined` when the error
  * carries no usable `retry-after` / `retry-after-ms` header.
  *
@@ -95,7 +108,7 @@ export const RETRY_AFTER_MAX_WAIT_MS = 120_000;
 export function retryAfterDelayMs(err: unknown): number | undefined {
   const hinted = parseRetryAfterMs(err);
   if (hinted === undefined) return undefined;
-  return Math.min(hinted, RETRY_AFTER_MAX_WAIT_MS);
+  return Math.min(hinted, resolveRetryAfterMaxWaitMs());
 }
 
 /**

@@ -188,6 +188,16 @@ export class SkillExecutor {
       this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
     );
 
+    // Contract: a skill hidden from the model-facing manifest (SKILL.md
+    // `disable-model-invocation: true` or `skills.hidden`) is NOT refused
+    // here. "Hidden" means "not advertised", not "forbidden": a user `/name`
+    // slash command reaches this executor as a model `skill` tool call (the
+    // slash bridge instructs the model to dispatch it —
+    // src/cli/slash/_lib/skill-message-bridge.ts), and this executor cannot
+    // tell that call apart from a model-initiated one. Refusing here would make
+    // every hidden skill unusable, slash command included. This diverges from
+    // Claude Code, whose slash path does not round-trip through the model.
+
     // 1. Try the global skill registry (built-in + user-space skills).
     //    These already have handlers that dispatch subagents internally.
     //    Only the getSkill LOOKUP is guarded: it throws "Skill not found" when

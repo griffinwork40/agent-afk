@@ -215,7 +215,7 @@ export function coerceEnvValue(meta: EnvVarMeta, raw: string): CoerceResult {
 // ── Config-key (afk.config.json) classification + validation ──────────────────
 
 export type ConfigKeyTier = 'agent' | 'human';
-export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'model-slot' | 'object';
+export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'string-array' | 'model-slot' | 'object';
 
 export interface ConfigKeySpec {
   /** Dotted path, e.g. `models.large` or `telegram.notify.mode`. */
@@ -297,6 +297,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // because that would let an agent expand its own hook subprocesses\' env access.
   // Value shape: Record<pluginName, string[]> — see issue #2459.
   { path: 'pluginHookEnv', tier: 'human', type: 'object', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
+  // Human-tier: hiding a skill from the model is an operator decision the agent
+  // must not be able to reverse on its own config. Accepts bare skill names
+  // (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Each
+  // entry is matched the same way `excludeName` suffix-matches — bare "name"
+  // matches both "name" and "<plugin>:name".
+  { path: 'skills.hidden', tier: 'human', type: 'string-array', description: 'Skill names to hide from the model-facing manifest while keeping them slash-invocable (human-tier: an operator configuration the agent must not reverse). Accepts bare names (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Matches both exact name and any "<plugin>:<name>" suffix.' },
 ];
 
 const CONFIG_KEY_BY_PATH = new Map(CONFIG_KEY_SPECS.map((s) => [s.path, s]));
@@ -313,7 +319,7 @@ export function classifyConfigKey(path: string): ConfigKeyClass {
 }
 
 export type ConfigCoerceResult =
-  | { ok: true; value: string | number | boolean | number[] | ModelSlotBinding | Record<string, unknown> }
+  | { ok: true; value: string | number | boolean | number[] | string[] | ModelSlotBinding | Record<string, unknown> }
   | { ok: false; error: string };
 
 /**
@@ -368,6 +374,24 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
         nums.push(n);
       }
       return { ok: true, value: nums };
+    }
+    case 'string-array': {
+      let arr: unknown[];
+      if (Array.isArray(raw)) arr = raw;
+      else if (typeof raw === 'string') {
+        arr = raw
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      } else {
+        return { ok: false, error: `${spec.path} expects an array of strings` };
+      }
+      const strs: string[] = [];
+      for (const el of arr) {
+        if (typeof el !== 'string') return { ok: false, error: `${spec.path} contains a non-string` };
+        strs.push(el);
+      }
+      return { ok: true, value: strs };
     }
     case 'model-slot': {
       if (typeof raw === 'string') {

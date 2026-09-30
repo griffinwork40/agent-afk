@@ -300,8 +300,10 @@ export function indexKeyForPath(
   // symlink, missing path).
   let resolvedRoot = root;
   let resolvedLeaf = leaf;
-  try { resolvedRoot = realpathSync(root); } catch { /* keep raw */ }
-  try { resolvedLeaf = realpathSync(leaf); } catch { /* keep raw */ }
+  try {
+    resolvedRoot = realpathSync(root);
+    resolvedLeaf = realpathSync(leaf);
+  } catch { /* keep raw strings when either path cannot be resolved */ }
   if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
   const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;

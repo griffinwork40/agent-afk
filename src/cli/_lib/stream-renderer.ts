@@ -343,6 +343,9 @@ export class StreamRenderer {
     // Note: 'stage-rail' has been removed from this overlay. The stage rail is
     // now a reserved footer row managed by LoopStageBar (same DECSTBM pattern as
     // BackgroundStatusBar) and painted independently of the compositor frame.
+    // Note: 'subagent-status' has been removed from this overlay (#2661). The
+    // status stack was redundant with the tool-lane Agent rows, which already
+    // surface every running subagent with elapsed time, nesting, and labels.
     this.overlayComposer = new OverlayComposer(compositor, [
       THOUGHT_SUMMARY_SLOT, // held `◆ thought for Xs` while it fades (smoke only); above the next phase
       'thinking-live',

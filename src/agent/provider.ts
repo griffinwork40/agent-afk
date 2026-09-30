@@ -492,11 +492,9 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * hot-reload it did not achieve, so a `false` here means "saved to disk,
    * applies on next launch".
    *
-   * Implemented by `AnthropicDirectQuery` and forwarded by `ProviderRouter`.
-   * `OpenAICompatibleQuery` deliberately leaves this undefined — it assembles
-   * its system parts as locals inside `query()` rather than retaining them on
-   * the instance, so a live swap there needs the #876 staleness rework first.
-   * `AgentSession.setSystemPrompt()` calls this only when present.
+   * Implemented by `AnthropicDirectQuery`, `OpenAICompatibleQuery`, and
+   * forwarded by `ProviderRouter`. `AgentSession.setSystemPrompt()` calls
+   * this only when present.
    */
   setSystemPrompt?(basePrompt: string | undefined): boolean;
   /**

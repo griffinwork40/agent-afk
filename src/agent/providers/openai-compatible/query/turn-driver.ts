@@ -42,6 +42,7 @@ import {
   type FinishTurnContext,
 } from './turn-iteration.js';
 import { runIterationWithOverloadPause } from './overload-pause-tier.js';
+import { runIterationWithQuotaLimitPause } from './usage-limit-tier.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
@@ -51,6 +52,7 @@ import type { OpenAIMessage } from '../messages.js';
 import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
+import { emitQueuedUserMessage } from '../../../trace/emit.js';
 
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
@@ -72,6 +74,88 @@ export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   readonly currentPermissionMode: string;
   /** Mutable — set true by close(). */
   readonly closed: boolean;
+  /** Inter-round steering callback; set via setBeforeNextRound(). Read live. */
+  readonly beforeNextRound: (() => string | undefined) | undefined;
+}
+
+/**
+ * Inject inter-round steering text from `beforeNextRound()` onto the last
+ * tool-result user message, mirroring anthropic-direct/loop/inter-round.ts.
+ */
+export function applyBeforeNextRound(
+  priorTurns: OpenAIMessage[],
+  steeringText: string | undefined,
+  traceWriter: TraceSink | undefined,
+  subagentId: string | undefined,
+): void {
+  if (!steeringText) return;
+  const last = priorTurns.at(-1);
+  // Invariant: OpenAI tool results are `role:'tool'` messages, so after an
+  // ordinary tool round the tail is NOT a user message. The callback has
+  // already drained the steering queue, so returning here would lose the
+  // text; append a fresh user turn instead (valid after tool{} messages —
+  // dispatch-append.ts uses the same shape for queued/image follow-ups).
+  if (!last || last.role !== 'user') {
+    priorTurns.push({ role: 'user', content: steeringText } as OpenAIMessage);
+  } else if (typeof last.content === 'string') {
+    last.content = last.content + '\n\n' + steeringText;
+  } else if (Array.isArray(last.content)) {
+    (last.content as Array<{ type: string; text: string }>).push({ type: 'text', text: steeringText });
+  }
+  void emitQueuedUserMessage(traceWriter, {
+    jobId: subagentId ?? '',
+    subagentId: subagentId ?? '',
+    byteLength: Buffer.byteLength(steeringText, 'utf8'),
+  });
+}
+
+/**
+ * Apply inter-round steering and immediately sync the journal.
+ *
+ * Invariant: `dispatchAndAppend` already synced the journal at round-end, but
+ * steering text appended AFTER that sync is invisible to JournalSync (same object
+ * reference, no diff detected). Syncing here ensures the steering content is
+ * persisted before the next model request — mirrors anthropic-direct's
+ * inter-round sync (loop/inter-round.ts).
+ */
+export function applyAndSyncSteering(ctx: TurnDriverContext): void {
+  const steeringText = ctx.beforeNextRound?.();
+  applyBeforeNextRound(ctx.priorTurns, steeringText, ctx.traceWriter, ctx.opts.config.subagentId);
+  if (steeringText) ctx.journal.sync(ctx.priorTurns);
+}
+
+/**
+ * Build a composited iteration factory: quota-limit park (outer) wrapping
+ * overload-pause (inner) wrapping the raw stream iteration.
+ *
+ * Extracted so `runTurnInner` stays under the 200-line function ceiling.
+ * All parameters are explicit — no closure over outer locals.
+ */
+function makeCompositeIteration(
+  ctx: TurnDriverContext,
+  controller: AbortController,
+  vision: boolean,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+): ReturnType<typeof runIterationWithQuotaLimitPause> {
+  return runIterationWithQuotaLimitPause(
+    () => runIterationWithOverloadPause(
+      () => runIteration(ctx, controller, vision, windDownReason),
+      {
+        surface: ctx.opts.config.surface,
+        traceWriter: ctx.traceWriter,
+        signal: controller.signal,
+        isClosed: () => ctx.closed,
+        sessionId: ctx.initSessionId,
+      },
+    ),
+    {
+      autoResumeOnUsageLimit: ctx.opts.config.autoResumeOnUsageLimit ?? true,
+      traceWriter: ctx.traceWriter,
+      signal: controller.signal,
+      isClosed: () => ctx.closed,
+      sessionId: ctx.initSessionId,
+    },
+  );
 }
 
 /**
@@ -160,16 +244,7 @@ export async function* runTurnInner(
       return;
     }
 
-    const result = yield* runIterationWithOverloadPause(
-      () => runIteration(ctx, controller, vision, windDownReason),
-      {
-        surface: ctx.opts.config.surface,
-        traceWriter: ctx.traceWriter,
-        signal: controller.signal,
-        isClosed: () => ctx.closed,
-        sessionId: ctx.initSessionId,
-      },
-    );
+    const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason);
     if (result === null) {
       ctx.abort.clear(controller);
       if (controller.signal.aborted || ctx.closed) {
@@ -207,6 +282,7 @@ export async function* runTurnInner(
       yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
       return;
     }
+    applyAndSyncSteering(ctx);
     round += 1;
 
     {

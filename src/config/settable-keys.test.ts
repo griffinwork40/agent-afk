@@ -213,6 +213,70 @@ describe('coerceConfigValue', () => {
   });
 });
 
+describe('coerceConfigValue — string-array type', () => {
+  const spec = getConfigKeySpec('skills.hidden')!;
+
+  it('accepts an array of strings', () => {
+    const result = coerceConfigValue(spec, ['forge', 'mint']);
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint'] });
+  });
+
+  it('accepts a comma-separated string and splits it', () => {
+    const result = coerceConfigValue(spec, 'forge,mint,ship');
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint', 'ship'] });
+  });
+
+  it('trims whitespace from comma-split entries', () => {
+    const result = coerceConfigValue(spec, ' forge , mint ');
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint'] });
+  });
+
+  it('rejects a non-string element in the array', () => {
+    const result = coerceConfigValue(spec, ['forge', 42]);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/non-string/);
+  });
+
+  it('rejects a non-string non-array input', () => {
+    const result = coerceConfigValue(spec, 123);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an array/);
+  });
+
+  it('returns an empty array for an empty comma-string', () => {
+    const result = coerceConfigValue(spec, '');
+    expect(result).toEqual({ ok: true, value: [] });
+  });
+});
+
+describe('coerceConfigValue — object type', () => {
+  const spec = getConfigKeySpec('pluginHookEnv')!;
+
+  it('accepts a plain object', () => {
+    const value = { 'my-plugin': ['SECRET_A', 'SECRET_B'] };
+    const result = coerceConfigValue(spec, value);
+    expect(result).toEqual({ ok: true, value });
+  });
+
+  it('rejects null (not an object)', () => {
+    const result = coerceConfigValue(spec, null);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects an array (not a plain object)', () => {
+    const result = coerceConfigValue(spec, ['foo', 'bar']);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects a string (not an object)', () => {
+    const result = coerceConfigValue(spec, 'my-plugin=SECRET_A');
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+});
+
 describe('dotted-path helpers', () => {
   it('setAtPath creates nested objects', () => {
     const obj: Record<string, unknown> = {};

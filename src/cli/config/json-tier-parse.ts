@@ -288,6 +288,18 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     }
   }
 
+  // skills.hidden: string array of skill names to hide from the model-facing
+  // manifest. Accepts bare names and plugin-qualified names. Validated
+  // defensively: non-array values are ignored; non-string elements are skipped.
+  if (json.skills !== undefined && Array.isArray(json.skills.hidden)) {
+    const hidden = (json.skills.hidden as unknown[]).filter(
+      (v): v is string => typeof v === 'string' && v.length > 0,
+    );
+    if (hidden.length > 0) {
+      config.skills = { hidden };
+    }
+  }
+
   return { config, modelsPartial };
 }
 
