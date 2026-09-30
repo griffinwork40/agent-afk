@@ -41,6 +41,7 @@ import type {
   SpineRelationItem,
 } from './spine-classifier.js';
 import { errorMessage } from '../../utils/errors.js';
+import { stripTrailingAnnotation, REINFORCED_LABEL, WEAKENED_LABEL } from './spine-hook.annotations.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -126,13 +127,11 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
             // cut mid-character, e.g. "(reinf") before appending the new one so
             // that date-rollover and truncation do not accumulate duplicates.
             //
-            // The regex matches any truncated prefix of " (reinforced YYYY-MM-DD)"
-            // at end of string, requiring at least " (re" to avoid false-positives
-            // on legitimate description text that ends in a parenthetical.
+            // stripTrailingAnnotation removes any truncated prefix of
+            // " (reinforced YYYY-MM-DD)" at end of string (spine-hook.annotations.ts).
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (reinforced ${isoDate})`;
-            const baseDescription = existing.description
-              .replace(/ \(re(?:i(?:nf(?:or(?:ce(?:d(?: [\d-]{0,10}\)?)?)?)?)?)?)?$/, '')
+            const baseDescription = stripTrailingAnnotation(existing.description, REINFORCED_LABEL)
               .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
             const newDescription = baseDescription + suffix;
             if (newDescription !== existing.description) {
@@ -169,11 +168,9 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
             // appending the new one — same date-rollover / truncation guard as
             // the strengthens branch above.
             //
-            // The regex matches any truncated prefix of
-            // " (partially weakened YYYY-MM-DD)" at end of string, requiring at
-            // least " (pa" to avoid false-positives on legitimate text.
-            const baseDescription = existing.description
-              .replace(/ \(pa(?:r(?:ti(?:al(?:ly(?: w(?:ea(?:ke(?:ne(?:d(?: [\d-]{0,10}\)?)?)?)?)?)?)?)?)?)?)?$/, '')
+            // stripTrailingAnnotation removes any truncated prefix of
+            // " (partially weakened YYYY-MM-DD)" at end of string.
+            const baseDescription = stripTrailingAnnotation(existing.description, WEAKENED_LABEL)
               .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
             const newDescription = baseDescription + suffix;
             if (newDescription !== existing.description) {
