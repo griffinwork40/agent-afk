@@ -29,6 +29,7 @@ import { MODEL_CAP_BYTES } from './_output-cap.js';
 import { classifyRgExit2, type GrepSettleResult } from './_rg-exit2.js';
 import { createStreamingCap, SCAN_CAP_BYTES, scanCapKillNote } from './_streaming-cap.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { awaitChildExit } from './_await-child-exit.js';
 
 /** Optional overrides for {@link createGrepHandler}. */
 export interface GrepHandlerOptions {
@@ -104,6 +105,53 @@ function parseGrepInput(
 }
 
 /**
+ * Build the ripgrep argv for one search. Pure: depends only on its inputs and
+ * the read-denylist, so the spawn site stays a thin wrapper.
+ */
+function buildRgArgs(pattern: string, path: string, include: string | undefined): string[] {
+  // Base flags. `-n` = line numbers. `--no-heading`/`--color=never` force the
+  // flat `path:line:content` shape on a pipe (don't rely on rg's tty auto-
+  // detection). `--hidden` makes rg search dotfiles/dirs (.github, .env,
+  // .claude) that the old `grep -rn` reached and agents grep constantly — rg
+  // skips them by default; .gitignore is still honored (node_modules/dist
+  // stay skipped). Do NOT add `-r`/`-rn`: in ripgrep `-r` is `--replace=TEXT`
+  // and would silently rewrite every match.
+  const args = ['-n', '--no-heading', '--color=never', '--hidden'];
+
+  if (include) {
+    args.push('-g', include);
+  }
+
+  // `resolveAndContain` protects the requested root, but a readable parent
+  // can contain unconditionally protected descendants. Prune each such
+  // subtree before ripgrep opens any files. Anchor the globs at the search
+  // root and escape glob metacharacters in literal path names.
+  // Invariant: normalization lives in `getReadDenylistDescendants` — do not
+  // reintroduce a local `relative(path, blocked)` (see its docstring).
+  for (const literalRel of getReadDenylistDescendants(path)) {
+    const literal = literalRel
+      .split('/')
+      .map((s) => s.replace(/([*?\[\]{}\\])/g, '\\$1'))
+      .join('/');
+    args.push('-g', `!${literal}`, '-g', `!${literal}/**`);
+  }
+
+  // `--hidden` re-includes .git (a dot-dir not covered by .gitignore); exclude
+  // it explicitly. Pushed AFTER any include glob so it always wins for .git paths.
+  args.push('-g', '!.git');
+
+  // Invariant: `pattern` and `path` MUST follow a `--` end-of-options separator.
+  // Without it, ripgrep parses any argument beginning with `-` as a FLAG, not a
+  // positional: a benign pattern like `->` fails ("unrecognized flag"), and a
+  // prompt-injected `--pre=<cmd>` reaches rg's preprocessor flag and EXECUTES
+  // <cmd> for every file (argument-injection → command execution — system `grep`
+  // had no such flag, so the swap to rg makes the missing `--` exploitable).
+  // `--` forces rg to treat everything after it as positionals: pattern, then path.
+  args.push('--', pattern, path);
+  return args;
+}
+
+/**
  * Create a grep handler closed over the session's working directory.
  *
  * `cwd` scopes both the default search path (when the model omits `path`)
@@ -146,52 +194,16 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
   return new Promise((resolve) => {
     let resolved = false;
 
-    function settle(result: GrepSettleResult) {
+    // `afterKill`: the child was just killed; hold the result until it has
+    // really exited (bounded, see `_await-child-exit.ts`) so no rg outlives us.
+    function settle(result: GrepSettleResult, afterKill = false) {
       if (resolved) return;
       resolved = true;
       signal.removeEventListener('abort', abortHandler);
-      resolve(result);
+      resolve(afterKill ? awaitChildExit(proc).then(() => result) : result);
     }
 
-    // Base flags. `-n` = line numbers. `--no-heading`/`--color=never` force the
-    // flat `path:line:content` shape on a pipe (don't rely on rg's tty auto-
-    // detection). `--hidden` makes rg search dotfiles/dirs (.github, .env,
-    // .claude) that the old `grep -rn` reached and agents grep constantly — rg
-    // skips them by default; .gitignore is still honored (node_modules/dist
-    // stay skipped). Do NOT add `-r`/`-rn`: in ripgrep `-r` is `--replace=TEXT`
-    // and would silently rewrite every match.
-    const args = ['-n', '--no-heading', '--color=never', '--hidden'];
-
-    if (include) {
-      args.push('-g', include);
-    }
-
-    // `resolveAndContain` protects the requested root, but a readable parent
-    // can contain unconditionally protected descendants. Prune each such
-    // subtree before ripgrep opens any files. Anchor the globs at the search
-    // root and escape glob metacharacters in literal path names.
-    // Invariant: normalization lives in `getReadDenylistDescendants` — do not
-    // reintroduce a local `relative(path, blocked)` (see its docstring).
-    for (const literalRel of getReadDenylistDescendants(path)) {
-      const literal = literalRel
-        .split('/')
-        .map((s) => s.replace(/([*?\[\]{}\\])/g, '\\$1'))
-        .join('/');
-      args.push('-g', `!${literal}`, '-g', `!${literal}/**`);
-    }
-
-    // `--hidden` re-includes .git (a dot-dir not covered by .gitignore); exclude
-    // it explicitly. Pushed AFTER any include glob so it always wins for .git paths.
-    args.push('-g', '!.git');
-
-    // Invariant: `pattern` and `path` MUST follow a `--` end-of-options separator.
-    // Without it, ripgrep parses any argument beginning with `-` as a FLAG, not a
-    // positional: a benign pattern like `->` fails ("unrecognized flag"), and a
-    // prompt-injected `--pre=<cmd>` reaches rg's preprocessor flag and EXECUTES
-    // <cmd> for every file (argument-injection → command execution — system `grep`
-    // had no such flag, so the swap to rg makes the missing `--` exploitable).
-    // `--` forces rg to treat everything after it as positionals: pattern, then path.
-    args.push('--', pattern, path);
+    const args = buildRgArgs(pattern, path, include);
 
     // Effective cwd priority (parity with the bash handler, #441):
     //   1. context?.resolveBase — permission anchor (updated in place on an
@@ -253,7 +265,7 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       // normally matches on stdout, but a search over an unreadable tree can
       // be all stderr, and falling back keeps that diagnosable.
       const body = out.totalBytes() === 0 && err.totalBytes() > 0 ? err.render() : out.render();
-      settle({ content: stripEscapeSequences(body.trimEnd()) + scanCapKillNote(scanCap), truncated: true });
+      settle({ content: stripEscapeSequences(body.trimEnd()) + scanCapKillNote(scanCap), truncated: true }, true);
     }
 
     proc.stdout!.on('data', (chunk: Buffer) => {
@@ -266,10 +278,10 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
       maybeScanCap('stderr');
     });
 
-    // Abort — resolve immediately, don't wait for streams.
+    // Abort — don't wait for streams to drain, only (bounded) for the exit.
     const abortHandler = () => {
       proc.kill();
-      settle({ content: 'Search aborted', isError: true });
+      settle({ content: 'Search aborted', isError: true }, true);
     };
     signal.addEventListener('abort', abortHandler);
 

@@ -11,6 +11,30 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.276.6] - 2026-09-30
+
+### Fixed
+- bash credential floor failed open on Windows (#2625) (138b7636)
+- unconfined sessions no longer denied with 'write roots []' (#2624) (abbff067)
+- L7+L8 postinstall import and three misc Windows test failures (#703) (#2623) (493d044e)
+- use resolveShell() in shell-task instead of hardcoded /bin/sh (#2622) (1b57dc2b)
+- close provider SQLite handles before test tmpdir removal (#2621) (30867b8d)
+- fix Windows path separator and 8.3 short-name bugs in sandbox containment (#703) (#2620) (e6c8d532)
+- fix POSIX path literals in util/tool tests and glob pattern separator bug (#2619) (6e2301ad)
+
+### Changed
+- add ratcheted POSIX-assumption guard enforced in pnpm test (#2626) (0487ad6e)
+- replace hardcoded /tmp with os.tmpdir() (#2618) (d9784900)
+
+## [5.276.5] - 2026-09-30
+
+### Fixed
+- reset denylist cache and use vi.stubEnv in symlink test block (#2615) (44477480)
+- wait (bounded) for killed ripgrep to exit before resolving (#2631) (c9aaf2e1)
+
+### Changed
+- fix POSIX path literals in daemon tests for Windows compat (#2617) (b0f1515f)
+
 ## [5.276.4] - 2026-09-29
 
 ### Fixed

@@ -276,10 +276,20 @@ describe('NdjsonTraceWriter', () => {
     // Using process.execPath + the Node loader API keeps the invocation
     // identical on every platform: no shell, no shim, no extension lookup.
     const { spawnSync } = await import('node:child_process');
-    const { fileURLToPath } = await import('node:url');
+    const { fileURLToPath, pathToFileURL } = await import('node:url');
     const { writeFile: writeFileAsync } = await import('node:fs/promises');
     const here = dirname(fileURLToPath(import.meta.url));
     const writerSrc = join(here, 'writer.ts');
+
+    // Contract: the import specifier for writer.ts in the generated child
+    // script must be a file:// URL, not a bare Windows path.  On Windows,
+    // join() produces backslash-separated paths (e.g. C:\...\writer.ts) which
+    // are NOT valid ESM import specifiers — Node's ESM resolver only accepts
+    // file:// URLs, relative paths (./...), or package names.  A raw Windows
+    // path passed to import() triggers ERR_UNSUPPORTED_ESM_URL_SCHEME and the
+    // child process exits without writing any trace events.  pathToFileURL()
+    // converts the path to a proper file:// URL on every platform.  See #703 L8a.
+    const writerUrl = pathToFileURL(writerSrc).href;
 
     // Child: open a writer, write one event (flushed), then throw uncaught.
     // The throw must escape with no handler so Node fires 'exit' and the
@@ -288,7 +298,7 @@ describe('NdjsonTraceWriter', () => {
     await writeFileAsync(
       childPath,
       [
-        `import { NdjsonTraceWriter } from ${JSON.stringify(writerSrc)};`,
+        `import { NdjsonTraceWriter } from ${JSON.stringify(writerUrl)};`,
         `const w = new NdjsonTraceWriter({ traceDir: process.env.CHILD_TRACE_DIR });`,
         `await w.write({ kind: 'session_phase', payload: { phase: 'session_init_done', durationMs: 7 } });`,
         `setTimeout(() => { throw new Error('simulated uncaught crash'); }, 5);`,

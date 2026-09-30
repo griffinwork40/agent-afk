@@ -19,10 +19,11 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildDaemonSessionFactory } from './daemon-session-factory.js';
+import { buildDaemonSessionFactory, type BuildDaemonSessionFactoryOpts, type DaemonSessionFactory } from './daemon-session-factory.js';
 import type { AgentConfig } from '../../agent/types.js';
 import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
 import type { ToolPermissionConfig } from '../../agent/tools/permissions.js';
+import { closeStore } from '../../agent/goals/goal-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers — read private provider internals (same pattern as
@@ -56,6 +57,32 @@ function readComposeExecutor(provider: AnthropicDirectProvider): unknown {
 const TEST_API_KEY = 'sk-ant-test-dummy-key-for-unit-tests';
 
 // ---------------------------------------------------------------------------
+// Teardown ownership. On Windows an open SQLite handle (kv.db / memory.db)
+// makes rmSync of the tmp AFK_HOME fail with EBUSY. Each test closes exactly
+// what IT owns: the sessions it spawned, the factories it built (via their
+// opt-in dispose(), which closes the stores the factory created), and the
+// goal-store singleton that injectGoalPrompt opens. Sessions deliberately do
+// NOT close provider stores — those are shared (see daemon-session-factory.ts).
+// ---------------------------------------------------------------------------
+
+const openSessions: Array<{ close: () => Promise<void> | void }> = [];
+function trackSession<T extends { close: () => Promise<void> | void }>(s: T): T {
+  openSessions.push(s);
+  return s;
+}
+const builtFactories: DaemonSessionFactory[] = [];
+function buildFactory(opts: BuildDaemonSessionFactoryOpts): DaemonSessionFactory {
+  const factory = buildDaemonSessionFactory(opts);
+  builtFactories.push(factory);
+  return factory;
+}
+async function releaseOwnedHandles(): Promise<void> {
+  await Promise.all(openSessions.splice(0).map((s) => Promise.resolve(s.close()).catch(() => undefined)));
+  for (const factory of builtFactories.splice(0)) factory.dispose();
+  closeStore();
+}
+
+// ---------------------------------------------------------------------------
 // Minimal AgentConfig — mirrors what CronScheduler.spawnSession() builds
 // before handing off to the sessionFactory.
 // ---------------------------------------------------------------------------
@@ -81,35 +108,25 @@ describe('buildDaemonSessionFactory', () => {
   // the same temp-dir convention memory-store.test.ts uses.
   let prevAfkHome: string | undefined;
   let tmpHome: string;
-  // Track sessions created per test so we can await close() before rmSync.
-  // On Windows, open SQLite handles cause rmSync to throw EBUSY.
-  const openSessions: Array<{ close: () => Promise<void> | void }> = [];
-  function trackSession<T extends { close: () => Promise<void> | void }>(s: T): T {
-    openSessions.push(s);
-    return s;
-  }
   beforeAll(() => {
     prevAfkHome = process.env['AFK_HOME'];
     tmpHome = mkdtempSync(join(tmpdir(), 'afk-daemon-factory-test-'));
     process.env['AFK_HOME'] = tmpHome;
   });
   afterAll(async () => {
-    // Close all open sessions before removing the tmpdir on Windows.
-    await Promise.all(openSessions.map((s) => Promise.resolve(s.close()).catch(() => undefined)));
-    openSessions.length = 0;
+    await releaseOwnedHandles();
     if (prevAfkHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = prevAfkHome;
-    // Best-effort: on Windows a lingering SQLite handle (kv.db) may cause EBUSY.
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+    rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it('returns a factory function', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     expect(typeof factory).toBe('function');
   });
 
   it('factory produces an AgentSession instance', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     // AgentSession has a `sendMessage` method — use it as a duck-type check.
     expect(typeof session.sendMessage).toBe('function');
@@ -117,7 +134,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('session provider is an AnthropicDirectProvider for an Anthropic-routed model', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider;
@@ -126,7 +143,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it("provider allowedTools contains 'agent', 'skill', and 'compose'", () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -141,7 +158,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('subagentExecutor is truthy (not bare provider)', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -153,7 +170,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('skillExecutor is truthy', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -165,7 +182,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('composeExecutor is truthy', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig()));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -177,7 +194,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('preserves permissionMode:bypassPermissions from the incoming config', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const config = makeConfig({ permissionMode: 'bypassPermissions' });
     const session = trackSession(factory(config));
     // AgentSession stores config; the field survives the spread.
@@ -187,7 +204,7 @@ describe('buildDaemonSessionFactory', () => {
   });
 
   it('passes a cwd from opts into the config', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY, cwd: '/tmp/my-repo' });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY, cwd: '/tmp/my-repo' });
     const config = makeConfig();
     const session = trackSession(factory(config));
     // cwd comes from opts and is in the provider/executor, but the spread
@@ -212,7 +229,7 @@ describe('buildDaemonSessionFactory', () => {
       seal: async () => undefined,
     } as unknown as NonNullable<AgentConfig['traceWriter']>;
 
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
     const session = trackSession(factory(makeConfig({ traceWriter })));
     const internals = session as unknown as { config?: { provider?: unknown } };
     const provider = internals.config?.provider as AnthropicDirectProvider;
@@ -243,8 +260,8 @@ describe('buildDaemonSessionFactory', () => {
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
     try {
       process.env[key] = '1';
-      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-      session = factory(makeConfig());
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: { provider?: unknown } };
       const provider = internals.config?.provider as AnthropicDirectProvider;
 
@@ -275,7 +292,8 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
     process.env['AFK_HOME'] = tmpAfkHome;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await releaseOwnedHandles();
     delete process.env['AFK_HOME'];
     rmSync(tmpAfkHome, { recursive: true, force: true });
   });
@@ -283,14 +301,14 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
   it('wireExecutors gets config.cwd when it differs from opts.cwd', () => {
     const daemonWideCwd = tmpAfkHome; // the "daemon-wide" cwd
     const taskCwd = join(tmpdir()); // the per-task cwd (a different, real dir)
-    const factory = buildDaemonSessionFactory({
+    const factory = buildFactory({
       model: 'sonnet',
       apiKey: TEST_API_KEY,
       cwd: daemonWideCwd,
     });
     // Simulate session-spawn.ts setting cwd to taskCwd on the config:
     const config = makeConfig({ cwd: taskCwd });
-    const session = factory(config);
+    const session = trackSession(factory(config));
     const internals = session as unknown as { config?: AgentConfig };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     const subExec = readSubagentExecutor(provider) as { ctx?: { cwd?: string } };
@@ -301,14 +319,14 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
 
   it('wireExecutors falls back to opts.cwd when config.cwd is absent', () => {
     const daemonWideCwd = tmpAfkHome;
-    const factory = buildDaemonSessionFactory({
+    const factory = buildFactory({
       model: 'sonnet',
       apiKey: TEST_API_KEY,
       cwd: daemonWideCwd,
     });
     // config.cwd not set — represents a task with no per-task cwd
     const config = makeConfig();
-    const session = factory(config);
+    const session = trackSession(factory(config));
     const internals = session as unknown as { config?: AgentConfig };
     const provider = internals.config?.provider as AnthropicDirectProvider;
     const subExec = readSubagentExecutor(provider) as { ctx?: { cwd?: string } };
@@ -316,8 +334,8 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
     void session.close().catch(() => undefined);
   });
   it('executors fork from a deferred parent exposing the daemon session journal (subagents journal via forSubagent)', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig());
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig()));
     const provider = (session as unknown as { config?: { provider?: unknown } }).config?.provider as AnthropicDirectProvider;
     expect(session.messageJournal).toBeDefined();
     type Ctx = { ctx?: { parentSession?: { messageJournal?: unknown } } };

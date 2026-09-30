@@ -5,7 +5,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
 import {
   slugify,
   resolveSlugCollision,
@@ -717,6 +717,8 @@ describe('schedule-store cwd field', () => {
     const task = toScheduledTask(loaded[0]!);
     // Should be the expanded home directory, not the literal '~'
     expect(task.cwd).not.toBe('~');
-    expect(task.cwd?.startsWith('/')).toBe(true);
+    // Use path.isAbsolute instead of startsWith('/') so the assertion is
+    // platform-neutral (Windows absolute paths start with a drive letter).
+    expect(isAbsolute(task.cwd ?? '')).toBe(true);
   });
 });

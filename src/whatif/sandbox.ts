@@ -27,8 +27,9 @@ import {
   mkdtempSync,
   rmSync,
   existsSync,
+  realpathSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { relative } from 'node:path';
@@ -149,16 +150,45 @@ function allocateSandboxPaths(): SandboxPaths {
 // Safety guard for cleanup
 // ---------------------------------------------------------------------------
 
-const resolvedTmpdir = resolve(tmpdir());
+/**
+ * Resolve the real, canonical path of os.tmpdir() at module-init time.
+ *
+ * Invariant: we use realpathSync.native (not path.resolve) to:
+ *   - Expand macOS /tmp -> /private/tmp symlinks, and
+ *   - Expand Windows 8.3 short names (e.g. RUNNER~1 -> runneradmin),
+ * so that the containment check compares apples-to-apples with the
+ * realpathSync.native result of each sandbox root below.
+ * A fallback to resolve() is used if tmpdir() does not exist (test isolation).
+ */
+function resolveRealTmpdir(): string {
+  try {
+    return realpathSync.native(tmpdir());
+  } catch {
+    return resolve(tmpdir());
+  }
+}
+
+const resolvedTmpdir = resolveRealTmpdir();
 
 /**
  * Assert that `dir` is a direct child of os.tmpdir() (one level deep,
  * no traversal tricks).  Throws if not — cleanup refuses to delete
  * paths that don't satisfy this invariant.
+ *
+ * Invariant: both sides use realpathSync.native so that macOS /tmp symlinks
+ * and Windows 8.3 short names are expanded identically, and sep (not hardcoded
+ * '/') is used as the child-separator so Windows backslashes are handled.
  */
 function assertUnderTmpdir(dir: string, label: string): void {
-  const resolved = resolve(dir);
-  if (!resolved.startsWith(resolvedTmpdir + '/') && resolved !== resolvedTmpdir) {
+  let resolved: string;
+  try {
+    resolved = realpathSync.native(dir);
+  } catch {
+    // Path may not exist if already removed. Fall back to resolve() to still
+    // run the check — if it throws again, let it propagate.
+    resolved = resolve(dir);
+  }
+  if (!resolved.startsWith(resolvedTmpdir + sep) && resolved !== resolvedTmpdir) {
     throw new Error(
       `[whatif] cleanup: ${label} path "${resolved}" is not inside os.tmpdir() ` +
         `"${resolvedTmpdir}". Refusing to delete.`,

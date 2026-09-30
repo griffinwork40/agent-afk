@@ -367,11 +367,16 @@ describe('processRecord', () => {
 
   it('revert found gives -1 commit_survival vote', async () => {
     const sessionId = 'relabel-test-revert-001';
-    // 8 days ago settles_after so commit_survival 7-day window has passed
-    writeRecord(makeRecord(sessionId, { artifacts: { commits: ['deadbeef'], prs: [], repo: '/tmp' } }), tmpDir);
+    // Contract: use tmpDir (the test's real temp dir) as the repo path rather
+    // than the POSIX-only '/tmp'.  On Windows, path.resolve('/tmp') resolves to
+    // a drive-relative path (e.g. 'D:\tmp') that does not exist, so
+    // existsSync(repo) returns false, repoCwd is null, and lfCommitSurvival is
+    // never called — making the assertion "expect(survivalVotes.some(v => v.vote
+    // === -1)).toBe(true)" fail.  tmpDir is created by mkdtempSync(os.tmpdir())
+    // and always exists on every platform.  See #703 L8c.
+    writeRecord(makeRecord(sessionId, { artifacts: { commits: ['deadbeef'], prs: [], repo: tmpDir } }), tmpDir);
 
-    // Make /tmp look like a valid path for the existsSync check
-    // but checkRevert returns true (revert found)
+    // checkRevert returns true (revert found); checkAncestor not reached.
     const deps = makeDeps({
       checkAncestor: async () => false,
       checkRevert: async () => true,
@@ -381,15 +386,16 @@ describe('processRecord', () => {
 
     const updated = readRecord(sessionId, tmpDir);
     const survivalVotes = updated?.votes.filter((v) => v.lf === 'commit_survival') ?? [];
-    // repo='/tmp' exists but we need to check — survival LF runs when repo path exists
-    // /tmp is always a valid existing directory, so the survival LF WILL run
+    // repo=tmpDir exists on every platform; survival LF WILL run.
     expect(survivalVotes.some((v) => v.vote === -1)).toBe(true);
   });
 
   it('commit survival +1 when ancestor check passes', async () => {
     const sessionId = 'relabel-test-survival-001';
+    // Contract: use tmpDir (the test's real temp dir) as the repo path; see
+    // the 'revert found' test above for the full rationale.  See #703 L8c.
     writeRecord(
-      makeRecord(sessionId, { artifacts: { commits: ['cafebabe'], prs: [], repo: '/tmp' } }),
+      makeRecord(sessionId, { artifacts: { commits: ['cafebabe'], prs: [], repo: tmpDir } }),
       tmpDir,
     );
 

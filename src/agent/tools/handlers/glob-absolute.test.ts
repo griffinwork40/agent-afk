@@ -23,10 +23,13 @@ describe('splitAbsolutePattern', () => {
   it('splits at the first segment containing a metacharacter', () => {
     expect(splitAbsolutePattern('/tmp/repo/src/foo*')).toEqual({
       base: path.normalize('/tmp/repo/src'),
+      // pattern is always forward-slash: glob engines require '/' as separator.
       pattern: 'foo*',
     });
     expect(splitAbsolutePattern('/tmp/repo/**/*.ts')).toEqual({
       base: path.normalize('/tmp/repo'),
+      // pattern must never be path.normalize()'d — that would emit backslashes
+      // on Windows (e.g. '**\*.ts'), breaking the glob matcher (#703).
       pattern: '**/*.ts',
     });
   });
