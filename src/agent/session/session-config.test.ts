@@ -58,7 +58,7 @@ function makeProviderQuery(overrides: Partial<ProviderQuery> = {}): ProviderQuer
     setPermissionMode: vi.fn().mockResolvedValue(undefined),
     setSystemPrompt: vi.fn().mockReturnValue(true),
     setCwd: vi.fn(),
-    reauth: vi.fn().mockResolvedValue({ accountId: 'acct-1', swapped: false }),
+    reauth: vi.fn().mockResolvedValue({ accountId: 'acct-1', oldAccountId: '', swapped: false }),
     interrupt: vi.fn().mockResolvedValue(undefined),
     supportedCommands: vi.fn().mockResolvedValue([]),
     supportedModels: vi.fn().mockResolvedValue([]),
@@ -283,11 +283,11 @@ describe('reauth', () => {
   it('returns the provider reauth result when supported', async () => {
     const { deps } = makeMockDeps({
       providerQuery: {
-        reauth: vi.fn().mockResolvedValue({ accountId: 'acct-42', swapped: true }),
+        reauth: vi.fn().mockResolvedValue({ accountId: 'acct-42', oldAccountId: 'acct-old', swapped: true }),
       },
     });
     const result = await reauth(deps);
-    expect(result).toEqual({ accountId: 'acct-42', swapped: true });
+    expect(result).toEqual({ accountId: 'acct-42', oldAccountId: 'acct-old', swapped: true });
   });
 
   it('returns null when provider reauth is absent', async () => {

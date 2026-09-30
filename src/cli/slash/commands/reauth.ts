@@ -74,7 +74,10 @@ export const reauthCmd: SlashCommand = {
     }
 
     if (result.swapped) {
-      ctx.out.success(`✓ Client swapped: ${result.oldAccountId} → ${result.accountId}`);
+      // Guard the degenerate case where `oldAccountId` is empty (the prior token
+      // was undefined at construction, e.g. first run before any `claude login`).
+      const fromLabel = result.oldAccountId || '(no prior account)';
+      ctx.out.success(`✓ Client swapped: ${fromLabel} → ${result.accountId}`);
       ctx.out.info('Next turn will use the new credential. If a usage-limit pause is active, it will resume automatically within ~30s (or send a message to retry immediately).');
     } else {
       ctx.out.success(`✓ Client refreshed. Authenticated as: ${result.accountId} (token unchanged)`);

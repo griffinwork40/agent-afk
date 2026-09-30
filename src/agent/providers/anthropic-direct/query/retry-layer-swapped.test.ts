@@ -149,4 +149,30 @@ describe('RetryLayer.forceClientRefresh — swapped detection fix (#2470)', () =
 
     expect(second!.swapped).toBe(false);
   });
+
+  it('A → B → C: second swap reports swapped:true with oldAccountId = B', async () => {
+    // Arrange: start with client built from token-A.
+    const layer = makeLayer({ clientToken: 'token-A', refresherToken: 'new-client' });
+
+    // First swap: store moves to token-B.
+    loadClaudeCodeOauthTokenMock.mockReturnValue('token-B');
+    const first = await layer.forceClientRefresh();
+
+    expect(first).not.toBeNull();
+    expect(first!.swapped).toBe(true);
+    expect(first!.oldAccountId).toBe('acct:token-A');
+    expect(first!.accountId).toBe('acct:token-B');
+
+    // Second swap: store moves to token-C. The baseline is now B (not A).
+    loadClaudeCodeOauthTokenMock.mockReturnValue('token-C');
+    const second = await layer.forceClientRefresh();
+
+    // Must detect A→B→C progression: second swap is also `swapped: true`
+    // and `oldAccountId` must be B (not A — the tracked token advanced after
+    // the first swap).
+    expect(second).not.toBeNull();
+    expect(second!.swapped).toBe(true);
+    expect(second!.oldAccountId).toBe('acct:token-B');
+    expect(second!.accountId).toBe('acct:token-C');
+  });
 });

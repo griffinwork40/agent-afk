@@ -141,6 +141,12 @@ export class RetryLayer {
     // Snapshot the token the initial client was built with. If the
     // constructor is called in OAuth mode the store holds the same value;
     // in api-key mode it is undefined (no OAuth token).
+    //
+    // Invariant: the constructor and the `opts.client` build both run in the
+    // same synchronous frame, so `loadClaudeCodeOauthToken()` returns the same
+    // value that was used to construct `opts.client`. This is safe as long as
+    // the caller does not construct the client on one microtask and pass it here
+    // on a later one (i.e. construction must be synchronous and sequential).
     this._clientToken = loadClaudeCodeOauthToken();
     this._authMode = opts.authMode;
     this.initSessionId = opts.initSessionId;
@@ -275,6 +281,11 @@ export class RetryLayer {
     if (!newClient) return null;
 
     this._client = newClient;
+    // Contract: `tokenRefresher` is expected to build its client from the same
+    // credential store that `loadClaudeCodeOauthToken()` reads. Therefore reading
+    // the store immediately after the refresher returns captures the token the new
+    // client was built with. If a future refresher implementation builds from a
+    // different source, `_clientToken` must be updated to match that source here.
     const newToken = loadClaudeCodeOauthToken();
     // Update the tracked token to match what the new client was built with.
     this._clientToken = newToken;

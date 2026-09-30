@@ -1271,9 +1271,10 @@ describe('AnthropicDirectQuery — reauth() / forceClientRefresh', () => {
 
     expect(refresher).toHaveBeenCalledOnce();
     expect(result).not.toBeNull();
-    // Result shape:
+    // Result shape — all three fields must be present.
     if (result) {
       expect(typeof result.accountId).toBe('string');
+      expect(result.oldAccountId).toEqual(expect.any(String));
       expect(typeof result.swapped).toBe('boolean');
     }
     // Critically: the retry layer's client is the NEW instance, not the
