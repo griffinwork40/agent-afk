@@ -29,8 +29,10 @@ import { join, basename, resolve, relative, isAbsolute } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
+import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type {
+  AccessStats,
   Fact,
   NewFact,
   SearchOpts,
@@ -546,6 +548,20 @@ export class MemoryStore {
   getFact(factId: number): Fact | null {
     const row = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(factId);
     return (row as Fact) ?? null;
+  }
+
+  /**
+   * Returns non-superseded facts with `access_count = 0` that are older than
+   * `minAgeDays` days (default 30). Read-only — no facts are modified or
+   * deleted. Use as a dry-run signal for a future GC sweep.
+   */
+  getUnaccessed(minAgeDays?: number): Fact[] {
+    return queryUnaccessed(this.db, minAgeDays);
+  }
+
+  /** Returns aggregate access-count statistics for the fact archive. */
+  getAccessStats(): AccessStats {
+    return queryAccessStats(this.db);
   }
 
   searchFacts(query: string, opts?: SearchOpts): Fact[] {
