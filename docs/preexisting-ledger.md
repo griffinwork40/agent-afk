@@ -86,15 +86,14 @@ Or add it to `~/.afk/config/afk.env`.
 
 ## Backfill
 
+The one-time backfill script scans `~/.afk/state/transcripts/*.md`, reuses the
+same detector, clusters by normalized locus, and ranks by distinct sessions + recency.
+
 Liveness in the backfill resolves prose loci (bare names, partial paths)
 against `git ls-files`. A name that matches more than one tracked file (for
 example `config.test.ts`, which exists under both `src/browser/` and
 `src/cli/`) is reported as `ambiguous (N files)` rather than checked, because
 testing the first match would report the wrong file's status.
-
-
-The one-time backfill script scans `~/.afk/state/transcripts/*.md`, reuses the
-same detector, clusters by normalized locus, and ranks by distinct sessions + recency.
 
 ```bash
 # Scan all transcripts and write ledger:

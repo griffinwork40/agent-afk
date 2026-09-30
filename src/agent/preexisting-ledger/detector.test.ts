@@ -66,7 +66,7 @@ describe('detectInText — pre-existing sentence positives', () => {
     // (The spec example shows this is a positive, but types.ts has no path
     //  prefix — we treat it as filtered out, which is correct per locus rules.)
     // If it appears as `src/types.ts` it would be detected.
-    expect(results).toBeInstanceOf(Array);
+    expect(results.length).toBe(0);
   });
 
   it('detects src/types.ts size-ceiling flag with full path', () => {

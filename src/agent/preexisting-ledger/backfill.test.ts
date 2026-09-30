@@ -7,50 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { detectInText } from './detector.js';
-
-// ---------------------------------------------------------------------------
-// Clustering helpers (inlined from the backfill script for testability)
-// ---------------------------------------------------------------------------
-
-interface Hit {
-  locus: string;
-  signal: string;
-  category: string;
-  transcriptFile: string;
-  sessionDate: string;
-}
-
-interface Cluster {
-  locus: string;
-  category: string;
-  sessionCount: number;
-  transcriptFiles: string[];
-  lastSeen: string;
-}
-
-function clusterHits(hits: Hit[]): Cluster[] {
-  const normalize = (l: string) => l.replace(/^`|`$/g, '').trim();
-  const map = new Map<string, { category: string; files: Set<string>; dates: string[] }>();
-  for (const hit of hits) {
-    const key = normalize(hit.locus);
-    if (!map.has(key)) {
-      map.set(key, { category: hit.category, files: new Set(), dates: [] });
-    }
-    const entry = map.get(key)!;
-    entry.files.add(hit.transcriptFile);
-    if (hit.sessionDate) entry.dates.push(hit.sessionDate);
-  }
-  const clusters: Cluster[] = [];
-  for (const [locus, { category, files, dates }] of map.entries()) {
-    const lastSeen = dates.length > 0 ? dates.sort().at(-1)! : '';
-    clusters.push({ locus, category, sessionCount: files.size, transcriptFiles: [...files], lastSeen });
-  }
-  clusters.sort((a, b) => {
-    if (b.sessionCount !== a.sessionCount) return b.sessionCount - a.sessionCount;
-    return b.lastSeen.localeCompare(a.lastSeen);
-  });
-  return clusters;
-}
+import { clusterHits, type ClusterHit as Hit } from './cluster.js';
 
 function hitsFromText(text: string, file: string, date: string): Hit[] {
   const entries = detectInText(text);
