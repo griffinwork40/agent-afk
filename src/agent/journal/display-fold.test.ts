@@ -1,0 +1,179 @@
+import { describe, it, expect } from 'vitest';
+
+import { COMPACT_ACK_TEXT, COMPACT_SUMMARY_HEADER } from '../providers/shared/compaction.js';
+import { cutAtFork, displaySegments, foldForDisplay, isCompactionPreamble, loadDisplayMessages, messageFingerprint } from './display-fold.js';
+import { forkJournal } from './fork.js';
+import { foldJournal, readJournalRecords } from './reader.js';
+import { JournalSync } from './sync.js';
+import type { JournalAdapter, JournalMessage, JournalRecord, JournalTruncateReason } from './types.js';
+import { createMessageJournal } from './writer.js';
+import { assistant, toolResult, useTmpAfkHome, user } from './__test-utils__/helpers.js';
+
+const V = 1 as const;
+let clock = 1_000;
+const ap = (index: number, message: JournalMessage, ts = ++clock): JournalRecord => ({ v: V, ts, kind: 'append', index, message });
+const tr = (length: number, reason?: JournalTruncateReason, ts = ++clock): JournalRecord => ({
+  v: V,
+  ts,
+  kind: 'truncate',
+  length,
+  ...(reason ? { reason } : {}),
+});
+const meta = (sessionId: string, forkedFrom?: { sessionId: string; length: number }, ts = ++clock): JournalRecord => ({
+  v: V,
+  ts,
+  kind: 'meta',
+  sessionId,
+  writerId: 'w',
+  ...(forkedFrom ? { forkedFrom } : {}),
+});
+
+const summary = (): JournalMessage => user(`${COMPACT_SUMMARY_HEADER}\n\nearlier stuff happened`);
+const ack = (): JournalMessage => assistant(COMPACT_ACK_TEXT);
+const toolUse = (id: string): JournalMessage => ({ role: 'assistant', content: [{ type: 'tool_use', id, name: 'bash', input: { command: 'ls' } }] });
+const texts = (ms: JournalMessage[]): string[] =>
+  ms.map((m) => {
+    const b = m.content[0];
+    if (!b) return '';
+    if (b.type === 'text') return b.text;
+    if (b.type === 'tool_use') return `use:${b.id}`;
+    if (b.type === 'tool_result') return `result:${b.content[0]?.type === 'text' ? b.content[0].text : ''}`;
+    return b.type;
+  });
+
+describe('isCompactionPreamble / messageFingerprint', () => {
+  it('recognizes the summary and ack, nothing else', () => {
+    expect(isCompactionPreamble(summary())).toBe(true);
+    expect(isCompactionPreamble(ack())).toBe(true);
+    expect(isCompactionPreamble(user('hello'))).toBe(false);
+    expect(isCompactionPreamble(assistant('Acknowledged.'))).toBe(false);
+  });
+
+  it('keys tool_result by id only so a placeholder matches its original', () => {
+    expect(messageFingerprint(toolResult('t1', 'real output'))).toBe(messageFingerprint(toolResult('t1', '[tool result cleared to reclaim context — was 9 bytes]')));
+    expect(messageFingerprint(toolResult('t1', 'x'))).not.toBe(messageFingerprint(toolResult('t2', 'x')));
+  });
+
+  it('ignores thinking blocks (dropped by provider switches)', () => {
+    const withThinking: JournalMessage = { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'hi' }] };
+    expect(messageFingerprint(withThinking)).toBe(messageFingerprint(assistant('hi')));
+  });
+});
+
+describe('foldForDisplay', () => {
+  it('equals the model fold for a plain append-only journal', () => {
+    const recs = [meta('s'), ap(0, user('a')), ap(1, assistant('b')), ap(2, user('c'))];
+    expect(texts(foldForDisplay([recs]))).toEqual(['a', 'b', 'c']);
+  });
+
+  it('keeps compaction-displaced history, hides the preamble, and does not duplicate the kept tail', () => {
+    const recs = [
+      ap(0, user('q1')), ap(1, assistant('a1')), ap(2, user('q2')), ap(3, assistant('a2')),
+      // compaction: summary + ack replace q1/a1; q2/a2 are the kept tail
+      tr(0, 'compact'), ap(0, summary()), ap(1, ack()), ap(2, user('q2')), ap(3, assistant('a2')),
+      ap(4, user('q3')),
+    ];
+    expect(texts(foldJournal(recs).messages)).toEqual([`${COMPACT_SUMMARY_HEADER}\n\nearlier stuff happened`, COMPACT_ACK_TEXT, 'q2', 'a2', 'q3']);
+    expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q2', 'a2', 'q3']);
+  });
+
+  it('keeps the ORIGINAL tool output over a microcompaction placeholder', () => {
+    const recs = [
+      ap(0, user('go')), ap(1, toolUse('t1')), ap(2, toolResult('t1', 'full output')), ap(3, assistant('done')),
+      tr(2, 'compact'), ap(2, toolResult('t1', '[tool result cleared to reclaim context — was 11 bytes]')), ap(3, assistant('done')),
+    ];
+    expect(texts(foldForDisplay([recs]))).toEqual(['go', 'use:t1', 'result:full output', 'done']);
+  });
+
+  it('drops rewound messages', () => {
+    const recs = [ap(0, user('q1')), ap(1, assistant('a1')), ap(2, user('oops')), ap(3, assistant('a2')), tr(2, 'rewind'), ap(2, user('q2'))];
+    expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q2']);
+  });
+
+  it('starts over after /clear, including compaction-archived rows', () => {
+    const recs = [ap(0, user('old')), tr(0, 'compact'), ap(0, summary()), ap(1, ack()), tr(0, 'clear'), ap(0, user('fresh'))];
+    expect(texts(foldForDisplay([recs]))).toEqual(['fresh']);
+  });
+
+  it('gives a genuinely new identical message its own row once the re-append phase is over', () => {
+    const recs = [ap(0, user('continue')), ap(1, assistant('a1')), tr(0, 'compact'), ap(0, summary()), ap(1, ack()), ap(2, assistant('a2')), ap(3, user('continue'))];
+    expect(texts(foldForDisplay([recs]))).toEqual(['continue', 'a1', 'a2', 'continue']);
+  });
+
+  it('treats an append at index < length as a soft overwrite (re-append matches)', () => {
+    const recs = [ap(0, user('a')), ap(1, assistant('b')), ap(1, assistant('b')), ap(2, user('c'))];
+    expect(texts(foldForDisplay([recs]))).toEqual(['a', 'b', 'c']);
+  });
+
+  it('matches a fork segment back onto the parent rows', () => {
+    const parent = [ap(0, user('q1')), ap(1, assistant('a1')), tr(0, 'compact'), ap(0, summary()), ap(1, ack())];
+    const fork = [meta('child', { sessionId: 'parent', length: 2 }), ap(0, summary()), ap(1, ack()), ap(2, user('q2'))];
+    expect(texts(foldForDisplay([parent, fork]))).toEqual(['q1', 'a1', 'q2']);
+  });
+});
+
+describe('displaySegments', () => {
+  it('follows forkedFrom and cuts the parent at the fork instant', () => {
+    const parent = [meta('p', undefined, 10), ap(0, user('before'), 11), ap(1, user('after-fork'), 30)];
+    const child = [meta('c', { sessionId: 'p', length: 1 }, 20), ap(0, user('before'), 20)];
+    const store: Record<string, JournalRecord[]> = { p: parent, c: child };
+    const segs = displaySegments('c', (id) => store[id] ?? []);
+    expect(segs.map((s) => s.length)).toEqual([2, 2]);
+    expect(texts(foldForDisplay(segs))).toEqual(['before']);
+  });
+
+  it('cutAtFork disambiguates same-millisecond records by fork length', () => {
+    const recs = [ap(0, user('a'), 5), ap(1, user('b'), 7), ap(2, user('post-fork'), 7)];
+    expect(texts(foldForDisplay([cutAtFork(recs, { ts: 7, length: 2 })]))).toEqual(['a', 'b']);
+    expect(cutAtFork(recs, { ts: 6, length: 1 })).toHaveLength(1);
+  });
+
+  it('stops at a missing ancestor and at a cycle', () => {
+    const a = [meta('a', { sessionId: 'b', length: 0 }, 50), ap(0, user('x'), 50)];
+    const b = [meta('b', { sessionId: 'a', length: 0 }, 40)];
+    const store: Record<string, JournalRecord[]> = { a, b };
+    expect(displaySegments('a', (id) => store[id] ?? []).length).toBe(2);
+    expect(displaySegments('lonely', () => [])).toEqual([]);
+  });
+});
+
+describe('loadDisplayMessages (real writer + JournalSync + forkJournal)', () => {
+  useTmpAfkHome();
+  const identity: JournalAdapter<JournalMessage> = { toJournal: (m) => m, fromJournalMessages: (ms) => ms };
+
+  it('shows pre-compaction history in a fork of a compacted session', async () => {
+    const j = createMessageJournal({ getSessionId: () => 'parent' });
+    const sync = new JournalSync(j, identity);
+    const q1 = user('q1');
+    const a1 = assistant('a1');
+    const q2 = user('q2');
+    const a2 = assistant('a2');
+    let arr: JournalMessage[] = [q1, a1, q2, a2];
+    sync.sync(arr);
+    // Compaction splice: new summary/ack objects, the kept tail by reference.
+    arr = [summary(), ack(), q2, a2];
+    sync.sync(arr, { reason: 'compact' });
+    await j.flush();
+
+    expect(texts(loadDisplayMessages('parent'))).toEqual(['q1', 'a1', 'q2', 'a2']);
+
+    expect(forkJournal('parent', 'child')).toBe(true);
+    const child = createMessageJournal({ getSessionId: () => 'child' });
+    const childSync = new JournalSync(child, identity);
+    childSync.seed(foldJournal(readJournalRecords('child')).messages);
+    // Parent keeps going after the fork; the child must not show it.
+    arr.push(user('parent-only'));
+    sync.sync(arr);
+    await j.close();
+    const childArr = foldJournal(readJournalRecords('child')).messages;
+    childArr.push(user('child-q3'));
+    childSync.sync(childArr);
+    await child.close();
+
+    expect(texts(loadDisplayMessages('child'))).toEqual(['q1', 'a1', 'q2', 'a2', 'child-q3']);
+  });
+
+  it('is empty for a session with no journal', () => {
+    expect(loadDisplayMessages('nope')).toEqual([]);
+  });
+});
