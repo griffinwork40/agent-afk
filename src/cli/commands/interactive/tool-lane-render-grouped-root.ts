@@ -121,7 +121,7 @@ export function renderGroupedRootTools(
     if (entries.length === 1) {
       const e = entries[0]!;
       if (e.result) {
-        // pushOutcomeLines splits multi-line formatOutcome so continuation
+        // pushOutcomeRows splits multi-line formatOutcome so continuation
         // lines carry '   ' (the same 3-space root indent) instead of a
         // bare inline join that would embed a raw \n into the row. This
         // mirrors the child-render and overlay paths — see

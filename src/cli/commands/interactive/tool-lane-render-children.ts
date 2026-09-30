@@ -108,7 +108,7 @@ function pushCompletedChildRows(
   cols: number,
 ): void {
   // formatOutcome may return multi-line content (hiddenLineCount +
-  // tailPreview). pushOutcomeLines splits on \n so continuation lines
+  // tailPreview). pushOutcomeRows splits on \n so continuation lines
   // carry the spine-aware indent instead of the bare 4-space indent
   // that formatOutcome embeds.
   pushOutcomeRows(lines, {
@@ -488,7 +488,7 @@ function renderFlushChildren(
         const parentSlot = parentIsLast ?? isLast;
         lines.push(...renderFlushChildren(grandchildren, childMap, homeDir, undefined, cols, [...ancestorIsLast, parentSlot], g, isLast));
       } else if (child.result) {
-        // Mirror overlay path: pushOutcomeLines splits on \n so continuation
+        // Mirror overlay path: pushOutcomeRows splits on \n so continuation
         // lines carry the spine-aware indent in scrollback.
         const continuationIndent = indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
         pushOutcomeRows(lines, {
