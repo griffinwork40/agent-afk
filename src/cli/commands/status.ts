@@ -7,7 +7,7 @@ import { providerForModel } from '../../agent/providers/index.js';
 import { statusPanel } from '../render.js';
 import { getApiKeyForModel, getModel, getApiKey, getCodexApiKey } from '../shared-helpers.js';
 import { resolveCliPermissionMode } from '../config.js';
-import { describeCredentialSource } from '../auth-wizard.describe-source.js';
+import { describeCredentialSource, credentialSourceId } from '../auth-wizard.describe-source.js';
 import { loadXaiApiKey } from '../../agent/auth/credential-resolver.js';
 
 export function registerStatusCommand(program: Command): void {
@@ -49,14 +49,10 @@ export function registerStatusCommand(program: Command): void {
           const codexApiKey = getCodexApiKey();
           const xaiApiKey = loadXaiApiKey();
 
-          // Derive the anthropic source label using the same precedence logic
-          // as describeCredentialSource() so the JSON value matches the text output.
+          // Stable enum from the same precedence walk as the text Auth row
+          // (describeCredentialSource), so text and JSON never disagree.
           const anthropicSource: string | null = anthropicApiKey
-            ? env.ANTHROPIC_API_KEY
-              ? 'ANTHROPIC_API_KEY'
-              : env.CLAUDE_CODE_OAUTH_TOKEN
-                ? 'CLAUDE_CODE_OAUTH_TOKEN'
-                : 'claude-code-keychain'
+            ? credentialSourceId()
             : null;
 
           const codexSource = codexApiKey

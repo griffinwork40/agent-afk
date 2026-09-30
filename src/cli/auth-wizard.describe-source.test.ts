@@ -16,7 +16,7 @@ vi.mock('../agent/auth/credential-resolver.js', () => ({
   hasProcessLocalRefreshedToken: vi.fn(() => false),
 }));
 
-import { describeCredentialSource } from './auth-wizard.describe-source.js';
+import { describeCredentialSource, credentialSourceId } from './auth-wizard.describe-source.js';
 import { env } from '../config/env.js';
 import { loadClaudeCodeOauthToken } from '../agent/auth/keychain.js';
 import { hasProcessLocalRefreshedToken } from '../agent/auth/credential-resolver.js';
@@ -48,26 +48,36 @@ describe('describeCredentialSource', () => {
     expect(describeCredentialSource()).toBe('ANTHROPIC_API_KEY');
   });
 
-  it('returns session-refresh label when process-local refreshed token is active (tier 3)', () => {
-    // env vars unset, keychain returns nothing, but a token was refreshed
-    // in-process and write-back to the credential store failed — matches
-    // refreshedClaudeCodeOauthToken in loadAnthropicCredential (tier 3).
-    vi.mocked(hasProcessLocalRefreshedToken).mockReturnValue(true);
-    expect(describeCredentialSource()).toBe('Claude Code login (session refresh)');
-  });
-
-  it('returns keychain label when only keychain token exists (tier 4)', () => {
+  it('returns keychain label when a keychain token exists (tier 3)', () => {
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue('sk-ant-oat01-keychain');
     expect(describeCredentialSource()).toBe('Claude Code login (keychain)');
   });
 
-  it('prefers session-refresh over keychain when both tiers are present', () => {
-    // Both tier 3 (process-local refresh) and tier 4 (keychain) are active.
-    // describeCredentialSource must match loadAnthropicCredential's order,
-    // where refreshedClaudeCodeOauthToken is checked before loadClaudeCodeOauthToken().
+  it('returns session-refresh label when only the process-local refreshed token exists (tier 4)', () => {
+    // env vars unset, store yields nothing, but a token was refreshed
+    // in-process and write-back to the credential store failed.
+    vi.mocked(hasProcessLocalRefreshedToken).mockReturnValue(true);
+    expect(describeCredentialSource()).toBe('Claude Code login (session refresh)');
+  });
+
+  it('prefers keychain over session-refresh when both tiers are present (matches loader, #2469)', () => {
+    // loadAnthropicCredential checks loadClaudeCodeOauthToken() BEFORE
+    // refreshedClaudeCodeOauthToken; the cache is filled on every startup
+    // preload, so it must not win the label when the store has a token.
     vi.mocked(hasProcessLocalRefreshedToken).mockReturnValue(true);
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue('sk-ant-oat01-keychain');
-    expect(describeCredentialSource()).toBe('Claude Code login (session refresh)');
+    expect(describeCredentialSource()).toBe('Claude Code login (keychain)');
+    expect(credentialSourceId()).toBe('claude-code-keychain');
+  });
+
+  it('credentialSourceId returns stable ids per tier', () => {
+    expect(credentialSourceId()).toBeNull();
+    vi.mocked(hasProcessLocalRefreshedToken).mockReturnValue(true);
+    expect(credentialSourceId()).toBe('claude-code-session-refresh');
+    (env as { CLAUDE_CODE_OAUTH_TOKEN: string | undefined }).CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-test';
+    expect(credentialSourceId()).toBe('CLAUDE_CODE_OAUTH_TOKEN');
+    (env as { ANTHROPIC_API_KEY: string | undefined }).ANTHROPIC_API_KEY = 'sk-ant-api03-test';
+    expect(credentialSourceId()).toBe('ANTHROPIC_API_KEY');
   });
 
   it('returns generic fallback when no credential source is found', () => {
