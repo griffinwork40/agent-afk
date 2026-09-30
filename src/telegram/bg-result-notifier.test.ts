@@ -215,6 +215,10 @@ describe('TelegramBgResultNotifier', () => {
     // Drain the microtask queue — the guarded body must not call push.
     await new Promise<void>((r) => queueMicrotask(r));
     expect(pushMock).not.toHaveBeenCalled();
+    // dispose() clears pendingInjections, so drainInjections() must return ''
+    // (the job was never injected because dispose ran before the guard-free
+    // pendingInjections.push path could fire).
+    expect(notifier.drainInjections()).toBe('');
   });
 
   it('swallows push errors without throwing', async () => {

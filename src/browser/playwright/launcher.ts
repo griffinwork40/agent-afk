@@ -21,6 +21,21 @@ import type { BrowserConfig } from '../types.js';
 import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
+import { registerCleanup } from '../../utils/cleanupRegistry.js';
+
+// ---------------------------------------------------------------------------
+// Close-with-fallback timeout
+// ---------------------------------------------------------------------------
+
+/**
+ * How long (ms) to wait for `context.close()` to resolve before assuming
+ * Chromium has frozen and sending SIGKILL to the browser process.
+ *
+ * 3 s is long enough for a normal teardown but short enough that a hung
+ * render doesn't block the parent process for more than a few seconds when
+ * a subagent times out.
+ */
+const CONTEXT_CLOSE_TIMEOUT_MS = 3_000;
 
 // Playwright's serialized cookies + localStorage. `newContext({ storageState })`
 // accepts exactly this shape, so reusing the method's return type keeps the
@@ -418,10 +433,13 @@ export class BrowserLauncher {
    * owns its own context — so concurrent `web_scrape` renders are safe.
    *
    * Ordered teardown: the `finally` block closes the context unconditionally
-   * (page closes with it). An abort closes the context early, which rejects
-   * the in-flight `goto`/`content` with a "context closed" error the caller
-   * maps to an abort. The abort listener is removed before the close so we
-   * never leak a reference to the caller's signal.
+   * (page closes with it). An abort closes the context early via
+   * `closeContextSafe`, which races `context.close()` against a 3-second
+   * timeout and falls back to SIGKILL on the browser process so a frozen
+   * Chromium never holds the Node event loop open after a subagent timeout.
+   *
+   * The abort listener is removed before the close so we never leak a
+   * reference to the caller's signal.
    */
   async renderHtml(
     url: string,
@@ -448,15 +466,27 @@ export class BrowserLauncher {
       });
     }
 
+    // Register the ephemeral context with the process-wide cleanup registry so
+    // that a SIGINT/SIGTERM-triggered shutdown also closes it even when it was
+    // never stored in `this.sessions`.
+    const unregisterCleanup = registerCleanup(async () => {
+      await this.closeContextSafe(context, browser);
+    });
+
     const onAbort = (): void => {
-      void context.close().catch(() => {
-        // Best-effort — context may already be closing.
+      // Use closeContextSafe: if Chromium is frozen, context.close() will hang
+      // indefinitely and keep the Node event loop open. After 3 s we fall back
+      // to SIGKILL on the browser process so the parent remains responsive.
+      void this.closeContextSafe(context, browser).catch(() => {
+        // Errors already swallowed inside closeContextSafe; catch here to
+        // prevent an unhandled-rejection warning on the void path.
       });
     };
 
     // Pre-aborted short-circuit: tear down and reject before any navigation.
     if (opts.signal?.aborted === true) {
-      await context.close().catch(() => { /* best-effort */ });
+      unregisterCleanup();
+      await this.closeContextSafe(context, browser);
       throw new Error('render aborted');
     }
     if (opts.signal !== undefined) {
@@ -484,12 +514,12 @@ export class BrowserLauncher {
       const httpStatus = resp !== null ? resp.status() : null;
       return { html, finalUrl, httpStatus };
     } finally {
+      unregisterCleanup();
       if (opts.signal !== undefined) {
         opts.signal.removeEventListener('abort', onAbort);
       }
-      await context.close().catch(() => {
-        // Best-effort — context may already be closed (abort / crash).
-      });
+      // Use closeContextSafe so a frozen Chromium doesn't block indefinitely.
+      await this.closeContextSafe(context, browser);
     }
   }
 
@@ -661,6 +691,53 @@ export class BrowserLauncher {
       viewport: { width: 1280, height: 800 },
       userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 agent-afk/${AFK_VERSION}`,
     };
+  }
+
+  /**
+   * Close a BrowserContext with a bounded timeout fallback.
+   *
+   * Races `context.close()` against `CONTEXT_CLOSE_TIMEOUT_MS`. If
+   * `close()` does not resolve within that window (Chromium is frozen), sends
+   * SIGKILL to the browser process via `browser.process()?.kill('SIGKILL')`.
+   * Playwright's launched browsers expose `browser.process()` at runtime for
+   * exactly this purpose; `null` is returned for remote/CDP connections where
+   * we have no child PID, so the fallback silently no-ops in those cases.
+   * The method is not in Playwright's public TypeScript types, so we access
+   * it through a typed interface cast.
+   *
+   * Always resolves — never throws. Used for ephemeral render contexts where
+   * a frozen context must not hold the Node event loop open after a subagent
+   * times out (issue #2519).
+   */
+  private async closeContextSafe(
+    context: BrowserContext,
+    browser: Browser,
+  ): Promise<void> {
+    // `process()` is exposed at runtime by Playwright's launched-browser
+    // implementation but is absent from the public TypeScript types (it is
+    // an internal API). We access it via a narrow structural cast so tsc does
+    // not complain while keeping the fallback reachable.
+    const browserWithProcess = browser as unknown as {
+      process?: () => { kill: (signal: NodeJS.Signals) => boolean } | null;
+    };
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        context.close(),
+        new Promise<void>((_resolve, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error('context.close() timed out'));
+          }, CONTEXT_CLOSE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      // context.close() timed out or threw — fall back to killing the process.
+      debugLog('[browser/launcher] context.close() timed out; sending SIGKILL to browser process');
+      browserWithProcess.process?.()?.kill('SIGKILL');
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    }
   }
 
   /**

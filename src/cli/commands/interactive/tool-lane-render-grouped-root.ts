@@ -12,10 +12,11 @@ import {
 } from './tool-lane-format.js';
 import type { ToolEntry } from './tool-lane-render.js';
 import { clampLineToTerminal, toolLaneWidth } from './tool-lane-render.js';
-import { pushOutcomeRows } from './tool-lane-outcome-rows.js';
+import { outcomeTailWidth, pushOutcomeRows } from './tool-lane-outcome-rows.js';
 
 function groupedResultSuffix(
   entries: ToolEntry[],
+  cols: number,
   homeDir?: string,
 ): string {
   const completed = entries.filter((entry) => entry.result);
@@ -51,8 +52,14 @@ function groupedResultSuffix(
   }
 
   if (completed.length > 0) {
+    // Pass tailWidth so hidden-line and tail-preview budgets respect the actual
+    // terminal width rather than falling back to the maxPreview constant (60).
+    // Continuation lines are stripped by the replace below (grouped summaries
+    // are always single-line), but the budget still governs how each entry is
+    // formatted before the strip — matching the single-entry pushOutcomeRows path.
+    const tailWidth = outcomeTailWidth(cols, '   ');
     const outcomes = completed.map((entry) =>
-      formatOutcome(entry.result!, homeDir, 60, entry.toolName).replace(/\n[\s\S]*/u, '…'),
+      formatOutcome(entry.result!, homeDir, 60, entry.toolName, tailWidth).replace(/\n[\s\S]*/u, '…'),
     );
     return palette.dim(' — ') + outcomes.join(palette.dim(', '));
   }
@@ -81,7 +88,7 @@ export function formatGroupedToolResults(
     color.bold(toolName) +
     palette.dim(` ×${entries.length}`) +
     ' ';
-  const suffix = groupedResultSuffix(entries, homeDir);
+  const suffix = groupedResultSuffix(entries, cols, homeDir);
   const targets = entries
     .map((entry) => shortenPaths(sanitizeLabel(entry.toolInput)).trim())
     .join(', ');

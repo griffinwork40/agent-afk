@@ -98,10 +98,26 @@ describe('promptFingerprint', () => {
     expect(fp).toEqual(['bug', 'fix', 'login']);
   });
 
-  it('preserves first-appearance order before sorting (dedup by first seen)', () => {
+  it('deduplication is order-independent (dedup by type, not first-seen position)', () => {
     // 'bug' appears first, then 'fix' — both kept once, output sorted
     const fp = promptFingerprint('bug fix bug fix');
     expect(fp).toEqual(['bug', 'fix']);
+  });
+
+  it('is order-independent for prompts with more than FINGERPRINT_MAX_TOKENS unique tokens', () => {
+    // Build two prompts with the SAME 80 unique tokens, but in reversed order.
+    // Pre-fix: cap was applied BEFORE sort, so reversed order gave different tokens.
+    // Post-fix: sort-then-slice guarantees identical fingerprints regardless of order.
+    const allTokens = Array.from({ length: 80 }, (_, i) => `vocab${String(i).padStart(3, '0')}`);
+    const forward = allTokens.join(' ');
+    const reversed = [...allTokens].reverse().join(' ');
+    const fpForward = promptFingerprint(forward);
+    const fpReversed = promptFingerprint(reversed);
+    expect(fpForward).toEqual(fpReversed);
+    expect(fpForward.length).toBe(FINGERPRINT_MAX_TOKENS);
+    // The kept tokens are the lexicographically first 64, same for both orderings
+    const sortedAll = [...allTokens].sort();
+    expect(fpForward).toEqual(sortedAll.slice(0, FINGERPRINT_MAX_TOKENS));
   });
 
   it('caps at FINGERPRINT_MAX_TOKENS when input is very long', () => {
