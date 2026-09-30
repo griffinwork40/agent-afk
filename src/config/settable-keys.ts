@@ -291,6 +291,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'daemon.task', tier: 'human', type: 'string', description: 'Daemon task prompt.' },
   { path: 'daemon.taskId', tier: 'human', type: 'string', description: 'Daemon task id.' },
   { path: 'daemon.verifyDone', tier: 'human', type: 'boolean', description: 'Daemon-surface "Done" verification gate (default: true): a cron-tick completion push whose response self-certifies "Done" with no corroborating evidence (a successful file write/edit or executed command) is relabelled "⚠️ Done (unverified)" with a caveat line. Set to false to disable. The daemon analog of telegram.verifyDone (which is REPL-only); the daemon is single-turn-per-tick, so the only honest enforcement is relabelling the outgoing push rather than bouncing a next turn. Human-tier: a self-honesty check on the agent\'s own completion reporting — the agent must not be able to disable it on its own config, same rationale as telegram.verifyDone.' },
+  // Human-tier: only the user may grant a plugin access to additional env vars.
+  // A plugin manifest must never be able to grant itself access — only the
+  // user\'s config counts. The agent tool must not be able to set this key either,
+  // because that would let an agent expand its own hook subprocesses\' env access.
+  // Value shape: Record<pluginName, string[]> — see issue #2459.
+  { path: 'pluginHookEnv', tier: 'human', type: 'string', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
 ];
 
 const CONFIG_KEY_BY_PATH = new Map(CONFIG_KEY_SPECS.map((s) => [s.path, s]));

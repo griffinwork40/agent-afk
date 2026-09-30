@@ -22,9 +22,10 @@
  *   T15 — Anthropic binding with baseUrl → oneShotCompletion receives baseUrl.
  *   T16 — Raw grok-* (no explicit slot provider) → forceMode undefined (not forced apikey).
  *   T17 — xai-oauth target → OAuth refresh called before resolveXaiAuth.
- *   T18 — Secret redaction: failure message is redacted and truncated before logging.
+ *   T18 — Missing Anthropic credential → throws /No Anthropic credential/.
  *   T19 — Ambient Anthropic credential is used when no custom baseUrl is configured;
  *          custom non-Anthropic baseUrl without apiKey rejects; trailing-dot FQDN passes.
+ *   T20 — Secret redaction: failure message is redacted and truncated before logging.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveCrossProviderSummarize, __resetCrossProviderWarnState } from './compact-summarizer.js';

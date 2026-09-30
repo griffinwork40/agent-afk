@@ -30,7 +30,7 @@
 
 import { BlockList, isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { env } from '../config/env.js';
 import { retryFetch, type RetryFetchOptions } from './retryFetch.js';
 import type { FetchFn } from './types.js';
@@ -293,20 +293,32 @@ export async function guardedFetch(
     ...(opts.allowPrivateHosts !== undefined ? { allowPrivateHosts: opts.allowPrivateHosts } : {}),
   };
 
+  // When the caller did not inject a custom fetchFn, use npm undici's own
+  // `fetch` together with `guardedDispatcher` (the same npm undici Agent).
+  // This avoids handing a foreign Agent from one undici copy into Node's
+  // built-in fetch (a different copy on Node 26+), which was the root cause
+  // of issue #2528.  The TOCTOU / DNS-rebinding guard is preserved: the
+  // Agent's connect-time `lookup` callback still classifies every DNS answer
+  // at socket-open time.
+  //
+  // Injected test fetches (fetchFn !== globalThis.fetch) bypass this path so
+  // tests continue to control the full fetch seam without a real dispatcher.
+  const useUndici =
+    fetchFn === globalThis.fetch && !(opts.allowPrivateHosts ?? privateHostsAllowed());
+
   let target = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertEgressAllowed(target, guardOpts);
-    // Production fetches use an Undici dispatcher whose lookup callback
-    // classifies the exact DNS answer used for the socket. Injected test
-    // fetches retain the standard RequestInit surface.
     const requestInit = {
       ...init,
       redirect: 'manual' as const,
-      ...(fetchFn === globalThis.fetch && !(opts.allowPrivateHosts ?? privateHostsAllowed())
-        ? { dispatcher: guardedDispatcher }
-        : {}),
+      ...(useUndici ? { dispatcher: guardedDispatcher } : {}),
     } as RequestInit;
-    const res = await retryFetch(fetchFn, target, requestInit, opts.retry ?? {});
+    // Use npm undici's own fetch (same package as the Agent) on the
+    // production path, so both ends of the dispatcher protocol come from
+    // the same copy of undici.  Fall back to the injected fetchFn otherwise.
+    const activeFetch: FetchFn = useUndici ? (undiciFetch as unknown as FetchFn) : fetchFn;
+    const res = await retryFetch(activeFetch, target, requestInit, opts.retry ?? {});
     if (!REDIRECT_STATUS.has(res.status)) return res;
 
     const location = res.headers.get('location');

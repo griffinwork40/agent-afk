@@ -60,6 +60,14 @@ let crashHandlersInstalled = false;
 const CRASH_EXIT_DELAY_MS = 200;
 
 /**
+ * Set before the deferred exit timer so service supervisors (launchd
+ * KeepAlive / systemd Restart=on-failure) see a non-zero code even when the
+ * timer fires before any in-flight Telegram push keeps the event loop alive.
+ * The timer is .unref()'d so the process can exit earlier (on its own) if
+ * the push never fires — exitCode ensures that natural exit is also code 1.
+ */
+
+/**
  * Reset the re-entry guard. Exported for testing only — do not call in
  * production code.
  *
@@ -88,10 +96,16 @@ export function installCrashHandlers(): void {
   };
   process.on('uncaughtException', (err) => {
     notifyCrash('uncaughtException', err);
+    // exitCode is set first so a natural (early) exit — before the timer fires
+    // — still reports code 1 to the supervisor. The unref'd timer fires if the
+    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
   process.on('unhandledRejection', (err) => {
     notifyCrash('unhandledRejection', err);
+    // Same rationale as uncaughtException above.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
 }

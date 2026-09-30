@@ -31,6 +31,8 @@ function makeConfig(
     },
     userGlobalEnabled,
     allowProjectHooks: false,
+    pluginHooksEnabled: false,
+    pluginHookEnv: {},
     sources: [],
     warnings: [],
   };

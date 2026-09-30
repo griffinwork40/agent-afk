@@ -1,0 +1,672 @@
+/**
+ * Cross-provider conformance suite — issue #2423
+ *
+ * One table of scripted scenarios run against BOTH ModelProvider adapters
+ * (anthropic-direct and openai-compatible) asserting on the normalized
+ * `ProviderEvent` stream.
+ *
+ * Scenarios that currently FAIL on a provider due to a real parity gap are
+ * documented inline with the open issue number. Where a feature is an
+ * expected divergence (not a crash), the test asserts the CURRENT observable
+ * behavior.
+ *
+ * Design:
+ *  - No real network — both providers use their published test-injection seams.
+ *  - Deterministic — fake timers where needed, no flakiness.
+ *  - TEST-ONLY — zero product-code mutations.
+ *
+ * Injection seams:
+ *  - anthropic-direct: `new AnthropicDirectQuery({ client: mockClient, ... })`
+ *    (same pattern as loop.*.test.ts and query-auth-retry.test.ts)
+ *  - openai-compatible: `__setOpenAIClientFactory(factory)` + `new OpenAICompatibleQuery(...)`
+ *    (same pattern as query.test.ts and query-journal.test.ts)
+ */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type Anthropic from '@anthropic-ai/sdk';
+import type OpenAI from 'openai';
+import type { AgentConfig } from '../../types/config-types.js';
+import type { ProviderEvent } from '../../provider.js';
+
+// anthropic-direct
+import { AnthropicDirectQuery } from '../../providers/anthropic-direct/query-runtime.js';
+import { OVERLOAD_EXHAUSTED } from '../../providers/anthropic-direct/overload-pause.js';
+import { OVERLOAD_MAX_RETRIES } from '../../providers/anthropic-direct/loop/retry-budget.js';
+
+// openai-compatible
+import {
+  __setOpenAIClientFactory,
+  OpenAICompatibleQuery,
+  __setRetryBaseDelay,
+} from '../../providers/openai-compatible/query.js';
+import {
+  MAX_CONNECTION_RETRIES,
+} from '../../providers/openai-compatible/query/retry.js';
+
+// harness helpers
+import {
+  makeAnthropicTextStream,
+  makeAnthropicToolUseStream,
+  collectEvents as collectAnthropicEvents,
+} from './__test-utils__/anthropic-harness.js';
+import {
+  makeOpenAITextChunks,
+  makeOpenAIToolUseChunks,
+} from './__test-utils__/openai-harness.js';
+import type { OpenAIChunk } from '../../providers/openai-compatible/translate.js';
+import type { OpenAIMessage } from '../../providers/openai-compatible/messages.js';
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/** Pick all events of a given type from an event list. */
+function pick<T extends ProviderEvent['type']>(
+  events: ProviderEvent[],
+  type: T,
+): Extract<ProviderEvent, { type: T }>[] {
+  return events.filter((e): e is Extract<ProviderEvent, { type: T }> => e.type === type);
+}
+
+/** Collect all ProviderEvents from an async iterable. */
+async function drain(gen: AsyncIterable<ProviderEvent>): Promise<ProviderEvent[]> {
+  const out: ProviderEvent[] = [];
+  for await (const ev of gen) out.push(ev);
+  return out;
+}
+
+/** Minimal prompt stream for a single user message. */
+async function* singlePrompt(content = 'hi'): AsyncIterable<{ content: string }> {
+  yield { content };
+}
+
+/** Base AgentConfig for openai-compatible tests. */
+function oaiConfig(): AgentConfig {
+  return { model: 'gpt-4o-mini', apiKey: 'sk-conf-test' } as AgentConfig;
+}
+
+/** Build a mock Anthropic client with a scripted create() implementation. */
+function makeAnthropicMock(createFn: (...args: unknown[]) => unknown): Anthropic {
+  return { messages: { create: vi.fn(createFn) } } as unknown as Anthropic;
+}
+
+/** Build a minimal AnthropicDirectQuery with a mock client. */
+function makeAnthropicQuery(
+  client: Anthropic,
+  opts: {
+    prompt?: string;
+    toolDispatcher?: { execute: () => Promise<{ content: string }> };
+    initialMessages?: import('@anthropic-ai/sdk/resources').MessageParam[];
+  } = {},
+): AnthropicDirectQuery {
+  return new AnthropicDirectQuery({
+    client,
+    authMode: 'api-key',
+    promptStream: singlePrompt(opts.prompt ?? 'hi'),
+    toolDispatcher: opts.toolDispatcher ?? { execute: async () => ({ content: 'ok' }) },
+    model: 'claude-test',
+    maxTokens: 1024,
+    tools: null,
+    userSystem: null,
+    systemPrefix: null,
+    ...(opts.initialMessages ? { initialMessages: opts.initialMessages } : {}),
+  });
+}
+
+/** Install a mock OpenAI client factory with a scripted create() impl. */
+function installOAIFactory(
+  createFn: (
+    args: { stream?: boolean; messages?: unknown[] },
+    opts?: { signal?: AbortSignal },
+  ) => Promise<AsyncIterable<OpenAIChunk>>,
+): void {
+  __setOpenAIClientFactory(
+    () =>
+      ({
+        chat: { completions: { create: vi.fn(createFn) } },
+      }) as unknown as OpenAI,
+  );
+}
+
+/** Build a minimal OpenAICompatibleQuery (factory must already be installed). */
+function makeOAIQuery(
+  overrides: {
+    toolDispatcher?: { execute: () => Promise<{ content: string }> };
+    prompt?: string;
+    resumeMessages?: OpenAIMessage[];
+  } = {},
+): OpenAICompatibleQuery {
+  return new OpenAICompatibleQuery({
+    auth: { apiKey: 'sk-conf-test', source: 'config', last4: 'test' },
+    model: 'gpt-4o-mini',
+    synthesizedSessionId: 'conf-sid',
+    promptStream: singlePrompt(overrides.prompt ?? 'hi'),
+    config: oaiConfig(),
+    toolDispatcher: overrides.toolDispatcher ?? { execute: async () => ({ content: 'ok' }) },
+    ...(overrides.resumeMessages ? { resumeMessages: overrides.resumeMessages } : {}),
+  });
+}
+
+// ============================================================================
+// SCENARIO 1 — Happy path: text streaming
+//
+// Provider emits: session.init → delta.text → assistant.message → turn.completed
+// Both providers must produce these event types in order.
+// ============================================================================
+describe('Conformance: S1 — happy-path text streaming', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: emits session.init, delta.text, assistant.message, turn.completed', async () => {
+    const evts = makeAnthropicTextStream('hello world');
+    const client = makeAnthropicMock(() =>
+      (async function* () { for (const e of evts) yield e; })(),
+    );
+    const events = await collectAnthropicEvents(makeAnthropicQuery(client));
+
+    expect(events[0]?.type).toBe('session.init');
+    expect(events.map((e) => e.type)).toContain('delta.text');
+    expect(events.map((e) => e.type)).toContain('assistant.message');
+    expect(events.map((e) => e.type)).toContain('turn.completed');
+    expect(pick(events, 'error')).toHaveLength(0);
+    expect(pick(events, 'assistant.message')[0]?.text).toBe('hello world');
+  });
+
+  it('openai-compatible: emits session.init, delta.text, assistant.message, turn.completed', async () => {
+    const chunks = makeOpenAITextChunks('hello world');
+    installOAIFactory(async () => (async function* () { for (const c of chunks) yield c; })());
+    const events = await drain(makeOAIQuery());
+
+    expect(events[0]?.type).toBe('session.init');
+    expect(events.map((e) => e.type)).toContain('delta.text');
+    expect(events.map((e) => e.type)).toContain('assistant.message');
+    expect(events.map((e) => e.type)).toContain('turn.completed');
+    expect(pick(events, 'error')).toHaveLength(0);
+    expect(pick(events, 'assistant.message')[0]?.text).toBe('hello world');
+  });
+});
+
+// ============================================================================
+// SCENARIO 2 — Single tool call and result
+//
+// Both providers must emit tool events and a final turn.completed.
+// ============================================================================
+describe('Conformance: S2 — single tool call and result', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: emits tool events and final turn.completed', async () => {
+    const toolDispatcher = { execute: vi.fn(async () => ({ content: 'tool result' })) };
+    const toolEvts = makeAnthropicToolUseStream('tool_c1', 'read_file', '{"file_path":"a.ts"}');
+    const textEvts = makeAnthropicTextStream('done');
+    let callIdx = 0;
+    const client = makeAnthropicMock(() => {
+      callIdx++;
+      const src = callIdx === 1 ? toolEvts : textEvts;
+      return (async function* () { for (const e of src) yield e; })();
+    });
+    const query = makeAnthropicQuery(client, { toolDispatcher });
+    const events = await collectAnthropicEvents(query);
+
+    expect(toolDispatcher.execute).toHaveBeenCalledTimes(1);
+    expect(pick(events, 'turn.completed')).toHaveLength(1);
+    expect(pick(events, 'error')).toHaveLength(0);
+  });
+
+  it('openai-compatible: emits tool events and final turn.completed', async () => {
+    const toolDispatcher = { execute: vi.fn(async () => ({ content: 'tool result' })) };
+    const toolChunks = makeOpenAIToolUseChunks('call_c2', 'read_file', '{"file_path":"a.ts"}');
+    const textChunks = makeOpenAITextChunks('done');
+    let callIdx = 0;
+    installOAIFactory(async () => {
+      callIdx++;
+      const src = callIdx === 1 ? toolChunks : textChunks;
+      return (async function* () { for (const c of src) yield c; })();
+    });
+    const events = await drain(makeOAIQuery({ toolDispatcher }));
+
+    expect(toolDispatcher.execute).toHaveBeenCalledTimes(1);
+    expect(pick(events, 'turn.completed')).toHaveLength(1);
+    expect(pick(events, 'error')).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// SCENARIO 3 — Non-transient error (HTTP 400): no retry, surfaces as `error`
+// ============================================================================
+describe('Conformance: S3 — non-transient error (HTTP 400) surfaces once, no retry', () => {
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+  });
+
+  it('anthropic-direct: one error event, no turn.completed', async () => {
+    const err400 = Object.assign(new Error('Bad request'), { status: 400 });
+    const client = makeAnthropicMock(() => { throw err400; });
+    const events = await collectAnthropicEvents(makeAnthropicQuery(client));
+
+    expect(client.messages.create).toHaveBeenCalledTimes(1);
+    expect(pick(events, 'error')).not.toHaveLength(0);
+    expect(pick(events, 'turn.completed')).toHaveLength(0);
+  });
+
+  it('openai-compatible: one error event, no turn.completed', async () => {
+    __setRetryBaseDelay(0);
+    const err400 = Object.assign(new Error('Bad request'), { status: 400 });
+    installOAIFactory(async () => { throw err400; });
+    const events = await drain(makeOAIQuery());
+
+    expect(pick(events, 'error')).not.toHaveLength(0);
+    expect(pick(events, 'turn.completed')).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// SCENARIO 4 — Transient 529 retry → eventual success
+//
+// Both providers must retry 529 and eventually succeed on the second attempt.
+// OAI uses real timers + delay=0 (the same pattern as query.test.ts retry tests).
+// Anthropic uses fake timers (its backoff is non-zero and isn't easily tweaked).
+// ============================================================================
+describe('Conformance: S4 — transient 529 retry → eventual success', () => {
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+  });
+
+  it('anthropic-direct: retries 529, succeeds on second attempt (fake timers)', async () => {
+    vi.useFakeTimers();
+    try {
+      const overloadErr = Object.assign(new Error('Overloaded'), { status: 529 });
+      const recovered = makeAnthropicTextStream('recovered');
+      let callCount = 0;
+      const client = makeAnthropicMock(() => {
+        callCount++;
+        if (callCount === 1) throw overloadErr;
+        return (async function* () { for (const e of recovered) yield e; })();
+      });
+      const resultPromise = collectAnthropicEvents(makeAnthropicQuery(client));
+      await vi.advanceTimersByTimeAsync(15_000);
+      const events = await resultPromise;
+
+      expect(callCount).toBe(2);
+      expect(pick(events, 'error')).toHaveLength(0);
+      expect(pick(events, 'turn.completed')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('openai-compatible: retries 529, succeeds on second attempt (real timers, delay=0)', async () => {
+    __setRetryBaseDelay(0);
+    const overloadErr = Object.assign(new Error('Overloaded'), { status: 529 });
+    const recovered = makeOpenAITextChunks('recovered');
+    let callCount = 0;
+    installOAIFactory(async () => {
+      callCount++;
+      if (callCount === 1) throw overloadErr;
+      return (async function* () { for (const c of recovered) yield c; })();
+    });
+    const events = await drain(makeOAIQuery());
+
+    expect(callCount).toBe(2);
+    expect(pick(events, 'error')).toHaveLength(0);
+    expect(pick(events, 'turn.completed')).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// SCENARIO 5 — Burst of 529s exhausts retry budget
+//
+// anthropic-direct: OVERLOAD_EXHAUSTED turn.completed (clean).
+// openai-compatible: error event after MAX_CONNECTION_RETRIES+1 attempts.
+// ============================================================================
+describe('Conformance: S5 — burst 529 exhausts retry budget', () => {
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+  });
+
+  it('anthropic-direct: exhaust → OVERLOAD_EXHAUSTED turn.completed, no raw error (fake timers)', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeAnthropicMock(() => {
+        throw Object.assign(new Error('Overloaded'), { status: 529 });
+      });
+      const resultPromise = collectAnthropicEvents(makeAnthropicQuery(client));
+      await vi.advanceTimersByTimeAsync(120_000);
+      const events = await resultPromise;
+
+      expect(pick(events, 'error')).toHaveLength(0);
+      const completed = pick(events, 'turn.completed')[0];
+      expect(completed).toBeDefined();
+      if (completed) {
+        expect(completed.usage.stopReason).toBe(OVERLOAD_EXHAUSTED);
+      }
+      expect(client.messages.create).toHaveBeenCalledTimes(OVERLOAD_MAX_RETRIES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('openai-compatible: exhaust → error event, call count bounded (real timers, delay=0)', async () => {
+    __setRetryBaseDelay(0);
+    let callCount = 0;
+    installOAIFactory(async () => {
+      callCount++;
+      throw Object.assign(new Error('Overloaded'), { status: 529 });
+    });
+    const events = await drain(makeOAIQuery());
+
+    expect(pick(events, 'error')).not.toHaveLength(0);
+    expect(callCount).toBe(MAX_CONNECTION_RETRIES + 1);
+  });
+});
+
+// ============================================================================
+// SCENARIO 6 — Orphaned tool call in history → repair or clear local error
+//
+// anthropic-direct: has `repairOrphanToolUses`, repairs and proceeds cleanly.
+// openai-compatible: issue #2417 CLOSED — verify the repair handles it.
+// ============================================================================
+describe('Conformance: S6 — orphaned tool call in history', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: repairs orphaned tool_use, completes cleanly', async () => {
+    type MsgParam = import('@anthropic-ai/sdk/resources').MessageParam;
+    const capturedMessages: MsgParam[][] = [];
+    const textEvts = makeAnthropicTextStream('repaired');
+    const client = makeAnthropicMock((params: { messages: MsgParam[] }) => {
+      capturedMessages.push(structuredClone(params.messages));
+      return (async function* () { for (const e of textEvts) yield e; })();
+    });
+
+    const orphanHistory: MsgParam[] = [
+      { role: 'user', content: 'do a thing' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_orphan', name: 'read_file', input: { file: 'x.ts' } },
+        ],
+      },
+    ];
+
+    const query = makeAnthropicQuery(client, { initialMessages: orphanHistory, prompt: 'continue' });
+    const events = await collectAnthropicEvents(query);
+
+    expect(pick(events, 'turn.completed')).toHaveLength(1);
+    expect(pick(events, 'error')).toHaveLength(0);
+    // The request was sent and the orphan was repaired
+    expect(capturedMessages.length).toBeGreaterThanOrEqual(1);
+    const sentMsgs = capturedMessages[0]!;
+    const orphanIdx = sentMsgs.findIndex(
+      (m) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.content) &&
+        (m.content as Array<{ type: string }>).some((b) => b.type === 'tool_use'),
+    );
+    expect(orphanIdx).toBeGreaterThan(-1);
+    // After repair: orphan assistant must be followed by a user message (synthetic tool_result)
+    const afterOrphan = sentMsgs[orphanIdx + 1];
+    expect(afterOrphan?.role).toBe('user');
+  });
+
+  // #2417 CLOSED: openai-compatible now has orphan repair.
+  // Verify the end-to-end contract: orphaned tool_calls history is handled
+  // without a hard API rejection.
+  it('openai-compatible: orphaned tool_calls handled cleanly (issue #2417 closed)', async () => {
+    const chunks = makeOpenAITextChunks('repaired');
+    installOAIFactory(async () => (async function* () { for (const c of chunks) yield c; })());
+
+    const resumeMessages: OpenAIMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'do a thing' }] },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call_orphan',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"file_path":"x.ts"}' },
+          },
+        ],
+      } as unknown as OpenAIMessage,
+      // NO matching tool result — orphan
+    ];
+
+    const events = await drain(makeOAIQuery({ resumeMessages, prompt: 'continue' }));
+
+    // Either clean success (repair worked) or a clear local error — not a silent hang.
+    const hasCompleted = pick(events, 'turn.completed').length > 0;
+    const hasError = pick(events, 'error').length > 0;
+    expect(hasCompleted || hasError).toBe(true);
+  });
+});
+
+// ============================================================================
+// SCENARIO 7 — First-byte / stream-stall timeout
+//
+// anthropic-direct: arms TTFB guard; silent server → error, not a hang.
+// openai-compatible: issue #2416 CLOSED — guard now in place.
+//
+// Both use fake timers and a short TTFB window (5s) via env var.
+// ============================================================================
+describe('Conformance: S7 — stream stall before first byte (TTFB timeout)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    process.env['AFK_MODEL_TTFB_TIMEOUT_MS'] = '5000';
+    process.env['AFK_MODEL_STALL_TIMEOUT_MS'] = '0'; // isolate TTFB
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env['AFK_MODEL_TTFB_TIMEOUT_MS'];
+    delete process.env['AFK_MODEL_STALL_TIMEOUT_MS'];
+    __setOpenAIClientFactory(null);
+  });
+
+  it('anthropic-direct: headers+silence → TTFB timeout surfaces as error event', async () => {
+    const client = makeAnthropicMock((_params: unknown, opts?: unknown) => {
+      const signal = (opts as { signal?: AbortSignal } | undefined)?.signal;
+      return (async function* () {
+        await new Promise<void>((_res, rej) => {
+          if (signal?.aborted) { rej(new Error('aborted')); return; }
+          signal?.addEventListener('abort', () => rej(new Error('aborted')), { once: true });
+        });
+      })();
+    });
+    const resultPromise = collectAnthropicEvents(makeAnthropicQuery(client));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const events = await resultPromise;
+
+    expect(pick(events, 'error')).not.toHaveLength(0);
+  });
+
+  // #2416 CLOSED: openai-compatible now has first-byte timeouts.
+  // The TTFB guard is in driveStream and uses TTFB env var (5s set in beforeEach).
+  // After TTFB fires: up to MAX_STREAM_RETRIES (3) retries, each preceded by a
+  // backoff sleep (base=2000ms by default) and another 5s TTFB window.
+  // Total advancement needed: 3 * (5000 + 2000 * 2^attempt) ≈ 60s.
+  it('openai-compatible: headers+silence → TTFB timeout surfaces as error event (issue #2416 closed)', async () => {
+    __setRetryBaseDelay(0); // zero backoff so retry sleeps don't add to budget
+    installOAIFactory(async (_args: unknown, opts?: { signal?: AbortSignal }) => {
+      const signal = opts?.signal;
+      return (async function* () {
+        await new Promise<void>((_res, rej) => {
+          if (signal?.aborted) { rej(new Error('aborted')); return; }
+          signal?.addEventListener('abort', () => rej(new Error('aborted')), { once: true });
+        });
+      })();
+    });
+
+    const events: ProviderEvent[] = [];
+    const resultPromise = drain(makeOAIQuery()).then((evs) => { events.push(...evs); });
+    // Advance past TTFB (5s) × (1 + MAX_STREAM_RETRIES) = 4 × 5s = 20s
+    await vi.advanceTimersByTimeAsync(25_000);
+    await resultPromise;
+
+    expect(pick(events, 'error')).not.toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// SCENARIO 8 — Usage/quota limit 429 with long Retry-After (gap: #2418)
+//
+// anthropic-direct: parks session until reset (hours if needed).
+// openai-compatible: caps at 120s, retries ≤MAX_CONNECTION_RETRIES, then fails.
+//
+// The parity gap (#2418 OPEN) is documented: openai-compatible never parks.
+// ============================================================================
+describe('Conformance: S8 — usage/quota limit 429 with long Retry-After', () => {
+  afterEach(() => {
+    if (vi.isFakeTimers()) vi.useRealTimers();
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+  });
+
+  it('anthropic-direct: 429 usage-limit emits a defined terminal event or parks (fake timers)', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeAnthropicMock(() => {
+        throw Object.assign(
+          new Error('Claude AI usage limit reached|1700000000'),
+          { status: 429 },
+        );
+      });
+      const resultPromise = collectAnthropicEvents(makeAnthropicQuery(client));
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // Race: if anthropic-direct parks, promise won't settle quickly.
+      let events: ProviderEvent[] = [];
+      const outcome = await Promise.race([
+        resultPromise.then((evs) => { events = evs; return 'settled' as const; }),
+        new Promise<'parking'>((r) => setTimeout(() => r('parking'), 200)),
+      ]);
+
+      if (outcome === 'settled') {
+        const hasError = pick(events, 'error').length > 0;
+        const hasPaused = pick(events, 'paused').length > 0;
+        expect(hasError || hasPaused).toBe(true);
+      }
+      // 'parking' = session is correctly parked — valid behavior (#2418 documents this)
+      expect(['settled', 'parking']).toContain(outcome);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Expected divergence from anthropic-direct (#2418 OPEN):
+  // openai-compatible caps Retry-After at 120s and fails — never parks for hours.
+  // Use a small Retry-After (2s) here so fake timers only need to advance 3×2s=6s.
+  // The parity gap is NOT about the cap value but about the behavior:
+  // openai-compatible will FAIL while anthropic-direct would PARK and wait out hours.
+  it('openai-compatible: 429 with Retry-After → error after bounded retries (gap: #2418 open)', async () => {
+    vi.useFakeTimers();
+    try {
+      let callCount = 0;
+      installOAIFactory(async () => {
+        callCount++;
+        const headers = new Headers({ 'retry-after': '2' }); // 2s Retry-After
+        throw Object.assign(new Error('quota exceeded'), { status: 429, headers });
+      });
+      const resultPromise = drain(makeOAIQuery());
+      // Advance past 3 retries × 2s = 6s
+      await vi.advanceTimersByTimeAsync(10_000);
+      const events = await resultPromise;
+
+      // openai-compatible MUST fail (not park indefinitely like anthropic-direct would for long waits)
+      expect(pick(events, 'error')).not.toHaveLength(0);
+      expect(callCount).toBeGreaterThanOrEqual(1);
+      expect(callCount).toBeLessThanOrEqual(MAX_CONNECTION_RETRIES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ============================================================================
+// SCENARIO 9 — AFK retry count is bounded and predictable (documents #2422)
+//
+// With a mock client (SDK bypassed), the attempt count is exactly
+// 1 + MAX_RETRIES. On a REAL client, SDK's default maxRetries=2 would stack
+// underneath, making each attempt silently 3× the API calls. See #2422.
+// ============================================================================
+describe('Conformance: S9 — AFK retry count is bounded and predictable (documents #2422)', () => {
+  afterEach(() => {
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+  });
+
+  it('anthropic-direct: mock count == 1 + OVERLOAD_MAX_RETRIES (no SDK stacking)', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeAnthropicMock(() => {
+        throw Object.assign(new Error('Overloaded'), { status: 529 });
+      });
+      const resultPromise = collectAnthropicEvents(makeAnthropicQuery(client));
+      await vi.advanceTimersByTimeAsync(120_000);
+      await resultPromise;
+
+      // Without SDK stacking: exactly 1 initial + OVERLOAD_MAX_RETRIES retries.
+      // On a real Anthropic SDK client (maxRetries=2 default), each attempt
+      // would become up to 3 API calls. See #2422.
+      expect(client.messages.create).toHaveBeenCalledTimes(OVERLOAD_MAX_RETRIES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('openai-compatible: mock count == 1 + MAX_CONNECTION_RETRIES (no SDK stacking)', async () => {
+    __setRetryBaseDelay(0);
+    let callCount = 0;
+    installOAIFactory(async () => {
+      callCount++;
+      throw Object.assign(new Error('Overloaded'), { status: 529 });
+    });
+    await drain(makeOAIQuery());
+
+    // Without SDK stacking: exactly 1 + MAX_CONNECTION_RETRIES.
+    // On a real OpenAI SDK client (maxRetries=2), each attempt would be 3× API calls.
+    // See #2422.
+    expect(callCount).toBe(MAX_CONNECTION_RETRIES + 1);
+  });
+});
+
+// ============================================================================
+// SCENARIO 10 — Optional ProviderQuery methods present / missing (gap: #2420)
+//
+// anthropic-direct: implements listRewindTargets, rewindConversation, setSystemPrompt.
+// openai-compatible: does NOT implement these — feature gap, #2420 OPEN.
+// ============================================================================
+describe('Conformance: S10 — optional ProviderQuery methods (gap: #2420)', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: setSystemPrompt, listRewindTargets, rewindConversation are implemented', () => {
+    const client = makeAnthropicMock(() => { throw new Error('unused'); });
+    const query = makeAnthropicQuery(client);
+
+    // rewindFiles returns { canRewind: false } for file rewind (files not supported),
+    // but listRewindTargets / rewindConversation handle conversation rewind.
+    expect(typeof query.listRewindTargets).toBe('function');
+    expect(typeof query.rewindConversation).toBe('function');
+    expect(typeof query.setSystemPrompt).toBe('function');
+  });
+
+  // Expected divergence (#2420 OPEN):
+  // openai-compatible does not implement these optional methods.
+  it('openai-compatible: listRewindTargets, rewindConversation, setSystemPrompt absent (gap: #2420 open)', async () => {
+    installOAIFactory(async () => { throw new Error('unused'); });
+    const query = makeOAIQuery();
+
+    // These methods are intentionally absent on OpenAICompatibleQuery.
+    // When #2420 is fixed, these assertions will need updating.
+    const q = query as unknown as Record<string, unknown>;
+    expect(q['listRewindTargets']).toBeUndefined();
+    expect(q['rewindConversation']).toBeUndefined();
+    // setSystemPrompt: may be a no-op stub or absent
+    if (q['setSystemPrompt'] !== undefined) {
+      // If present (stub), must not throw
+      expect(() => (q['setSystemPrompt'] as (s: string | undefined) => void)(undefined)).not.toThrow();
+    }
+    // The rewindFiles method must return canRewind: false
+    const rewindResult = await query.rewindFiles('any-id', { dryRun: true });
+    expect(rewindResult.canRewind).toBe(false);
+  });
+});

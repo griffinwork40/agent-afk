@@ -53,6 +53,7 @@ import type { ProviderEvent } from '../../../provider.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
+import { setRefreshedClaudeCodeOauthToken } from '../../../auth/credential-resolver.js';
 import type { AnthropicClientLike, AuthMode, RunTurnInput } from '../types.js';
 import type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
 import { turnWithAuthRetry } from './auth-retry-tier.js';
@@ -289,9 +290,19 @@ export class RetryLayer {
     const newToken = loadClaudeCodeOauthToken();
     // Update the tracked token to match what the new client was built with.
     this._clientToken = newToken;
+    // Fix #2471 (resolver-cache fallback): when the live store is temporarily
+    // unreadable (write-back failed, keychain locked), `loadAnthropicCredential()`
+    // falls through to its process-local cache — which still held the boot-time
+    // token. Update the cache here so every subsequent resolver read returns the
+    // fresh account's token, not the boot-time one.
+    if (newToken) setRefreshedClaudeCodeOauthToken(newToken);
     return {
       accountId: parseAccountIdentifier(newToken ?? ''),
-      oldAccountId: parseAccountIdentifier(priorClientToken ?? ''),
+      // Skip parseAccountIdentifier when the prior token was nullish: passing ''
+      // returns the truthy sentinel 'token:(unknown)', which the caller must then
+      // special-case. Passing '' directly instead lets the caller distinguish
+      // "no prior account" from "account with undecodable token" cleanly.
+      oldAccountId: priorClientToken != null ? parseAccountIdentifier(priorClientToken) : '',
       swapped: priorClientToken !== newToken,
     };
   }

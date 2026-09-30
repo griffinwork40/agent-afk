@@ -177,6 +177,7 @@ export function loadAndRegisterConfigHooks(
         const hookCommand = hook.command;
         const hookTimeoutMs = hook.timeoutMs;
         const hookPluginRoot = hook.pluginRoot;
+        const hookPluginName = hook.pluginName;
 
         const handler = async (context: HookContext): Promise<HookDecision> => {
           // For tool-scoped events, check the matcher against the tool name.
@@ -209,6 +210,8 @@ export function loadAndRegisterConfigHooks(
             timeoutMs: hookTimeoutMs,
             transcriptPath,
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
+            ...(hookPluginName !== undefined ? { pluginName: hookPluginName } : {}),
+            ...(hookPluginName !== undefined ? { pluginHookEnv: hookConfig.pluginHookEnv } : {}),
           });
 
           return result.decision;

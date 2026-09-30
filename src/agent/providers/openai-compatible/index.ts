@@ -65,10 +65,7 @@ import {
   formatEnvironmentFragment,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
-import {
-  registerPresenceLifecycle,
-  resolveTopLevelSessionId,
-} from '../shared/presence-lifecycle.js';
+import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 const PROVIDER_NAME = 'openai-compatible';
@@ -285,13 +282,20 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // system prompt the next turn sees — not just the dispatcher's resolve base.
     let _currentCwd = config.cwd ?? process.cwd();
 
+    // Resolve FIRST so awareness source + dispatcher share the same id, not the
+    // resume-only config.sessionId absent on fresh telegram/daemon sessions (#2353).
+    const { resolved: resolvedSession, nextMintedSessionId } = resolveSessionId({
+      config, surface: this.providerOpts.surface ?? 'cli', mintedSessionId: this._mintedSessionId,
+    });
+    this._mintedSessionId = nextMintedSessionId;
+
     const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
       surface: this.providerOpts.surface ?? 'cli',
       getCwd: () => _currentCwd,
       modelName,
       providerName: PROVIDER_NAME,
       permissionMode,
-      ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
+      ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
       ...(config.parentSessionId !== undefined
         ? { parentSessionId: config.parentSessionId }
         : {}),
@@ -309,24 +313,6 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ? this.providerOpts.subagentExecutor.getSubagentsLite()
           : { active: [], backgroundJobs: [] },
     });
-
-    // Invariant: resolve the session id BEFORE anything that consumes it —
-    // the tool dispatcher (every `ToolHandlerContext.sessionId`),
-    // `buildOpts.sessionIdOverride` (query construction), and the presence
-    // write below must receive the SAME id. The Telegram watcher resolves a
-    // session's ledger path from the id in its presence file, so a mismatch
-    // makes auto-subscribe tail a ledger that does not exist.
-    // History: both providers shared a config.sessionId bug fixed via the
-    // shared helper; parity is pinned by shared/dispatcher-session-id.test.ts.
-    const resolvedSession = resolveTopLevelSessionId({
-      sessionId: config.sessionId,
-      resume: config.resume,
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      surface: this.providerOpts.surface ?? 'cli',
-      memoized: this._mintedSessionId,
-    });
-    this._mintedSessionId = resolvedSession.memoized;
 
     // External-dispatcher branch mirrors anthropic-direct: when the caller
     // supplies their own dispatcher, wrap it so `get_runtime_state` is still
@@ -380,18 +366,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // Fast mode: top-level only (forks are built without a controller in tools/nesting.ts).
     if (this.providerOpts.fastModeController !== undefined && (config.depth ?? 0) === 0) buildOpts.fastTier = { controller: this.providerOpts.fastModeController, hasCustomEndpoint: isCustomOpenAIEndpoint(config.openaiBaseUrl ?? this.providerOpts.baseURL) };
 
-    // Phase 2 — Presence file lifecycle (top-level sessions only), using the id
-    // resolved above so presence and query construction cannot diverge.
-    this._presenceSessionId = registerPresenceLifecycle({
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      sessionId: resolvedSession.id,
+    // Phase 2 — Presence file lifecycle (top-level CLI sessions only). Non-CLI
+    // fresh sessions get a stable id (above) but no file (see session-wiring.ts).
+    this._presenceSessionId = registerSessionPresence({
+      resolved: resolvedSession, config, surface: this.providerOpts.surface ?? 'cli',
+      runtimeStateSource, providerName: PROVIDER_NAME, modelName,
       currentPresenceSessionId: this._presenceSessionId,
-      runtimeStateSource,
-      surface: this.providerOpts.surface ?? 'cli',
-      cwd: config.cwd,
-      providerName: PROVIDER_NAME,
-      model: modelName,
     });
 
     // Invariant: assemble the full provider-side system prompt so non-Anthropic
@@ -451,13 +431,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
       return parts.join('\n\n');
     };
 
-    // Phase 2 — the `# Environment` block. Reads `_currentCwd` (the mutable
-    // cell, not the closed-over `config.cwd`) so a post-construction call
-    // picks up whatever `rebuildEnvironmentBlock` last wrote there.
+    // Phase 2 — the `# Environment` block. Uses `resolvedSession.id` (not
+    // `config.sessionId`) so the block shows the resolved id (#2353).
     const buildEnvFragment = (): string =>
       formatEnvironmentFragment({
         cwd: _currentCwd,
-        ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
+        ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
         surface: this.providerOpts.surface ?? 'cli',
         ...(config.depth !== undefined ? { depth: config.depth } : {}),
         ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),

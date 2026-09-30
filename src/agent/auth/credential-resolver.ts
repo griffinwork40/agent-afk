@@ -98,6 +98,23 @@ export function _resetRefreshedClaudeCodeOauthToken(): void {
 }
 
 /**
+ * Update the process-local refresh fallback with a freshly-obtained token.
+ *
+ * Called by `forceClientRefresh()` (via the `/reauth` handler or the
+ * usage-limit hot-swap path) after it successfully builds a new SDK client.
+ * Keeps the resolver cache in sync so that when the live credential store
+ * yields nothing (expired token, write-back failed, locked keychain),
+ * `loadAnthropicCredential()` returns the freshly-refreshed token —
+ * i.e. the account the parent is NOW authenticated with — rather than
+ * the boot-time token.
+ *
+ * Never logs or persists the token value.
+ */
+export function setRefreshedClaudeCodeOauthToken(token: string): void {
+  refreshedClaudeCodeOauthToken = token;
+}
+
+/**
  * Returns true when a token was refreshed during this process but its
  * write-back to the persistent credential store failed.  Used by
  * `describeCredentialSource` to give tier-3 a distinct label.
