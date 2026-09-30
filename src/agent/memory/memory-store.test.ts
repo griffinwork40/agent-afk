@@ -665,3 +665,71 @@ describe('searchFacts — access tracking', () => {
     expect(store.getFact(idB)!.access_count).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// search() — FTS5 hyphen / colon sanitization (issue #2669)
+// ---------------------------------------------------------------------------
+
+describe('search() — FTS5 query sanitization', () => {
+  it('returns facts for a hyphenated query (e.g. "agent-afk") instead of silently returning []', () => {
+    // This is the exact repro from issue #2669: the bare query `agent-afk`
+    // caused FTS5 to raise "no such column: afk", which was previously swallowed.
+    store.storeFact({
+      category: 'convention',
+      content: 'agent-afk uses pnpm as its package manager',
+      source_surface: 'test',
+    });
+
+    const results = store.search('agent-afk');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.content).toContain('agent-afk');
+  });
+
+  it('returns facts for a colon-containing query', () => {
+    store.storeFact({
+      category: 'learning',
+      content: 'prefer src:config when referencing the config module',
+      source_surface: 'test',
+    });
+
+    const results = store.search('src:config');
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('an explicit operator query (foo AND bar*) still works and is not over-quoted', () => {
+    store.storeFact({
+      category: 'preference',
+      content: 'always use TypeScript strict mode',
+      source_surface: 'test',
+    });
+
+    // This must NOT be sanitized — AND and bar* are valid FTS5 syntax.
+    const results = store.search('TypeScript AND strict*');
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it('returns the same facts whether the query is bare or manually pre-quoted', () => {
+    // Regression guard: bare `agent-afk` and explicit `"agent-afk"` must
+    // return equivalent results (the issue body's own acceptance criterion).
+    store.storeFact({
+      category: 'decision',
+      content: 'agent-afk ships as an npm package',
+      source_surface: 'test',
+    });
+
+    const bare = store.search('agent-afk');
+    const preQuoted = store.search('"agent-afk"');
+
+    expect(bare.length).toBe(preQuoted.length);
+    expect(bare.map((r) => r.content)).toEqual(preQuoted.map((r) => r.content));
+  });
+
+  it('throws (does not return []) when a query is still unparseable after sanitizing', () => {
+    // A query consisting solely of FTS5 operator tokens with no operands is
+    // syntactically invalid AND cannot be sanitized (no special bareword chars).
+    // sanitizeFtsQuery leaves "AND OR" intact, the retry re-uses the same string,
+    // and the second searchFacts call throws — which must propagate to the caller
+    // rather than being swallowed as a silent empty result.
+    expect(() => store.search('AND OR')).toThrow();
+  });
+});
