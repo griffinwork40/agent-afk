@@ -211,9 +211,10 @@ function buildForeignSummarize(
         warnedFailure.add(targetModel);
         const rawMsg = err instanceof Error ? err.message : String(err);
         // Redact before logging: provider SDK errors (e.g. OpenAI 401) can
-        // echo partial API keys in the message body. Pre-truncate to 200 chars
-        // before redactSecrets so we never scan arbitrarily large strings.
-        const msg = redactSecrets(rawMsg.slice(0, 200));
+        // echo partial API keys in the message body. Redact the full string
+        // first so a secret straddling the 200-char boundary is never logged
+        // unredacted, then truncate to 200 chars for display.
+        const msg = redactSecrets(rawMsg).slice(0, 200);
         // eslint-disable-next-line no-console
         console.warn(
           `[afk/compact] Cross-provider summarization failed for ${targetProvider}/${targetModel}: ` +

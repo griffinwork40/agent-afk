@@ -552,11 +552,21 @@ describe('glob handler — globstar collapses to zero segments (root-level match
 // ---------------------------------------------------------------------------
 
 describe('GlobAbortedError message and handler catch', () => {
+  let abortTempDir: string;
+
+  beforeEach(async () => {
+    abortTempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-abort-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(abortTempDir, { recursive: true, force: true });
+  });
+
   it('handler returns { content: "Search aborted", isError: true } when the abort signal fires before the walk starts', async () => {
     const ac = new AbortController();
     ac.abort(); // pre-abort so the signal is already aborted at call time
     const result = await globHandler(
-      { pattern: '**/*.ts', path: '/tmp' },
+      { pattern: '**/*.ts', path: abortTempDir },
       ac.signal,
     );
     expect(result).toEqual({ content: 'Search aborted', isError: true });
