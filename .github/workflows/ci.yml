@@ -507,7 +507,7 @@ jobs:
         # turn the hook into a no-op (`|| true` swallows the missing module).
         run: |
           set -e
-          if ! npm pack --dry-run --ignore-scripts --json | grep -q '"path": "scripts/postinstall.mjs"'; then
+          if ! npm pack --dry-run --ignore-scripts --json | jq -e '.[0].files[] | select(.path == "scripts/postinstall.mjs")' > /dev/null; then
             echo "::error::scripts/postinstall.mjs is not in the npm tarball; the postinstall hook would be a silent no-op" >&2
             exit 1
           fi
