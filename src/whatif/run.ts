@@ -89,17 +89,27 @@ export class WhatifMdeError extends Error {
   readonly episodesPerArm: number;
   readonly kind: 'mde' | 'headroom';
   readonly predictionId?: string;
+  /**
+   * True when the refusal is backed by a MEASURED baseline-sample headroom
+   * check (as opposed to the analyst-estimate headroom gate or the generic MDE
+   * gate).  A measured refusal cannot be cleared by `--force`; the only
+   * override is `--no-baseline-sample`.  CLI entry points use this flag to
+   * decide whether to prompt or to print `--no-baseline-sample` advice
+   * directly (issue #2610).
+   */
+  readonly measured: boolean;
 
   constructor(
     minProbesPerPrediction: number,
     message?: string,
-    opts?: { kind?: 'mde' | 'headroom'; predictionId?: string },
+    opts?: { kind?: 'mde' | 'headroom'; predictionId?: string; measured?: boolean },
   ) {
     super(message ?? mdeGateRefusedMessage(minProbesPerPrediction));
     this.name = 'WhatifMdeError';
     this.episodesPerArm = minProbesPerPrediction;
     this.kind = opts?.kind ?? 'mde';
     this.predictionId = opts?.predictionId;
+    this.measured = opts?.measured ?? false;
   }
 }
 

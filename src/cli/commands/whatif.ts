@@ -26,6 +26,7 @@ import { describeChange } from '../../whatif/operators/index.js';
 import {
   parseWhatifArgs,
 } from '../../whatif/args.js';
+import { decideMdeAction } from './whatif.mde-handler.js';
 import {
   resolveSpec,
   buildWhatifDeps,
@@ -242,39 +243,32 @@ async function runWhatifCommand(
 
     if (isMdeError(err)) {
       const me = err as WhatifMdeErrorType;
-      const detail = me.message.replace('whatif: run is underpowered — ', '');
-      if (parsed.yes && !parsed.force) {
-        // --yes suppresses interactive prompts; refuse with a clear message.
-        process.stderr.write(
-          `${palette.error('whatif: underpowered run refused')} — ${detail}\n`,
-        );
+      const action = decideMdeAction(me, parsed.yes, !!process.stdin.isTTY);
+
+      if (action.kind === 'refuse') {
+        process.stderr.write(`${palette.error('whatif:')} ${action.message}\n`);
         process.exit(2);
       }
-      if (process.stdin.isTTY) {
-        // Interactive: ask the operator whether to proceed anyway.
-        process.stderr.write(`\n${palette.warning('whatif: underpowered run')}\n  ${detail}\n`);
-        const proceed = await confirmSpec([], 'Proceed anyway?');
-        if (!proceed) {
-          process.stderr.write('Aborted.\n');
-          process.exit(0);
-        }
-        // Re-run with force=true after user confirms, then fall through to
-        // the shared render block below instead of duplicating it here.
-        const { runWhatif: rerun } = await import('../../whatif/run.js');
-        spinner?.start();
-        try {
-          report = await rerun({ ...runOpts, force: true }, depsWithProgress);
-        } catch (err2) {
-          spinner?.stop();
-          throw err2;
-        }
+
+      // action.kind === 'prompt': interactive session, clearable refusal.
+      process.stderr.write(`\n${palette.warning('whatif: underpowered run')}\n  ${action.detail}\n`);
+      const proceed = await confirmSpec([], 'Proceed anyway?');
+      if (!proceed) {
+        process.stderr.write('Aborted.\n');
+        process.exit(0);
+      }
+      // Re-run with force=true after user confirms, then fall through to
+      // the shared render block below instead of duplicating it here.
+      const { runWhatif: rerun } = await import('../../whatif/run.js');
+      spinner?.start();
+      try {
+        report = await rerun({ ...runOpts, force: true }, depsWithProgress);
+      } catch (err2) {
         spinner?.stop();
-        // Fall through to shared render block.
-      } else {
-        // Non-interactive, no --yes: print message and fail.
-        process.stderr.write(`${palette.error('whatif:')} ${detail}\n`);
-        process.exit(2);
+        throw err2;
       }
+      spinner?.stop();
+      // Fall through to shared render block.
     } else {
       throw err;
     }
