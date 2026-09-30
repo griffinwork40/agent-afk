@@ -254,11 +254,15 @@ describe('plugin update', () => {
     );
     await runArgv(makeProgram(fakeGit(['v2.0.0', 'v1.0.0'])), ['plugin', 'update', 'outdated']);
     // formatOutcome for 'updated' emits: "<name>: v1.0.0 → v2.0.0"
-    expect(logs.some((l) => /outdated.*v1\.0\.0.*v2\.0\.0/.test(l))).toBe(true);
+    // Pin the → separator so a missing arrow (e.g. "v1.0.0 v2.0.0") does not silently pass.
+    expect(logs.some((l) => /outdated.*v1\.0\.0\s*→\s*v2\.0\.0/.test(l))).toBe(true);
+    // Also verify the index was updated so this test is self-contained.
+    expect(readIndex(indexPath).plugins['outdated'].ref).toBe('v2.0.0');
   });
 
   it('reports a missing-dir warning on stdout for a single-plugin update', async () => {
     // Plugin is in the index but its directory was never created.
+    // Production path (update.ts:152) returns at the existsSync check — no git call occurs.
     upsertPlugin(
       'ghost',
       {
@@ -267,7 +271,7 @@ describe('plugin update', () => {
       },
       indexPath,
     );
-    await runArgv(makeProgram(fakeGit(['v1.0.0'])), ['plugin', 'update', 'ghost']);
+    await runArgv(makeProgram(), ['plugin', 'update', 'ghost']);
     // formatOutcome for 'missing-dir' emits: "! <name>: plugin dir missing (<dir>)"
     expect(logs.some((l) => /ghost.*plugin dir missing/.test(l))).toBe(true);
   });
