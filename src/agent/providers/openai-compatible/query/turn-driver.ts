@@ -51,6 +51,7 @@ import type { OpenAIMessage } from '../messages.js';
 import type { OpenAIJournalWiring } from './journal-wiring.js';
 import type { AgentConfig } from '../../../types/config-types.js';
 import type { OpenAIAuthResolution } from '../auth.js';
+import { emitQueuedUserMessage } from '../../../trace/emit.js';
 
 /** Full context the inner turn driver needs from the owning query. */
 export interface TurnDriverContext extends IterationContext, FinishTurnContext {
@@ -72,6 +73,39 @@ export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   readonly currentPermissionMode: string;
   /** Mutable — set true by close(). */
   readonly closed: boolean;
+  /** Inter-round steering callback; set via setBeforeNextRound(). Read live. */
+  readonly beforeNextRound: (() => string | undefined) | undefined;
+}
+
+/**
+ * Inject inter-round steering text from `beforeNextRound()` onto the last
+ * tool-result user message, mirroring anthropic-direct/loop/inter-round.ts.
+ */
+export function applyBeforeNextRound(
+  priorTurns: OpenAIMessage[],
+  steeringText: string | undefined,
+  traceWriter: TraceSink | undefined,
+  subagentId: string | undefined,
+): void {
+  if (!steeringText) return;
+  const last = priorTurns.at(-1);
+  // Invariant: OpenAI tool results are `role:'tool'` messages, so after an
+  // ordinary tool round the tail is NOT a user message. The callback has
+  // already drained the steering queue, so returning here would lose the
+  // text; append a fresh user turn instead (valid after tool{} messages —
+  // dispatch-append.ts uses the same shape for queued/image follow-ups).
+  if (!last || last.role !== 'user') {
+    priorTurns.push({ role: 'user', content: steeringText } as OpenAIMessage);
+  } else if (typeof last.content === 'string') {
+    last.content = last.content + '\n\n' + steeringText;
+  } else if (Array.isArray(last.content)) {
+    (last.content as Array<{ type: string; text: string }>).push({ type: 'text', text: steeringText });
+  }
+  void emitQueuedUserMessage(traceWriter, {
+    jobId: subagentId ?? '',
+    subagentId: subagentId ?? '',
+    byteLength: Buffer.byteLength(steeringText, 'utf8'),
+  });
 }
 
 /**
@@ -207,6 +241,7 @@ export async function* runTurnInner(
       yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
       return;
     }
+    applyBeforeNextRound(ctx.priorTurns, ctx.beforeNextRound?.(), ctx.traceWriter, ctx.opts.config.subagentId);
     round += 1;
 
     {

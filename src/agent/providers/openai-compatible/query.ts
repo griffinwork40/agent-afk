@@ -34,7 +34,6 @@
 
 import OpenAI from 'openai';
 import { randomUUID } from 'node:crypto';
-import type { AgentConfig } from '../../types/config-types.js';
 
 import { pathContainmentBypassed } from '../../permission-policy.js';
 import type { TraceSink } from '../../trace/index.js';
@@ -60,9 +59,7 @@ import { collectSupportedCommands } from '../shared/supported-commands.js';
 import { TurnTrace } from '../shared/turn-trace.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
-  resolveOpenAIAuth,
   formatAuthDiagnostic,
-  type AuthResolverDeps,
 } from './auth.js';
 import { type OpenAIMessage } from './messages.js';
 import {
@@ -90,7 +87,7 @@ import {
   resolveReasoningEffort,
 } from './query/model-params.js';
 import { resolveClientFactory, buildOpenAIAdmissionFetch } from './query/client.js';
-import { FastTierSession, type FastTierOptions } from './query/fast-tier-session.js';
+import { FastTierSession } from './query/fast-tier-session.js';
 import {
   runTurnInner,
   type TurnDriverContext,
@@ -102,6 +99,12 @@ import {
 import { OPENAI_COMPATIBLE_MODELS } from './query/capabilities.js';
 import type { OpenAICompatibleQueryOptions } from './query/query-options.js';
 export type { OpenAICompatibleQueryOptions } from './query/query-options.js';
+import { applySetSystemPrompt, type BeforeNextRoundCallback } from './query/live-updates.js';
+import {
+  listOpenAIUserTurns,
+  rewindOpenAIConversation,
+} from './query/rewind-conversation.js';
+export { buildQueryFromConfig } from './query/build-query.js';
 
 // Re-exported from the extracted query/ submodules so existing import sites
 // (sibling tests + index.ts) keep resolving these from './query.js'.
@@ -135,6 +138,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   readonly toolDispatcher: ToolDispatcher | undefined;
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly onCwdChange?: (cwd: string) => void;
+  private readonly systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
+  /** Inter-round steering callback; set via setBeforeNextRound(). */
+  private _beforeNextRound: BeforeNextRoundCallback = undefined;
+  get beforeNextRound(): BeforeNextRoundCallback { return this._beforeNextRound; }
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** Which wire this session speaks: Chat Completions (default) or Responses. */
@@ -223,6 +230,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.toolDispatcher = opts.toolDispatcher;
     this.onPermissionMode = opts.onPermissionMode;
     this.onCwdChange = opts.onCwdChange;
+    this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
     this.traceWriter = opts.traceWriter;
     this.fastTier = new FastTierSession(opts.fastTier);
     this.autoCompactThreshold = resolveAutoCompactThreshold(opts.config.autoCompact, opts.model);
@@ -411,6 +419,22 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     this.onCwdChange?.(cwd);
   }
 
+  setSystemPrompt(basePrompt: string | undefined): boolean {
+    return applySetSystemPrompt(this.opts.config, basePrompt, this.systemPromptRebuildFactory);
+  }
+
+  setBeforeNextRound(cb: BeforeNextRoundCallback): void {
+    this._beforeNextRound = cb;
+  }
+
+  listRewindTargets(): import('../../provider.js').RewindTarget[] {
+    return listOpenAIUserTurns(this.priorTurns);
+  }
+
+  async rewindConversation(turnIndex: number): Promise<import('../../provider.js').ProviderRewindConversationResult> {
+    return rewindOpenAIConversation(this.priorTurns, this.abort, this.closed, turnIndex);
+  }
+
   async supportedCommands(): Promise<ProviderCommandInfo[]> {
     return collectSupportedCommands();
   }
@@ -476,58 +500,4 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   }
 }
 
-/**
- * Resolve auth + construct a query. Provider entrypoint uses this; tests
- * use the constructor directly via the test-injection hook.
- */
-export function buildQueryFromConfig(
-  config: AgentConfig,
-  promptStream: AsyncIterable<ProviderUserTurn>,
-  options: {
-    baseURL?: string;
-    defaultHeaders?: Record<string, string>;
-    toolDispatcher?: ToolDispatcher;
-    onPermissionMode?: (mode: string) => void;
-    onCwdChange?: (cwd: string) => void;
-    mcpManager?: import('../../mcp/index.js').McpManager;
-    useResponsesApi?: boolean;
-    /**
-     * Optional env + fs injection point forwarded to `resolveOpenAIAuth`.
-     * Tests pass a hermetic stub here to prevent reading real host credentials
-     * (e.g. `~/.codex/auth.json`) from the developer's machine.
-     */
-    authDeps?: AuthResolverDeps;
-    /**
-     * Session id resolved by the calling provider.
-     */
-    sessionIdOverride?: string;
-    /** Fast mode wiring from the provider (top-level sessions only). */
-    fastTier?: FastTierOptions;
-  } = {},
-): OpenAICompatibleQuery {
-  const auth = resolveOpenAIAuth(config.apiKey, options.authDeps, config.forceChatgptOAuth ?? false);
-  const synthesizedSessionId =
-    options.sessionIdOverride ??
-    config.resume ??
-    `openai-pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const rawModel = typeof config.model === 'string' ? config.model : 'gpt-4o-mini';
-  const model = resolveModelId(rawModel) ?? rawModel;
 
-  const opts: OpenAICompatibleQueryOptions = {
-    auth,
-    model,
-    synthesizedSessionId,
-    promptStream,
-    config,
-  };
-  if (options.baseURL !== undefined) opts.baseURL = options.baseURL;
-  if (options.defaultHeaders !== undefined) opts.defaultHeaders = options.defaultHeaders;
-  if (options.toolDispatcher !== undefined) opts.toolDispatcher = options.toolDispatcher;
-  if (options.onPermissionMode !== undefined) opts.onPermissionMode = options.onPermissionMode;
-  if (options.onCwdChange !== undefined) opts.onCwdChange = options.onCwdChange;
-  if (options.mcpManager !== undefined) opts.mcpManager = options.mcpManager;
-  if (options.useResponsesApi !== undefined) opts.useResponsesApi = options.useResponsesApi;
-  if (config.traceWriter !== undefined) opts.traceWriter = config.traceWriter;
-  if (options.fastTier !== undefined) opts.fastTier = options.fastTier;
-  return new OpenAICompatibleQuery(opts);
-}

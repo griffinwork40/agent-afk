@@ -439,9 +439,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // full joined system prompt over the STABLE fragments captured above.
     // Used both for the initial build and for every #876 rebuild, so the two
     // can never drift out of ordering sync with each other.
-    const assembleSystemPrompt = (envFragment: string): string => {
+    const assembleSystemPrompt = (envFragment: string, baseSys = existingSys): string => {
       const parts = [toolBase];
-      if (existingSys !== undefined && existingSys.length > 0) parts.push(existingSys);
+      if (baseSys !== undefined && baseSys.length > 0) parts.push(baseSys);
       parts.push(memoryPrompt);
       const workspacePrompt = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined);
       if (workspacePrompt) parts.push(workspacePrompt);
@@ -487,7 +487,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
       this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
       patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment());
     };
-    buildOpts.onCwdChange = rebuildEnvironmentBlock;
+    Object.assign(buildOpts, { onCwdChange: rebuildEnvironmentBlock, systemPromptRebuildFactory: (base?: string) => assembleSystemPrompt(buildEnvFragment(), base) });
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
   }
