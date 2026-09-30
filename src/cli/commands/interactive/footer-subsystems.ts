@@ -9,6 +9,7 @@ import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
 import type { TurnState } from './repl-loop-shared.js';
+import { makeForegroundCountsGetter } from './foreground-counts.js';
 
 /**
  * The persistent footer subsystems owned by a single `runReplLoop`. Returned
@@ -214,6 +215,7 @@ export function setupFooterSubsystems(
   healthRail = new HealthRail({
     backgroundRegistry: ctx.backgroundRegistry,
     getExtraRows: () => ctx.statusLine.getExtraRows(),
+    getForegroundAgentCounts: makeForegroundCountsGetter(ctx.subagentManager, ctx.backgroundRegistry),
   });
   healthRail.setRowCountChangeHandler((rows) => {
     healthRailRowCount = rows;

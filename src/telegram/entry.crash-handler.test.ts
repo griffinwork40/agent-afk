@@ -13,6 +13,13 @@
  *      the fire-and-forget push HTTP request has a chance to flush before the
  *      process terminates.
  *
+ * Fix: #2576 — three advisory findings addressed:
+ *   1. process.exitCode = 1 is set before the unref'd timer so supervisors
+ *      (launchd KeepAlive / systemd Restart=on-failure) see a non-zero code
+ *      even when the process exits naturally before the timer fires.
+ *   2. vi.useFakeTimers() moved from test bodies into beforeEach.
+ *   3. vi.useRealTimers() / vi.clearAllTimers() remain in afterEach (unchanged).
+ *
  * No real Telegram messages are sent. pushIfConfigured is fully mocked.
  */
 
@@ -78,7 +85,7 @@ function captureProcessOn(): {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('installCrashHandlers (#2303, #2513)', () => {
+describe('installCrashHandlers (#2303, #2513, #2576)', () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -86,6 +93,11 @@ describe('installCrashHandlers (#2303, #2513)', () => {
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number | string | null) => undefined as never);
     // Reset module-scoped re-entry guard so each test starts from a clean state.
     _resetCrashHandlersForTest();
+    // Reset exitCode so tests that check it start from a known-clean state.
+    process.exitCode = undefined;
+    // Install fake timers here so every test that exercises timers gets them
+    // automatically, without needing an inline vi.useFakeTimers() call.
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
@@ -97,6 +109,8 @@ describe('installCrashHandlers (#2303, #2513)', () => {
     exitSpy.mockRestore();
     vi.useRealTimers();
     vi.resetModules();
+    // Restore exitCode so other test files aren't affected.
+    process.exitCode = undefined;
   });
 
   it('registers an uncaughtException handler', () => {
@@ -120,9 +134,6 @@ describe('installCrashHandlers (#2303, #2513)', () => {
   });
 
   it('uncaughtException handler calls pushIfConfigured with "telegram" prefix and error text', async () => {
-    // Use fake timers so the deferred process.exit(1) setTimeout never becomes
-    // a real pending timer that could leak across test boundaries.
-    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -142,9 +153,6 @@ describe('installCrashHandlers (#2303, #2513)', () => {
   });
 
   it('unhandledRejection handler calls pushIfConfigured with "telegram" prefix', async () => {
-    // Use fake timers so the deferred process.exit(1) setTimeout never becomes
-    // a real pending timer that could leak across test boundaries.
-    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -163,9 +171,6 @@ describe('installCrashHandlers (#2303, #2513)', () => {
   });
 
   it('rate-limits crash pushes: second call within 60 s is suppressed', async () => {
-    // Use fake timers so the deferred process.exit(1) setTimeout never becomes
-    // a real pending timer that could leak across test boundaries.
-    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -183,7 +188,6 @@ describe('installCrashHandlers (#2303, #2513)', () => {
   });
 
   it('uncaughtException handler defers process.exit(1) by ~200 ms so the push can flush', async () => {
-    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -204,7 +208,6 @@ describe('installCrashHandlers (#2303, #2513)', () => {
   });
 
   it('unhandledRejection handler defers process.exit(1) by ~200 ms so the push can flush', async () => {
-    vi.useFakeTimers();
     const { captured, restore } = captureProcessOn();
     try {
       installCrashHandlers();
@@ -233,6 +236,43 @@ describe('installCrashHandlers (#2303, #2513)', () => {
       const countAfterSecond = (captured['uncaughtException'] ?? []).length;
 
       expect(countAfterSecond).toBe(countAfterFirst);
+    } finally {
+      restore();
+    }
+  });
+
+  it('uncaughtException handler sets process.exitCode = 1 immediately (before timer)', () => {
+    const { captured, restore } = captureProcessOn();
+    try {
+      installCrashHandlers();
+      const [handler] = captured['uncaughtException'] ?? [];
+
+      // exitCode starts undefined (reset in beforeEach).
+      expect(process.exitCode).toBeUndefined();
+
+      handler!(new Error('crash'));
+
+      // exitCode must be set synchronously — before any timer fires.
+      expect(process.exitCode).toBe(1);
+      // Timer has not fired yet.
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('unhandledRejection handler sets process.exitCode = 1 immediately (before timer)', () => {
+    const { captured, restore } = captureProcessOn();
+    try {
+      installCrashHandlers();
+      const [handler] = captured['unhandledRejection'] ?? [];
+
+      expect(process.exitCode).toBeUndefined();
+
+      handler!(new Error('rejection'));
+
+      expect(process.exitCode).toBe(1);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       restore();
     }

@@ -16,11 +16,12 @@
  * @module scripts/backfill-preexisting-ledger
  */
 
-import { readdirSync, readFileSync, statSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { getTranscriptsDir } from '../src/paths.js';
 import { detectInText } from '../src/agent/preexisting-ledger/detector.js';
+import { clusterHits, type ClusterHit as TranscriptHit, type Cluster } from '../src/agent/preexisting-ledger/cluster.js';
 import { getPreexistingBackfillPath } from '../src/agent/preexisting-ledger/paths.js';
 import { findLocusMatches, resolveLocusPath } from '../src/agent/preexisting-ledger/resolve.js';
 
@@ -35,14 +36,6 @@ const testTopN = testTopFlag >= 0 ? parseInt(args[testTopFlag + 1] ?? '0', 10) :
 // ---------------------------------------------------------------------------
 // Transcript scanning
 // ---------------------------------------------------------------------------
-
-interface TranscriptHit {
-  locus: string;
-  signal: string;
-  category: string;
-  transcriptFile: string;
-  sessionDate: string;
-}
 
 function extractAssistantBlocks(markdown: string): string[] {
   // Transcripts use ## Assistant headers; extract each block.
@@ -77,48 +70,6 @@ function scanTranscript(filePath: string, fileName: string): TranscriptHit[] {
     }
   }
   return hits;
-}
-
-// ---------------------------------------------------------------------------
-// Clustering and ranking
-// ---------------------------------------------------------------------------
-
-interface Cluster {
-  locus: string;
-  category: string;
-  sessionCount: number;
-  transcriptFiles: string[];
-  lastSeen: string;
-}
-
-function clusterHits(hits: TranscriptHit[]): Cluster[] {
-  // Normalise locus: trim backticks and whitespace.
-  const normalize = (l: string) => l.replace(/^`|`$/g, '').trim();
-
-  const map = new Map<string, { category: string; files: Set<string>; dates: string[] }>();
-  for (const hit of hits) {
-    const key = normalize(hit.locus);
-    if (!map.has(key)) {
-      map.set(key, { category: hit.category, files: new Set(), dates: [] });
-    }
-    const entry = map.get(key)!;
-    entry.files.add(hit.transcriptFile);
-    if (hit.sessionDate) entry.dates.push(hit.sessionDate);
-  }
-
-  const clusters: Cluster[] = [];
-  for (const [locus, { category, files, dates }] of map.entries()) {
-    const lastSeen = dates.length > 0 ? dates.sort().at(-1)! : '';
-    clusters.push({ locus, category, sessionCount: files.size, transcriptFiles: [...files], lastSeen });
-  }
-
-  // Rank: descending sessionCount, then descending lastSeen.
-  clusters.sort((a, b) => {
-    if (b.sessionCount !== a.sessionCount) return b.sessionCount - a.sessionCount;
-    return b.lastSeen.localeCompare(a.lastSeen);
-  });
-
-  return clusters;
 }
 
 // ---------------------------------------------------------------------------

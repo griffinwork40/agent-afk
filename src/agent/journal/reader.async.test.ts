@@ -156,25 +156,27 @@ describe('findToolResultAsync', () => {
 });
 
 describe('scanFileAsync: fd leak fix — stream.destroy()', () => {
-  it('closes the file descriptor by destroying the stream after scanning', async () => {
-    // Verify that fd count does not grow unboundedly across repeated scans,
-    // which would be the observable symptom of a missing stream.destroy() call.
+  it('calls stream.destroy() after each scan so file descriptors are released', async () => {
+    // Spy on fs.ReadStream.prototype.destroy to assert it is called for each
+    // stream that scanFileAsync opens — the structural guarantee that no fd leaks.
+    // We use the prototype because fs.createReadStream is non-configurable and
+    // cannot be replaced via vi.spyOn directly.
     const sessionId = 'async-destroy-fd';
     fs.mkdirSync(getSessionLedgerDir(sessionId), { recursive: true });
     const journalPath = getSessionJournalPath(sessionId);
     fs.writeFileSync(journalPath, toolResultRecord('tu-fd', 'content', 500) + '\n');
 
-    // Run many scans; if the stream is never destroyed the process fd table
-    // would grow. We simply assert all scans resolve without error (a leaking
-    // fd would eventually cause EMFILE under higher concurrency, but the
-    // structural guarantee is that destroy IS called — verified by code review
-    // of reader.async.ts line 73-74).
-    const results = await Promise.all(
-      Array.from({ length: 20 }, () => findToolResultAsync(sessionId, 'tu-fd')),
-    );
-    // All results should be the same non-null hit.
-    expect(results.every((r) => r !== null)).toBe(true);
-    expect(results[0]?.block.content).toEqual([{ type: 'text', text: 'content' }]);
+    const destroySpy = vi.spyOn(fs.ReadStream.prototype, 'destroy');
+
+    try {
+      const result = await findToolResultAsync(sessionId, 'tu-fd');
+      expect(result).not.toBeNull();
+      expect(result?.block.content).toEqual([{ type: 'text', text: 'content' }]);
+      // destroy() must have been called at least once (once per journal file opened).
+      expect(destroySpy).toHaveBeenCalled();
+    } finally {
+      destroySpy.mockRestore();
+    }
   });
 });
 

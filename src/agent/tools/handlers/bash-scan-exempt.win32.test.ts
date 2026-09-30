@@ -36,7 +36,7 @@ describe('isBashScanExemptPath under win32 path semantics', () => {
     },
   );
 
-  it.each(['/tmp/../etc/hosts', '/etc/hosts', '/dev/sda', '/tmpfoo/x'])(
+  it.each(['/tmp/../etc/hosts', '/etc/hosts', '/dev/sda', '/tmpfoo/x', '/private/tmpx', '/var/tmpx'])(
     'does NOT exempt POSIX-shaped path %s',
     (p) => {
       stubWinTmp();

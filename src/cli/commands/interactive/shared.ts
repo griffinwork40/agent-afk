@@ -10,6 +10,7 @@ import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
+import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SlashContext, SessionStats, ResumeSwapResult, ThinkingUiMode } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
 import type { StatusLine } from '../../status-line.js';
@@ -288,6 +289,15 @@ export interface InteractiveCtx {
    * jobs do not outlive the parent process — see `interactive.ts`.
    */
   backgroundRegistry: BackgroundAgentRegistry;
+  /**
+   * Root subagent manager for the session.
+   *
+   * Exposed on the ctx so footer subsystems (health rail) can query live
+   * foreground-subagent counts without depending on `SubagentExecutor`
+   * internals. Read-only consumer: only call `.list()` for status queries;
+   * lifecycle operations (fork, abort) belong in the executor layer.
+   */
+  subagentManager: SubagentManager;
   /**
    * Narrow control seam over the root `SubagentExecutor` for user-triggered
    * promotion of a running foreground subagent to a detached background job

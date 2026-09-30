@@ -58,7 +58,8 @@ vi.mock('path', async () => {
 
 vi.mock('node:os', async () => {
   const actual = await vi.importActual<typeof import('node:os')>('node:os');
-  return { ...actual, default: { ...actual, tmpdir: (): string => WIN_TMP_SHORT }, tmpdir: (): string => WIN_TMP_SHORT };
+  const fakeTmpdir = (): string => WIN_TMP_SHORT;
+  return { ...actual, default: { ...actual, tmpdir: fakeTmpdir }, tmpdir: fakeTmpdir };
 });
 
 // Counter for mkdtempSync to return baseline root first, candidate root second.
@@ -133,16 +134,12 @@ describe('sandbox.ts cleanup tmpdir guard under win32 path semantics', () => {
     await expect(cleanup()).resolves.toBeUndefined();
   });
 
-  it('cleanup throws when someone tampers with the sandbox root to be outside tmpdir', async () => {
-    // This proves containment is NOT weakened: a path outside tmpdir is still refused.
-    // We simulate this by returning a non-tmpdir path from mkdtempSync.
-    // Since vi.mock hoisting makes it hard to change per-test, we test the invariant
-    // differently: verify the error message format from the module.
-    //
-    // Instead of trying to inject a bad root through materializeSandboxes
-    // (which would require overriding the mock mid-test), we verify that the
-    // long-form resolvedTmpdir is what the check uses — by checking that a
-    // valid path (long form child of long-form tmpdir) passes.
+  it('cleanup resolves when the 8.3-expanded sandbox root is inside the long-form tmpdir', async () => {
+    // Exercises the accept path of the tmpdir containment guard: the mock returns
+    // 8.3 short names from os.tmpdir() but long-form paths from mkdtempSync/realpathSync,
+    // so the guard must compare long-form to long-form.  A true reject-path test is not
+    // practicable here because vi.mock hoisting prevents per-test mock overrides; the
+    // guard's reject branch is covered by the sandbox.ts unit tests.
     mkdtempCallCount = 0;
     const result = await materializeSandboxes({
       realHome: FAKE_HOME,

@@ -461,4 +461,38 @@ describe('createTelegramElicitationHandler — spoofing guard', () => {
     controller.abort();
     await p;
   });
+
+  it('falls back to "⚠ AFK safety approval" when _harnessInternal is true but title is undefined', async () => {
+    // Covers the fallback branch: `req._harnessInternal === true` but no `req.title`.
+    const req: ElicitationRequest = {
+      serverName: 'agent-afk',
+      _harnessInternal: true,
+      message: 'Approve this call?',
+      mode: 'form',
+      // title intentionally absent
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          choice: { type: 'string', enum: ['approve', 'deny'] },
+        },
+        required: ['choice'],
+      },
+    };
+
+    const stub = makeStubBot();
+    const handler = createTelegramElicitationHandler(stub.bot, new Set([111]));
+    const controller = new AbortController();
+
+    const p = handler(req, { signal: controller.signal });
+    await new Promise((r) => setImmediate(r));
+
+    const text = stub.sent[0]!.text;
+    // Safety fallback banner must appear
+    expect(text).toContain('⚠ AFK safety approval');
+    // Fixed MCP banner must NOT appear for harness requests
+    expect(text).not.toContain('MCP elicitation');
+
+    controller.abort();
+    await p;
+  });
 });

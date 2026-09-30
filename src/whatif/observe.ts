@@ -45,6 +45,31 @@ const MEMORY_SEARCH_TOOLS = new Set(['memory_search']);
 const ASK_TOOL = 'ask_question';
 
 // ---------------------------------------------------------------------------
+// textContainsQuestion
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns `true` when the assistant's reply text contains a question.
+ *
+ * Two patterns are recognised:
+ *   1. The last non-empty line ends with `?`.
+ *   2. Any line starts with `Question:` or `**Question:**` (with optional
+ *      surrounding whitespace), followed by at least one whitespace character —
+ *      this prevents matching a bare `*Question:*` markdown bold span.
+ *
+ * Exported so it can be tested in isolation.
+ */
+export function textContainsQuestion(t: string): boolean {
+  const lines = t.split('\n');
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  const lastLine = nonEmpty[nonEmpty.length - 1] ?? '';
+  if (lastLine.trim().endsWith('?')) return true;
+  // Require at least one whitespace after the colon to avoid matching
+  // a bare `*Question:*` bullet marker.
+  return lines.some((l) => /^\s*(\*{1,2})?Question:\*{0,2}\s/.test(l));
+}
+
+// ---------------------------------------------------------------------------
 // extractFeatures
 // ---------------------------------------------------------------------------
 
@@ -63,9 +88,10 @@ const ASK_TOOL = 'ask_question';
  *
  * `askedBeforeActing` is `true` when:
  *   - `ask_question` appears before any tool with a `recorded` verdict, OR
- *   - the episode used only read-only tools (no `recorded` verdict anywhere)
- *     and `text` contains a question — the last non-empty line ends with `?`
- *     OR any line starts with `Question:` / `**Question:**`, OR
+ *   - the episode reached `ask_question` or exhausted the tool list without
+ *     encountering a `recorded` verdict (so it only did read-only work) and
+ *     `text` contains a question — the last non-empty line ends with `?` OR
+ *     any line starts with `Question:` / `**Question:**`, OR
  *   - there are no tools at all and the same text heuristic matches.
  *
  * `usedSkills` collects the `name` input from every `skill` tool call.
@@ -138,22 +164,6 @@ export function extractFeatures(trace: EpisodeTrace): EpisodeFeatures {
 
   // ── askedBeforeActing ─────────────────────────────────────────────────────
   let askedBeforeActing = false;
-
-  /**
-   * Text heuristic: returns true when the assistant's reply contains a
-   * question.  Checks two patterns:
-   *   1. The last non-empty line ends with '?' (original heuristic).
-   *   2. Any line starts with 'Question:' or '**Question:**' (common markdown
-   *      question-framing pattern seen in the field, e.g. episode s1 evidence).
-   */
-  function textContainsQuestion(t: string): boolean {
-    const lines = t.split('\n');
-    const nonEmpty = lines.filter((l) => l.trim().length > 0);
-    const lastLine = nonEmpty[nonEmpty.length - 1] ?? '';
-    if (lastLine.trim().endsWith('?')) return true;
-    // Check for explicit "Question:" / "**Question:**" prefix on any line.
-    return lines.some((l) => /^\s*(\*{1,2})?Question:\*{0,2}/.test(l));
-  }
 
   if (tools.length === 0) {
     askedBeforeActing = textContainsQuestion(text);

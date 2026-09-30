@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { scanLocalPlugins, _resetPluginScanCache } from './plugins-scanner.js';
@@ -44,7 +44,8 @@ describe('plugins-scanner', () => {
     writeFileSync(join(tmpHome, 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
       'test@mp': [{ scope: 'user', installPath: active }],
     } }));
-    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([{ type: 'local', path: active }]);
+    // path is now the resolved realpath (symlinks expanded) — use realpathSync to survive macOS aliasing.
+    expect(scanLocalPlugins(tmpHome, { trustAll: true })).toEqual([{ type: 'local', path: realpathSync(active) }]);
     expect(scanLocalPlugins(tmpHome, { trustAll: true, sourceEnabled: new Map([['test@mp', false]]) })).toEqual([]);
   });
 

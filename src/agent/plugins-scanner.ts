@@ -20,7 +20,7 @@ import type { SdkPluginConfig } from './types/sdk-types.js';
 import { findPluginDirs, pluginManifestPath } from '../config/plugin-discovery.js';
 import type { SourceEnabledMap } from '../config/import-sources.js';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
-import { join, resolve as resolvePath } from 'path';
+import { join, resolve as resolvePath, sep } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
 
@@ -293,8 +293,17 @@ export function indexKeyForPath(
   root: string,
   leaf: string,
 ): { layout: 'flat' | 'cache'; key: string } | null {
-  if (!leaf.startsWith(root)) return null;
-  const rel = leaf.slice(root.length).replace(/^[/\\]+/, '');
+  // Contract: resolve both paths through realpathSync before the startsWith
+  // check so that symlink aliasing (e.g. macOS /var/... → /private/var/...)
+  // never produces a false null when one side was realpath-resolved and the
+  // other was not. Fall back to raw strings when resolution fails (dangling
+  // symlink, missing path).
+  let resolvedRoot = root;
+  let resolvedLeaf = leaf;
+  try { resolvedRoot = realpathSync(root); } catch { /* keep raw */ }
+  try { resolvedLeaf = realpathSync(leaf); } catch { /* keep raw */ }
+  if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
+  const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
   const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);
   if (segments.length === 0) return null;

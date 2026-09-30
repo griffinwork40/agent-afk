@@ -539,9 +539,9 @@ describe('skill subagent fork — openai-compatible parent session', () => {
     expect(resolveApiKeyForModel).toHaveBeenCalledWith('gpt-4o-mini');
 
     // Child manager carries the child-resolved key (not the parent's).
-    const childApiKey = (getManager() as unknown as { parentApiKey: string | undefined })
-      .parentApiKey;
-    expect(childApiKey).toBe('sk-openai-child');
+    const mgr1 = getManager() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+    expect(typeof mgr1.parentApiKey).toBe('function');
+    expect(mgr1.parentApiKey!()).toBe('sk-openai-child');
 
     // forkSubagent was given the correct child model.
     expect(getArgs()!.config.model).toBe('gpt-4o-mini');
@@ -576,9 +576,9 @@ describe('skill subagent fork — openai-compatible parent session', () => {
     // The module-level resolveCredentialForModel mock was called.
     expect(mockResolveCredentialForModel).toHaveBeenCalled();
     // The resolved value reaches the child manager.
-    const childApiKey = (getManager() as unknown as { parentApiKey: string | undefined })
-      .parentApiKey;
-    expect(childApiKey).toBe('sk-openai-resolved');
+    const mgr2 = getManager() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+    expect(typeof mgr2.parentApiKey).toBe('function');
+    expect(mgr2.parentApiKey!()).toBe('sk-openai-resolved');
   });
 
   it('never leaks the OpenAI parent key to an Anthropic-routed child', async () => {
@@ -619,9 +619,9 @@ describe('skill subagent fork — openai-compatible parent session', () => {
     expect(getArgs()!.config.model).toBe('sonnet');
 
     // Parent OpenAI key must NOT reach the child manager.
-    const childApiKey = (getManager() as unknown as { parentApiKey: string | undefined })
-      .parentApiKey;
-    expect(childApiKey).not.toBe('sk-openai-key');
-    expect(childApiKey).toBe('sk-ant-key');
+    const mgr3 = getManager() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+    expect(typeof mgr3.parentApiKey).toBe('function');
+    expect(mgr3.parentApiKey!()).not.toBe('sk-openai-key');
+    expect(mgr3.parentApiKey!()).toBe('sk-ant-key');
   });
 });

@@ -126,9 +126,12 @@ const PROVIDER_NAME = 'openai-compatible';
  * currentPermissionMode, closed, responsesCompactionUnavailable).
  */
 export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, CompactHandlerContext {
+  /** @internal Package-visible so extracted query/ modules can satisfy TurnDriverContext without an object literal intermediary. */
   readonly client: OpenAI;
+  /** @internal Package-visible for context-interface satisfaction. */
   readonly opts: OpenAICompatibleQueryOptions;
   readonly initSessionId: string;
+  /** @internal Package-visible so turn-driver.ts can dispatch tool calls. */
   readonly toolDispatcher: ToolDispatcher | undefined;
   private readonly onPermissionMode?: (mode: string) => void;
   private readonly onCwdChange?: (cwd: string) => void;
@@ -138,13 +141,14 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   readonly wireMode: WireMode;
   /** Static OpenAI list prices apply only when using the official public API endpoint. */
   readonly useOpenAIPricing: boolean;
-  /** Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
+  /** @internal Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
   readonly traceWriter: TraceSink | undefined;
+  /** @internal Package-visible for fast-tier delegation from turn-driver. */
   readonly fastTier: FastTierSession;
 
-  /** Running conversation state for multi-turn sessions (journal-seeded on resume). */
+  /** @internal Running conversation state for multi-turn sessions (journal-seeded on resume). */
   readonly priorTurns: OpenAIMessage[];
-  /** Message-journal commit points + resume seeding (query/journal-wiring.ts). */
+  /** @internal Message-journal commit points + resume seeding (query/journal-wiring.ts). */
   readonly journal: OpenAIJournalWiring;
 
   /**
@@ -201,6 +205,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   /**
    * Last completed turn's accumulated usage — drives `getContextUsage()`.
    * Mutable — updated by finishTurn (via FinishTurnContext) and mid-round live refresh.
+   * @internal Package-visible for FinishTurnContext satisfaction.
    */
   lastUsage: ProviderUsage | null = null;
 
@@ -266,6 +271,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
    * The OpenAI tool catalog to advertise for THIS turn. Filters out the
    * plan-exit tool on non-plan turns — mirroring the anthropic-direct
    * per-turn filter. Required by TurnDriverContext.
+   * @internal Package-visible for TurnDriverContext.
    */
   activeOpenAITools(): OpenAIFunctionTool[] | undefined {
     if (!this.openAITools) return undefined;

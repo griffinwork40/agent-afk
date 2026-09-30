@@ -11,6 +11,54 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.276.23] - 2026-09-30
+
+### Fixed
+- stable session id for non-CLI surfaces + correct id in get_runtime_state (#2708) (4dcfb31d)
+- update resolver cache and use live getter for parentApiKey after /reauth (#2699) (1f0ec2a4)
+- address advisory findings from 2026-09-30 pr-triage (#2693) (ea594f57)
+
+## [5.276.22] - 2026-09-30
+
+### Fixed
+- close frozen Playwright context safely in renderHtml (#2698) (c6573703)
+
+## [5.276.21] - 2026-09-30
+
+### Added
+- per-plugin hook env allowlist (#2700) (4c3db5ee)
+
+### Fixed
+- use undici's own fetch+Agent instead of globalThis.fetch+foreign dispatcher (#2697) (77e4fce9)
+- sort-then-slice fingerprint, drop unused barrel exports, clarify docs (#2696) (31d61c0a)
+- exitCode guarantee, module-scope const, beforeEach fake timers (#2690) (2f2dc903)
+- plumb tailWidth into grouped-root suffix; sum fixed-part widths directly (#2692) (be879a9d)
+- address advisory test-hygiene findings from #2671 + #2672 (#2691) (1e921566)
+
+## [5.276.20] - 2026-09-30
+
+### Fixed
+- reorder realpathSync before manifestName, validate CODEX_HOME absolute, use realPath for asset path (#2678) (51a97242)
+- address advisory findings from 2026-09-29 pr-triage (#2684) (9c9355af)
+
+## [5.276.19] - 2026-09-30
+
+### Fixed
+- address advisory test-quality findings from Windows-compat PR batch (#2677) (0ce311df)
+- lift textContainsQuestion to module scope, tighten regex, improve tests (#2676) (13c357e4)
+- tighten comment precision, add prefix-boundary test cases, fix unresolvable @link (#2680) (826d881d)
+- harden pack check with jq and clarify postinstall docs (#2681) (5009c6e7)
+- extract clusterHits to cluster.ts; tighten detector test; fix doc order (#2682) (72698c27)
+- sanitize FTS5 queries with hyphens/colons before retrying (#2674) (448d3722)
+- count foreground subagents in health rail N/M subs (#2685) (c0b47588)
+- document latch/ask invariant, add selectBaseSchemas tests, annotate dead ternary (#2683) (57c7f6ae)
+
+## [5.276.18] - 2026-09-30
+
+### Fixed
+- add avail=1 degenerate-terminal unit test for band reserve clamp (#2671) (e5128b7d)
+- sync message description, add test comment, clarify mock comment (#2675) (97fb0ffa)
+
 ## [5.276.17] - 2026-09-30
 
 ### Changed

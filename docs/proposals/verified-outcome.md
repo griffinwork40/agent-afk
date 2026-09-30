@@ -386,7 +386,7 @@ The router experiment (M3) stays blocked until the label has at least 200
 
 4. **`cross_session_reask` LF** (`src/agent/outcomes/lf-reask.ts`): when a new root session starts in the same `cwd` and its prompt fingerprint has normalized-token Jaccard ≥ 0.6 with a prior session's `first_prompt_tokens` in the same `cwd` within 30 minutes, upserts a weak -1 onto the prior session's record. Jaccard threshold 0.6 documented in the module. Bounded scan of 20 most-recent records. Fire-and-forget; called from session-end hook after upsert.
 
-5. **Schema extension** (`src/agent/outcomes/schema.ts`): additive optional fields `first_prompt_tokens?: string[]` (max 64 tokens; raw prompt text is intentionally never stored) and `first_cwd?: string`. Legacy `first_prompt` keys are stripped automatically on the next read-modify-write cycle because the schema uses a plain `z.object` (not `.passthrough()`) which drops unknown fields on parse. Existing records without these fields still parse (Zod `optional()`)..
+5. **Schema extension** (`src/agent/outcomes/schema.ts`): additive optional fields `first_prompt_tokens?: string[]` (max 64 tokens; raw prompt text is intentionally never stored) and `first_cwd?: string`. Legacy `first_prompt` keys are stripped automatically on the next read-modify-write cycle because the schema uses a plain `z.object` (not `.passthrough()`) which drops unknown fields on parse. Existing records without these fields still parse (Zod `optional()`). Note: records that are never written again (e.g. old `settled` records with no delayed LF activity) keep any legacy `first_prompt` key on disk indefinitely; a future cleanup pass or fingerprint-expiry job would be needed to purge them proactively (tracked as a follow-up)..
 
 ### Follow-ups
 

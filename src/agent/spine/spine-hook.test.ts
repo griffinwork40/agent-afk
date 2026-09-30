@@ -106,6 +106,22 @@ function makeSessionEndContext(
   };
 }
 
+// ── Drift guard ───────────────────────────────────────────────────────────────
+// Verify that the local MAX_DESCRIPTION_LEN constant (used in the mock factory
+// above and in truncation tests below) matches the mocked export value.
+// The vi.mock factory above must also set MAX_DESCRIPTION_LEN to the same
+// value as spine-classifier.ts:MAX_DESCRIPTION_LEN — update all three sites
+// together if the production value changes.
+describe('MAX_DESCRIPTION_LEN drift guard', () => {
+  it('local MAX_DESCRIPTION_LEN matches the mocked spine-classifier export', async () => {
+    // Import the (mocked) module — the mock factory hard-codes the same
+    // value as the production export. This test fails fast if either the
+    // local const or the mock factory value is updated without the other.
+    const mocked = await import('./spine-classifier.js');
+    expect(MAX_DESCRIPTION_LEN).toBe(mocked.MAX_DESCRIPTION_LEN);
+  });
+});
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('createSpineSessionEndHook', () => {
