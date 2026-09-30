@@ -162,6 +162,14 @@ describe('buildElisionMarker', () => {
     const marker = buildElisionMarker('text/plain', 'hello');
     expect(marker).toBe('data:text/plain,\u2026elided 5 bytes');
   });
+
+  it('reports UTF-8 byte count, not char count, for multi-byte payloads', () => {
+    // 'café' is 4 chars but 5 UTF-8 bytes (the é encodes to 2 bytes).
+    // This exercises the bytes-vs-chars distinction — ASCII-only fixtures
+    // produce identical counts and cannot catch a chars regression.
+    const marker = buildElisionMarker('text/plain', 'caf\u00e9');
+    expect(marker).toBe('data:text/plain,\u2026elided 5 bytes');
+  });
 });
 
 describe('elideDataUriPayloads — post-pass rewriter', () => {

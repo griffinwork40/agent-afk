@@ -56,7 +56,7 @@ const DATA_URI_RE = /data:(?<mime>[^,\s"')>]{1,120}),(?!\u2026)(?<payload>[^\s"'
  *                 `data:image/svg+xml;base64,…elided 75677 bytes`.
  */
 export function buildElisionMarker(mime: string, payload: string): string {
-  return `data:${mime},\u2026elided ${Buffer.byteLength(payload)} bytes`;
+  return `data:${mime},\u2026elided ${Buffer.byteLength(payload, 'utf8')} bytes`;
 }
 
 /**
@@ -118,7 +118,7 @@ export function applyDataUriTurndownRule(turndown: TurndownLike): void {
  *
  * The fast path (`!markdown.includes('data:')`) makes this a no-op —
  * effectively a single scan — for pages without data URIs, guaranteeing
- * byte-identical pass-through at minimal cost.
+ * reference-identical pass-through at minimal cost.
  *
  * @param markdown  Markdown string produced by Turndown.
  * @returns         The same string with `data:` payloads elided, or the
