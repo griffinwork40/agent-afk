@@ -578,6 +578,86 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     expect(mockEntry.description).not.toContain(yesterday);
     expect(writeSpine).toHaveBeenCalled();
   });
+
+  it('truncation resilience: strips "(reinf" fragment (word truncated mid-character)', async () => {
+    // Observed real-world case from goblin-portal SPINE.md:
+    // description ended exactly at "(reinf" — the annotation word was sliced mid-character.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    // Construct a description that ends with " (reinf" (word truncated before "orced")
+    const base = 'Single `main` branch; check-*.sh scripts.';
+    const fragmentDesc = base + ' (reinf';
+
+    const mockEntry = {
+      id: 'INV-005',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: fragmentDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeStrengthensMock(fragmentDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // The "(reinf" fragment must be stripped, replaced with a fresh full annotation
+    expect(mockEntry.description).not.toContain('(reinf (reinforced');
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    const matches = mockEntry.description.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('truncation resilience: strips "(reinforced 2026-09-2" fragment (date truncated mid-digit)', async () => {
+    // Date was truncated mid-digit, leaving e.g. "(reinforced 2026-09-2" at end of line.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const base = 'All env vars go through env.ts';
+    const fragmentDesc = base + ' (reinforced 2026-09-2'; // date cut after first day digit
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: fragmentDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeStrengthensMock(fragmentDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Fragment must be stripped, not stacked
+    expect(mockEntry.description).not.toContain('(reinforced 2026-09-2 (reinforced');
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    const matches = mockEntry.description.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
 });
 
 describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
@@ -719,6 +799,85 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     expect(mockEntry.description.length).toBeLessThanOrEqual(120);
     expect(mockEntry.description).toMatch(/\(partially weakened /);
     expect(mockEntry.description).not.toContain(yesterday);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('truncation resilience: strips "(partially weakened 2026-09-2" fragment (date truncated mid-digit)', async () => {
+    // Observed real-world case from goblin-portal SPINE.md:
+    // "(partially weakened 2026-09-2" — date cut after first day digit.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const base = 'Prefer native SwiftTerm; GPU renderer (Metal) is optional, not default.';
+    const fragmentDesc = base + ' (partially weakened 2026-09-2';
+
+    const mockEntry = {
+      id: 'TST-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: fragmentDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [mockEntry] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeWeakensMock(fragmentDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Fragment must be stripped, not stacked
+    expect(mockEntry.description).not.toContain('(partially weakened 2026-09-2 (partially weakened');
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
+    const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('truncation resilience: strips "(partial" fragment (word truncated mid-character)', async () => {
+    // Annotation word truncated before "ly weakened" — only "(pa..." remains.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const base = 'All env vars go through env.ts';
+    const fragmentDesc = base + ' (partial'; // truncated inside the word "partially"
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: fragmentDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue(makeWeakensMock(fragmentDesc));
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Fragment must be stripped, not stacked
+    expect(mockEntry.description).not.toContain('(partial (partially weakened');
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
+    const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
     expect(writeSpine).toHaveBeenCalled();
   });
 });
