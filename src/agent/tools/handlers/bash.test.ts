@@ -875,8 +875,8 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
 //
 // NB: appendRoutingDecision is a no-op under vitest (env.VITEST guard), so we
 // spy on console.warn — the reliable, synchronous signal that the escape path
-// was taken. `warnIfBypassPermissions` also writes a `[security]` line, so we
-// match specifically on the path-escape substring to disambiguate.
+// was taken. We match specifically on the path-escape substring so unrelated
+// `[security]` lines can never satisfy these assertions.
 // ---------------------------------------------------------------------------
 describe('bash path-containment scan — C4 (#354)', () => {
   function createSignal(): AbortSignal {
