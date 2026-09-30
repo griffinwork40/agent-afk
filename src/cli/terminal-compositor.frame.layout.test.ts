@@ -402,6 +402,19 @@ describe('computeViewportLayout — bandReserveRows', () => {
     expect(layout.trimmedOverlay.length).toBe(1);
   });
 
+  it('avail=1 (degenerate 4-row terminal): reserve is zeroed, single overlay row still shown', () => {
+    // rows=4, fixedRows: gapRow(1)+input(1)=2, maxLines=(4-1)=3, avail=3-2=1.
+    // clamp: reserve = min(bandReserveRows, max(0, avail-1)) = min(R, 0) = 0.
+    // The band-visibility guarantee cannot be honoured at this terminal height;
+    // the single available row is given to the overlay instead (overlayBudget=1).
+    // This test documents the known trade-off so regression is detected explicitly.
+    const lines = ['line0', 'line1', 'line2'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 4, noScrollRegion, 10);
+    // reserve zeroes → overlayBudget = avail = 1 → overlay trimmed to 1 row
+    expect(layout.trimmedOverlay.length).toBe(1);
+  });
+
   it('reserve of 0 when avail is 0 results in empty trimmedOverlay (no crash)', () => {
     // rows=3, fixedRows=2, avail=0 — zero budget regardless of reserve
     const lines = ['line0', 'line1'];
