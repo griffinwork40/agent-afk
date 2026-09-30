@@ -310,7 +310,7 @@
     },
     {
       "name": "AFK_FRAMEWORK_PROMPT_FILE",
-      "description": "Absolute path to a replacement for the framework base system prompt (`system-prompt.md`). When set, `loadSystemPrompt()` reads this file instead of the bundled `system-prompt.md`. Unset = byte-identical default behaviour. An unreadable path throws at prompt load (hard error, no fallback). Use with `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>` to A/B test framework prompt changes without modifying `system-prompt.md`.",
+      "description": "Absolute path to a replacement for the framework base system prompt (`system-prompt.md`). When set, `loadSystemPrompt()` reads this file instead of the bundled `system-prompt.md`. Unset = byte-identical default behaviour. Fail-closed: a relative path or an unreadable file is a hard error with no bundled-prompt fallback — a silent fallback would turn an A/B run into A/A. This error reaches EVERY surface that builds a system prompt. At startup (CLI, Telegram) it crashes the process with a clear message. Mid-session (`/afk-md reload`) it surfaces an error and leaves the REPL usable. Mid-server (`afk web` session-create) it rejects the request with an actionable message and keeps other sessions running. Use only with `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>` — never set it persistently in `afk.env` (a stale value there blocks every surface until removed).",
       "type": "string",
       "required": false,
       "example": "/tmp/whatif-narration/system-prompt.narrate.md",

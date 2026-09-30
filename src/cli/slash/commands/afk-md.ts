@@ -135,8 +135,11 @@ export const afkMdCmd: SlashCommand = {
 
     if (word === 'reload') {
       const baseline = currentOverlayTokens(ctx.stats.cwd);
-      const { applied, tokens, delta, source, shadowed } = applyReload(ctx, baseline);
-      if (shadowed) {
+      const { applied, tokens, delta, source, shadowed, frameworkPromptError } = applyReload(ctx, baseline);
+      if (frameworkPromptError !== undefined) {
+        ctx.out.error(`Reload aborted — AFK_FRAMEWORK_PROMPT_FILE error: ${frameworkPromptError}`);
+        ctx.out.error('Unset or fix AFK_FRAMEWORK_PROMPT_FILE. The session prompt was not changed.');
+      } else if (shadowed) {
         ctx.out.warn(
           'AFK.md is shadowed by a higher-priority system prompt override; the file is not part of what the model receives.',
         );
@@ -149,7 +152,7 @@ export const afkMdCmd: SlashCommand = {
           'Re-read from disk, but this provider cannot swap the prompt of a running session — it applies on next launch.',
         );
       }
-      ctx.out.line(palette.dim(`  ${source}`));
+      if (frameworkPromptError === undefined) ctx.out.line(palette.dim(`  ${source}`));
       return 'continue';
     }
 
