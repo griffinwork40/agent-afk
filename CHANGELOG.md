@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.278.1] - 2026-09-30
+
+### Added
+- openai-compatible waits out usage/quota limits (#2721) (f66156a3)
+- add access-pattern reporting for the fact archive (#2724) (91739adb)
+- whatif preflight checks whether the experiment can answer the question (#2722) (556a53f8)
+
+### Fixed
+- address remaining advisory findings from 2026-09-30 pr-triage (#2719) (93a31b65)
+- address advisory findings from #2661 review (#2717) (4f2d08e0)
+
+### Changed
+- read outcome tool results from the message journal (#2718) (bad8a911)
+- provider accounting parity audit and fixes (#2723) (523d9761)
+
 ## [5.278.0] - 2026-09-30
 
 ### Added
