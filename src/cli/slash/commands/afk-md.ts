@@ -49,10 +49,31 @@ function scopeFromWord(word: string): AfkMdScope | null {
   return null;
 }
 
-function renderOverview(ctx: SlashContext): void {
+/**
+ * Invariant: `resolveBaseSystemPrompt()` throws when `AFK_FRAMEWORK_PROMPT_FILE`
+ * points at a missing or unreadable path. Every mid-session caller must contain
+ * that throw so a bad env var cannot crash the REPL. Startup callers (chat.ts,
+ * farm.ts, bootstrap-config.ts) intentionally let it propagate — those are
+ * process-init sites, not live commands.
+ *
+ * Returns `{ source }` on success or `null` on error (after emitting ctx.out.error).
+ */
+function tryResolveSource(ctx: SlashContext, cwd: string): string | null {
+  try {
+    return resolveBaseSystemPrompt(cwd).source;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ctx.out.error(`AFK_FRAMEWORK_PROMPT_FILE error: ${message}`);
+    ctx.out.error('Unset or fix AFK_FRAMEWORK_PROMPT_FILE and try again.');
+    return null;
+  }
+}
+
+function renderOverview(ctx: SlashContext): boolean {
   const cwd = ctx.stats.cwd ?? process.cwd();
   const targets = resolveTargets(cwd);
-  const { source } = resolveBaseSystemPrompt(cwd);
+  const source = tryResolveSource(ctx, cwd);
+  if (source === null) return false;
   const loaded = loadAfkMd(cwd);
   const totalTokens = currentOverlayTokens(cwd);
   const totalBytes = loaded ? Buffer.byteLength(loaded.content, 'utf8') : 0;
@@ -93,22 +114,25 @@ function renderOverview(ctx: SlashContext): void {
     ),
   );
   ctx.out.line(palette.dim('  this command edits your AFK.md prompt overlay.'));
+  return true;
 }
 
-function renderShow(ctx: SlashContext): void {
+function renderShow(ctx: SlashContext): boolean {
   const cwd = ctx.stats.cwd ?? process.cwd();
-  const { source } = resolveBaseSystemPrompt(cwd);
+  const source = tryResolveSource(ctx, cwd);
+  if (source === null) return false;
   const loaded = loadAfkMd(cwd);
   if (!loaded) {
     ctx.out.info('No AFK.md overlay is active — nothing to show.');
     ctx.out.line(palette.dim(`  ${source}`));
-    return;
+    return true;
   }
   ctx.out.line(palette.heading('Composed overlay — exactly what the model receives'));
   ctx.out.line(palette.dim(`  ${source}`));
   ctx.out.line('');
   ctx.out.raw(loaded.content);
   ctx.out.line('');
+  return true;
 }
 
 export const afkMdCmd: SlashCommand = {
