@@ -38,6 +38,7 @@ import {
   __setOpenAIClientFactory,
   OpenAICompatibleQuery,
   __setRetryBaseDelay,
+  __setRetryAfterMaxWaitMs,
 } from '../../providers/openai-compatible/query.js';
 import {
   MAX_CONNECTION_RETRIES,
@@ -507,18 +508,64 @@ describe('Conformance: S7 — stream stall before first byte (TTFB timeout)', ()
 });
 
 // ============================================================================
-// SCENARIO 8 — Usage/quota limit 429 with long Retry-After (gap: #2418)
+// SCENARIO 8 — Usage/quota limit 429 with long Retry-After (parity: #2418)
 //
-// anthropic-direct: parks session until reset (hours if needed).
-// openai-compatible: caps at 120s, retries ≤MAX_CONNECTION_RETRIES, then fails.
+// Before #2418: openai-compatible capped Retry-After at 120s, retried
+// ≤MAX_CONNECTION_RETRIES, then failed. anthropic-direct parked until reset.
 //
-// The parity gap (#2418 OPEN) is documented: openai-compatible never parks.
+// After #2418 (CLOSED): openai-compatible now classifies long-Retry-After 429s
+// (>5 min) as quota/usage-limit events and parks with `paused`/`resumed` events,
+// honoring `autoResumeOnUsageLimit` and the 2-hour bound — matching anthropic-direct.
+//
+// S8a: short Retry-After (≤5 min) → still handled by connection retry, no park.
+// S8b: long Retry-After (>5 min) → parks with paused/resumed on both providers.
 // ============================================================================
-describe('Conformance: S8 — usage/quota limit 429 with long Retry-After', () => {
+import { __setQuotaTwoHoursMs } from '../openai-compatible/query/usage-limit-tier.js';
+
+describe('Conformance: S8a — short Retry-After 429 (transient rate-limit, no park)', () => {
   afterEach(() => {
     if (vi.isFakeTimers()) vi.useRealTimers();
     __setOpenAIClientFactory(null);
     __setRetryBaseDelay(null);
+    __setRetryAfterMaxWaitMs(null);
+  });
+
+  // Short retry-after (2s, well under the 5-min threshold) is handled by the
+  // connection-phase retry loop in retry.ts — NOT the quota-limit park.
+  // openai-compatible retries ≤MAX_CONNECTION_RETRIES times, then fails.
+  it('openai-compatible: short Retry-After 429 → error after bounded retries (connection retry path)', async () => {
+    vi.useFakeTimers();
+    __setRetryBaseDelay(0);
+    try {
+      let callCount = 0;
+      installOAIFactory(async () => {
+        callCount++;
+        const headers = new Headers({ 'retry-after': '2' }); // 2s — transient
+        throw Object.assign(new Error('rate limited'), { status: 429, headers });
+      });
+      const resultPromise = drain(makeOAIQuery());
+      // Advance past 3 retries × 2s = 6s
+      await vi.advanceTimersByTimeAsync(10_000);
+      const events = await resultPromise;
+
+      // Short Retry-After → connection retry, not a quota park.
+      expect(pick(events, 'error')).not.toHaveLength(0);
+      expect(pick(events, 'paused')).toHaveLength(0); // no quota park
+      expect(callCount).toBeGreaterThanOrEqual(1);
+      expect(callCount).toBeLessThanOrEqual(MAX_CONNECTION_RETRIES + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('Conformance: S8b — long Retry-After 429 (quota/usage limit) emits paused (#2418)', () => {
+  afterEach(() => {
+    if (vi.isFakeTimers()) vi.useRealTimers();
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+    __setRetryAfterMaxWaitMs(null);
+    __setQuotaTwoHoursMs(null);
   });
 
   it('anthropic-direct: 429 usage-limit emits a defined terminal event or parks (fake timers)', async () => {
@@ -545,36 +592,46 @@ describe('Conformance: S8 — usage/quota limit 429 with long Retry-After', () =
         const hasPaused = pick(events, 'paused').length > 0;
         expect(hasError || hasPaused).toBe(true);
       }
-      // 'parking' = session is correctly parked — valid behavior (#2418 documents this)
+      // 'parking' = session is correctly parked — valid behavior
       expect(['settled', 'parking']).toContain(outcome);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  // Expected divergence from anthropic-direct (#2418 OPEN):
-  // openai-compatible caps Retry-After at 120s and fails — never parks for hours.
-  // Use a small Retry-After (2s) here so fake timers only need to advance 3×2s=6s.
-  // The parity gap is NOT about the cap value but about the behavior:
-  // openai-compatible will FAIL while anthropic-direct would PARK and wait out hours.
-  it('openai-compatible: 429 with Retry-After → error after bounded retries (gap: #2418 open)', async () => {
+  // After #2418: openai-compatible parks on long Retry-After and emits paused.
+  // Use test injection to collapse all waits to 0ms so the test runs instantly
+  // without fake timers: __setRetryBaseDelay(0) kills backoff delays, and
+  // __setRetryAfterMaxWaitMs(0) collapses the connection-phase retry-after cap,
+  // and __setQuotaTwoHoursMs(100) gives a tiny 100ms budget window for the quota tier.
+  it('openai-compatible: long Retry-After 429 → emits paused (autoResume=true), parks (#2418 fixed)', async () => {
     vi.useFakeTimers();
+    __setRetryBaseDelay(0);
+    // Collapse connection-phase retry-after waits to 0 so retries fire instantly.
+    __setRetryAfterMaxWaitMs(0);
+    // Tiny 2-hour budget — immediately exhausted after quota tier fires once.
+    __setQuotaTwoHoursMs(50);
     try {
-      let callCount = 0;
       installOAIFactory(async () => {
-        callCount++;
-        const headers = new Headers({ 'retry-after': '2' }); // 2s Retry-After
+        // 10-minute retry-after — above the 5-min threshold → quota park after connection retries.
+        // Connection-phase retries are instant (maxWait=0), then error surfaces to quota tier.
+        const headers = new Headers({ 'retry-after': '600' });
         throw Object.assign(new Error('quota exceeded'), { status: 429, headers });
       });
       const resultPromise = drain(makeOAIQuery());
-      // Advance past 3 retries × 2s = 6s
-      await vi.advanceTimersByTimeAsync(10_000);
+      // Advance past the tiny quota budget (50ms). Connection retries are instant (maxWait=0),
+      // so after 3 instant retries the error surfaces to the quota tier, which parks for
+      // Math.min(600_000, 50) = 50ms, then checks budget (elapsed > 50ms) → surfaces error.
+      await vi.advanceTimersByTimeAsync(200);
       const events = await resultPromise;
 
-      // openai-compatible MUST fail (not park indefinitely like anthropic-direct would for long waits)
+      // openai-compatible MUST emit paused (quota park)
+      const paused = pick(events, 'paused');
+      expect(paused.length).toBeGreaterThan(0);
+      expect(paused[0]?.reason).toBe('usage-limit');
+      expect(paused[0]?.autoResume).toBe(true);
+      // Eventually surfaces an error (budget exhausted, not parked indefinitely)
       expect(pick(events, 'error')).not.toHaveLength(0);
-      expect(callCount).toBeGreaterThanOrEqual(1);
-      expect(callCount).toBeLessThanOrEqual(MAX_CONNECTION_RETRIES + 1);
     } finally {
       vi.useRealTimers();
     }

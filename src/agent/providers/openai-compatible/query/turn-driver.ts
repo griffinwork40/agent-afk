@@ -42,6 +42,7 @@ import {
   type FinishTurnContext,
 } from './turn-iteration.js';
 import { runIterationWithOverloadPause } from './overload-pause-tier.js';
+import { runIterationWithQuotaLimitPause } from './usage-limit-tier.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import type { AbortCoordinator } from '../../shared/abort-coordinator.js';
 import { dispatchAndAppendToolCalls } from './dispatch-append.js';
@@ -72,6 +73,40 @@ export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   readonly currentPermissionMode: string;
   /** Mutable — set true by close(). */
   readonly closed: boolean;
+}
+
+/**
+ * Build a composited iteration factory: quota-limit park (outer) wrapping
+ * overload-pause (inner) wrapping the raw stream iteration.
+ *
+ * Extracted so `runTurnInner` stays under the 200-line function ceiling.
+ * All parameters are explicit — no closure over outer locals.
+ */
+function makeCompositeIteration(
+  ctx: TurnDriverContext,
+  controller: AbortController,
+  vision: boolean,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+): ReturnType<typeof runIterationWithQuotaLimitPause> {
+  return runIterationWithQuotaLimitPause(
+    () => runIterationWithOverloadPause(
+      () => runIteration(ctx, controller, vision, windDownReason),
+      {
+        surface: ctx.opts.config.surface,
+        traceWriter: ctx.traceWriter,
+        signal: controller.signal,
+        isClosed: () => ctx.closed,
+        sessionId: ctx.initSessionId,
+      },
+    ),
+    {
+      autoResumeOnUsageLimit: ctx.opts.config.autoResumeOnUsageLimit ?? true,
+      traceWriter: ctx.traceWriter,
+      signal: controller.signal,
+      isClosed: () => ctx.closed,
+      sessionId: ctx.initSessionId,
+    },
+  );
 }
 
 /**
@@ -160,16 +195,7 @@ export async function* runTurnInner(
       return;
     }
 
-    const result = yield* runIterationWithOverloadPause(
-      () => runIteration(ctx, controller, vision, windDownReason),
-      {
-        surface: ctx.opts.config.surface,
-        traceWriter: ctx.traceWriter,
-        signal: controller.signal,
-        isClosed: () => ctx.closed,
-        sessionId: ctx.initSessionId,
-      },
-    );
+    const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason);
     if (result === null) {
       ctx.abort.clear(controller);
       if (controller.signal.aborted || ctx.closed) {
