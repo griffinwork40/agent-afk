@@ -1,0 +1,66 @@
+#!/bin/sh
+# pre-push hook — runs pnpm check:audits before every push.
+# Tracked at scripts/git-hooks/pre-push; installed into .git/hooks by
+# scripts/install-pre-push-hook.mjs (runs on pnpm install via prepare).
+#
+# Fail-open: if the environment looks broken (node_modules missing or pnpm
+# not on PATH) this hook exits 0 so developers are never hard-blocked.
+#
+# Bypass: git push --no-verify
+
+toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+cd "$toplevel"
+
+# Fail-open: node_modules absent.
+if [ ! -d node_modules ]; then
+  echo "pre-push: node_modules not found — skipping audit gates (run pnpm install)" >&2
+  exit 0
+fi
+
+# Fail-open: pnpm not on PATH.
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pre-push: pnpm not found on PATH — skipping audit gates" >&2
+  exit 0
+fi
+
+# If every pushed ref is a deletion (local sha is all zeros), skip.
+# A deletion line has the form: <zeros> <remote-ref> <zeros> <remote-ref>
+# but git gives us: <local-sha> <local-ref> <remote-sha> <remote-ref>
+all_deletions=1
+found_any=0
+while IFS=' ' read -r local_sha local_ref remote_sha remote_ref; do
+  found_any=1
+  case "$local_sha" in
+    0000000000000000000000000000000000000000) ;;
+    *) all_deletions=0 ;;
+  esac
+done
+
+# No refs pushed (empty stdin) or all deletions — nothing to check.
+if [ "$found_any" -eq 0 ] || [ "$all_deletions" -eq 1 ]; then
+  exit 0
+fi
+
+echo "pre-push: running pnpm check:audits …" >&2
+
+pnpm check:audits
+exit_code=$?
+
+if [ "$exit_code" -eq 2 ]; then
+  echo "" >&2
+  echo "pre-push: every audit gate failed — environment may be broken." >&2
+  echo "  Try: pnpm install" >&2
+  echo "  Then re-try your push, or bypass with: git push --no-verify" >&2
+  exit 0
+fi
+
+if [ "$exit_code" -ne 0 ]; then
+  echo "" >&2
+  echo "pre-push: CI will fail these checks — fix them before pushing." >&2
+  echo "  Do NOT regenerate ratchet baselines just to silence a gate." >&2
+  echo "  Bypass (use sparingly): git push --no-verify" >&2
+  exit 1
+fi
+
+exit 0
