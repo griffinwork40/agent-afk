@@ -1,0 +1,46 @@
+feat(skills): hide skills from the model manifest via disable-model-invocation / skills.hidden
+
+Add two additive opt-in mechanisms for operators to remove a skill from the
+model-facing catalogue while keeping it fully slash-invocable by users.
+
+Problem: ~120 skills appear in the model's skill manifest on every request with
+no budget control, costing ~8K prompt tokens per session. Many are never
+model-invoked (orchestration-only, maintenance-loop skills). There was no way to
+keep a skill user-invocable while removing it from the model's menu.
+
+Changes:
+- src/skills/skill-types.ts: add disableModelInvocation?: boolean to SkillMetadata
+- src/agent/plugins/tool-injector.ts: parse disable-model-invocation frontmatter
+  field (Claude Code parity) into PluginSkillMetadata.disableModelInvocation
+- src/skills/user-skills.ts: parse disable-model-invocation from user/project
+  SKILL.md frontmatter; thread field through registerSkill() call
+- src/config/settable-keys.ts: add string-array type + string[] to
+  ConfigCoerceResult; add skills.hidden key (human-tier, not agent-settable)
+- src/config/mutate.ts: widen ConfigWriteResult.value to include string[]
+- src/agent/tools/skill-bridge.ts: add isHiddenByConfig() + readHiddenSkillNames()
+  helpers; annotate entries with disableModelInvocation in collectSkillEntries();
+  filter annotated entries in buildSkillManifest() alongside existing excludeName
+  and source !== 'command' filters; add disableModelInvocation field to
+  SkillManifestEntry interface; import listConfig from config/mutate
+- src/agent/tools/skill-executor.ts: add model-invocation refusal guard after
+  collectSkillEntries() scan — matches Claude Code behaviour (refuse with clear
+  error rather than silently dispatch)
+- docs/skill-load-mode.md: document both mechanisms, syntax, matching semantics,
+  and model-refusal contract
+- src/agent/tools/skill-bridge.test.ts: 17 new tests covering frontmatter-hidden
+  skills (registry + plugin + disk), config-hidden skills (bare and qualified
+  suffix match), collectSkillEntries non-filtering invariant, and non-hidden
+  skills unaffected
+- src/agent/tools/skill-executor.test.ts: 3 new tests covering model refusal for
+  disableModelInvocation:true skill, config-hidden skill, and normal skill still
+  invocable
+
+Semantics:
+- Filtered ONLY at buildSkillManifest() boundary (model-facing). Slash-command
+  router, /skills, and afk skill list see every skill unchanged.
+- When the model calls skill tool with a hidden name, SkillExecutor.execute()
+  returns isError:true with a clear message naming the field/config that hides it.
+- skills.hidden is human-tier (not agent-settable): an operator hiding a skill
+  must not be reversible by the model.
+- collectSkillEntries() propagates disableModelInvocation on entries so /skills
+  can optionally mark hidden skills without re-reading config.

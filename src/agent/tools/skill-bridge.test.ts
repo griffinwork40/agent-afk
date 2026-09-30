@@ -1519,3 +1519,290 @@ describe('discoverPluginSkillBodies — project plugin session-cwd resolution', 
     expect(bodiesWithCwdB.has('session-cwd-plugin-skill')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// disable-model-invocation: frontmatter + skills.hidden config feature tests
+// ---------------------------------------------------------------------------
+
+describe('hide-from-model — disable-model-invocation frontmatter (registry skills)', () => {
+  beforeEach(() => {
+    _resetRegistry();
+  });
+
+  it('hides a registry skill with disableModelInvocation:true from the manifest', () => {
+    registerSkill({
+      name: 'hidden-builtin',
+      description: 'Should not appear in manifest',
+      handler: vi.fn(),
+      disableModelInvocation: true,
+    });
+    registerSkill({
+      name: 'visible-builtin',
+      description: 'Should appear',
+      handler: vi.fn(),
+    });
+
+    const manifest = buildSkillManifest([]);
+
+    expect(manifest).not.toContain('hidden-builtin');
+    expect(manifest).toContain('visible-builtin');
+  });
+
+  it('collectSkillEntries still includes hidden skills (non-model consumers unaffected)', () => {
+    registerSkill({
+      name: 'hidden-builtin',
+      description: 'Hidden from model',
+      handler: vi.fn(),
+      disableModelInvocation: true,
+    });
+
+    const entries = collectSkillEntries([]);
+
+    const entry = entries.find((e) => e.name === 'hidden-builtin');
+    expect(entry).toBeDefined();
+    expect(entry?.disableModelInvocation).toBe(true);
+  });
+
+  it('non-hidden skills are unaffected', () => {
+    registerSkill({
+      name: 'normal-skill',
+      description: 'Appears everywhere',
+      handler: vi.fn(),
+    });
+
+    const manifest = buildSkillManifest([]);
+    const entries = collectSkillEntries([]);
+
+    expect(manifest).toContain('normal-skill');
+    const entry = entries.find((e) => e.name === 'normal-skill');
+    expect(entry?.disableModelInvocation).toBeUndefined();
+  });
+});
+
+describe('hide-from-model — disable-model-invocation frontmatter (plugin SKILL.md)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    tmpDir = mkdtempSync(join(tmpdir(), 'skill-bridge-dmi-plugin-'));
+  });
+
+  afterEach(() => {
+    try { rmSync(tmpDir, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writePluginSkill(
+    pluginPath: string,
+    skillName: string,
+    dmi: boolean,
+  ): void {
+    const dir = join(pluginPath, 'skills', skillName);
+    mkdirSync(dir, { recursive: true });
+    const dmiLine = dmi ? 'disable-model-invocation: true\n' : '';
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${skillName}\ndescription: Plugin skill ${skillName}\n${dmiLine}---\n# Body\n`,
+    );
+  }
+
+  it('hides plugin skill with disable-model-invocation:true from the manifest', () => {
+    const plugin = join(tmpDir, 'p1');
+    mkdirSync(plugin, { recursive: true });
+    writePluginSkill(plugin, 'plugin-hidden', true);
+    writePluginSkill(plugin, 'plugin-visible', false);
+
+    const manifest = buildSkillManifest([{ type: 'local', path: plugin }]);
+
+    expect(manifest).not.toContain('plugin-hidden');
+    expect(manifest).toContain('plugin-visible');
+  });
+
+  it('collectSkillEntries marks plugin skill with disableModelInvocation:true', () => {
+    const plugin = join(tmpDir, 'p2');
+    mkdirSync(plugin, { recursive: true });
+    writePluginSkill(plugin, 'plugin-hidden', true);
+
+    const entries = collectSkillEntries([{ type: 'local', path: plugin }]);
+    const entry = entries.find((e) => e.name === 'plugin-hidden');
+
+    expect(entry).toBeDefined();
+    expect(entry?.disableModelInvocation).toBe(true);
+  });
+
+  it('plugin skill without the field remains visible', () => {
+    const plugin = join(tmpDir, 'p3');
+    mkdirSync(plugin, { recursive: true });
+    writePluginSkill(plugin, 'plugin-normal', false);
+
+    const entries = collectSkillEntries([{ type: 'local', path: plugin }]);
+    const entry = entries.find((e) => e.name === 'plugin-normal');
+
+    expect(entry?.disableModelInvocation).toBeUndefined();
+    expect(buildSkillManifest([{ type: 'local', path: plugin }])).toContain('plugin-normal');
+  });
+});
+
+describe('hide-from-model — skills.hidden in afk.config.json', () => {
+  let tmpAfkHome: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    vi.unstubAllEnvs();
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-config-hidden-'));
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+    // Ensure config dir exists for writing the config file.
+    mkdirSync(join(tmpAfkHome, 'config'), { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writeHiddenConfig(names: string[]): void {
+    writeFileSync(
+      join(tmpAfkHome, 'config', 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: names } }),
+    );
+  }
+
+  it('hides a skill whose bare name is listed in skills.hidden', () => {
+    registerSkill({
+      name: 'config-hidden-skill',
+      description: 'Operator does not want model to call this',
+      handler: vi.fn(),
+    });
+    registerSkill({
+      name: 'visible-skill',
+      description: 'Should appear',
+      handler: vi.fn(),
+    });
+    writeHiddenConfig(['config-hidden-skill']);
+
+    const manifest = buildSkillManifest([]);
+
+    expect(manifest).not.toContain('config-hidden-skill');
+    expect(manifest).toContain('visible-skill');
+  });
+
+  it('hides a plugin-qualified skill via bare name suffix match', () => {
+    registerSkill({
+      name: 'awa-dev:qualify',
+      description: 'Qualified skill',
+      handler: vi.fn(),
+    });
+    // Bare name "qualify" matches "awa-dev:qualify" via suffix.
+    writeHiddenConfig(['qualify']);
+
+    const manifest = buildSkillManifest([]);
+
+    expect(manifest).not.toContain('qualify');
+  });
+
+  it('collectSkillEntries marks config-hidden skills with disableModelInvocation', () => {
+    registerSkill({
+      name: 'config-hidden',
+      description: 'Hidden via config',
+      handler: vi.fn(),
+    });
+    writeHiddenConfig(['config-hidden']);
+
+    const entries = collectSkillEntries([]);
+    const entry = entries.find((e) => e.name === 'config-hidden');
+
+    expect(entry).toBeDefined();
+    expect(entry?.disableModelInvocation).toBe(true);
+  });
+
+  it('skills not in skills.hidden remain visible', () => {
+    registerSkill({
+      name: 'not-hidden',
+      description: 'Normal skill',
+      handler: vi.fn(),
+    });
+    writeHiddenConfig(['other-skill']);
+
+    const manifest = buildSkillManifest([]);
+    expect(manifest).toContain('not-hidden');
+
+    const entry = collectSkillEntries([]).find((e) => e.name === 'not-hidden');
+    expect(entry?.disableModelInvocation).toBeUndefined();
+  });
+
+  it('skills.hidden absent or empty leaves all skills visible', () => {
+    registerSkill({
+      name: 'any-skill',
+      description: 'Should be visible',
+      handler: vi.fn(),
+    });
+    // No config file written — readHiddenSkillNames returns empty Set.
+    const manifest = buildSkillManifest([]);
+    expect(manifest).toContain('any-skill');
+  });
+
+  it('handles plugin-qualified name in skills.hidden directly', () => {
+    registerSkill({
+      name: 'awa-dev:qualify',
+      description: 'Fully qualified',
+      handler: vi.fn(),
+    });
+    // Exact qualified name also matches.
+    writeHiddenConfig(['awa-dev:qualify']);
+
+    const manifest = buildSkillManifest([]);
+    expect(manifest).not.toContain('qualify');
+  });
+});
+
+describe('hide-from-model — disk-skill disable-model-invocation via user SKILL.md', () => {
+  let tmpAfkHome: string;
+  let tmpCwd: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    vi.unstubAllEnvs();
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-dmi-disk-afkhome-'));
+    tmpCwd = mkdtempSync(join(tmpdir(), 'skill-bridge-dmi-disk-cwd-'));
+    origCwd = process.cwd();
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+    process.chdir(tmpCwd);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(tmpCwd, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writeUserSkillWithDMI(name: string, dmi: boolean): void {
+    const dir = join(tmpAfkHome, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    const dmiLine = dmi ? 'disable-model-invocation: true\n' : '';
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Disk skill ${name}\n${dmiLine}---\n# Body\n`,
+    );
+  }
+
+  it('hides a disk user skill with disable-model-invocation:true from the manifest', () => {
+    writeUserSkillWithDMI('disk-hidden', true);
+    writeUserSkillWithDMI('disk-visible', false);
+
+    const manifest = buildSkillManifest([]);
+
+    expect(manifest).not.toContain('disk-hidden');
+    expect(manifest).toContain('disk-visible');
+  });
+
+  it('hidden disk skill is still in collectSkillEntries (slash-router unaffected)', () => {
+    writeUserSkillWithDMI('disk-hidden', true);
+
+    const entries = collectSkillEntries([]);
+    const entry = entries.find((e) => e.name === 'disk-hidden');
+
+    expect(entry).toBeDefined();
+    expect(entry?.disableModelInvocation).toBe(true);
+  });
+});

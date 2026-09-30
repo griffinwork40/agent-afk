@@ -3194,3 +3194,84 @@ describe('SkillExecutor', () => {
   });
 
 });
+
+describe('SkillExecutor — model invocation refused for hidden skills', () => {
+  let tmpAfkHome: string;
+  let tmpCwd: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-executor-hidden-afkhome-'));
+    tmpCwd = mkdtempSync(join(tmpdir(), 'skill-executor-hidden-cwd-'));
+    origCwd = process.cwd();
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+    process.chdir(tmpCwd);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(tmpCwd, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function makeExecutor() {
+    return new SkillExecutor({
+      parentSession: {
+        sessionId: 'test',
+        getInputStreamRef: () => ({ pushUserMessage: () => {} }),
+        abortSignal,
+      },
+    });
+  }
+
+  it('refuses model tool call for a skill with disableModelInvocation:true', async () => {
+    registerSkill({
+      name: 'no-model-skill',
+      description: 'Hidden from model',
+      handler: vi.fn(),
+      disableModelInvocation: true,
+    });
+
+    const executor = makeExecutor();
+    const result = await executor.execute(makeCall({ name: 'no-model-skill' }));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('no-model-skill');
+    expect(result.content).toContain('disable-model-invocation');
+  });
+
+  it('refuses model tool call for a skill hidden via skills.hidden config', async () => {
+    mkdirSync(join(tmpAfkHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpAfkHome, 'config', 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: ['config-model-hidden'] } }),
+    );
+    registerSkill({
+      name: 'config-model-hidden',
+      description: 'Hidden via config',
+      handler: vi.fn(),
+    });
+
+    const executor = makeExecutor();
+    const result = await executor.execute(makeCall({ name: 'config-model-hidden' }));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('config-model-hidden');
+    expect(result.content).toContain('skills.hidden');
+  });
+
+  it('non-hidden skills are still invocable by the model', async () => {
+    registerSkill({
+      name: 'model-ok-skill',
+      description: 'Visible to model',
+      handler: vi.fn().mockResolvedValue('output'),
+    });
+
+    const executor = makeExecutor();
+    const result = await executor.execute(makeCall({ name: 'model-ok-skill' }));
+
+    expect(result.isError).toBeUndefined();
+  });
+});

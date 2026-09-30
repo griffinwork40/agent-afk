@@ -188,6 +188,35 @@ export class SkillExecutor {
       this.currentCwd !== undefined ? { cwd: this.currentCwd } : undefined,
     );
 
+    // Contract: when a skill is hidden from the model-facing manifest (via
+    // `disable-model-invocation: true` in SKILL.md frontmatter or via
+    // `skills.hidden` in afk.config.json), the model must not be able to
+    // bypass the manifest filter by calling the `skill` tool directly.
+    //
+    // We refuse here — matching Claude Code behaviour for `disable-model-
+    // invocation` skills — with a clear error that names the skill and explains
+    // it is user-invocable only. The user can still type `/name` in the REPL;
+    // only model-initiated `skill` tool calls are blocked.
+    //
+    // The lookup uses the same `entries` array already built above (no extra
+    // scan). We find by exact name OR by suffix match (for plugin-qualified
+    // forms like "<plugin>:name" where the hidden entry uses the bare name),
+    // reusing the same logic `isHiddenByConfig` applies in `collectSkillEntries`.
+    const hiddenEntry = entries.find(
+      (e) =>
+        e.disableModelInvocation &&
+        (e.name === parsed.name || e.name.endsWith(`:${parsed.name}`)),
+    );
+    if (hiddenEntry !== undefined) {
+      return {
+        content:
+          `Skill "${parsed.name}" has model invocation disabled (disable-model-invocation: true ` +
+          `or listed in skills.hidden). It is available as a slash command for users but cannot ` +
+          `be called via the skill tool by the model.`,
+        isError: true,
+      };
+    }
+
     // 1. Try the global skill registry (built-in + user-space skills).
     //    These already have handlers that dispatch subagents internally.
     //    Only the getSkill LOOKUP is guarded: it throws "Skill not found" when
