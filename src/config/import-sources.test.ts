@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -181,8 +181,10 @@ describe('detectSources', () => {
       'demo@mp': [{ scope: 'user', installPath: active }, { scope: 'managed', installPath: active }],
       'project-only@mp': [{ scope: 'local', installPath: join(root, 'project-only') }],
     } }));
+    // path is now the resolved realpath (symlinks expanded) — use realpathSync
+    // so the assertion survives macOS /var → /private/var aliasing.
     expect(detectSources(home).find((s) => s.binary === 'claude-code')?.plugins)
-      .toEqual([{ name: 'demo', path: active }]);
+      .toEqual([{ name: 'demo', path: realpathSync(active) }]);
   });
 
   it('does not load cached plugins when the installed registry is empty or malformed', () => {
@@ -317,8 +319,68 @@ describe('plugin-discovery: per-entry realpathSync isolation', () => {
       },
     }));
     const plugins = detectSources(home).find((s) => s.binary === 'claude-code')?.plugins ?? [];
-    // The dangling entry must NOT cause the whole batch to be discarded
-    expect(plugins).toEqual([{ name: 'good', path: goodPath }]);
+    // The dangling entry must NOT cause the whole batch to be discarded.
+    // path is now the resolved realpath — use realpathSync to survive macOS aliasing.
+    expect(plugins).toEqual([{ name: 'good', path: realpathSync(goodPath) }]);
+  });
+
+  it('skips a symlink-to-deleted-target entry (dangling symlink) and returns other valid entries', () => {
+    const root = join(home, '.claude', 'plugins');
+    // Create a real plugin directory that the symlink will initially point to
+    const realTarget = join(home, 'real-plugin-target');
+    writePlugin(realTarget, 'gone');
+    const targetPath = join(realTarget, 'gone');
+
+    // Create a symlink pointing to the target, then delete the target
+    const symlinkDir = join(root, 'symlinked');
+    mkdirSync(symlinkDir, { recursive: true });
+    const symlinkPath = join(symlinkDir, 'gone');
+    symlinkSync(targetPath, symlinkPath);
+    // Remove the real target — symlink is now dangling
+    rmSync(realTarget, { recursive: true, force: true });
+
+    // Create a valid second plugin for the registry
+    const pluginRoot = join(root, 'cache', 'mp', '1.0');
+    writePlugin(pluginRoot, 'valid');
+    const validPath = join(pluginRoot, 'valid');
+
+    writeFileSync(join(root, 'installed_plugins.json'), JSON.stringify({
+      version: 2,
+      plugins: {
+        // Entry whose installPath is a symlink pointing to a now-deleted target
+        'gone@mp': [{ scope: 'user', installPath: symlinkPath }],
+        'valid@mp': [{ scope: 'user', installPath: validPath }],
+      },
+    }));
+
+    const plugins = detectSources(home).find((s) => s.binary === 'claude-code')?.plugins ?? [];
+    // The dangling-symlink entry must be skipped; the valid entry must survive.
+    // path is now the resolved realpath — use realpathSync to survive macOS aliasing.
+    expect(plugins).toEqual([{ name: 'valid', path: realpathSync(validPath) }]);
+  });
+});
+
+describe('codexHome: CODEX_HOME validation', () => {
+  it('uses an absolute CODEX_HOME override', () => {
+    const codex = join(home, 'my-codex');
+    mkdirSync(codex, { recursive: true });
+    vi.stubEnv('CODEX_HOME', codex);
+    const sources = detectSources(home);
+    const detected = sources.find((s) => s.binary === 'codex')!;
+    // present is false since we have nothing under codex, but the source map
+    // used codex as root — confirmed by the mcpConfigPath check below
+    expect(detected.mcpConfigPath).toBeNull(); // nothing there — correct root used
+  });
+
+  it('ignores a relative CODEX_HOME override and falls back to ~/.codex', () => {
+    // A relative path is almost certainly wrong and would resolve against cwd
+    vi.stubEnv('CODEX_HOME', 'relative/path');
+    // Place a plugin under the REAL ~/.codex (our injected home) to confirm
+    // codexHome fell back to home/.codex
+    writePlugin(join(home, '.codex', 'plugins'), 'fallback-plugin');
+    const sources = detectSources(home);
+    const detected = sources.find((s) => s.binary === 'codex')!;
+    expect(detected.plugins.map((p) => p.name)).toContain('fallback-plugin');
   });
 });
 

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import { readMcpServers } from './import-mcp-discovery.js';
 export { readMcpServers } from './import-mcp-discovery.js';
 import { env } from './env.js';
@@ -82,7 +82,11 @@ interface SourcePathMap {
 
 /** Returns the Codex home directory: `CODEX_HOME` env override, or `~/.codex`. */
 function codexHome(home: string): string {
-  return env.CODEX_HOME?.trim() || join(home, '.codex');
+  const override = env.CODEX_HOME?.trim();
+  // Require an absolute path — a relative value would resolve against the process
+  // cwd at runtime, which is unpredictable and almost certainly not the intent.
+  if (override && isAbsolute(override)) return override;
+  return join(home, '.codex');
 }
 
 const SOURCE_MAPS: Record<ImportSourceBinary, SourcePathMap> = {
