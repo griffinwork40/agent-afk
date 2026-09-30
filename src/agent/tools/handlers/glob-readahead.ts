@@ -68,7 +68,7 @@ export class Readahead {
   // Mutable state — mutated on every schedule/get/drain call.
   /** Pending or resolved reads keyed by absolute directory path. */
   private readonly cache = new Map<string, Promise<ReaddirResult>>();
-  /** Count of I/O calls in flight (resolved promises still count until get). */
+  /** Count of I/O calls currently in flight (settled promises are excluded after drain). */
   private inFlight = 0;
   /**
    * Epoch counter incremented on every {@link drain} call.
@@ -108,10 +108,15 @@ export class Readahead {
     const capturedEpoch = this.epoch;
     const p = fs
       .readdir(dirPath, { withFileTypes: true })
-      // Unreadable dirs (e.g. permission denied) return an empty listing.
-      // This is safe because the entry-level denylist already filtered out
-      // known-protected paths before schedule() was called; any remaining
-      // EACCES here is an OS-level restriction beyond our control.
+      // Broad catch (swallows all errors → empty listing). This is intentionally
+      // wider than the errno-narrowed catch in get(): schedule() runs speculative
+      // pre-fetches that the walker may never consume (abort/cap), so surfacing
+      // a structured error here has no actionable consumer — the walker re-checks
+      // abort/cap before acting on any result. Genuine I/O denials (EACCES,
+      // ENOENT) become empty listings, which is the same behaviour as the
+      // get() errno guard. Non-filesystem errors (e.g. from test mocks) are
+      // also swallowed here; the walker's own get() path surfaces them if the
+      // path is ever actually visited.
       .catch((): ReaddirResult => [])
       .finally(() => {
         // Guard against epoch mismatch: if drain() was called between when
@@ -137,6 +142,13 @@ export class Readahead {
    * Note: the cache entry is deleted on first await, so each path is
    * retrieved at most once (evict-on-get). This matches the walker's
    * single-visit-per-directory invariant.
+   *
+   * Single-walker assumption: evict-before-await is safe only because glob.ts
+   * uses exactly one concurrent walker per Readahead instance. A second
+   * concurrent `get()` on the same path after the eviction but before the
+   * awaited promise resolves would find no cached entry and issue a redundant
+   * `readdir`. If multiple walkers sharing a Readahead are ever introduced,
+   * this method must be revised to use a two-phase (lookup-then-evict) pattern.
    */
   async get(dirPath: string): Promise<ReaddirResult> {
     const cached = this.cache.get(dirPath);

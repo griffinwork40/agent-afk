@@ -1330,8 +1330,9 @@ describe('SkillExecutor', () => {
 
       expect(result.isError).toBeUndefined();
       expect(resolveApiKeyForModel).toHaveBeenCalledWith('sonnet');
-      expect((capture.get() as unknown as { parentApiKey: string | undefined }).parentApiKey)
-        .toBe('anthropic-keychain-token');
+      const mgr1 = capture.get() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+      expect(typeof mgr1.parentApiKey).toBe('function');
+      expect(mgr1.parentApiKey!()).toBe('anthropic-keychain-token');
     });
 
     it('calls resolveCredentialForModel directly when no resolver is injected', async () => {
@@ -1356,8 +1357,9 @@ describe('SkillExecutor', () => {
       await executor.execute(makeCall({ name: 'fork-skill-legacy' }));
 
       expect(mockResolveCredentialForModel).toHaveBeenCalledWith('sonnet');
-      expect((capture.get() as unknown as { parentApiKey: string | undefined }).parentApiKey)
-        .toBe('resolved-test-credential');
+      const mgr2 = capture.get() as unknown as { parentApiKey: (() => string | undefined) | undefined };
+      expect(typeof mgr2.parentApiKey).toBe('function');
+      expect(mgr2.parentApiKey!()).toBe('resolved-test-credential');
     });
   });
 

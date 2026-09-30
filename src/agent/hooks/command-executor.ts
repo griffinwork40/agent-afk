@@ -409,11 +409,17 @@ function parseStdoutDecision(stdout: string): HookDecision {
   }
 
   // `hookSpecificOutput.additionalContext` → injectContext
+  // `hookSpecificOutput.updatedInput`       → updatedInput (PreToolUse only)
   const hso = obj['hookSpecificOutput'];
   if (hso !== null && typeof hso === 'object' && !Array.isArray(hso)) {
     const hsoObj = hso as Record<string, unknown>;
     if (typeof hsoObj['additionalContext'] === 'string') {
       decision.injectContext = hsoObj['additionalContext'];
+    }
+    // Accept only a plain object; ignore arrays, primitives, null.
+    const ui = hsoObj['updatedInput'];
+    if (ui !== null && typeof ui === 'object' && !Array.isArray(ui)) {
+      decision.updatedInput = ui as Record<string, unknown>;
     }
   }
 

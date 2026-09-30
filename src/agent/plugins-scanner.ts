@@ -20,7 +20,7 @@ import type { SdkPluginConfig } from './types/sdk-types.js';
 import { findPluginDirs, pluginManifestPath } from '../config/plugin-discovery.js';
 import type { SourceEnabledMap } from '../config/import-sources.js';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
-import { join, resolve as resolvePath } from 'path';
+import { join, resolve as resolvePath, sep } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
 
@@ -302,7 +302,7 @@ export function indexKeyForPath(
   let resolvedLeaf = leaf;
   try { resolvedRoot = realpathSync(root); } catch { /* keep raw */ }
   try { resolvedLeaf = realpathSync(leaf); } catch { /* keep raw */ }
-  if (!resolvedLeaf.startsWith(resolvedRoot)) return null;
+  if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
   const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
   const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);

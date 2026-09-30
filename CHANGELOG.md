@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.276.23] - 2026-09-30
+
+### Fixed
+- stable session id for non-CLI surfaces + correct id in get_runtime_state (#2708) (4dcfb31d)
+- update resolver cache and use live getter for parentApiKey after /reauth (#2699) (1f0ec2a4)
+- address advisory findings from 2026-09-30 pr-triage (#2693) (ea594f57)
+
+## [5.276.22] - 2026-09-30
+
+### Fixed
+- close frozen Playwright context safely in renderHtml (#2698) (c6573703)
+
 ## [5.276.21] - 2026-09-30
 
 ### Added
