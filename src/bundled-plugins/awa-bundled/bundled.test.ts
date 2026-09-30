@@ -124,11 +124,10 @@ const PINNED_HASHES = {
   // external-constraint rule it contradicted, and put the merge-decision rule
   // in Wave 2's receives list.
   // Hash re-bumped: prior-reviewer-feedback awareness + cross-run dedup rubric (#1720).
+  // Hash re-bumped: removed prompt-only Merge offer exception — /review is now strictly
+  //   read-only; merging is delegated to /pr-triage (#2367).
   // Full rationale: docs/bundled-plugins.md#review-726
-
-
-
-  review: 'd370edb1f95a8837964cddd864868c423709ed3b551d6740bd27f693027eabde',
+  review: '316dabf2891396caaf7a3ccaef8c5c995af23654b4f27b3c636ba657bf8556a1',
   // History: /shadow-verify gained the confidence-trigger + composition-axis
   // verdicts (#52, #187).
   // Hash re-bumped: search-surface sharing + explicit verifier budgets (#995).
