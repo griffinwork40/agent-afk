@@ -670,7 +670,7 @@ describe('discoverPluginHooksConfigs', () => {
   it('finds <plugin>/hooks/hooks.json in flat layout with pluginRoot', () => {
     const pluginDir = makePlugin(root, 'my-plugin', true);
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
     ]);
   });
 
@@ -680,7 +680,7 @@ describe('discoverPluginHooksConfigs', () => {
     const pluginDir = makePlugin(join(root, 'cache', 'mp1'), 'plugin-a', true);
     writeIndex(root, { 'mp1:plugin-a': { enabled: true } });
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
     ]);
   });
 
@@ -832,5 +832,102 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
     expect(result.hooks.SessionStart).toBeUndefined();
     expect(result.warnings.some((w) => /unsupported hook type "http"/.test(w))).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // pluginName threading: plugin hooks carry the manifest name (#2459)
+  // -----------------------------------------------------------------------
+
+  it('plugin hook carries pluginName from the manifest when the manifest has a name', () => {
+    const pluginDir = join(pluginsDir, 'demo-plugin');
+    // Overwrite the blank manifest written by beforeEach with a named one.
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'claude-jev-afk', version: '1.0.0' }),
+      'utf-8',
+    );
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    const hook = result.hooks.SessionStart?.[0]?.hooks[0];
+    expect(hook).toBeDefined();
+    expect(hook!.pluginName).toBe('claude-jev-afk');
+  });
+
+  it('plugin hook has pluginName=undefined when manifest has no name field', () => {
+    // The blank manifest `{}` written by beforeEach has no `name` field.
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    const hook = result.hooks.SessionStart?.[0]?.hooks[0];
+    expect(hook).toBeDefined();
+    // readPluginManifest returns null for a missing name → not set on the hook.
+    expect(hook!.pluginName).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pluginHookEnv parsing (issue #2459)
+// ---------------------------------------------------------------------------
+
+describe('loadHooksConfig — pluginHookEnv parsing', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    afkHome = join(tmp, 'afk-home-phe');
+    projectCwd = join(tmp, 'project-phe');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  function writeUserGlobalConfig(body: unknown): void {
+    writeFileSync(join(afkHome, 'config', 'afk.config.json'), JSON.stringify(body), 'utf-8');
+  }
+
+  it('pluginHookEnv defaults to {} when not set', () => {
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv).toEqual({});
+  });
+
+  it('pluginHookEnv is parsed from user-global afk.config.json', () => {
+    writeUserGlobalConfig({
+      pluginHookEnv: { 'claude-jev-afk': ['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY'] },
+    });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv['claude-jev-afk']).toEqual(['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY']);
+  });
+
+  it('pluginHookEnv from project-local file is ignored (security gate)', () => {
+    // Only user-global files supply pluginHookEnv — a project-local
+    // afk.config.json must NOT be able to grant secrets to plugin hooks.
+    writeFileSync(
+      join(projectCwd, 'afk.config.json'),
+      JSON.stringify({ pluginHookEnv: { 'evil-plugin': ['ANTHROPIC_API_KEY'] } }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv).toEqual({});
+  });
+
+  it('malformed pluginHookEnv (not an object) emits a warning and uses {}', () => {
+    writeUserGlobalConfig({ pluginHookEnv: ['not', 'an', 'object'] });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv).toEqual({});
+    expect(result.warnings.some((w) => w.includes('"pluginHookEnv" must be an object'))).toBe(true);
+  });
+
+  it('malformed per-plugin entry (not an array) emits a warning and skips that plugin', () => {
+    writeUserGlobalConfig({ pluginHookEnv: { 'good-plugin': ['MY_KEY'], 'bad-plugin': 'not-an-array' } });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv['good-plugin']).toEqual(['MY_KEY']);
+    expect(result.pluginHookEnv['bad-plugin']).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('pluginHookEnv["bad-plugin"]'))).toBe(true);
   });
 });

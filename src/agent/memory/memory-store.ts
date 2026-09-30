@@ -722,7 +722,7 @@ export class MemoryStore {
         throw err; // No sanitization possible; surface the error to the handler.
       }
     }
-    const results: MemorySearchResult[] = [...factResults];
+    const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {
       const procs = this.searchProcedures(query);

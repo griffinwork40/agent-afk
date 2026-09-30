@@ -137,6 +137,12 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
 /** Guards against duplicate listener registration if called more than once. */
 let daemonCrashHandlersInstalled = false;
 
+/** Milliseconds to wait after firing the crash notification before exiting,
+ *  giving the fire-and-forget HTTP push a chance to flush.
+ *  Declared at module scope (mirrors entry.ts) so it is visible across the
+ *  whole module rather than being buried inside registerDaemonCrashHandlers. */
+const CRASH_EXIT_DELAY_MS = 200;
+
 /**
  * Register uncaughtException / unhandledRejection process handlers that push a
  * best-effort Telegram crash notice before exiting. Rate-limited to one push
@@ -154,7 +160,6 @@ function registerDaemonCrashHandlers(): void {
 
   let lastCrashPushAt = 0;
   const CRASH_PUSH_GUARD_MS = 60_000;
-  const CRASH_EXIT_DELAY_MS = 200;
   const notifyCrash = (kind: string, err: unknown): void => {
     const nowMs = Date.now();
     if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
@@ -168,10 +173,16 @@ function registerDaemonCrashHandlers(): void {
   };
   process.on('uncaughtException', (err) => {
     notifyCrash('uncaughtException', err);
+    // exitCode is set first so a natural (early) exit — before the timer fires
+    // — still reports code 1 to the supervisor. The unref'd timer fires if the
+    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
   process.on('unhandledRejection', (err) => {
     notifyCrash('unhandledRejection', err);
+    // Same rationale as uncaughtException above.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
 }

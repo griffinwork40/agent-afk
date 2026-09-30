@@ -211,8 +211,9 @@ function buildForeignSummarize(
         warnedFailure.add(targetModel);
         const rawMsg = err instanceof Error ? err.message : String(err);
         // Redact before logging: provider SDK errors (e.g. OpenAI 401) can
-        // echo partial API keys in the message body. Truncate to 200 chars so
-        // a very long error body does not swamp stderr.
+        // echo partial API keys in the message body. Redact the full string
+        // first so a secret straddling the 200-char boundary is never logged
+        // unredacted, then truncate to 200 chars for display.
         const msg = redactSecrets(rawMsg).slice(0, 200);
         // eslint-disable-next-line no-console
         console.warn(

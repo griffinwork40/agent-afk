@@ -197,8 +197,13 @@ export interface SubagentManagerOptions {
    * API key (or OAuth token) inherited by all forked children whose
    * `config.apiKey` is missing or empty. Mirrors the hookRegistry /
    * permissionBubbler auto-fill pattern in {@link SubagentManager.forkSubagent}.
+   *
+   * May be a plain string (backward-compatible) or a zero-arg getter.
+   * The getter form is preferred for long-lived managers (fix #2471): it
+   * lets the credential be re-read at fork time so a mid-session `/reauth`
+   * or usage-limit hot-swap is reflected in every child forked after it.
    */
-  apiKey?: string;
+  apiKey?: string | (() => string | undefined);
   /**
    * Local-server base URL inherited by all forked children whose
    * `config.baseUrl` is missing. Ensures subagents spawned by the `agent`
