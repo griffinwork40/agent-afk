@@ -48,7 +48,9 @@ export interface AssembleChildConfigArgs<T> {
   workspaceStore?: WorkspaceStore;
   // Manager-level inherited values
   parentCwd: string | undefined;
-  parentApiKey: string | undefined;
+  // Fix #2471: a getter lets forkSubagent read the live credential at fork
+  // time instead of the boot-time snapshot captured by SubagentManager.
+  parentApiKey: (() => string | undefined) | undefined;
   parentBaseUrl: string | undefined;
   parentProvider: BundledProviderName | undefined;
   parentTraceWriter: TraceSink | undefined;
@@ -155,11 +157,15 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     effectiveChildModel,
     effectiveTimeoutMs,
     childController,
-    parentApiKey,
+    parentApiKey: parentApiKeyGetter,
     parentBaseUrl,
     parentProvider,
     parentCanUseTool,
   } = args;
+  // Resolve at fork time so a mid-session /reauth or hot-swap is visible to
+  // every child forked after it (fix #2471). The getter is undefined for
+  // callers that never supplied an apiKey; otherwise it is called once here.
+  const parentApiKey = parentApiKeyGetter?.();
 
   // Query the shared workspace for entries relevant to this child's task
   // and inject them as a system-prompt preamble so the child sees sibling

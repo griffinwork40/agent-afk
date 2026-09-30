@@ -10,6 +10,7 @@ import {
   resolveCredentialForModel,
   preloadClaudeKeychainOAuth,
   _resetRefreshedClaudeCodeOauthToken,
+  setRefreshedClaudeCodeOauthToken,
 } from './credential-resolver.js';
 import { refreshClaudeCodeOauthToken, loadClaudeCodeOauthToken, _resetKeychainReadCache } from './keychain.js';
 
@@ -196,6 +197,26 @@ describe('preloadClaudeKeychainOAuth — startup refresh guard', () => {
     vi.mocked(loadClaudeCodeOauthToken).mockReturnValue('sk-ant-oat01-account-B');
 
     // Forked children resolve through this path; they must get B, not A.
+    expect(loadAnthropicCredential()).toBe('sk-ant-oat01-account-B');
+    expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-oat01-account-B');
+  });
+
+  it('setRefreshedClaudeCodeOauthToken updates the cache so the new account token is returned when the store is empty (fix #2471)', () => {
+    // Scenario: store is empty (write-back failed / keychain locked).
+    vi.mocked(loadClaudeCodeOauthToken).mockReturnValue(undefined);
+
+    // Boot on account A: preload caches A's token in the process-local slot.
+    vi.mocked(refreshClaudeCodeOauthToken).mockResolvedValue('sk-ant-oat01-account-A');
+    // Manually simulate what preloadClaudeKeychainOAuth does (async, so inline
+    // to keep the test sync and focused on setRefreshedClaudeCodeOauthToken).
+    setRefreshedClaudeCodeOauthToken('sk-ant-oat01-account-A');
+    expect(loadAnthropicCredential()).toBe('sk-ant-oat01-account-A');
+
+    // /reauth fires → forceClientRefresh() calls setRefreshedClaudeCodeOauthToken
+    // with the new token. The store is still empty (write-back failed).
+    setRefreshedClaudeCodeOauthToken('sk-ant-oat01-account-B');
+
+    // Children whose live store read yields nothing must now get B, not A.
     expect(loadAnthropicCredential()).toBe('sk-ant-oat01-account-B');
     expect(resolveCredentialForModel('claude-sonnet-4-6')).toBe('sk-ant-oat01-account-B');
   });
