@@ -579,8 +579,9 @@ describe('view_image handler — error paths', () => {
 
   it('returns isError when file is outside the allowed read root', async () => {
     // Create a file outside the cwd that the handler is confined to
-    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-view-image-outside-'));
+    let outsideDir: string | undefined;
     try {
+      outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-view-image-outside-'));
       const outsideFile = path.join(outsideDir, 'secret.png');
       await fs.writeFile(outsideFile, makePngBuffer(10, 10));
 
@@ -591,7 +592,9 @@ describe('view_image handler — error paths', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toContain('outside the allowed');
     } finally {
-      await fs.rm(outsideDir, { recursive: true, force: true });
+      if (outsideDir != null) {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
     }
   });
 });
