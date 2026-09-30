@@ -38,7 +38,16 @@ function defaultClientFactory(opts: {
   defaultHeaders?: Record<string, string>;
   fetch?: typeof globalThis.fetch;
 }): OpenAI {
-  const clientOpts: ConstructorParameters<typeof OpenAI>[0] = { apiKey: opts.apiKey };
+  const clientOpts: ConstructorParameters<typeof OpenAI>[0] = {
+    apiKey: opts.apiKey,
+    // Disable SDK-level retries so AFK's own retry loop (retry.ts
+    // MAX_CONNECTION_RETRIES / MAX_STREAM_RETRIES) is the single, traced
+    // retry authority. Without this the SDK default of 2 silently runs under
+    // AFK's loop, turning a single failing request into up to 3× the
+    // attempts AFK believes it is making — and those SDK-level retries are
+    // invisible in the witness trace (issue #2422).
+    maxRetries: 0,
+  };
   if (opts.baseURL !== undefined) clientOpts.baseURL = opts.baseURL;
   if (opts.defaultHeaders !== undefined) clientOpts.defaultHeaders = opts.defaultHeaders;
   if (opts.fetch !== undefined) clientOpts.fetch = opts.fetch;

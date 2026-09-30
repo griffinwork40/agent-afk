@@ -35,30 +35,44 @@ describe('anthropic-direct auth', () => {
 
   it('buildClientOptions(token, "oauth") yields { authToken } and no apiKey', () => {
     const opts = buildClientOptions('tok', 'oauth');
-    expect(opts).toEqual({ authToken: 'tok' });
+    expect(opts).toEqual({ authToken: 'tok', maxRetries: 0 });
     expect((opts as Record<string, unknown>)['apiKey']).toBeUndefined();
   });
 
   it('buildClientOptions(token, "api-key") yields { apiKey } and no authToken', () => {
     const opts = buildClientOptions('tok', 'api-key');
-    expect(opts).toEqual({ apiKey: 'tok' });
+    expect(opts).toEqual({ apiKey: 'tok', maxRetries: 0 });
     expect((opts as Record<string, unknown>)['authToken']).toBeUndefined();
+  });
+
+  it('buildClientOptions always sets maxRetries: 0 so AFK retry layers own retries (#2422)', () => {
+    // The SDK defaults to maxRetries=2; without this override the SDK retries
+    // silently stack under AFK's own loop (round-retry.ts, retry-layer.ts),
+    // turning each failing call into up to 3× the attempts AFK believes it is
+    // making — and those SDK-level retries are invisible in the witness trace.
+    expect(buildClientOptions('tok', 'api-key').maxRetries).toBe(0);
+    expect(buildClientOptions('tok', 'oauth').maxRetries).toBe(0);
+    expect(buildClientOptions('tok', 'api-key', 'http://127.0.0.1:8080').maxRetries).toBe(0);
+    const fakeFetch = () => Promise.resolve(new Response());
+    expect(buildClientOptions('tok', 'api-key', undefined, fakeFetch).maxRetries).toBe(0);
   });
 
   it('buildClientOptions forwards a non-empty baseUrl as the SDK-camelCase baseURL', () => {
     expect(buildClientOptions('tok', 'api-key', 'http://127.0.0.1:8080')).toEqual({
       apiKey: 'tok',
       baseURL: 'http://127.0.0.1:8080',
+      maxRetries: 0,
     });
     expect(buildClientOptions('oauth-tok', 'oauth', 'http://127.0.0.1:9000')).toEqual({
       authToken: 'oauth-tok',
       baseURL: 'http://127.0.0.1:9000',
+      maxRetries: 0,
     });
   });
 
   it('buildClientOptions omits baseURL when baseUrl is undefined or empty', () => {
-    expect(buildClientOptions('tok', 'api-key')).toEqual({ apiKey: 'tok' });
-    expect(buildClientOptions('tok', 'api-key', '')).toEqual({ apiKey: 'tok' });
+    expect(buildClientOptions('tok', 'api-key')).toEqual({ apiKey: 'tok', maxRetries: 0 });
+    expect(buildClientOptions('tok', 'api-key', '')).toEqual({ apiKey: 'tok', maxRetries: 0 });
   });
 
   it('OAUTH_BETA_HEADER includes the interleaved-thinking beta', () => {
