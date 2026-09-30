@@ -509,6 +509,24 @@
       "category": "misc"
     },
     {
+      "name": "AFK_MEMORY_GC_MIN_AGE_DAYS",
+      "description": "Minimum age in days for a never-accessed fact to become a GC candidate. Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 90 (three months). Must be a positive number; invalid values fall back to the default.",
+      "type": "number",
+      "required": false,
+      "default": "90",
+      "example": "60",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_MEMORY_GC_SWEEP_ENABLE",
+      "description": "Enable the periodic soft-delete GC sweep for the fact archive. When set to 1, never-accessed facts older than AFK_MEMORY_GC_MIN_AGE_DAYS are marked superseded (soft-deleted) at most once every 24 hours at session start. Off by default — enable only when archive noise becomes measurable. \"preference\" facts are always excluded regardless of this setting.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "misc"
+    },
+    {
       "name": "AFK_MESSAGE_JOURNAL_DISABLED",
       "description": "Disable the per-session message journal (state/sessions/<id>/journal.jsonl + blobs/). The journal records the full conversation, including full tool results, and is the source for --resume and /fork. Set to 1 to skip journal writes; resume then falls back to the text-only sidecar history.",
       "type": "boolean",
