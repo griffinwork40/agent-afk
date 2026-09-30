@@ -9,6 +9,7 @@ import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
+import type { StopWiring } from '../../../agent/types/session-types.js';
 import { truncateDisplayWidth } from '../../display.js';
 import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
@@ -18,7 +19,7 @@ import {
 } from '../../slash/plugin-skills.js';
 import type { InteractiveCtx } from './shared.js';
 import { formatStatusFields } from './shared.js';
-import { AbortError, HookBlockedError, errorMessage } from '../../../utils/errors.js';
+import { HookBlockedError, errorMessage } from '../../../utils/errors.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
 
 import type { TranscriptHandle } from './transcript.js';
@@ -32,10 +33,10 @@ import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-bloc
 import { MomentumTicker } from './momentum-ticker.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
 
-/** Per-handler timeout for the post-turn Stop notification. Tighter than the
- *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
- *  REPL turn — a notification hook must not stall the prompt for 30s × N handlers. */
-const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
+// STOP_HOOK_HANDLER_TIMEOUT_MS (5s) was used by the REPL's own Stop dispatch,
+// which has been removed. Stop is now dispatched by the session layer
+// (turn-stream-runner.ts) with the same 5s timeout. Constant kept as a
+// comment for history; do not re-add the REPL dispatch.
 
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
@@ -167,13 +168,37 @@ export async function runInputLoop(
   // bg-result buffer). Optional on ctx — early /resume calls before runInputLoop
   // runs are a safe no-op.
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
-  // Parsed terminal-state kind + corroborating-evidence flag of the current
-  // turn, captured from onTerminalState (which fires during runTurn) so the
-  // post-turn Stop dispatch can carry them on StopContext for policy handlers.
-  // Reset before every runTurn so a verdict-less turn never reuses a stale kind.
-  let currentTerminalKind: 'done' | 'blocked' | 'asking' | 'interrupted' | undefined;
-  let currentDoneHasEvidence: boolean | undefined;
-  let currentDoneClassification: 'no-code-changes' | 'verified' | 'unverified' | undefined;
+
+  // Wire session-layer Stop dispatch. The session's TurnStreamRunner dispatches
+  // Stop once per top-level turn via the hookRegistry already on the session.
+  // The REPL supplies `getHasNextTurn: () => true` (it always has a next prompt)
+  // and routes injectContext into `pendingStopInjection`, which the loop drains
+  // at the top of the next iteration. Blocked/timeout notices are rendered by
+  // the existing `onStopBlocked` / `onStopTimeout` callbacks and can be
+  // displayed by the REPL's completionWriter below.
+  //
+  // Re-applied before EVERY turn (see the drain below), not only here:
+  // /resume swaps ctx.session.current for a new AgentSession, which would
+  // otherwise start un-wired and silently stop firing Stop.
+  const stopWiring: StopWiring = {
+    getHasNextTurn: () => true,
+    onStopInjectContext: (text) => { pendingStopInjection = text; },
+    onStopBlocked: (reason) => {
+      ctx.completionWriter.fn(
+        palette.dim(`  [stop hook] blocked: ${sanitizeForDisplay(reason ?? 'no reason given')}`),
+      );
+    },
+    onStopTimeout: () => {
+      ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
+    },
+  };
+  ctx.session.current.wireStopHook?.(stopWiring);
+
+  // History: currentTerminalKind / currentDoneHasEvidence / currentDoneClassification
+  // were captured here for the REPL's post-turn Stop dispatch. Stop is now
+  // dispatched by the session layer (turn-stream-runner.ts via wireStopHook),
+  // so these per-turn captures are no longer needed at this level.
+  // The verdictLedger still receives terminal state via onTerminalState below.
 
   // Auto-resume: wake an idle prompt when a background subagent result lands so
   // the session continues its work without waiting for a keystroke. Fires only
@@ -578,6 +603,8 @@ export async function runInputLoop(
         runText = pendingStopInjection + '\n\n' + runText;
         pendingStopInjection = undefined;
       }
+      // Idempotent: covers a session swapped in since the last turn.
+      ctx.session.current.wireStopHook?.(stopWiring);
 
       // UserPromptSubmit hook — fires before every turn submission.
       // Handlers may block the turn (HookBlockedError → continue loop),
@@ -623,10 +650,6 @@ export async function runInputLoop(
         }
       }
 
-      // Reset the per-turn verdict capture so a turn that emits no terminal
-      // state never carries the previous turn's kind into the Stop dispatch.
-      // onTerminalState re-sets these during runTurn when a verdict parses.
-      currentTerminalKind = currentDoneHasEvidence = currentDoneClassification = undefined;
       // Enable and clear the code-block register so `/copy N` indices match
       // the blocks rendered in THIS turn, not a prior one.  enableCodeBlockRegister()
       // is idempotent after the first turn; calling it here ensures it is set
@@ -710,13 +733,11 @@ export async function runInputLoop(
           healthRail?.update(ctx.stats);
         },
         rearmStatus: () => ctx.statusLine.rearm(),
-        onTerminalState: (state, meta) => {
+        onTerminalState: (state, _meta) => {
           verdictLedger?.push(state);
-          // Capture for the post-turn Stop dispatch (StopContext). Fires during
-          // runTurn, so these are set by the time Stop dispatches at loop tail.
-          currentTerminalKind = state.kind;
-          currentDoneHasEvidence = meta?.doneHasCorroboratingEvidence;
-          currentDoneClassification = meta?.doneEvidenceClassification;
+          // Note: Stop dispatch is handled by the session layer (turn-stream-runner.ts)
+          // which computes its own enrichment from the per-turn tool events + last
+          // assistant text. Per-turn captures here are no longer forwarded to Stop.
         },
         setActiveCompositor: (c) => {
           // Publish the active compositor for the SIGINT handler (which
@@ -796,66 +817,13 @@ export async function runInputLoop(
         surface.toRunTurnRefs(buildPrompt(ctx.stats.permissionMode)),
       );
 
-      // Contract: Stop fires post-turn. A Stop handler may return injectContext
-      // to bounce a correction into the NEXT turn — stashed in
-      // pendingStopInjection and drained at the top of the loop (the terminal-
-      // state gate uses this). AbortError propagates (abort precedence is
-      // non-negotiable). HookBlockedError surfaces a brief notice and continues
-      // -- block still does NOT force REPL continuation (block-to-force-
-      // continuation remains deferred; only injectContext-into-next-turn, which
-      // needed the cross-turn state now declared above, is wired here).
-      //
-      // Invariant: Stop fires only on non-throwing runTurn completions. Any
-      // throw from runTurn (including model errors and abort) bypasses this
-      // block entirely -- error and abort paths skip Stop by design. The
-      // sequential placement (not finally) is intentional: Stop signals
-      // successful turn completion, not turn exit.
-      //
-      // Invariant: slash-command-only iterations (res.handled paths above)
-      // end in `continue` before reaching this block, so Stop does not fire
-      // for slash-command-only turns. Only turns that invoke runTurn trigger
-      // Stop.
-      //
-      // Contract: Stop dispatch uses STOP_HOOK_HANDLER_TIMEOUT_MS (5s) rather
-      // than the registry default (30s) because Stop fires every REPL turn —
-      // a notification hook must not stall the prompt for 30s × N handlers.
-      if (ctx.hookRegistry) {
-        try {
-          const stopDecision = await ctx.hookRegistry.dispatch(
-            {
-              event: 'Stop',
-              sessionId: ctx.stats.sessionId,
-              // Carry the just-completed turn's parsed verdict (captured via
-              // onTerminalState during runTurn) so post-turn policy handlers —
-              // the terminal-state gate — can read it. Omitted when the turn
-              // emitted no recognizable terminal state.
-              ...(currentTerminalKind !== undefined ? { terminalState: currentTerminalKind } : {}),
-              ...(currentDoneHasEvidence !== undefined ? { doneHasCorroboratingEvidence: currentDoneHasEvidence } : {}),
-              ...(currentDoneClassification !== undefined ? { doneEvidenceClassification: currentDoneClassification } : {}),
-            },
-            undefined,
-            STOP_HOOK_HANDLER_TIMEOUT_MS,
-          );
-          // Stash any handler-returned correction for delivery on the next turn
-          // (drained at the top of the loop). dispatch() already merges
-          // injectContext across non-blocking handlers (#345), so this is the
-          // single merged string; a whitespace-only value is ignored.
-          if (stopDecision.injectContext && stopDecision.injectContext.trim().length > 0) {
-            pendingStopInjection = stopDecision.injectContext;
-          }
-        } catch (err) {
-          if (err instanceof AbortError) throw err;
-          if (err instanceof HookHandlerTimeoutError) {
-            debugLog('[stop hook] handler timed out');
-            ctx.completionWriter.fn(palette.dim('  [stop hook] timed out'));
-          } else if (err instanceof HookBlockedError) {
-            ctx.completionWriter.fn(
-              palette.dim(`  [stop hook] blocked: ${sanitizeForDisplay(err.reason ?? 'no reason given')}`),
-            );
-          } else {
-            debugLog('[stop hook] unexpected error: ' + String(err));
-          }
-        }
-      }
+      // Contract: Stop dispatch is now handled by the session layer
+      // (turn-stream-runner.ts) via wireStopHook() called at loop init above.
+      // The session dispatches Stop once per top-level turn, routes injectContext
+      // into pendingStopInjection, and calls onStopBlocked/onStopTimeout for
+      // REPL display. The REPL-level dispatch that was here previously is removed
+      // so Stop does not double-fire. The `currentTerminalKind` / evidence vars
+      // are still captured via onTerminalState (below) for the verdictLedger /
+      // verdict-card rendering — they are no longer passed to Stop dispatch.
     }
   }
