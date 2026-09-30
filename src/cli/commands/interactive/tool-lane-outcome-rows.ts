@@ -89,7 +89,9 @@ export function pushOutcomeRows(
 ): void {
   const { continuationIndent, cols } = opts;
   const suffix = head.suffix ?? '';
-  const fixed = displayWidth(stripAnsi(head.lead + head.sep + suffix));
+  const fixed = displayWidth(stripAnsi(head.lead)) +
+    displayWidth(stripAnsi(head.sep)) +
+    displayWidth(stripAnsi(suffix));
   const avail = Math.max(0, cols - fixed);
   const labelWidth = displayWidth(stripAnsi(head.label));
   // The single-line preview may use everything except the label's floor;
