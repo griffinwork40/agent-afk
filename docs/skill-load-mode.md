@@ -232,12 +232,16 @@ A bare entry suffix-matches any `<plugin>:name` form.
 This key is **human-tier** in `settable-keys.ts` — the model cannot set it on
 its own config (an operator hiding a skill must not be reversible by the model).
 
-### Model tool-call refusal
+### Hidden is not forbidden
 
-When the model calls the `skill` tool with a hidden skill's name,
-`SkillExecutor.execute()` refuses with a clear error (matching Claude Code
-behaviour) rather than allowing a silent bypass. The slash-command path is
-unaffected.
+A hidden skill is removed from the model's menu, but the `skill` tool still
+dispatches it when called by name. This is deliberate and differs from Claude
+Code: in agent-afk a user `/name` slash command is delivered as an instruction
+to the model to call the `skill` tool (`src/cli/slash/_lib/skill-message-bridge.ts`),
+so `SkillExecutor` cannot distinguish a user-requested dispatch from a
+model-initiated one. Refusing model calls would therefore break the slash
+command as well. The goal of hiding is prompt-token savings, which the manifest
+filter alone delivers.
 
 ### Scope
 

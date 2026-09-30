@@ -215,8 +215,9 @@ export interface SkillMetadata {
    * place `excludeName` and `source !== 'command'` filters live. The slash-
    * command router, `/skills`, and `afk skill list` still see and invoke the
    * skill. When the MODEL calls the `skill` tool with a hidden skill's name,
-   * `SkillExecutor.execute()` refuses with a clear error (matching Claude Code
-   * behaviour) so there is no silent bypass.
+   * `SkillExecutor.execute()` still dispatches it: the slash path itself
+   * round-trips through a model `skill` tool call, so a refusal would break
+   * `/name` too. Hidden means "not advertised", not "forbidden".
    */
   disableModelInvocation?: boolean;
   /**

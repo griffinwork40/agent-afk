@@ -3195,7 +3195,7 @@ describe('SkillExecutor', () => {
 
 });
 
-describe('SkillExecutor — model invocation refused for hidden skills', () => {
+describe('SkillExecutor — hidden skills stay dispatchable (slash path round-trips through the skill tool)', () => {
   let tmpAfkHome: string;
   let tmpCwd: string;
   let origCwd: string;
@@ -3226,40 +3226,40 @@ describe('SkillExecutor — model invocation refused for hidden skills', () => {
     });
   }
 
-  it('refuses model tool call for a skill with disableModelInvocation:true', async () => {
+  it('dispatches a skill with disableModelInvocation:true (a /name slash command arrives this way)', async () => {
+    const handler = vi.fn().mockResolvedValue('hidden output');
     registerSkill({
       name: 'no-model-skill',
       description: 'Hidden from model',
-      handler: vi.fn(),
+      handler,
       disableModelInvocation: true,
     });
 
     const executor = makeExecutor();
     const result = await executor.execute(makeCall({ name: 'no-model-skill' }));
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('no-model-skill');
-    expect(result.content).toContain('disable-model-invocation');
+    expect(result.isError).toBeUndefined();
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses model tool call for a skill hidden via skills.hidden config', async () => {
+  it('dispatches a skill hidden via skills.hidden config', async () => {
     mkdirSync(join(tmpAfkHome, 'config'), { recursive: true });
     writeFileSync(
       join(tmpAfkHome, 'config', 'afk.config.json'),
       JSON.stringify({ skills: { hidden: ['config-model-hidden'] } }),
     );
+    const handler = vi.fn().mockResolvedValue('hidden output');
     registerSkill({
       name: 'config-model-hidden',
       description: 'Hidden via config',
-      handler: vi.fn(),
+      handler,
     });
 
     const executor = makeExecutor();
     const result = await executor.execute(makeCall({ name: 'config-model-hidden' }));
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain('config-model-hidden');
-    expect(result.content).toContain('skills.hidden');
+    expect(result.isError).toBeUndefined();
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('non-hidden skills are still invocable by the model', async () => {
