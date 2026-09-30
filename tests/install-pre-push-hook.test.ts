@@ -34,10 +34,14 @@ function makeTempRepo(name: string): string {
 }
 
 function runInstaller(repoDir: string, env: Record<string, string> = {}): { stdout: string; stderr: string; code: number } {
+  // Strip CI from the inherited env so the runner's CI=true does not leak into
+  // the child and trigger the installer's early-exit guard, causing tests that
+  // expect a hook to be written to fail silently.
+  const { CI: _ci, ...base } = process.env;
   const result = spawnSync(process.execPath, [installerPath], {
     encoding: 'utf8',
     cwd: repoDir,
-    env: { ...process.env, ...env },
+    env: { ...base, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   return {
