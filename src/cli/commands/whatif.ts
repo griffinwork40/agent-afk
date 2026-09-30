@@ -14,13 +14,13 @@
  */
 
 import { Command } from 'commander';
-import { createInterface } from 'node:readline';
 import ora from 'ora';
 import { loadConfig } from '../config.js';
 import { handleCommandError } from '../errors/index.js';
 import { getAfkHome, getSkillsDir, getPluginsDir } from '../../paths.js';
 import { palette } from '../palette.js';
 import { REPL_SPINNER_OPTIONS } from './interactive/shared.js';
+import { confirmSpec } from './whatif.confirm.js';
 import { renderTerminal } from '../../whatif/report.js';
 import { describeChange } from '../../whatif/operators/index.js';
 import {
@@ -54,24 +54,6 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
 
 function isMdeError(err: unknown): err is WhatifMdeErrorType {
   return err instanceof Error && err.name === 'WhatifMdeError';
-}
-
-// ---------------------------------------------------------------------------
-// TTY confirmation helper
-// ---------------------------------------------------------------------------
-
-async function confirmSpec(lines: string[]): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stderr });
-    process.stderr.write('\n');
-    for (const l of lines) process.stderr.write(`  ${l}\n`);
-    process.stderr.write('\nProceed with this change? [y/N] ');
-    rl.once('line', (answer) => {
-      rl.close();
-      resolve(answer.trim().toLowerCase() === 'y');
-    });
-    rl.once('close', () => resolve(false));
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +253,7 @@ async function runWhatifCommand(
       if (process.stdin.isTTY) {
         // Interactive: ask the operator whether to proceed anyway.
         process.stderr.write(`\n${palette.warning('whatif: underpowered run')}\n  ${detail}\n`);
-        const proceed = await confirmSpec(['Proceed anyway? [y/N]']);
+        const proceed = await confirmSpec([], 'Proceed anyway?');
         if (!proceed) {
           process.stderr.write('Aborted.\n');
           process.exit(0);

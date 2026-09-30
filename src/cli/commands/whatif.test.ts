@@ -1,8 +1,10 @@
 /**
  * Tests for src/cli/commands/whatif.ts — registerWhatifCommand.
+ * Also covers the confirmSpec helper from whatif.confirm.ts.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PassThrough } from 'node:stream';
 import { Command } from 'commander';
 
 // ---------------------------------------------------------------------------
@@ -80,6 +82,7 @@ vi.mock('ora', () => ({
 }));
 
 import { registerWhatifCommand } from './whatif.js';
+import { confirmSpec } from './whatif.confirm.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -144,5 +147,54 @@ describe('registerWhatifCommand — budget error', () => {
     const program = new Command();
     program.exitOverride();
     expect(() => registerWhatifCommand(program)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// confirmSpec — regression: fix(#2609) resolve-before-close
+// ---------------------------------------------------------------------------
+
+describe('confirmSpec', () => {
+  /**
+   * Helper: returns a fake stdin PassThrough that emits `input` after a tick
+   * so readline has time to attach its listeners before data arrives.
+   */
+  function fakeStdin(input: string): PassThrough {
+    const pt = new PassThrough();
+    setImmediate(() => pt.end(input));
+    return pt;
+  }
+
+  it('returns true when the user answers y', async () => {
+    const result = await confirmSpec([], 'Proceed?', fakeStdin('y\n'));
+    expect(result).toBe(true);
+  });
+
+  it('returns true when the user answers Y (case-insensitive)', async () => {
+    const result = await confirmSpec([], 'Proceed?', fakeStdin('Y\n'));
+    expect(result).toBe(true);
+  });
+
+  it('returns false when the user answers n', async () => {
+    const result = await confirmSpec([], 'Proceed?', fakeStdin('n\n'));
+    expect(result).toBe(false);
+  });
+
+  it('returns false when the user answers N', async () => {
+    const result = await confirmSpec([], 'Proceed?', fakeStdin('N\n'));
+    expect(result).toBe(false);
+  });
+
+  it('returns false when stdin closes without input (Ctrl-D / EOF)', async () => {
+    const pt = new PassThrough();
+    setImmediate(() => pt.end()); // close without writing a line
+    const result = await confirmSpec([], 'Proceed?', pt);
+    expect(result).toBe(false);
+  });
+
+  it('accepts a custom question parameter', async () => {
+    // Just verifies the signature — the return value still depends on input.
+    const result = await confirmSpec(['info line'], 'Continue anyway?', fakeStdin('y\n'));
+    expect(result).toBe(true);
   });
 });
