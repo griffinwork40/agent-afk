@@ -181,7 +181,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -400,8 +400,7 @@ export function createDefaultHookRegistry(
       console.warn(`[hooks] ${warning}`);
     }
     loadAndRegisterConfigHooks(registry, hookConfig, {
-      cwd: agentOptions?.cwd,
-      sessionId: agentOptions?.sessionId,
+      cwd: agentOptions?.cwd, sessionId: agentOptions?.sessionId, getTranscriptPath: agentOptions?.getTranscriptPath,
     });
   }
 

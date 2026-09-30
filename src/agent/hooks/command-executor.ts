@@ -49,6 +49,16 @@ export interface ExecuteCommandOptions {
    * hooks (they use AFK's own `AFK_PROJECT_DIR`).
    */
   pluginRoot?: string;
+  /**
+   * Absolute path to the current session's autosaved markdown transcript file
+   * (`~/.afk/state/transcripts/<isoStamp>.md`). Contains prior conversation
+   * turns in chronological order. Written continuously during the REPL session
+   * so it always contains at least the turns preceding the hook event.
+   *
+   * `null` when no transcript is available (daemon, `afk chat`, web, or REPL
+   * before the first turn). Emitted as `transcript_path` in the stdin payload.
+   */
+  transcriptPath?: string | null;
 }
 
 export interface CommandExecutorResult {
@@ -67,6 +77,7 @@ function buildStdinPayload(
   context: HookContext,
   sessionId: string | undefined,
   agentCwd: string,
+  transcriptPath: string | null | undefined,
 ): string {
   const payload: Record<string, unknown> = {
     session_id: sessionId,
@@ -99,9 +110,13 @@ function buildStdinPayload(
   if (context.event === 'UserPromptSubmit') {
     payload['prompt'] = context.prompt;
   }
-  // transcript_path: always emit the key so hook scripts can detect it.
-  // When unknown, emit null (not undefined — JSON.stringify drops undefined).
-  payload['transcript_path'] = null;
+  // transcript_path: always emit the key so hook scripts can detect its absence.
+  // Use the supplied path when provided and non-empty; fall back to null so
+  // JSON.stringify always includes the key (undefined would drop it).
+  payload['transcript_path'] =
+    typeof transcriptPath === 'string' && transcriptPath.length > 0
+      ? transcriptPath
+      : null;
   return JSON.stringify(payload);
 }
 
@@ -121,7 +136,7 @@ export async function executeCommand(
   // Tilde-expand the command path before spawning.
   const command = opts.command.replace(/^~\//, homedir() + '/');
 
-  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd);
+  const stdinPayload = buildStdinPayload(context, sessionId, agentCwd, opts.transcriptPath);
 
   // Env vars injected into the child process.
   //

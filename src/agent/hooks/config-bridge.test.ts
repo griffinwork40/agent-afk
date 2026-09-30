@@ -729,3 +729,124 @@ describe('episode mode hook filter', () => {
     expect(registry.count('SessionStart')).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// transcript_path threading (issue #2372)
+// ---------------------------------------------------------------------------
+
+describe('getTranscriptPath threading (issue #2372)', () => {
+  it('transcript path from getTranscriptPath getter appears in hook stdin payload', async () => {
+    const transcriptFile = join(tmp, '2026-01-01T00-00-00-000Z.md');
+    writeFileSync(transcriptFile, '# Session\n\n## User\n\nhello\n\n');
+
+    // Script that blocks (exit 2) if transcript_path doesn't match.
+    const scriptPath = join(tmp, 'check-transcript-path.sh');
+    writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/sh',
+        'payload=$(cat)',
+        `case "$payload" in`,
+        `  *'"transcript_path":"${transcriptFile}"'*) exit 0 ;;`,
+        `  *) echo "wrong transcript_path: $payload" >&2; exit 2 ;;`,
+        'esac',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        UserPromptSubmit: [
+          makeGroup([{ type: 'command', command: scriptPath, timeoutMs: 5000 }]),
+        ],
+      },
+    });
+
+    loadAndRegisterConfigHooks(registry, config, {
+      cwd: tmp,
+      getTranscriptPath: () => transcriptFile,
+    });
+
+    const decision = await registry.dispatch({
+      event: 'UserPromptSubmit',
+      prompt: 'hello',
+      sessionId: 'test-sid',
+    });
+    expect(decision).toEqual({});
+  });
+
+  it('transcript_path is null when getTranscriptPath is not provided', async () => {
+    const scriptPath = join(tmp, 'check-null-transcript.sh');
+    writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/sh',
+        'payload=$(cat)',
+        'case "$payload" in',
+        `  *'"transcript_path":null'*) exit 0 ;;`,
+        `  *) echo "expected null in: $payload" >&2; exit 2 ;;`,
+        'esac',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        Stop: [makeGroup([{ type: 'command', command: scriptPath, timeoutMs: 5000 }])],
+      },
+    });
+
+    // No getTranscriptPath → null in payload.
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    const decision = await registry.dispatch({ event: 'Stop', sessionId: 'test-sid' });
+    expect(decision).toEqual({});
+  });
+
+  it('getter is called at dispatch time so /clear rotations are visible', async () => {
+    // Simulate a /clear rotation: currentPath changes between registration
+    // and dispatch. The hook payload should reflect the post-rotation path.
+    const beforeClearPath = join(tmp, 'before-clear.md');
+    const afterClearPath = join(tmp, 'after-clear.md');
+    writeFileSync(beforeClearPath, '# before\n');
+    writeFileSync(afterClearPath, '# after\n');
+    let currentPath = beforeClearPath;
+
+    const scriptPath = join(tmp, 'check-dynamic.sh');
+    writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/sh',
+        'payload=$(cat)',
+        `case "$payload" in`,
+        `  *'"transcript_path":"${afterClearPath}"'*) exit 0 ;;`,
+        `  *) echo "expected after-clear path, got: $payload" >&2; exit 2 ;;`,
+        'esac',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        Stop: [makeGroup([{ type: 'command', command: scriptPath, timeoutMs: 5000 }])],
+      },
+    });
+
+    loadAndRegisterConfigHooks(registry, config, {
+      cwd: tmp,
+      getTranscriptPath: () => currentPath,
+    });
+
+    // Simulate /clear rotation: update currentPath before dispatch.
+    currentPath = afterClearPath;
+
+    const decision = await registry.dispatch({ event: 'Stop', sessionId: 'test-sid' });
+    expect(decision).toEqual({});
+  });
+});

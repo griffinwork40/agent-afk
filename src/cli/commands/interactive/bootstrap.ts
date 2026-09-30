@@ -147,7 +147,7 @@ export async function bootstrapSession(
 
   // Stable hookRegistry shared across sessions (including swaps), plus the
   // terminal-state Stop gate registered on top of it.
-  const { hookRegistry, addPreviewDiffRef } = createReplHookRegistry({
+  const { hookRegistry, addPreviewDiffRef, setTranscriptPathGetter } = createReplHookRegistry({
     completionWriter, memoryStore: sharedMemoryStore, stateStore: sharedStateStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
@@ -426,7 +426,7 @@ export async function bootstrapSession(
 
   // Wire requestResume into slashCtx so slash commands can call it.
   slashCtx.requestResume = requestResume;
-
+  ctx.setTranscriptPathGetter = setTranscriptPathGetter;
   // Witness layer: bootstrap complete — emit the done marker with the full
   // span measured from function entry (covers config load, manager + writer
   // construction, MCP connect, provider + session build).

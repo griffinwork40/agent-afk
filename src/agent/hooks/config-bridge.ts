@@ -27,6 +27,23 @@ import { resolveContextSessionId } from './hook-utils.js';
 export interface AgentConfigForBridge {
   cwd?: string;
   sessionId?: string;
+  /**
+   * Live getter for the current session's autosaved markdown transcript path.
+   *
+   * Called at hook-dispatch time (not registration time) so it reflects the
+   * current path even after a `/clear` rotation. Returns `null` when no
+   * transcript is available (daemon, `afk chat`, web, or REPL before the first
+   * turn completes). The resolved value is forwarded as `transcript_path` in
+   * the stdin payload sent to every shell hook command.
+   *
+   * Artifact chosen: `~/.afk/state/transcripts/<isoStamp>.md` — the REPL's
+   * per-session autosaved markdown transcript. It is written incrementally as
+   * turns complete, so it already contains prior conversation turns when any
+   * hook fires. Format: markdown with `## User` / `## Assistant` blocks
+   * separated by `---` dividers. A Claude-Code-compatible JSONL export is a
+   * possible follow-up.
+   */
+  getTranscriptPath?: () => string | null;
 }
 
 /**
@@ -48,6 +65,7 @@ export function loadAndRegisterConfigHooks(
 ): void {
   const agentCwd = agentConfig.cwd ?? process.cwd();
   const sessionId = agentConfig.sessionId;
+  const getTranscriptPath = agentConfig.getTranscriptPath;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
   // Episode mode: disable the context-injecting events (SessionStart and
@@ -179,12 +197,17 @@ export function loadAndRegisterConfigHooks(
           // sessionId (SubagentStart, SubagentStop).
           const effectiveSessionId = resolveContextSessionId(context, sessionId);
 
+          // Resolve the live transcript path at dispatch time (not registration
+          // time) so rotations from /clear are captured automatically.
+          const transcriptPath = getTranscriptPath?.() ?? null;
+
           const result = await executeCommand({
             command: hookCommand,
             context,
             agentCwd,
             sessionId: effectiveSessionId,
             timeoutMs: hookTimeoutMs,
+            transcriptPath,
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
           });
 

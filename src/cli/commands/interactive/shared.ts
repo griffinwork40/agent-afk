@@ -452,6 +452,18 @@ export interface InteractiveCtx {
    * runs (non-TTY surfaces never set it).
    */
   hasPendingUserMessage?: () => boolean;
+  /**
+   * Setter that wires the live transcript-path getter into the hook registry.
+   *
+   * Called by `interactive.ts` immediately after `initTranscript()` resolves,
+   * passing `() => transcript.path()`. Because `transcript.path()` is itself a
+   * live getter inside the `TranscriptHandle` closure, hook handlers always
+   * receive the current path even after a `/clear` rotation.
+   *
+   * Absent on test stubs and non-REPL surfaces — the hook registry falls back
+   * to `null` when the getter is never set.
+   */
+  setTranscriptPathGetter?: (fn: (() => string | null) | null) => void;
 }
 
 /**

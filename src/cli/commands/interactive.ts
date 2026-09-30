@@ -329,7 +329,7 @@ export function registerInteractiveCommand(program: Command): void {
       const transcript = await initTranscript(() => ctx.stats.model);
       console.log(palette.dim(`  transcript: ${transcript.path()}`));
       registerCleanup(async () => { await transcript.appendEnded(); });
-
+      ctx.setTranscriptPathGetter?.(() => transcript.path());
       const { saveCurrentSession, isSaved } = makeSessionSaver(ctx);
       registerCleanup(async () => {
         if (isSaved()) return;

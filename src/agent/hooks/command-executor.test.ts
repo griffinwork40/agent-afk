@@ -332,6 +332,74 @@ esac
       const result = await executeCommand(makeOpts(scriptPath, ctx));
       expect(result.decision.decision).toBe('approve');
     });
+
+    // -----------------------------------------------------------------------
+    // transcript_path in stdin payload (issue #2372)
+    // -----------------------------------------------------------------------
+
+    it('transcript_path is a real path when opts.transcriptPath is set and the file exists', async () => {
+      const { writeFileSync: wfs } = await import('node:fs');
+      const transcriptFile = join(tmp, 'session.md');
+      wfs(transcriptFile, '# Session\n\n## User\n\nhello\n\n');
+
+      const scriptPath = join(tmp, 'check-transcript.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"transcript_path":"${transcriptFile}"'*) echo '{"decision":"approve"}' ;;
+  *) echo "wrong or missing transcript_path in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        ...makeOpts(scriptPath),
+        transcriptPath: transcriptFile,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('transcript_path is null in payload when opts.transcriptPath is not provided', async () => {
+      const scriptPath = join(tmp, 'check-transcript-null.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"transcript_path":null'*) echo '{"decision":"approve"}' ;;
+  *) echo "expected transcript_path:null in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand(makeOpts(scriptPath));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('transcript_path is null in payload when opts.transcriptPath is explicitly null', async () => {
+      const scriptPath = join(tmp, 'check-transcript-explicit-null.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"transcript_path":null'*) echo '{"decision":"approve"}' ;;
+  *) echo "expected transcript_path:null in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        ...makeOpts(scriptPath),
+        transcriptPath: null,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
   });
 
   // ---------------------------------------------------------------------------
