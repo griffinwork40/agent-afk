@@ -242,6 +242,36 @@ describe('plugin update', () => {
     expect(logs.some((l) => /current.*up-to-date \(v1\.0\.0\)/.test(l))).toBe(true);
   });
 
+  it('reports an updated outcome on stdout for a single-plugin update', async () => {
+    mkdirSync(join(pluginsDir, 'outdated'));
+    upsertPlugin(
+      'outdated',
+      {
+        source: 'owner/repo', sourceType: 'github', ref: 'v1.0.0', commit: 'old',
+        enabled: true, installedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      },
+      indexPath,
+    );
+    await runArgv(makeProgram(fakeGit(['v2.0.0', 'v1.0.0'])), ['plugin', 'update', 'outdated']);
+    // formatOutcome for 'updated' emits: "<name>: v1.0.0 → v2.0.0"
+    expect(logs.some((l) => /outdated.*v1\.0\.0.*v2\.0\.0/.test(l))).toBe(true);
+  });
+
+  it('reports a missing-dir warning on stdout for a single-plugin update', async () => {
+    // Plugin is in the index but its directory was never created.
+    upsertPlugin(
+      'ghost',
+      {
+        source: 'owner/repo', sourceType: 'github', ref: 'v1.0.0', commit: 'old',
+        enabled: true, installedAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+      },
+      indexPath,
+    );
+    await runArgv(makeProgram(fakeGit(['v1.0.0'])), ['plugin', 'update', 'ghost']);
+    // formatOutcome for 'missing-dir' emits: "! <name>: plugin dir missing (<dir>)"
+    expect(logs.some((l) => /ghost.*plugin dir missing/.test(l))).toBe(true);
+  });
+
   it('updates every plugin when no name is passed', async () => {
     mkdirSync(join(pluginsDir, 'a'));
     mkdirSync(join(pluginsDir, 'b'));
