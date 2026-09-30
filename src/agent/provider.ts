@@ -254,6 +254,14 @@ export type ProviderEvent =
        * timeout/abort/spawn-error/signal-only outcomes.
        */
       exitCode?: number;
+      /**
+       * Absolute path of the generated image file. Set only for successful
+       * `image_generate` results; absent for all other tools and on errors.
+       * TUI-only — the model never sees it. Consumed by the REPL renderer to
+       * emit the image inline via the Kitty Graphics Protocol after the tool
+       * result commits to scrollback.
+       */
+      inlinePath?: string;
     }
   | {
       /**

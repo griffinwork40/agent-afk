@@ -103,6 +103,7 @@ export async function* emitAndCommitToolResults(
       // back to the provider measurement for non-bash tools that don't.
       durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
       ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+      ...(result.inlinePath !== undefined ? { inlinePath: result.inlinePath } : {}),
       sessionId: input.ctx.sessionId,
     };
 

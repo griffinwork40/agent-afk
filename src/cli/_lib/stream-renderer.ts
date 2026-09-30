@@ -142,6 +142,14 @@ export class StreamRenderer {
   private lastProgressByTask = new Map<string, ProgressEvent>();
 
   /**
+   * Accumulated `inlinePath` values from `tool_result` events, drained by
+   * `flushToolLaneToScrollback` after scrollback is committed. Passed by
+   * reference into the per-event OrchestratorCtx so it persists across
+   * `buildOrchestratorCtx` rebuilds. Guarded at the drain site by `isTTY`.
+   */
+  private pendingInlinePaths: string[] = [];
+
+  /**
    * Sticky selector for the subagent named in the progress banner's detail slot.
    * Held here (not on the ctx) because `buildOrchestratorCtx` allocates a fresh
    * ctx object per call, which would reset the stickiness on every repaint and
@@ -535,6 +543,7 @@ export class StreamRenderer {
       streamingMarkdown: this.streamingMarkdownRef,
       coordinator: this.coordinator,
       lastProgressByTask: this.lastProgressByTask,
+      pendingInlinePaths: this.pendingInlinePaths,
       sources: this.sources,
       childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),

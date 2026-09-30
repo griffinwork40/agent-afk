@@ -99,6 +99,7 @@ export async function* emitDispatchedToolOutputs({
       // to provider-side measurement for non-bash tools.
       durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
       ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+      ...(result.inlinePath !== undefined ? { inlinePath: result.inlinePath } : {}),
       sessionId,
     };
     if (result.render?.diff) {

@@ -20,6 +20,13 @@ import { commitBlockAbove } from './commit-block.js';
 import { indentForScrollback } from '../commands/interactive/tool-lane-flush-margin.js';
 
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
+import { detectKittySupport, emitKittyImage } from '../kitty-image.js';
+import { isPlainOutputRequested } from '../../config/env.js';
+
+// Note: inline-path collection is handled upstream in the orchestrator's
+// tool_result handler (stream-renderer-orchestrator.ts). Paths accumulate
+// in ctx.pendingInlinePaths (owned by StreamRenderer, passed by reference)
+// and are drained by flushToolLaneToScrollback below.
 
 /**
  * Render a skill-emitted panel (`emitCard()` payload) above any pending
@@ -266,6 +273,11 @@ export function finalizeOrchestrator(
     // subagent-block-gap.repro.test.ts.
     if (ctx.toolLane.hasPending()) {
       const lines = ctx.toolLane.flushCompletedRoots();
+      // Drain inline-image paths NOW (before the closure captures ctx) so the
+      // emit happens at the correct causal position even if ctx mutates later.
+      const pendingImages = ctx.isTTY && !isPlainOutputRequested()
+        ? (ctx.pendingInlinePaths?.splice(0) ?? [])
+        : (ctx.pendingInlinePaths && (ctx.pendingInlinePaths.length = 0), []);
       if (lines.length > 0) {
         // Capture ctx references used in the closure — avoids closing over the
         // mutable ctx object (defense against future mutations before flushAll).
@@ -300,6 +312,19 @@ export function finalizeOrchestrator(
                 overlayComposer.flush();
               } else {
                 compositor.setOverlay(toolLane.getOverlay());
+              }
+              // Emit inline images AFTER scrollback + overlay are settled
+              // (TUI ordering: setup after teardown, see kitty-image.ts JSDoc).
+              if (pendingImages.length > 0) {
+                const cap = detectKittySupport();
+                if (cap.transport !== 'unsupported') {
+                  const { stdout } = compositor;
+                  const cols = stdout.columns ?? 80;
+                  const writeFn = (data: string): void => { stdout.write(data); };
+                  for (const p of pendingImages) {
+                    emitKittyImage(p, writeFn, cap.transport, cols);
+                  }
+                }
               }
             } else {
               for (const line of lines) out.line(line);
@@ -422,6 +447,19 @@ export function emitErrorBox(err: Error, out: Writer): void {
  */
 export function flushToolLaneToScrollback(ctx: OrchestratorCtx): void {
   if (!ctx.toolLane.hasPending()) return;
+
+  // TUI ordered-ops: drain accumulated inline-image paths before the lane
+  // flush (teardown-before-setup rule documented in kitty-image.ts module
+  // JSDoc). Paths were pushed by the orchestrator's tool_result handler into
+  // ctx.pendingInlinePaths (owned by StreamRenderer, persisted across ctx
+  // rebuilds). splice(0) atomically empties the array and returns its contents
+  // so each path is emitted exactly once even when multiple tool results
+  // arrived before a flush. Non-TTY: suppress (array stays populated but is
+  // never emitted; cleared on each flush to prevent unbounded growth).
+  const inlinePaths = ctx.isTTY
+    ? (ctx.pendingInlinePaths?.splice(0) ?? [])
+    : (ctx.pendingInlinePaths && (ctx.pendingInlinePaths.length = 0), []);
+
   const lines = ctx.toolLane.flushCompletedRoots();
   // Invariant (TUI rhythm contract): emit tool lines + ONE trailing
   // blank. No leading blank — the predecessor block already owns its
@@ -443,6 +481,26 @@ export function flushToolLaneToScrollback(ctx: OrchestratorCtx): void {
       ctx.overlayComposer.flush();
     } else {
       ctx.compositor.setOverlay(ctx.toolLane.getOverlay());
+    }
+
+    // Emit inline images after scrollback + overlay are settled (TUI ordering
+    // rule: setup after teardown). Best-effort: fire-and-forget so a slow fs
+    // read never stalls the streaming event loop. Suppressed when plain output
+    // is requested (AFK_PLAIN_OUTPUT=1) — which is checked here rather than in
+    // detectKittySupport() so the detector stays a pure env-function.
+    if (inlinePaths.length > 0 && !isPlainOutputRequested()) {
+      const cap = detectKittySupport();
+      if (cap.transport !== 'unsupported' && ctx.compositor) {
+        const { stdout } = ctx.compositor;
+        const cols = stdout.columns ?? 80;
+        const writeFn = (data: string): void => { stdout.write(data); };
+        for (const p of inlinePaths) {
+          // Fire-and-forget — errors are swallowed so image rendering never
+          // breaks the REPL event loop. The user already sees the file path
+          // in the tool-lane scrollback row; the inline render is a bonus.
+          emitKittyImage(p, writeFn, cap.transport, cols);
+        }
+      }
     }
   } else {
     if (lines.length > 0) {

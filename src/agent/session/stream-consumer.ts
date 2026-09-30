@@ -176,6 +176,13 @@ function buildToolOutputEvent(
     ? { failureClass: event.failureClass }
     : {};
 
+  // Plumb the image inline-render path through to the ToolResultChunk.
+  // Only set on successful image_generate results (not errors, not other tools).
+  const inlinePathPassthrough =
+    event.inlinePath !== undefined && event.isError !== true
+      ? { inlinePath: event.inlinePath }
+      : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -191,6 +198,7 @@ function buildToolOutputEvent(
         ...displayPassthrough,
         ...batchPassthrough,
         ...failureClassPassthrough,
+        ...inlinePathPassthrough,
       },
     };
   }
@@ -226,6 +234,7 @@ function buildToolOutputEvent(
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,
+      ...inlinePathPassthrough,
     },
   };
 }

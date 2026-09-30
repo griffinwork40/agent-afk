@@ -363,41 +363,56 @@ export function createImageGenerateHandler(
     };
 
     // 10. Optionally attach image for same-turn vision feedback.
-    if (parsed.inspect) {
-      const formatToMediaType: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
-        png: 'image/png',
-        jpeg: 'image/jpeg',
-        webp: 'image/webp',
-      };
-      const mediaType = formatToMediaType[parsed.output_format] ?? 'image/png';
+    return buildImageResult(meta, imageData, imageBuffer, parsed, savePath);
+  };
+}
 
-      // Byte cap guard — 2 MiB base64 to bound worst-case context consumption.
-      if (imageData.length > MAX_BASE64_BYTES) {
-        meta['imageOmitted'] =
-          `inspect:true requested but base64 payload (${imageData.length} bytes) exceeds the ` +
-          `${MAX_BASE64_BYTES}-byte cap; image saved to disk only. Use a smaller size or lower quality.`;
-        return { content: JSON.stringify(meta, null, 2) };
-      }
+/**
+ * Step 10 of the handler: assemble the ToolResult. `inlinePath` is set on
+ * every success path so REPL renderers can display the saved file inline
+ * (#2143); `image` is attached only when `inspect` is requested and the
+ * payload fits the byte and dimension caps.
+ */
+function buildImageResult(
+  meta: Record<string, unknown>,
+  imageData: string,
+  imageBuffer: Buffer,
+  parsed: { inspect?: boolean | undefined; output_format: string },
+  savePath: string,
+): ToolResult {
+  if (parsed.inspect) {
+    const formatToMediaType: Record<string, 'image/png' | 'image/jpeg' | 'image/webp'> = {
+      png: 'image/png',
+      jpeg: 'image/jpeg',
+      webp: 'image/webp',
+    };
+    const mediaType = formatToMediaType[parsed.output_format] ?? 'image/png';
 
-      // Dimension guard — mirrors browser-screenshot.ts MAX_IMAGE_DIMENSION check.
-      const dims = readImageDimensions(imageBuffer, parsed.output_format);
-      if (dims !== null && (dims.width > MAX_IMAGE_DIMENSION || dims.height > MAX_IMAGE_DIMENSION)) {
-        meta['imageOmitted'] =
-          `inspect:true requested but image dimensions ${dims.width}x${dims.height}px exceed ` +
-          `the ${MAX_IMAGE_DIMENSION}px model-vision limit; image saved to disk only.`;
-        return { content: JSON.stringify(meta, null, 2) };
-      }
+    // Byte cap guard — 2 MiB base64 to bound worst-case context consumption.
+    if (imageData.length > MAX_BASE64_BYTES) {
+      meta['imageOmitted'] =
+        `inspect:true requested but base64 payload (${imageData.length} bytes) exceeds the ` +
+        `${MAX_BASE64_BYTES}-byte cap; image saved to disk only. Use a smaller size or lower quality.`;
+      return { content: JSON.stringify(meta, null, 2), inlinePath: savePath };
+    }
 
-      return {
-        content: JSON.stringify(meta, null, 2),
-        image: { mediaType, data: imageData },
-      };
+    // Dimension guard — mirrors browser-screenshot.ts MAX_IMAGE_DIMENSION check.
+    const dims = readImageDimensions(imageBuffer, parsed.output_format);
+    if (dims !== null && (dims.width > MAX_IMAGE_DIMENSION || dims.height > MAX_IMAGE_DIMENSION)) {
+      meta['imageOmitted'] =
+        `inspect:true requested but image dimensions ${dims.width}x${dims.height}px exceed ` +
+        `the ${MAX_IMAGE_DIMENSION}px model-vision limit; image saved to disk only.`;
+      return { content: JSON.stringify(meta, null, 2), inlinePath: savePath };
     }
 
     return {
       content: JSON.stringify(meta, null, 2),
+      image: { mediaType, data: imageData },
+      inlinePath: savePath,
     };
-  };
+  }
+
+  return { content: JSON.stringify(meta, null, 2), inlinePath: savePath };
 }
 
 export const imageGenerateHandler = createImageGenerateHandler();
