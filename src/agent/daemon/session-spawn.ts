@@ -65,7 +65,17 @@ export function daemonTraceLabel(taskId: string): string {
 // misconfiguration or a full disk). The caller that has an explicit cwd
 // (task.cwd or sessionConfig.cwd) never reaches this function.
 
-/** Memoized result of the first successful daemonDefaultCwd() call. */
+/**
+ * Memoized result of the first daemonDefaultCwd() call (success or fallback).
+ *
+ * Contract: once set, this value is returned for every subsequent call without
+ * re-running mkdirSync or re-emitting the warning. The cached path is NOT
+ * re-verified for liveness — a directory that is later removed or unmounted is
+ * still returned. This is intentional: the daemon state dir is owned by the
+ * process and re-checking every tick would add I/O overhead with no recovery
+ * path (the scheduler has no mechanism to quarantine a single tick on cwd
+ * failure). Call `_resetDaemonDefaultCwdCache()` in tests that swap AFK_HOME.
+ */
 let _daemonDefaultCwdCache: string | null = null;
 
 /**
@@ -89,8 +99,11 @@ export function daemonDefaultCwd(): string {
     console.warn(
       `[daemon] daemonDefaultCwd: could not create ${dir} (${code}); ` +
         `falling back to ${fallback}. ` +
-        `To fix: correct permissions on ${dir} or set AFK_STATE_DIR to a writable path.`,
+        `To fix: correct permissions on ${dir} or set AFK_STATE_DIR (or AFK_HOME) to a writable path.`,
     );
+    // Memoize the fallback too so the warning fires only once per process even
+    // if mkdirSync keeps throwing (e.g. EACCES on every scheduler tick).
+    _daemonDefaultCwdCache = fallback;
     return fallback;
   }
 }

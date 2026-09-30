@@ -1159,6 +1159,45 @@ describe('CronScheduler — per-task cwd', () => {
     expect(statSync(result).isDirectory()).toBe(true);
   });
 
+  it('daemonDefaultCwd() warns exactly once and does not retry mkdir on persistent failure', () => {
+    // Simulate a persistent mkdirSync failure by pointing AFK_HOME at a plain
+    // FILE — mkdirSync({ recursive: true }) throws ENOTDIR because a regular
+    // file blocks one of the ancestor path segments.
+    // The warning must fire on the first call only; subsequent calls must use
+    // the memoized fallback without re-running mkdirSync.
+    const fileAsHome = join(dir, 'fake-home-file');
+    writeFileSync(fileAsHome, '');
+    const envKey = 'AFK_HOME';
+    const prior = process.env[envKey];
+    process.env[envKey] = fileAsHome;
+    _resetDaemonDefaultCwdCache();
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const first = daemonDefaultCwd();
+      const second = daemonDefaultCwd();
+      const third = daemonDefaultCwd();
+
+      // All calls must return os.tmpdir() as the fallback.
+      expect(first).toBe(tmpdir());
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+
+      // console.warn must have fired exactly once with the AFK_STATE_DIR / AFK_HOME hint.
+      const warnCalls = warnSpy.mock.calls.filter((args) =>
+        String(args[0]).includes('daemonDefaultCwd'),
+      );
+      expect(warnCalls).toHaveLength(1);
+      expect(String(warnCalls[0]![0])).toMatch(/AFK_STATE_DIR \(or AFK_HOME\)/);
+    } finally {
+      warnSpy.mockRestore();
+      if (prior === undefined) delete process.env[envKey];
+      else process.env[envKey] = prior;
+      _resetDaemonDefaultCwdCache();
+    }
+  });
+
   it('produces an error telemetry record when task.cwd has vanished', async () => {
     // Create a dir, register a task pointing to it, then remove the dir.
     const vanishingDir = join(dir, 'vanishing');
