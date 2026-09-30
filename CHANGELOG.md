@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.276.12] - 2026-09-30
+
+### Fixed
+- fix JSON credential source label, tier order, and xAI auth branch (#2634) (2aebb10d)
+- track client-built token in RetryLayer to fix swapped detection (#2636) (141ed326)
+
 ## [5.276.11] - 2026-09-30
 
 ### Fixed
