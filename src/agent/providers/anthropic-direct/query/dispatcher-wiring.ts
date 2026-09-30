@@ -238,6 +238,9 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
         )
       : config.isNonInteractive && episodeMode
+        // Episode mode: keep ask_question so the gate can log it as 'executed'.
+        // The fourth arm (!isNonInteractive && episodeMode, or bare interactive)
+        // falls through to baseToolDefs — interactive sessions keep all tools.
         ? baseToolDefs.filter(
             (t) => t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
           )

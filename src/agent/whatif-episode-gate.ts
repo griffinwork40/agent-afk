@@ -245,6 +245,10 @@ export function createWhatifEpisodeGate(): (context: HookContext) => HookDecisio
     const isSubagent = 'parentSessionId' in context && context.parentSessionId !== undefined;
 
     // If the latch fired in an earlier call this process, block everything.
+    // Invariant: once latched, even `ask_question` returns EPISODE_BLOCK_REASON
+    // (not EPISODE_ASK_BLOCK_REASON). The latch check precedes the ask-specific
+    // branch below, so the ask path is only reachable before any recorded verdict.
+    // This is intentional and covered by the 'latch wins' test (#2628).
     if (_latchedAfterFirstRecorded) {
       appendToolLog(toolName, input, 'recorded', isSubagent);
       return { decision: 'block', reason: EPISODE_BLOCK_REASON };
