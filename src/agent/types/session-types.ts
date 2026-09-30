@@ -307,6 +307,14 @@ export interface IAgentSession {
   setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
 
   /**
+   * Wire or update Stop-hook delivery callbacks. Called by surfaces (REPL,
+   * Telegram, daemon) after session construction so each surface can supply
+   * its own `getHasNextTurn` / `onStopInjectContext` / display callbacks.
+   * The runner reads these lazily on each `done` event.
+   */
+  wireStopHook?(wiring: StopWiring): void;
+
+  /**
    * Tear down the SDK conversation and rebuild it from the same config.
    * Used by `/clear` so the model genuinely loses prior-turn context —
    * forwarding the literal string `/clear` to a provider does not.
@@ -420,4 +428,26 @@ export interface IAgentSession {
   rewindConversation(turnIndex: number): Promise<ProviderRewindConversationResult>;
 
   close(): Promise<void>;
+}
+
+/**
+ * A surface's Stop-hook delivery callbacks, supplied via
+ * `IAgentSession.wireStopHook`. The session reads the CURRENT wiring on every
+ * turn end (never a construction-time copy), so wiring after construction, or
+ * re-wiring a swapped-in session, takes effect on the next turn.
+ */
+export interface StopWiring {
+  /**
+   * `true` on surfaces with a next user turn (REPL, Telegram per-chat): a Stop
+   * `injectContext` goes to `onStopInjectContext`. `false` on one-shot surfaces
+   * (daemon/cron task, `afk chat`): it is dropped with a `stop_inject_dropped`
+   * trace event.
+   */
+  getHasNextTurn: () => boolean;
+  /** Stash the string and prepend it to the next outbound user message. */
+  onStopInjectContext?: (text: string) => void;
+  /** A Stop handler blocked (log-only until same-turn continuation lands). */
+  onStopBlocked?: (reason: string | undefined) => void;
+  /** A Stop handler exceeded STOP_HOOK_HANDLER_TIMEOUT_MS. */
+  onStopTimeout?: () => void;
 }
