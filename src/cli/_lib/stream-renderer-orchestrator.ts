@@ -6,7 +6,7 @@
  * @module cli/_lib/stream-renderer-orchestrator
  */
 
-import type { OutputEvent, ProgressEvent } from '../../agent/types.js';
+import type { OutputEvent, ProgressEvent, ToolResultChunk } from '../../agent/types.js';
 // Design note (issue #389): `lastProgressByTask` is now a field of
 // OrchestratorCtx rather than a separate parameter to setComposedOverlay.
 // This lets any callsite (including subagent handlers via
@@ -154,6 +154,34 @@ export interface OrchestratorCtx {
    * its ctx object per call and cannot hold the selection itself.
    */
   childActivity?: ChildActivityTracker;
+  /**
+   * Accumulated `inlinePath` values from completed tool results, drained by
+   * {@link flushToolLaneToScrollback} after the lane is committed to scrollback.
+   * Lives on StreamRenderer (passed by reference) so it persists across the
+   * per-event ctx rebuilds that `buildOrchestratorCtx()` performs.
+   *
+   * Push from the `tool_result` handler; drain (splice-to-empty) in the emit
+   * path. Guarded by `isTTY` at the drain site — non-TTY surfaces never
+   * populate it (the push is unconditional, but the emit guard is isTTY).
+   *
+   * Optional so tests that construct `OrchestratorCtx` directly without the
+   * field continue to work — the drain site falls back to an empty array.
+   */
+  pendingInlinePaths?: string[];
+}
+
+/**
+ * Record a tool result on the lane and queue its `inlinePath` (if any) for
+ * post-flush inline-image emission (#2143, drained by
+ * flushToolLaneToScrollback in stream-renderer-orchestrator-emit.ts).
+ * Error results never queue an image.
+ */
+function addToolResult(
+  ctx: OrchestratorCtx,
+  chunk: ToolResultChunk,
+): void {
+  ctx.toolLane.addResult(chunk.toolUseId, chunk);
+  if (chunk.inlinePath && !chunk.isError) ctx.pendingInlinePaths?.push(chunk.inlinePath);
 }
 
 /**
@@ -322,7 +350,7 @@ export function handleOrchestratorEvent(
         if (ctx.isTTY) setComposedOverlay(ctx);
       } else if (chunk.type === 'tool_result') {
         ctx.streamingMarkdown.current?.commitPending();
-        ctx.toolLane.addResult(chunk.toolUseId, chunk);
+        addToolResult(ctx, chunk);
         if (ctx.isTTY) setComposedOverlay(ctx);
       } else if (chunk.type === 'tool_diff') {
         // Sidecar render-only diff. Late-attached to the matching tool

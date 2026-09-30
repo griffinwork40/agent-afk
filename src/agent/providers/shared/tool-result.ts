@@ -78,4 +78,10 @@ export interface ToolResult {
     mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
     data: string;
   };
+  /**
+   * Absolute path of a successfully-generated image file, for inline Kitty-protocol
+   * rendering in the interactive REPL. Set by `image_generate` on success; absent
+   * on errors and for all other tools. TUI-only — never model-facing.
+   */
+  inlinePath?: string;
 }

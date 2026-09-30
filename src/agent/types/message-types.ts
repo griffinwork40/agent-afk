@@ -186,6 +186,14 @@ export interface ToolResultChunk {
    */
   failureClass?: ToolFailureClass;
   metadata?: Record<string, unknown>;
+  /**
+   * Absolute path of the generated image file, plumbed from `image_generate`
+   * results for inline Kitty-protocol rendering in supporting terminals.
+   * Set only for successful `image_generate` results; absent for all other tools.
+   * TUI-only — never model-facing. Consumed by `flushToolLaneToScrollback` to
+   * emit the image inline after the tool-lane result commits to scrollback.
+   */
+  inlinePath?: string;
 }
 
 /**

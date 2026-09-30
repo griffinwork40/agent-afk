@@ -40,6 +40,7 @@ export function makeOrchestratorCtx(args: {
   stageTracker?: StageTrackerState;
   activeSkillName?: string;
   lastProgressByTask: Map<string, ProgressEvent>;
+  pendingInlinePaths?: string[];
   sources?: ReadonlyMap<string, SourceState>;
   childActivity?: ChildActivityTracker;
   thoughtHold?: ThoughtSummaryHold;
@@ -55,6 +56,7 @@ export function makeOrchestratorCtx(args: {
     streamingMarkdown: args.streamingMarkdown,
     coordinator: args.coordinator,
     lastProgressByTask: args.lastProgressByTask,
+    ...(args.pendingInlinePaths ? { pendingInlinePaths: args.pendingInlinePaths } : {}),
     // Live child-activity inputs for the banner detail slot. Spread-guarded
     // (not passed as `undefined`) so exactOptionalPropertyTypes stays satisfied
     // and omitting them is indistinguishable from the pre-change ctx shape.
