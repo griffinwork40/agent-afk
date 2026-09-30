@@ -1553,7 +1553,7 @@ export const ENV_REGISTRY = [
       'Opt-in per-subagent conversation log. Writes OutputEvent JSONL to ' +
       'state/subagent-logs/<sessionLabel>/<subagentId>.jsonl for both foreground and ' +
       'background subagents. Powers /tasks:view replay. OFF by default (raw tool arguments ' +
-      'are written without redaction. Set to 1 to enable.',
+      'are written without redaction). Set to 1 to enable.',
     type: 'boolean',
     required: false,
     example: '1',

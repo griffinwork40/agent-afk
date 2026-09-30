@@ -60,5 +60,3 @@ export function extractRawToolInput(input: unknown): string | undefined {
   }
   return Object.keys(picked).length > 0 ? JSON.stringify(picked) : undefined;
 }
-
-

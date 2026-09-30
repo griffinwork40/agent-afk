@@ -1,9 +1,7 @@
 /**
  * Shell-string escaping utility.
  *
- * Previously duplicated verbatim across six sites:
- *   - `agent/session/subagent-output-capture.ts`
- *   - `agent/session/subagent-prompt-capture.ts`
+ * Previously duplicated verbatim across four sites:
  *   - `cli/input/clipboard-image.ts`
  *   - `cli/terminal-spawn/spawners.ts`
  *   - `browser/agent-browser/actions.ts`
