@@ -101,6 +101,20 @@ export interface RetryLayerOptions {
  */
 export class RetryLayer {
   private _client: Anthropic;
+  /**
+   * The OAuth token string the current `_client` was built with.
+   *
+   * `loadClaudeCodeOauthToken()` reads the credential STORE, which may already
+   * contain account B when `/reauth` runs (the user ran `claude login` before
+   * calling us). Comparing store-before vs store-after therefore yields
+   * `swapped: false` even when the live client is switching from A to B.
+   *
+   * Tracking the token we actually wired into `_client` at construction (and
+   * updating it on every client swap) lets `forceClientRefresh` compute
+   * `swapped` against the running client's credential, not the store's
+   * current value.
+   */
+  private _clientToken: string | undefined;
   private readonly _authMode: AuthMode;
   private readonly initSessionId: string;
   private readonly baseUrl?: string;
@@ -124,6 +138,10 @@ export class RetryLayer {
 
   constructor(opts: RetryLayerOptions) {
     this._client = opts.client;
+    // Snapshot the token the initial client was built with. If the
+    // constructor is called in OAuth mode the store holds the same value;
+    // in api-key mode it is undefined (no OAuth token).
+    this._clientToken = loadClaudeCodeOauthToken();
     this._authMode = opts.authMode;
     this.initSessionId = opts.initSessionId;
     this.baseUrl = opts.baseUrl;
@@ -218,8 +236,10 @@ export class RetryLayer {
    *   - No `tokenRefresher` is wired (api-key mode, or local-server mode).
    *   - The refresher returned null (token read/refresh failed).
    *
-   * Returns `{ accountId, swapped }` on success, where `swapped` is `true`
-   * iff the new client's underlying token differs from the previous one.
+   * Returns `{ accountId, oldAccountId, swapped }` on success, where `swapped`
+   * is `true` iff the new client's underlying token differs from the previous
+   * one. `oldAccountId` is the account id parsed from the token the old client
+   * was built with (useful for the `/reauth` message "switched from X to Y").
    * Callers (e.g. `/reauth`) can use `swapped` to distinguish "now on a
    * different account" from "the existing token was already current".
    *
@@ -227,9 +247,14 @@ export class RetryLayer {
    * the 401 path uses, so a 401-driven refresh racing with an explicit
    * `/reauth` collapses to a single upstream call.
    */
-  async forceClientRefresh(): Promise<{ accountId: string; swapped: boolean } | null> {
+  async forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
     if (!this.tokenRefresher) return null;
-    const priorToken = loadClaudeCodeOauthToken();
+    // Capture the token the CURRENT CLIENT was built with. This is the correct
+    // baseline for "did we just swap accounts?". Reading loadClaudeCodeOauthToken()
+    // here instead would return the STORE's current value — which is already
+    // account B when the user ran `claude login` before calling `/reauth`,
+    // producing store-before === store-after and a false `swapped: false`.
+    const priorClientToken = this._clientToken;
 
     let newClient: Anthropic | null = null;
     try {
@@ -251,9 +276,12 @@ export class RetryLayer {
 
     this._client = newClient;
     const newToken = loadClaudeCodeOauthToken();
+    // Update the tracked token to match what the new client was built with.
+    this._clientToken = newToken;
     return {
       accountId: parseAccountIdentifier(newToken ?? ''),
-      swapped: priorToken !== newToken,
+      oldAccountId: parseAccountIdentifier(priorClientToken ?? ''),
+      swapped: priorClientToken !== newToken,
     };
   }
 

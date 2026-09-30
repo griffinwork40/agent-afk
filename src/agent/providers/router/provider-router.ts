@@ -510,7 +510,7 @@ export class ProviderRouter implements ProviderQuery {
     return this.active?.query.setSystemPrompt?.(basePrompt) ?? false;
   }
 
-  async reauth(): Promise<{ accountId: string; swapped: boolean } | null> {
+  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
     return (await this.active?.query.reauth?.()) ?? null;
   }
 

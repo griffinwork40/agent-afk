@@ -47,16 +47,9 @@ export const reauthCmd: SlashCommand = {
       return 'continue';
     }
 
-    // Show current account before refresh.
-    const currentToken = loadClaudeCodeOauthToken();
-    if (currentToken) {
-      const currentAccount = parseAccountIdentifier(currentToken);
-      ctx.out.info(`Current keychain account: ${currentAccount}`);
-    }
-
     ctx.out.info('Rebuilding session client from keychain credentials…');
 
-    let result: { accountId: string; swapped: boolean } | null;
+    let result: { accountId: string; oldAccountId: string; swapped: boolean } | null;
     try {
       result = await ctx.session.current.reauth();
     } catch (err) {
@@ -81,7 +74,7 @@ export const reauthCmd: SlashCommand = {
     }
 
     if (result.swapped) {
-      ctx.out.success(`✓ Client swapped. Session now authenticated as: ${result.accountId}`);
+      ctx.out.success(`✓ Client swapped: ${result.oldAccountId} → ${result.accountId}`);
       ctx.out.info('Next turn will use the new credential. If a usage-limit pause is active, it will resume automatically within ~30s (or send a message to retry immediately).');
     } else {
       ctx.out.success(`✓ Client refreshed. Authenticated as: ${result.accountId} (token unchanged)`);

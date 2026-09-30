@@ -526,7 +526,7 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * Implemented by `AnthropicDirectQuery`. Providers that do not implement
    * leave it undefined; `AgentSession.reauth()` returns `null` in that case.
    */
-  reauth?(): Promise<{ accountId: string; swapped: boolean } | null>;
+  reauth?(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null>;
   close(): void | Promise<void>;
 }
 
