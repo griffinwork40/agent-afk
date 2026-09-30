@@ -32,6 +32,8 @@ import type { Dirent } from 'fs';
  * Number of concurrent `readdir` calls allowed.
  * 32 is conservative: avoids FD exhaustion on common ulimit=256 systems while
  * still providing meaningful parallelism on typical SSDs/NVMe.
+ *
+ * @internal
  */
 export const READAHEAD_CONCURRENCY = 32;
 
@@ -40,6 +42,11 @@ type ReaddirResult = Dirent[];
 /**
  * Promise-based bounded read-ahead cache for `readdir` results.
  *
+ * **Single-use contract**: each {@link Readahead} instance is intended for one
+ * walk lifetime. Calling {@link drain} and then {@link schedule}/{@link get}
+ * again is not supported — the epoch guard below detects this and silently
+ * ignores stale {@link finally} callbacks so `inFlight` never goes negative.
+ *
  * Usage pattern in the walker:
  * ```
  * const ra = new Readahead(32, signal);
@@ -47,13 +54,26 @@ type ReaddirResult = Dirent[];
  * ra.schedule(childPath);       // kick off I/O now
  * // … later, when actually walking that directory:
  * const entries = await ra.get(childPath); // instant if I/O already done
+ * // … after the walk finishes:
+ * ra.drain();                   // drop cached promises so GC can collect them
  * ```
+ *
+ * @internal
  */
 export class Readahead {
   /** Pending or resolved reads keyed by absolute directory path. */
   private readonly cache = new Map<string, Promise<ReaddirResult>>();
   /** Count of I/O calls in flight (resolved promises still count until get). */
   private inFlight = 0;
+  /**
+   * Epoch counter incremented on every {@link drain} call.
+   * Each scheduled promise captures the current epoch; its {@link finally}
+   * callback is a no-op when the epoch has advanced (i.e. drain was called
+   * after the promise was launched but before it settled). This prevents the
+   * inFlight counter from going negative if a Readahead instance were ever
+   * reused after a drain().
+   */
+  private epoch = 0;
   private readonly maxConcurrent: number;
   private readonly signal: AbortSignal | undefined;
 
@@ -68,57 +88,89 @@ export class Readahead {
    *   - the concurrency budget allows it, AND
    *   - the abort signal has not fired.
    *
+   * When the concurrency budget is exhausted, the schedule call is a silent
+   * no-op. The walker's {@link get} will then issue a fresh direct readdir.
+   *
    * Called by the walker when it decides a directory is worth entering
-   * (denylist + prune checks passed). The result is cached for `get()`.
+   * (denylist + prune checks passed). The result is cached for {@link get}.
    */
   schedule(dirPath: string): void {
     if (this.cache.has(dirPath)) return;
     if (this.signal?.aborted) return;
+    // When concurrency is saturated, the walker falls back to a direct readdir
+    // in get(). This is the over-cap path — intentional, not an error.
     if (this.inFlight >= this.maxConcurrent) return;
 
     this.inFlight++;
+    const capturedEpoch = this.epoch;
     const p = fs
       .readdir(dirPath, { withFileTypes: true })
+      // Unreadable dirs (e.g. permission denied) return an empty listing.
+      // This is safe because the entry-level denylist already filtered out
+      // known-protected paths before schedule() was called; any remaining
+      // EACCES here is an OS-level restriction beyond our control.
       .catch((): ReaddirResult => [])
       .finally(() => {
-        this.inFlight--;
+        // Guard against epoch mismatch: if drain() was called between when
+        // this promise was launched and when it settled, don't decrement
+        // inFlight — it was already reset to 0 by drain().
+        if (this.epoch === capturedEpoch) {
+          this.inFlight--;
+        }
       });
     this.cache.set(dirPath, p);
   }
 
   /**
-   * Retrieve the `readdir` result for `dirPath`.
+   * Retrieve the `readdir` result for `dirPath` and evict it from the cache.
    *
-   * If a prior `schedule()` call queued a read, the promise is awaited
+   * If a prior {@link schedule} call queued a read, the promise is awaited
    * (may already be resolved). If no read was scheduled (concurrency was
-   * exhausted when `schedule()` was called), a fresh `readdir` is issued
-   * synchronously here and counted against the budget.
+   * exhausted when `schedule()` was called, so the call was a no-op), a fresh
+   * `readdir` is issued directly here — this is the over-cap fallback path.
    *
    * Returns `[]` on any I/O error (inaccessible directory).
+   *
+   * Note: the cache entry is deleted on first await, so each path is
+   * retrieved at most once (evict-on-get). This matches the walker's
+   * single-visit-per-directory invariant.
    */
   async get(dirPath: string): Promise<ReaddirResult> {
     const cached = this.cache.get(dirPath);
     if (cached) {
-      const result = await cached;
+      // Evict immediately so the resolved promise is not held in memory
+      // beyond the point where the walker processes this directory.
       this.cache.delete(dirPath);
-      return result;
+      return cached;
     }
 
-    // No prior schedule — issue a fresh read (concurrency already saturated
-    // earlier or the caller skipped schedule for this entry).
+    // Over-cap fallback: no prior schedule() call succeeded (concurrency was
+    // saturated). Issue a fresh direct readdir now.
     try {
       return await fs.readdir(dirPath, { withFileTypes: true });
-    } catch {
-      return [];
+    } catch (err) {
+      // Re-throw non-filesystem errors (unexpected runtime failures) so the
+      // caller can distinguish I/O denials from programming errors. ENOENT /
+      // EACCES / ENOTDIR are all treated as empty listings.
+      if (err && typeof err === 'object' && 'code' in err) {
+        return [];
+      }
+      throw err;
     }
   }
 
   /**
    * Drop all cached promises after the walk finishes or is aborted.
    * Allows GC to collect outstanding promise chains.
+   *
+   * Advances the internal epoch so any still-pending {@link finally} callbacks
+   * from in-flight reads become no-ops and do not decrement `inFlight` below
+   * zero. This makes {@link Readahead} safe even if a caller accidentally
+   * reuses the instance (though single-use is the intended contract).
    */
   drain(): void {
     this.cache.clear();
     this.inFlight = 0;
+    this.epoch++;
   }
 }

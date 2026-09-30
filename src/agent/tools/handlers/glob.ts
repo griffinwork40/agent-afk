@@ -202,6 +202,13 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
         // Schedule the child readdir ahead of the walk so I/O runs in
         // parallel with the rest of this loop. The walker will await it
         // via ra.get() when recursion actually begins.
+        //
+        // Intentional fast-path guard: the abort and cap checks here
+        // duplicate the identical checks at the top of walk(), but they
+        // avoid enqueuing a readdir that walk() would immediately discard
+        // (abort) or never consume (cap hit). Reads already in flight from
+        // prior schedule() calls complete normally — the consumer (walk)
+        // re-checks abort/cap before acting on any result, so that is safe.
         if (!signal?.aborted && matches.length < maxResults) {
           ra.schedule(entryPath);
         }
