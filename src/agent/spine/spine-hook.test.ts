@@ -10,9 +10,14 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // ── Mock the classifier so no real LLM calls happen ─────────────────────────
 
+// MAX_DESCRIPTION_LEN is inlined here as the real production value (300).
+// vi.mock factories are hoisted before module initialisation, so we cannot
+// reference a module-level const from the factory. The inline literal must
+// match spine-classifier.ts:MAX_DESCRIPTION_LEN — if that value changes,
+// update this mock and the test body constant below.
 vi.mock('./spine-classifier.js', () => ({
   classifyDiff: vi.fn().mockResolvedValue({ items: [], rawOutput: '', parsed: true }),
-  MAX_DESCRIPTION_LEN: 120,
+  MAX_DESCRIPTION_LEN: 300, // must equal spine-classifier.ts:MAX_DESCRIPTION_LEN
 }));
 
 // ── Mock Telegram push so no real network calls happen ───────────────────────
@@ -65,6 +70,12 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { createSpineSessionEndHook } from './spine-hook.js';
 import type { HookContext } from '../hooks.js';
+
+// Mirror of the production constant — kept in sync manually so truncation
+// tests exercise the actual production length, not a stale fixture value.
+// If spine-classifier.ts:MAX_DESCRIPTION_LEN changes, update BOTH the mock
+// factory above and this constant.
+const MAX_DESCRIPTION_LEN = 300; // must equal spine-classifier.ts:MAX_DESCRIPTION_LEN
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -535,17 +546,18 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     expect(writeSpine).toHaveBeenCalled();
   });
 
-  it('truncation resilience: long base description still produces exactly one annotation ≤ 120 chars', async () => {
+  it('truncation resilience: long base description still produces exactly one annotation ≤ MAX_DESCRIPTION_LEN chars', async () => {
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    // 97 chars base — after appending ` (reinforced 2026-09-14)` (25 chars) = 122, gets sliced to 120
-    // The closing paren is cut off, leaving ` (reinforced 2026-09-14` at the tail
-    const longBase = 'A'.repeat(97);
+    // Build a base that, after appending ` (reinforced 2026-09-14)` (25 chars),
+    // exceeds MAX_DESCRIPTION_LEN by 2 — so the closing paren is cut off.
+    const suffix = ` (reinforced 2026-09-14)`;
+    const longBase = 'A'.repeat(MAX_DESCRIPTION_LEN - suffix.length + 2);
     const yesterday = '2026-09-14';
     // Simulate a previously-truncated description (missing closing paren)
-    const truncatedDesc = (longBase + ` (reinforced ${yesterday}`).slice(0, 120);
-    expect(truncatedDesc).toHaveLength(120);
+    const truncatedDesc = (longBase + ` (reinforced ${yesterday}`).slice(0, MAX_DESCRIPTION_LEN);
+    expect(truncatedDesc).toHaveLength(MAX_DESCRIPTION_LEN);
     expect(truncatedDesc.endsWith(')')).toBe(false); // confirm truncation scenario
 
     const mockEntry = {
@@ -570,8 +582,8 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    // Result must be ≤ MAX_DESCRIPTION_LEN (120)
-    expect(mockEntry.description.length).toBeLessThanOrEqual(120);
+    // Result must be ≤ MAX_DESCRIPTION_LEN
+    expect(mockEntry.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LEN);
     // Must contain today's annotation (even if itself truncated)
     expect(mockEntry.description).toMatch(/\(reinforced /);
     // Must NOT still contain the old date
@@ -763,15 +775,17 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     expect(writeSpine).toHaveBeenCalled();
   });
 
-  it('truncation resilience: long base description still produces exactly one annotation ≤ 120 chars', async () => {
+  it('truncation resilience: long base description still produces exactly one annotation ≤ MAX_DESCRIPTION_LEN chars', async () => {
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    // 89 chars base — after appending ` (partially weakened 2026-09-14)` (32 chars) = 121, sliced to 120
-    const longBase = 'B'.repeat(89);
+    // Build a base that, after appending ` (partially weakened 2026-09-14)` (32 chars),
+    // exceeds MAX_DESCRIPTION_LEN by 2 — so the closing paren is cut off.
+    const suffix = ` (partially weakened 2026-09-14)`;
+    const longBase = 'B'.repeat(MAX_DESCRIPTION_LEN - suffix.length + 2);
     const yesterday = '2026-09-14';
-    const truncatedDesc = (longBase + ` (partially weakened ${yesterday}`).slice(0, 120);
-    expect(truncatedDesc).toHaveLength(120);
+    const truncatedDesc = (longBase + ` (partially weakened ${yesterday}`).slice(0, MAX_DESCRIPTION_LEN);
+    expect(truncatedDesc).toHaveLength(MAX_DESCRIPTION_LEN);
     expect(truncatedDesc.endsWith(')')).toBe(false); // confirm truncation
 
     const mockEntry = {
@@ -796,7 +810,7 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    expect(mockEntry.description.length).toBeLessThanOrEqual(120);
+    expect(mockEntry.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LEN);
     expect(mockEntry.description).toMatch(/\(partially weakened /);
     expect(mockEntry.description).not.toContain(yesterday);
     expect(writeSpine).toHaveBeenCalled();
