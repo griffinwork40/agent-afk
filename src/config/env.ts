@@ -52,6 +52,7 @@ import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
 import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
+import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -366,6 +367,8 @@ export const ENV_REGISTRY = [
     example: '0',
     category: 'misc',
   },
+  // Entries live in env.memory-gc.ts (extracted for the 350-line ceiling).
+  ...MEMORY_GC_ENV_REGISTRY,
   {
     name: 'AFK_MICROCOMPACT_KEEP_LAST',
     description: 'Number of the most-recent tool_result blocks that tool-result microcompaction keeps intact regardless of size, so the agent does not lose the tool output it is actively reasoning over. Older results are the safe ones to trim. Default 4 (see shared/compaction.ts DEFAULT_MICROCOMPACT_KEEP_LAST). Values <= 0 protect nothing.',
