@@ -3,7 +3,6 @@
   "entries": {
     "src/agent/dag-subagent.ts::runSubagentDAG": { "loc": 249, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/default-hook-registry.ts::createDefaultHookRegistry": { "loc": 234, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/hooks/command-executor.ts::executeCommand": { "loc": 205, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop.ts::runTurn": { "loc": 246, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop/stream-consumer.ts::consumeRoundStream": { "loc": 279, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/query-turn-driver.ts::driveTurns": { "loc": 209, "reason": "legacy: predates the function-size gate; pending helper extraction" },

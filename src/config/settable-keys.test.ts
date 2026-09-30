@@ -98,6 +98,7 @@ describe('classifyConfigKey / specs', () => {
     expect(classifyConfigKey('enableShellHooks')).toBe('human'); // trust gate — agent must not flip it
     expect(classifyConfigKey('hooks')).toBe('unknown'); // hooks intentionally not listed (no safe per-key validator)
     expect(classifyConfigKey('permissionMode')).toBe('human'); // self-escalation vector — agent must not set bypass on itself
+    expect(classifyConfigKey('pluginHookEnv')).toBe('human'); // per-plugin env allowlist — agent must not expand its own hook env access
     expect(classifyConfigKey('interactive.worktreeBranchPrefix')).toBe('human');
     expect(classifyConfigKey('nonsense.key')).toBe('unknown');
   });

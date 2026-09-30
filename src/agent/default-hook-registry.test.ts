@@ -22,6 +22,8 @@ function makeConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedHooksConf
     hooks: {},
     userGlobalEnabled: true,
     allowProjectHooks: false,
+    pluginHooksEnabled: false,
+    pluginHookEnv: {},
     sources: [],
     warnings: [],
     ...overrides,

@@ -754,4 +754,167 @@ echo '{"decision":"approve"}'
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Per-plugin env allowlist (issue #2459)
+  // ---------------------------------------------------------------------------
+
+  describe('per-plugin env allowlist (pluginHookEnv)', () => {
+    it('allowed var from process.env is forwarded to matching plugin hook', async () => {
+      const originalVal = process.env['TYPESAFE_API_KEY'];
+      process.env['TYPESAFE_API_KEY'] = 'test-typesafe-secret';
+      try {
+        const scriptPath = join(tmp, 'check-plugin-env.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+if [ "$TYPESAFE_API_KEY" = "test-typesafe-secret" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "expected TYPESAFE_API_KEY to be forwarded, got: $TYPESAFE_API_KEY" >&2
+  exit 2
+fi
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'claude-jev-afk',
+          pluginHookEnv: { 'claude-jev-afk': ['TYPESAFE_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+      } finally {
+        if (originalVal === undefined) delete process.env['TYPESAFE_API_KEY'];
+        else process.env['TYPESAFE_API_KEY'] = originalVal;
+      }
+    });
+
+    it('allowed var is NOT forwarded to a different plugin', async () => {
+      const originalVal = process.env['TYPESAFE_API_KEY'];
+      process.env['TYPESAFE_API_KEY'] = 'test-typesafe-secret';
+      try {
+        const scriptPath = join(tmp, 'check-no-cross-plugin.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+# hook from a DIFFERENT plugin — must NOT see claude-jev-afk's allowlisted vars
+if [ -n "$TYPESAFE_API_KEY" ]; then
+  echo "CROSS-PLUGIN LEAK: $TYPESAFE_API_KEY" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'other-plugin',
+          pluginHookEnv: { 'claude-jev-afk': ['TYPESAFE_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+      } finally {
+        if (originalVal === undefined) delete process.env['TYPESAFE_API_KEY'];
+        else process.env['TYPESAFE_API_KEY'] = originalVal;
+      }
+    });
+
+    it('listing ANTHROPIC_API_KEY forwards nothing and logs a warning', async () => {
+      const originalKey = process.env['ANTHROPIC_API_KEY'];
+      process.env['ANTHROPIC_API_KEY'] = 'sk-ant-danger';
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const scriptPath = join(tmp, 'check-denied-cred.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+  echo "ANTHROPIC KEY LEAKED" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'my-plugin',
+          pluginHookEnv: { 'my-plugin': ['ANTHROPIC_API_KEY'] },
+        });
+        // The var was denied → hook sees no ANTHROPIC_API_KEY → approve
+        expect(result.decision.decision).toBe('approve');
+        // A warning must have been emitted about the refused credential
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ANTHROPIC_API_KEY'));
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('my-plugin'));
+      } finally {
+        if (originalKey === undefined) delete process.env['ANTHROPIC_API_KEY'];
+        else process.env['ANTHROPIC_API_KEY'] = originalKey;
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('AFK_-prefixed credential listed in pluginHookEnv is refused with a warning', async () => {
+      const originalVal = process.env['AFK_LOCAL_API_KEY'];
+      process.env['AFK_LOCAL_API_KEY'] = 'afk-secret-val';
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const scriptPath = join(tmp, 'check-denied-afk.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+if [ -n "$AFK_LOCAL_API_KEY" ]; then
+  echo "AFK CRED LEAKED" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'my-plugin',
+          pluginHookEnv: { 'my-plugin': ['AFK_LOCAL_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_LOCAL_API_KEY'));
+      } finally {
+        if (originalVal === undefined) delete process.env['AFK_LOCAL_API_KEY'];
+        else process.env['AFK_LOCAL_API_KEY'] = originalVal;
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('non-plugin hook (no pluginName) does not receive plugin-allowlisted vars', async () => {
+      const originalVal = process.env['TYPESAFE_API_KEY'];
+      process.env['TYPESAFE_API_KEY'] = 'test-val';
+      try {
+        const scriptPath = join(tmp, 'check-no-plugin-no-var.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+# No pluginName set → pluginHookEnv is ignored → var not forwarded
+if [ -n "$TYPESAFE_API_KEY" ]; then
+  echo "VAR LEAKED TO NON-PLUGIN HOOK" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        // Note: no pluginName in opts — pluginHookEnv is ignored
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginHookEnv: { 'some-plugin': ['TYPESAFE_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+      } finally {
+        if (originalVal === undefined) delete process.env['TYPESAFE_API_KEY'];
+        else process.env['TYPESAFE_API_KEY'] = originalVal;
+      }
+    });
+  });
 }); // end describe.skipIf(win32)
