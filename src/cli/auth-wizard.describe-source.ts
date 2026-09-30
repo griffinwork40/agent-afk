@@ -18,15 +18,24 @@ import { hasProcessLocalRefreshedToken } from '../agent/auth/credential-resolver
  * precedence order as `loadAnthropicCredential`:
  *   1. ANTHROPIC_API_KEY env
  *   2. CLAUDE_CODE_OAUTH_TOKEN env
- *   3. macOS Keychain / ~/.claude/.credentials.json (Claude Code login)
- *   4. Process-local refreshed token (keychain refresh succeeded but write-back failed)
+ *   3. Process-local refreshed token (keychain refresh succeeded but write-back failed)
+ *   4. macOS Keychain / ~/.claude/.credentials.json (Claude Code login)
+ *
+ * Note: tier 3 (session-refresh) ranks above tier 4 (keychain) to match the
+ * precedence in `loadAnthropicCredential`: `refreshedClaudeCodeOauthToken` is
+ * checked before `loadClaudeCodeOauthToken()` there, so we mirror that order
+ * here. The live keychain store outranks the process-local cache in the
+ * loader, so when both are present the loader uses the keychain — but if a
+ * refresh produced a token and the write-back to the store failed, the cache
+ * is the only source of that token, and we want the label to reflect it
+ * accurately rather than claiming "keychain".
  */
 export function describeCredentialSource(): string {
   if (env.ANTHROPIC_API_KEY) return 'ANTHROPIC_API_KEY';
   if (env.CLAUDE_CODE_OAUTH_TOKEN) return 'CLAUDE_CODE_OAUTH_TOKEN';
-  if (loadClaudeCodeOauthToken()) return 'Claude Code login (keychain)';
   // Tier 3: token was refreshed this process but write-back to the persistent
-  // store failed -- the token is NOT in the keychain, so label it distinctly.
+  // store failed — the token is NOT in the keychain, so label it distinctly.
   if (hasProcessLocalRefreshedToken()) return 'Claude Code login (session refresh)';
+  if (loadClaudeCodeOauthToken()) return 'Claude Code login (keychain)';
   return 'existing credential';
 }

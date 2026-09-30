@@ -8,6 +8,7 @@ import { statusPanel } from '../render.js';
 import { getApiKeyForModel, getModel, getApiKey, getCodexApiKey } from '../shared-helpers.js';
 import { resolveCliPermissionMode } from '../config.js';
 import { describeCredentialSource } from '../auth-wizard.describe-source.js';
+import { loadXaiApiKey } from '../../agent/auth/credential-resolver.js';
 
 export function registerStatusCommand(program: Command): void {
   program
@@ -26,6 +27,7 @@ export function registerStatusCommand(program: Command): void {
         // Both openai-compatible and anthropic-direct construct synchronously
         // — no real wire call happens before close().
         const isOpenAI = provider === 'openai-compatible' || provider === 'openai-codex';
+        const isXai = provider === 'xai' || provider === 'xai-oauth';
         const session = new AgentSession({
           // Use the fastest model per provider for the check.
           model: isOpenAI ? 'gpt-4o-mini' : 'haiku',
@@ -45,11 +47,16 @@ export function registerStatusCommand(program: Command): void {
         if (options.format === 'json') {
           const anthropicApiKey = getApiKey();
           const codexApiKey = getCodexApiKey();
+          const xaiApiKey = loadXaiApiKey();
 
-          const anthropicSource = anthropicApiKey
+          // Derive the anthropic source label using the same precedence logic
+          // as describeCredentialSource() so the JSON value matches the text output.
+          const anthropicSource: string | null = anthropicApiKey
             ? env.ANTHROPIC_API_KEY
               ? 'ANTHROPIC_API_KEY'
-              : 'CLAUDE_CODE_OAUTH_TOKEN'
+              : env.CLAUDE_CODE_OAUTH_TOKEN
+                ? 'CLAUDE_CODE_OAUTH_TOKEN'
+                : 'claude-code-keychain'
             : null;
 
           const codexSource = codexApiKey
@@ -57,6 +64,8 @@ export function registerStatusCommand(program: Command): void {
               ? 'OPENAI_API_KEY'
               : 'CODEX_API_KEY'
             : null;
+
+          const xaiSource: string | null = xaiApiKey ? 'XAI_API_KEY' : null;
 
           console.log(JSON.stringify({
             providers: {
@@ -67,6 +76,10 @@ export function registerStatusCommand(program: Command): void {
               codex: {
                 ok: !!codexApiKey,
                 source: codexSource,
+              },
+              xai: {
+                ok: !!xaiApiKey,
+                source: xaiSource,
               },
             },
             model: String(model),
@@ -87,9 +100,13 @@ export function registerStatusCommand(program: Command): void {
                     ? apiKey
                       ? 'Found (OPENAI_API_KEY / CODEX_API_KEY)'
                       : 'Reading ~/.codex/auth.json (run `afk provider auth diagnose`)'
-                    : apiKey
-                      ? `Found (${describeCredentialSource()})`
-                      : 'Falling back to Claude OAuth',
+                    : isXai
+                      ? apiKey
+                        ? 'Found (XAI_API_KEY)'
+                        : 'No XAI_API_KEY set'
+                      : apiKey
+                        ? `Found (${describeCredentialSource()})`
+                        : 'Falling back to Claude OAuth',
                   kind: apiKey ? 'ok' : 'warn',
                 },
                 { label: 'Model', value: String(model), kind: 'info' },

@@ -57,10 +57,14 @@ describe('CLI JSON output', () => {
       expect(parsed).toHaveProperty('providers');
       expect(parsed.providers).toHaveProperty('anthropic');
       expect(parsed.providers).toHaveProperty('codex');
+      expect(parsed.providers).toHaveProperty('xai');
       expect(parsed.providers.anthropic).toHaveProperty('ok');
-      expect(parsed.providers.anthropic).toHaveProperty('source');
+      // The test sets ANTHROPIC_API_KEY, so source must be the stable enum value.
+      expect(parsed.providers.anthropic.source).toBe('ANTHROPIC_API_KEY');
       expect(parsed.providers.codex).toHaveProperty('ok');
       expect(parsed.providers.codex).toHaveProperty('source');
+      expect(parsed.providers.xai).toHaveProperty('ok');
+      expect(parsed.providers.xai).toHaveProperty('source');
       expect(parsed).toHaveProperty('model');
       expect(parsed).toHaveProperty('bypass');
       expect(parsed).toHaveProperty('permissionMode');
