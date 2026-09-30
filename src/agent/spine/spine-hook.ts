@@ -41,8 +41,13 @@ import type {
   SpineRelationItem,
 } from './spine-classifier.js';
 import { errorMessage } from '../../utils/errors.js';
-import { stripTrailingAnnotation, REINFORCED_LABEL, WEAKENED_LABEL } from './spine-hook.annotations.js';
+import { stripAnyStatusAnnotation } from './spine-hook.annotations.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
+import {
+  getClassifiableDiff,
+  isDuplicateDiff,
+  persistDiffFingerprint,
+} from './spine-hook.diff.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -82,9 +87,24 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       // repo root, not a linked worktree's checkout path (#worktree-spine-bug).
       const repoRoot = resolveRepoRootSync({ cwd: _rootCwd, fallback: _rootCwd, mode: 'git-common-dir' });
 
-      // ── Git diff guard ────────────────────────────────────────────────
-      const diff = getGitDiff(repoRoot);
-      if (!diff.trim()) return {}; // empty diff — fast exit, zero cost
+      // ── Git diff (worktree-aware, SPINE-filtered) ─────────────────────
+      // History: the original hook ran `git diff HEAD` in the common-dir root,
+      // so every worktree session classified the MAIN checkout's stale staged
+      // files instead of its own changes. `getClassifiableDiff` uses
+      // `show-toplevel` from the session's own cwd so each worktree classifies
+      // only its own diff. SPINE.md edits are stripped before classification to
+      // break the self-reference loop (hook writes SPINE.md → next session sees
+      // it as a "change" → generates meta-invariants about SPINE.md hygiene).
+      const diffResult = getClassifiableDiff(_rootCwd, _rootCwd);
+      if (diffResult.skipped) return {}; // empty or SPINE-only diff — fast exit
+
+      // ── Duplicate-diff guard ──────────────────────────────────────────
+      // History: with 145 stale staged files in the main checkout, every session
+      // end re-classified the identical diff and fired repeated Telegram alerts.
+      // An unchanged fingerprint means we already handled this diff; skip.
+      if (isDuplicateDiff(diffResult.fingerprint, repoRoot)) return {};
+
+      const diff = diffResult.diff;
 
       // ── Read current SPINE.md ─────────────────────────────────────────
       const currentDoc = readSpine(repoRoot);
@@ -94,7 +114,18 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
 
       // ── Run classifier ────────────────────────────────────────────────
       const result = await classifyDiff(diff, spineContent, signal);
-      if (!result.parsed || result.items.length === 0) return {};
+
+      // ── Persist fingerprint after a parsed result ─────────────────────
+      // We persist when the classifier returned a parsed result (even zero items)
+      // so an empty-classified diff is not re-classified on every future session.
+      // Parse failures are NOT persisted: an unparsed response may indicate a
+      // transient LLM error or truncated output — re-classifying it is safer
+      // than permanently skipping a diff we may not have fully processed.
+      if (result.parsed) {
+        persistDiffFingerprint(diffResult.fingerprint, repoRoot);
+      }
+
+      if (result.items.length === 0) return {};
 
       // ── Apply items ───────────────────────────────────────────────────
       // v1 limitation: reuse the pre-classify snapshot. Concurrent sessions
@@ -120,18 +151,13 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           // Auto-write: no human review needed
           const existing = findEntry(doc, item.existingId);
           if (existing) {
-            // Append a parenthetical note to the description to surface the
-            // strengthening without creating a new entry (v1 keeps IDs stable).
-            // Strip any pre-existing annotation (including truncated ones where
-            // the closing paren was sliced off, or where the annotation word was
-            // cut mid-character, e.g. "(reinf") before appending the new one so
-            // that date-rollover and truncation do not accumulate duplicates.
-            //
-            // stripTrailingAnnotation removes any truncated prefix of
-            // " (reinforced YYYY-MM-DD)" at end of string (spine-hook.annotations.ts).
+            // Append a parenthetical note without creating a new entry (IDs stable).
+            // stripAnyStatusAnnotation collapses ALL existing reinforce/weaken
+            // annotations before the new one is appended — preventing chains like
+            // "(partially weakened D) (reinforced D)" when the two alternate.
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (reinforced ${isoDate})`;
-            const baseDescription = stripTrailingAnnotation(existing.description, REINFORCED_LABEL)
+            const baseDescription = stripAnyStatusAnnotation(existing.description)
               .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
             const newDescription = baseDescription + suffix;
             if (newDescription !== existing.description) {
@@ -164,13 +190,9 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           if (existing) {
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (partially weakened ${isoDate})`;
-            // Strip any pre-existing annotation (including truncated ones) before
-            // appending the new one — same date-rollover / truncation guard as
-            // the strengthens branch above.
-            //
-            // stripTrailingAnnotation removes any truncated prefix of
-            // " (partially weakened YYYY-MM-DD)" at end of string.
-            const baseDescription = stripTrailingAnnotation(existing.description, WEAKENED_LABEL)
+            // Strip ANY pre-existing status annotation before appending the new
+            // one — same chain-prevention guard as the strengthens branch above.
+            const baseDescription = stripAnyStatusAnnotation(existing.description)
               .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
             const newDescription = baseDescription + suffix;
             if (newDescription !== existing.description) {
@@ -285,27 +307,6 @@ function handleContradiction(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-
-
-function getGitDiff(repoRoot: string): string {
-  try {
-    // Use `git diff HEAD` (no commit ref) to capture uncommitted working-tree
-    // changes made during this session. If the session committed its changes,
-    // this returns empty (correct fast-exit for v1: committed work is visible
-    // in the next session's diff via HEAD~1 at that point). Using HEAD~1 would
-    // incorrectly re-classify the previous commit on sessions that commit nothing.
-    return execFileSync('git', ['diff', 'HEAD', '--unified=0'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      maxBuffer: 2 * 1024 * 1024, // 2 MB cap
-    });
-  } catch {
-    // No commits yet or git error — treat as empty
-    return '';
-  }
-}
 
 function buildSpineText(doc: import('./spine-store.js').SpineDocument | null): string {
   if (!doc) return '';

@@ -40,6 +40,28 @@ export function stripTrailingAnnotation(description: string, label: string): str
   return description;
 }
 
+/**
+ * Strip ALL trailing status annotations of either kind from `description`,
+ * collapsing chains like `(partially weakened D) (reinforced D) (partially
+ * weakened D)` down to the bare base text.
+ *
+ * The hook previously stripped only the annotation for the label it was
+ * about to append, so alternating reinforce/weaken cycles accumulated chains.
+ * This function loops until neither label matches — guaranteeing a clean base
+ * regardless of how many stacked annotations exist on disk.
+ */
+export function stripAnyStatusAnnotation(description: string): string {
+  let current = description;
+  for (;;) {
+    const stripped = stripTrailingAnnotation(
+      stripTrailingAnnotation(current, REINFORCED_LABEL),
+      WEAKENED_LABEL,
+    );
+    if (stripped === current) return current;
+    current = stripped;
+  }
+}
+
 function isAnnotationPrefix(tail: string, label: string): boolean {
   if (tail.length <= label.length) {
     return tail.length >= MIN_LABEL_CHARS && label.startsWith(tail);
