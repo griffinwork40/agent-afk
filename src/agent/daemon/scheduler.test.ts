@@ -69,7 +69,7 @@ import { runShellTask } from './shell-task.js';
 import { parseTerminalState } from '../../cli/commands/interactive/terminal-state.js';
 import { DONE_EVIDENCE_TOOLS } from '../../cli/commands/interactive/afk-push.js';
 import { getTraceDir, getDaemonStateDir } from '../../paths.js';
-import { daemonDefaultCwd } from './session-spawn.js';
+import { daemonDefaultCwd, _resetDaemonDefaultCwdCache } from './session-spawn.js';
 import { AgentSession } from '../session/agent-session.js';
 import { McpManager } from '../mcp/index.js';
 import type { AgentConfig } from '../types.js';
@@ -103,6 +103,10 @@ afterEach(() => {
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
   if (isolatedAfkHome !== undefined) rmSync(isolatedAfkHome, { recursive: true, force: true });
   isolatedAfkHome = undefined;
+  // Reset the daemonDefaultCwd memo so each test gets a fresh resolution
+  // against the new isolatedAfkHome. Without this, the memoized value from a
+  // prior test (pointing at a deleted temp dir) would be returned.
+  _resetDaemonDefaultCwdCache();
 });
 
 /**
