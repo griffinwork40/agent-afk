@@ -188,6 +188,13 @@ export class SubagentManager {
     return [...this.active.values()].map((h) => ({ id: h.id, status: h.status }));
   }
 
+  /**
+   * Total subagents ever dispatched by this manager (foreground + background).
+   * Monotonically increasing. Used by the health rail's foreground-counts getter
+   * to compute fg-only totals: `dispatchCount − backgroundRegistry.list().length`.
+   */
+  get dispatchCount(): number { return this.counter; }
+
   get(id: string): SubagentHandle | undefined {
     return this.active.get(id) ?? this.completed.get(id)?.handle;
   }
