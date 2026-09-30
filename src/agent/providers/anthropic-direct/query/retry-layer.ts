@@ -291,7 +291,11 @@ export class RetryLayer {
     this._clientToken = newToken;
     return {
       accountId: parseAccountIdentifier(newToken ?? ''),
-      oldAccountId: parseAccountIdentifier(priorClientToken ?? ''),
+      // Skip parseAccountIdentifier when the prior token was nullish: passing ''
+      // returns the truthy sentinel 'token:(unknown)', which the caller must then
+      // special-case. Passing '' directly instead lets the caller distinguish
+      // "no prior account" from "account with undecodable token" cleanly.
+      oldAccountId: priorClientToken != null ? parseAccountIdentifier(priorClientToken) : '',
       swapped: priorClientToken !== newToken,
     };
   }

@@ -82,6 +82,10 @@ export class TelegramBgResultNotifier {
   private disposed = false;
 
   private readonly onSettled = (job: BackgroundJob): void => {
+    // Early-exit guard: if dispose() already ran, neither push nor injection
+    // is meaningful — the session is torn down.
+    if (this.disposed) return;
+
     // Skip cancelled jobs — same as the REPL notifier contract.
     if (job.status === 'cancelled') return;
 

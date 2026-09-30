@@ -546,3 +546,19 @@ describe('glob handler — globstar collapses to zero segments (root-level match
     expect(result.content).toContain('No files matched');
   });
 });
+
+// ---------------------------------------------------------------------------
+// GlobAbortedError.message — the handler catch maps it to 'Search aborted'
+// ---------------------------------------------------------------------------
+
+describe('GlobAbortedError message and handler catch', () => {
+  it('handler returns { content: "Search aborted", isError: true } when the abort signal fires before the walk starts', async () => {
+    const ac = new AbortController();
+    ac.abort(); // pre-abort so the signal is already aborted at call time
+    const result = await globHandler(
+      { pattern: '**/*.ts', path: '/tmp' },
+      ac.signal,
+    );
+    expect(result).toEqual({ content: 'Search aborted', isError: true });
+  });
+});
