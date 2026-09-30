@@ -272,23 +272,24 @@ describe('F2(c): fully-pending band (F3 scenario): pending rows survive disarm-o
     expect(countLabel(vs, 'PENDING-BAND-BOTTOM'), `PENDING-BAND-BOTTOM must appear exactly once:\n${dump}`).toBe(1);
   });
 
-  it('partially-or-fully-pending band is not lost when owner scrolls before disarm (content-hug)', async () => {
-    // Use a full-viewport overlay so the frame rises as high as possible.
-    // Note: with contentHugBandReserve active, at least 1 overlay row is
-    // always withheld, so the frame is 1 row shorter and the newest band row
-    // stays painted (paintedRows >= 1) — "fully-pending" is intentionally
-    // prevented by the fix. The F2 invariant under test (that pending rows
-    // survive disarm-owner-wrote) still applies to any partially-pending band.
+  it('partially-pending band is not lost when owner scrolls before disarm (content-hug)', async () => {
+    // With contentHugBandReserve active the newest band rows stay painted, so a
+    // 1-row band can no longer go fully pending. Commit a band LARGER than the
+    // reserve (max(3, rows/4) = 6 at 24 rows) so the older rows are genuinely
+    // pending, then assert every row survives disarm-owner-wrote exactly once.
     const overlay = Array.from({ length: ROWS }, (_, i) => `overlay-hug-${i}`).join('\n');
     const { c, vs, stdout, repaint } = await makeRig({ overlay, contentHug: true });
 
-    c.commitAbove('PENDING-BAND-HUG\n');
+    const labels = Array.from({ length: 12 }, (_, i) => `PENDING-BAND-HUG-${i}`);
+    c.commitAbove(labels.join('\n') + '\n');
     repaint();
 
     const raw = c as unknown as { committedBand: string[]; committedBandPaintedRows: number };
     expect(raw.committedBand.length, 'precondition: band must be non-empty').toBeGreaterThan(0);
-    // paintedRows may be 0 (fully pending) or >= 1 (partially pending) depending
-    // on the band size and reserve; either case exercises the F2 fix.
+    expect(
+      raw.committedBandPaintedRows,
+      'precondition: some band rows must be pending (paintedRows < band length)',
+    ).toBeLessThan(raw.committedBand.length);
 
     c.suspendInput();
 
@@ -297,7 +298,9 @@ describe('F2(c): fully-pending band (F3 scenario): pending rows survive disarm-o
     c.disarm();
 
     const dump = dumpScreen(vs);
-    expect(countLabel(vs, 'PENDING-BAND-HUG'), `PENDING-BAND-HUG must appear exactly once:\n${dump}`).toBe(1);
+    for (const label of labels) {
+      expect(countLabel(vs, label), `${label} must appear exactly once:\n${dump}`).toBe(1);
+    }
   });
 });
 
