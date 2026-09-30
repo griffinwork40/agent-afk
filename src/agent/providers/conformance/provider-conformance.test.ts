@@ -630,6 +630,147 @@ describe('Conformance: S9 — AFK retry count is bounded and predictable (docume
 });
 
 // ============================================================================
+// SCENARIO 11 — cachedInputTokens semantics parity (issue #2424)
+//
+// Anthropic: input_tokens EXCLUDES cache; cache_read_input_tokens is additive.
+// OpenAI:    prompt_tokens INCLUDES cached tokens; cached_tokens is a subset.
+//
+// Both must surface cached tokens in ProviderUsage.cachedInputTokens.
+// The contextWindowTokens computation must differ correctly:
+//   Anthropic: input + output + cachedInput + cacheCreation
+//   OpenAI:    input + output  (cached already included in input)
+// ============================================================================
+describe('Conformance: S11 — cachedInputTokens semantics (issue #2424)', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: cachedInputTokens populated from cache_read_input_tokens (additive to input)', async () => {
+    // Wire input_tokens = 20, cache_read_input_tokens = 80, output_tokens = 10.
+    // Anthropic: input_tokens EXCLUDES cache reads. Window = 20 + 10 + 80 = 110.
+    const evts: import('@anthropic-ai/sdk/resources').RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_s11_anth',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-test',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: {
+            input_tokens: 20,
+            output_tokens: 10,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 80,
+          },
+        },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'hi' },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      { type: 'content_block_stop', index: 0 } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 10 },
+      } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+      { type: 'message_stop' } as unknown as import('@anthropic-ai/sdk/resources').RawMessageStreamEvent,
+    ];
+    const client = makeAnthropicMock(() =>
+      (async function* () { for (const e of evts) yield e; })(),
+    );
+    const events = await collectAnthropicEvents(makeAnthropicQuery(client));
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // Anthropic: cachedInputTokens is from cache_read_input_tokens (additive).
+    expect(usage.cachedInputTokens).toBe(80);
+    // Anthropic: inputTokens is the EXCLUSIVE count (excludes cache reads).
+    expect(usage.inputTokens).toBe(20);
+    // Anthropic contextWindowTokens = input + output + cachedInput + cacheCreation
+    // = 20 + 10 + 80 + 0 = 110. Must NOT equal input + output alone (= 30).
+    expect(usage.contextWindowTokens).toBe(110);
+  });
+
+  it('openai-compatible: cachedInputTokens populated from prompt_tokens_details.cached_tokens (subset)', async () => {
+    // Wire prompt_tokens = 100 (includes 80 cached), completion_tokens = 10.
+    // OpenAI: cached_tokens is a SUBSET of prompt_tokens. Window = 100 + 10 = 110.
+    const chunks: OpenAIChunk[] = [
+      { choices: [{ delta: { content: 'hi' } }] } as OpenAIChunk,
+      {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 10,
+          total_tokens: 110,
+          prompt_tokens_details: { cached_tokens: 80 },
+        },
+      } as OpenAIChunk,
+    ];
+    installOAIFactory(async () => (async function* () { for (const c of chunks) yield c; })());
+    const events = await drain(makeOAIQuery());
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // OpenAI: cachedInputTokens is the cached_tokens subset.
+    expect(usage.cachedInputTokens).toBe(80);
+    // OpenAI: inputTokens is the INCLUSIVE prompt_tokens (includes cached).
+    expect(usage.inputTokens).toBe(100);
+    // OpenAI: contextWindowTokens = prompt + completion = 100 + 10 = 110.
+    // Must NOT add cachedInputTokens again (that would be 190, double-counting).
+    expect(usage.contextWindowTokens).toBe(110);
+  });
+});
+
+// ============================================================================
+// SCENARIO 12 — contextWindowTokens set after a turn on both providers (#2424)
+//
+// Both providers must populate ProviderUsage.contextWindowTokens on a happy-
+// path turn so auto-compaction and getContextUsage() percentage are driven by
+// the provider-computed footprint rather than the input+output fallback.
+// ============================================================================
+describe('Conformance: S12 — contextWindowTokens populated after a turn (issue #2424)', () => {
+  afterEach(() => __setOpenAIClientFactory(null));
+
+  it('anthropic-direct: contextWindowTokens is defined and positive after a text turn', async () => {
+    const evts = makeAnthropicTextStream('hello');
+    const client = makeAnthropicMock(() =>
+      (async function* () { for (const e of evts) yield e; })(),
+    );
+    const events = await collectAnthropicEvents(makeAnthropicQuery(client));
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // Must be a positive number (input + output + cache fields from the stream).
+    expect(typeof usage.contextWindowTokens).toBe('number');
+    expect((usage.contextWindowTokens ?? 0)).toBeGreaterThan(0);
+  });
+
+  it('openai-compatible: contextWindowTokens is defined and positive after a text turn', async () => {
+    const chunks = makeOpenAITextChunks('hello');
+    installOAIFactory(async () => (async function* () { for (const c of chunks) yield c; })());
+    const events = await drain(makeOAIQuery());
+    const completed = pick(events, 'turn.completed');
+    expect(completed).toHaveLength(1);
+    const usage = completed[0]!.usage;
+
+    // Must be a positive number (prompt_tokens + completion_tokens).
+    expect(typeof usage.contextWindowTokens).toBe('number');
+    expect((usage.contextWindowTokens ?? 0)).toBeGreaterThan(0);
+  });
+});
+
+// ============================================================================
 // SCENARIO 10 — Optional ProviderQuery methods present / missing (gap: #2420)
 //
 // anthropic-direct: implements listRewindTargets, rewindConversation, setSystemPrompt.
