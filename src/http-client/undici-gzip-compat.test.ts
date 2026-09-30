@@ -26,7 +26,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { gzipSync } from 'node:zlib';
-import { Agent, setGlobalDispatcher } from 'undici';
+import { Agent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const PAYLOAD = { ok: true, value: 42 };
@@ -86,11 +86,13 @@ describe('undici gzip-bridge compatibility with built-in fetch (issue #2525)', (
     }
   });
 
-  it('per-request path: npm-undici Agent passed as `dispatcher` (egress-guard shape)', async () => {
+  it('per-request path: npm-undici fetch + npm-undici Agent (egress-guard shape after #2528)', async () => {
+    // After fix #2528 egress-guard uses npm undici's own `fetch` together with
+    // its own `Agent` (guardedDispatcher), so both ends of the dispatch protocol
+    // come from the same copy of undici — no cross-copy handshake on Node 26+.
     const dispatcher = new Agent();
     try {
-      // Same cast egress-guard.ts uses: lib.dom RequestInit has no `dispatcher`.
-      await expectIntactResponse(await fetch(url, { dispatcher } as RequestInit));
+      await expectIntactResponse(await undiciFetch(url, { dispatcher }));
     } finally {
       await dispatcher.close();
     }

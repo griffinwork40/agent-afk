@@ -74,8 +74,10 @@ export const reauthCmd: SlashCommand = {
     }
 
     if (result.swapped) {
-      // Guard the degenerate case where `oldAccountId` is empty (the prior token
-      // was undefined at construction, e.g. first run before any `claude login`).
+      // Guard the degenerate case where the prior token was nullish (e.g. first
+      // run before any `claude login`). retry-layer.ts returns '' (not the
+      // 'token:(unknown)' sentinel) when priorClientToken was nullish, so the
+      // falsy check here is now reachable.
       const fromLabel = result.oldAccountId || '(no prior account)';
       ctx.out.success(`✓ Client swapped: ${fromLabel} → ${result.accountId}`);
       ctx.out.info('Next turn will use the new credential. If a usage-limit pause is active, it will resume automatically within ~30s (or send a message to retry immediately).');

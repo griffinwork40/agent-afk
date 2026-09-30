@@ -592,7 +592,7 @@ describe('view_image handler — error paths', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toContain('outside the allowed');
     } finally {
-      if (outsideDir != null) {
+      if (outsideDir !== undefined) {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
     }

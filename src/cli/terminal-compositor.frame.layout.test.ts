@@ -385,16 +385,17 @@ describe('computeViewportLayout — bandReserveRows', () => {
   });
 
   it('reserve reduces the overlay budget', () => {
-    // rows=30, fixedRows: gapRow(1)+input(1)=2, avail=(30-1)-2=27
+    // rows=30, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2, avail=(30-1)-2=27
     // reserve=5 → overlayBudget=22
     const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
     const chrome = bareChrome(lines);
     const layout = computeViewportLayout(chrome, 0, false, 30, noScrollRegion, 5);
+    expect(layout.maxLines).toBe(29); // maxLines = rows - 1 = 29
     expect(layout.trimmedOverlay.length).toBe(22);
   });
 
   it('small terminal: clamp keeps at least 1 overlay row when overlay is non-empty', () => {
-    // rows=5, fixedRows: gapRow(1)+input(1)=2, avail=(5-1)-2=2
+    // rows=5, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2, avail=(5-1)-2=2
     // A reserve of 10 is clamped to max(0, avail-1)=1 → overlayBudget=1
     const lines = ['line0', 'line1', 'line2'];
     const chrome = bareChrome(lines);
@@ -403,7 +404,8 @@ describe('computeViewportLayout — bandReserveRows', () => {
   });
 
   it('avail=1 (degenerate 4-row terminal): reserve is zeroed, single overlay row still shown', () => {
-    // rows=4, fixedRows: gapRow(1)+input(1)=2, maxLines=(4-1)=3, avail=3-2=1.
+    // rows=4, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2,
+    // maxLines=(4-1)=3, avail=3-2=1.
     // clamp: reserve = min(bandReserveRows, max(0, avail-1)) = min(R, 0) = 0.
     // The band-visibility guarantee cannot be honoured at this terminal height;
     // the single available row is given to the overlay instead (overlayBudget=1).
@@ -411,12 +413,26 @@ describe('computeViewportLayout — bandReserveRows', () => {
     const lines = ['line0', 'line1', 'line2'];
     const chrome = bareChrome(lines);
     const layout = computeViewportLayout(chrome, 0, false, 4, noScrollRegion, 10);
+    expect(layout.maxLines).toBe(3); // maxLines = rows - 1 = 3
     // reserve zeroes → overlayBudget = avail = 1 → overlay trimmed to 1 row
     expect(layout.trimmedOverlay.length).toBe(1);
   });
 
+  it('avail=1 (degenerate 4-row terminal): single-line overlay fits exactly — no truncation', () => {
+    // rows=4, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2,
+    // maxLines=3, avail=1. With lines=['line0'] (length 1), overlayLines.length
+    // === overlayBudget (1) — the no-truncation branch fires and the overlay is
+    // returned as-is (same reference).
+    const lines = ['line0'];
+    const chrome = bareChrome(lines);
+    const layout = computeViewportLayout(chrome, 0, false, 4, noScrollRegion, 10);
+    expect(layout.maxLines).toBe(3); // maxLines = rows - 1 = 3
+    // overlayBudget = avail = 1; length === budget → no truncation
+    expect(layout.trimmedOverlay).toBe(lines); // same reference, not truncated
+  });
+
   it('reserve of 0 when avail is 0 results in empty trimmedOverlay (no crash)', () => {
-    // rows=3, fixedRows=2, avail=0 — zero budget regardless of reserve
+    // rows=3, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2, avail=0
     const lines = ['line0', 'line1'];
     const chrome = bareChrome(lines);
     const layout = computeViewportLayout(chrome, 0, false, 3, noScrollRegion, 5);
@@ -424,7 +440,8 @@ describe('computeViewportLayout — bandReserveRows', () => {
   });
 
   it('reserve larger than band does not exceed avail-1', () => {
-    // rows=10, avail=(10-1)-2=7, reserve capped at avail-1=6 → budget=1
+    // rows=10, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+input(1)=2,
+    // avail=(10-1)-2=7, reserve capped at avail-1=6 → budget=1
     const lines = Array.from({ length: 10 }, (_, i) => `line ${i}`);
     const chrome = bareChrome(lines);
     const layout = computeViewportLayout(chrome, 0, false, 10, noScrollRegion, 100);
@@ -446,7 +463,7 @@ describe('computePickerViewportLayout — bandReserveRows', () => {
   });
 
   it('picker path: reserve reduces the overlay budget', () => {
-    // rows=30, fixedRows: gapRow(1)+pickerRows(3)=4, avail=(30-1)-4=25
+    // rows=30, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+pickerRows(3)=4, avail=(30-1)-4=25
     // reserve=5 → overlayBudget=20
     const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`);
     const chrome = bareChrome(lines);
@@ -455,7 +472,7 @@ describe('computePickerViewportLayout — bandReserveRows', () => {
   });
 
   it('picker path: clamp keeps at least 1 overlay row on a small terminal', () => {
-    // rows=7, fixedRows: gapRow(1)+pickerRows(3)=4, avail=(7-1)-4=2
+    // rows=7, fixedRows: gapRow(1, overlayLines non-empty → gap=1)+pickerRows(3)=4, avail=(7-1)-4=2
     // reserve of 10 clamped to avail-1=1 → budget=1
     const lines = ['a', 'b', 'c', 'd'];
     const chrome = bareChrome(lines);

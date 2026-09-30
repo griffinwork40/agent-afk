@@ -23,30 +23,11 @@ const FTS5_OPERATORS = new Set(['AND', 'OR', 'NOT']);
  * Characters that FTS5 treats as query-syntax tokens when they appear unquoted
  * in a bare word. A token containing any of these causes FTS5 to try to
  * interpret it as a column filter or arithmetic expression, producing errors
- * like "no such column: afk" for the query `agent-afk`.
+ * like "no such column: afk" for the query `agent-afk`. Includes `+`, `^`,
+ * `(`, `)` so that queries like `C++` or `foo(bar)` are also quoted safely.
  */
-const FTS5_BAREWORD_SPECIAL = /[-:/.,]/;
+const FTS5_BAREWORD_SPECIAL = /[-:/.,+^()]/;
 
-/**
- * Sanitize a raw FTS5 query so it survives the MATCH call without a syntax
- * error, while preserving intentional FTS5 syntax:
- *
- * - Explicit boolean operators (AND, OR, NOT) are kept as-is.
- * - Already-quoted phrases ("foo bar") are kept as-is.
- * - Prefix wildcards (term*) are kept as-is (valid FTS5 syntax).
- * - Bare tokens that contain FTS5 special characters (`-`, `:`, `/`, `.`, `,`)
- *   are wrapped in double-quotes so FTS5 treats them as literal phrases.
- *
- * The return value equals the input when no substitution was needed, which lets
- * callers skip the retry when sanitization is a no-op.
- *
- * Examples:
- *   "agent-afk"          → '"agent-afk"'
- *   "foo AND bar*"       → "foo AND bar*"   (unchanged)
- *   "ground-state"       → '"ground-state"'
- *   '"exact phrase"'     → '"exact phrase"' (unchanged)
- *   "foo:bar"            → '"foo:bar"'
- */
 /**
  * Map a Fact[] returned by searchFacts into MemorySearchResult entries.
  * Extracted here so the mapping logic is shared between the primary and
@@ -68,6 +49,31 @@ export function factsToResults(facts: Fact[]): MemorySearchResult[] {
   }));
 }
 
+/**
+ * Sanitize a raw FTS5 query so it survives the MATCH call without a syntax
+ * error, while preserving intentional FTS5 syntax:
+ *
+ * - Explicit boolean operators (AND, OR, NOT) are kept as-is.
+ * - Already-quoted phrases ("foo bar") are kept as-is.
+ * - Prefix wildcards (term*) are kept as-is (valid FTS5 syntax).
+ * - Bare tokens that contain FTS5 special characters (`-`, `:`, `/`, `.`, `,`,
+ *   `+`, `^`, `(`, `)`) are wrapped in double-quotes so FTS5 treats them as
+ *   literal phrases.
+ *
+ * The return value equals the input when no substitution was needed, which lets
+ * callers skip the retry when sanitization is a no-op.
+ *
+ * Examples:
+ *   "agent-afk"          → '"agent-afk"'
+ *   "foo AND bar*"       → "foo AND bar*"   (unchanged)
+ *   "ground-state"       → '"ground-state"'
+ *   '"exact phrase"'     → '"exact phrase"' (unchanged)
+ *   "foo:bar"            → '"foo:bar"'
+ *   "C++"                → '"C++"'
+ *   "foo(bar)"           → '"foo(bar)"'
+ *
+ * @internal Exported only for MemoryStore and its unit tests.
+ */
 export function sanitizeFtsQuery(query: string): string {
   const tokens: string[] = [];
   // Walk the query character by character, emitting tokens split on whitespace

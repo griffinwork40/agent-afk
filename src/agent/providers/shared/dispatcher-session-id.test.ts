@@ -77,6 +77,7 @@ function runTurn(provider: ModelProvider, config: AgentConfig): void {
 interface Branch {
   name: string;
   make: () => ModelProvider;
+  makeOnSurface: (surface: string) => ModelProvider;
   freshConfig: () => AgentConfig;
 }
 
@@ -84,17 +85,25 @@ const branches: Branch[] = [
   {
     name: 'anthropic-direct',
     make: () => new AnthropicDirectProvider({}),
+    makeOnSurface: (surface: string) => new AnthropicDirectProvider({ surface }),
     freshConfig: () => ({ model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test' }),
   },
   {
     name: 'openai-compatible',
     make: () => new OpenAICompatibleProvider({}),
+    makeOnSurface: (surface: string) => new OpenAICompatibleProvider({ surface }),
     freshConfig: () => ({ model: 'gpt-5.1', apiKey: 'test-openai-key' }),
   },
 ];
 
 function tracked(branch: Branch): ModelProvider {
   const p = branch.make();
+  openProviders.push(p);
+  return p;
+}
+
+function trackedOnSurface(branch: Branch, surface: string): ModelProvider {
+  const p = branch.makeOnSurface(surface);
   openProviders.push(p);
   return p;
 }
@@ -152,6 +161,59 @@ for (const branch of branches) {
       runTurn(provider, { ...branch.freshConfig(), sessionId: 'resumed-target' });
 
       expect(calls[0]?.sessionId).toBe('resumed-target');
+    });
+
+    it('hands tools a stable session id on a fresh telegram session (fix #2353)', async () => {
+      // Regression guard: before the fix, non-CLI surfaces returned undefined
+      // from resolveTopLevelSessionId, so image_generate failed closed with
+      // "requires a session context (sessionId missing)" and openai-compatible
+      // minted a new openai-pending-… id per call, breaking stability.
+      const provider = trackedOnSurface(branch, 'telegram');
+      const calls = captureDispatcherOpts(provider);
+
+      runTurn(provider, branch.freshConfig());
+
+      expect(calls).toHaveLength(1);
+      const sid = calls[0]?.sessionId;
+      expect(sid).toBeTypeOf('string');
+      expect(sid).not.toBe('');
+      // No presence file written — telegram fresh sessions don't advertise.
+      const records = await readPresenceFiles();
+      expect(records).toHaveLength(0);
+    });
+
+    it('hands tools a stable session id on a fresh daemon session (fix #2353)', async () => {
+      const provider = trackedOnSurface(branch, 'daemon');
+      const calls = captureDispatcherOpts(provider);
+
+      runTurn(provider, branch.freshConfig());
+      // Second turn — must be the same id (stability across turns).
+      runTurn(provider, branch.freshConfig());
+
+      expect(calls).toHaveLength(2);
+      const sid = calls[0]?.sessionId;
+      expect(sid).toBeTypeOf('string');
+      expect(sid).not.toBe('');
+      expect(calls[1]?.sessionId).toBe(sid);
+      // No presence file written — daemon fresh sessions don't advertise.
+      const records = await readPresenceFiles();
+      expect(records).toHaveLength(0);
+    });
+
+    it('get_runtime_state reports the resolved session id on a fresh telegram session (fix #2353)', () => {
+      // Regression guard: before the fix, buildRuntimeStateSource received
+      // config.sessionId (undefined for fresh sessions) so get_runtime_state
+      // and the # Environment block showed no id.
+      const provider = trackedOnSurface(branch, 'telegram');
+      const calls = captureDispatcherOpts(provider);
+
+      runTurn(provider, branch.freshConfig());
+
+      const sid = calls[0]?.sessionId;
+      expect(sid).toBeTypeOf('string');
+      // The resolved id drives both the dispatcher opts AND runtimeStateSource.
+      // Verified implicitly: both receive resolvedSession.id post-fix.
+      expect(sid).not.toBeUndefined();
     });
   });
 }

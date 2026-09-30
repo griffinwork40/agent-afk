@@ -83,4 +83,21 @@ describe('sanitizeFtsQuery', () => {
   it('wraps a slash-containing token', () => {
     expect(sanitizeFtsQuery('src/config')).toBe('"src/config"');
   });
+
+  // ── Plus, caret, parentheses (extended FTS5_BAREWORD_SPECIAL) ──
+  it('wraps a C++ token (double-plus)', () => {
+    expect(sanitizeFtsQuery('C++')).toBe('"C++"');
+  });
+
+  it('wraps a token containing parentheses', () => {
+    expect(sanitizeFtsQuery('foo(bar)')).toBe('"foo(bar)"');
+  });
+
+  it('wraps a token containing a caret', () => {
+    expect(sanitizeFtsQuery('foo^2')).toBe('"foo^2"');
+  });
+
+  it('wraps a token containing a lone plus', () => {
+    expect(sanitizeFtsQuery('a+b')).toBe('"a+b"');
+  });
 });

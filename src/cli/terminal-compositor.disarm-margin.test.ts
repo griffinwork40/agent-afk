@@ -51,6 +51,10 @@ afterEach(() => {
 });
 
 function installMarginSpy(): void {
+  // Spying on the module namespace object intercepts the binding used by
+  // teardown.ts under Vitest's CommonJS transform. Under native ESM this
+  // would silently stop intercepting the named import — tracked advisory
+  // finding from #2660.
   marginSpy = vi.spyOn(measure, 'contentMargin').mockReturnValue(MARGIN);
 }
 
@@ -180,5 +184,46 @@ describe('#2450: pending band rows via appendLinesAtCursor are indented by conte
       leadingSpaces,
       `MARGIN-PENDING must be indented by ${MARGIN_SPACES} spaces on the owner-wrote disarm path (got ${leadingSpaces}):\n${dump}`,
     ).toBe(MARGIN_SPACES);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (3) Negative: no margin when centering is off (contentMargin returns '')
+// ---------------------------------------------------------------------------
+
+describe('#2450 negative: queued commit is NOT indented when contentMargin() returns empty', () => {
+  it('queued commit has zero leading spaces when contentMargin() returns empty string', async () => {
+    // Do NOT install the marginSpy — contentMargin() falls through to the real
+    // implementation which returns '' when AFK_CENTER_CONTENT is unset.
+    // We stub it to '' explicitly to make the test deterministic.
+    marginSpy = vi.spyOn(measure, 'contentMargin').mockReturnValue('');
+
+    const stdout = makeStdout();
+    const vs = attachScreen(stdout);
+    const c = new TerminalCompositor({
+      stdout,
+      stdin: makeStdin(),
+      onCancel: vi.fn(),
+      anchorRow: 1,
+    });
+    await c.arm();
+
+    c.suspendInput();
+    stdout.write('OWNER-LINE\r\n');
+    c.commitAbove('NO-MARGIN-QUEUED\n');
+    c.disarm();
+
+    const all = [...vs.scrollbackLines(), ...vs.visibleLines()];
+    const dump = dumpScreen(vs);
+
+    const matches = all.filter((l) => l.trimStart().startsWith('NO-MARGIN-QUEUED'));
+    expect(matches.length, `NO-MARGIN-QUEUED must appear exactly once:\n${dump}`).toBe(1);
+
+    const line = matches[0]!;
+    const leadingSpaces = line.length - line.trimStart().length;
+    expect(
+      leadingSpaces,
+      `NO-MARGIN-QUEUED must have 0 leading spaces when centering is off (got ${leadingSpaces}):\n${dump}`,
+    ).toBe(0);
   });
 });

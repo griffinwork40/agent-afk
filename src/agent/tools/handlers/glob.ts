@@ -211,6 +211,9 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
           // supported Node version. If somehow reached, recursing would derive
           // a wrong canonical path (join(realPath, name) skips the symlink
           // target), so we skip safely rather than mis-classify.
+          // Note: this guard does NOT replace the denylist check at the real
+          // prune site (~line 182 above, DEFAULT_PRUNE_DIRS). Do not remove
+          // that check thinking this guard covers it — it does not.
           continue;
         }
         if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
