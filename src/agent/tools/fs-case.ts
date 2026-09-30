@@ -92,7 +92,8 @@ export function pathIsWithin(real: string, blocked: string, protectedPath = bloc
   // the event loop.
   const r = real.toLowerCase();
   const b = blocked.toLowerCase();
-  if (!(r === b || r.startsWith(b + '/') || r.startsWith(b + '\\'))) return false;
+  const foldsOverlap = r === b || r.startsWith(b + '/') || r.startsWith(b + '\\');
+  if (!foldsOverlap) return false;
   return isCaseInsensitiveFs(protectedPath);
 }
 

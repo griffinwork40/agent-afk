@@ -109,7 +109,11 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 /** Thrown out of the walk when the tool call's AbortSignal fires. */
-class GlobAbortedError extends Error {}
+class GlobAbortedError extends Error {
+  constructor() {
+    super('glob walk aborted');
+  }
+}
 
 /**
  * Recursively collect files matching a glob pattern.
@@ -195,7 +199,20 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
       // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
       // named them literally in the pattern. The search root itself is
       // never pruned here (it is walked directly, not as a child entry).
+      //
+      // Invariant: withFileTypes Dirents report symlinks as symlinks, never as
+      // directories, so isDirectory() is never true for a symlink — the guard
+      // below enforces this assumption explicitly so a future Node change or
+      // test double cannot silently violate it.
       if (entry.isDirectory()) {
+        if (entry.isSymbolicLink()) {
+          // This branch should be unreachable: withFileTypes Dirents cannot be
+          // both isDirectory() and isSymbolicLink() simultaneously on any
+          // supported Node version. If somehow reached, recursing would derive
+          // a wrong canonical path (join(realPath, name) skips the symlink
+          // target), so we skip safely rather than mis-classify.
+          continue;
+        }
         if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
           continue;
         }
