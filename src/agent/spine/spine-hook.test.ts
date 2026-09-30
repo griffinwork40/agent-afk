@@ -47,6 +47,7 @@ vi.mock('./spine-store.js', () => ({
 // fs; the appendFileSync capture is used only in the pending-log describe block.
 
 const _capturedAppendCalls: Array<{ path: string; data: string }> = [];
+const _capturedWriteCalls: Array<{ path: string; data: string }> = [];
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -57,6 +58,13 @@ vi.mock('node:fs', async (importOriginal) => {
         _capturedAppendCalls.push({ path: String(path), data: String(data) });
       },
     ),
+    // Capture writeFileSync calls (used by persistDiffFingerprint)
+    writeFileSync: vi.fn(
+      (path: import('node:fs').PathOrFileDescriptor, data: string | Uint8Array): void => {
+        _capturedWriteCalls.push({ path: String(path), data: String(data) });
+      },
+    ),
+    // readFileSync: passthrough — fingerprint file won't exist in tests, returns ENOENT
     mkdirSync: vi.fn(),
   };
 });
@@ -1211,6 +1219,104 @@ describe('createSpineSessionEndHook — cross-annotation chain prevention (outco
     // Exactly one annotation total
     const annotations = mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
     expect(annotations).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+});
+
+// ── Fingerprint persist on zero-item result (finding fix) ─────────────────────
+// Verify that a parsed-but-empty classifier result DOES persist the fingerprint,
+// so an empty-classified diff is not re-classified on every future session end.
+
+describe('createSpineSessionEndHook — fingerprint persisted on zero-item parse', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
+  });
+
+  it('calls writeFileSync (fingerprint) even when classifier returns empty items', async () => {
+    await setupDiffMock();
+    _capturedWriteCalls.length = 0;
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // At least one writeFileSync call must target the fingerprint map path
+    const fingerprintWrite = _capturedWriteCalls.find(
+      (c) => c.path.includes('spine-diff-fingerprints'),
+    );
+    expect(fingerprintWrite).toBeDefined();
+  });
+});
+
+// ── Chain-on-disk collapse after next write ───────────────────────────────────
+// Verify that an entry with a chain like "(partially weakened D) (reinforced D)"
+// already on disk gets collapsed to exactly one annotation on the next hook fire.
+
+describe('createSpineSessionEndHook — chain on disk collapses to one annotation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
+    _capturedWriteCalls.length = 0;
+  });
+
+  it('collapses existing chain on disk to exactly one annotation after next write', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    // Simulates a description that has accumulated a chain from previous alternating sessions
+    const chainedDesc =
+      'All env vars go through env.ts (partially weakened 2026-09-14) (reinforced 2026-09-20)';
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: chainedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'INV-001',
+          existingDescription: chainedDesc,
+          description: 'Another exception found',
+          rationale: 'legacy2.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // The description must now have exactly ONE annotation
+    const annotations =
+      mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
+    expect(annotations).toHaveLength(1);
+    // And it must be today's weakening
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
     expect(writeSpine).toHaveBeenCalled();
   });
 });

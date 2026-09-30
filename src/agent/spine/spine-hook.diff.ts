@@ -13,7 +13,9 @@
  *
  *  3. Fingerprinting the filtered diff with SHA-256 so a repeated identical
  *     diff (e.g. the main checkout's 145 stale staged files lingering across
- *     multiple unrelated sessions) is classified at most once.
+ *     multiple unrelated sessions) is classified at most once, keyed by the
+ *     repo root so concurrent worktrees / different repos don't evict each
+ *     other's fingerprints.
  *
  * @module agent/spine/spine-hook.diff
  */
@@ -84,15 +86,21 @@ export function getClassifiableDiff(
 }
 
 /**
- * Return true when `fingerprint` matches the last-persisted diff fingerprint.
+ * Return true when `fingerprint` matches the last-persisted diff fingerprint
+ * for `repoRoot`.
+ *
+ * Each repo root is keyed independently in the fingerprint map so concurrent
+ * worktrees (e.g. goblin-portal and agent-afk both using SPINE) do not evict
+ * each other's fingerprints.
  *
  * An identical fingerprint means this exact diff has already been classified;
  * the hook should skip the classifier call and return early.
  */
-export function isDuplicateDiff(fingerprint: string): boolean {
+export function isDuplicateDiff(fingerprint: string, repoRoot: string): boolean {
   try {
-    const stored = readFileSync(getSpineDiffFingerprintPath(), 'utf-8').trim();
-    return stored === fingerprint;
+    const map = readFingerprintMap();
+    const key = rootKey(repoRoot);
+    return map[key] === fingerprint;
   } catch {
     // File does not exist yet — first run, not a duplicate.
     return false;
@@ -100,17 +108,21 @@ export function isDuplicateDiff(fingerprint: string): boolean {
 }
 
 /**
- * Persist `fingerprint` as the last-classified diff fingerprint.
+ * Persist `fingerprint` as the last-classified diff fingerprint for `repoRoot`.
  *
- * Called after the classifier runs successfully (after any SPINE.md write).
+ * The fingerprint map is keyed by a short hash of the repo root, so each project
+ * has exactly one entry and the file stays well under 1 KB even across many repos.
+ *
  * Best-effort — never throws; a failed write just means the next session may
  * re-classify the same diff once more, which is safe.
  */
-export function persistDiffFingerprint(fingerprint: string): void {
+export function persistDiffFingerprint(fingerprint: string, repoRoot: string): void {
   try {
     const p = getSpineDiffFingerprintPath();
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, fingerprint + '\n', 'utf-8');
+    const map = readFingerprintMap();
+    map[rootKey(repoRoot)] = fingerprint;
+    writeFileSync(p, JSON.stringify(map) + '\n', 'utf-8');
   } catch {
     // Best-effort — fingerprint is an optimisation, not a correctness requirement.
   }
@@ -119,6 +131,31 @@ export function persistDiffFingerprint(fingerprint: string): void {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Derive a short stable key for a repo root path.
+ *
+ * Uses the first 16 hex characters of sha256(repoRoot) — collision probability
+ * is negligible for the ≤10 repos a typical AFK user works with, and the key
+ * is short enough that the JSON file stays well under 1 KB.
+ */
+function rootKey(repoRoot: string): string {
+  return sha256hex(repoRoot).slice(0, 16);
+}
+
+/** Read the persisted fingerprint map, returning {} on any error. */
+function readFingerprintMap(): Record<string, string> {
+  try {
+    const raw = readFileSync(getSpineDiffFingerprintPath(), 'utf-8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Run `git diff HEAD --unified=0` in `root` and return the raw output.

@@ -182,18 +182,33 @@ describe('isDuplicateDiff / persistDiffFingerprint — outcome C: stale diff ded
   });
 
   it('isDuplicateDiff returns false when no fingerprint is stored', () => {
-    expect(isDuplicateDiff('abc123')).toBe(false);
+    expect(isDuplicateDiff('abc123', '/repo/a')).toBe(false);
   });
 
   it('isDuplicateDiff returns false when stored fingerprint differs', () => {
-    persistDiffFingerprint('aabbcc');
-    expect(isDuplicateDiff('112233')).toBe(false);
+    persistDiffFingerprint('aabbcc', '/repo/a');
+    expect(isDuplicateDiff('112233', '/repo/a')).toBe(false);
   });
 
   it('isDuplicateDiff returns true after persistDiffFingerprint stores the same hash', () => {
     const fp = 'deadbeef';
-    persistDiffFingerprint(fp);
-    expect(isDuplicateDiff(fp)).toBe(true);
+    persistDiffFingerprint(fp, '/repo/a');
+    expect(isDuplicateDiff(fp, '/repo/a')).toBe(true);
+  });
+
+  it('two different repo roots store and retrieve independent fingerprints', () => {
+    const fpA = 'fingerprint-for-repo-a';
+    const fpB = 'fingerprint-for-repo-b';
+    persistDiffFingerprint(fpA, '/repo/a');
+    persistDiffFingerprint(fpB, '/repo/b');
+    // Root A still resolves its own fingerprint
+    expect(isDuplicateDiff(fpA, '/repo/a')).toBe(true);
+    // Root B resolves its own fingerprint, not A's
+    expect(isDuplicateDiff(fpB, '/repo/b')).toBe(true);
+    // Cross-check: A's hash is not a duplicate for B
+    expect(isDuplicateDiff(fpA, '/repo/b')).toBe(false);
+    // Cross-check: B's hash is not a duplicate for A
+    expect(isDuplicateDiff(fpB, '/repo/a')).toBe(false);
   });
 
   it('getClassifiableDiff emits a stable fingerprint for the same diff content', async () => {

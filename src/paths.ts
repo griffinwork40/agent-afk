@@ -826,17 +826,22 @@ export function getWhatifDir(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Path to the last-classified diff fingerprint for the SPINE SessionEnd hook.
+ * Path to the per-root diff-fingerprint map for the SPINE SessionEnd hook.
  *
- * The hook writes a SHA-256 hex digest of the diff it classified into this
- * file. On the next session end it compares the current diff's digest against
- * the stored value; an unchanged diff is skipped (no redundant classifier call,
- * no duplicate Telegram alert).
+ * The hook writes a SHA-256 hex digest of the diff it classified into a JSON
+ * map keyed by a short hash of the repo root. Using a single shared slot
+ * caused concurrent worktrees (or different repos like goblin-portal that
+ * both use SPINE) to evict each other's fingerprints, causing stale diffs to
+ * be re-classified on every session alternation.
  *
- * Lives at `$AFK_STATE_DIR/spine-last-diff-fingerprint` — a single-line text
- * file, not JSONL, because it is an opaque hash with no structured fields.
+ * The file is a JSON object `{ [rootHash: string]: diffFingerprint }` where
+ * rootHash is the first 16 hex chars of sha256(repoRoot). Size is naturally
+ * bounded: each project has exactly one entry, and AFK users typically work
+ * with ≤10 repos, so the file stays well under 1 KB.
+ *
+ * Lives at `$AFK_STATE_DIR/spine-diff-fingerprints.json`.
  */
 export function getSpineDiffFingerprintPath(): string {
-  return join(getAfkStateDir(), 'spine-last-diff-fingerprint');
+  return join(getAfkStateDir(), 'spine-diff-fingerprints.json');
 }
 
