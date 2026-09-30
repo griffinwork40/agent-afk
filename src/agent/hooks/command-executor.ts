@@ -26,12 +26,14 @@
 
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
+import { mkdirSync } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import type { HookContext, HookDecision } from '../hooks.js';
 import { killProcessGroup } from '../../utils/kill-process-group.js';
 import { resolveShell } from '../../utils/resolve-shell.js';
 import { readEnvFile } from '../../utils/envFile.js';
-import { getEnvConfigPath } from '../../paths.js';
+import { getEnvConfigPath, getPluginDataDir } from '../../paths.js';
+import { buildOptionEnv, readUserConfigSchema } from '../plugins/plugin-user-config.js';
 
 // ---------------------------------------------------------------------------
 // Per-plugin env allowlist — denylist
@@ -102,6 +104,20 @@ export interface ExecuteCommandOptions {
    * before the first turn). Emitted as `transcript_path` in the stdin payload.
    */
   transcriptPath?: string | null;
+  /**
+   * User-configured option values for this plugin, from the index-store entry.
+   * Combined with the manifest `userConfig` schema to produce
+   * `CLAUDE_PLUGIN_OPTION_*` env vars.  Sensitive keys are suppressed by
+   * `buildOptionEnv`; only user-scope plugins supply this.
+   */
+  pluginOptions?: Record<string, string>;
+  /**
+   * Index key for this plugin (e.g. `"my-plugin"` or `"marketplace:my-plugin"`).
+   * Used to resolve `CLAUDE_PLUGIN_DATA` — the per-plugin writable data
+   * directory.  When set, the directory is created lazily (0700) before the
+   * subprocess is spawned and exported as `CLAUDE_PLUGIN_DATA`.
+   */
+  pluginKey?: string;
 }
 
 export interface CommandExecutorResult {
@@ -476,5 +492,46 @@ function buildChildEnv(
   if (opts.pluginName !== undefined && opts.pluginHookEnv !== undefined) {
     applyPluginHookEnv(childEnv, opts.pluginName, opts.pluginHookEnv);
   }
+  // CLAUDE_PLUGIN_OPTION_* — export declared, non-sensitive userConfig options.
+  if (opts.pluginRoot !== undefined) {
+    applyPluginOptionEnv(childEnv, opts.pluginRoot, opts.pluginOptions);
+  }
+  // CLAUDE_PLUGIN_DATA — per-plugin writable data dir (created lazily, 0700).
+  if (opts.pluginKey !== undefined) {
+    const dataDir = getPluginDataDir(opts.pluginKey);
+    try {
+      mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    } catch {
+      // Best-effort: if mkdir fails (e.g. permissions) we still set the var
+      // so the hook knows the intended path.
+    }
+    childEnv['CLAUDE_PLUGIN_DATA'] = dataDir;
+  }
   return childEnv;
+}
+
+/**
+ * Inject `CLAUDE_PLUGIN_OPTION_*` env vars derived from the plugin's
+ * `userConfig` manifest block and the user's stored option values.
+ *
+ * Extracted from {@link buildChildEnv} to keep that function within the
+ * 200-line ceiling (pnpm audit:funcsize:check).
+ */
+function applyPluginOptionEnv(
+  childEnv: NodeJS.ProcessEnv,
+  pluginRoot: string,
+  storedOptions: Record<string, string> | undefined,
+): void {
+  let schema;
+  try {
+    schema = readUserConfigSchema(pluginRoot);
+  } catch (err) {
+    // Collision in manifest — warn and skip rather than crashing the hook run.
+    console.warn(`[hooks] plugin userConfig schema error at ${pluginRoot}: ${String(err)}`);
+    return;
+  }
+  const optEnv = buildOptionEnv(schema, storedOptions);
+  for (const [key, val] of Object.entries(optEnv)) {
+    childEnv[key] = val;
+  }
 }

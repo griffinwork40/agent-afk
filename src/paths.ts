@@ -185,6 +185,28 @@ export function getPluginsIndexPath(): string {
   return join(getPluginsDir(), '.index.json');
 }
 
+/**
+ * Per-plugin writable data directory: `~/.afk/plugins/data/<sanitisedKey>/`.
+ *
+ * This is AFK's equivalent of Claude Code's `CLAUDE_PLUGIN_DATA` env var — a
+ * stable, plugin-private directory for logs, caches, and any persistent state
+ * the plugin's hook scripts need to write.
+ *
+ * The `pluginKey` argument is the index key (e.g. `"my-plugin"` or
+ * `"marketplace:my-plugin"`). Colons and other filesystem-unsafe characters
+ * are replaced with `__` so the resulting directory name is unambiguous and
+ * portable across POSIX and Windows.
+ *
+ * The directory is NOT created here — it is created lazily (mode 0o700) by
+ * `ensurePluginDataDir` in `src/agent/hooks/command-executor.ts` at hook-
+ * dispatch time so callers that only need the path pay no I/O cost.
+ */
+export function getPluginDataDir(pluginKey: string): string {
+  // Sanitise: replace any char outside [A-Za-z0-9._-] with '__'.
+  const safe = pluginKey.replace(/[^A-Za-z0-9._-]+/g, '__');
+  return join(getPluginsDir(), 'data', safe);
+}
+
 export function getSchedulesPath(): string {
   return join(getAfkConfigDir(), 'schedules.json');
 }
