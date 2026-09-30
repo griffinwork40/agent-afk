@@ -270,7 +270,8 @@ export const imageEditTool: AnthropicToolDef = {
     'falls back to the full OpenAI auth chain (OPENAI_API_KEY, Codex CLI). ' +
     'Each edit costs real money via the OpenAI API.\n\n' +
     'Safety: blocked in daemon/cron sessions unless AFK_IMAGE_ALLOW_DAEMON=1. ' +
-    'Per-session edit cap controlled by AFK_IMAGE_SESSION_LIMIT (default 10). ' +
+    'Per-session edit cap controlled by AFK_IMAGE_SESSION_LIMIT (default 10); ' +
+    'edits and generates each maintain their own separate counter (an edit does not consume a generate slot). ' +
     'Every call is recorded in the effect ledger for audit.\n\n' +
     'Reference images: must exist on disk and be readable under the session read-root policy ' +
     '(same path containment rules as read_file). ' +
