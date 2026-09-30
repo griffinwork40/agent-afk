@@ -238,8 +238,12 @@ export function __resetCrossProviderWarnState(): void {}
 /** True when `url` routes to Anthropic's own API host. */
 function isAnthropicApiHost(url: string): boolean {
   try {
+    // Normalize a trailing-dot FQDN (e.g. 'api.anthropic.com.') — Node's URL
+    // parser keeps the dot in `hostname`, so without this strip the canonical
+    // host would be misidentified as a custom host and the ambient-credential
+    // guard would throw erroneously.
     const { hostname } = new URL(url);
-    return hostname === 'api.anthropic.com';
+    return hostname.replace(/\.$/, '') === 'api.anthropic.com';
   } catch {
     return false;
   }

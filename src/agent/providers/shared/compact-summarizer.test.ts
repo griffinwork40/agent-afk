@@ -22,6 +22,9 @@
  *   T15 — Anthropic binding with baseUrl → oneShotCompletion receives baseUrl.
  *   T16 — Raw grok-* (no explicit slot provider) → forceMode undefined (not forced apikey).
  *   T17 — xai-oauth target → OAuth refresh called before resolveXaiAuth.
+ *   T18 — Secret redaction: failure message is redacted and truncated before logging.
+ *   T19 — Ambient Anthropic credential is used when no custom baseUrl is configured;
+ *          custom non-Anthropic baseUrl without apiKey rejects; trailing-dot FQDN passes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveCrossProviderSummarize, __resetCrossProviderWarnState } from './compact-summarizer.js';
@@ -32,6 +35,7 @@ import * as xaiAuth from '../xai/auth.js';
 import * as xaiEndpoints from '../xai/endpoints.js';
 import * as xaiOauth from '../xai/oauth.js';
 import * as credentialResolver from '../../auth/credential-resolver.js';
+import * as modelSlots from '../../session/model-slots.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -787,39 +791,20 @@ describe('T18: missing Anthropic credential throws', () => {
 });
 
 // ---------------------------------------------------------------------------
-// T19: Custom (non-Anthropic) baseUrl with no explicit apiKey → throws guard error
+// T19: Ambient Anthropic credential is used when no custom baseUrl is configured
 // (advisory finding from #2560 — ambient credential + user-configurable baseUrl)
 // ---------------------------------------------------------------------------
 
-describe('T19: custom non-Anthropic baseUrl without explicit apiKey is rejected', () => {
-  it('throws when baseUrl is a non-Anthropic host and no apiKey is provided', async () => {
-    // We cannot inject a slot baseUrl via resolveBinding on a raw model id, so we
-    // test summarizeViaAnthropic's guard via an integration: mock loadAnthropicCredential
-    // to return a token (simulating an ambient credential) but the guard should reject
-    // before ever calling it because the baseUrl is a non-Anthropic host.
-    //
-    // The observable: the thrown error must mention the custom baseUrl and "explicit apiKey".
-    // We verify by checking the test path where binding.baseUrl IS set but binding.apiKey
-    // is NOT — which currently requires going through the module's internal summarizeViaAnthropic.
-    // Since that function is not exported, we test via resolveCrossProviderSummarize with a
-    // mock that intercepts oneShotCompletion — the guard runs BEFORE oneShotCompletion.
+describe('T19: ambient Anthropic credential is used when no custom baseUrl is configured', () => {
+  it('uses the ambient credential and calls oneShotCompletion without a baseUrl', async () => {
+    // When no custom baseUrl is present (resolveBinding returns {}), the ambient
+    // credential path must run cleanly — the guard must NOT block the common case.
     const key = makeSessionKey();
     const oneShotAnthropic = vi
       .spyOn(anthropicOneshot, 'oneShotCompletion')
       .mockResolvedValue(FOREIGN_RESULT);
     vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
 
-    // We need a way to exercise summarizeViaAnthropic with a custom baseUrl and no apiKey.
-    // resolveCrossProviderSummarize calls resolveBinding which cannot inject baseUrl from
-    // a raw model id alone. The most reliable approach: mock the module-internal binding
-    // by importing the module and invoking via a slot-less model id, knowing that the
-    // guard is local to summarizeViaAnthropic and fires when binding.baseUrl is set without
-    // binding.apiKey. Since resolveBinding returns {} for an unknown raw id (no baseUrl),
-    // we document this test as verifying the GUARD LOGIC directly through a round-trip:
-    // the guard only fires when a binding carries baseUrl without apiKey. A slot alias
-    // would set this up, but slot config is read-only from tests. We instead verify the
-    // positive path (ambient credential IS used when no custom baseUrl) to confirm the
-    // guard does NOT block the common case.
     const sessionFn = makeSessionFn();
     const summarize = resolveCrossProviderSummarize(
       'openai-compatible',
@@ -836,6 +821,62 @@ describe('T19: custom non-Anthropic baseUrl without explicit apiKey is rejected'
     // Confirm oneShotCompletion was called WITHOUT a baseUrl (no custom host → safe).
     const callArg = (oneShotAnthropic.mock.calls[0] as [Record<string, unknown>] | undefined)?.[0];
     expect(callArg?.['baseUrl']).toBeUndefined();
+  });
+
+  it('rejects when resolveBinding returns a non-Anthropic baseUrl with no apiKey', async () => {
+    // Guard: when binding.baseUrl is a non-Anthropic host and no explicit apiKey
+    // is provided, summarizeViaAnthropic must throw rather than forwarding the
+    // ambient Anthropic credential to an untrusted endpoint.
+    const key = makeSessionKey();
+    vi.spyOn(anthropicOneshot, 'oneShotCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
+    // Inject a custom non-Anthropic baseUrl into the binding without an apiKey.
+    vi.spyOn(modelSlots, 'resolveBinding').mockReturnValue({
+      id: 'claude-haiku-4-5-20251001',
+      baseUrl: 'https://my-proxy.example.com',
+    });
+
+    const sessionFn = makeSessionFn();
+    const summarize = resolveCrossProviderSummarize(
+      'openai-compatible',
+      sessionFn,
+      'claude-haiku-4-5-20251001',
+      key,
+    );
+
+    await expect(summarize('transcript')).rejects.toThrow(/explicit apiKey/);
+    // The ambient credential must never have been used.
+    expect(anthropicOneshot.oneShotCompletion).not.toHaveBeenCalled();
+  });
+
+  it('succeeds when the baseUrl is the canonical Anthropic host with a trailing dot', async () => {
+    // Trailing-dot FQDNs (e.g. 'https://api.anthropic.com./v1') are valid DNS
+    // notation. Node's URL parser keeps the dot in `hostname`, so without
+    // normalisation the host would be misidentified as custom and the guard
+    // would throw. Verify the strip-trailing-dot normalisation works.
+    const key = makeSessionKey();
+    const oneShotAnthropic = vi
+      .spyOn(anthropicOneshot, 'oneShotCompletion')
+      .mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
+    vi.spyOn(modelSlots, 'resolveBinding').mockReturnValue({
+      id: 'claude-haiku-4-5-20251001',
+      baseUrl: 'https://api.anthropic.com./v1',
+    });
+
+    const sessionFn = makeSessionFn();
+    const summarize = resolveCrossProviderSummarize(
+      'openai-compatible',
+      sessionFn,
+      'claude-haiku-4-5-20251001',
+      key,
+    );
+
+    // Should NOT throw — trailing-dot hostname is treated as the canonical host.
+    await expect(summarize('transcript')).resolves.toBe(FOREIGN_RESULT);
+    expect(oneShotAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'sk-ant-ambient' }),
+    );
   });
 });
 
