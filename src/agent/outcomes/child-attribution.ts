@@ -46,8 +46,11 @@ export function createChildAttributionHook(): HookHandler {
     // Only PostToolUse from forked children
     if (context.event !== 'PostToolUse') return {};
     if (!('parentSessionId' in context)) return {};
-    const parentSessionId = context.parentSessionId;
-    if (!parentSessionId) return {};
+    if (!context.parentSessionId) return {};
+    // Credit to the root session (depth-0). For depth-1 children rootSessionId
+    // equals parentSessionId; for grandchildren rootSessionId skips the
+    // intermediate session that never writes a sidecar.
+    const parentSessionId = context.rootSessionId ?? context.parentSessionId;
     if (context.toolName !== 'bash') return {};
     if (context.isError === true) return {};
 
