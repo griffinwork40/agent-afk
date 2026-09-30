@@ -130,6 +130,7 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   readonly client: OpenAI;
   /** @internal Package-visible for context-interface satisfaction. */
   readonly opts: OpenAICompatibleQueryOptions;
+  /** @internal Package-visible so extracted query/ modules can read the synthesized session id. */
   readonly initSessionId: string;
   /** @internal Package-visible so turn-driver.ts can dispatch tool calls. */
   readonly toolDispatcher: ToolDispatcher | undefined;
@@ -137,9 +138,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   private readonly onCwdChange?: (cwd: string) => void;
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
-  /** Which wire this session speaks: Chat Completions (default) or Responses. */
+  /** @internal Which wire this session speaks: Chat Completions (default) or Responses. */
   readonly wireMode: WireMode;
-  /** Static OpenAI list prices apply only when using the official public API endpoint. */
+  /** @internal Static OpenAI list prices apply only when using the official public API endpoint. */
   readonly useOpenAIPricing: boolean;
   /** @internal Witness-layer trace writer (optional). Mirrors RunTurnInput.traceWriter in anthropic-direct. */
   readonly traceWriter: TraceSink | undefined;

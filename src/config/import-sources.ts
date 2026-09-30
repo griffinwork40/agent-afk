@@ -7,6 +7,7 @@ import { env } from './env.js';
 import { readCodexEnabledPlugins } from './codex-discovery.js';
 import { findPluginDirs } from './plugin-discovery.js';
 import { getJsonConfigPath, getLegacyJsonConfigPath } from '../paths.js';
+import { debugLog } from '../utils/debug.js';
 
 /**
  * Cross-tool import configuration: resolves which external asset sources (claude-code,
@@ -86,6 +87,9 @@ function codexHome(home: string): string {
   // Require an absolute path — a relative value would resolve against the process
   // cwd at runtime, which is unpredictable and almost certainly not the intent.
   if (override && isAbsolute(override)) return override;
+  if (override) {
+    debugLog(`[import-sources] CODEX_HOME="${override}" is not absolute — ignoring and falling back to ~/.codex`);
+  }
   return join(home, '.codex');
 }
 
