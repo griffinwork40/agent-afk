@@ -781,6 +781,7 @@ export async function runInputLoop(
         // Thread the edit-preview ref so the StreamRenderer can wire the hook
         // callback into the tool lane during arm(). Absent on non-REPL callers.
         ...(ctx.addPreviewDiffRef ? { addPreviewDiffRef: ctx.addPreviewDiffRef } : {}),
+        ...(healthRail ? { foregroundSubsRef: healthRail.foregroundSubs } : {}), // #2687 fg subs → rail
         bashTailSetter: ctx.bashTailSetter,
         // Live tok/s: delegate to the momentum ticker, which handles EMA
         // smoothing and throttled repaint internally.

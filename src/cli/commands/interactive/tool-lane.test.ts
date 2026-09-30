@@ -3106,3 +3106,45 @@ describe('ToolLane.addPreviewDiff — pre-execution diff preview', () => {
     expect(flushed).not.toContain('@@ -1,1 +1,1 @@');
   });
 });
+
+describe('countInFlightForegroundAgents (#2687)', () => {
+  it('returns 0 when lane is empty', () => {
+    const lane = new ToolLane();
+    expect(lane.countInFlightForegroundAgents()).toBe(0);
+  });
+
+  it('returns 0 for a non-nesting tool entry', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_bash', 'bash', '(ls)');
+    expect(lane.countInFlightForegroundAgents()).toBe(0);
+  });
+
+  it('counts an in-flight agent tool call', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_ag1', 'agent', '{}');
+    expect(lane.countInFlightForegroundAgents()).toBe(1);
+  });
+
+  it('counts in-flight Task and compose dispatches', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_task', 'Task', '{}');
+    lane.addStart('tu_comp', 'compose', '{}');
+    expect(lane.countInFlightForegroundAgents()).toBe(2);
+  });
+
+  it('does not count a settled (has result) nesting entry', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_ag2', 'agent', '{}');
+    lane.addResult('tu_ag2', makeResult('tu_ag2', ''));
+    expect(lane.countInFlightForegroundAgents()).toBe(0);
+  });
+
+  it('counts only the in-flight subset when some entries are settled', () => {
+    const lane = new ToolLane();
+    lane.addStart('tu_ag3', 'agent', '{}');      // in-flight
+    lane.addStart('tu_ag4', 'agent', '{}');      // will be settled
+    lane.addResult('tu_ag4', makeResult('tu_ag4', ''));
+    lane.addStart('tu_bash2', 'bash', '(pwd)');  // leaf tool — not counted
+    expect(lane.countInFlightForegroundAgents()).toBe(1);
+  });
+});

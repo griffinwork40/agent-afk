@@ -67,6 +67,28 @@ interface RailSnapshot {
   contextRatio: number;
 }
 
+/**
+ * Contract: derive the rail's `N/M subs` pair from the background registry
+ * plus the tool lane's in-flight foreground subagent count (#2687).
+ *
+ * - `activeSubs` = running background jobs + in-flight foreground dispatches.
+ * - `totalSubs` is a high-water mark that never decreases (the registry evicts
+ *   terminal jobs after ~5 min, so `jobCount` can shrink). Foreground dispatches
+ *   are folded into it so `N <= M` always holds and a session that has only
+ *   ever run foreground subagents still renders `N/M` rather than `0 subs`
+ *   (the formatter hides the pair when `totalSubs === 0`).
+ */
+export function deriveSubCounts(
+  bgActive: number,
+  jobCount: number,
+  foregroundActive: number,
+  prevTotal: number,
+): { activeSubs: number; totalSubs: number } {
+  const activeSubs = bgActive + foregroundActive;
+  const totalSubs = Math.max(prevTotal, jobCount + foregroundActive);
+  return { activeSubs, totalSubs };
+}
+
 /** Opaque handle returned by `HealthRail.start()` — see the class. */
 export class HealthRail {
   private readonly stream: NodeJS.WriteStream;
@@ -75,6 +97,13 @@ export class HealthRail {
 
   private started = false;
   private snapshot: RailSnapshot | null = null;
+  /**
+   * Late-bound source for the in-flight foreground subagent count (#2687).
+   * The REPL passes this ref into each turn's handles; the turn handler points
+   * `current` at the live renderer's tool-lane count. Defaults to 0 so the
+   * rail behaves exactly as before on callers that never wire it.
+   */
+  readonly foregroundSubs: { current: () => number } = { current: () => 0 };
   private onRowCountChange?: (rows: number) => void;
   private resizeUnsub: (() => void) | null = null;
   /** Interval that triggers a repaint every second while the rail is running. */
@@ -144,11 +173,13 @@ export class HealthRail {
    */
   update(stats: SessionStats, contextRatioOverride?: number): void {
     const allJobs = this.registry ? this.registry.list() : [];
-    const activeSubs = allJobs.filter((j) => j.status === 'running').length;
-    // Ratchet upward: registry evicts terminal jobs after ~5 min, so
-    // list().length can shrink. The high-water mark never decreases.
-    this.totalSubsEver = Math.max(this.totalSubsEver, allJobs.length);
-    const totalSubs = this.totalSubsEver;
+    const { activeSubs, totalSubs } = deriveSubCounts(
+      allJobs.filter((j) => j.status === 'running').length,
+      allJobs.length,
+      this.foregroundSubs.current(),
+      this.totalSubsEver,
+    );
+    this.totalSubsEver = totalSubs;
 
     // Accumulate total tool calls across all completed turns.
     const toolCalls = stats.turns.reduce(

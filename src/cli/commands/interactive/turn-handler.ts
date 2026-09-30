@@ -121,6 +121,7 @@ export async function runTurn(
     h.bashTailSetter.current = (id, tail) => renderer.setBashOutputTail(id, tail);
   }
 
+  if (h.foregroundSubsRef) h.foregroundSubsRef.current = () => renderer.getInFlightForegroundSubCount(); // #2687 health-rail fg subs
   const disposeRendererOnce = async (): Promise<void> => {
     if (state.rendererDisposed) return;
     state.rendererDisposed = true;

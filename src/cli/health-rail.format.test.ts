@@ -60,6 +60,19 @@ describe('formatHealthRail', () => {
     expect(result).toContain('2/5 subs');
   });
 
+  it('shows combined fg+bg active count — foreground subs are summed before reaching the formatter (#2687)', () => {
+    // HealthRail.update() adds foregroundActiveSubs to the background-registry
+    // active count before storing the snapshot. The formatter receives the
+    // already-combined activeSubs field — this test documents that the
+    // formatter correctly displays the combined value.
+    const result = stripAnsi(formatHealthRail(
+      { totalTurns: 0, elapsedMs: 0, toolCalls: 0, activeSubs: 3, totalSubs: 5, contextRatio: 0 },
+      120,
+    ));
+    // 3 = e.g. 1 background running + 2 foreground in-flight
+    expect(result).toContain('3/5 subs');
+  });
+
   it('shows 0/total when all subagents completed', () => {
     const result = stripAnsi(formatHealthRail(
       { totalTurns: 0, elapsedMs: 0, toolCalls: 0, activeSubs: 0, totalSubs: 3, contextRatio: 0 },

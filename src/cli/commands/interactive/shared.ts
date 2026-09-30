@@ -727,6 +727,15 @@ export interface TurnHandles {
    * Best-effort — absent on non-interactive callers and non-TTY surfaces.
    */
   onTextDelta?(charCount: number): void;
+  /**
+   * Mutable ref wired by the turn handler to expose the renderer's in-flight
+   * foreground subagent count. The turn handler assigns `current` to
+   * `() => renderer.getInFlightForegroundSubCount()` so callers (onAfterTurn,
+   * onContextProgress) can read the count without a direct renderer reference.
+   * Mirrors the `bashTailSetter` pattern; the REPL passes `HealthRail.foregroundSubs`. Absent on
+   * non-interactive callers; `current` defaults to `() => 0` until wired.
+   */
+  foregroundSubsRef?: { current: () => number };
 }
 
 // `discardStdin: false` is load-bearing — ora's default wraps process.stdin

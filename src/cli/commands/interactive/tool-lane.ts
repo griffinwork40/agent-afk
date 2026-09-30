@@ -1,5 +1,5 @@
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
+import { SUBAGENT_TOOLS, NESTING_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { stripAnsi } from '../../display.js';
@@ -17,7 +17,7 @@ import {
 } from './tool-lane-render.js';
 import type { ToolLaneFlash } from './tool-lane-flash.js';
 import type { ElementFade } from '../../smoke-fade.js';
-import { trailingCompletedRootToolName } from './tool-lane.queries.js';
+import { trailingCompletedRootToolName, countInFlightForegroundAgents as countInFlightFgAgents, findLastSkillEntryId as findLastSkillId } from './tool-lane.queries.js';
 import { renderToolLaneOverlay } from './tool-lane-overlay.js';
 import {
   ancestorDepthOf as ancestorDepthIn,
@@ -434,6 +434,18 @@ export class ToolLane {
   }
 
   /**
+   * Count in-flight foreground subagent dispatches — NESTING_TOOLS entries
+   * (agent, Task, Agent, compose, skill) that have not yet received a result.
+   *
+   * Delegates to {@link countInFlightFgAgents} (tool-lane.queries.ts). Used
+   * by the health rail to include foreground subagents in the `N/M subs`
+   * count alongside the background registry's jobs (#2687).
+   */
+  countInFlightForegroundAgents(): number {
+    return countInFlightFgAgents(this.entries, this.order);
+  }
+
+  /**
    * Returns `true` if `id` is registered as a `tool` entry (not a text entry).
    * Used by the streaming renderer to distinguish a registered tool_use_id
    * (a valid nesting parent — e.g. a compose entry) from an arbitrary
@@ -460,14 +472,7 @@ export class ToolLane {
    * entries no longer appear in the lane and are not valid nesting parents.
    */
   findLastSkillEntryId(): string | undefined {
-    for (let i = this.order.length - 1; i >= 0; i--) {
-      const id = this.order[i]!;
-      const entry = this.entries.get(id);
-      if (entry?.kind === 'tool' && SKILL_TOOLS.has(entry.toolName)) {
-        return id;
-      }
-    }
-    return undefined;
+    return findLastSkillId(this.entries, this.order);
   }
 
   /**

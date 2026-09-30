@@ -343,6 +343,11 @@ export class StreamRenderer {
     // Note: 'stage-rail' has been removed from this overlay. The stage rail is
     // now a reserved footer row managed by LoopStageBar (same DECSTBM pattern as
     // BackgroundStatusBar) and painted independently of the compositor frame.
+    //
+    // Note: 'subagent-status' has also been removed from this overlay (#2661).
+    // The subagent-status slot and its activeSubagents tracking were removed;
+    // foreground subagent counts are now reported via the health rail instead
+    // (see HealthRail.foregroundSubs / #2687).
     this.overlayComposer = new OverlayComposer(compositor, [
       THOUGHT_SUMMARY_SLOT, // held `◆ thought for Xs` while it fades (smoke only); above the next phase
       'thinking-live',
@@ -399,6 +404,18 @@ export class StreamRenderer {
    */
   getCompositor(): TerminalCompositor | null {
     return this.compositor;
+  }
+
+  /**
+   * Count in-flight foreground subagent dispatches from the tool lane.
+   * Returns 0 after dispose. Delegates to {@link ToolLane.countInFlightForegroundAgents}.
+   *
+   * Called by the REPL loop to include foreground subagents in the health
+   * rail's `N/M subs` count alongside the background registry's jobs.
+   */
+  getInFlightForegroundSubCount(): number {
+    if (this.disposed) return 0;
+    return this.toolLane.countInFlightForegroundAgents();
   }
 
   /**
