@@ -45,8 +45,13 @@ export const LABEL_OVERHEAD = 32; // 22 fixed + 10 digit budget — generous upp
  * label push the total past `budget`.
  *
  * @param s       Already-redacted string to preview.
- * @param budget  Max characters in the returned string.
- *                Defaults to {@link PREVIEW_BUDGET}.
+ * @param budget  Max characters in the returned string. Defaults to
+ *                {@link PREVIEW_BUDGET}. When `budget` is 0 or negative,
+ *                the label cannot fit, so the function falls through to the
+ *                `half <= 0` guard and returns `s.slice(0, budget)` — an
+ *                empty string for `budget === 0`. Callers are expected to
+ *                pass a positive budget; the 0/negative case is handled
+ *                defensively rather than silently.
  * @returns Preview string, or `''` when the input is empty.
  */
 export function previewInput(s: string, budget = PREVIEW_BUDGET): string {

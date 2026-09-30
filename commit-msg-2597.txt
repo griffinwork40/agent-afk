@@ -1,0 +1,39 @@
+fix(#2597): address advisory findings from 2026-09-29 pr-triage
+
+Applies the concrete, low-risk advisory findings from issue #2597
+(merged PRs #2571–#2575). Speculative, architectural, or complex
+findings are tracked in the PR body.
+
+## Changes
+
+### src/whatif/redundancy.ts (#2571)
+- Fix stemmer guards: raise -ings threshold from > 6 to > 7
+  (prevents "strings" stemming to "str"; now falls through to the
+  -s rule, producing "string") and raise -ing threshold from > 6 to
+  > 7 (prevents "running" stemming to "runn"; left unstemmed, which
+  is correct for this conservative stemmer).
+- Remove duplicate "// Token helpers" section header (~line 90); rename
+  to "// Tokenization" to distinguish it from the one at line 43.
+
+### src/agent/afk-gate-preview.ts (#2573)
+- Document the budget <= 0 precondition in the JSDoc for previewInput.
+
+### src/agent/providers/openai-compatible/query.ts (#2575)
+- Add @internal JSDoc to six package-visible fields and one method that
+  were promoted from private to satisfy the extracted context interfaces:
+  client, opts, toolDispatcher, traceWriter, fastTier, priorTurns,
+  journal, lastUsage, activeOpenAITools().
+
+### src/telegram/elicitation-telegram.test.ts (#2573)
+- Add test: _harnessInternal: true with title: undefined triggers the
+  AFK safety approval fallback banner (previously untested branch).
+
+### src/agent/providers/openai-compatible/query/repair-orphan-tool-calls.test.ts (#2573)
+- Add reversed-order interleaving test confirming that the repair function
+  always emits undefined-id (Ollama-style) messages before id-correlated
+  ones regardless of input order.
+
+### src/agent/journal/reader.async.test.ts (#2572)
+- Replace the weak fd-leak test (pure concurrency heuristic, vi unused)
+  with a spy-based assertion using vi.spyOn(fs.ReadStream.prototype,
+  destroy) — directly verifies stream.destroy() is called after each scan.
