@@ -45,6 +45,8 @@ export const sendTelegramTool: AnthropicToolDef = {
         type: 'string',
         description:
           'Plain-text message body to send to the operator. ' +
+          'Markdown is rendered as Telegram HTML (bold, italic, code, links); ' +
+          'plain-text fallback is used if Telegram rejects the formatting. ' +
           'Max 4096 characters (Telegram API limit). Must be non-empty.',
       },
       chat: {

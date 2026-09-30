@@ -50,7 +50,8 @@ vi.mock('../../telegram/push.js', () => ({
   pushIfConfigured: vi.fn(async () => undefined),
   // `push` and `pushMarkdown` are imported by send-telegram.ts (via the tool-handlers
   // chain pulled in transitively through daemon.ts's executor imports). The mock must
-  // export all of them or Vitest will throw "No <export> export is defined on the mock".
+  // export all named exports used by the module under test; otherwise Vitest throws a
+  // "No '<name>' export is defined on the mock" error at runtime.
   push: vi.fn(async () => undefined),
   pushMarkdown: vi.fn(async () => ({ ok: true, status: 200 })),
 }));
