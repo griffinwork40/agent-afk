@@ -53,7 +53,7 @@ import {
   readSourceEnabledState,
 } from '../../config/import-sources.js';
 import { errorMessage } from '../../utils/errors.js';
-import { listConfig } from '../../config/mutate.js';
+import { loadJsonConfig } from '../../cli/config/json-tier.js';
 
 export interface SkillManifestEntry {
   name: string;
@@ -195,9 +195,11 @@ function discoverPluginSkillsAndCommands(pluginPath: string, knownToolNames: Rea
 
 /**
  * Check whether a skill name is in the operator-configured `skills.hidden`
- * list. Matching follows the same suffix rule as `excludeName`: a bare entry
- * "name" hides both "name" and any "<plugin>:name" — so an operator hiding
- * "forge" does not need to enumerate every qualified variant.
+ * list. Matching is bidirectional:
+ *   - Bare config entry "forge" hides qualified skill "awa-dev:forge" (suffix
+ *     match from the skill side).
+ *   - Qualified config entry "awa-dev:qualify" hides bare skill "qualify"
+ *     (the plugin prefixed its entry, but discovery registered the skill bare).
  *
  * Contract: this function is called from `collectSkillEntries` to annotate
  * entries with `disableModelInvocation`; the actual filtering happens in
@@ -205,10 +207,22 @@ function discoverPluginSkillsAndCommands(pluginPath: string, knownToolNames: Rea
  */
 function isHiddenByConfig(skillName: string, hiddenNames: ReadonlySet<string>): boolean {
   if (hiddenNames.size === 0) return false;
+  // Exact match (bare entry matches bare skill; qualified entry matches qualified skill).
   if (hiddenNames.has(skillName)) return true;
-  // Suffix match: bare "name" hides "plugin:name".
-  const bare = skillName.includes(':') ? skillName.split(':').pop()! : skillName;
-  return hiddenNames.has(bare);
+  if (skillName.includes(':')) {
+    // Skill is qualified (e.g. "awa-dev:qualify"):
+    //   - bare entry "qualify" hides it (suffix match from skill side).
+    const bare = skillName.split(':').pop()!;
+    if (hiddenNames.has(bare)) return true;
+  } else {
+    // Skill is bare (e.g. "qualify"):
+    //   - qualified entry "awa-dev:qualify" in the config must also hide it
+    //     (the plugin prefixed its entry, but discovery registered the skill bare).
+    for (const entry of hiddenNames) {
+      if (entry.includes(':') && entry.split(':').pop() === skillName) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -219,10 +233,10 @@ function isHiddenByConfig(skillName: string, hiddenNames: ReadonlySet<string>): 
  */
 function readHiddenSkillNames(): ReadonlySet<string> {
   try {
-    const config = listConfig();
-    const raw = (config['skills'] as Record<string, unknown> | undefined)?.['hidden'];
-    if (!Array.isArray(raw)) return new Set();
-    return new Set(raw.filter((v): v is string => typeof v === 'string' && v.length > 0));
+    const { config } = loadJsonConfig();
+    const hidden = config.skills?.hidden;
+    if (!Array.isArray(hidden) || hidden.length === 0) return new Set();
+    return new Set(hidden);
   } catch {
     return new Set();
   }

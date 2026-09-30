@@ -309,6 +309,17 @@ export interface CliConfig {
    * `undefined` / absent = nothing imported (strict opt-in).
    */
   importFrom?: ImportFromConfig;
+  /**
+   * Skill visibility overrides. Skill names listed in `hidden` are excluded
+   * from the model-facing manifest but remain slash-invocable by the user.
+   * Accepts bare names (`"forge"`) and plugin-qualified names
+   * (`"awa-dev:qualify"`). Matching is bidirectional (see `isHiddenByConfig`).
+   * Human-tier: the operator controls which skills the model can
+   * self-dispatch — the agent must not reverse this.
+   */
+  skills?: {
+    hidden?: string[];
+  };
 }
 
 /** One per-tier model binding in afk.config.json's `models` block. */
@@ -404,6 +415,10 @@ export interface ConfigFileSchema {
   importFrom?: Partial<
     Record<ImportSourceBinary, boolean | { plugins?: boolean; skills?: boolean; mcp?: boolean }>
   >;
+  /** Skill visibility overrides — see `CliConfig.skills`. */
+  skills?: {
+    hidden?: unknown[];
+  };
 }
 
 export const DEFAULT_CONFIG: Omit<CliConfig, 'apiKey'> = {

@@ -30,6 +30,7 @@ import { registerSkill, _resetRegistry } from '../../skills/skill-registry.js';
 import { _resetPluginScanCache } from '../plugins-scanner.js';
 import { getPluginsDir } from '../../paths.js';
 import type { RegisteredAgent } from '../agents/types.js';
+import { _resetConfigCache } from '../../cli/config.js';
 
 const fsMocks = vi.hoisted(() => ({
   readFileSync: vi.fn(),
@@ -1647,6 +1648,7 @@ describe('hide-from-model — skills.hidden in afk.config.json', () => {
 
   beforeEach(() => {
     _resetRegistry();
+    _resetConfigCache();
     vi.unstubAllEnvs();
     tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-config-hidden-'));
     vi.stubEnv('AFK_HOME', tmpAfkHome);
@@ -1655,6 +1657,7 @@ describe('hide-from-model — skills.hidden in afk.config.json', () => {
   });
 
   afterEach(() => {
+    _resetConfigCache();
     vi.unstubAllEnvs();
     try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
   });
@@ -1804,5 +1807,163 @@ describe('hide-from-model — disk-skill disable-model-invocation via user SKILL
 
     expect(entry).toBeDefined();
     expect(entry?.disableModelInvocation).toBe(true);
+  });
+});
+
+describe('hide-from-model — skills.hidden respects project-tier config (F-1)', () => {
+  let tmpAfkHome: string;
+  let tmpProjectDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    _resetConfigCache();
+    vi.unstubAllEnvs();
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-proj-config-afkhome-'));
+    tmpProjectDir = mkdtempSync(join(tmpdir(), 'skill-bridge-proj-config-cwd-'));
+    origCwd = process.cwd();
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+    process.chdir(tmpProjectDir);
+  });
+
+  afterEach(() => {
+    _resetConfigCache();
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+    try { rmSync(tmpProjectDir, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  it('hides a skill listed in a project-tier afk.config.json skills.hidden', () => {
+    // Write the hidden list to the PROJECT-tier config (cwd/afk.config.json),
+    // not the user-tier config. The 3-tier walk must find it.
+    writeFileSync(
+      join(tmpProjectDir, 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: ['project-hidden-skill'] } }),
+    );
+    registerSkill({
+      name: 'project-hidden-skill',
+      description: 'Hidden via project-tier config',
+      handler: vi.fn(),
+    });
+    registerSkill({
+      name: 'visible-skill',
+      description: 'Should appear',
+      handler: vi.fn(),
+    });
+
+    const manifest = buildSkillManifest([]);
+
+    expect(manifest).not.toContain('project-hidden-skill');
+    expect(manifest).toContain('visible-skill');
+  });
+
+  it('project-tier skills.hidden outranks user-tier (project config wins)', () => {
+    // Project config hides 'project-wins'; user config would hide 'user-only'
+    // but the 3-tier walk stops at project.
+    writeFileSync(
+      join(tmpProjectDir, 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: ['project-wins'] } }),
+    );
+    mkdirSync(join(tmpAfkHome, 'config'), { recursive: true });
+    writeFileSync(
+      join(tmpAfkHome, 'config', 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: ['user-only'] } }),
+    );
+
+    registerSkill({ name: 'project-wins', description: 'Hidden by project', handler: vi.fn() });
+    registerSkill({ name: 'user-only', description: 'NOT hidden (user tier ignored)', handler: vi.fn() });
+
+    const manifest = buildSkillManifest([]);
+
+    // Project tier wins → project-wins is hidden
+    expect(manifest).not.toContain('project-wins');
+    // User tier is skipped when project tier is present → user-only is visible
+    expect(manifest).toContain('user-only');
+  });
+});
+
+describe('hide-from-model — skills.hidden bidirectional name matching (F-2)', () => {
+  let tmpAfkHome: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    _resetRegistry();
+    _resetConfigCache();
+    vi.unstubAllEnvs();
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'skill-bridge-bidir-afkhome-'));
+    origCwd = process.cwd();
+    vi.stubEnv('AFK_HOME', tmpAfkHome);
+    mkdirSync(join(tmpAfkHome, 'config'), { recursive: true });
+  });
+
+  afterEach(() => {
+    _resetConfigCache();
+    vi.unstubAllEnvs();
+    process.chdir(origCwd);
+    try { rmSync(tmpAfkHome, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  function writeHiddenConfig(names: string[]): void {
+    writeFileSync(
+      join(tmpAfkHome, 'config', 'afk.config.json'),
+      JSON.stringify({ skills: { hidden: names } }),
+    );
+  }
+
+  it('qualified config entry "awa-dev:qualify" hides bare skill "qualify"', () => {
+    // Discovery registers the skill as bare "qualify" (e.g. because it was the
+    // first to claim the bare slot), but the operator wrote the qualified form
+    // in their config. isHiddenByConfig must match in this direction too.
+    registerSkill({
+      name: 'qualify',
+      description: 'Qualify skill (registered bare)',
+      handler: vi.fn(),
+    });
+    writeHiddenConfig(['awa-dev:qualify']);
+
+    const manifest = buildSkillManifest([]);
+    expect(manifest).not.toContain('qualify');
+  });
+
+  it('bare config entry "qualify" hides qualified skill "awa-dev:qualify"', () => {
+    // The reverse: skill is registered qualified, config has bare name.
+    registerSkill({
+      name: 'awa-dev:qualify',
+      description: 'Qualified qualify skill',
+      handler: vi.fn(),
+    });
+    writeHiddenConfig(['qualify']);
+
+    const manifest = buildSkillManifest([]);
+    expect(manifest).not.toContain('qualify');
+  });
+
+  it('qualified config entry hides plugin skill registered as bare (plugin SKILL.md case)', () => {
+    // Simulates: plugin "awa-dev" contributes SKILL.md with name: "qualify",
+    // which discovery registers as bare "qualify" (first-wins). Operator wrote
+    // "awa-dev:qualify" in skills.hidden. Must be hidden.
+    const tmpPluginDir = mkdtempSync(join(tmpdir(), 'skill-bridge-bidir-plugin-'));
+    const skillDir = join(tmpPluginDir, 'skills', 'qualify');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: qualify\ndescription: Plugin qualify skill\n---\n# Body\n',
+    );
+    writeHiddenConfig(['awa-dev:qualify']);
+
+    const manifest = buildSkillManifest([{ type: 'local', path: tmpPluginDir }]);
+    expect(manifest).not.toContain('qualify');
+
+    try { rmSync(tmpPluginDir, { recursive: true }); } catch { /* non-fatal */ }
+  });
+
+  it('unrelated skills are unaffected by bidirectional matching', () => {
+    registerSkill({ name: 'other', description: 'Unrelated', handler: vi.fn() });
+    registerSkill({ name: 'qualify', description: 'Target', handler: vi.fn() });
+    writeHiddenConfig(['awa-dev:qualify']);
+
+    const manifest = buildSkillManifest([]);
+    expect(manifest).toContain('other');
   });
 });

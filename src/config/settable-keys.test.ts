@@ -213,6 +213,42 @@ describe('coerceConfigValue', () => {
   });
 });
 
+describe('coerceConfigValue — string-array type', () => {
+  const spec = getConfigKeySpec('skills.hidden')!;
+
+  it('accepts an array of strings', () => {
+    const result = coerceConfigValue(spec, ['forge', 'mint']);
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint'] });
+  });
+
+  it('accepts a comma-separated string and splits it', () => {
+    const result = coerceConfigValue(spec, 'forge,mint,ship');
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint', 'ship'] });
+  });
+
+  it('trims whitespace from comma-split entries', () => {
+    const result = coerceConfigValue(spec, ' forge , mint ');
+    expect(result).toEqual({ ok: true, value: ['forge', 'mint'] });
+  });
+
+  it('rejects a non-string element in the array', () => {
+    const result = coerceConfigValue(spec, ['forge', 42]);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/non-string/);
+  });
+
+  it('rejects a non-string non-array input', () => {
+    const result = coerceConfigValue(spec, 123);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an array/);
+  });
+
+  it('returns an empty array for an empty comma-string', () => {
+    const result = coerceConfigValue(spec, '');
+    expect(result).toEqual({ ok: true, value: [] });
+  });
+});
+
 describe('dotted-path helpers', () => {
   it('setAtPath creates nested objects', () => {
     const obj: Record<string, unknown> = {};
