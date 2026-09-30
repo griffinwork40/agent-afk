@@ -84,6 +84,18 @@ export {
 };
 export type { ForkParent, ForkSubagentOptions, SubagentManagerOptions };
 
+/**
+ * Normalise the `apiKey` option to a live-getter form.
+ * Plain strings are wrapped so forks always call through and see the current
+ * credential (e.g. after /reauth). Function form is passed through unchanged.
+ */
+function normaliseApiKeyToGetter(
+  apiKey: string | (() => string | undefined) | undefined,
+): (() => string | undefined) | undefined {
+  if (apiKey === undefined) return undefined;
+  if (typeof apiKey === 'function') return apiKey;
+  return () => apiKey;
+}
 
 export class SubagentManager {
   private readonly active = new Map<string, SubagentHandleImpl<unknown>>();
@@ -146,9 +158,7 @@ export class SubagentManager {
     this.parentCanUseTool = options.canUseTool;
     this.hookRegistry = options.hookRegistry;
     this.progressSink = options.progressSink;
-    // Wrap plain strings into a getter; function form passed through unchanged.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    this.parentApiKey = options.apiKey === undefined ? undefined : typeof options.apiKey === 'function' ? options.apiKey : (() => options.apiKey as string);
+    this.parentApiKey = normaliseApiKeyToGetter(options.apiKey);
     this.parentBaseUrl = options.baseUrl;
     this.parentProvider =
       options.parentModel !== undefined ? providerForModel(options.parentModel) : undefined;
