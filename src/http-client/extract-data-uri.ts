@@ -39,15 +39,15 @@
  *   mime    — everything between "data:" and the first "," (e.g. "image/svg+xml;base64")
  *   payload — everything after the first ","
  */
-const DATA_URI_RE = /data:(?<mime>[^,\s"')>]{1,200}),(?!\u2026)(?<payload>[^\s"')>]+)/g;
+const DATA_URI_RE = /data:(?<mime>[^,\s"')>]{1,120}),(?!\u2026)(?<payload>[^\s"')>]+)/g;
 
 /**
  * Build an elision marker that preserves MIME type (and encoding label when
  * present) so the model still knows what kind of data was there.
  *
- * The byte count is reported as `payload.length` (character count), which is
- * an exact count for base64 ASCII payloads and a reasonable approximation for
- * URL-encoded or plain-text payloads.
+ * The byte count is reported as `Buffer.byteLength(payload)` (UTF-8 bytes),
+ * which is exact for base64 ASCII payloads and correct for URL-encoded or
+ * plain-text payloads that contain multi-byte characters.
  *
  * @param mime     Everything between `data:` and the first `,`, e.g.
  *                 `image/svg+xml;base64` or `text/plain`.
@@ -56,7 +56,7 @@ const DATA_URI_RE = /data:(?<mime>[^,\s"')>]{1,200}),(?!\u2026)(?<payload>[^\s"'
  *                 `data:image/svg+xml;base64,…elided 75677 bytes`.
  */
 export function buildElisionMarker(mime: string, payload: string): string {
-  return `data:${mime},\u2026elided ${payload.length} bytes`;
+  return `data:${mime},\u2026elided ${Buffer.byteLength(payload)} bytes`;
 }
 
 /**
@@ -72,7 +72,9 @@ export function buildElisionMarker(mime: string, payload: string): string {
  *
  * @param turndown  The shared TurndownService instance from `importExtractDeps`.
  */
-export function applyDataUriTurndownRule(turndown: {
+
+/** Structural interface for the subset of TurndownService used by this module. */
+export interface TurndownLike {
   addRule: (
     key: string,
     rule: {
@@ -83,7 +85,9 @@ export function applyDataUriTurndownRule(turndown: {
       ) => string;
     },
   ) => void;
-}): void {
+}
+
+export function applyDataUriTurndownRule(turndown: TurndownLike): void {
   turndown.addRule('data-uri-img', {
     filter(node) {
       if (node.nodeName !== 'IMG') return false;
