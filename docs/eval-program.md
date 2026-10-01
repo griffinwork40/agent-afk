@@ -9,8 +9,8 @@ live in `docs/benchmarks/` and are separate from the external behavioral benchma
 | Suite | Capability Probed | Arms | Fixed Model | Sample × Trials | Est. Cost | Cadence | Public Submission |
 |-------|-------------------|------|-------------|-----------------|-----------|---------|-------------------|
 | Terminal-Bench | Shell task completion, code execution, filesystem manipulation | afk-full, afk-minimal, claude-code | claude-sonnet-4-5 | 20 tasks × 2 trials | ~$15–40 | Per major release | ⚠ See note |
-| Terminal-Bench (full) | Same — full split | afk-full, afk-minimal, claude-code | claude-sonnet-4-5 | 250 tasks × 1 trial | ~$150–300 | Quarterly | ⚠ See note |
-| GAIA | Multi-step reasoning, web + tool use, factual retrieval | afk-full, afk-minimal, claude-code | claude-sonnet-4-5 | 20 tasks × 2 trials | ~$20–60 | Per major release | ✓ HF leaderboard accepts; check current format |
+| Terminal-Bench (full) | Same — full split | afk-full, afk-minimal, claude-code | claude-sonnet-4-5 | full split × 1 trial (count varies by release; TB 2.0 = 89) | ~$300–600 per arm | Quarterly | ⚠ See note |
+| GAIA | Multi-step reasoning, web + tool use, factual retrieval | afk-full, afk-minimal, claude-code | claude-sonnet-4-5 | 20 tasks × 2 trials | ~$20–60 | Per major release | ⚠ See note |
 | SWE-bench Pro | Real-world software engineering: bug fixes on live repos | afk-full, afk-minimal | claude-sonnet-4-5 | 10 tasks × 1 trial | ~$50–150 | Quarterly | ⚠ See note |
 
 ### Arm Definitions
@@ -18,7 +18,7 @@ live in `docs/benchmarks/` and are separate from the external behavioral benchma
 | Arm | Description |
 |-----|-------------|
 | `afk-full` | Full AFK framework prompt + all tools (agent/skill/compose dispatch enabled) |
-| `afk-minimal` | `AFK_FRAMEWORK_PROMPT_FILE=/tmp/afk-empty-framework-prompt.txt` (empty prompt) + `AFK_MAX_NESTING_DEPTH=0` (dispatch tools disabled). Vanilla Claude + basic tools only. Ablation to isolate framework contribution. |
+| `afk-minimal` | `AFK_FRAMEWORK_PROMPT_FILE=/tmp/afk-empty-framework-prompt.txt` (empty prompt) + `AFK_MAX_NESTING_DEPTH=0` (dispatch tools disabled). Removes the framework prompt and delegation; builtin tools, tool descriptions, and any cwd `AFK.md` overlay remain. Ablation to isolate the framework contribution. Not a bare-model arm. |
 | `claude-code` | Harbor built-in `claude-code` agent; same model. Comparison baseline. |
 | `terminus-2` (optional) | Harbor built-in agentic baseline; run when available on Hub. |
 
@@ -26,7 +26,7 @@ live in `docs/benchmarks/` and are separate from the external behavioral benchma
 
 **Always run a 10–20 task stratified sample before any full Terminal-Bench run.**
 
-Full Terminal-Bench (~250 tasks at claude-sonnet-4-5) costs $300–600. A stratified sample on 10–20 tasks provides sufficient signal to abort if the adapter is misconfigured or costs are anomalous.
+A full Terminal-Bench run at claude-sonnet-4-5 is estimated at $300–600 per arm (unverified estimate; measure cost per task on the sample first). A stratified sample on 10–20 tasks provides sufficient signal to abort if the adapter is misconfigured or costs are anomalous.
 
 ```bash
 # Sample run — verify adapter works and cost/turn is reasonable before full run
@@ -44,8 +44,8 @@ Proceed with full run only if: (a) all tasks complete without adapter errors, (b
 
 **Terminal-Bench:**
 - Harbor Hub offers continuous Terminal-Bench runs accessible at https://hub.harborframework.com.
-- Terminal-Bench 2.1 community submissions to the Princeton HAL harness are **closed** (harness archived as of 2025). Continuous benchmark runs via Harbor Hub are the supported path.
-- Recommend uploading to Harbor Hub (`harbor run --upload --public`) rather than attempting leaderboard submission.
+- Terminal-Bench 2.1 community submissions are **closed**; only maintainer-run results are added (source: harbor-framework/terminal-bench-2-1 README, checked 2026-09-30).
+- The continuous Terminal-Bench release has a Harbor Hub leaderboard; whether community uploads appear on it is **not verified**. `harbor run --upload --public` publishes trajectories (including the afk system prompt) publicly; check the Hub policy before relying on it for a leaderboard row.
 
 **SWE-bench Verified:**
 - The swe-bench/experiments leaderboard requires **academic affiliation + arXiv paper** since 2025-11-18 (source: swe-bench/experiments README, `CONTRIBUTING.md`).
@@ -53,12 +53,12 @@ Proceed with full run only if: (a) all tasks complete without adapter errors, (b
 - Harbor's `swe-bench-pro` dataset runs locally; results are not submittable to the public Verified leaderboard.
 
 **GAIA:**
-- The GAIA Hugging Face leaderboard (https://huggingface.co/spaces/gaia-benchmark/leaderboard) accepts community submissions.
-- Format requirements and submission instructions are at https://github.com/aymeric-roucher/GAIA. Verify current requirements before submitting.
-- Harbor's GAIA adapter produces results compatible with the leaderboard format; exact submission process not verified as of 2026-09-30.
+- The GAIA Hugging Face leaderboard space exists (https://huggingface.co/spaces/gaia-benchmark/leaderboard, last modified 2026-05); whether it currently accepts submissions is **not verified**.
+- Harbor's GAIA adapter uses the **validation** split (165 tasks, public answers), which can be scored locally. A leaderboard row requires the **test** split, whose answers are private and are scored only by the leaderboard. Local validation scores are self-reported.
+- Validation answers are public, so a web-enabled agent can in principle find them; treat validation scores as an upper bound.
 
 **Princeton HAL:**
-- Archived. Do not use.
+- `princeton-pli/hal-harness` is archived and no longer accepts new results (README, checked 2026-09-30). Do not use.
 
 ## What These Benchmarks Do NOT Cover
 
@@ -95,14 +95,14 @@ PYTHONPATH=. harbor run \
 Results land in `bench/harbor/jobs/<job-name>/`. Each trial directory has:
 
 - `agent/afk-stream.txt` — raw NDJSON stream from `afk chat --format stream-json`
-- `trial.json` — structured trial metadata: `reward`, `cost_usd`, `n_input_tokens`, `n_output_tokens`
+- `result.json` — structured trial result; the reward is at `.verifier_result.rewards.reward`
 - `verifier/` — task-specific verifier output
 
 Read pass rate across a job:
 
 ```bash
-jq -s '[.[] | .reward // 0] | (map(select(. >= 1)) | length) / length' \
-  bench/harbor/jobs/<job>/*/trial.json
+jq -s '[.[] | .verifier_result.rewards.reward // 0] | (map(select(. >= 1)) | length) / length' \
+  bench/harbor/jobs/<job>/*/result.json
 ```
 
 Compare two arms:
