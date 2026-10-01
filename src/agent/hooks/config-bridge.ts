@@ -23,6 +23,7 @@ import { compileMatcher } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
 import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
 import { resolveContextSessionId } from './hook-utils.js';
+import { readIndex } from '../plugins/index-store.js';
 
 export interface AgentConfigForBridge {
   cwd?: string;
@@ -202,6 +203,22 @@ export function loadAndRegisterConfigHooks(
           // time) so rotations from /clear are captured automatically.
           const transcriptPath = getTranscriptPath?.() ?? null;
 
+          // Resolve plugin options and key from the index for user-scope
+          // plugins so CLAUDE_PLUGIN_OPTION_* and CLAUDE_PLUGIN_DATA are
+          // available in the hook subprocess.
+          let resolvedPluginKey: string | undefined;
+          let resolvedPluginOptions: Record<string, string> | undefined;
+          if (hookPluginName !== undefined) {
+            // The index key is the plugin name (manifest name or dir name).
+            // readIndex is fast (in-memory read of a small JSON file).
+            const idx = readIndex();
+            const idxEntry = idx.plugins[hookPluginName];
+            if (idxEntry !== undefined) {
+              resolvedPluginKey = hookPluginName;
+              resolvedPluginOptions = idxEntry.options;
+            }
+          }
+
           const result = await executeCommand({
             command: hookCommand,
             context,
@@ -212,6 +229,8 @@ export function loadAndRegisterConfigHooks(
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
             ...(hookPluginName !== undefined ? { pluginName: hookPluginName } : {}),
             ...(hookPluginName !== undefined ? { pluginHookEnv: hookConfig.pluginHookEnv } : {}),
+            ...(resolvedPluginKey !== undefined ? { pluginKey: resolvedPluginKey } : {}),
+            ...(resolvedPluginOptions !== undefined ? { pluginOptions: resolvedPluginOptions } : {}),
           });
 
           return result.decision;
