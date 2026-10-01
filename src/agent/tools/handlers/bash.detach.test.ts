@@ -168,15 +168,26 @@ describe('post-detach session abort kills process (Fix #1)', () => {
       });
     });
 
-    // Start a slow command that would emit output only after a sleep
+    // Use a portable Node.js long-running command instead of `sleep 5 && echo afterwait`:
+    //   - Works identically on all platforms (no POSIX `sleep` or shell `&&` required).
+    //   - The sentinel string "afterwait" is written only if the process runs to
+    //     completion (10 s); a kill before that leaves output empty so the
+    //     post-assertion `not.toContain('afterwait')` is valid on every OS.
+    //   - On Windows, `taskkill /F /T /PID` kills the bash/shell wrapper AND the
+    //     spawned node.exe child reliably (both are standard Windows processes).
+    //   - The 10 s handler timeout_ms ensures the process doesn't exit on its own
+    //     during the test window.
+    const longRunningCmd =
+      'node -e "setTimeout(function(){process.stdout.write(\'afterwait\\n\')},10000)"';
     const handlerPromise = handler(
-      { command: 'sleep 5 && echo afterwait', timeout_ms: 10000 },
+      { command: longRunningCmd, timeout_ms: 30000 },
       sessionAbort.signal,
       context,
     );
 
-    // Spawn time — give the process a moment to start
-    await new Promise<void>((r) => setTimeout(r, 50));
+    // Spawn time — give the process a moment to start.
+    // 200 ms is generous enough for slow Windows CI runners.
+    await new Promise<void>((r) => setTimeout(r, 200));
 
     // Simulate Ctrl+B: detach all tokens (frees the model turn)
     registry.detachAll();
@@ -190,18 +201,22 @@ describe('post-detach session abort kills process (Fix #1)', () => {
     // Fix #1: the re-registered abortHandler inside onDetach must kill the process.
     sessionAbort.abort();
 
-    // Wait for deliver() to fire (process close after kill)
+    // Wait for deliver() to fire (process close after kill).
+    // 10 000 ms budget: on Windows, killProcessGroup calls `taskkill /F /T /PID`
+    // (synchronous), but the IOCP close-event propagation back through Node's
+    // libuv adds latency on slow CI runners. 10 s is well above the observed
+    // worst-case (~2-3 s) while keeping the test meaningfully bounded.
     const settled = await Promise.race([
       settledPromise,
-      new Promise<null>((r) => setTimeout(() => r(null), 3000)),
+      new Promise<null>((r) => setTimeout(() => r(null), 10000)),
     ]);
 
     // deliver() must have been called — the process was killed, not orphaned
     expect(settled).not.toBeNull();
     expect(deliveredResults).toHaveLength(1);
 
-    // The process was killed by SIGKILL; status must be 'failed' (Fix #3)
-    // and the output must NOT contain 'afterwait' (the post-sleep echo never ran)
+    // The process was killed before completing (Fix #3 → status 'failed').
+    // Output must NOT contain 'afterwait' (the deferred write never ran).
     expect(deliveredResults[0]!.status).toBe('failed');
     expect(deliveredResults[0]!.output).not.toContain('afterwait');
   });
