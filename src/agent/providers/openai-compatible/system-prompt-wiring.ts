@@ -2,11 +2,9 @@
  * System-prompt assembly and cwd-rebuild wiring for one
  * `OpenAICompatibleProvider.query()` call.
  *
- * Extracted from `index.ts` (#2711/#2721 ratchet-collision fix; restored in PR
- * #2735 review after the PR inlined it and re-grew the baselined file by +5
- * code lines) so the fragment-collection, assembly, and cwd-/base-rebuild
- * factories live in one place and the `query()` body stays within the
- * function-size ceiling.
+ * Extracted from `index.ts` (#2711/#2721 ratchet-collision fix) so the
+ * fragment-collection, assembly, and cwd-/base-rebuild factories live in one
+ * place and the `query()` body stays within the function-size ceiling.
  *
  * Ordering mirrors AnthropicDirectProvider.query():
  *   [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?, goalPrompt?,
@@ -86,16 +84,6 @@ export interface SystemPromptWiringResult {
  * `_currentCwd` cell is read via `getCurrentCwd` (a getter the caller provides),
  * and the mutable `_currentBaseRef` cell is owned here and shared between
  * `rebuildAfterCwdChange` and `systemPromptRebuildFactory`.
- *
- * Invariant: assemble the full provider-side system prompt so non-Anthropic
- * sessions receive the SAME fragments as anthropic-direct — tool conventions,
- * the interactive slash-command/bash-passthrough/background-subagent guidance,
- * the memory prompt, and the skill manifest. The tool/memory fragments are
- * resolved via the shared helpers in tools/system-prompt.ts so the set cannot
- * drift from anthropic-direct. Ordering mirrors AnthropicDirectProvider.query():
- * [toolBase, userSystem?, memoryPrompt, hotMemory?, env, manifest?]. Hot memory
- * rides config.hotMemory (a dedicated field). `envFragment` is the ONLY
- * cwd-dependent piece.
  */
 export function buildSystemPromptWiring(args: SystemPromptWiringArgs): SystemPromptWiringResult {
   const {

@@ -255,3 +255,63 @@ export const imageGenerateTool: AnthropicToolDef = {
     required: ['prompt'],
   },
 };
+
+export const imageEditTool: AnthropicToolDef = {
+  name: 'image_edit',
+  category: 'web',
+  concurrencySafe: false,
+  riskClass: 'caution',
+  description:
+    'Edit one or more local images via the OpenAI Images Edit API (`POST /v1/images/edits`). ' +
+    'Accepts one or more existing image files on disk as reference images (png, jpg/jpeg, webp, ≤25 MiB each) ' +
+    'and a text prompt describing the desired modification. ' +
+    'The edited image is saved to disk and the file path is returned.\n\n' +
+    'Uses AFK_IMAGE_API_KEY when set (keeps image billing separate from chat completions); ' +
+    'falls back to the full OpenAI auth chain (OPENAI_API_KEY, Codex CLI). ' +
+    'Each edit costs real money via the OpenAI API.\n\n' +
+    'Safety: blocked in daemon/cron sessions unless AFK_IMAGE_ALLOW_DAEMON=1. ' +
+    'Per-session edit cap controlled by AFK_IMAGE_SESSION_LIMIT (default 10); ' +
+    'edits and generates each maintain their own separate counter (an edit does not consume a generate slot). ' +
+    'Every call is recorded in the effect ledger for audit.\n\n' +
+    'Reference images: must exist on disk and be readable under the session read-root policy ' +
+    '(same path containment rules as read_file). ' +
+    'Extension must be .png, .jpg, .jpeg, or .webp. Each file must be ≤ 25 MiB.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      prompt: {
+        type: 'string',
+        description: 'Text description of the desired edit. Be specific about what to change, add, or remove.',
+      },
+      image_paths: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'One or more absolute or relative file paths to the reference images. ' +
+          'Supported formats: .png, .jpg, .jpeg, .webp. Each file must be ≤ 25 MiB. ' +
+          'Paths are resolved against the session read-root policy (same rules as read_file). ' +
+          'Maximum 16 images.',
+      },
+      model: {
+        type: 'string',
+        enum: ['gpt-image-1', 'gpt-image-1-mini', 'gpt-image-1.5', 'gpt-image-2'],
+        description: 'Image model to use. Default: gpt-image-1.',
+      },
+      size: {
+        type: 'string',
+        enum: ['1024x1024', '1024x1536', '1536x1024', 'auto'],
+        description: 'Output image dimensions. Default: 1024x1024.',
+      },
+      output_format: {
+        type: 'string',
+        enum: ['png', 'webp', 'jpeg'],
+        description: 'Output image format. Default: png.',
+      },
+      output_path: {
+        type: 'string',
+        description: 'Optional file path to save the edited image to. When omitted, saves to <cwd>/.afk/generated-images/edited-<id>.<format>.',
+      },
+    },
+    required: ['prompt', 'image_paths'],
+  },
+};

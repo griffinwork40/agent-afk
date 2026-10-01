@@ -164,7 +164,7 @@ describe('listDirectoryHandler', () => {
   });
 
   it('returns error for permission denied', async () => {
-    // Skip this test on Windows (chmod doesn't work the same way)
+    // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; chmod doesn't restrict directory reads the same way
     if (process.platform === 'win32') {
       return;
     }

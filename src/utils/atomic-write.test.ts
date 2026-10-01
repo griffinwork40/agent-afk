@@ -28,6 +28,7 @@ describe('atomicWriteFile (sync)', () => {
     expect(readFileSync(dest, 'utf-8')).toBe('second');
   });
 
+  // Skipped on Windows: POSIX file-mode bits not exposed by NTFS — genuinely POSIX-only.
   it('applies the default 0o600 mode', () => {
     if (process.platform === 'win32') return; // POSIX modes not supported
     const dest = join(dir, 'secret.txt');
@@ -35,6 +36,7 @@ describe('atomicWriteFile (sync)', () => {
     expect(statSync(dest).mode & 0o777).toBe(0o600);
   });
 
+  // Skipped on Windows: POSIX file-mode bits not exposed by NTFS — genuinely POSIX-only.
   it('applies a custom mode passed as options object', () => {
     if (process.platform === 'win32') return;
     const dest = join(dir, 'pub.txt');
@@ -42,6 +44,7 @@ describe('atomicWriteFile (sync)', () => {
     expect(statSync(dest).mode & 0o777).toBe(0o644);
   });
 
+  // Skipped on Windows: POSIX file-mode bits not exposed by NTFS — genuinely POSIX-only.
   it('accepts a positional numeric mode for backward compat', () => {
     if (process.platform === 'win32') return;
     const dest = join(dir, 'compat.txt');
@@ -101,6 +104,7 @@ describe('atomicWriteFileAsync (async)', () => {
     expect(readFileSync(dest, 'utf-8')).toBe('second');
   });
 
+  // Skipped on Windows: POSIX file-mode bits not exposed by NTFS — genuinely POSIX-only.
   it('applies the default 0o600 mode', async () => {
     if (process.platform === 'win32') return;
     const dest = join(dir, 'secret.txt');
@@ -108,6 +112,7 @@ describe('atomicWriteFileAsync (async)', () => {
     expect(statSync(dest).mode & 0o777).toBe(0o600);
   });
 
+  // Skipped on Windows: POSIX file-mode bits not exposed by NTFS — genuinely POSIX-only.
   it('applies a custom mode', async () => {
     if (process.platform === 'win32') return;
     const dest = join(dir, 'pub.txt');

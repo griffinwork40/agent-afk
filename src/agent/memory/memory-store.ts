@@ -738,6 +738,9 @@ export class MemoryStore {
         throw err; // No sanitization possible; surface the error to the handler.
       }
     }
+    // Invariant: `results` aliases `factResults` (no defensive copy).
+    // The array is consumed exactly once (push + slice below) and never read
+    // from again. Add a spread copy here if a second reader ever appears.
     const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {

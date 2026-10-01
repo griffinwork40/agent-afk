@@ -642,8 +642,10 @@ describe('Conformance: S8b — long Retry-After 429 (quota/usage limit) emits pa
 // SCENARIO 9 — AFK retry count is bounded and predictable (documents #2422)
 //
 // With a mock client (SDK bypassed), the attempt count is exactly
-// 1 + MAX_RETRIES. On a REAL client, SDK's default maxRetries=2 would stack
-// underneath, making each attempt silently 3× the API calls. See #2422.
+// 1 + MAX_RETRIES. Before #2422 both providers left the SDK's default
+// maxRetries=2 in place, so each AFK attempt silently became 3× the API
+// calls. #2422 pinned maxRetries: 0 on both providers so the SDK never
+// retries and AFK's own loop is the sole retry driver.
 // ============================================================================
 describe('Conformance: S9 — AFK retry count is bounded and predictable (documents #2422)', () => {
   afterEach(() => {
@@ -661,9 +663,9 @@ describe('Conformance: S9 — AFK retry count is bounded and predictable (docume
       await vi.advanceTimersByTimeAsync(120_000);
       await resultPromise;
 
-      // Without SDK stacking: exactly 1 initial + OVERLOAD_MAX_RETRIES retries.
-      // On a real Anthropic SDK client (maxRetries=2 default), each attempt
-      // would become up to 3 API calls. See #2422.
+      // Without SDK stacking (maxRetries: 0 since #2422): exactly 1 initial +
+      // OVERLOAD_MAX_RETRIES retries. Before #2422 the Anthropic SDK's default
+      // maxRetries=2 made each attempt up to 3 API calls.
       expect(client.messages.create).toHaveBeenCalledTimes(OVERLOAD_MAX_RETRIES + 1);
     } finally {
       vi.useRealTimers();
@@ -679,9 +681,9 @@ describe('Conformance: S9 — AFK retry count is bounded and predictable (docume
     });
     await drain(makeOAIQuery());
 
-    // Without SDK stacking: exactly 1 + MAX_CONNECTION_RETRIES.
-    // On a real OpenAI SDK client (maxRetries=2), each attempt would be 3× API calls.
-    // See #2422.
+    // Without SDK stacking (maxRetries: 0 since #2422): exactly 1 +
+    // MAX_CONNECTION_RETRIES. Before #2422 the OpenAI SDK's default
+    // maxRetries=2 made each attempt up to 3 API calls.
     expect(callCount).toBe(MAX_CONNECTION_RETRIES + 1);
   });
 });

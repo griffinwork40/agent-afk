@@ -215,7 +215,7 @@ export function coerceEnvValue(meta: EnvVarMeta, raw: string): CoerceResult {
 // ── Config-key (afk.config.json) classification + validation ──────────────────
 
 export type ConfigKeyTier = 'agent' | 'human';
-export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'string-array' | 'model-slot';
+export type ConfigKeyType = 'string' | 'number' | 'boolean' | 'enum' | 'number-array' | 'string-array' | 'model-slot' | 'object';
 
 export interface ConfigKeySpec {
   /** Dotted path, e.g. `models.large` or `telegram.notify.mode`. */
@@ -296,7 +296,7 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // user\'s config counts. The agent tool must not be able to set this key either,
   // because that would let an agent expand its own hook subprocesses\' env access.
   // Value shape: Record<pluginName, string[]> — see issue #2459.
-  { path: 'pluginHookEnv', tier: 'human', type: 'string', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
+  { path: 'pluginHookEnv', tier: 'human', type: 'object', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
   // Human-tier: hiding a skill from the model is an operator decision the agent
   // must not be able to reverse on its own config. Accepts bare skill names
   // (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Each
@@ -319,7 +319,7 @@ export function classifyConfigKey(path: string): ConfigKeyClass {
 }
 
 export type ConfigCoerceResult =
-  | { ok: true; value: string | number | boolean | number[] | string[] | ModelSlotBinding }
+  | { ok: true; value: string | number | boolean | number[] | string[] | ModelSlotBinding | Record<string, unknown> }
   | { ok: false; error: string };
 
 /**
@@ -401,6 +401,12 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
       const res = coerceSlotBindingInput(raw);
       if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
       return { ok: true, value: res.value };
+    }
+    case 'object': {
+      if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+        return { ok: false, error: `${spec.path} expects an object (Record<string, …>)` };
+      }
+      return { ok: true, value: raw as Record<string, unknown> };
     }
     case 'string':
     default: {

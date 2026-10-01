@@ -45,12 +45,14 @@ import {
   webScrapeTool,
   webRequestTool,
   imageGenerateTool,
+  imageEditTool,
 } from './schemas.web-tools.js';
 export {
   sendTelegramTool,
   webScrapeTool,
   webRequestTool,
   imageGenerateTool,
+  imageEditTool,
 } from './schemas.web-tools.js';
 
 // ── Schedule tools ─────────────────────────────────────────────────────────
@@ -165,6 +167,7 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   webScrapeTool,
   webRequestTool,
   imageGenerateTool,
+  imageEditTool,
   createScheduleTool,
   updateScheduleTool,
   listSchedulesTool,

@@ -11,6 +11,29 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.279.2] - 2026-10-01
+
+### Fixed
+- forward MCP image content blocks to the model (#2734) (f785c05a)
+
+## [5.279.1] - 2026-10-01
+
+### Fixed
+- address advisory findings from pr-triage pass 2 (#2737) (4b0b84d0)
+
+## [5.279.0] - 2026-10-01
+
+### Added
+- add image_edit tool via OpenAI Images Edit API (#2725) (50e4d361)
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2720) (a6549920)
+
+## [5.278.2] - 2026-10-01
+
+### Fixed
+- restore funcsize/filesize ratchets on openai-compatible query() after #2711/#2721 collision (#2729) (a3010b28)
+
 ## [5.278.1] - 2026-09-30
 
 ### Added

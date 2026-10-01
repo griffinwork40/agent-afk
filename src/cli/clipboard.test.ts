@@ -153,10 +153,8 @@ describe('copyToClipboard', () => {
     expect(typeof result).toBe('boolean');
   });
 
-  // The win32 tool (`clip`) is absent on the POSIX test hosts (CI = ubuntu,
-  // dev = macOS), so the external-tool loop exhausts and the OSC 52 fallback
-  // fires deterministically. Skipped on Windows, where a real `clip` would
-  // intercept before the fallback is reached.
+  // Windows: TODO needs native equivalent — on Windows `clip` intercepts before OSC 52 fallback fires,
+  // so the fallback path is unreachable; the win32 clipboard tool path needs a separate test.
   it.skipIf(process.platform === 'win32')(
     'falls back to OSC 52 when no local tool succeeds',
     () => {
@@ -167,6 +165,8 @@ describe('copyToClipboard', () => {
     },
   );
 
+  // Skipped on Windows: OSC 52 non-TTY guard relies on same fallback path that clip.exe blocks.
+  // TODO needs native equivalent — a mock-tool variant.
   it.skipIf(process.platform === 'win32')(
     'does not emit OSC 52 into a non-TTY sink (piped output stays clean)',
     () => {

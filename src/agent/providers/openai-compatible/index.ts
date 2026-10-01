@@ -374,9 +374,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
     // System-prompt assembly: fragment collection, environment-block builder, and
     // cwd-/base-rebuild factories (#876, #2420). Extracted to system-prompt-wiring.ts
-    // so query() stays within the function-size ceiling. Ordering: [toolBase,
-    // userSystem?, memoryPrompt, workspace?, hotMemory?, goalPrompt?, envFragment,
-    // manifest?] — mirrors AnthropicDirectProvider.query().
+    // (#2711/#2721 ratchet fix) so query() stays within the function-size ceiling.
+    // Ordering: [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?,
+    // goalPrompt?, envFragment, manifest?] — mirrors AnthropicDirectProvider.query().
     const spw = buildSystemPromptWiring({
       config,
       hasSkillExecutor: this.providerOpts.skillExecutor !== undefined,
@@ -388,16 +388,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
       getCurrentCwd: () => _currentCwd,
       runtimeStateSource,
     });
+
     const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };
 
-    // Invariant (#876 + #2420): `setCwd()` (query.ts) invokes `onCwdChange` so
-    // a mid-session cwd re-anchor refreshes both the `get_runtime_state` tool
-    // (via the `getCwd` cell) and the system prompt's `# Environment` block.
-    // Ordering is load-bearing: `_currentCwd` is updated FIRST so
-    // `spw.rebuildAfterCwdChange()` reads the new directory via `getCurrentCwd`.
+    // Invariant (#876 + #2420): `_currentCwd` MUST be updated BEFORE calling
+    // `spw.rebuildAfterCwdChange()` so `getCurrentCwd()` returns the new dir
+    // when the `# Environment` block is re-derived. `patchedConfig.systemPrompt`
+    // is reassigned IN PLACE (the same object `OpenAICompatibleQuery` holds as
+    // `this.opts.config` by reference) so the next turn picks up the new string.
     buildOpts.onCwdChange = (newCwd: string): void => {
       _currentCwd = newCwd;
-      this._sharedCurrentCwd = newCwd;
+      this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
       patchedConfig.systemPrompt = spw.rebuildAfterCwdChange();
     };
     buildOpts.systemPromptRebuildFactory = spw.systemPromptRebuildFactory;
