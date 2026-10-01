@@ -195,6 +195,42 @@ describe('DetachableToolRegistry', () => {
       // Registry is cleared
       expect(registry.hasDetachable()).toBe(false);
     });
+
+    it('cancelAll on a detached token prevents a late deliver() from emitting settled', () => {
+      // Regression: before the fix, cancelAll() only cleared the map but did not
+      // mark tokens settled. A detached token's deliver() closure holds the token
+      // object directly, so it bypassed the map lookup and still passed the
+      // _status !== 'settled' guard — emitting 'settled' after session teardown.
+      const registry = new DetachableToolRegistry();
+      const token = registry.register('call-1');
+      token.notifyDetached(); // _status: 'running' → 'detached'
+
+      registry.cancelAll();
+
+      // Simulate the late proc.once('close') deliver() call that races teardown
+      const settled: DetachedToolResult[] = [];
+      registry.on('settled', (r: DetachedToolResult) => settled.push(r));
+      token.deliver(makeResult('call-1'));
+
+      expect(settled).toHaveLength(0);
+    });
+
+    it('cancelAll aborts a running token so its deliver() also becomes a no-op', () => {
+      const registry = new DetachableToolRegistry();
+      const token = registry.register('call-1'); // stays 'running'
+
+      registry.cancelAll();
+
+      // detach abort signal must have fired for running tokens
+      expect(token.detachSignal.aborted).toBe(true);
+
+      // Late deliver() must not emit settled
+      const settled: DetachedToolResult[] = [];
+      registry.on('settled', (r: DetachedToolResult) => settled.push(r));
+      token.deliver(makeResult('call-1'));
+
+      expect(settled).toHaveLength(0);
+    });
   });
 
   describe('parallel-batch semantics (Invariant:D1)', () => {

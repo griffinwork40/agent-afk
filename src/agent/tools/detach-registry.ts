@@ -244,9 +244,13 @@ export class DetachableToolRegistry extends EventEmitter {
    *     detachAll()). Re-aborting it is a no-op and confusing — skip it.
    *     The session signal (fix #1) handles the kill for detached processes.
    *
-   * tokens.clear() after the loop means any late deliver() call (from a close
-   * event racing with teardown) will find the token absent and become a no-op —
-   * correct per the contract, since the session is tearing down.
+   * Every token is marked 'settled' before the registry is cleared so that any
+   * late deliver() call (e.g. from proc.once('close') in detach-bash.ts
+   * execOnDetach racing with teardown) finds _status === 'settled' and becomes a
+   * true no-op — without this, a 'detached' token passes the _status !== 'settled'
+   * guard in deliver() and emits 'settled' AFTER session teardown.  tokens.clear()
+   * alone is insufficient because deliver() holds a closure over the token object,
+   * not a registry lookup.
    */
   cancelAll(): void {
     for (const token of this.tokens.values()) {
@@ -258,6 +262,10 @@ export class DetachableToolRegistry extends EventEmitter {
       if (token._status === 'running' && !token._abort.signal.aborted) {
         token._abort.abort();
       }
+      // Mark every token settled BEFORE clearing the map so that any late
+      // deliver() closure (held by a proc.once('close') callback) hits the
+      // _status !== 'settled' guard and becomes a no-op.
+      token._status = 'settled';
     }
     this.tokens.clear();
   }
