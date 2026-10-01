@@ -83,6 +83,7 @@ interface ParsedInput {
   image_paths: string[];
   model: string;
   size: string;
+  quality: string;
   output_format: string;
   output_path?: string;
 }
@@ -91,6 +92,7 @@ const VALID_EDIT_MODELS = new Set(['gpt-image-1', 'gpt-image-1-mini', 'gpt-image
 const DEFAULT_EDIT_MODEL = 'gpt-image-1';
 
 const VALID_EDIT_SIZES = new Set(['1024x1024', '1024x1536', '1536x1024', 'auto']);
+const VALID_EDIT_QUALITIES = new Set(['low', 'medium', 'high', 'auto']);
 const VALID_EDIT_FORMATS = new Set(['png', 'webp', 'jpeg']);
 
 function parseInput(input: unknown): ParsedInput | { error: string } {
@@ -135,6 +137,14 @@ function parseInput(input: unknown): ParsedInput | { error: string } {
     };
   }
 
+  const quality =
+    typeof obj['quality'] === 'string' ? obj['quality'] : 'auto';
+  if (!VALID_EDIT_QUALITIES.has(quality)) {
+    return {
+      error: `Invalid quality "${quality}". Valid values: ${[...VALID_EDIT_QUALITIES].join(', ')}.`,
+    };
+  }
+
   const output_format =
     typeof obj['output_format'] === 'string' ? obj['output_format'] : 'png';
   if (!VALID_EDIT_FORMATS.has(output_format)) {
@@ -146,7 +156,7 @@ function parseInput(input: unknown): ParsedInput | { error: string } {
   const output_path =
     typeof obj['output_path'] === 'string' ? obj['output_path'] : undefined;
 
-  return { prompt, image_paths, model, size, output_format, output_path };
+  return { prompt, image_paths, model, size, quality, output_format, output_path };
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +439,7 @@ async function callImagesEditApi(
   form.append('prompt', parsed.prompt);
   form.append('model', parsed.model);
   form.append('size', parsed.size);
+  form.append('quality', parsed.quality);
   form.append('response_format', 'b64_json');
   form.append('n', '1');
 
