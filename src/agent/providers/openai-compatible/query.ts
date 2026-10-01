@@ -145,6 +145,9 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   /** Inter-round steering callback; set via setBeforeNextRound(). */
   private _beforeNextRound: BeforeNextRoundCallback = undefined;
   get beforeNextRound(): BeforeNextRoundCallback { return this._beforeNextRound; }
+  /** Provider-side stop-hook seam (issue #2714); set via setBeforeTurnEnd(). */
+  private _beforeTurnEnd: ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined = undefined;
+  get beforeTurnEnd(): ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined { return this._beforeTurnEnd; }
   /** Pre-computed tool catalog — recomputed only if dispatcher.toolDefs changes (it doesn't today). */
   private readonly openAITools: OpenAIFunctionTool[] | undefined;
   /** @internal Which wire this session speaks: Chat Completions (default) or Responses. */
@@ -428,6 +431,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
 
   setBeforeNextRound(cb: BeforeNextRoundCallback): void {
     this._beforeNextRound = cb;
+  }
+
+  setBeforeTurnEnd(cb: ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this._beforeTurnEnd = cb;
   }
 
   listRewindTargets(): import('../../provider.js').RewindTarget[] {

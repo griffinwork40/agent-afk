@@ -69,6 +69,7 @@ import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
+import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -336,9 +337,14 @@ export class AgentSession implements IAgentSession {
    * Wire (or re-wire) this surface's Stop-hook delivery callbacks. Until a
    * surface calls this, the session layer does not dispatch Stop at all.
    * Read on every turn end, so calling it after construction is safe.
+   *
+   * Also wires the provider-side stop-hook seam (issue #2714) so blocking Stop
+   * hooks can trigger same-turn continuations. Body extracted to
+   * {@link agent-session.stop-hook-wiring} to keep this file under the ceiling.
    */
   wireStopHook(wiring: StopWiring): void {
     this.stopWiring = wiring;
+    applyStopHookWiring(this.stopWiring, () => this.config, () => this.stateManager.getSessionId(), () => this.abortController.signal, () => this.conversationHistory, () => this.runner.getActiveTurnToolEvents(), this.providerQuery);
   }
 
   /**

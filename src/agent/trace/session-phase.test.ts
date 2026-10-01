@@ -339,6 +339,8 @@ describe('SessionPhaseName union ↔ SessionPhaseNameSchema parity', () => {
     session_id_assigned: true,
     many_image_degraded: true,
     stop_inject_dropped: true,
+    stop_hook_continuation: true,
+    stop_hook_cap_reached: true,
   };
 
   it('the Zod enum contains exactly the union members (no drift either way)', () => {

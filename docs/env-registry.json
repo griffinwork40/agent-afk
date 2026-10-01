@@ -885,6 +885,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
+      "description": "Maximum same-turn continuation rounds that a blocking Stop hook may trigger per turn. When a Stop hook returns decision:block, its reason is appended as a user message and the model runs again in the same turn (CC-compatible behaviour). This cap is global across all hooks for that turn — two blocking hooks together consume from the same counter. 0 disables continuation entirely (block is logged only, same as pre-2714 behaviour). Default: 2.",
+      "type": "number",
+      "required": false,
+      "default": "2",
+      "example": "0",
+      "category": "process"
+    },
+    {
       "name": "AFK_STREAM_BUFFER_MS",
       "description": "Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50.",
       "type": "number",

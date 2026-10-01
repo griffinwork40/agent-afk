@@ -76,6 +76,13 @@ export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   readonly closed: boolean;
   /** Inter-round steering callback; set via setBeforeNextRound(). Read live. */
   readonly beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * Provider-side seam: blocking Stop hook → same-turn continuation (issue #2714).
+   * Mirrors RunTurnInput.beforeTurnEnd for the anthropic-direct provider.
+   * Called once per natural turn end (not wind-down, not abort, not truncation).
+   * Returns `{ continueWith: string }` to continue the turn, or undefined to end.
+   */
+  readonly beforeTurnEnd: ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined;
 }
 
 /**
@@ -219,6 +226,10 @@ export async function* runTurnInner(
     return;
   }
 
+  // stop-hook-continuation rule: 0-based per-turn counter, shared across
+  // same-turn re-entries triggered by a blocking Stop hook (issue #2714).
+  let stopHookContinuation = 0;
+
   pushUserTurn(ctx, content);
 
   // Accumulate usage across all tool-loop iterations.
@@ -342,7 +353,57 @@ export async function* runTurnInner(
     ctx.priorTurns.push(assistantTurn);
   }
 
-  // Emit the terminal assistant.message (with truncation notice appended).
+  // stop-hook-continuation rule: call beforeTurnEnd ONLY on natural ends.
+  // Guards (same as anthropic-direct/loop.ts):
+  //   - abort: signal already fired → skip (hook must not fight the budget)
+  //   - truncation (max_tokens etc.): runtime output-ceiling → skip
+  //   - wind-down round: iteration cap / soft-deadline → skip
+  const isNaturalEnd = !controller.signal.aborted
+    && !isTruncationStopReason(accumulatedUsage.stopReason)
+    && windDownReason === null;
+
+  if (isNaturalEnd && ctx.beforeTurnEnd !== undefined) {
+    const seamResult = await ctx.beforeTurnEnd(stopHookContinuation);
+    if (seamResult?.continueWith) {
+      // A blocking Stop hook wants a same-turn continuation. Push its reason
+      // as a framework user message and re-enter the model loop by recursing
+      // into a fresh runTurnInner with the continuation message as content.
+      // Journal sync is handled inside the recursive call's pushUserTurn path.
+      stopHookContinuation += 1;
+      // The recursive call must NOT re-clear the abort slot (controller is
+      // already cleared above). Use the same controller/signal for abort coherence.
+      yield* runTurnInner(ctx, seamResult.continueWith, controller, turnStartTime, taskId);
+      return;
+    }
+    // Non-blocking: fall through to emit assistant.message and turn.completed.
+  }
+
+  yield* emitTurnTerminal(
+    ctx,
+    finalAssistantText,
+    droppedToolNames,
+    accumulatedUsage,
+    windDownReason,
+    turnStartTime,
+  );
+}
+
+/**
+ * Emit the terminal assistant.message event (with truncation notice appended
+ * when the stop reason is a runtime output-token ceiling) followed by
+ * `turn.completed`.
+ *
+ * Extracted from `runTurnInner` to keep it under the 200-line ceiling.
+ * All parameters are explicit — no closure over outer locals.
+ */
+async function* emitTurnTerminal(
+  ctx: TurnDriverContext,
+  finalAssistantText: string,
+  droppedToolNames: string[],
+  accumulatedUsage: ProviderUsage,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  turnStartTime: number,
+): AsyncGenerator<ProviderEvent> {
   const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
     ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
         canIncreaseOutputLimit: !(
