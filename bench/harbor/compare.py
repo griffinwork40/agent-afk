@@ -19,15 +19,19 @@ import math
 from pathlib import Path
 
 
-def _load_trials(job_dir: Path) -> dict[str, float | None]:
-    """Return {task_name: reward} for every trial in a job directory.
+def _load_trials(job_dir: Path) -> dict[str, list[float | None]]:
+    """Return {task_name: [reward, ...]} aggregating every replicate trial.
 
     Harbor writes per-trial result.json files under <job>/<trial_name>/result.json.
     The job-level result.json is skipped (no task_name field at that level).
-    Reward is nested at verifier_result.rewards.reward (float, 0.0–1.0).
+    Reward is nested at verifier_result.rewards.reward (float, 0.0-1.0).
+
+    Multiple trials that share a task_name (e.g. a 20-task x 2-trial run) are
+    aggregated into a list so pass-rate and McNemar computations see every
+    replicate rather than only the last one.
     """
-    results: dict[str, float | None] = {}
-    for result_path in sorted(job_dir.rglob("result.json")):
+    results: dict[str, list[float | None]] = {}
+    for result_path in sorted(job_dir.glob("*/result.json")):
         # Skip the top-level job result.json (parent is the job dir itself)
         if result_path.parent == job_dir:
             continue
@@ -40,13 +44,14 @@ def _load_trials(job_dir: Path) -> dict[str, float | None]:
         verifier_result = data.get("verifier_result") or {}
         rewards = verifier_result.get("rewards") or {}
         reward = rewards.get("reward")
-        results[task_id] = float(reward) if reward is not None else None
+        value: float | None = float(reward) if reward is not None else None
+        results.setdefault(task_id, []).append(value)
     return results
 
 
-def _pass_rate(rewards: dict[str, float | None]) -> tuple[float, int]:
+def _pass_rate(trials: dict[str, list[float | None]]) -> tuple[float, int]:
     """Return (pass_rate, n_trials) treating reward >= 1.0 as pass."""
-    values = [v for v in rewards.values() if v is not None]
+    values = [v for replicates in trials.values() for v in replicates if v is not None]
     if not values:
         return 0.0, 0
     passed = sum(1 for v in values if v >= 1.0)
@@ -54,15 +59,30 @@ def _pass_rate(rewards: dict[str, float | None]) -> tuple[float, int]:
 
 
 def _mcnemar_p(n10: int, n01: int) -> float | str:
-    """McNemar test p-value (two-sided) on discordant pairs."""
+    """McNemar test p-value (two-sided) on discordant pairs.
+
+    Contract: returned float is always in [0.0, 1.0].
+    """
+    try:
+        from scipy.stats import binomtest
+        n = n10 + n01
+        if n == 0:
+            return "n/a (no discordant pairs)"
+        result = binomtest(min(n10, n01), n, 0.5, alternative="two-sided")
+        return round(float(result.pvalue), 4)
+    except ImportError:
+        pass
     try:
         from scipy.stats import binom
         n = n10 + n01
         if n == 0:
             return "n/a (no discordant pairs)"
-        p = 2 * min(
-            binom.cdf(min(n10, n01), n, 0.5),
-            1 - binom.cdf(min(n10, n01) - 1, n, 0.5),
+        p = min(
+            1.0,
+            2 * min(
+                binom.cdf(min(n10, n01), n, 0.5),
+                1 - binom.cdf(min(n10, n01) - 1, n, 0.5),
+            ),
         )
         return round(float(p), 4)
     except ImportError:
@@ -80,9 +100,18 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
+def _task_passed(replicates: list[float | None]) -> bool | None:
+    """Majority-pass vote across replicates; None if all rewards are missing."""
+    values = [v for v in replicates if v is not None]
+    if not values:
+        return None
+    passed = sum(1 for v in values if v >= 1.0)
+    return passed > len(values) / 2
+
+
 def main(job_dirs: list[Path]) -> None:
     arm_names = [d.name for d in job_dirs]
-    arm_data = [_load_trials(d) for d in job_dirs]
+    arm_data: list[dict[str, list[float | None]]] = [_load_trials(d) for d in job_dirs]
 
     # Union of task IDs
     all_tasks = sorted({t for arm in arm_data for t in arm})
@@ -102,11 +131,15 @@ def main(job_dirs: list[Path]) -> None:
     for task in all_tasks:
         row = f"{task[:col_w - 1]:<{col_w}}"
         for arm in arm_data:
-            r = arm.get(task)
-            if r is None:
-                row += f"{'—':>{arm_w}}"
+            replicates = arm.get(task)
+            if replicates is None:
+                row += f"{'--':>{arm_w}}"
             else:
-                row += f"{'✓' if r >= 1.0 else '✗':>{arm_w}}"
+                result = _task_passed(replicates)
+                if result is None:
+                    row += f"{'--':>{arm_w}}"
+                else:
+                    row += f"{'PASS' if result else 'FAIL':>{arm_w}}"
         print(row)
 
     print()
@@ -122,10 +155,16 @@ def main(job_dirs: list[Path]) -> None:
         print()
         print(f"McNemar test: {arm_names[0]} vs {arm_names[1]}")
         a, b = arm_data[0], arm_data[1]
-        paired = [(a.get(t), b.get(t)) for t in all_tasks
-                  if a.get(t) is not None and b.get(t) is not None]
-        n10 = sum(1 for ra, rb in paired if ra >= 1.0 and rb < 1.0)
-        n01 = sum(1 for ra, rb in paired if ra < 1.0 and rb >= 1.0)
+        # One vote per task (majority across replicates) for the paired test
+        paired = [
+            (_task_passed(a[t]), _task_passed(b[t]))
+            for t in all_tasks
+            if t in a and t in b
+            and _task_passed(a[t]) is not None
+            and _task_passed(b[t]) is not None
+        ]
+        n10 = sum(1 for ra, rb in paired if ra and not rb)
+        n01 = sum(1 for ra, rb in paired if not ra and rb)
         p = _mcnemar_p(n10, n01)
         print(f"  Discordant pairs: {arm_names[0]} wins={n10}, {arm_names[1]} wins={n01}")
         print(f"  p-value: {p}")

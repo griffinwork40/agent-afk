@@ -209,7 +209,13 @@ class AfkAgent(BaseInstalledAgent):
                 content = stream_path.read_text(encoding="utf-8", errors="replace")
                 meta = _extract_done_metadata_from_text(content)
             except OSError:
-                pass
+                import warnings
+                warnings.warn(
+                    f"afk_agent: host-side stream log not found at {stream_path}; "
+                    "cost/token metadata will be unavailable for this trial.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         if meta is None:
             # No usage data available — left unset per spec

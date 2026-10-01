@@ -371,9 +371,9 @@ class TestPopulateContextPostRun:
         ctx = MagicMock()
         inner.populate_context_post_run(ctx)
 
-        # Should not have set any attribute
-        ctx.cost_usd.__set__ = MagicMock()
-        assert not ctx.cost_usd.called or True  # just confirm no exception
+        # populate_context_post_run should return without raising and without
+        # setting any cost/token attributes when metadata is unavailable.
+        ctx.cost_usd.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
