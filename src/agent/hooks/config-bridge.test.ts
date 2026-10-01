@@ -135,6 +135,7 @@ describe('trust gate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Matcher filtering — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -237,6 +238,7 @@ describe.skipIf(process.platform === 'win32')('matcher filtering', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Non-tool events (no matcher applied) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -287,6 +289,7 @@ describe.skipIf(process.platform === 'win32')('non-tool events', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Blocking — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -338,6 +341,7 @@ describe('multiple handlers', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — integration tests dispatch #!/bin/sh scripts; no Windows shell equivalent (#703)
 // createDefaultHookRegistry integration — some tests dispatch #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -476,6 +480,7 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Plugin-tier hooks (Claude Code compat) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -553,6 +558,7 @@ describe.skipIf(process.platform === 'win32')('plugin-tier hooks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts to propagate session id; no Windows shell equivalent (#703)
 // Session id resolution — context.sessionId wins over agentConfig.sessionId
 // ---------------------------------------------------------------------------
 

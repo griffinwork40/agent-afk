@@ -44,6 +44,7 @@ function context(cwd: string): { ctx: SlashContext; output: string[] } {
 }
 
 describe('/diff', () => {
+  // Skipped on Windows: tests use POSIX 'test -e'/'touch' and chmod — genuinely POSIX-only.
   it.skipIf(process.platform === 'win32')('passes a pathspec as data instead of shell syntax', async () => {
     // Uses POSIX `test -e` and `touch` commands — POSIX-only.
     const cwd = repo();
@@ -56,6 +57,7 @@ describe('/diff', () => {
     expect(() => execFileSync('test', ['-e', marker])).toThrow();
   });
 
+  // Skipped on Windows: chmod not available — genuinely POSIX-only.
   it.skipIf(process.platform === 'win32')('renders mode-only changes that have no text patch headers', async () => {
     // chmod is a POSIX-only operation — Windows does not track executable bits.
     const cwd = repo();

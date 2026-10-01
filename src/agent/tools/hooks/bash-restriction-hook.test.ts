@@ -408,7 +408,7 @@ describe('createBashRestrictionHook — wiring failsafes', () => {
   });
 });
 
-// Windows: POSIX-only sensitive paths (~/Library, /etc/shadow, ~/.ssh)
+// Windows: genuinely POSIX-only — sensitive path roots include ~/Library, /etc/shadow, ~/.ssh which are POSIX-only paths
 describe.skipIf(isWin32)('SENSITIVE_PATH_SIGNAL stays in sync with the built-in sensitive roots', () => {
   // Invariant: every restricted root check 2 protects must ALSO be matchable by
   // check 1's lexical signal — otherwise an interpreter one-liner that assembles
@@ -641,7 +641,7 @@ describe('createBashRestrictionHook — credential parity with the typed read de
   });
 });
 
-// Windows: mcp.json carve-out uses POSIX home paths ($HOME, ~/.afk)
+// Windows: genuinely POSIX-only — mcp.json carve-out tests use POSIX home path spellings ($HOME, ~/.afk) not valid on Windows
 describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parity (#728)', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
   const home = homedir();
@@ -740,7 +740,7 @@ describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parit
 // these pin that propagation so a future refactor of `allowlistedFileForms`
 // cannot silently invert the carve-out on the bash surface without a failing
 // test. Mirrors the mcp.json parity block above.
-// Windows: ssh carve-out uses POSIX home paths (~/.ssh/config, $HOME)
+// Windows: genuinely POSIX-only — ssh carve-out tests use POSIX home path spellings (~/.ssh/config, $HOME) not valid on Windows
 describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts carve-out parity (#579 O2)', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
   const home = homedir();
@@ -809,7 +809,7 @@ describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts
   });
 });
 
-// Windows: relocated AFK_HOME uses POSIX paths ($AFK_HOME, symlinks, ~/.afk)
+// Windows: genuinely POSIX-only — relocated AFK_HOME tests use POSIX path spellings ($AFK_HOME, symlinks, ~/.afk) not valid on Windows
 describe.skipIf(isWin32)('createBashRestrictionHook — relocated AFK_HOME parity', () => {
   const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
   const relocated = join(tmpdir(), 'agent-afk-relocated-home');

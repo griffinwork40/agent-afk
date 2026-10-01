@@ -305,6 +305,7 @@ describe('bashHandler', () => {
   });
 
   describe('output truncation', () => {
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for large output generation (#703)
     it.skipIf(process.platform === 'win32')('truncates output at 100KB', async () => {
       // Generate ~110KB of output
       const largeLine = 'x'.repeat(110_000);
@@ -318,6 +319,7 @@ describe('bashHandler', () => {
       expect(result.content).toContain('truncated');
     });
 
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for large output generation (#703)
     it.skipIf(process.platform === 'win32')('includes a head+tail truncation notice when output exceeds the model cap', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
@@ -337,6 +339,7 @@ describe('bashHandler', () => {
     // marker vs hard-cap kill note), and handlers may emit the literal
     // string "truncated" in legitimate output (e.g. a log line about
     // database truncation). The structured flag is unambiguous.
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for large output generation (#703)
     it.skipIf(process.platform === 'win32')('sets ToolResult.truncated=true when output exceeds 100KB', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
@@ -348,6 +351,7 @@ describe('bashHandler', () => {
       expect(result.truncated).toBe(true);
     });
 
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for output generation (#703)
     it.skipIf(process.platform === 'win32')('does not truncate output under 100KB', async () => {
       const mediumLine = 'x'.repeat(50_000);
       const result = await bashHandler(
@@ -374,6 +378,7 @@ describe('bashHandler', () => {
     // only after waiting out the 15s sleep. NB: 'q'/'z' are the phase markers
     // because neither letter appears in the truncation marker text — 'b',
     // for one, collides with the word "bytes".
+    // Windows: genuinely POSIX-only — uses `head -c`, `/dev/zero`, and SIGKILL; no Windows equivalents (#703)
     it.skipIf(process.platform === 'win32')('mid-stream hard cap: SIGKILLs a runaway before it completes (V8 overflow guard)', async () => {
       // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
       const start = Date.now();
@@ -411,6 +416,7 @@ describe('bashHandler', () => {
     // long-running commands write progress to stderr (e.g. `find /` with
     // permission errors), so a stderr-only flood must also trigger the
     // mid-stream kill.
+    // Windows: genuinely POSIX-only — uses `head -c`, `/dev/zero`, stderr redirect `>&2` (#703)
     it.skipIf(process.platform === 'win32')('mid-stream hard cap: protects stderr from unbounded accumulation', async () => {
       // `head -c`, `/dev/zero`, and stderr redirect `>&2` are POSIX-only (#703)
       const start = Date.now();
@@ -478,7 +484,7 @@ describe('bashHandler', () => {
     });
   });
 
-  // Windows: pwd, cat, ls are POSIX-only shell commands
+  // Windows: genuinely POSIX-only — uses `pwd`, `cat`, `ls` POSIX-only shell commands (#703)
   describe.skipIf(isWin32)('cwd scoping', () => {
     // These tests guard the worktree-isolation invariant: a session
     // configured with `cwd` must spawn its shell commands in that
@@ -577,7 +583,7 @@ describe('bashHandler', () => {
     });
   });
 
-  // Windows: pwd is a POSIX-only shell command
+  // Windows: genuinely POSIX-only — uses `pwd` POSIX-only shell command (#703)
   describe.skipIf(isWin32)('context.cwd enforcement', () => {
     it('runs command in context.cwd when set', async () => {
       const handler = createBashHandler('default');
@@ -700,7 +706,7 @@ describe('bashHandler', () => {
   });
 });
 
-// Windows: pwd, cat, ls are POSIX-only shell commands
+// Windows: genuinely POSIX-only — uses `pwd`, `cat`, `ls` POSIX-only shell commands (#703)
 describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;
@@ -761,7 +767,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
 // produce a large elapsed time). A handler that sends SIGKILL terminates it
 // promptly regardless of signal disposition.
 // ---------------------------------------------------------------------------
-// `trap '' TERM`, `kill -0`, and `sleep 9999 & echo $!; wait` are POSIX-only (#703)
+// Windows: genuinely POSIX-only — uses `trap '' TERM`, `kill -0`, `sleep 9999 & echo $!; wait` (#703)
 describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;

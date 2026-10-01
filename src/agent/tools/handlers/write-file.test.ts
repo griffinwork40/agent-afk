@@ -168,7 +168,7 @@ describe('writeFileHandler', () => {
     expect(result.content).toBe('Aborted');
   });
 
-  // Windows: POSIX permission bits (chmod) not supported on NTFS
+  // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; chmod read-only directory behavior differs
   it.skipIf(isWin32)('returns permission error for read-only parent directory', async () => {
     const parentDir = join(tmpDir, 'readonly');
     mkdirSync(parentDir, { recursive: true });
@@ -422,7 +422,7 @@ describe('writeFileHandler cwd containment', () => {
       expect((result as any).render.diff.addedLines).toBeGreaterThan(0);
     });
 
-    // Windows: POSIX permission bits (chmod 0o200) not supported on NTFS
+    // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; chmod write-only (0o200) behavior differs
     it.skipIf(isWin32)('F14: suppresses diff when readFile throws a non-ENOENT error (e.g. EACCES)', async () => {
       // Create a file then make it write-only (no read bit).
       // readFile will throw EACCES; the handler must still write successfully

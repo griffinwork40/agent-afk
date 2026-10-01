@@ -497,6 +497,7 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
     assertAgree(path.join(os.tmpdir(), 'anywhere.ts'), ctx, 'write', 'bypass-tmp');
   });
 
+  // Windows: genuinely POSIX-only — symlinks to /etc require POSIX path; Windows has no /etc and symlinks need elevation
   it.skipIf(process.platform === 'win32')('symlink inside root pointing outside: both restrict', () => {
     // Create a real symlink to test the realpath resolution path.
     // Symlinks to /etc are POSIX-only; skip on Windows where /etc does not exist.
