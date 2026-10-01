@@ -56,6 +56,8 @@ function isGenuineUserTurn(msg: OpenAIMessage): boolean {
   // role:'user' messages that slip through are synthetic ones injected by
   // `harnessUserMessage` (queued_user_message). Both should be rewindable if
   // they contain text, so the text check is the right gate.
+  // Note: image-only synthetic user turns (no extractable text) fail this
+  // check and are intentionally unrewindable — same behaviour as anthropic-direct.
   return extractOpenAIText(msg.content).trim().length > 0;
 }
 
