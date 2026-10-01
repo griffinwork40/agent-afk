@@ -88,6 +88,17 @@ export class ToolLane {
   flash: ToolLaneFlash | null = null;
 
   /**
+   * The most recent `capturePath` from any bash tool result with a captured
+   * output file. Updated in {@link addResult} when `chunk.capturePath` is
+   * present. Used by the Ctrl+G viewer to open the last capture without
+   * requiring the user to know the exact file path.
+   */
+  private lastCapturePath: string | undefined = undefined;
+
+  /** Return the most recent bash capture path, or `undefined` if none. */
+  getLastCapturePath(): string | undefined { return this.lastCapturePath; }
+
+  /**
    * Optional AFK_SMOKE_TEXT whole-element fade for live rows. Set by
    * `armSmokeEffects` (stream-renderer-smoke.ts) only when smoke is enabled;
    * `null` otherwise, so the overlay renders exactly as before.
@@ -280,6 +291,8 @@ export class ToolLane {
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
+    // Track the most recent bash capture path for the Ctrl+G viewer (#1505).
+    if (chunk.capturePath !== undefined) this.lastCapturePath = chunk.capturePath;
     // Deliberately does NOT touch `activeTools`. The dispatcher is the only
     // observer of what is actually running and pushes a fresh snapshot on every
     // start and settle (see notifyToolActivity), so inferring the live set from

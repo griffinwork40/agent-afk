@@ -150,6 +150,13 @@ export class TerminalCompositor {
    */
   onOpenEditor?: () => void;
   /**
+   * Ctrl+G "open bash output viewer" handler — see
+   * {@link TerminalCompositorOptions.onOpenOutputViewer}. Installed once at
+   * REPL arm time; absent on surfaces without a ToolLane.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  onOpenOutputViewer?: () => void;
+  /**
    * Resolved prompt accessor. Always a function — strings supplied at
    * construction are wrapped in a constant-returning closure so the
    * downstream code path is uniform.
@@ -624,6 +631,7 @@ export class TerminalCompositor {
     this.onShiftTab = opts.onShiftTab;
     this.onTaskView = opts.onTaskView;
     this.onOpenEditor = opts.onOpenEditor;
+    this.onOpenOutputViewer = opts.onOpenOutputViewer;
     // Normalize promptText to a buffer-aware function: string → constant
     // closure; function → use as-is; falsy → dim-chevron fallback.
     const promptOpt = opts.promptText;

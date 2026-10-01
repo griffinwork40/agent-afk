@@ -282,6 +282,12 @@ export interface InteractiveCtx {
    * session-scoped AgentConfig reaches the per-turn ToolLane. Issue #1506.
    */
   bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
+  /**
+   * Mutable ref for the most recent bash capture path (issue #1505). Written
+   * by the turn handler's finally path so Ctrl+G can open the viewer after
+   * any turn that produced a large bash output.
+   */
+  capturePathRef: { current: string | undefined };
   mcpManager?: import('../../../agent/mcp/index.js').McpManager;
   /**
    * Registry of background subagent jobs spawned by the `agent` tool with
@@ -730,6 +736,14 @@ export interface TurnHandles {
    * per-turn ToolLane.
    */
   bashTailSetter?: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
+  /**
+   * Mutable ref for the most recent bash capture path across all turns
+   * (issue #1505). The turn handler writes the last capturePath from the
+   * finishing StreamRenderer into this ref immediately before dispose, so
+   * Ctrl+G can open the viewer at any time between or after turns.
+   * Best-effort — absent on non-interactive callers and non-TTY surfaces.
+   */
+  capturePathRef?: { current: string | undefined };
   /**
    * Fired on each streaming text-content chunk with the character length of
    * the chunk. Wired by the REPL to the MomentumTicker so it can compute a
