@@ -29,6 +29,7 @@ import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
 import { scrubBashEnv } from './bash-env-scrub.js';
+import { applyBashDetach, buildBashDelivery } from '../detach-bash.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -412,6 +413,30 @@ export function createBashHandler(
       // settle() is idempotent (guards on `resolved`), so re-firing here is safe.
       if (signal.aborted) {
         abortHandler();
+      }
+
+      // Detach contract (#2542): when a detachRegistry is present, register
+      // this call so Ctrl+B can free the model's turn while the process keeps
+      // running. applyBashDetach installs a one-time listener on the token's
+      // detachSignal. When it fires, the callback resolves the handler Promise
+      // with the placeholder result without killing the process, then wires a
+      // separate 'close' listener for late out-of-band delivery.
+      // The process's existing abort listener still fires on session abort.
+      if (context?.detachRegistry !== undefined && context.toolUseId !== undefined && !resolved) {
+        const toolUseId = context.toolUseId;
+        applyBashDetach(context.detachRegistry, toolUseId, command, (token, label) => {
+          if (resolved) return; // normal close already settled — skip
+          resolved = true;
+          clearTimeout(timeoutHandle);
+          signal.removeEventListener('abort', abortHandler);
+          tailBuffer?.clear();
+          proc.once('close', (closeCode) => {
+            const combined = stripEscapeSequences((stdout + stderr).trimEnd());
+            const capped = capForModel(combined);
+            token.deliver(buildBashDelivery(toolUseId, label, capped.content, closeCode ?? undefined, startedAt));
+          });
+          resolve(token.detachResult(label));
+        });
       }
   
       // Normal completion — `close` fires after all stdio streams drain.

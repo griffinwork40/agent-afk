@@ -10,6 +10,7 @@ import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
+import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SlashContext, SessionStats, ResumeSwapResult, ThinkingUiMode } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
@@ -653,6 +654,18 @@ export interface TurnHandles {
    * call site. Absent on non-REPL callers, where Ctrl+B does nothing.
    */
   subagentControl?: SubagentControl;
+  /**
+   * Detach registry for the Ctrl+B bash-detach contract (#2542).
+   *
+   * When present, `makeHandleBackgroundKey` checks this registry AFTER
+   * attempting subagent promotion and BEFORE falling through to whole-turn
+   * backgrounding. If detachable tool calls are in flight, `detachAll()` is
+   * called to free the model's turn while the processes keep running.
+   *
+   * Forwarded from the session dispatcher at `runTurn` call site. Absent on
+   * non-REPL callers, where Ctrl+B does nothing for tool calls.
+   */
+  detachRegistry?: DetachableToolRegistry;
   /**
    * Install/clear a per-turn ESC soft-stop handler on the surface's
    * persistent compositor. Used by the turn handler to flip
