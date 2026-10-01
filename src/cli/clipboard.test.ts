@@ -19,6 +19,30 @@ import {
   type Osc52Sink,
 } from './clipboard.js';
 
+// Invariant: vi.mock is hoisted to the top of the module and applies to the
+// whole file, so it must be declared here (not inside a hook). The mock is a
+// pass-through to the real spawnSync until a test flips `forceEnoent`, which
+// keeps every other test in this file running against real child_process.
+const childProcessMock = vi.hoisted(() => ({ forceEnoent: false }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: ((...args: Parameters<typeof actual.spawnSync>) =>
+      childProcessMock.forceEnoent
+        ? {
+            pid: 0,
+            output: [],
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+            status: null,
+            signal: null,
+            error: new Error('ENOENT: mock, no clipboard tool available'),
+          }
+        : actual.spawnSync(...args)) as typeof actual.spawnSync,
+  };
+});
+
 /** A recording write sink; `isTTY` controls the OSC 52 gate. */
 function makeSink(isTTY: boolean | undefined): Osc52Sink & { chunks: string[] } {
   const chunks: string[] = [];
@@ -158,26 +182,15 @@ describe('copyToClipboard', () => {
   // test is portable across all platforms — on Windows real `clip` would
   // succeed and bypass the fallback, making the assertions wrong.
   describe('OSC 52 fallback (all local tools mocked absent)', () => {
+    // Contract: the toggle (not vi.mock placement) scopes the mock. vi.mock
+    // is file-level, so it is declared at top level and passes through to the
+    // real spawnSync unless a test in this block has switched it on.
     beforeAll(() => {
-      vi.mock('node:child_process', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('node:child_process')>();
-        return {
-          ...actual,
-          spawnSync: vi.fn(() => ({
-            pid: 0,
-            output: [],
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.alloc(0),
-            status: null,
-            signal: null,
-            error: new Error('ENOENT: mock — no clipboard tool available'),
-          })),
-        };
-      });
+      childProcessMock.forceEnoent = true;
     });
 
     afterAll(() => {
-      vi.restoreAllMocks();
+      childProcessMock.forceEnoent = false;
     });
 
     it('falls back to OSC 52 when no local tool succeeds', () => {
