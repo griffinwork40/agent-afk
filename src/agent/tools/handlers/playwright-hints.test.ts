@@ -177,6 +177,104 @@ describe('playwrightInstallCommand', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows / PowerShell env-prefix syntax (issue #2758)
+//
+// The POSIX `VAR=value cmd` inline-prefix form is not valid PowerShell.
+// On win32 the install command must use `$env:VAR=value; cmd` instead.
+// Tests inject `platform` so they run portably on macOS/Linux CI without
+// a real Windows host (POSIX-guard convention: never skip on win32, make
+// tests portable by injecting platform).
+// ---------------------------------------------------------------------------
+
+describe('playwrightInstallCommand — Windows PowerShell syntax (issue #2758)', () => {
+  beforeEach(() => {
+    resetPlaywrightInstallCommandCache();
+  });
+
+  it('uses POSIX VAR=value prefix on non-win32', () => {
+    const cmd = playwrightInstallCommand('linux');
+    // Must start with the bare env-var name (POSIX inline-prefix form).
+    expect(cmd).toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+/);
+    // Must NOT use PowerShell $env: syntax on POSIX.
+    expect(cmd).not.toMatch(/\$env:/);
+  });
+
+  it('uses PowerShell $env: prefix on win32', () => {
+    const cmd = playwrightInstallCommand('win32');
+    // Must use the PowerShell assignment form, NOT the bare `VAR=value` prefix.
+    expect(cmd).toMatch(/^\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
+    // Must NOT use the POSIX inline-prefix form (no bare `VAR=` at the start).
+    expect(cmd).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
+  });
+
+  it('win32 command still sets the timeout to >= 120000 ms', () => {
+    const cmd = playwrightInstallCommand('win32');
+    const ms = Number(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=(\d+)/.exec(cmd)?.[1]);
+    expect(ms).toBeGreaterThanOrEqual(120_000);
+  });
+
+  it('win32 command still ends with "install chromium"', () => {
+    expect(playwrightInstallCommand('win32')).toMatch(/install chromium$/);
+  });
+
+  it('win32 command does NOT include npx (issue #1998)', () => {
+    expect(playwrightInstallCommand('win32')).not.toMatch(/npx/);
+  });
+
+  it('memoizes per-platform so win32 and linux produce independent cached values', () => {
+    const linux = playwrightInstallCommand('linux');
+    const win32 = playwrightInstallCommand('win32');
+    // Same call twice returns the cached string by identity.
+    expect(playwrightInstallCommand('linux')).toBe(linux);
+    expect(playwrightInstallCommand('win32')).toBe(win32);
+    // The two platforms produce syntactically different strings.
+    expect(linux).not.toBe(win32);
+  });
+});
+
+describe('playwrightMissingHint — Windows PowerShell syntax (issue #2758)', () => {
+  const BIN_MISSING = "Executable doesn't exist at /ms-playwright/chromium/chrome";
+  const PKG_MISSING = 'Cannot find package playwright';
+
+  it('emits $env: prefix in the chromium-missing hint on win32', () => {
+    const hint = playwrightMissingHint(BIN_MISSING, { platform: 'win32' });
+    expect(hint).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
+    expect(hint).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
+  });
+
+  it('emits $env: prefix in the package-missing hint on win32', () => {
+    const hint = playwrightMissingHint(PKG_MISSING, { platform: 'win32' });
+    expect(hint).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
+  });
+
+  it('still emits POSIX prefix on linux', () => {
+    const hint = playwrightMissingHint(BIN_MISSING, { platform: 'linux' });
+    expect(hint).toMatch(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+ node/);
+    expect(hint).not.toMatch(/\$env:/);
+  });
+
+  it('win32 hint still contains "install chromium"', () => {
+    const hint = playwrightMissingHint(BIN_MISSING, { platform: 'win32' });
+    expect(hint).toMatch(/install chromium/);
+  });
+
+  it('win32 hint still contains the "Do NOT use npx" warning', () => {
+    const hint = playwrightMissingHint(BIN_MISSING, { platform: 'win32' });
+    expect(hint).toMatch(/Do NOT use/);
+    expect(hint).toMatch(/npx playwright install chromium/);
+  });
+
+  it('decoratePlaywrightLaunchError emits PowerShell syntax on win32', () => {
+    const original = new Error(BIN_MISSING);
+    const decorated = decoratePlaywrightLaunchError(original, false, false, 'win32');
+    expect(decorated).toBeInstanceOf(Error);
+    const msg = (decorated as Error).message;
+    expect(msg).toMatch(/\$env:PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+;/);
+    expect(msg).not.toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Headed vs headless artifact naming (issue #721)
 // ---------------------------------------------------------------------------
 
