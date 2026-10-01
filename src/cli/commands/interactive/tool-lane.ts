@@ -3,7 +3,6 @@ import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { stripAnsi } from '../../display.js';
-import { ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
 import {
   formatAgentSummary,
   formatAgentHeader,
@@ -24,6 +23,7 @@ import {
   propagateChildFailure as propagateChildFailureIn,
 } from './tool-lane.ancestry.js';
 import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
+import { elapsedDisplayNeedsUpdate } from './tool-lane.elapsed-check.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -418,28 +418,7 @@ export class ToolLane {
    * nothing to repaint until the grace period expires.
    */
   checkElapsedDisplayNeedsUpdate(): boolean {
-    const now = Date.now();
-    let changed = false;
-    // Prune tracking entries for IDs that are no longer in-flight.
-    for (const id of this.lastElapsedSecond.keys()) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) {
-        this.lastElapsedSecond.delete(id);
-      }
-    }
-    for (const id of this.order) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) continue;
-      const elapsedMs = now - entry.startedAt;
-      if (elapsedMs < ELAPSED_GRACE_MS) continue; // within grace period — display is ''
-      const currentSec = Math.floor(elapsedMs / 1000);
-      const lastSec = this.lastElapsedSecond.get(id);
-      if (lastSec === undefined || currentSec !== lastSec) {
-        this.lastElapsedSecond.set(id, currentSec);
-        changed = true;
-      }
-    }
-    return changed;
+    return elapsedDisplayNeedsUpdate(this.entries, this.order, this.lastElapsedSecond);
   }
 
   hasPending(): boolean {

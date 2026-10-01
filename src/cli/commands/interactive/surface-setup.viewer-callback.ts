@@ -15,18 +15,24 @@ import type { TerminalCompositor } from '../../terminal-compositor.js';
  *                        finally path; holds the most-recent bash capture path.
  * @param getCompositor   Reads the armed compositor (returns null before arm or
  *                        on non-TTY surfaces).
+ * @param getSignal       Optional: returns an AbortSignal scoped to the
+ *                        compositor's lifetime so the viewer can be closed
+ *                        externally (e.g. when a new turn starts and the
+ *                        compositor is disarmed).
  */
 export function buildOutputViewerCallback(
   capturePathRef: { current: string | undefined },
   getCompositor: () => TerminalCompositor | null,
+  getSignal?: () => AbortSignal,
 ): () => void {
   return (): void => {
     const compositor = getCompositor();
     if (!compositor) return;
+    const signal = getSignal?.();
     // Dynamic import keeps the viewer out of the initial bundle; fire-and-forget
     // so the keypress handler returns synchronously.
     import('./bash-output-viewer.js').then(({ runBashOutputViewer }) => {
-      runBashOutputViewer(compositor, capturePathRef.current).catch(() => {});
+      runBashOutputViewer(compositor, capturePathRef.current, signal).catch(() => {});
     }).catch(() => {});
   };
 }

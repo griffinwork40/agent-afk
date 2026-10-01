@@ -24,6 +24,7 @@ import {
   clearSearch,
   resize,
   maxScrollTop,
+  _setConfinementRootForTest,
 } from './bash-output-viewer-model.js';
 
 // ---------------------------------------------------------------------------
@@ -34,9 +35,13 @@ let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'afk-viewer-test-'));
+  // Redirect confinement check to the per-test temp dir so tests don't
+  // need to write into the real AFK witness state directory.
+  _setConfinementRootForTest(tmpdir());
 });
 
 afterEach(() => {
+  _setConfinementRootForTest(null);
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -58,7 +63,9 @@ describe('loadViewer — missing file', () => {
   });
 
   it('returns expired error for ENOENT path', () => {
-    const result = loadViewer('/no/such/path/capture.txt', 24);
+    // Path must be inside the confinement root (tmpdir()) so the confinement
+    // check passes and the ENOENT read triggers the 'expired' error.
+    const result = loadViewer(join(tmpDir, 'no-such-file.txt'), 24);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe('expired');
   });
@@ -74,7 +81,8 @@ describe('loadViewer — normal file', () => {
     const result = loadViewer(p, 24);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.state.lines.length).toBeGreaterThanOrEqual(3);
+    // Trailing newline is stripped — exactly 3 content lines.
+    expect(result.state.lines.length).toBe(3);
   });
 
   it('starts at tail (scrollTop near end) for default view', () => {
@@ -152,7 +160,7 @@ describe('loadViewer — sanitization', () => {
     const result = loadViewer(p, 24);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.state.lines.length).toBeGreaterThanOrEqual(3);
+    expect(result.state.lines.length).toBe(3);
     expect(result.state.lines[0]).toBe('aaa');
     expect(result.state.lines[1]).toBe('bbb');
   });

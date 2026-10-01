@@ -29,6 +29,7 @@ import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import type { CompositorInputMode, KeyInfo, PickerController, SubmissionPayload } from './terminal-compositor.types.js';
 import { handleOpenOutputViewer } from './terminal-compositor.input-dispatch.viewer-key.js';
+import { handleOpenEditor } from './terminal-compositor.input-dispatch.editor-key.js';
 
 /**
  * Max gap (ms) between the two Escapes of a double-Esc rewind trigger at an
@@ -1092,23 +1093,6 @@ function handleBackground(self: KeyDispatchHost, key: KeyInfo): boolean {
   }
   return false;
 }
-
-function handleOpenEditor(self: KeyDispatchHost, key: KeyInfo): boolean {
-  // Ctrl+O → open $EDITOR seeded with the current buffer (the /editor chord).
-  // We ALWAYS consume Ctrl+O when armed — even with no handler wired — so the
-  // raw control byte (0x0f) never leaks into the buffer via handlePrintable
-  // (which drops ctrl combos anyway, but consuming here is explicit + testable).
-  // The handler owns the async suspend/spawn/restore + buffer load internally;
-  // dispatch just fires it and returns. Fire in any input mode: composing a
-  // prompt (idle) is the primary case, and firing mid-stream is harmless — the
-  // handler reads the live buffer regardless of turn state.
-  if (key?.ctrl && key?.name === 'o') {
-    if (self.onOpenEditor) self.onOpenEditor();
-    return true;
-  }
-  return false;
-}
-
 
 function handleTab(self: KeyDispatchHost, key: KeyInfo): boolean {
   // Tab applies the highlighted dropdown candidate. When no dropdown is

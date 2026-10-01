@@ -18,7 +18,34 @@
  */
 
 import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
+import { getWitnessRoot } from '../../../paths.witness.js';
+
+// ---------------------------------------------------------------------------
+// Confinement root (test-overridable)
+// ---------------------------------------------------------------------------
+
+/**
+ * The directory prefix that `capturePath` must start with. Defaults to the
+ * witness root so all capture files live under the AFK state tree.
+ *
+ * Tests may override this via `_setConfinementRootForTest(dir)` to redirect
+ * the confinement check to a throwaway temp directory — never use in
+ * production code.
+ *
+ * @internal
+ */
+let _confinementRoot: string | null = null;
+
+/** @internal — for unit tests only. */
+export function _setConfinementRootForTest(root: string | null): void {
+  _confinementRoot = root;
+}
+
+function getConfinementRoot(): string {
+  return _confinementRoot ?? getWitnessRoot();
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -81,9 +108,16 @@ export function loadViewer(capturePath: string | undefined, viewportRows: number
   if (capturePath === undefined) {
     return { ok: false, error: 'missing' };
   }
+  // Path confinement: reject any path that escapes the witness state dir so a
+  // malicious or buggy capturePath cannot read arbitrary files on disk.
+  const resolved = path.resolve(capturePath);
+  const confinementRoot = getConfinementRoot();
+  if (!resolved.startsWith(confinementRoot + path.sep) && resolved !== confinementRoot) {
+    return { ok: false, error: 'read_error' };
+  }
   let raw: string;
   try {
-    raw = readFileSync(capturePath, 'utf8');
+    raw = readFileSync(resolved, 'utf8');
   } catch (err: unknown) {
     const code = (err as NodeJS.ErrnoException | null)?.code;
     if (code === 'ENOENT') return { ok: false, error: 'expired' };
@@ -96,7 +130,10 @@ export function loadViewer(capturePath: string | undefined, viewportRows: number
   // and trims, destroying multi-line structure).
   const sanitized = stripEscapeSequences(raw);
 
-  const allLines = sanitized.split('\n');
+  const rawLines = sanitized.split('\n');
+  // Drop a trailing empty string created by a trailing newline — the file
+  // conventionally ends with '\n' but that should not produce a phantom last line.
+  const allLines = rawLines[rawLines.length - 1] === '' ? rawLines.slice(0, -1) : rawLines;
   const totalLines = allLines.length;
   const truncated = totalLines > VIEWER_MAX_LINES;
   const lines: string[] = truncated ? allLines.slice(0, VIEWER_MAX_LINES) : allLines;

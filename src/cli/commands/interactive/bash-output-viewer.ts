@@ -267,8 +267,12 @@ export function runBashOutputViewer(
       }
 
       // ── Normal mode ────────────────────────────────────────────────────
-      // Close.
-      if (key.name === 'escape' || char === 'q') {
+      // Close unconditionally on q; Esc clears search first if active.
+      if (char === 'q') {
+        close();
+        return;
+      }
+      if (key.name === 'escape') {
         if (state.searchQuery) {
           // First Esc clears search, second closes.
           state = clearSearch(state);
