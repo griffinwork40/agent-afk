@@ -824,6 +824,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SESSION_TMPDIR_DISABLE",
+      "description": "Disable per-session private temp dirs. By default every session and subagent gets its own directory under <os tmpdir>/afk-<uid>/ (removed on close) injected as TMPDIR/TMP/TEMP into bash and test_run child processes, so one session cleaning its temp files cannot delete a concurrent session's. Set to 1 to share the inherited TMPDIR instead.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "process"
+    },
+    {
       "name": "AFK_SESSIONSTART_COOLDOWN_MS",
       "description": "Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.",
       "type": "number",

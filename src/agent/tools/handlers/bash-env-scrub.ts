@@ -12,6 +12,8 @@
  * @module agent/tools/handlers/bash-env-scrub
  */
 
+import { resolveSpawnTmpEnv } from '../../session/session-tmpdir.js';
+
 /** Env vars stripped from every shell child process the agent spawns. */
 const BASH_ENV_SCRUB: readonly string[] = ['AFK_WHATIF_EPISODE', 'AFK_WHATIF_TOOL_LOG'];
 
@@ -28,4 +30,17 @@ export function scrubBashEnv(
     delete base[key];
   }
   return base;
+}
+
+/**
+ * The env for a shell/test child: `process.env` overlaid with the per-session
+ * `contextEnv` (e.g. `PLUGIN_ROOT`, the session's private `TMPDIR`/`TMP`/
+ * `TEMP`), then scrubbed. The session temp dir is created lazily here; when it
+ * cannot be, its keys are dropped and the child inherits the process temp dir.
+ */
+export function buildChildEnv(
+  contextEnv: Record<string, string> | undefined,
+): Record<string, string | undefined> {
+  const sessionEnv = resolveSpawnTmpEnv(contextEnv);
+  return scrubBashEnv(sessionEnv !== undefined ? { ...process.env, ...sessionEnv } : undefined);
 }

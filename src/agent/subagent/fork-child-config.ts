@@ -33,6 +33,7 @@ import { injectWorkspacePreamble } from '../workspace/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
+import { childTmpEnvPatch } from '../session/session-tmpdir.js';
 
 export interface AssembleChildConfigArgs<T> {
   options: ForkSubagentOptions<T>;
@@ -78,7 +79,7 @@ function applyForkPreambles(config: AgentConfig): AgentConfig {
 /**
  * Parent-derived fields the child inherits only when the caller's
  * `options.config` left them unset (awareness topology, cwd, read/write scope,
- * trace writer, surface). Extracted from {@link assembleChildConfig} verbatim;
+ * trace writer, surface, private temp dir). Extracted from {@link assembleChildConfig} verbatim;
  * spread AFTER `...options.config` there, so explicit caller values still win.
  */
 function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<AgentConfig> {
@@ -126,6 +127,12 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
     ...(args.options.config.surface === undefined && args.parentSurface !== undefined
       ? { surface: args.parentSurface }
       : {}),
+    // Private temp dir (session-tmpdir.ts): a fresh TMPDIR/TMP/TEMP nested
+    // under the dispatching session's dir, merged over the caller's env so
+    // `PLUGIN_ROOT` (skill forks) survives. Never the parent's or a sibling's
+    // dir, so a child's `rm -rf "$TMPDIR"/tmp.*` cannot reach theirs. A
+    // caller-chosen (unregistered) TMPDIR wins, like the fields above.
+    ...childTmpEnvPatch(args.options.config.env, args.id),
   };
 }
 
