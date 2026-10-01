@@ -146,9 +146,10 @@ const WEB_TOOLS = new Set([
   'web_scrape',
   // web_request: structured HTTP tool (all methods, SSRF-guarded, #1413).
   'web_request',
-  // image_generate: outbound OpenAI Images API call — external HTTP, same
-  // conceptual shape as web_request (billing + network side effect).
+  // image_generate / image_edit: outbound OpenAI Images API calls — external HTTP,
+  // same conceptual shape as web_request (billing + network side effect).
   'image_generate',
+  'image_edit',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).

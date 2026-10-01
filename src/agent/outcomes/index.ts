@@ -47,10 +47,7 @@ export { readRecord, writeRecord, listRecords, upsertVotes, appendArtifacts } fr
 
 export { createOutcomeSessionEndHook } from './session-end-hook.js';
 export { createChildAttributionHook } from './child-attribution.js';
-// promptFingerprint and FINGERPRINT_MAX_TOKENS are intentionally NOT re-exported
-// here: they are internal implementation details used only inside lf-reask.ts
-// and session-end-hook.ts (which imports directly). Exposing them as public API
-// would imply a stability contract we do not want to make (issue #2561).
+// promptFingerprint/FINGERPRINT_MAX_TOKENS are internal to lf-reask.ts/session-end-hook.ts (issue #2561).
 export { lfReask, normalizeTokens, jaccardSimilarity, REASK_THRESHOLD } from './lf-reask.js';
 
 export type { ExecFnCi } from './lf-ci.js';

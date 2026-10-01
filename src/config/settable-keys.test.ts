@@ -249,6 +249,34 @@ describe('coerceConfigValue — string-array type', () => {
   });
 });
 
+describe('coerceConfigValue — object type', () => {
+  const spec = getConfigKeySpec('pluginHookEnv')!;
+
+  it('accepts a plain object', () => {
+    const value = { 'my-plugin': ['SECRET_A', 'SECRET_B'] };
+    const result = coerceConfigValue(spec, value);
+    expect(result).toEqual({ ok: true, value });
+  });
+
+  it('rejects null (not an object)', () => {
+    const result = coerceConfigValue(spec, null);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects an array (not a plain object)', () => {
+    const result = coerceConfigValue(spec, ['foo', 'bar']);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects a string (not an object)', () => {
+    const result = coerceConfigValue(spec, 'my-plugin=SECRET_A');
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+});
+
 describe('dotted-path helpers', () => {
   it('setAtPath creates nested objects', () => {
     const obj: Record<string, unknown> = {};

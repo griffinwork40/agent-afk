@@ -262,7 +262,7 @@ describe('plugin update', () => {
 
   it('reports a missing-dir warning on stdout for a single-plugin update', async () => {
     // Plugin is in the index but its directory was never created.
-    // Production path (update.ts:152) returns at the existsSync check — no git call occurs.
+    // Production path returns early at the existsSync(dir) guard in updatePlugin — no git call occurs.
     upsertPlugin(
       'ghost',
       {

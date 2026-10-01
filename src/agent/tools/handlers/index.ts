@@ -20,6 +20,7 @@ import { sendTelegramHandler } from './send-telegram.js';
 import { webScrapeHandler } from './web-scrape.js';
 import { webRequestHandler } from './web-request.js';
 import { imageGenerateHandler } from './image-generate.js';
+import { imageEditHandler, createImageEditHandler } from './image-edit.js';
 import { viewImageHandler, createViewImageHandler } from './view-image.js';
 import {
   createScheduleHandler,
@@ -108,6 +109,7 @@ export function createBuiltinHandlers(
     ['web_scrape', webScrapeHandler],
     ['web_request', webRequestHandler],
     ['image_generate', imageGenerateHandler],
+    ['image_edit', imageEditHandler],
     ['create_schedule', createScheduleHandler],
     ['update_schedule', updateScheduleHandler],
     ['list_schedules', listSchedulesHandler],
@@ -148,6 +150,8 @@ export {
   webScrapeHandler,
   webRequestHandler,
   imageGenerateHandler,
+  imageEditHandler,
+  createImageEditHandler,
   viewImageHandler,
   createViewImageHandler,
   createScheduleHandler,

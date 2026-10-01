@@ -303,6 +303,8 @@ export async function guardedFetch(
   //
   // Injected test fetches (fetchFn !== globalThis.fetch) bypass this path so
   // tests continue to control the full fetch seam without a real dispatcher.
+  // Invariant: fetchFn is immutable across hops — the useUndici hoist is safe
+  // because fetchFn is captured once from the caller and never reassigned.
   const useUndici =
     fetchFn === globalThis.fetch && !(opts.allowPrivateHosts ?? privateHostsAllowed());
 
@@ -317,6 +319,9 @@ export async function guardedFetch(
     // Use npm undici's own fetch (same package as the Agent) on the
     // production path, so both ends of the dispatcher protocol come from
     // the same copy of undici.  Fall back to the injected fetchFn otherwise.
+    // The double cast (as unknown as FetchFn) is needed because undici's fetch
+    // types `body` as `BodyInit | null` while the DOM spec adds `ReadableStream`;
+    // the runtime behaviour is identical — only the TS overload surface differs.
     const activeFetch: FetchFn = useUndici ? (undiciFetch as unknown as FetchFn) : fetchFn;
     const res = await retryFetch(activeFetch, target, requestInit, opts.retry ?? {});
     if (!REDIRECT_STATUS.has(res.status)) return res;
