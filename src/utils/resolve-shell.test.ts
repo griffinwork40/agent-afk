@@ -283,3 +283,162 @@ describe('bashToolShellGuidance', () => {
     expect(guidance).toContain('Commands run through /bin/sh (POSIX) (Node spawn with shell:true)');
   });
 });
+
+// ---------------------------------------------------------------------------
+// WSL / App-Execution-Alias filtering (issue #2759)
+// ---------------------------------------------------------------------------
+
+describe('findGitBashOnWindows — WSL bash filtering', () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+    delete process.env['MSYSTEM'];
+    delete process.env['SystemRoot'];
+    delete process.env['LOCALAPPDATA'];
+    process.env['PATH'] = process.env['PATH'] ?? '';
+  });
+
+  it('skips C:\\Windows\\System32\\bash.exe (WSL shim) in MSYSTEM PATH scan', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['MSYSTEM'] = 'MINGW64';
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    // System32 bash.exe is on PATH first, then the real Git Bash
+    process.env['PATH'] = 'C:\\Windows\\System32;C:\\Program Files\\Git\\usr\\bin';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'C:\\Windows\\System32\\bash.exe' ||
+        s === 'C:\\Program Files\\Git\\usr\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    // Must NOT pick System32\bash.exe
+    expect(result.shell).toBe('C:\\Program Files\\Git\\usr\\bin\\bash.exe');
+  });
+
+  it('skips WindowsApps bash.exe (App Execution Alias) in MSYSTEM PATH scan', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    process.env['MSYSTEM'] = 'MINGW64';
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    process.env['PATH'] =
+      'C:\\Users\\User\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\Git\\usr\\bin';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'C:\\Users\\User\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe' ||
+        s === 'C:\\Program Files\\Git\\usr\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    // Must NOT pick the WindowsApps alias
+    expect(result.shell).toBe('C:\\Program Files\\Git\\usr\\bin\\bash.exe');
+  });
+
+  it('skips System32\\bash.exe in the generic PATH scan (no MSYSTEM)', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    // Only System32 bash.exe is present; no known paths, no git.exe
+    process.env['PATH'] = 'C:\\Windows\\System32';
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === 'C:\\Windows\\System32\\bash.exe',
+    );
+    const result = resolveShell();
+    // Should fall back to PowerShell, not pick System32\bash.exe
+    expect(result.shell).toBe('powershell.exe');
+  });
+
+  it('skips WindowsApps bash.exe in the generic PATH scan (no MSYSTEM)', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    process.env['PATH'] = 'C:\\Users\\User\\AppData\\Local\\Microsoft\\WindowsApps';
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) =>
+        String(p) === 'C:\\Users\\User\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe',
+    );
+    const result = resolveShell();
+    expect(result.shell).toBe('powershell.exe');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// git.exe-derived discovery (issue #2759)
+// ---------------------------------------------------------------------------
+
+describe('findGitBashOnWindows — git.exe-derived discovery', () => {
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+    delete process.env['MSYSTEM'];
+    delete process.env['SystemRoot'];
+    delete process.env['LOCALAPPDATA'];
+    process.env['PATH'] = process.env['PATH'] ?? '';
+  });
+
+  it('finds Git Bash via git.exe when installed under %LOCALAPPDATA%', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    // git.exe lives in a non-standard location; no Program Files paths exist
+    process.env['PATH'] = 'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\cmd';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\cmd\\git.exe' ||
+        s === 'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    expect(result.shell).toBe(
+      'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\bin\\bash.exe',
+    );
+    expect(result.args).toEqual(['-c']);
+  });
+
+  it('git.exe-derived path is preferred over a generic PATH bash.exe that is not WSL', () => {
+    // If both a git.exe-derived bash and a non-WSL PATH bash exist, the
+    // git.exe path wins because it is checked first.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    process.env['PATH'] =
+      'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\cmd;C:\\tools\\otherbash';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\cmd\\git.exe' ||
+        s === 'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\bin\\bash.exe' ||
+        s === 'C:\\tools\\otherbash\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    expect(result.shell).toBe(
+      'C:\\Users\\User\\AppData\\Local\\Programs\\Git\\bin\\bash.exe',
+    );
+  });
+
+  it('falls back to PowerShell when git.exe is found but bash.exe sibling is absent', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    process.env['PATH'] = 'C:\\tools\\git\\cmd';
+    vi.mocked(fs.existsSync).mockImplementation(
+      // git.exe exists but bin\bash.exe does not
+      (p) => String(p) === 'C:\\tools\\git\\cmd\\git.exe',
+    );
+    const result = resolveShell();
+    expect(result.shell).toBe('powershell.exe');
+  });
+});
