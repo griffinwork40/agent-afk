@@ -25,7 +25,7 @@ import { renderMarkdownToTerminal } from '../../src/cli/formatter.js';
 import { formatSubmittedEcho } from '../../src/cli/input/echo.js';
 import { commitBlockAbove } from '../../src/cli/_lib/commit-block.js';
 import { StreamingMarkdownRenderer } from '../../src/cli/markdown-stream.js';
-import { SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
+import { LIFETIME_MS, SMOKE_GLYPHS } from '../../src/cli/smoke-reveal.js';
 import { OverlayComposer } from '../../src/cli/_lib/overlay-composer.js';
 import { armSmokeEffects, THOUGHT_SUMMARY_SLOT } from '../../src/cli/_lib/stream-renderer-smoke.js';
 import { ToolLane } from '../../src/cli/commands/interactive/tool-lane.js';
@@ -791,7 +791,11 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     ref: 'src/cli/smoke-reveal.ts',
     async drive(ctx): Promise<void> {
       await streamWithSmoke(ctx, `${SMOKE_PARA_1}\n\n${SMOKE_PARA_2} SMOKETWO_END`);
-      await settle(900); // no pushes from here on: only the settle driver repaints
+      // No pushes from here on: only the settle driver repaints. Budget: the
+      // playhead's drain after the last arrival (~1.1 s for this burst at
+      // TARGET_LAG_MS 400 / MIN_CPS 60) plus one full smoke lifetime, since
+      // prose now condenses out of smoke; the old fixed 900 ms predates both.
+      await settle(1300 + LIFETIME_MS);
     },
     expect: {
       exactlyOnce: ['SMOKEONE_START', 'SMOKEONE_END', 'SMOKETWO_START', 'SMOKETWO_END'],
@@ -801,28 +805,30 @@ export const SCENARIOS: Record<string, PtyScenario> = {
     },
   },
 
-  // Positive control for the scenario above: prove the mask is actually
+  // Positive control for the scenario above: prove the reveal is actually
   // active through the real compositor, so 'smoke-text-settles' cannot pass
-  // just because the effect silently stayed off. The lead text settles. The
-  // final chunk is snapshotted ~40ms after arrival, while it is still smoke
-  // or not yet revealed, so its marker must not be readable yet.
+  // just because the effect silently stayed off. Body prose is deliberately
+  // legible from its first frame (the ink fade only dims it), so the control
+  // uses the smoke ACCENT: a heading line snapshotted ~40ms after arrival is
+  // still condensing (paced at the accent cadence, drawn as particles), so
+  // its marker cannot be readable yet. With the reveal off it would be.
   'smoke-text-mid-fade': {
-    description: 'AFK_SMOKE_TEXT: text that just arrived is still smoke (the mask is live through the compositor)',
+    description: 'AFK_SMOKE_TEXT: a heading that just arrived is still smoke (the reveal is live through the compositor)',
     cols: 100,
     rows: 24,
     ref: 'src/cli/smoke-reveal.ts',
     async drive(ctx): Promise<void> {
       const md = await streamWithSmoke(ctx, SMOKE_PARA_2);
       await settle(700);
-      md.push(' SMOKETWO_END');
+      md.push('\n## SMOKEHEAD_END');
       await settle(40);
     },
     expect: {
       exactlyOnce: ['SMOKETWO_START'],
-      // Deliberately no positive smoke-glyph assertion: at 40ms the chunk may
-      // still be an unrevealed blank placeholder rather than a glyph, so
-      // requiring a specific glyph races the fade and flaked on CI.
-      absent: ['SMOKETWO_END'],
+      // Deliberately no positive smoke-glyph assertion: at 40ms the heading
+      // may still be held for classification rather than drawn, so requiring
+      // a specific glyph races the reveal and would flake on CI.
+      absent: ['SMOKEHEAD_END'],
     },
   },
 

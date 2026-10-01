@@ -10,6 +10,7 @@ import {
   SMOKE_GLYPHS,
 } from './smoke-reveal.js';
 import { segmentAnsi, countVisible } from './smoke-reveal.ansi.js';
+import { MAX_CPS, TARGET_LAG_MS } from './smoke-reveal.playhead.js';
 import { smokeTone, resetSmokeToneCache } from './smoke-reveal.tones.js';
 import { applyTheme } from './theme.js';
 
@@ -168,30 +169,65 @@ describe('SmokeReveal', () => {
     r.dispose();
   });
 
-  it('staggers a burst so its first character appears before its last', () => {
+  it('reveals a burst with a playhead: first letter on arrival, then an accelerating front', () => {
     const c = clockAt();
-    const r = new SmokeReveal(() => {}, c.now);
-    r.record('abcdefghijklmnopqrst');
-    c.advance(5);
-    const plain = stripAnsi(r.apply('abcdefghijklmnopqrst'));
-    // Oldest is already a speck. The youngest are not born yet (held blank).
-    expect(plain[0]).not.toBe(' ');
-    expect(plain.endsWith(' ')).toBe(true);
+    const r = new SmokeReveal(() => {}, c.now, { prose: 'ink' });
+    const text = 'abcdefghijklmnopqrstuvwxyzabcdefghijklmn';
+    r.record(text);
+    const bornAt = (): number => stripAnsi(r.apply(text)).replace(/ +$/, '').length;
+    // Zero first-token latency: the first letter is born the instant it arrives.
+    expect(bornAt()).toBe(1);
+    // The front then eases up to speed instead of stepping at a fixed cadence.
+    // With TARGET_LAG_MS=400ms and TAU_MS=100ms the acceleration is gentle: early
+    // frames may birth 0-1 chars while velocity builds. We sample over a window of
+    // TARGET_LAG_MS / 2 ms (≈200ms) to let the front visibly accelerate, then check
+    // that (a) the last sample advanced more than the first, (b) not all text was
+    // born (confirming the front is still ramping), and (c) total advance is
+    // monotone non-decreasing (no backsliding).
+    const SAMPLE_FRAME = 1000 / 60;
+    const SAMPLE_COUNT = Math.ceil((TARGET_LAG_MS / 2) / SAMPLE_FRAME); // ≈12 frames
+    const adv: number[] = [];
+    let prev = 1;
+    for (let i = 0; i < SAMPLE_COUNT; i++) {
+      c.advance(SAMPLE_FRAME);
+      const n = bornAt();
+      adv.push(n - prev);
+      prev = n;
+    }
+    // Cumulative advance must be non-decreasing (no frame can un-birth a char).
+    let cumPrev = 0;
+    for (const d of adv) {
+      expect(d).toBeGreaterThanOrEqual(0);
+      cumPrev += d;
+    }
+    // Front accelerated over the window: last advance greater than first advance.
+    expect(adv.at(-1) ?? 0).toBeGreaterThan(adv[0] ?? 0);
+    expect(prev).toBeLessThan(text.length);
     r.dispose();
   });
 
-  it('caps reveal lag: a huge chunk is fully visible (as letters) within MAX_LAG_MS + LIFETIME_MS', () => {
+  it.each(['ink', 'smoke'] as const)('settles old overflow immediately and animates only a bounded %s tail', (style) => {
     const c = clockAt();
-    const r = new SmokeReveal(() => {}, c.now);
-    const big = 'x'.repeat(2_000);
+    const r = new SmokeReveal(() => {}, c.now, { prose: style });
+    const cap = (MAX_LAG_MS * MAX_CPS) / 1000; // the prose run's character capacity
+    const prefix = 'x'.repeat(2000 - cap);
+    const big = prefix + 'y'.repeat(cap);
     r.record(big);
-    c.advance(MAX_LAG_MS + LIFETIME_MS);
+    const first = r.apply(big);
+    // Exact unstyled prefix, not merely nonblank: overflow must already be settled.
+    expect(first.startsWith(prefix)).toBe(true);
+    expect(stripAnsi(first)).toBe(prefix + ' '.repeat(cap));
+    c.advance(MAX_LAG_MS);
+    expect(stripAnsi(r.apply(big))).toMatch(/ $/); // no hidden deadline jump
+    c.advance(4000);
     expect(r.apply(big)).toBe(big);
+    expect(r.smokeHoldRemaining()).toBe(0);
+    r.dispose();
   });
 
   it('keeps births monotonic when a second burst arrives mid-stagger', () => {
     const c = clockAt();
-    const r = new SmokeReveal(() => {}, c.now);
+    const r = new SmokeReveal(() => {}, c.now, { prose: 'ink' });
     r.record('aaaaaaaaaa');
     c.advance(10);
     r.record('bbbbbbbbbb');

@@ -17,6 +17,8 @@ import type { TrustedSkillResult } from '../../../agent/trusted-skill-result.js'
 import type { InputSurface } from '../../input/input-surface.js';
 import { getTerminalWidth } from '../../terminal-size.js';
 import { boundLineToTerminal } from '../../render/bounded-line.js';
+import { discoverTerminalColors } from '../../terminal-colors.js';
+import { shouldQueryTerminalColors } from '../../terminal-colors.gate.js';
 
 /**
  * Subscribe to trusted-skill start/completion events, emitting in-flight +
@@ -117,6 +119,22 @@ export function wireProviderGrants(
  * suspend/resume works at invocation time even though the surface isn't
  * armed yet at install time.
  */
+/**
+ * `createReplInput`, preceded by the one-time terminal color query (OSC
+ * 10/11/4) the ink and smoke reveal use to fade into exact colors.
+ *
+ * Invariant (stdin ownership): the query must finish before the readline
+ * interface exists, because `terminal: false` readline consumes stdin `data`
+ * and would read the terminal's reply as typed input. Awaiting it here, on
+ * the only path that creates the REPL's readline, makes that ordering
+ * structural. The query is a no-op off a TTY, when no reveal animates, or
+ * with AFK_TERM_COLOR_QUERY=0; a DA1 sentinel keeps it to one round trip.
+ */
+export async function createReplInputAfterColorQuery(): Promise<ReturnType<typeof createReplInput>> {
+  await discoverTerminalColors(shouldQueryTerminalColors());
+  return createReplInput();
+}
+
 export function createReplInput(): {
   rl: readline.Interface;
   inputSurfaceRef: { current: InputSurface | null };

@@ -130,6 +130,13 @@ export interface ParsePipelineCallbacks {
   onCommitBlock(blockText: string): void;
   /** Schedule a repaint of remaining pending content. */
   onScheduleRepaint(): void;
+  /**
+   * Optional commit gate: return true to keep the completed block ending at
+   * `boundary` (and everything after it) pending for now. The caller is then
+   * responsible for re-running the pipeline later (see
+   * markdown-stream.commit-defer.ts). Omitted = commit every completed block.
+   */
+  deferCommit?(buffer: string, boundary: number): boolean;
 }
 
 /**
@@ -175,6 +182,7 @@ export function runParsePipeline(
       boundary += nextBoundary;
     }
     if (boundary === -1) break;
+    if (callbacks.deferCommit?.(buffer, boundary)) break;
 
     const blockText = buffer.slice(0, boundary);
     // Slice buffer BEFORE commitBlock so any synchronous repaint triggered

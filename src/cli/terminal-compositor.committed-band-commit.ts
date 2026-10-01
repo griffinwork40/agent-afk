@@ -28,6 +28,7 @@ import { commitPhase1Teardown } from './terminal-compositor.commit-phase1.js';
 import { commitPhase3Hold, commitPhase3HoldStore } from './terminal-compositor.commit-phase3-hold.js';
 import { commitPhase3Band } from './terminal-compositor.commit-phase3-band.js';
 import { postCommitPlacementMode, phase2PendingContentRows } from './terminal-compositor.content-hug.js';
+import { CommitWriteTx } from './terminal-compositor.commit-write-tx.js';
 
 /**
  * Narrowest TerminalCompositor state slice the committed-band functions touch.
@@ -242,119 +243,134 @@ export function commitAbove(self: CommittedBandHost, text: string): void {
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
 
-  // Pre-commit banner sync: on the FIRST commit with a visible banner
-  // (anchorRow > 1), synchronise placement mode / geometry before the
-  // geometry snapshot. See preCommitBannerSync() for the full contract.
-  if (!self.hasCommitted && self.anchorRow !== undefined && self.anchorRow > 1) {
-    preCommitBannerSync(self, rows);
-  }
-
-  // F1 (retained-logical-source re-wrap): the prior band was hard-wrapped at
-  // WHATEVER width was current when IT was committed — possibly a resize or
-  // several ago. Re-wrap it to the CURRENT `cols` before any of the geometry
-  // below reads `self.committedBand`/`committedBandBottomRow` (the merge
-  // contiguity check, decideCommitMode's overflowRun, and Phase 3's merge all
-  // read the band) — see terminal-compositor.band-reflow.ts's module doc for
-  // why a stale-width row can never be trusted verbatim again. No-op (and
-  // free) when nothing has resized since the band was last reflowed.
-  reflowCommittedBandToWidth(self, cols);
-
-  const t = decomposeCommitText(text, cols);
-  const geo = snapshotCommitGeometry(self, t.contentLineCount, rows, cols);
-  const route = routeCommit(self, t, geo);
-
-  // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.
-  // Re-armed at the top of every commitAbove, so a throw on a dying TTY (the
-  // only realistic escape — Phase 3's stdout.write under writeWithGuard) that
-  // skips the Phase-3 reset only suppresses a visual nicety for a session
-  // that is already ending; the next commit re-arms it. No try/finally needed.
-  self.commitInFlight = true;
-  self.committing = true;
-  // Rows Phase 1 scrolls into scrollback this commit (set inside the guard).
-  // The whole screen — banner included — scrolls up by this many rows, so the
-  // anchor floor must drop to match (see the decrement after the finally).
-  let scrolledRows = 0;
+  // Open a write-transaction so every byte emitted during this commit —
+  // logUpdate.clear(), withFullScrollRegion DECSTBM pairs, Phase-1 archive
+  // writes, Phase-2 repaint, and Phase-3 band paint — reaches the terminal in
+  // ONE stream.write() wrapped in DEC 2026 SYNC_START/SYNC_END.  On non-TTY
+  // streams this is a true no-op (no patching, no escapes emitted).
+  const tx = CommitWriteTx.begin(self.stdout);
   try {
-    self.logUpdate.clear(geo.extraRows);
-    scrolledRows = commitPhase1Teardown(self, geo, route);
-  } finally {
-    self.committing = false;
-    self.debugLog('commitAbove:finally');
-  }
-
-  // Invariant (floor follows the scroll): Phase 1 scrolled `scrolledRows` rows
-  // off the top of the screen. The banner occupying rows [1, anchorRow-1]
-  // scrolled up with everything else, so the protected ceiling shrinks by the
-  // same amount — exactly as the evict path in preserveRowsBeforeFrameRender
-  // does (anchorRow -= deficit). Without this the floor goes stale, the
-  // above-frame room never grows, committed content orphans in the vacated
-  // banner rows, and a later overlay collapse loses it. Clamp at 1; once the
-  // banner is fully in scrollback the path matches the no-banner case.
-  if (scrolledRows > 0 && self.anchorRow !== undefined && self.anchorRow > 1) {
-    self.anchorRow = Math.max(1, self.anchorRow - scrolledRows);
-  }
-  // Mark that a commit has happened this arm cycle so growthDeficit in
-  // repaint() knows there is transcript content above the frame to protect.
-  self.hasCommitted = true;
-  // Transition from cursor-follow to bottom-pinned: the first commit means
-  // streaming content is arriving, so the frame snaps to the viewport floor.
-  // This is the ONLY site that flips the mode; resetState() resets it back
-  // to 'cursor-follow' for the next arm cycle.
-  self.placementMode = postCommitPlacementMode(self);
-  // Mark the compositor state as dirty so endTurnFlush (lifecycle.ts) knows
-  // a redraw is warranted. Mirrors the bandGeometryStale setter pattern.
-  self.lifecycleStateDirty = true;
-
-  // Phase 2: repaint the live frame (bottom-anchored, or under content-hug just
-  // below the rows Phase 3 will paint — content-hug.ts, in-flight commit).
-  self.debugLog('commitAbove:phase2:repaint');
-  self.pendingContentRows = phase2PendingContentRows(self, geo, route);
-  self.repaint();
-  self.debugLog('commitAbove:phase2:done', { newTopRow: self.logUpdate.topRow ?? null });
-
-  // Phase 3: write the committed text at rows `newTopRow -
-  // lineCount..newTopRow - 1` (immediately above the live frame) so it's
-  // visible without scrolling.
-  //
-  // In the fitsAboveFrame case this is the SOLE copy of the block — Phase 1
-  // scrolled only the band overflow (oldest lines that no longer fit) into
-  // scrollback, never the new block itself. The copy stays visible and is
-  // kept durable across a later overlay growth by repaint()'s evict-on-growth
-  // (which scrolls it into scrollback rather than letting the taller frame
-  // overwrite it); it also flows into scrollback on its own as later commits
-  // evict it.
-  //
-  // In the overflow case Phase 1 already archived the whole block at
-  // anchorFloor, so this paints only the top lines that fit.
-  //
-  // Edge cases:
-  // - `topRow` is 0 or 1: no above-frame area exists, skip phase 3.
-  // - `lineCount > newTopRow - anchorFloor`: only the lines that fit between
-  //   anchorFloor and the frame are painted; in the overflow path the rest
-  //   are already in scrollback (Phase 1) — never CUP-written below
-  //   anchorFloor.
-  const newTopRow = self.logUpdate.topRow ?? 0;
-  if (newTopRow > 1) {
-    // Measure room against the POST-scroll floor: the anchorRow decrement above
-    // lowered the ceiling by `scrolledRows`, so the newly-vacated banner rows
-    // are now legitimately available to the band. Using the stale pre-scroll
-    // anchorFloor would keep maxRun pinned and re-trigger the cap-to-one-row bug.
-    const postScrollFloor = Math.max(self.anchorRow ?? 1, 1);
-    const maxRun = Math.max(0, newTopRow - postScrollFloor);
-    if (route.useBandHold) {
-      commitPhase3Hold(self, geo, route, newTopRow, maxRun);
-    } else {
-      commitPhase3Band(self, geo, route, newTopRow, maxRun, postScrollFloor);
+    // Pre-commit banner sync: on the FIRST commit with a visible banner
+    // (anchorRow > 1), synchronise placement mode / geometry before the
+    // geometry snapshot. See preCommitBannerSync() for the full contract.
+    if (!self.hasCommitted && self.anchorRow !== undefined && self.anchorRow > 1) {
+      preCommitBannerSync(self, rows);
     }
-  } else if (route.useBandHold) {
-    commitPhase3HoldStore(self, geo, route);
-  } else {
-    clearCommittedBand(self);
-  }
 
-  self.pendingContentRows = null;
-  self.commitInFlight = false;
-  self.debugLog('commitAbove:phase3:done');
+    // F1 (retained-logical-source re-wrap): the prior band was hard-wrapped at
+    // WHATEVER width was current when IT was committed — possibly a resize or
+    // several ago. Re-wrap it to the CURRENT `cols` before any of the geometry
+    // below reads `self.committedBand`/`committedBandBottomRow` (the merge
+    // contiguity check, decideCommitMode's overflowRun, and Phase 3's merge all
+    // read the band) — see terminal-compositor.band-reflow.ts's module doc for
+    // why a stale-width row can never be trusted verbatim again. No-op (and
+    // free) when nothing has resized since the band was last reflowed.
+    reflowCommittedBandToWidth(self, cols);
+
+    const t = decomposeCommitText(text, cols);
+    const geo = snapshotCommitGeometry(self, t.contentLineCount, rows, cols);
+    const route = routeCommit(self, t, geo);
+
+    // Suppress the shrink re-pin for the whole commit; Phase 3 sets the band.
+    // Re-armed at the top of every commitAbove, so a throw on a dying TTY (the
+    // only realistic escape — Phase 3's stdout.write under writeWithGuard) that
+    // skips the Phase-3 reset only suppresses a visual nicety for a session
+    // that is already ending; the next commit re-arms it. No try/finally needed.
+    self.commitInFlight = true;
+    self.committing = true;
+    // Rows Phase 1 scrolls into scrollback this commit (set inside the guard).
+    // The whole screen — banner included — scrolls up by this many rows, so the
+    // anchor floor must drop to match (see the decrement after the finally).
+    let scrolledRows = 0;
+    try {
+      self.logUpdate.clear(geo.extraRows);
+      scrolledRows = commitPhase1Teardown(self, geo, route);
+    } finally {
+      self.committing = false;
+      self.debugLog('commitAbove:finally');
+    }
+
+    // Invariant (floor follows the scroll): Phase 1 scrolled `scrolledRows` rows
+    // off the top of the screen. The banner occupying rows [1, anchorRow-1]
+    // scrolled up with everything else, so the protected ceiling shrinks by the
+    // same amount — exactly as the evict path in preserveRowsBeforeFrameRender
+    // does (anchorRow -= deficit). Without this the floor goes stale, the
+    // above-frame room never grows, committed content orphans in the vacated
+    // banner rows, and a later overlay collapse loses it. Clamp at 1; once the
+    // banner is fully in scrollback the path matches the no-banner case.
+    if (scrolledRows > 0 && self.anchorRow !== undefined && self.anchorRow > 1) {
+      self.anchorRow = Math.max(1, self.anchorRow - scrolledRows);
+    }
+    // Mark that a commit has happened this arm cycle so growthDeficit in
+    // repaint() knows there is transcript content above the frame to protect.
+    self.hasCommitted = true;
+    // Transition from cursor-follow to bottom-pinned: the first commit means
+    // streaming content is arriving, so the frame snaps to the viewport floor.
+    // This is the ONLY site that flips the mode; resetState() resets it back
+    // to 'cursor-follow' for the next arm cycle.
+    self.placementMode = postCommitPlacementMode(self);
+    // Mark the compositor state as dirty so endTurnFlush (lifecycle.ts) knows
+    // a redraw is warranted. Mirrors the bandGeometryStale setter pattern.
+    self.lifecycleStateDirty = true;
+
+    // Phase 2: repaint the live frame (bottom-anchored, or under content-hug just
+    // below the rows Phase 3 will paint — content-hug.ts, in-flight commit).
+    self.debugLog('commitAbove:phase2:repaint');
+    self.pendingContentRows = phase2PendingContentRows(self, geo, route);
+    self.repaint();
+    self.debugLog('commitAbove:phase2:done', { newTopRow: self.logUpdate.topRow ?? null });
+
+    // Phase 3: write the committed text at rows `newTopRow -
+    // lineCount..newTopRow - 1` (immediately above the live frame) so it's
+    // visible without scrolling.
+    //
+    // In the fitsAboveFrame case this is the SOLE copy of the block — Phase 1
+    // scrolled only the band overflow (oldest lines that no longer fit) into
+    // scrollback, never the new block itself. The copy stays visible and is
+    // kept durable across a later overlay growth by repaint()'s evict-on-growth
+    // (which scrolls it into scrollback rather than letting the taller frame
+    // overwrite it); it also flows into scrollback on its own as later commits
+    // evict it.
+    //
+    // In the overflow case Phase 1 already archived the whole block at
+    // anchorFloor, so this paints only the top lines that fit.
+    //
+    // Edge cases:
+    // - `topRow` is 0 or 1: no above-frame area exists, skip phase 3.
+    // - `lineCount > newTopRow - anchorFloor`: only the lines that fit between
+    //   anchorFloor and the frame are painted; in the overflow path the rest
+    //   are already in scrollback (Phase 1) — never CUP-written below
+    //   anchorFloor.
+    const newTopRow = self.logUpdate.topRow ?? 0;
+    if (newTopRow > 1) {
+      // Measure room against the POST-scroll floor: the anchorRow decrement above
+      // lowered the ceiling by `scrolledRows`, so the newly-vacated banner rows
+      // are now legitimately available to the band. Using the stale pre-scroll
+      // anchorFloor would keep maxRun pinned and re-trigger the cap-to-one-row bug.
+      const postScrollFloor = Math.max(self.anchorRow ?? 1, 1);
+      const maxRun = Math.max(0, newTopRow - postScrollFloor);
+      if (route.useBandHold) {
+        commitPhase3Hold(self, geo, route, newTopRow, maxRun);
+      } else {
+        commitPhase3Band(self, geo, route, newTopRow, maxRun, postScrollFloor);
+      }
+    } else if (route.useBandHold) {
+      commitPhase3HoldStore(self, geo, route);
+    } else {
+      clearCommittedBand(self);
+    }
+
+    self.pendingContentRows = null;
+    self.commitInFlight = false;
+    self.debugLog('commitAbove:phase3:done');
+  } finally {
+    // Invariant (tx flush ordering): tx.end() must fire AFTER every phase so
+    // the SYNC_END lands at the true end of the commit output, not mid-commit.
+    // The finally block guarantees this even when a phase throws (e.g. EPIPE).
+    // CommitWriteTx.end() restores stream.write before attempting the flush, so
+    // the stream is never left patched regardless of whether the flush succeeds.
+    tx.end();
+  }
 }
 
 export function clearCommittedBand(self: CommittedBandHost): void {

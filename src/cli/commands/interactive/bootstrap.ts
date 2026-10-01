@@ -23,7 +23,7 @@ import { createReplProviders } from './bootstrap-providers.js';
 import { createReplSurface } from './bootstrap-surface.js';
 import { createReplHookRegistry } from './bootstrap-hooks.js';
 import { createReplSlashContext } from './bootstrap-slash-context.js';
-import { wireTrustedSkillEvents, wireProviderGrants, createReplInput } from './bootstrap-wiring.js';
+import { wireTrustedSkillEvents, wireProviderGrants, createReplInputAfterColorQuery } from './bootstrap-wiring.js';
 import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
@@ -421,7 +421,7 @@ export async function bootstrapSession(
   // side effect target).
   wireProviderGrants(startupProvider);
 
-  const { rl, inputSurfaceRef } = createReplInput();
+  const { rl, inputSurfaceRef } = await createReplInputAfterColorQuery();
   ctx.rl = rl;
   ctx.inputSurfaceRef = inputSurfaceRef;
 

@@ -364,6 +364,15 @@
       "category": "misc"
     },
     {
+      "name": "AFK_INK_TEXT",
+      "description": "Streamed assistant prose in the interactive REPL is revealed at a steady pace instead of popping in: by default each letter condenses out of faint smoke (see AFK_SMOKE_TEXT), and a finished paragraph waits for its last letters before moving into scrollback. Layout and scrollback are identical to having it off. On by default on 256-color or truecolor terminals. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1. Set AFK_INK_TEXT=0 (or false/no/off) to show text the instant it arrives.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "0",
+      "category": "display"
+    },
+    {
       "name": "AFK_INTERNAL",
       "description": "Tier gate. Set to exactly `1` to unlock — only the literal string \"1\" unlocks (other truthy values like \"true\"/\"yes\" leave the tier locked). When unlocked, skills tagged `audience: 'internal'` (e.g. /audit-fit, harvest/distill plugins) become visible at end-user surfaces (slash-command list, --help, tab-complete, system-prompt skill manifest). Default unset = public tier — internal skills are hidden. Not an access-control boundary; it gates surfacing, not the underlying registry.",
       "type": "boolean",
@@ -863,7 +872,7 @@
     },
     {
       "name": "AFK_SMOKE_TEXT",
-      "description": "When set to \"1\" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable.",
+      "description": "Style of the streamed-text reveal (the reveal itself is AFK_INK_TEXT). Unset (default): prose and headings condense out of smoke, braille particles thickening into each letter with a thin wisp drifting ahead of the front. Set to \"0\" (or false/no/off) for the calmer ink fade instead, where letters rise from near the background into their own color. Set to \"1\" (or true/yes/on) to also hold headings until they finish rolling in and fade in machine-status UI (tool rows, the thought summary). Needs a 256-color or truecolor terminal. Off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1.",
       "type": "boolean",
       "required": false,
       "default": "",
@@ -1050,6 +1059,15 @@
       "required": false,
       "example": "0.7",
       "category": "model"
+    },
+    {
+      "name": "AFK_TERM_COLOR_QUERY",
+      "description": "At interactive REPL startup, AFK asks the terminal for its real text, background, and 16-color palette (OSC 10/11/4, answered in well under 150ms by modern terminals and tmux) so the ink and smoke reveal can fade each letter exactly into the color it will settle on. Only runs when a reveal is enabled on a TTY. Set AFK_TERM_COLOR_QUERY=0 (or false/no/off) to skip the query and use the theme's built-in colors.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "0",
+      "category": "display"
     },
     {
       "name": "AFK_TERM_TITLE",
@@ -1252,6 +1270,15 @@
       "required": false,
       "example": "1",
       "category": "debug"
+    },
+    {
+      "name": "AFK_WORD_TEXT",
+      "description": "Word-at-a-time style for the streamed-text reveal (the reveal itself is AFK_INK_TEXT), built for reading along while text streams. Set to \"1\" (or true/yes/on) and prose appears one whole word at a time at a steady pace, with only the newest words fading briefly from dim into their own color; a word is never shown half-typed. Overrides AFK_SMOKE_TEXT for prose and headings. Needs a 256-color or truecolor terminal. Off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, Telegram, the daemon, and AFK_REDUCED_MOTION=1.",
+      "type": "boolean",
+      "required": false,
+      "default": "",
+      "example": "1",
+      "category": "display"
     },
     {
       "name": "AFK_WORKSPACE_DISABLED",

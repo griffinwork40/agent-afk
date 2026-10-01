@@ -22,12 +22,34 @@ function countOccurrences(text: string, marker: string): number {
 }
 
 /**
+ * True when the last occurrence of `marker` in `cleaned` (the progressively-
+ * stripped working copy) has no non-whitespace content after it. In that case
+ * closing it would produce an empty span (e.g. `****`), which marked renders
+ * as literal syntax rather than an inline element — visibly wrong at the fade
+ * edge. We skip the close; the pending display shows the bare trailing marker
+ * for the fraction of a second until the next chunk adds content.
+ *
+ * We check `cleaned` (the version with consumed longer-marker pairs removed)
+ * rather than `result` so appended closers from previous markers don't
+ * confuse the search. The `result` string is only used for the final output.
+ */
+function emptySpanIfClosed(cleaned: string, marker: string): boolean {
+  const last = cleaned.lastIndexOf(marker);
+  if (last === -1) return false;
+  // Content after the last marker in the cleaned version
+  const after = cleaned.slice(last + marker.length);
+  return after.trim() === '';
+}
+
+/**
  * Append closing markers for any unclosed inline markdown spans in `text`.
  *
  * - Pure function: the input string is never modified.
  * - Display-only: callers must not persist the return value back to the buffer.
  * - Checks `**` before `*` so bold markers are not double-counted as italics.
- * - Counts non-overlapping occurrences; odd count → unclosed → appends closer.
+ * - Counts non-overlapping occurrences; odd count → unclosed → appends closer,
+ *   UNLESS the trailing open marker has no content after it in the cleaned
+ *   text (would produce an empty span that renders as literal syntax).
  * - Multiple unclosed markers are all closed in fixed MARKERS-array order
  *   (`**`, `~~`, `*`, `` ` ``). This is a display-only approximation: nesting
  *   order is not tracked, so closers are appended outermost-first by array
@@ -41,7 +63,7 @@ export function closePendingInlineSyntax(text: string): string {
 
   for (const marker of MARKERS) {
     const count = countOccurrences(cleaned, marker);
-    if (count % 2 !== 0) {
+    if (count % 2 !== 0 && !emptySpanIfClosed(cleaned, marker)) {
       result += marker;
     }
     // Remove this marker's occurrences from cleaned so shorter markers

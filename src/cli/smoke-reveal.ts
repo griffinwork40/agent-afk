@@ -1,47 +1,70 @@
 /**
- * Smoke-text reveal: streamed characters condense out of faint smoke
- * (speck, then haze, then a dim letter, then the real letter) instead of
- * popping in. Opt-in via `AFK_SMOKE_TEXT=1`.
+ * Text reveal mask: streamed characters arrive softly instead of popping in.
+ *
+ * Two styles share one mask (see smoke-reveal.cells.ts for the look):
+ *  - `ink` (the default for prose): a letter rises from just above the
+ *    background into its OWN color, like ink drying, and never passes
+ *    through a brighter tone than it settles on. `AFK_INK_TEXT=0` disables it.
+ *  - `smoke` (the accent, opt-in via `AFK_SMOKE_TEXT=1`): heading lines
+ *    condense out of braille particles, with a thin wisp drifting ahead of
+ *    the front. Body prose stays ink, so smoke remains a moment.
  *
  * How it works:
- *  - `record(chunk)` runs when raw markdown arrives. Each burst of new
- *    characters gets staggered birth times, so a 40-character chunk appears
- *    as fast writing rather than a block. Births are monotonic, and a
- *    character is never revealed more than `MAX_LAG_MS` after it arrived.
- *  - `apply(formatted)` runs on the formatted pending overlay string just
- *    before it is painted. It walks the visible characters and styles the
- *    youngest ones by age.
+ *  - `record(chunk)` runs when raw markdown enters the pipeline. It splits
+ *    the chunk into heading / other runs and appends them to a continuous
+ *    playhead (`RevealTimeline`, smoke-reveal.playhead.ts) that births each
+ *    character as it crosses it. The playhead accelerates and decelerates
+ *    smoothly with the backlog, so a network lump sweeps in quickly instead
+ *    of landing as a block and a stall eases to rest over several frames.
+ *    Intake bounds nominal queued animation duration with `MAX_LAG_MS`
+ *    (headings: `ACCENT_MAX_LAG_MS`), settling older overflow immediately.
+ *    These budgets are capacities, not strict arrival-to-birth deadlines.
+ *  - `apply(formatted)` runs on the formatted pending overlay just before it
+ *    is painted. It walks the visible characters, tracking the active SGR
+ *    style, and restyles the youngest ones by age. Characters not yet born
+ *    are drawn as blank cells of the same width.
+ *
+ * Invariant (pace the REVEAL, never the TEXT): every character is in the
+ * buffer, laid out and committed exactly as it would be with the reveal off.
+ * Only its styling (and blank-until-born) changes. An earlier version paced
+ * text INTO the buffer instead; that grew the overlay one row at a time
+ * (each growth at the bottom of the screen is a full compositor repaint, a
+ * visible flicker) and held every paragraph in the overlay until its commit
+ * (a shrink repaint per paragraph). Reserved blank cells keep the layout
+ * identical to reveal-off, so the reveal cannot cause either.
  *
  * Invariant (age mapping by distance-from-end): ages are keyed by how far a
- * character sits from the END of the text, counting non-whitespace code
- * points only. New text always lands at the end, and a block commit only
+ * character sits from the END of the text, counting non-whitespace grapheme
+ * clusters only. New text always lands at the end, and a block commit only
  * removes text from the FRONT, so distance-from-end survives commits,
- * re-wrapping, indentation, and centering margins unchanged.
+ * re-wrapping, indentation, and centering margins unchanged. Births are
+ * monotonic, so the characters not yet born are exactly the newest few.
  *
  * Invariant (raw vs formatted counts): `record()` sees RAW markdown, but
  * `apply()` indexes the FORMATTED overlay, and the formatter consumes syntax
- * (`**`, backticks, link brackets). Left unreconciled, every consumed syntax
- * character pushes the reveal window one cell onto text that has already
- * settled, re-smoking (or blanking) it. So each `apply()` compares how much
- * the formatted text actually grew since the previous apply against how much
- * raw text was recorded, and trims the excess from the newest bursts. The
- * comparison needs a baseline; `noteCommit()` drops it whenever text leaves
- * the FRONT of the overlay, since the growth delta is meaningless across a
- * commit. The first frame after a commit is left unreconciled, which is
- * harmless: the excess lands on the fresh paragraph's own young text.
+ * (`**`, backticks, `## `). Each `apply()` compares how much the formatted
+ * text grew since the previous apply against how much raw text was recorded
+ * and trims the excess from the newest bursts. `noteCommit()` drops the
+ * baseline whenever text leaves the FRONT of the overlay; the first frame
+ * after a commit is left unreconciled, which is harmless.
  *
- * Invariant (settle driver): pending-overlay repaints are content-driven.
- * They fire on push() and resize, never on a periodic tick. Without a driver
- * of its own, the fade would freeze mid-smoke whenever the model paused.
- * While any character is still settling, `apply()` arms ONE timer that calls
- * the owner's existing throttled `scheduleRepaint()`. There is no second
- * paint path, and the timer stops as soon as everything has settled.
+ * Invariant (settle driver): while any character is still settling,
+ * `apply()` marks ONE steady 60 fps `FrameClock` dirty
+ * (markdown-stream.frame-clock.ts), which calls the owner's `paint` callback
+ * once per period on a drift-corrected grid. While `animating`, the owner
+ * routes its own repaint requests into `markDirty()` instead of painting, so
+ * content pushes never add a second paint in a period. The clock stops (its
+ * one timer is released) on the first frame where nothing is settling.
  *
- * Contract: this module never delays a block commit. Committed blocks render
- * through `formatBlockForCommit`, untouched by the mask. A paragraph's last
- * few characters may therefore snap solid a moment early. That is deliberate:
- * holding a tall overlay across `commitAbove()` can drop the block (see
- * `syncPendingOverlay` in markdown-stream.ts).
+ * Contract: this module never delays a block commit itself. Committed blocks
+ * render through `formatBlockForCommit`, untouched by the mask. The OWNER may
+ * defer one: markdown-stream.commit-defer.ts keeps a completed block pending
+ * (text keeps flowing behind it) until `revealHoldRemaining(d)` for its last
+ * letter reaches 0, bounded in time, so a paragraph finishes fading before it
+ * commits. Without that, at model stream rates most of each paragraph was
+ * still fading at its commit and snapped solid. Renders the mask skips are
+ * never deferred, and the commit itself still goes through
+ * `syncPendingOverlay` in markdown-stream.ts.
  *
  * @module cli/smoke-reveal
  */
@@ -49,86 +72,147 @@
 import chalk from 'chalk';
 import stringWidth from 'string-width';
 import { env, isPlainOutputRequested } from '../config/env.js';
-import { isExplicitlyEnabled } from '../config/env-helpers.js';
+import { isExplicitlyDisabled, isExplicitlyEnabled } from '../config/env-helpers.js';
 import { countVisible, segmentAnsi } from './smoke-reveal.ansi.js';
-import { smokeTone } from './smoke-reveal.tones.js';
+import { SMOKE_GLYPH_LEVELS } from './smoke-reveal.frame.js';
+import { LineClassifier } from './smoke-reveal.lines.js';
+import { FRAME_PERIOD_MS, FrameClock } from './markdown-stream.frame-clock.js';
+import { HEADING_MAX_CPS, MAX_CPS, RevealTimeline } from './smoke-reveal.playhead.js';
+import { applySgr, EMPTY_SGR, isSgr, serializeSgr, type SgrState } from './smoke-reveal.sgr.js';
 import {
-  SMOKE_GLYPH_LEVELS,
-  charLifetime,
-  easeOutCubic,
-  smokeGlyph,
-  smokeToneOffset,
-} from './smoke-reveal.frame.js';
+  INK_MS,
+  MAX_LIFETIME_MS,
+  SMOKE_GLYPH_PHASE,
+  SMOKE_MS,
+  WISP_CELLS,
+  inkCell,
+  lifetimeOf,
+  smokeCell,
+  wispCell,
+  wispCells,
+  type RevealStyle,
+} from './smoke-reveal.cells.js';
 
-/** Total time from first speck to fully settled letter. */
-export const LIFETIME_MS = 320;
-/** Fraction of the lifetime spent as a smoke glyph before the letter shows. */
-export const GLYPH_PHASE = 0.36;
-/** Spacing between characters revealed from one burst. */
+export type { RevealStyle } from './smoke-reveal.cells.js';
+export { INK_MS } from './smoke-reveal.cells.js';
+
+/** Smoke-accent lifetime: first speck to fully settled letter. */
+export const LIFETIME_MS = SMOKE_MS;
+/** Fraction of the smoke lifetime spent as a particle before the letter shows. */
+export const GLYPH_PHASE = SMOKE_GLYPH_PHASE;
+/** Historical floor spacing between prose characters. The playhead's prose ceiling is `MAX_CPS`. */
 export const STAGGER_MS = 6;
-/** Upper bound on how far a reveal may trail the character's arrival. */
-export const MAX_LAG_MS = 160;
-/** Settle-driver cadence, which matches the renderer's default throttle. */
-export const FRAME_MS = 33;
 /**
- * Every smoke glyph the reveal can draw, faintest density level first: a
- * lone braille speck, then braille particles that grow denser. Each level
- * has several same-density variants (see `SMOKE_GLYPH_LEVELS` in
- * smoke-reveal.frame.ts, which also carries the narrow-width invariant).
+ * Nominal queued-animation duration budget for prose, not an arrival deadline.
+ * Invariant: run capacity is `MAX_LAG_MS * MAX_CPS` characters (playhead
+ * record), 720 at the 600 cps ceiling. The steady pacer keeps its backlog
+ * near `TARGET_LAG_MS` of text, far below this, so only a pathological lump
+ * overflows. Lowering the ceiling alone shrinks capacity and turns "slower"
+ * into overflow chunks snapping solid.
+ */
+export const MAX_LAG_MS = 1200;
+/** Minimum spacing for heading lines (`HEADING_MAX_CPS`): slower, so the smoke has room to roll. */
+export const ACCENT_STAGGER_MS = 18;
+/** Nominal queued-animation duration budget for heading lines. */
+export const ACCENT_MAX_LAG_MS = 900;
+/**
+ * Share of a smoke letter's life a held heading or deferred smoke block waits
+ * for before it may commit. 1 = fully condensed: a probe of realistic streams
+ * showed 0.75 left 10-20 nearly-final letters per paragraph to snap to full
+ * color at commit, and 1 leaves none, for about 125 ms of extra commit delay.
+ */
+export const SMOKE_HOLD_SHARE = 1;
+/** Share of an ink letter's fade a deferred block commit waits for. */
+export const INK_HOLD_SHARE = 0.75;
+/** Re-check interval for a deferred commit whose last letter is not born yet. */
+export const HOLD_RECHECK_MS = 32;
+/** Settle-driver cadence: the frame clock's 60 fps period. */
+export const FRAME_MS = FRAME_PERIOD_MS;
+/**
+ * Every smoke glyph the reveal can draw, faintest density level first (see
+ * `SMOKE_GLYPH_LEVELS` in smoke-reveal.frame.ts for the narrow-width
+ * invariant). The ahead-of-front wisp draws from the same set.
  */
 export const SMOKE_GLYPHS: readonly string[] = SMOKE_GLYPH_LEVELS.flat();
 
-/** SGR reset. Clears the tail's original styling before a smoke glyph. */
 const RESET = '\u001b[0m';
 
-interface Burst {
-  start: number;
-  end: number;
-  count: number;
+export interface RecordOptions {
+  /** Force one style for the whole chunk (skips heading detection). */
+  style?: RevealStyle;
+  /**
+   * Minimum spacing between this chunk's characters (speed ceiling
+   * `1000 / staggerMs` cps). `0` reveals the chunk instantly. Default: the
+   * playhead's `MAX_CPS` for prose, `HEADING_MAX_CPS` for headings.
+   */
+  staggerMs?: number;
+  /**
+   * Extra queued-animation budget for this chunk, in ms. The renderer passes
+   * how long a chunk sat in a commit hold, so text released from a hold
+   * animates instead of landing as overflow (the backlog is still bounded:
+   * later intakes settle against their own budgets).
+   */
+  extraBudgetMs?: number;
 }
 
-/**
- * Whether the smoke effect should run in this process: `AFK_SMOKE_TEXT` is
- * explicitly enabled, plain-output mode is off, and chalk can render at
- * least 256 colors. The last check also disables it for NO_COLOR, CI, and
- * non-TTY, since `configureColor()` drops chalk.level to 0 there.
- */
+export interface RevealStyles {
+  /** Style for body text. Default `smoke` (the historical behavior). */
+  prose?: RevealStyle;
+  /** Style for markdown heading lines. Default: same as `prose`. */
+  headings?: RevealStyle;
+}
+
+export interface ApplyOptions {
+  /**
+   * Column budget of one overlay line. When given, a smoke front may draw its
+   * wisp in the empty cells after it, but only if the whole line still fits.
+   * Omitted: no wisp, and the output is column-for-column the input.
+   */
+  maxWidth?: number;
+}
+
+/** Terminal can show the reveal at all: not plain-output, and 256+ colors (so not NO_COLOR/CI/non-TTY). */
+function canReveal(): boolean {
+  return !isPlainOutputRequested() && chalk.level >= 2;
+}
+
+/** Smoke accent: `AFK_SMOKE_TEXT` is explicitly enabled on a capable terminal. */
 export function isSmokeTextEnabled(): boolean {
   const raw = env.AFK_SMOKE_TEXT;
   if (!raw || !isExplicitlyEnabled(raw)) return false;
-  if (isPlainOutputRequested()) return false;
-  return chalk.level >= 2;
+  return canReveal();
 }
 
 /**
- * Render one character at `age` ms old (`age >= 0`), or null once it has
- * settled. `seed` is the character's stable identity: it picks the
- * character's own fade length, particle shapes, and smoke tone (see
- * smoke-reveal.frame.ts), so neighbouring letters condense out of ragged,
- * drifting smoke rather than one uniform band.
+ * Style of the default text reveal: smoke, unless `AFK_SMOKE_TEXT` is
+ * explicitly disabled, which falls back to the calmer ink fade.
  */
-function renderAt(ch: string, age: number, seed: number): string | null {
-  const life = charLifetime(seed, LIFETIME_MS);
-  if (age >= life) return null;
-  const f = age / life;
-  // Smoke phase: particles densify and brighten from 0.12 to 0.4 of the ramp.
-  // Wide glyphs (CJK, emoji) keep their own character so the column count
-  // never changes. Only narrow characters swap to a smoke glyph.
-  if (f < GLYPH_PHASE && stringWidth(ch) === 1) {
-    const p = f / GLYPH_PHASE;
-    return RESET + smokeTone(0.12 + 0.28 * p + smokeToneOffset(seed))(smokeGlyph(p, seed));
-  }
-  // Letter phase: the real character fades up from dim to the settled tone,
-  // eased out so it condenses quickly and then glides into its own styling,
-  // after which apply() stops styling it and its markdown styling returns.
-  const p = f < GLYPH_PHASE ? 0 : (f - GLYPH_PHASE) / (1 - GLYPH_PHASE);
-  return RESET + smokeTone(0.4 + 0.6 * easeOutCubic(p))(ch);
+export function defaultRevealStyle(): RevealStyle {
+  const raw = env.AFK_SMOKE_TEXT;
+  return raw && isExplicitlyDisabled(raw) ? 'ink' : 'smoke';
+}
+
+/** Text reveal (on by default): on unless `AFK_INK_TEXT` is explicitly disabled, on a capable terminal. */
+export function isInkTextEnabled(): boolean {
+  const raw = env.AFK_INK_TEXT;
+  if (raw && isExplicitlyDisabled(raw)) return false;
+  return canReveal();
+}
+
+interface Front {
+  birth: number;
+  style: RevealStyle;
+  /** Style active after the newest character (restored after an inserted wisp). */
+  state: SgrState;
+  /** Index into the output parts just after the newest character. */
+  at: number;
+  /** Width of the newest character's line, filled in when the line ends. */
+  lineWidth: number | null;
 }
 
 export class SmokeReveal {
-  private bursts: Burst[] = [];
-  private nextBirth = 0;
-  private timer: NodeJS.Timeout | null = null;
+  private readonly timeline = new RevealTimeline();
+  private readonly clock: FrameClock;
   /**
    * Reconciled characters recorded over this instance's life. The character
    * `d` positions from the end has the stable identity `serial - 1 - d`: new
@@ -141,103 +225,207 @@ export class SmokeReveal {
   /** Raw visible characters recorded since the last walked apply(). */
   private sinceApply = 0;
 
+  /** Segmentation of the last formatted string: a frame repaint of unchanged text reuses it. */
+  private segCache: { text: string; segs: ReturnType<typeof segmentAnsi>; visible: number } | null = null;
+
+  private readonly lines = new LineClassifier();
+  private readonly prose: RevealStyle;
+  private readonly headings: RevealStyle;
+
+  /** `paint` must paint immediately (unthrottled): the frame clock already paces it. */
   constructor(
-    private readonly requestRepaint: () => void,
+    paint: () => void,
     private readonly now: () => number = Date.now,
-  ) {}
+    styles: RevealStyles = {},
+  ) {
+    this.clock = new FrameClock(paint);
+    this.prose = styles.prose ?? 'smoke';
+    this.headings = styles.headings ?? this.prose;
+  }
 
   /** Register newly arrived raw text. Whitespace-only chunks are ignored. */
-  record(chunk: string): void {
-    const count = countVisible(chunk);
-    if (count === 0) return;
+  record(chunk: string, opts: RecordOptions = {}): void {
     const t = this.now();
-    const cap = t + MAX_LAG_MS;
-    const start = Math.min(Math.max(t, this.nextBirth), cap);
-    const end = Math.min(start + (count - 1) * STAGGER_MS, cap);
-    this.bursts.push({ start, end, count });
-    this.nextBirth = end + STAGGER_MS;
-    this.sinceApply += count;
+    const runs = opts.style
+      ? [{ text: chunk, heading: false, style: opts.style }]
+      : this.lines.split(chunk).map((r) => ({ ...r, style: r.heading ? this.headings : this.prose }));
+    for (const run of runs) {
+      const count = countVisible(run.text);
+      if (count === 0) continue;
+      const ceiling = run.heading ? HEADING_MAX_CPS : MAX_CPS;
+      const maxCps = opts.staggerMs === undefined ? ceiling : opts.staggerMs <= 0 ? Infinity : 1000 / opts.staggerMs;
+      const capMs = (run.heading ? ACCENT_MAX_LAG_MS : MAX_LAG_MS) + Math.max(0, opts.extraBudgetMs ?? 0);
+      this.timeline.record(t, { count, style: run.style, capMs, maxCps });
+      this.sinceApply += count;
+    }
     this.prune(t);
+  }
+
+  /**
+   * Milliseconds until the newest characters, if they are smoke, have
+   * condensed enough (`SMOKE_HOLD_SHARE` of their life) to be committed
+   * without a visible snap. 0 when the newest character is not smoke.
+   */
+  smokeHoldRemaining(): number {
+    const t = this.now();
+    this.timeline.advance(t);
+    const tl = this.timeline;
+    const birth = tl.styleAt(tl.recorded - 1) === 'smoke' ? tl.newestBirthEstimate(t) : null;
+    return birth === null ? 0 : Math.max(0, birth + SMOKE_MS * SMOKE_HOLD_SHARE - t);
+  }
+
+  /**
+   * Milliseconds until the character `d` positions from the end (0 = newest),
+   * of either style, is far enough through its fade (`SMOKE_HOLD_SHARE` /
+   * `INK_HOLD_SHARE`) to be committed without a visible snap. While it is still unborn its birth is not yet
+   * known, so this returns the short `HOLD_RECHECK_MS` re-check interval
+   * rather than a pessimistic estimate. 0 when settled or nothing is tracked.
+   */
+  revealHoldRemaining(d = 0): number {
+    const t = this.now();
+    this.timeline.advance(t);
+    const tl = this.timeline;
+    const i = tl.recorded - 1 - d;
+    if (i < tl.first || tl.isSettled(i)) return 0;
+    const birth = tl.birthAt(i);
+    const style = tl.styleAt(i);
+    if (birth === null || style === undefined) return 0;
+    if (birth === Infinity) return HOLD_RECHECK_MS;
+    const dwell = style === 'smoke' ? SMOKE_MS * SMOKE_HOLD_SHARE : INK_MS * INK_HOLD_SHARE;
+    return Math.max(0, birth + dwell - t);
   }
 
   /**
    * Style the youngest characters of `formatted` by age. Returns `formatted`
    * unchanged (same reference) when nothing is animating.
    */
-  apply(formatted: string): string {
+  apply(formatted: string, opts: ApplyOptions = {}): string {
     const t = this.now();
     this.prune(t);
-    if (this.bursts.length === 0 || formatted === '') return formatted;
+    const tl = this.timeline;
+    if (tl.recorded === tl.first || formatted === '') return formatted;
 
-    const segs = segmentAnsi(formatted);
-    let visible = 0;
-    for (const s of segs) if (s.kind === 'char' && !s.ws) visible++;
+    const { segs, visible } = this.segment(formatted);
     this.reconcile(visible);
 
-    // Characters at or beyond the recorded total are settled by definition,
-    // so skip the per-burst walk for them (most of a long paragraph).
-    const recorded = this.recordedCount();
+    // Characters at or beyond the tracked count are settled by definition,
+    // so skip the timeline lookup for them (most of a long paragraph).
+    const recorded = tl.recorded - tl.first;
+    // Births are monotonic, so the unborn characters are exactly the newest
+    // `unborn`, and the revealed front is the character just before them.
+    const unborn = Math.min(recorded, tl.recorded - tl.bornCount);
+    const lead = unborn < recorded ? this.birthOf(unborn) : null;
+    // Stable identity of the revealed front: the wisp's texture is seeded from
+    // it, so appending text (which moves `serial`) never reshuffles the wisp.
+    const leadSeed = this.serial - 1 - unborn;
+    const parts: string[] = [];
+    let state: SgrState = EMPTY_SGR;
+    let col = 0;
     let idx = 0;
     let animating = false;
-    let out = '';
+    let front: Front | null = null;
     for (const s of segs) {
-      if (s.kind === 'raw' || s.ws) {
-        out += s.text;
+      if (s.kind === 'raw') {
+        if (isSgr(s.text)) state = applySgr(state, s.text);
+        parts.push(s.text);
+        continue;
+      }
+      if (s.ws) {
+        if (s.text.includes('\n')) {
+          if (front && front.lineWidth === null) front.lineWidth = col;
+          col = 0;
+        } else col += stringWidth(s.text);
+        parts.push(s.text);
         continue;
       }
       const d = visible - 1 - idx;
-      const birth = d >= recorded ? null : this.birthOf(d);
+      const hit = d >= recorded ? null : this.birthOf(d);
       idx++;
-      if (birth === null) {
-        out += s.text;
+      const w = stringWidth(s.text);
+      col += w;
+      if (hit === null) {
+        parts.push(s.text);
         continue;
       }
-      const age = t - birth;
-      // Not revealed yet: hold the cell blank so layout never shifts.
-      const cell = age < 0 ? ' '.repeat(Math.max(1, stringWidth(s.text))) : renderAt(s.text, age, this.serial - 1 - d);
-      if (cell === null) {
-        out += s.text;
-        continue;
-      }
-      animating = true;
-      out += cell;
+      const age = t - hit.birth;
+      const seed = this.serial - 1 - d;
+      let cell: string | null;
+      if (age < 0) cell = this.reservedCell(unborn - d, w, lead, t, leadSeed);
+      else if (hit.style === 'ink') cell = inkCell(s.text, age, state, d - unborn);
+      else cell = smokeCell(s.text, age, seed, state);
+      parts.push(cell ?? s.text);
+      if (cell !== null) animating = true;
+      if (d === 0 && age >= 0) front = { birth: hit.birth, style: hit.style, state, at: parts.length, lineWidth: null };
     }
-    if (animating) this.armTick();
-    return animating ? out + RESET : formatted;
+    if (front && front.lineWidth === null) front.lineWidth = col;
+    if (this.insertWisp(parts, front, t, opts.maxWidth)) animating = true;
+    if (animating) this.clock.markDirty();
+    return animating ? parts.join('') + RESET : formatted;
+  }
+
+  /** True while the frame clock is driving repaints (some character is still settling). */
+  get animating(): boolean {
+    return this.clock.running;
+  }
+
+  /** Ask the frame clock for a paint on its next tick (owner repaint requests while `animating`). */
+  markDirty(): void {
+    this.clock.markDirty();
+  }
+
+  /** Text just left the FRONT of the overlay (a block commit). */
+  noteCommit(): void {
+    this.lastVisible = null;
   }
 
   /**
-   * Text just left the FRONT of the overlay (a block commit). Drops the growth
-   * baseline so the next apply() does not read the shrink as consumed syntax.
+   * Forget the `count` newest characters (a stripped pending tail) while the
+   * kept text keeps its own reveal history. The growth baseline is dropped
+   * because the overlay just shrank at the END, not by a front commit.
    */
-  noteCommit(): void {
+  forgetNewest(count: number): void {
+    this.timeline.trimNewest(count);
     this.lastVisible = null;
   }
 
   /** Forget all history (e.g. the pending buffer was discarded). */
   reset(): void {
-    this.bursts = [];
-    this.nextBirth = 0;
+    this.timeline.reset();
+    this.segCache = null;
+    this.lines.reset();
     this.lastVisible = null;
     this.sinceApply = 0;
-    this.clearTick();
+    this.clock.stop();
   }
 
-  /**
-   * Stop the settle driver and clear all history. Safe to call repeatedly.
-   *
-   * Intentionally delegates to reset() rather than clearTick() alone: on
-   * dispose the caller is done with this instance entirely, so wiping burst
-   * history is the right semantic (avoids a stale burst list if the object is
-   * ever reused after disposal). Call reset() directly if only clearing history
-   * mid-lifetime without disposing.
-   */
+  /** Stop the settle driver and clear all history. Safe to call repeatedly. */
   dispose(): void {
     this.reset();
   }
 
   /**
-   * Trim raw-count excess (formatter-consumed syntax) from the newest bursts
+   * A not-yet-born cell `k` positions ahead of the revealed front: blank, or
+   * a wisp particle when the front is smoke. Always exactly `width` columns.
+   */
+  private reservedCell(k: number, width: number, lead: { birth: number; style: RevealStyle } | null, t: number, seed: number): string {
+    const blank = ' '.repeat(Math.max(1, width));
+    if (!lead || lead.style !== 'smoke' || width !== 1) return blank;
+    const wisp = wispCell(k, t - lead.birth, t, seed);
+    return wisp ? wisp + RESET : blank;
+  }
+
+  /** Splice the drifting wisp after a smoke front at the very end of the text, when the line has room. */
+  private insertWisp(parts: string[], front: Front | null, t: number, maxWidth: number | undefined): boolean {
+    if (!front || front.style !== 'smoke' || maxWidth === undefined) return false;
+    if ((front.lineWidth ?? 0) + WISP_CELLS > maxWidth) return false;
+    const wisp = wispCells(t - front.birth, t, this.serial - 1);
+    if (!wisp) return false;
+    parts.splice(front.at, 0, wisp + serializeSgr(front.state));
+    return true;
+  }
+
+  /**
+   * Trim raw-count excess (formatter-consumed syntax) from the newest runs
    * so their total matches how much the formatted text actually grew. See the
    * "raw vs formatted counts" invariant in the module header.
    */
@@ -247,60 +435,40 @@ export class SmokeReveal {
     this.lastVisible = visible;
     this.serial += this.sinceApply;
     this.sinceApply = 0;
-    for (let i = this.bursts.length - 1; i >= 0 && excess > 0; i--) {
-      const b = this.bursts[i];
-      if (!b) continue;
-      const take = Math.min(excess, b.count);
-      b.count -= take;
-      excess -= take;
-      this.serial -= take;
-      if (b.count === 0) this.bursts.splice(i, 1);
-    }
+    excess = Math.min(Math.max(0, excess), this.timeline.recorded - this.timeline.first);
+    this.timeline.trimNewest(excess);
+    this.serial -= excess;
   }
 
-  /** Total characters across live (not yet pruned) bursts. */
-  private recordedCount(): number {
-    let n = 0;
-    for (const b of this.bursts) n += b.count;
-    return n;
+  /** `segmentAnsi(formatted)` plus its visible count, memoized on the string. */
+  private segment(text: string): { segs: ReturnType<typeof segmentAnsi>; visible: number } {
+    if (this.segCache?.text === text) return this.segCache;
+    const segs = segmentAnsi(text);
+    let visible = 0;
+    for (const s of segs) if (s.kind === 'char' && !s.ws) visible++;
+    this.segCache = { text, segs, visible };
+    return this.segCache;
   }
 
-  /** Birth time of the character `d` positions from the end, or null if settled. */
-  private birthOf(d: number): number | null {
-    let rem = d;
-    for (let i = this.bursts.length - 1; i >= 0; i--) {
-      const b = this.bursts[i];
-      if (!b) continue;
-      if (rem < b.count) {
-        if (b.count === 1) return b.start;
-        const j = b.count - 1 - rem;
-        return b.start + ((b.end - b.start) * j) / (b.count - 1);
-      }
-      rem -= b.count;
-    }
-    return null;
+  /** Birth time and style of the character `d` positions from the end (Infinity = unborn), or null if settled. */
+  private birthOf(d: number): { birth: number; style: RevealStyle } | null {
+    const i = this.timeline.recorded - 1 - d;
+    if (this.timeline.isSettled(i)) return null;
+    const birth = this.timeline.birthAt(i);
+    const style = this.timeline.styleAt(i);
+    return birth === null || style === undefined ? null : { birth, style };
   }
 
-  /** Drop bursts whose every character has settled. They are oldest-first. */
+  /**
+   * Advance the playhead to `t` and drop characters that have settled. A
+   * smoke front's wisp can outlive its letter by `WISP_MS`, which is shorter
+   * than any smoke letter's life, so pruning never strands a live wisp.
+   */
   private prune(t: number): void {
-    while (this.bursts.length > 0 && (this.bursts[0]?.end ?? 0) + LIFETIME_MS <= t) {
-      this.bursts.shift();
-    }
-  }
-
-  private armTick(): void {
-    if (this.timer) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.requestRepaint();
-    }, FRAME_MS);
-    this.timer.unref?.();
-  }
-
-  private clearTick(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this.timeline.advance(t);
+    this.timeline.prune(t, (style) => (style === 'ink' ? INK_MS : MAX_LIFETIME_MS));
   }
 }
+
+/** Re-exported for tests that inspect a burst's settle time. */
+export { lifetimeOf };

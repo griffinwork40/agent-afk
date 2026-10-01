@@ -9,8 +9,8 @@
  *
  *  - its own condense speed (`charLifetime`): a fraction of letters settle a
  *    little early, so the fade front is ragged rather than a straight band;
- *  - its own particle shape at each density level (`smokeGlyph`): the same
- *    number of braille dots, in a different arrangement;
+ *  - its own particle shape (`smokeGlyph`): its own order for raising braille
+ *    dots, so neighbours condense differently while each one only gains dots;
  *  - a slight tone offset while it is still smoke (`smokeToneOffset`).
  *
  * Invariant (stable per character): every value here is a pure function of
@@ -28,11 +28,27 @@
  * @module cli/smoke-reveal.frame
  */
 
+/** Dots a smoke particle has at its faintest and densest density levels. */
+const MIN_DOTS = 1;
+const MAX_DOTS = 5;
+
+/** Every braille pattern (U+2800 block) with exactly `n` of its 8 dots raised. */
+function brailleWithDots(n: number): string[] {
+  const out: string[] = [];
+  for (let bits = 1; bits < 256; bits++) {
+    let c = 0;
+    for (let b = bits; b; b &= b - 1) c++;
+    if (c === n) out.push(String.fromCharCode(0x2800 + bits));
+  }
+  return out;
+}
+
 /**
- * Smoke glyph variants per density level, faintest level first. Every entry
- * in a level has the same dot count, so a level reads as one density whatever
- * variant a character draws: a lone speck, a speck that has drifted, a pair,
- * then four dots just before the letter condenses.
+ * Smoke glyphs per density level, faintest first: level k holds every braille
+ * pattern with `MIN_DOTS + k` dots. A character climbs the levels by GAINING
+ * dots from its own stable dot order (see `smokeGlyph`), so each level's glyph
+ * is a superset of the previous one and the particle visibly condenses
+ * instead of re-scattering at every level.
  *
  * Invariant: every glyph must be East-Asian-Width NEUTRAL/narrow, never
  * Ambiguous. An Ambiguous glyph (e.g. U+00B7 `·`) renders 2 columns on
@@ -42,12 +58,10 @@
  * column. Shade blocks (░▒) read as redaction bars and plain dots read as a
  * loading ellipsis, so neither belongs here.
  */
-export const SMOKE_GLYPH_LEVELS: readonly (readonly string[])[] = [
-  ['⠁', '⠈', '⠂', '⠐'],
-  ['⠂', '⠐', '⠄', '⠠'],
-  ['⠢', '⠔', '⠊', '⠑', '⠡', '⠌'],
-  ['⠶', '⠛', '⠭', '⠳', '⠞', '⠹'],
-];
+export const SMOKE_GLYPH_LEVELS: readonly (readonly string[])[] = Array.from(
+  { length: MAX_DOTS - MIN_DOTS + 1 },
+  (_, k) => brailleWithDots(MIN_DOTS + k),
+);
 
 /** Largest fraction by which a character's fade may be shortened. */
 export const LIFETIME_JITTER = 0.2;
@@ -58,7 +72,11 @@ export const TONE_JITTER = 0.04;
 const LANE_LIFETIME = 0;
 const LANE_TONE = 1;
 const LANE_GLYPH = 2;
-const LANE_COUNT = LANE_GLYPH + SMOKE_GLYPH_LEVELS.length;
+/**
+ * Pinned, not derived from the level count: `seedUnit` multiplies by it, so
+ * changing it would silently reshuffle every character's lifetime and tone.
+ */
+const LANE_COUNT = 6;
 
 /**
  * Deterministic unit value in [0, 1) for `seed` on `lane`. A 32-bit integer
@@ -80,13 +98,30 @@ export function charLifetime(seed: number, base: number): number {
   return base * (1 - LIFETIME_JITTER * seedUnit(seed, LANE_LIFETIME));
 }
 
-/** Smoke glyph for progress `p` in [0, 1) through the smoke phase. */
+/** This character's stable order for raising its 8 braille dot bits (Fisher-Yates on its seed). */
+function dotOrder(seed: number): number[] {
+  const order = [0, 1, 2, 3, 4, 5, 6, 7];
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(seedUnit(seed * 8 + i, LANE_GLYPH) * (i + 1));
+    const a = order[i] ?? 0;
+    order[i] = order[j] ?? 0;
+    order[j] = a;
+  }
+  return order;
+}
+
+/**
+ * Smoke glyph for progress `p` in [0, 1) through the smoke phase: the first
+ * `MIN_DOTS + level` dots of this character's own dot order, so dots only
+ * ever accumulate as it condenses.
+ */
 export function smokeGlyph(p: number, seed: number): string {
   const last = SMOKE_GLYPH_LEVELS.length - 1;
   const level = Math.min(last, Math.max(0, Math.floor(p * SMOKE_GLYPH_LEVELS.length)));
-  const variants = SMOKE_GLYPH_LEVELS[level] ?? [];
-  const pick = Math.floor(seedUnit(seed, LANE_GLYPH + level) * variants.length);
-  return variants[pick] ?? variants[0] ?? '⠁';
+  const order = dotOrder(seed);
+  let bits = 0;
+  for (let i = 0; i < MIN_DOTS + level; i++) bits |= 1 << (order[i] ?? 0);
+  return String.fromCharCode(0x2800 + bits);
 }
 
 /** Tone offset in [-TONE_JITTER, TONE_JITTER) for a character still in smoke. */
@@ -102,4 +137,14 @@ export function smokeToneOffset(seed: number): number {
 export function easeOutCubic(p: number): number {
   const q = 1 - Math.min(1, Math.max(0, p));
   return 1 - q * q * q;
+}
+
+/**
+ * Smoothstep on [0, 1]: starts and lands with zero slope. Used for letter
+ * blends so the first frame of a fade barely moves (no pop as a letter is
+ * born) and the hand-off to the settled color has no visible corner.
+ */
+export function smoothstep(p: number): number {
+  const x = Math.min(1, Math.max(0, p));
+  return x * x * (3 - 2 * x);
 }

@@ -121,11 +121,27 @@ describe('smokeGlyph', () => {
   });
 
   it('is stable for one character within a level, and varies across characters', () => {
-    for (const s of SEEDS.slice(0, 32)) expect(smokeGlyph(0.1, s)).toBe(smokeGlyph(0.2, s));
-    for (let level = 0; level < SMOKE_GLYPH_LEVELS.length; level++) {
-      const p = (level + 0.5) / SMOKE_GLYPH_LEVELS.length;
+    const n = SMOKE_GLYPH_LEVELS.length;
+    for (const s of SEEDS.slice(0, 32)) expect(smokeGlyph(0.1 / n, s)).toBe(smokeGlyph(0.9 / n, s));
+    for (let level = 0; level < n; level++) {
+      const p = (level + 0.5) / n;
       const seen = new Set(SEEDS.map((s) => smokeGlyph(p, s)));
-      expect(seen.size).toBe(SMOKE_GLYPH_LEVELS[level]?.length);
+      expect(seen.size).toBeGreaterThan(Math.min(SMOKE_GLYPH_LEVELS[level]?.length ?? 0, SEEDS.length) / 4);
+      for (const g of seen) expect(SMOKE_GLYPH_LEVELS[level]).toContain(g);
+    }
+  });
+
+  it('only ever gains dots: each level is a superset of the one before (condenses, never re-scatters)', () => {
+    const n = SMOKE_GLYPH_LEVELS.length;
+    const bits = (g: string): number => g.charCodeAt(0) - 0x2800;
+    for (const s of SEEDS) {
+      let prev = 0;
+      for (let level = 0; level < n; level++) {
+        const cur = bits(smokeGlyph((level + 0.5) / n, s));
+        expect(cur & prev, `seed ${s} level ${level}`).toBe(prev);
+        expect(cur).not.toBe(prev);
+        prev = cur;
+      }
     }
   });
 });

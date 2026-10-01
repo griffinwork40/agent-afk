@@ -188,6 +188,7 @@ describe('Bug #1 — void finalizeOrchestrator race: skill block ordering', () =
     let pendingBuffer = '';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeMarkdownRenderer: any = {
+      noteStreamDone: () => {},
       // Mirror the real StreamingMarkdownRenderer.commitPending semantics:
       // it synchronously flushes the entire pending buffer to scrollback via
       // compositor.commitAbove (markdown-stream.ts:191 — commitBlock writes
@@ -404,6 +405,7 @@ describe('Chronological subagent done-block placement', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeMarkdownRenderer: any = {
+      noteStreamDone: () => {},
       commitPending: () => {},
       push: () => {},
       flush: async () => {},
@@ -470,6 +472,7 @@ describe('Chronological subagent done-block placement', () => {
     let pendingBuffer = '';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeMarkdownRenderer: any = {
+      noteStreamDone: () => {},
       commitPending: () => {
         if (pendingBuffer.trim()) {
           recordingCompositor.commitAbove('[md:' + pendingBuffer.trim() + ']');
@@ -555,6 +558,7 @@ describe('Chronological subagent done-block placement', () => {
     let pendingBuffer = '';
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fakeMarkdownRenderer: any = {
+      noteStreamDone: () => {},
       commitPending: () => {
         if (pendingBuffer.trim()) {
           recordingCompositor.commitAbove('[md:' + pendingBuffer.trim() + ']');
