@@ -195,16 +195,16 @@ export function getPluginsIndexPath(): string {
  * The `pluginKey` argument is the index key (e.g. `"my-plugin"` or
  * `"marketplace:my-plugin"`). Colons and other filesystem-unsafe characters
  * are replaced with `__` so the resulting directory name is unambiguous and
- * portable across POSIX and Windows.
+ * portable across POSIX and Windows. Keys that sanitise to `.`, `..`, or
+ * empty are normalised to `__` to prevent directory traversal.
  *
  * The directory is NOT created here — it is created lazily (mode 0o700) by
  * `ensurePluginDataDir` in `src/agent/hooks/command-executor.ts` at hook-
  * dispatch time so callers that only need the path pay no I/O cost.
  */
 export function getPluginDataDir(pluginKey: string): string {
-  // Sanitise: replace any char outside [A-Za-z0-9._-] with '__'.
-  const safe = pluginKey.replace(/[^A-Za-z0-9._-]+/g, '__');
-  return join(getPluginsDir(), 'data', safe);
+  const safe = pluginKey.replace(/[^A-Za-z0-9._-]+/g, '__') || '__';
+  return join(getPluginsDir(), 'data', /^\.{1,2}$/.test(safe) ? '__' : safe);
 }
 
 export function getSchedulesPath(): string {
