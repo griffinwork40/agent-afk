@@ -573,4 +573,73 @@ describe('deriveSessionFacet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
   });
+
+  // outcome derived from terminal-state heading
+  function oneAssistant(assistant: string): StoredSessionInput {
+    return {
+      sessionId: 'ts-test',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{ user: 'do something', assistant, timestamp: 1 }],
+    };
+  }
+
+  it('terminal-state: **Done** -> fully_achieved', () => {
+    const facet = deriveSessionFacet(oneAssistant('Work complete.\n\n**Done** — all tasks finished.'));
+    expect(facet.outcome).toBe('fully_achieved');
+  });
+
+  it('terminal-state: **Blocked** -> not_achieved, primary_success is none', () => {
+    const facet = deriveSessionFacet(oneAssistant('Cannot proceed.\n\n**Blocked** — waiting for credentials.'));
+    expect(facet.outcome).toBe('not_achieved');
+    expect(facet.primary_success).toBe('none');
+  });
+
+  it('terminal-state: **Asking** -> partially_achieved', () => {
+    const facet = deriveSessionFacet(oneAssistant('One question before continuing.\n\n**Asking** — which approach?'));
+    expect(facet.outcome).toBe('partially_achieved');
+  });
+
+  it('terminal-state: **Interrupted** -> aborted', () => {
+    const facet = deriveSessionFacet(oneAssistant('Stopping here.\n\n**Interrupted**'));
+    expect(facet.outcome).toBe('aborted');
+  });
+
+  it('terminal-state: heading-style ### Blocked -> not_achieved', () => {
+    const facet = deriveSessionFacet(oneAssistant('Analysis done.\n\n### Blocked\n\nMissing API key.'));
+    expect(facet.outcome).toBe('not_achieved');
+  });
+
+  it('terminal-state: heading-style ## Done -> fully_achieved', () => {
+    const facet = deriveSessionFacet(oneAssistant('## Done\n\nAll changes applied.'));
+    expect(facet.outcome).toBe('fully_achieved');
+  });
+
+  it('terminal-state: last-marker-wins when multiple markers present', () => {
+    // First marker is Asking, last is Done — outcome should be fully_achieved
+    const facet = deriveSessionFacet(oneAssistant('**Asking** — clarification needed.\n\nActually never mind.\n\n**Done** — completed.'));
+    expect(facet.outcome).toBe('fully_achieved');
+  });
+
+  it('terminal-state: no marker -> falls back to fully_achieved for non-empty assistant', () => {
+    const facet = deriveSessionFacet(oneAssistant('Here is the result, no heading marker at all.'));
+    expect(facet.outcome).toBe('fully_achieved');
+  });
+
+  it('terminal-state: zero-turn session stays aborted regardless', () => {
+    const facet = deriveSessionFacet({ sessionId: 'z', model: 'haiku', startedAt: 0, savedAt: 0, totalTurns: 0, turns: [] });
+    expect(facet.outcome).toBe('aborted');
+  });
+
+  it('terminal-state: empty assistant stays partially_achieved regardless', () => {
+    const facet = deriveSessionFacet(oneAssistant(''));
+    expect(facet.outcome).toBe('partially_achieved');
+  });
+
+  it('terminal-state: case-insensitive match (**done** lowercase)', () => {
+    const facet = deriveSessionFacet(oneAssistant('**done** — lowercase variant'));
+    expect(facet.outcome).toBe('fully_achieved');
+  });
 });
