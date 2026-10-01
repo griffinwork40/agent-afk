@@ -59,6 +59,37 @@ const EVIDENCE_CAP = 50;
 const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
 const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
 
+// Invariant: matches both **Bold** and heading (## / ###) terminal-state markers
+// emitted by the agent's end-of-turn protocol. The global flag lets us iterate
+// all occurrences and pick the last one (last-marker-wins semantics). Reuses the
+// same vocabulary as parseSelfReport in src/agent/outcomes/lf-immediate.ts — the
+// two must stay in sync if new terminal states are added.
+const TERMINAL_STATE_RE = /(?:\*\*|#{2,3}\s*)(Done|Blocked|Asking|Interrupted)\b/gi;
+
+/**
+ * Map the last terminal-state marker found in `text` to a FacetOutcome.
+ * Returns null when no recognizable marker is present (caller falls through
+ * to the existing heuristic).
+ *
+ * Mapping: Done -> fully_achieved; Asking -> partially_achieved;
+ *          Blocked -> not_achieved; Interrupted -> aborted.
+ */
+function terminalStateToOutcome(text: string): FacetOutcome | null {
+  let lastWord: string | undefined;
+  let m: RegExpExecArray | null;
+  // Contract: TERMINAL_STATE_RE has the `g` flag; re-use by resetting lastIndex.
+  TERMINAL_STATE_RE.lastIndex = 0;
+  while ((m = TERMINAL_STATE_RE.exec(text)) !== null) {
+    lastWord = m[1]?.toLowerCase();
+  }
+  if (lastWord === undefined) return null;
+  if (lastWord === 'done') return 'fully_achieved';
+  if (lastWord === 'asking') return 'partially_achieved';
+  if (lastWord === 'blocked') return 'not_achieved';
+  if (lastWord === 'interrupted') return 'aborted';
+  return null;
+}
+
 /** Parse a stringified tool input to an object, swallowing malformed JSON. */
 function parseInput(input: string | undefined): Record<string, unknown> | undefined {
   if (!input) return undefined;
@@ -225,9 +256,16 @@ export function deriveSessionFacet(
   const lastAssistant = [...turns].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
 
   let outcome: FacetOutcome;
-  if (turns.length === 0) outcome = 'aborted';
-  else if (lastAssistant.trim().length === 0) outcome = 'partially_achieved';
-  else outcome = 'fully_achieved';
+  if (turns.length === 0) {
+    outcome = 'aborted';
+  } else if (lastAssistant.trim().length === 0) {
+    outcome = 'partially_achieved';
+  } else {
+    // When the last assistant turn carries a terminal-state heading, derive the
+    // outcome from it. Falls through to 'fully_achieved' when no marker is found
+    // (preserving the prior behaviour exactly for sessions without a heading).
+    outcome = terminalStateToOutcome(lastAssistant) ?? 'fully_achieved';
+  }
 
   // Skip-gate semantics (consumers compare primary_success === 'none' and read
   // friction_detail non-emptiness): 'none' for non-completing sessions.
