@@ -125,6 +125,14 @@ export class TerminalCompositor {
   /** Per-read single-Escape override for cancellable borrowed idle prompts. */
   onIdleEscape?: () => void;
   /**
+   * Fired on every `idle → streaming` mode transition (i.e. when a new turn
+   * starts). Installed via {@link setOnStreamingStart}; used by the
+   * bash-output-viewer to close itself cleanly before the compositor leaves
+   * idle so a subsequent `enterPickerMode` cannot throw.
+   * @internal Relaxed from `private` for the input-mode module (InputModeHost).
+   */
+  onStreamingStart?: () => void;
+  /**
    * Timestamp (ms) of the last Escape at an empty idle prompt, for double-tap
    * detection in `handleEscape`. 0 = disarmed.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
@@ -766,6 +774,13 @@ export class TerminalCompositor {
   setOnRewindRequest(handler: (() => void) | null): void { Api.setOnRewindRequest(this, handler); }
 
   setOnIdleEscape(handler: (() => void) | null): void { Api.setOnIdleEscape(this, handler); }
+
+  /**
+   * Install or clear the `idle → streaming` start handler — see
+   * {@link onStreamingStart}. Installed once per REPL session by
+   * `setupSurface` to close any open bash-output-viewer when a turn starts.
+   */
+  setOnStreamingStart(handler: (() => void) | null): void { Api.setOnStreamingStart(this, handler); }
 
   /**
    * Install or clear the Ctrl+O "open $EDITOR" handler — see

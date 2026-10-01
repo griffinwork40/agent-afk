@@ -164,6 +164,39 @@ describe('loadViewer — sanitization', () => {
     expect(result.state.lines[0]).toBe('aaa');
     expect(result.state.lines[1]).toBe('bbb');
   });
+
+  it('strips raw C0 control bytes (BEL, BS, SO) but keeps \\n and \\t', () => {
+    // BEL=0x07, BS=0x08, SO=0x0E are common in raw bash output.
+    const bel = '\x07';
+    const bs = '\x08';
+    const so = '\x0E';
+    const p = writeCapture('c0.txt', `before${bel}${bs}${so}after\tnext\nline2`);
+    const result = loadViewer(p, 24);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const line0 = result.state.lines[0] ?? '';
+    // BEL, BS, SO must be stripped.
+    expect(line0).not.toContain(bel);
+    expect(line0).not.toContain(bs);
+    expect(line0).not.toContain(so);
+    // \t must survive (tab indentation).
+    expect(line0).toContain('\t');
+    // Line structure must survive: 2 lines.
+    expect(result.state.lines.length).toBe(2);
+  });
+
+  it('strips C1 control bytes (0x80–0x9F)', () => {
+    // 0x9D is a C1 byte (sometimes emitted by terminal emulators).
+    const c1 = '\x9D';
+    const p = writeCapture('c1.txt', `text${c1}more`);
+    const result = loadViewer(p, 24);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const allText = result.state.lines.join('');
+    expect(allText).not.toContain(c1);
+    expect(allText).toContain('text');
+    expect(allText).toContain('more');
+  });
 });
 
 // ---------------------------------------------------------------------------

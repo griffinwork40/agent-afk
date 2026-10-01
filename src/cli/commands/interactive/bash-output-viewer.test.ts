@@ -175,4 +175,54 @@ describe('AbortSignal', () => {
     // enterPickerMode should never have been called.
     expect(h.exitCount()).toBe(0);
   });
+
+  it('turn-start abort exits picker mode so a subsequent enterPickerMode does not throw', async () => {
+    // Simulates the race: viewer opens in idle, then a turn starts (abort fires).
+    // After close, another picker must be openable without throwing.
+    let secondEnterThrew = false;
+    let secondController: PickerController | null = null;
+
+    const h = makePickerHost();
+    // Wrap enterPickerMode to also track a second entry attempt.
+    const originalEnter = h.host.enterPickerMode.bind(h.host);
+    const originalExit = h.host.exitPickerMode.bind(h.host);
+
+    // Track whether a second enterPickerMode throws.
+    let pickerActive = false;
+    h.host.enterPickerMode = (c: PickerController) => {
+      if (pickerActive) { secondEnterThrew = true; return; }
+      pickerActive = true;
+      originalEnter(c);
+    };
+    h.host.exitPickerMode = () => {
+      pickerActive = false;
+      originalExit();
+    };
+
+    const ac = new AbortController();
+    const viewerPromise = runBashOutputViewer(h.host, captureFile, ac.signal);
+
+    // Viewer is now open (pickerController held).
+    expect(pickerActive).toBe(true);
+
+    // Simulate turn start: abort the viewer signal.
+    ac.abort();
+    await viewerPromise;
+
+    // Picker should now be released.
+    expect(pickerActive).toBe(false);
+    expect(secondEnterThrew).toBe(false);
+
+    // A fresh enterPickerMode (e.g. interrupt picker) must succeed.
+    let freshRows: readonly string[] = [];
+    h.host.enterPickerMode({
+      renderRows: () => ['row'],
+      onKey: () => {},
+    });
+    freshRows = h.host.enterPickerMode ? ['row'] : [];
+    expect(pickerActive).toBe(true);
+    // Clean up.
+    h.host.exitPickerMode();
+    expect(pickerActive).toBe(false);
+  });
 });

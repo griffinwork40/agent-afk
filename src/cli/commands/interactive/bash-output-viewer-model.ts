@@ -22,6 +22,14 @@ import * as path from 'node:path';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { getWitnessRoot } from '../../../paths.witness.js';
 
+// Strip C0 (0x00–0x1F) and C1 (0x80–0x9F) control bytes from viewer lines,
+// but PRESERVE \n (0x0A) and \t (0x09) so line structure and tab indentation
+// survive. Applied after stripEscapeSequences (which removes ANSI escape
+// sequences) so raw bytes such as BEL (0x07), BS (0x08), and SO (0x0E) that
+// escape-sequence stripping cannot remove as sequences are silently dropped.
+// eslint-disable-next-line no-control-regex
+const VIEWER_CTRL_RE = /[\x00-\x08\x0B-\x1F\x7F-\x9F]/g;
+
 // ---------------------------------------------------------------------------
 // Confinement root (test-overridable)
 // ---------------------------------------------------------------------------
@@ -127,8 +135,12 @@ export function loadViewer(capturePath: string | undefined, viewportRows: number
   // Sanitize: strip ANSI/CSI/OSC/DCS escape sequences; keep newlines so line
   // structure is preserved.  stripEscapeSequences is the correct function here
   // (not sanitizeForDisplay, which also collapses all control bytes to spaces
-  // and trims, destroying multi-line structure).
-  const sanitized = stripEscapeSequences(raw);
+  // and trims, destroying multi-line structure).  A second pass via
+  // VIEWER_CTRL_RE removes raw C0/C1 bytes (BEL, BS, SO, …) that are not part
+  // of an escape sequence and would otherwise reach the terminal as-is.
+  // \n (0x0A) and \t (0x09) are explicitly excluded so line and tab structure
+  // survive — VIEWER_CTRL_RE matches 0x00–0x08 and 0x0B–0x1F, skipping them.
+  const sanitized = stripEscapeSequences(raw).replace(VIEWER_CTRL_RE, '');
 
   const rawLines = sanitized.split('\n');
   // Drop a trailing empty string created by a trailing newline — the file

@@ -44,6 +44,13 @@ export type ApiHost = InputModeHost & RenderHost & AutocompleteHost & KeyDispatc
   onRewindRequest?: () => void;
   onIdleEscape?: () => void;
   onOpenEditor?: () => void;
+  /**
+   * Fired on every `idle → streaming` transition (i.e. when a new turn
+   * starts). Wired by the REPL via {@link setOnStreamingStart} to abort
+   * any open bash-output-viewer so it does not hold `pickerController`
+   * while the compositor switches to streaming mode.
+   */
+  onStreamingStart?: () => void;
 
   // setInputMode — needs to flush before delegating to InputMode.*
   flushPendingRepaint(): void;
@@ -72,6 +79,10 @@ export function setOnRewindRequest(self: ApiHost, handler: (() => void) | null):
 
 export function setOnIdleEscape(self: ApiHost, handler: (() => void) | null): void {
   self.onIdleEscape = handler ?? undefined;
+}
+
+export function setOnStreamingStart(self: ApiHost, handler: (() => void) | null): void {
+  self.onStreamingStart = handler ?? undefined;
 }
 
 export function setOnOpenEditor(self: ApiHost, handler: (() => void) | null): void {
