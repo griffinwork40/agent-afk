@@ -354,6 +354,13 @@ export interface InteractiveCtx {
    */
   getInFlight?: () => boolean;
   /**
+   * Mutable ref written by any code path that calls `ctx.rl.close()` so the
+   * session sidecar records WHY the session ended (`exitReason` alongside
+   * `endedAt`). Set by `interactive.ts` before `installSignalHandlers` and
+   * written by signal handlers + the /exit slash command path.
+   */
+  exitReasonRef?: { current: StoredSession['exitReason'] };
+  /**
    * Atomically swap the active session for a stored one. Refuses while a
    * turn is in flight. Tears down the outgoing session, builds a new one,
    * mutates `session.current`, re-runs plugin passthrough registration,

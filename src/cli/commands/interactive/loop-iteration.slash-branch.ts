@@ -72,6 +72,7 @@ export async function handleSlashCommand(
     // Readline/compositor teardown makes prompting impossible, so the
     // external input-lifecycle constraint requires disposition first.
     await ctx.resolveWorktreeDisposition?.(true);
+    if (ctx.exitReasonRef) ctx.exitReasonRef.current = 'exit-command'; // #2762
     ctx.rl.close();
     return { action: 'exit' };
   }
