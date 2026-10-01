@@ -121,12 +121,11 @@ describe('createPathApprovalHook — typed-tool gating', () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
-    const decision = await preToolUse(preCtx('bash', { command: 'ls' }));
+    const decision = await preToolUse(preCtx('bash', { command: 'ls' }, mgr));
     expect(decision).toEqual({});
     expect(mgr._events).toHaveLength(0);
   });
@@ -136,13 +135,12 @@ describe('createPathApprovalHook — typed-tool gating', () => {
     elicitationRouter.install(handler);
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     const decision = await preToolUse(
-      preCtx('read_file', { file_path: '/tmp/repo/src/foo.ts' }),
+      preCtx('read_file', { file_path: '/tmp/repo/src/foo.ts' }, mgr),
     );
     expect(decision).toEqual({});
     expect(handler).not.toHaveBeenCalled();
@@ -165,7 +163,6 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     // Child provider (injected via context) grants BASE + the sibling.
     const childMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => parentRef,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -190,8 +187,7 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
   it('STILL auto-denies a forked-child write OUTSIDE its injected grants (confinement preserved)', async () => {
     const childMgr = makeMockGrantManager({ writeRoots: [BASE] });
     const { preToolUse } = createPathApprovalHook({
-      // Even a permissive parent ref must not widen the child.
-      getGrantManager: () => makeMockGrantManager({ writeRoots: [BASE, SIBLING] }),
+      // Even a permissive parent ref must not widen the child. SIBLING] }),
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -216,7 +212,6 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     const refMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
     const injectedMgr = makeMockGrantManager({ writeRoots: [BASE] });
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => refMgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -233,26 +228,7 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     expect(decision.decision).toBe('block'); // the restrictive injected manager won
   });
 
-  it('falls back to opts.getGrantManager when no grantManager is injected (prior behavior)', async () => {
-    // Top-level session, no injected manager: the ref grants the path, so the
-    // hook resolves exactly as before — no prompt, no block.
-    const refMgr = makeMockGrantManager({ readRoots: [BASE, SIBLING] });
-    const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => refMgr,
-      getCwd: () => BASE,
-      surface: 'repl',
-    });
 
-    const decision = await preToolUse({
-      event: 'PreToolUse',
-      toolName: 'read_file',
-      input: { file_path: `${SIBLING}/in.txt` },
-      sessionId: 'sess-1',
-      // no parentSessionId, no grantManager
-    });
-
-    expect(decision).toEqual({});
-  });
 });
 
 describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
@@ -265,7 +241,6 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
     elicitationRouter.install(handler);
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -276,6 +251,7 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
       input: { file_path: '/etc/hosts' },
       sessionId: 'child-1',
       parentSessionId: 'parent-1',
+      grantManager: mgr,
     });
 
     expect(decision.decision).toBe('block');
@@ -288,7 +264,6 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
   it('mentions writeRoots in the deny reason for a write-mode fork', async () => {
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -299,6 +274,7 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
       input: { file_path: '/etc/hosts', content: 'x' },
       sessionId: 'child-1',
       parentSessionId: 'parent-1',
+      grantManager: mgr,
     });
 
     expect(decision.decision).toBe('block');
@@ -310,7 +286,6 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
   it('mentions read roots in the deny reason for a read-mode fork', async () => {
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -321,6 +296,7 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
       input: { file_path: '/etc/hosts' },
       sessionId: 'child-1',
       parentSessionId: 'parent-1',
+      grantManager: mgr,
     });
 
     expect(decision.decision).toBe('block');
@@ -343,7 +319,6 @@ describe('createPathApprovalHook — sub-agent auto-deny (PR1)', () => {
     elicitationRouter.install(handler);
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -368,19 +343,18 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse, postToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     const decision = await preToolUse(
-      preCtx('read_file', { file_path: '/etc/hosts' }),
+      preCtx('read_file', { file_path: '/etc/hosts' }, mgr),
     );
     expect(decision).toEqual({});
     expect(mgr._readRoots).toContain('/etc/hosts');
 
     // PostToolUse should revoke the once-grant.
-    postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }));
+    postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(mgr._readRoots).not.toContain('/etc/hosts');
     expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
   });
@@ -397,14 +371,13 @@ describe('createPathApprovalHook — outcome mapping', () => {
     const refMgr = makeMockGrantManager();
     const injectedMgr = makeMockGrantManager();
     const { preToolUse, postToolUse } = createPathApprovalHook({
-      getGrantManager: () => refMgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     // Pre: approve "once" against the INJECTED manager (context.grantManager).
     const decision = await preToolUse({
-      ...preCtx('read_file', { file_path: '/etc/hosts' }),
+      ...preCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr),
       grantManager: injectedMgr,
     });
     expect(decision).toEqual({});
@@ -414,7 +387,7 @@ describe('createPathApprovalHook — outcome mapping', () => {
 
     // Post: revoke must land on the SAME injected manager the Pre check mutated.
     postToolUse({
-      ...postCtx('read_file', { file_path: '/etc/hosts' }),
+      ...postCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr),
       grantManager: injectedMgr,
     });
     expect(injectedMgr._readRoots).not.toContain('/etc/hosts');
@@ -429,13 +402,12 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(handler);
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(mgr._readRoots).toContain('/etc/hosts');
@@ -448,13 +420,12 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'persist' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'telegram',
     });
 
     const decision = await preToolUse(
-      preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }),
+      preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }, mgr),
     );
 
     expect(decision).toEqual({});
@@ -478,12 +449,11 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'persist' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'web',
     });
 
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
 
     expect(append).toHaveBeenCalledTimes(1);
     expect(append.mock.calls[0]?.[0]).toMatchObject({ source: 'elicit:web' });
@@ -493,13 +463,12 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'deny' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     const decision = await preToolUse(
-      preCtx('read_file', { file_path: '/etc/hosts' }),
+      preCtx('read_file', { file_path: '/etc/hosts' }, mgr),
     );
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('/etc/hosts');
@@ -510,11 +479,10 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(async () => ({ action: 'decline' }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
-    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(decision.decision).toBe('block');
   });
 
@@ -522,11 +490,10 @@ describe('createPathApprovalHook — outcome mapping', () => {
     elicitationRouter.install(async () => ({ action: 'cancel' }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
-    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('cancelled');
   });
@@ -543,12 +510,11 @@ describe('createPathApprovalHook — allowAll bypass (bypassPermissions, PR2)', 
     const mgr = makeMockGrantManager();
     const bypassMgr = { ...mgr, getGrants: () => ({ ...mgr.getGrants(), allowAll: true }) };
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => bypassMgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
-    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, bypassMgr));
     expect(decision).toEqual({});
     expect(handler).not.toHaveBeenCalled();
     expect(mgr._events).toHaveLength(0);
@@ -566,14 +532,13 @@ describe('createPathApprovalHook — concurrency dedup', () => {
     elicitationRouter.install(handler as never);
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     // Fire two concurrent calls for the SAME path.
-    const a = preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
-    const b = preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    const a = preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
+    const b = preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
 
     // Flush microtasks so the elicitation-router's serial queue fires the
     // handler (which sets resolveHandler) before we try to call it.
@@ -602,14 +567,13 @@ describe('createPathApprovalHook — turn-signal cancellation (F2 regression)', 
     elicitationRouter.install(handler as never);
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     const controller = new AbortController();
     const pending = preToolUse(
-      preCtx('read_file', { file_path: '/etc/hosts' }),
+      preCtx('read_file', { file_path: '/etc/hosts' }, mgr),
       controller.signal,
     );
     // Let the router enqueue and start awaiting the handler, then abort.
@@ -628,13 +592,12 @@ describe('createPathApprovalHook — SessionEnd once-grant sweep (F3 regression)
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse, sessionEnd } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     // Approve "once" — root added + recorded for cleanup.
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(mgr._readRoots).toContain('/etc/hosts');
 
     // PostToolUse never fires (the call's signal aborted). Without the sweep
@@ -647,7 +610,6 @@ describe('createPathApprovalHook — SessionEnd once-grant sweep (F3 regression)
   it('is a no-op when no once-grants are outstanding', () => {
     const mgr = makeMockGrantManager();
     const { sessionEnd } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
@@ -660,7 +622,6 @@ describe('createPathApprovalHook — failsafe behavior', () => {
   it('fails open when no grant manager is wired (headless surfaces)', async () => {
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'deny' } }));
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => undefined,
       getCwd: () => BASE,
       surface: 'unknown',
     });
@@ -682,19 +643,18 @@ describe('createPathApprovalHook — M1: once-grant revoked on error path', () =
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse, postToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     // Pre: approve once — grant added.
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(mgr._readRoots).toContain('/etc/hosts');
 
     // Post fires even when the tool call produced an error result
     // (dispatcher calls firePostToolUse after its try/catch). Simulate by
     // calling postToolUse directly — the context carries no error flag.
-    const postDecision = postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }));
+    const postDecision = postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(postDecision).toEqual({});
 
     // Grant must be revoked.
@@ -713,20 +673,19 @@ describe('createPathApprovalHook — M1 cwd: stored-cwd revoke is cwd-drift-safe
 
     let currentCwd = BASE; // mutable — simulates a cwd change mid-call.
     const { preToolUse, postToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => currentCwd,
       surface: 'repl',
     });
 
     // Pre fires while cwd is BASE.
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(mgr._readRoots).toContain('/etc/hosts');
 
     // Simulate cwd changing between Pre and Post (e.g. /cwd command).
     currentCwd = '/tmp/other-repo';
 
     // Post must still revoke using the Pre-captured cwd.
-    postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }));
+    postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }, mgr));
     expect(mgr._readRoots).not.toContain('/etc/hosts');
     expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
   });
@@ -737,13 +696,12 @@ describe('createPathApprovalHook — M5: audit log line emitted per decision', (
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }));
+    await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, mgr));
 
     const calls = spy.mock.calls.map((args) => String(args[0]));
     const logLine = calls.find((l) => l.startsWith('[path-approval]'));
@@ -758,13 +716,12 @@ describe('createPathApprovalHook — M5: audit log line emitted per decision', (
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'deny' } }));
     const mgr = makeMockGrantManager();
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'telegram',
     });
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await preToolUse(preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }));
+    await preToolUse(preCtx('write_file', { file_path: '/etc/hosts', content: 'x' }, mgr));
 
     const calls = spy.mock.calls.map((args) => String(args[0]));
     const logLine = calls.find((l) => l.startsWith('[path-approval]'));
@@ -790,7 +747,6 @@ describe('createPathApprovalHook — unconfined-session forks (deny-all regressi
   it('does NOT block a fork reading a repo file when the parent is unconfined', async () => {
     const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => REPO, // REPL fabricates a concrete cwd even when unconfined
       surface: 'repl',
     });
@@ -808,7 +764,6 @@ describe('createPathApprovalHook — unconfined-session forks (deny-all regressi
   it('does NOT block a fork glob/grep of an arbitrary absolute path when unconfined', async () => {
     const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => REPO,
       surface: 'repl',
     });
@@ -831,7 +786,6 @@ describe('createPathApprovalHook — unconfined-session forks (deny-all regressi
   it('does NOT block a fork reading ~/.afk/state (skill-preflight inputs — #554 must not regress)', async () => {
     const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => REPO,
       surface: 'repl',
     });
@@ -860,7 +814,6 @@ describe('createPathApprovalHook — read-denylist floor', () => {
     it(`blocks a fork reading credential path ${p.replace(homedir(), '~')}`, async () => {
       const mgr = makeMockGrantManager({ resolveBase: undefined, readRoots: [] });
       const { preToolUse } = createPathApprovalHook({
-        getGrantManager: () => mgr,
         getCwd: () => '/tmp/x',
         surface: 'repl',
       });
@@ -880,12 +833,11 @@ describe('createPathApprovalHook — read-denylist floor', () => {
   it('blocks a credential read even in bypass (allowAll) mode', async () => {
     const mgr = makeMockGrantManager({ allowAll: true });
     const { preToolUse } = createPathApprovalHook({
-      getGrantManager: () => mgr,
       getCwd: () => BASE,
       surface: 'repl',
     });
     const decision = await preToolUse(
-      preCtx('read_file', { file_path: `${homedir()}/.ssh/id_rsa` }),
+      preCtx('read_file', { file_path: `${homedir()}/.ssh/id_rsa` }, mgr),
     );
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('protected credential/secret path');
@@ -933,7 +885,6 @@ describe('path-approval hook ↔ handler parity (the divergence six PRs kept re-
         ...(c.grants.allowAll ? { allowAll: true } : {}),
       });
       const { preToolUse } = createPathApprovalHook({
-        getGrantManager: () => mgr,
         getCwd: () => CWD,
         surface: 'repl',
       });

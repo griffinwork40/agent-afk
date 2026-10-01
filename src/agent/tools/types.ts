@@ -33,18 +33,9 @@ import type { DetachableToolRegistry } from './detach-registry.js';
  *   - `writeRoots` gates write-class tools (write_file, edit_file).
  *     Defaults to `[resolveBase]` when unset.
  *   - A path is allowed if it falls inside ANY root in the list.
- *
- * Back-compat: the legacy `cwd` field is kept as an alias for
- * `resolveBase` so existing callers (including tests) that set only
- * `{ cwd: x }` continue to work without change.
  */
 export interface ToolHandlerContext {
-  /**
-   * @deprecated Prefer `resolveBase`. Kept for back-compat; treated as an
-   * alias for `resolveBase` inside the shared `resolveAndContain` helper.
-   */
-  cwd?: string;
-  /** Path-resolution anchor for relative paths. Was: cwd. */
+  /** Path-resolution anchor for relative paths. */
   resolveBase?: string;
   /**
    * Allowed roots for read-class tools (read_file, glob, grep,

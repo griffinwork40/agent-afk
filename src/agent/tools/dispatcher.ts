@@ -428,7 +428,6 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private get handlerContext(): ToolHandlerContext {
     return {
-      cwd: this.resolveBase,
       resolveBase: this.resolveBase,
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),

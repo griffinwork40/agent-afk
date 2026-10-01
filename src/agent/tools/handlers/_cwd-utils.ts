@@ -98,7 +98,7 @@ function computeContainment(
   mode: 'read' | 'write',
   fallbackBase: string | undefined,
 ): { restricted: boolean; resolved: string; roots: string[] } {
-  const resolveBase = context?.resolveBase ?? context?.cwd ?? fallbackBase;
+  const resolveBase = context?.resolveBase ?? fallbackBase;
 
   // Resolve to absolute, anchoring relative paths against resolveBase.
   const abs = path.isAbsolute(inputPath)
@@ -179,14 +179,12 @@ function computeContainment(
  *                      the error-message noun; the containment logic is identical.
  * @param fallbackBase - Optional session cwd closed over by a handler factory
  *                      (e.g. `createReadFileHandler(cwd)`). Used as the LAST
- *                      resolve-base tier — after `context.resolveBase` /
- *                      `context.cwd`, before `process.cwd()` — so a factory
- *                      handler invoked WITHOUT a dispatcher context still
- *                      anchors relative paths to (and confines them within)
- *                      its session tree instead of the host launch dir. Mirrors
- *                      the `?? sessionCwd` tier grep/glob already carry. On the
- *                      dispatcher path it is a no-op: `context.cwd` and the
- *                      factory cwd are the same value, so `context` wins.
+ *                      resolve-base tier — after `context.resolveBase`,
+ *                      before `process.cwd()` — so a factory handler invoked
+ *                      WITHOUT a dispatcher context still anchors relative paths
+ *                      to (and confines them within) its session tree instead of
+ *                      the host launch dir. Mirrors the `?? sessionCwd` tier
+ *                      grep/glob already carry.
  * @returns The resolved absolute path.
  * @throws  When `mode === 'read'` and the resolved path is a protected
  *          credential/secret path (read-denylist floor), OR when a resolve base

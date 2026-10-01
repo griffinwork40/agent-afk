@@ -324,7 +324,7 @@ describe('waitForHandler — relative path resolution for file type', () => {
     mockCheckEgress.mockResolvedValue({ allowed: true });
   });
 
-  it('resolves a relative path against context.cwd', async () => {
+  it('resolves a relative path against context.resolveBase', async () => {
     const { evaluateFile } = await import('./wait-for-conditions.js');
     const mockEvalFile = vi.mocked(evaluateFile);
     let capturedCond: unknown;
@@ -333,14 +333,14 @@ describe('waitForHandler — relative path resolution for file type', () => {
       return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
     });
 
-    const cwd = path.resolve('/home/user/myproject');
+    const resolveBase = path.resolve('/home/user/myproject');
     await waitForHandler(
       { type: 'file', path: 'dist/server.js' },
       neverSignal,
-      { cwd, resolveBase: undefined } as never,
+      { resolveBase } as never,
     );
 
-    expect((capturedCond as { path: string })?.path).toBe(path.resolve(cwd, 'dist/server.js'));
+    expect((capturedCond as { path: string })?.path).toBe(path.resolve(resolveBase, 'dist/server.js'));
   });
 
   it('prefers context.resolveBase over context.cwd', async () => {
@@ -376,7 +376,7 @@ describe('waitForHandler — relative path resolution for file type', () => {
     await waitForHandler(
       { type: 'file', path: absPath },
       neverSignal,
-      { cwd: path.resolve('/home/user/myproject') } as never,
+      { resolveBase: path.resolve('/home/user/myproject') },
     );
 
     expect((capturedCond as { path: string })?.path).toBe(absPath);
