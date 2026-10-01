@@ -142,7 +142,8 @@ function isBlockedAddress(ip: string): boolean {
  * all:true}` (autoSelectFamily) and `net` throws ERR_INVALID_IP_ADDRESS when
  * it receives a single-address reply for an all=true request. The hook is now
  * built via `createGuardedLookup` in `egress-guard.lookup.ts`, which honours
- * the `options.all` contract properly (issue fix: afk/egress-lookup-all-contract).
+ * the `options.all` contract. Latent until PR #2697 moved production fetches
+ * onto npm undici's own fetch + this Agent.
  */
 const guardedDispatcher = new Agent({
   connect: {

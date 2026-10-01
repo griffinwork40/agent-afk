@@ -40,10 +40,11 @@ export function extractEgressBlockedError(err: unknown): Error | null {
 
 /**
  * Format a network-error message that surfaces undici's cause chain when
- * available. When `err` wraps an `EgressBlockedError` as its cause, the
- * returned string is `"fetch failed (<cause.code>: <cause.message>)"` — giving
- * callers that format `web_scrape network error: <X>` an actionable message
- * instead of the opaque `"fetch failed"`.
+ * available. When `err` is undici's `TypeError('fetch failed', { cause })`,
+ * the returned string is `"fetch failed (<cause.code>: <cause.message>)"`
+ * (code omitted when absent) — giving callers that format
+ * `web_scrape network error: <X>` an actionable message instead of the
+ * opaque `"fetch failed"`. Any other error returns its own message.
  *
  * Contract: existing message prefixes (`web_scrape network error:`,
  * `web_scrape blocked:`, etc.) are NOT included here — the caller owns them.
