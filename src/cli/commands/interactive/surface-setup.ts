@@ -17,6 +17,7 @@ import type { MascotBar } from './mascot-bar.js';
 import { buildPrompt, type TurnState } from './repl-loop-shared.js';
 import { installHistorySubmissionTracker } from './surface-setup.history-tracking.js';
 import { buildSuggestConfig } from './surface-setup.suggest-config.js';
+import { buildOutputViewerCallback } from './surface-setup.viewer-callback.js';
 import { boundLineToTerminal } from '../../render/bounded-line.js';
 
 /**
@@ -145,6 +146,7 @@ export async function setupSurface(
         resumeFooter: () => ctx.slashCtx.resumeFooter?.(),
       }).catch(() => {});
     },
+    onOpenOutputViewer: buildOutputViewerCallback(ctx.capturePathRef, () => surface.getCompositor()),
     // StatusLine doubles as DECSTBM scroll-region guard so commitAbove
     // writes survive the persistent bottom-row reservation.
     scrollRegion: ctx.statusLine,

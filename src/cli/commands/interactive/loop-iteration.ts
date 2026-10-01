@@ -781,7 +781,7 @@ export async function runInputLoop(
         // Thread the edit-preview ref so the StreamRenderer can wire the hook
         // callback into the tool lane during arm(). Absent on non-REPL callers.
         ...(ctx.addPreviewDiffRef ? { addPreviewDiffRef: ctx.addPreviewDiffRef } : {}),
-        bashTailSetter: ctx.bashTailSetter,
+        bashTailSetter: ctx.bashTailSetter, capturePathRef: ctx.capturePathRef,
         // Live tok/s: delegate to the momentum ticker, which handles EMA
         // smoothing and throttled repaint internally.
         onTextDelta: (charCount) => momentumTicker.update(charCount),

@@ -23,7 +23,7 @@ import { createReplProviders } from './bootstrap-providers.js';
 import { createReplSurface } from './bootstrap-surface.js';
 import { createReplHookRegistry } from './bootstrap-hooks.js';
 import { createReplSlashContext } from './bootstrap-slash-context.js';
-import { wireTrustedSkillEvents, wireProviderGrants, createReplInput } from './bootstrap-wiring.js';
+import { wireTrustedSkillEvents, wireProviderGrants, createReplInput, createTurnBridgeRefs } from './bootstrap-wiring.js';
 import { buildAgentSession, buildSharedDeps } from './bootstrap-session-builder.js';
 import { registerAll } from '../../slash/index.js';
 import { setTasksIctx } from '../../slash/commands/tasks.js';
@@ -151,10 +151,9 @@ export async function bootstrapSession(
     completionWriter, memoryStore: sharedMemoryStore, stateStore: sharedStateStore, stats, effectiveCwd, traceWriter: trace?.writer,
   });
 
-  // Mutable ref for the per-turn bash output tail bridge (issue #1506).
-  // The factory below closes over this; the per-turn StreamRenderer sets
-  // .current when it starts and clears it when the turn ends.
-  const bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined } = { current: undefined };
+  // Mutable refs bridging per-turn renderer state back to the session context
+  // (issues #1505 and #1506 — see bootstrap-wiring.ts for field docs).
+  const { bashTailSetter, capturePathRef } = createTurnBridgeRefs();
   const bashOutputTailReporter = (toolUseId: string) => {
     return (tail: string | undefined) => { bashTailSetter.current?.(toolUseId, tail); };
   };
@@ -358,6 +357,7 @@ export async function bootstrapSession(
     completionWriter,
     replRenderer,
     bashTailSetter,
+    capturePathRef,
     slashCtx,
     rl: null!,  // overwritten below
     options,

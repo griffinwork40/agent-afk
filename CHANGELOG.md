@@ -11,6 +11,14 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.280.0] - 2026-10-01
+
+### Added
+- Harbor installed-agent adapter and eval program (#2741) (dbabc71b)
+
+### Changed
+- classify Windows-skipped tests (#2738) (25c43d0b)
+
 ## [5.279.2] - 2026-10-01
 
 ### Fixed

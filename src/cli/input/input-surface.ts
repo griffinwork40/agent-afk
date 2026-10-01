@@ -175,6 +175,13 @@ export interface InputSurfaceArmOpts {
    */
   onOpenEditor?: () => void;
   /**
+   * Stable Ctrl+G handler — opens the in-TUI bash output viewer on the
+   * most recent capture file. Fires in any input mode (the compositor
+   * consumes Ctrl+G even when idle so it never leaks into the buffer).
+   * Absent on surfaces without a ToolLane.
+   */
+  onOpenOutputViewer?: () => void;
+  /**
    * Optional DECSTBM scroll-region guard (typically the active
    * StatusLine). Forwarded to the compositor so `commitAbove`'s
    * scrollback writes use full-screen scroll semantics.
@@ -376,6 +383,7 @@ export class InputSurface {
       onTaskView: () => this.taskViewHandler?.() ?? false,
       ...(opts.onShiftTab ? { onShiftTab: opts.onShiftTab } : {}),
       ...(opts.onOpenEditor ? { onOpenEditor: opts.onOpenEditor } : {}),
+      ...(opts.onOpenOutputViewer ? { onOpenOutputViewer: opts.onOpenOutputViewer } : {}),
       history: this.history,
       autocompleteState: this.autocompleteState,
       formatInputBuffer: (segment) => colorizeInputBuffer(segment, this.slashRegistryView),

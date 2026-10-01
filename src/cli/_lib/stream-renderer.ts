@@ -486,6 +486,16 @@ export class StreamRenderer {
    * Delegate to this turn's ToolLane for live bash output tail. Issue #1506.
    * Safe to call after dispose (no-op).
    */
+  /**
+   * Return the most recent bash capture path seen across all turns on this
+   * renderer, or `undefined` when no capture has been recorded yet. Used by
+   * the Ctrl+G viewer to open the last large output without requiring the user
+   * to know the path. Safe to call at any time (including after dispose).
+   */
+  getLastCapturePath(): string | undefined {
+    return this.toolLane.getLastCapturePath();
+  }
+
   setBashOutputTail(toolUseId: string, tail: string | undefined): void {
     if (this.disposed) return;
     this.toolLane.setBashOutputTail(toolUseId, tail);
