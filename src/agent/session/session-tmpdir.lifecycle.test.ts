@@ -14,7 +14,7 @@ process.env['AFK_HOME'] = tmpHome;
 
 import { AgentSession } from './agent-session.js';
 import { createMockProvider } from '../__fixtures__/mock-provider.js';
-import type { ProviderQueryArgs } from '../types.js';
+import type { ProviderQueryArgs } from '../provider.js';
 import { ensureSessionTmpdir, setSessionTmpdirRootForTests } from './session-tmpdir.js';
 
 const root = path.join(tmpHome, 'tmp-root');
