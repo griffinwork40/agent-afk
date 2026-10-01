@@ -8,7 +8,7 @@
  * rather than crash a caller like /fork.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import {
   clipboardToolsFor,
   copyToClipboard,
@@ -153,27 +153,45 @@ describe('copyToClipboard', () => {
     expect(typeof result).toBe('boolean');
   });
 
-  // Windows: TODO needs native equivalent — on Windows `clip` intercepts before OSC 52 fallback fires,
-  // so the fallback path is unreachable; the win32 clipboard tool path needs a separate test.
-  it.skipIf(process.platform === 'win32')(
-    'falls back to OSC 52 when no local tool succeeds',
-    () => {
+  // These two tests exercise the OSC 52 fallback path (reached when every local
+  // clipboard tool fails). spawnSync is mocked to always report ENOENT so the
+  // test is portable across all platforms — on Windows real `clip` would
+  // succeed and bypass the fallback, making the assertions wrong.
+  describe('OSC 52 fallback (all local tools mocked absent)', () => {
+    beforeAll(() => {
+      vi.mock('node:child_process', async (importOriginal) => {
+        const actual = await importOriginal<typeof import('node:child_process')>();
+        return {
+          ...actual,
+          spawnSync: vi.fn(() => ({
+            pid: 0,
+            output: [],
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+            status: null,
+            signal: null,
+            error: new Error('ENOENT: mock — no clipboard tool available'),
+          })),
+        };
+      });
+    });
+
+    afterAll(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('falls back to OSC 52 when no local tool succeeds', () => {
       const sink = makeSink(true);
       const ok = copyToClipboard('hi', 'win32', {}, sink);
       expect(ok).toBe(true);
       expect(sink.chunks.join('')).toBe(osc52Copy('hi'));
-    },
-  );
+    });
 
-  // Skipped on Windows: OSC 52 non-TTY guard relies on same fallback path that clip.exe blocks.
-  // TODO needs native equivalent — a mock-tool variant.
-  it.skipIf(process.platform === 'win32')(
-    'does not emit OSC 52 into a non-TTY sink (piped output stays clean)',
-    () => {
+    it('does not emit OSC 52 into a non-TTY sink (piped output stays clean)', () => {
       const sink = makeSink(false);
       const ok = copyToClipboard('hi', 'win32', {}, sink);
       expect(sink.chunks).toHaveLength(0);
       expect(ok).toBe(false);
-    },
-  );
+    });
+  });
 });
