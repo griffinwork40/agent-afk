@@ -506,6 +506,10 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
   journalSnapshot(): ReturnType<OpenAIJournalWiring['snapshot']> { return this.journal.snapshot(this.priorTurns); }
 
   close(): void {
+    // Invariant: the `closed` flag and the close promise must be updated
+    // together — sub-generators poll the flag each loop iteration while the
+    // outer loop is parked on the promise, so resolving one without the
+    // other leaves a reader stuck.
     this._closed = true;
     this.abort.requestAbort('closed');
     this.abort.markClosed();
