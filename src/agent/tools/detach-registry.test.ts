@@ -144,6 +144,59 @@ describe('DetachableToolRegistry', () => {
     });
   });
 
+  describe('deregister: normal-close cleanup (Fix #2)', () => {
+    it('deregister removes the token so hasDetachable() is false', () => {
+      const registry = new DetachableToolRegistry();
+      registry.register('call-1');
+      expect(registry.hasDetachable()).toBe(true);
+
+      registry.deregister('call-1');
+
+      expect(registry.hasDetachable()).toBe(false);
+      expect(registry.listRunning()).toEqual([]);
+    });
+
+    it('deregister on an unknown id is a no-op (does not throw)', () => {
+      const registry = new DetachableToolRegistry();
+      expect(() => registry.deregister('nonexistent')).not.toThrow();
+    });
+
+    it('deregister on an already-settled token is a no-op (token already removed by deliver)', () => {
+      const registry = new DetachableToolRegistry();
+      const token = registry.register('call-1');
+      token.notifyDetached();
+      token.deliver(makeResult('call-1')); // deliver() removes from map, sets status='settled'
+
+      // deregister should not throw and hasDetachable should stay false
+      expect(() => registry.deregister('call-1')).not.toThrow();
+      expect(registry.hasDetachable()).toBe(false);
+    });
+  });
+
+  describe('cancelAll: status-gating (Fix #4)', () => {
+    it('aborts running tokens but NOT already-detached tokens detach signals', () => {
+      const registry = new DetachableToolRegistry();
+      const t1 = registry.register('call-1'); // stays 'running'
+      const t2 = registry.register('call-2');
+      t2.notifyDetached(); // transitions to 'detached'
+
+      // Track whether t2's detach signal gets aborted by cancelAll
+      let t2SignalAborted = false;
+      // Note: t2 was never detachAll()'d so its signal is NOT yet aborted
+      t2.detachSignal.addEventListener('abort', () => { t2SignalAborted = true; });
+
+      registry.cancelAll();
+
+      // Running token's detach signal should have been fired
+      expect(t1.detachSignal.aborted).toBe(true);
+      // Detached token's signal must NOT be newly aborted by cancelAll
+      expect(t2SignalAborted).toBe(false);
+      expect(t2.detachSignal.aborted).toBe(false);
+      // Registry is cleared
+      expect(registry.hasDetachable()).toBe(false);
+    });
+  });
+
   describe('parallel-batch semantics (Invariant:D1)', () => {
     it('does not partially detach: a token that completes before detachAll is skipped', () => {
       const registry = new DetachableToolRegistry();

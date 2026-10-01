@@ -46,15 +46,27 @@ export function bashDetachLabel(command: string): string {
 /**
  * Build the {@link DetachedToolResult} delivered to the registry's 'settled'
  * notifier once the detached process actually finishes.
+ *
+ * Fix #3: accepts raw Node close-event args so signal-killed processes are
+ * correctly classified as 'failed'. When closeSignal is non-null (e.g.
+ * 'SIGKILL'), the process was killed — status must be 'failed' regardless of
+ * closeCode. closeCode=null && closeSignal=null would mean 'exited normally with
+ * no code', which we treat as 'completed'; that combination never occurs for
+ * SIGKILL'd processes.
  */
 export function buildBashDelivery(
   toolUseId: string,
   label: string,
   output: string,
-  exitCode: number | undefined,
+  closeCode: number | null,
+  closeSignal: string | null,
   startedAt: number,
 ): DetachedToolResult {
-  const status = exitCode === 0 || exitCode === undefined ? 'completed' : 'failed';
+  // Contract: signal-killed (closeSignal !== null) → failed; non-zero exit → failed; else completed.
+  const status =
+    closeSignal !== null || (closeCode !== null && closeCode !== 0) ? 'failed' : 'completed';
+  // exitCode field is informational — preserve existing behavior (null → undefined).
+  const exitCode = closeCode ?? undefined;
   return { toolUseId, label, status, output, exitCode, durationMs: Date.now() - startedAt };
 }
 
@@ -86,6 +98,76 @@ export function applyBashDetach(
     onDetach(token, label);
   }, { once: true });
   return token;
+}
+
+/**
+ * Parameters for {@link execOnDetach} — all mutable state the bash handler
+ * exposes to the onDetach callback via explicit refs rather than bare closure
+ * variables.
+ */
+export interface OnDetachParams {
+  /** Resolved ref: set to false — onDetach verifies and sets to true. */
+  resolvedRef: { value: boolean };
+  /** The active timeout handle to clear on detach. */
+  timeoutHandle: ReturnType<typeof setTimeout>;
+  /** The session's AbortSignal — re-registered post-detach for process kill. */
+  signal: AbortSignal;
+  /**
+   * The abort handler to remove (freeing the turn) and then re-register
+   * (keeping the kill path alive until proc exits). Fix #1.
+   */
+  abortHandler: () => void;
+  /**
+   * Mutable ref: set to undefined inside onDetach so the normal-close path's
+   * deregisterOnClose?.() is a no-op. Fix #2.
+   */
+  deregisterOnCloseRef: { value: (() => void) | undefined };
+  /** Rolling tail buffer to clear on detach (may be undefined). */
+  clearTail: (() => void) | undefined;
+  /** Getters for stdout+stderr — called lazily on proc close. */
+  getOutput: () => string;
+  /** The process to register a once('close') listener on. */
+  proc: import('child_process').ChildProcess;
+  /** Milliseconds epoch when the bash command started (for durationMs). */
+  startedAt: number;
+  /** The handler's Promise resolve function. */
+  resolve: (result: { content: string }) => void;
+}
+
+/**
+ * Execute the onDetach callback body for a bash handler.
+ *
+ * Extracted from `createBashHandler` to keep it within the function-size
+ * baseline (fix #1 + #2 + #3 together added ~40 lines to that function).
+ * Takes all mutable state as explicit ref parameters instead of bare closure
+ * variables — preserves testability while reducing `createBashHandler`'s line
+ * span.
+ */
+export function execOnDetach(
+  token: DetachToken,
+  label: string,
+  toolUseId: string,
+  p: OnDetachParams,
+): void {
+  if (p.resolvedRef.value) return; // normal close already settled — skip
+  p.resolvedRef.value = true;
+  clearTimeout(p.timeoutHandle);
+  // Fix #1: remove primary abort listener (frees the turn), then immediately
+  // re-register so session abort still kills the process (Invariant:D3).
+  p.signal.removeEventListener('abort', p.abortHandler);
+  p.signal.addEventListener('abort', p.abortHandler);
+  // Fix #2: detach path owns cleanup — null out so normal proc.on('close')
+  // deregisterOnClose?.() is a no-op. token.deliver() handles map removal.
+  p.deregisterOnCloseRef.value = undefined;
+  p.clearTail?.();
+  p.proc.once('close', (closeCode: number | null, closeSignal: string | null) => {
+    // Fix #1: process exited — clean up the re-registered abort listener.
+    p.signal.removeEventListener('abort', p.abortHandler);
+    const output = p.getOutput();
+    // Fix #3: pass closeSignal so SIGKILL → 'failed'.
+    token.deliver(buildBashDelivery(toolUseId, label, output, closeCode, closeSignal, p.startedAt));
+  });
+  p.resolve(token.detachResult(label));
 }
 
 /**

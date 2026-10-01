@@ -29,7 +29,8 @@ import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
 import { scrubBashEnv } from './bash-env-scrub.js';
-import { applyBashDetach, buildBashDelivery } from '../detach-bash.js';
+import { applyBashDetach, execOnDetach } from '../detach-bash.js';
+import type { OnDetachParams } from '../detach-bash.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -309,6 +310,7 @@ export function createBashHandler(
         if (proc.pid !== undefined) {
           killProcessGroup(proc.pid);
         }
+        deregisterOnClose?.(); // Fix #2: free registry slot on timeout kill path
         settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true, durationMs: Date.now() - startedAt });
       }, timeout_ms);
   
@@ -366,6 +368,7 @@ export function createBashHandler(
         // consumers (subagent traces, hooks) — they should not substring-scan.
         const content = headAndTail(combined, MODEL_CAP_BYTES) + HARD_CAP_KILL_NOTE;
         // SIGKILL path: middle bytes are unrecoverable — no capture file.
+        deregisterOnClose?.(); // Fix #2: free registry slot on overflow kill path
         settle({ content, truncated: true, durationMs: Date.now() - startedAt, ...(testResult !== undefined ? { testResult } : {}) });
       }
   
@@ -396,12 +399,26 @@ export function createBashHandler(
         maybeOverflow('stderr');
       });
   
+      // Fix #2: declared before abortHandler so the closure captures this by
+      // reference. Assigned inside the applyBashDetach block below when a
+      // detachRegistry is present. Every non-detach settle path (abort, timeout,
+      // overflow, normal close) calls deregisterOnClose?.() to remove the token
+      // from the registry — token.deliver() only runs on the detach path so
+      // we cannot rely on it for normal cleanup.
+      //
+      // Invariant: assigned synchronously before any event-loop ticks after
+      // proc.once / signal.addEventListener fire, so the closure always sees the
+      // assigned value when abortHandler or the close handler runs.
+      let deregisterOnClose: (() => void) | undefined;
+
       // Handle abort signal — resolve immediately, don't wait for streams.
       // S10: same process-group SIGKILL rationale as timeout path above.
+      // Fix #2: calls deregisterOnClose?.() to clean up the registry slot.
       const abortHandler = () => {
         if (proc.pid !== undefined) {
           killProcessGroup(proc.pid);
         }
+        deregisterOnClose?.();
         settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
       };
       signal.addEventListener('abort', abortHandler);
@@ -418,29 +435,45 @@ export function createBashHandler(
       // Detach contract (#2542): when a detachRegistry is present, register
       // this call so Ctrl+B can free the model's turn while the process keeps
       // running. applyBashDetach installs a one-time listener on the token's
-      // detachSignal. When it fires, the callback resolves the handler Promise
-      // with the placeholder result without killing the process, then wires a
-      // separate 'close' listener for late out-of-band delivery.
-      // The process's existing abort listener still fires on session abort.
+      // detachSignal. When it fires, execOnDetach() (in detach-bash.ts) handles
+      // fixes #1 / #2 / #3 — extracted to keep createBashHandler in baseline.
       if (context?.detachRegistry !== undefined && context.toolUseId !== undefined && !resolved) {
         const toolUseId = context.toolUseId;
-        applyBashDetach(context.detachRegistry, toolUseId, command, (token, label) => {
-          if (resolved) return; // normal close already settled — skip
-          resolved = true;
-          clearTimeout(timeoutHandle);
-          signal.removeEventListener('abort', abortHandler);
-          tailBuffer?.clear();
-          proc.once('close', (closeCode) => {
+        deregisterOnClose = () => context.detachRegistry!.deregister(toolUseId);
+        const resolvedRef = { value: resolved };
+        const deregisterOnCloseRef = { value: deregisterOnClose };
+        const detachParams: OnDetachParams = {
+          resolvedRef,
+          timeoutHandle,
+          signal,
+          abortHandler,
+          deregisterOnCloseRef,
+          clearTail: tailBuffer !== undefined ? () => tailBuffer.clear() : undefined,
+          getOutput: () => {
             const combined = stripEscapeSequences((stdout + stderr).trimEnd());
-            const capped = capForModel(combined);
-            token.deliver(buildBashDelivery(toolUseId, label, capped.content, closeCode ?? undefined, startedAt));
-          });
-          resolve(token.detachResult(label));
+            return capForModel(combined).content;
+          },
+          proc,
+          startedAt,
+          resolve,
+        };
+        applyBashDetach(context.detachRegistry, toolUseId, command, (token, label) => {
+          execOnDetach(token, label, toolUseId, detachParams);
+          // Sync mutable refs back to handler locals after execOnDetach runs.
+          resolved = resolvedRef.value;
+          deregisterOnClose = deregisterOnCloseRef.value;
         });
       }
   
       // Normal completion — `close` fires after all stdio streams drain.
       proc.on('close', (code) => {
+        // Fix #2: deregisterOnClose is set when a detachRegistry is present.
+        // It is nulled out inside the onDetach callback (detach path owns cleanup).
+        // Here on the normal-close path, call it to free the registry slot.
+        // Safe to call unconditionally — deregister() is idempotent and
+        // deregisterOnClose is undefined on the detach path.
+        deregisterOnClose?.();
+
         // If the process was killed by our abort handler, `settle` already
         // ran (resolved=true) so this call is a no-op. Check anyway so the
         // branch is explicit: abort beats close.

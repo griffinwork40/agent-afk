@@ -190,6 +190,26 @@ export class DetachableToolRegistry extends EventEmitter {
   }
 
   /**
+   * Deregister a token that completed via the NORMAL (non-detach) path.
+   *
+   * Fix #2: deliver() is only called on the detached path — when a bash command
+   * completes normally, the handler must call deregister() so the registry slot
+   * is freed and hasDetachable() returns false. No-op if the token is already
+   * settled (deliver() already cleaned it up) or if the toolUseId is unknown.
+   *
+   * @param toolUseId  The id passed to register() when the call was created.
+   */
+  deregister(toolUseId: string): void {
+    const token = this.tokens.get(toolUseId);
+    // Only remove if still in the map and not yet settled by deliver().
+    // deliver() already calls this.tokens.delete(), so token being absent is
+    // the 'already settled' case — silently succeed either way.
+    if (token !== undefined && token._status !== 'settled') {
+      this.tokens.delete(toolUseId);
+    }
+  }
+
+  /**
    * Fire every registered token's abort signal (Ctrl+B path). Handlers that
    * are polling `shouldDetach()` or listening on `detachSignal` will unblock,
    * call `notifyDetached()`, and return their `detachResult`.
@@ -213,18 +233,29 @@ export class DetachableToolRegistry extends EventEmitter {
    * turn. Handlers MUST wire the session's abort signal to stop the operation
    * on cancel; the detach signal only asks for an early return.
    *
-   * For bash: the handler's existing signal listener already kills the process
-   * group on session abort. detachAll uses the DETACH signal (separate); cancel
-   * uses the SESSION signal (already wired). So `cancelAll` here fires the
-   * detach abort to ensure any detach-polling handler also unblocks — the
-   * handler's outer signal listener handles the actual kill.
+   * Fix #4 (Invariant:D3): For bash, the handler's existing session AbortSignal
+   * listener kills the process group on session abort. After fix #1, that
+   * listener is re-registered inside the onDetach callback so it still fires
+   * even after the token transitions to 'detached'. Therefore:
+   *
+   *   - 'running' tokens: fire their detach abort so any poll-style handler
+   *     unblocks. The session's own signal does the actual kill.
+   *   - 'detached' tokens: their detach signal is ALREADY aborted (from
+   *     detachAll()). Re-aborting it is a no-op and confusing — skip it.
+   *     The session signal (fix #1) handles the kill for detached processes.
+   *
+   * tokens.clear() after the loop means any late deliver() call (from a close
+   * event racing with teardown) will find the token absent and become a no-op —
+   * correct per the contract, since the session is tearing down.
    */
   cancelAll(): void {
     for (const token of this.tokens.values()) {
-      // Fire the detach abort so poll-style handlers unblock. The session's
-      // own AbortSignal (already held by the handler) is responsible for the
-      // actual process kill.
-      if (!token._abort.signal.aborted) {
+      // Running tokens: fire the detach abort so poll-style handlers unblock.
+      // The session's own AbortSignal (already held by the handler) is
+      // responsible for the actual process kill.
+      // Detached tokens: detach signal already aborted; session signal (fix #1)
+      // handles kill — skip to avoid confusing double-abort.
+      if (token._status === 'running' && !token._abort.signal.aborted) {
         token._abort.abort();
       }
     }
