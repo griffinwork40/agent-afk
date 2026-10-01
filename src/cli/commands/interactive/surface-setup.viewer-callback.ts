@@ -11,15 +11,17 @@ import type { TerminalCompositor } from '../../terminal-compositor.js';
  * Extracted from `surface-setup.ts` so `setupSurface` stays under its
  * baselined function-size ceiling (issue #1505).
  *
- * Invariant: an open viewer must never survive an `idle → streaming`
- * transition. The viewer holds the compositor's single `pickerController`
- * slot; if a turn starts while it is open (queued message, background-agent
- * result, scheduled input) and the viewer stays up, the compositor is stuck
- * in picker mode and the next overlay's `enterPickerMode` throws on
- * re-entry. Each open therefore gets a fresh AbortController, and the
- * compositor's `onStreamingStart` hook (fired by `setInputMode` BEFORE it
- * mutates mode state) aborts it, which runs the viewer's normal `close()`
- * path and calls `exitPickerMode()`. The hook is (re)installed on every open
+ * Invariant: an open viewer must never survive an external input-mode
+ * transition (turn start or turn end). The viewer holds the compositor's
+ * single `pickerController` slot; if a turn starts while it is open (queued
+ * message, background-agent result, scheduled input) or ends while it is
+ * open, the viewer is orphaned, the compositor stays in picker state, and the
+ * next overlay's `enterPickerMode` throws on re-entry. Each open therefore
+ * gets a fresh AbortController, and the compositor's `onInputModeTransition`
+ * hook (fired at the top of `setInputMode`, BEFORE it reads the previous
+ * mode) aborts it. That runs the viewer's normal `close()` path, whose
+ * `exitPickerMode()` restores the saved mode, so `setInputMode` then proceeds
+ * from the logical pre-viewer mode. The hook is (re)installed on every open
  * so it always targets the live viewer; the viewer is its only consumer.
  *
  * @param capturePathRef  Session-scoped mutable ref written by the turn-handler
@@ -38,7 +40,7 @@ export function buildOutputViewerCallback(
     current?.abort();
     const ac = new AbortController();
     current = ac;
-    compositor.setOnStreamingStart(() => ac.abort());
+    compositor.setOnInputModeTransition(() => ac.abort());
     // Dynamic import keeps the viewer out of the initial bundle; fire-and-forget
     // so the keypress handler returns synchronously.
     import('./bash-output-viewer.js').then(({ runBashOutputViewer }) => {

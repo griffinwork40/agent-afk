@@ -125,13 +125,14 @@ export class TerminalCompositor {
   /** Per-read single-Escape override for cancellable borrowed idle prompts. */
   onIdleEscape?: () => void;
   /**
-   * Fired on every `idle → streaming` mode transition (i.e. when a new turn
-   * starts). Installed via {@link setOnStreamingStart}; used by the
-   * bash-output-viewer to close itself cleanly before the compositor leaves
-   * idle so a subsequent `enterPickerMode` cannot throw.
+   * Fired at the top of every `setInputMode` call that changes the mode,
+   * before the previous mode is read. Installed via
+   * {@link setOnInputModeTransition}; used by the bash-output-viewer to close
+   * itself (restoring the saved mode) before the transition proceeds, so a
+   * subsequent `enterPickerMode` cannot throw.
    * @internal Relaxed from `private` for the input-mode module (InputModeHost).
    */
-  onStreamingStart?: () => void;
+  onInputModeTransition?: () => void;
   /**
    * Timestamp (ms) of the last Escape at an empty idle prompt, for double-tap
    * detection in `handleEscape`. 0 = disarmed.
@@ -776,11 +777,11 @@ export class TerminalCompositor {
   setOnIdleEscape(handler: (() => void) | null): void { Api.setOnIdleEscape(this, handler); }
 
   /**
-   * Install or clear the `idle → streaming` start handler — see
-   * {@link onStreamingStart}. Installed once per REPL session by
-   * `setupSurface` to close any open bash-output-viewer when a turn starts.
+   * Install or clear the input-mode transition handler — see
+   * {@link onInputModeTransition}. Installed by the Ctrl+G output-viewer
+   * callback on each open, to close that viewer on the next mode change.
    */
-  setOnStreamingStart(handler: (() => void) | null): void { Api.setOnStreamingStart(this, handler); }
+  setOnInputModeTransition(handler: (() => void) | null): void { Api.setOnInputModeTransition(this, handler); }
 
   /**
    * Install or clear the Ctrl+O "open $EDITOR" handler — see

@@ -1,8 +1,8 @@
 /**
  * Wiring tests for the Ctrl+G output-viewer callback (PR #2739 stuck-picker fix).
  *
- * Contract under test: an open viewer is aborted when a turn starts
- * (`idle → streaming`), so the compositor's single picker slot is released
+ * Contract under test: an open viewer is aborted on any input-mode
+ * transition (turn start or turn end), so the compositor's single picker slot is released
  * and a later overlay's `enterPickerMode` cannot throw on re-entry.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -45,14 +45,14 @@ describe('buildOutputViewerCallback — turn-start abort wiring', () => {
     c.disarm();
   });
 
-  it('streaming → idle does not abort an open viewer', async () => {
+  it('streaming → idle (turn end) also aborts an open viewer, so it cannot be orphaned', async () => {
     const c = new TerminalCompositor({ stdout: makeMockStdout(), stdin: makeMockStdin(), onCancel: vi.fn() });
     await c.arm();
     const open = buildOutputViewerCallback({ current: undefined }, () => c);
     open();
     await flushImport();
     c.setInputMode('idle');
-    expect(signals[0]!.aborted).toBe(false);
+    expect(signals[0]!.aborted).toBe(true);
     c.disarm();
   });
 

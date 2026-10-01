@@ -83,13 +83,13 @@ export interface InputModeHost {
   readonly onSubmit?: (payload: SubmissionPayload) => void;
 
   /**
-   * Fired on every `idle → streaming` transition (i.e. when a new turn starts).
-   * Optional — set via the compositor's `setOnStreamingStart` API.
-   * Used to close any open bash-output-viewer before the compositor
-   * enters streaming mode (so `enterPickerMode` does not throw on the
-   * next overlay that a new turn might open).
+   * Fired at the top of every `setInputMode` call that changes the mode,
+   * before `prev` is read. Optional — set via the compositor's
+   * `setOnInputModeTransition` API. Used to close any open
+   * bash-output-viewer (whose `exitPickerMode` restores the saved mode)
+   * so `enterPickerMode` does not throw on the next overlay.
    */
-  onStreamingStart?: () => void;
+  onInputModeTransition?: () => void;
 }
 
 /**
@@ -180,6 +180,13 @@ export function repaintPicker(self: InputModeHost): void {
  * queued message would be stranded until the user pressed Enter again.
  */
 export function setInputMode(self: InputModeHost, mode: CompositorInputMode): void {
+  // Invariant: the transition hook runs BEFORE `prev` is read. An open
+  // output viewer closes here via exitPickerMode(), which writes
+  // `inputMode = pickerSavedMode`; reading `prev` afterwards means the
+  // branches below see the logical pre-viewer mode (so idle → streaming
+  // still resets the once-only guards, and → idle still flushes the queue),
+  // and the `inputMode = mode` write below cannot be clobbered by it.
+  if (mode !== self.inputMode) self.onInputModeTransition?.();
   const prev = self.inputMode;
   self.inputMode = mode;
   // idle → streaming: clear the once-only canceled/backgrounded/softStopped
@@ -188,11 +195,6 @@ export function setInputMode(self: InputModeHost, mode: CompositorInputMode): vo
   // turns would arm the once-only flag in the second turn, breaking
   // ESC/Ctrl+C mid-stream forever after.
   if (prev === 'idle' && mode === 'streaming') {
-    // Notify any open bash-output-viewer (or other registered listener) that a
-    // turn is starting so it can close cleanly before the compositor leaves idle.
-    // This fires BEFORE state mutations so the viewer's `close()` path still
-    // observes pickerController !== null and can call exitPickerMode() safely.
-    self.onStreamingStart?.();
     self.canceled = false;
     self.backgrounded = false;
     self.softStopped = false;
