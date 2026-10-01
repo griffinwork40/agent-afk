@@ -316,6 +316,13 @@ export interface InteractiveCtx {
    */
   subagentControl?: SubagentControl;
   /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Shared between the REPL Ctrl+B handler (turn handles) and
+   * the per-query dispatcher so Ctrl+B can free the model's turn while a bash
+   * process keeps running. The teardown path calls cancelAll() (Invariant:D3).
+   */
+  detachRegistry?: DetachableToolRegistry;
+  /**
    * Optional background summarizer. Constructed only when `bgSummaries: true`
    * in afk.config.json. The teardown path calls `stop()` before
    * `backgroundRegistry.cancelAll()` so in-flight Haiku calls are aborted

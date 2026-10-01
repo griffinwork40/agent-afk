@@ -336,6 +336,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.bashOutputTailReporter !== undefined
             ? { bashOutputTailReporter: config.bashOutputTailReporter }
             : {}),
+          // #2542/#2735: Forward detach registry from AgentConfig so REPL
+          // Ctrl+B handler and this dispatcher share the same instance.
+          ...(config.detachRegistry !== undefined
+            ? { detachRegistry: config.detachRegistry }
+            : {}),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
           ...(config.isNonInteractive ? { isNonInteractive: true } : {}),
@@ -437,6 +442,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
       traceWriter?: import('../../trace/index.js').TraceSink;
       /** Factory for the REPL-only live bash output tail callback. */
       bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+      /**
+       * Session-scoped detach registry for the Ctrl+B bash-backgrounding
+       * contract (#2542, #2735) — parity with anthropic-direct buildDispatcher.
+       * Absent for headless surfaces and forked children.
+       */
+      detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
       /**
        * Live source for the `get_runtime_state` tool — see the matching
        * comment in `anthropic-direct/index.ts:buildDispatcher`.
@@ -600,6 +611,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
     // Yield contract: queued-message probe, late-bound off planExitControls (top-level only).
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
+    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding — parity with
+    // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
+    if (opts.detachRegistry !== undefined) dispatcherOpts.detachRegistry = opts.detachRegistry;
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
