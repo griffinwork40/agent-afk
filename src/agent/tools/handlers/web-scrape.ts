@@ -32,7 +32,7 @@
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../http-client/scrape.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../http-client/search.js';
-import { checkEgressTarget, guardedFetch, EgressBlockedError } from '../../../http-client/egress-guard.js';
+import { checkEgressTarget, guardedFetch } from '../../../http-client/egress-guard.js';
 import type { EgressGuardOptions as GuardOpts } from '../../../http-client/egress-guard.js';
 import type { RenderFn } from '../../../http-client/types.js';
 import { headAndTail } from './_output-cap.js';
@@ -42,7 +42,7 @@ import {
   isPlaywrightMissing,
   playwrightInstallCommand,
 } from './playwright-hints.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
 import { forwardAbortSignal } from '../../../utils/abort.js';
 
 // External constraint: Node 20+ ships `fetch` as a global. Older runtimes
@@ -244,11 +244,15 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           // A redirect hop that landed on internal space — name the refusal
           // rather than reporting it as a generic network failure.
-          if (err instanceof EgressBlockedError) {
-            return { content: `web_scrape blocked: ${err.message}`, isError: true };
+          // Also covers the connect-time case: undici wraps EgressBlockedError
+          // as TypeError('fetch failed', { cause }); extractEgressBlockedError
+          // unwraps it so callers see the policy message, not "fetch failed".
+          const blocked = extractEgressBlockedError(err);
+          if (blocked !== null) {
+            return { content: `web_scrape blocked: ${blocked.message}`, isError: true };
           }
           return {
-            content: `web_scrape network error: ${errorMessage(err)}`,
+            content: `web_scrape network error: ${fetchFailedMessage(err)}`,
             isError: true,
           };
         }
@@ -296,11 +300,13 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           if (ac.signal.aborted) return { content: `web_scrape aborted: ${abortMessage()}`, isError: true };
           // As in raw mode: a guard refusal (initial URL, redirect hop, or the
           // render path's post-navigation re-check) is a policy decision, not a
-          // markdown-extraction failure.
-          if (err instanceof EgressBlockedError) {
-            return { content: `web_scrape blocked: ${err.message}`, isError: true };
+          // markdown-extraction failure. Also handles the connect-time path
+          // where undici wraps EgressBlockedError as TypeError('fetch failed').
+          const blocked = extractEgressBlockedError(err);
+          if (blocked !== null) {
+            return { content: `web_scrape blocked: ${blocked.message}`, isError: true };
           }
-          const base = errorMessage(err);
+          const base = fetchFailedMessage(err);
           // A chromium-missing LAUNCH failure is already decorated by
           // BrowserLauncher, so `base` may carry the remediation. Only add it
           // here for the cases the launcher never sees — chiefly a missing
