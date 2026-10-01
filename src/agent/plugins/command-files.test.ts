@@ -86,10 +86,8 @@ describe('extractPluginCommands', () => {
     expect(found[0]?.body).toBe('Deploy the app.');
   });
 
-  // Windows NTFS forbids `:` in filenames, so the colon-file fixture cannot be
-  // created there. The guard under test still runs on Windows (`:` rejection
-  // lives in the walker, not the OS), but the specific "colon file vs slash
-  // file wins" assertion is POSIX-only.
+  // Windows: genuinely POSIX-only — NTFS forbids `:` in filenames so the colon-file fixture cannot be created;
+  // the walker guard still runs on Windows but the "colon file vs slash file wins" assertion is POSIX-only.
   it.skipIf(process.platform === 'win32')('skips a path segment containing the namespace separator', () => {
     // `a:b.md` would derive the same name as `a/b.md`; registering both lets
     // the first-wins guard drop one at random. Distinct bodies make it
@@ -105,9 +103,7 @@ describe('extractPluginCommands', () => {
     expect(found[0]?.body).toBe('Slash body.');
   });
 
-  // Windows NTFS disallows control characters (including ESC / 0x1B) in filenames,
-  // so this fixture cannot be created on Windows. Skip the whole test rather than
-  // partially exercising it with a file that the OS refuses to create.
+  // Windows: genuinely POSIX-only — NTFS disallows control characters (ESC/0x1B) in filenames so the fixture cannot be created
   it.skipIf(process.platform === 'win32')('skips a .md command whose filename carries a terminal escape', () => {
     // The name comes from the PATH, so a filename is the one place a plugin
     // can inject bytes into it — and the name is later written to the terminal
@@ -124,8 +120,7 @@ describe('extractPluginCommands', () => {
     for (const c of found) expect(c.name).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
   });
 
-  // Windows NTFS disallows control characters (including BEL / 0x07) in filenames,
-  // so the fixture directory `ev\x07il/` cannot be created on Windows.
+  // Windows: genuinely POSIX-only — NTFS disallows control characters (BEL/0x07) in filenames so the fixture directory cannot be created
   it.skipIf(process.platform === 'win32')('skips a subdirectory segment carrying a control byte', () => {
     // Directory segments reach the name through `segments`, a different route
     // than the filename `base` — both must be rejected by the single guard.
@@ -135,8 +130,7 @@ describe('extractPluginCommands', () => {
     expect(found.map((c) => c.name)).toEqual(['ok:cmd']);
   });
 
-  // Windows NTFS disallows C1 control characters (U+0080–U+009F) in filenames,
-  // so this fixture cannot be created on Windows.
+  // Windows: genuinely POSIX-only — NTFS disallows C1 control characters (U+0080–U+009F) in filenames so the fixture cannot be created
   it.skipIf(process.platform === 'win32')('skips a filename carrying a C1 control byte (8-bit CSI)', () => {
     // U+009B is CSI in 8-bit form: terminals in 8-bit mode act on it exactly
     // as they do on ESC-[, so restricting the guard to C0 would leave a
@@ -256,6 +250,7 @@ describe('normalizeSkillSource', () => {
     expect(result).toBe('---\ndescription: d\n---\n\nBody.\n');
   });
 
+  // Windows: genuinely POSIX-only — NTFS disallows control characters in filenames so the ESC-bearing fixture cannot be created
   it.skipIf(process.platform === 'win32')('strips a terminal escape embedded in an untrusted plugin filename', () => {
     // The AFK_DEBUG skip diagnostics interpolate raw `readdirSync` entries
     // from a third-party plugin tree. Without sanitisation, a directory or

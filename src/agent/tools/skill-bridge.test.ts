@@ -989,6 +989,7 @@ describe('discoverPluginAgents', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(brokenPath));
   });
 
+  // Windows: genuinely POSIX-only — NTFS disallows control characters in filenames so the ESC-bearing fixture path cannot be created
   it.skipIf(process.platform === 'win32')('warns rather than silently skipping an unreadable plugin agent file', () => {
     const pluginA = join(tmpDir, 'plugin-a');
     writeManifest(pluginA, 'demo');
@@ -1013,6 +1014,7 @@ describe('discoverPluginAgents', () => {
     expect(message).not.toContain('\x07');
   });
 
+  // Windows: genuinely POSIX-only — NTFS disallows control characters (OSC/ESC) in filenames so the fixture cannot be created
   it.skipIf(process.platform === 'win32')('sanitizes an escape-sequence-bearing file path before it reaches warn', () => {
     const pluginA = join(tmpDir, 'plugin-a');
     writeManifest(pluginA, 'demo');

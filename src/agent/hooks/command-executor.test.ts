@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { executeCommand } from './command-executor.js';
 import type { HookContext } from '../hooks.js';
 
-// Hooks execute user-authored #!/bin/sh scripts — POSIX-only (#703)
+// Windows: genuinely POSIX-only — hooks execute user-authored #!/bin/sh scripts; no Windows shell equivalent (#703)
 describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', () => {
   let tmp: string;
 
