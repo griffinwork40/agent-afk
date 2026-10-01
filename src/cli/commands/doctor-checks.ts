@@ -12,6 +12,7 @@ import { env, getMissingRequiredEnvVars } from '../../config/env.js';
 import { getConcurrencyStatuses } from '../../config/concurrency.js';
 import { access, constants, mkdir, readFile } from 'fs/promises';
 import { execSync } from 'child_process';
+import nodePath from 'path';
 import { getApiKey, getCodexApiKey } from '../shared-helpers.js';
 import { preloadClaudeKeychainOAuth } from '../../agent/auth/credential-resolver.js';
 import {
@@ -97,7 +98,15 @@ export async function checkXaiAuth(): Promise<Check> {
   };
 }
 
-export async function checkNpmBinOnPath(): Promise<Check> {
+/** Injectable deps — real defaults use the host platform; tests override for cross-platform coverage. */
+export interface NpmBinOnPathDeps {
+  platform?: NodeJS.Platform;
+  pathDelimiter?: string;
+}
+
+export async function checkNpmBinOnPath(deps: NpmBinOnPathDeps = {}): Promise<Check> {
+  const platform = deps.platform ?? process.platform;
+  const pathDelimiter = deps.pathDelimiter ?? nodePath.delimiter;
   try {
     const prefix = execSync('npm config get prefix', {
       timeout: 2000,
@@ -105,9 +114,12 @@ export async function checkNpmBinOnPath(): Promise<Check> {
       stdio: ['ignore', 'pipe', 'ignore'],
     })
       .trim()
-      .replace(/\/$/, '');
-    const binDir = `${prefix}/bin`;
-    const pathParts = (env.PATH ?? '').split(':').map((p) => p.replace(/\/$/, ''));
+      .replace(/[/\\]$/, '');
+    // On Windows, `npm config get prefix` already points to the directory that
+    // holds global binaries (e.g. C:\Users\Alice\AppData\Roaming\npm).
+    // On POSIX it returns the install prefix and binaries live in <prefix>/bin.
+    const binDir = platform === 'win32' ? prefix : `${prefix}/bin`;
+    const pathParts = (env.PATH ?? '').split(pathDelimiter).map((p) => p.replace(/[/\\]$/, ''));
     if (pathParts.includes(binDir)) {
       return { name: 'npm bin on PATH', state: 'pass', detail: binDir };
     }
