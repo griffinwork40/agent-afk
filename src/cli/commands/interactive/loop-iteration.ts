@@ -415,8 +415,8 @@ export async function runInputLoop(
             // Readline/compositor teardown makes prompting impossible, so the
             // external input-lifecycle constraint requires disposition first.
             await ctx.resolveWorktreeDisposition?.(true);
-            ctx.rl.close();
-            return;
+            if (ctx.exitReasonRef) ctx.exitReasonRef.current = 'exit-command'; // #2762
+            ctx.rl.close(); return;
           }
           if (text === '/clear' || text.startsWith('/clear ')) {
             await transcript.rotateOnClear();
