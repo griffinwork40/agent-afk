@@ -755,6 +755,30 @@ describe('deriveSessionFacet', () => {
     expect(facet.yield_tracking.pr_url ?? null).toBeNull();
   });
 
+  it('yield_tracking: env-prefixed gh pr create is detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/78';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-env-prefixed',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-env',
+          input: JSON.stringify({ command: 'GH_TOKEN=abc GH_REPO=owner/repo gh pr create --fill' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
   it('yield_tracking: gh pr create chained after git push is detected (#2781)', () => {
     const prUrl = 'https://github.com/owner/repo/pull/77';
     const facet = deriveSessionFacet({

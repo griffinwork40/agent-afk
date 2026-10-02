@@ -87,15 +87,22 @@ export const TAIL_LINES = 40;
  *
  * The search is tail-anchored like `parseTerminalState` — it scans the
  * last `TAIL_LINES` lines and walks backward for the heading.
+ *
+ * Invariant: this must skip fenced lines exactly as `parseTerminalState`
+ * does (both use `fencedLines`). The REPL strips the buffer at this offset
+ * and renders the card from `parseTerminalState`; if the two disagreed, a
+ * fenced `done` would strip a code block's tail with no card to replace it.
  */
 export function findTerminalStateHeadingOffset(text: string): number {
   if (!text) return -1;
 
   const lines = text.split('\n');
+  const isFenced = fencedLines(lines);
   const tailStart = Math.max(0, lines.length - TAIL_LINES);
   const tail = lines.slice(tailStart);
 
   for (let i = tail.length - 1; i >= 0; i--) {
+    if (isFenced[tailStart + i]) continue;
     const line = tail[i] ?? '';
     if (lineToKind(line)) {
       // Compute the character offset in the original text. Sum lengths of
@@ -109,6 +116,30 @@ export function findTerminalStateHeadingOffset(text: string): number {
     }
   }
   return -1;
+}
+
+/**
+ * Mark which lines sit inside a fenced code block (``` or ~~~), delimiter
+ * lines included. A forward pass over the WHOLE text, so a fence opened
+ * before the tail window is still tracked. A fence closes only on its own
+ * marker (CommonMark); an unclosed fence runs to the end of the text.
+ */
+function fencedLines(lines: string[]): boolean[] {
+  const isFenced: boolean[] = new Array(lines.length).fill(false);
+  let fenceMarker = '';
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = (lines[i] ?? '').trimStart();
+    if (!fenceMarker) {
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        fenceMarker = trimmed.slice(0, 3);
+        isFenced[i] = true;
+      }
+    } else {
+      isFenced[i] = true;
+      if (trimmed.startsWith(fenceMarker)) fenceMarker = '';
+    }
+  }
+  return isFenced;
 }
 
 /**
@@ -129,30 +160,7 @@ export function parseTerminalState(text: string): TerminalState | null {
   if (!text) return null;
 
   const lines = text.split('\n');
-
-  // Pre-compute which lines are inside a fenced code block (``` or ~~~).
-  // A forward pass over the WHOLE text ensures a fence opened before the tail
-  // window is still tracked correctly. Fence-delimiter lines themselves are
-  // also marked as fenced (they are skipped together with the content).
-  const isFenced: boolean[] = new Array(lines.length).fill(false);
-  let inFence = false;
-  let fenceMarker = '';
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = (lines[i] ?? '').trimStart();
-    if (!inFence) {
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-        inFence = true;
-        fenceMarker = trimmed.startsWith('```') ? '```' : '~~~';
-        isFenced[i] = true;
-      }
-    } else {
-      isFenced[i] = true;
-      if (trimmed.startsWith(fenceMarker)) {
-        inFence = false;
-        fenceMarker = '';
-      }
-    }
-  }
+  const isFenced = fencedLines(lines);
 
   const tail = lines.slice(Math.max(0, lines.length - TAIL_LINES));
   const tailOffset = Math.max(0, lines.length - TAIL_LINES);

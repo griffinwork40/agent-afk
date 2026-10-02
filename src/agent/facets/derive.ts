@@ -68,10 +68,12 @@ const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
 const GH_PR_URL_LINE_RE = /^[ \t]*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+)[ \t]*$/gm;
 
 // Invariant: `gh pr create` counts as an invocation only at the start of a
-// line or right after a shell separator (`;`, `&&`, `||`, `|`). This rejects
-// the phrase as an argument (rg -n "gh pr create" src). It is an approximation:
-// a separator inside a quoted string can still match.
-const GH_PR_CREATE_INVOCATION_RE = /(?:^|[;|&])[ \t]*gh[ \t]+pr[ \t]+create(?:[ \t]|$)/m;
+// line or right after a shell separator (`;`, `&&`, `||`, `|`), optionally
+// after env assignments (`GH_TOKEN=x gh pr create`). This rejects the phrase
+// as an argument (rg -n "gh pr create" src). It is an approximation: a
+// separator inside a quoted string can still match.
+const GH_PR_CREATE_INVOCATION_RE =
+  /(?:^|[;|&])[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*gh[ \t]+pr[ \t]+create(?:[ \t]|$)/m;
 
 /** Last GitHub PR URL that sits alone on an output line, or null. */
 function lastOwnLinePrUrl(result: string): string | null {

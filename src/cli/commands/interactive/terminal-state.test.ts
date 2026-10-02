@@ -343,3 +343,34 @@ describe('parseTerminalState — fence-aware (item 2, #2781)', () => {
     expect(parseTerminalState(text)).toBeNull();
   });
 });
+
+// The REPL strips the pending buffer at findTerminalStateHeadingOffset and
+// renders the verdict card from parseTerminalState, so the two must agree on
+// fenced lines (#2781 re-review).
+describe('findTerminalStateHeadingOffset — fence-aware, agrees with parseTerminalState (#2781)', () => {
+  it('returns -1 for a fenced shell `done` with no heading', () => {
+    const text = ['Ran it:', '```bash', 'for f in a b; do', '  echo "$f"', 'done', '```'].join('\n');
+    expect(findTerminalStateHeadingOffset(text)).toBe(-1);
+    expect(parseTerminalState(text)).toBeNull();
+  });
+
+  it('points at the real Blocked heading, not a later fenced `done`', () => {
+    const text = [
+      'Intro.',
+      '**Blocked**',
+      '- What blocks: CI',
+      '```sh',
+      'while true; do sleep 1;',
+      'done',
+      '```',
+    ].join('\n');
+    expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Blocked**'));
+    expect(parseTerminalState(text)?.kind).toBe('blocked');
+  });
+
+  it('a ~~~ line does not close a ``` fence (CommonMark)', () => {
+    const text = ['```', 'x', '~~~', 'done', '```', 'tail prose'].join('\n');
+    expect(findTerminalStateHeadingOffset(text)).toBe(-1);
+    expect(parseTerminalState(text)).toBeNull();
+  });
+});
