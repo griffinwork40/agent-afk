@@ -473,12 +473,12 @@ export function _resetJsonStringSlotWarnings(): void {
 }
 
 /**
- * Build a re-save suggestion from a recovered JSON-string slot using ONLY the
- * non-secret fields (`id`, `name`, `provider`). `baseUrl`/`apiKey` are
- * deliberately omitted: they are human-gated and `apiKey` is a secret that must
- * never be echoed to stderr.
+ * Project a recovered JSON-string slot onto ONLY its agent-settable fields
+ * (`id`, `name`, `provider`). `baseUrl`/`apiKey` are human-gated (and `apiKey`
+ * is a secret that must never be echoed), so they are always omitted. Used both
+ * as the recovered binding and as the re-save suggestion.
  */
-function safeSlotSuggestion(parsed: unknown): string {
+function safeSlotFields(parsed: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (parsed && typeof parsed === 'object') {
     const obj = parsed as Record<string, unknown>;
@@ -487,7 +487,14 @@ function safeSlotSuggestion(parsed: unknown): string {
       if (typeof v === 'string' && v.trim()) out[key] = v.trim();
     }
   }
-  return JSON.stringify(out);
+  return out;
+}
+
+/** True when a recovered JSON-string slot carried any human-gated field. */
+function hasPrivilegedSlotFields(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const obj = parsed as Record<string, unknown>;
+  return obj['baseUrl'] !== undefined || obj['apiKey'] !== undefined;
 }
 
 function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | undefined {
@@ -513,18 +520,30 @@ function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | und
         }
         return undefined;
       }
+      // Invariant: a JSON-encoded STRING slot value could historically be written
+      // by the agent-tier `models.*` setter (it accepted any non-empty string), so
+      // it is agent-provenance data. Only the agent-settable fields (id, name,
+      // provider) may be recovered from it. `baseUrl`/`apiKey` are human-gated and
+      // are DISCARDED here — honouring them would let a previously inert,
+      // agent-written string redirect model traffic and pair it with a credential,
+      // bypassing the human-only write gate. Hand-written object values (not
+      // strings) keep the lenient path below and are unaffected.
+      const recovered = safeSlotFields(parsed);
+      const droppedPrivileged = hasPrivilegedSlotFields(parsed);
       if (slotHint && !warnedJsonStringSlots.has(`recover:${slotHint}`)) {
         warnedJsonStringSlots.add(`recover:${slotHint}`);
         // Never echo the raw stored string: it may carry an `apiKey`. Rebuild the
         // suggestion from the non-secret fields only, single-quoted for the shell.
+        const tier = slotHint.toUpperCase();
         process.stderr.write(
           `[afk] warning: models.${slotHint} was stored as a JSON-encoded string instead of an object — recovered, but please re-save:\n` +
-          `  afk config set models.${slotHint} '${safeSlotSuggestion(parsed)}'\n`,
+            `  afk config set models.${slotHint} '${JSON.stringify(recovered)}'\n` +
+            (droppedPrivileged
+              ? `  baseUrl/apiKey in that string were IGNORED; set them via AFK_MODEL_${tier}_BASE_URL / AFK_MODEL_${tier}_API_KEY.\n`
+              : ''),
         );
       }
-      // Delegate to the object branch below (do not call coerceSlotBindingInput
-      // here — the loader is lenient about baseUrl/apiKey in hand-edited configs).
-      return parseBinding(parsed, slotHint);
+      return parseBinding(recovered, slotHint);
     }
     return { id };
   }

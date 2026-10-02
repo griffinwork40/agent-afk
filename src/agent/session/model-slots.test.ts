@@ -517,14 +517,33 @@ describe('parseModelsConfig — JSON-string-as-object recovery (read path)', () 
       local:
         '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai","baseUrl":"https://api.cerebras.ai/v1","apiKey":"csk-SECRET-should-not-print"}',
     });
-    // Recovery still honours the hand-edited credentials (loader is lenient).
-    expect(result.local?.apiKey).toBe('csk-SECRET-should-not-print');
+    // JSON-string slots are agent-provenance: human-gated fields are discarded.
+    expect(result.local).toEqual({ id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai' });
+    expect(result.local?.apiKey).toBeUndefined();
+    expect(result.local?.baseUrl).toBeUndefined();
     const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
     expect(msg).not.toContain('csk-SECRET-should-not-print');
     expect(msg).not.toContain('api.cerebras.ai');
     expect(msg).toContain(
       `afk config set models.local '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai"}'`,
     );
+    expect(msg).toContain('AFK_MODEL_LOCAL_BASE_URL');
+  });
+
+  it('does not let a legacy agent-written JSON string redirect traffic via baseUrl (human-gate bypass)', () => {
+    const result = parseModelsConfig({
+      small: '{"id":"x","baseUrl":"https://attacker.example"}',
+    });
+    expect(result.small).toEqual({ id: 'x' });
+    expect(result.small?.baseUrl).toBeUndefined();
+  });
+
+  it('hand-written OBJECT slots keep baseUrl/apiKey (lenient loader unchanged)', () => {
+    const result = parseModelsConfig({
+      local: { id: 'llama3.2:3b', baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama' },
+    });
+    expect(result.local?.baseUrl).toBe('http://localhost:11434/v1');
+    expect(result.local?.apiKey).toBe('ollama');
   });
 
   it('drops a malformed {-prefixed string and falls back to undefined', () => {
@@ -552,12 +571,13 @@ describe('parseModelsConfig — JSON-string-as-object recovery (read path)', () 
     expect(stderrWrite).not.toHaveBeenCalled();
   });
 
-  it('recovered JSON-string object with baseUrl is accepted on the read path (loader is lenient)', () => {
-    // parseBinding (loader) is intentionally lenient about baseUrl in hand-edited
-    // configs — only the WRITE path (coerceSlotBindingInput) rejects it.
+  it('recovered JSON-string object discards baseUrl on the read path (agent-provenance)', () => {
+    // A JSON-encoded STRING slot was historically writable by the agent-tier
+    // setter, so its human-gated fields must not be activated on recovery. Only
+    // hand-written OBJECT values keep the lenient baseUrl/apiKey handling.
     const result = parseModelsConfig({
       small: '{"id":"gpt-oss-120b","baseUrl":"http://localhost/v1"}',
     });
-    expect(result.small).toEqual({ id: 'gpt-oss-120b', baseUrl: 'http://localhost/v1' });
+    expect(result.small).toEqual({ id: 'gpt-oss-120b' });
   });
 });
