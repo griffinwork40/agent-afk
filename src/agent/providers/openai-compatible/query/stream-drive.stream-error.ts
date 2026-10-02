@@ -18,6 +18,7 @@ import {
   isStallTimeoutError,
   stallTimeoutError,
 } from '../../shared/stream-stall-timeout.js';
+import { isMidStreamNetworkTermination } from '../../shared/network-termination.js';
 import {
   MAX_STREAM_RETRIES,
   computeBackoffDelay,
@@ -30,7 +31,7 @@ export interface RetryAction {
   kind: 'retry';
   delay: number;
   source: 'stream';
-  reason: 'stall_timeout' | 'ttfb_timeout' | 'retry-after' | 'backoff';
+  reason: 'stall_timeout' | 'ttfb_timeout' | 'retry-after' | 'backoff' | 'network_termination';
   attempt: number;
 }
 
@@ -51,6 +52,21 @@ export type StreamErrorAction = RetryAction | FatalAction | FallThroughAction;
 /**
  * Classify a mid-stream error and return the action the caller must perform.
  *
+ * Branch order (first match wins):
+ *   1. Stall timeout — wins over network_termination because the watchdog
+ *      tears the socket itself, which surfaces as TypeError('terminated').
+ *      A stall IS a mid-stream event so it is never retried here.
+ *   2. TTFB timeout — retried if budget allows.
+ *   3. Status-bearing retryable error (429 / 5xx) — retried if budget allows.
+ *   4. Mid-stream network termination (TypeError: terminated / ECONNRESET /
+ *      UND_ERR_SOCKET / UND_ERR_CLOSED) — retried EVEN IF content was already
+ *      yielded, matching the status-retry path. The outer loop emits
+ *      `stream.retry` before re-connecting, which resets partial text on the
+ *      consumer side. Falls through as fatal once the shared budget is exhausted.
+ *
+ * The caller already checked `ctx.controller.signal.aborted` (the user/turn
+ * signal) before calling here, so a user interrupt never reaches this function.
+ *
  * @param err                      - The error thrown by the stream iterator.
  * @param contentYieldedThisAttempt - Whether any translated events were yielded.
  * @param streamRetries            - Current retry count (will be incremented inside).
@@ -64,6 +80,7 @@ export function classifyStreamError(
   streamRetries: number,
   stallMs: number,
 ): { action: StreamErrorAction; newStreamRetries: number } {
+  // Branch 1: stall timeout — must win; the watchdog causes the termination.
   if (isStallTimeoutError(err)) {
     if (!contentYieldedThisAttempt && streamRetries < MAX_STREAM_RETRIES) {
       const next = streamRetries + 1;
@@ -84,6 +101,7 @@ export function classifyStreamError(
     };
   }
 
+  // Branch 2: TTFB timeout.
   if (isTtfbTimeoutError(err) && streamRetries < MAX_STREAM_RETRIES) {
     const next = streamRetries + 1;
     return {
@@ -98,6 +116,7 @@ export function classifyStreamError(
     };
   }
 
+  // Branch 3: status-bearing retryable error (429 / 5xx).
   if (isRetryableStreamError(err) && streamRetries < MAX_STREAM_RETRIES) {
     const next = streamRetries + 1;
     const hinted = retryAfterDelayMs(err);
@@ -108,6 +127,23 @@ export function classifyStreamError(
         delay,
         source: 'stream',
         reason: hinted !== undefined ? 'retry-after' : 'backoff',
+        attempt: next,
+      },
+      newStreamRetries: next,
+    };
+  }
+
+  // Branch 4: mid-stream transport termination (TypeError: terminated, ECONNRESET, …).
+  // Retried even when content was already yielded — the outer loop emits stream.retry
+  // which resets partial text on the consumer side (mirrors the status-retry path).
+  if (isMidStreamNetworkTermination(err) && streamRetries < MAX_STREAM_RETRIES) {
+    const next = streamRetries + 1;
+    return {
+      action: {
+        kind: 'retry',
+        delay: computeBackoffDelay(next - 1),
+        source: 'stream',
+        reason: 'network_termination',
         attempt: next,
       },
       newStreamRetries: next,
