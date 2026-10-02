@@ -1469,10 +1469,10 @@ export const ENV_REGISTRY = [
   {
     name: 'AFK_SESSION_MAX_AGE_DAYS',
     description:
-      'Evict a session sidecar file once it is older than this many days (based on savedAt). Default 30.',
+      'Evict a session sidecar file once it is older than this many days (based on savedAt). Default 60.',
     type: 'number',
     required: false,
-    default: '30',
+    default: '60',
     category: 'debug',
   },
   {

@@ -183,7 +183,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_PREEXISTING_LEDGER_DISABLE` | boolean |  |  | `1` | Set to 1 to disable the pre-existing-defect SessionEnd hook. When set, the hook will not scan session turns or append records to ~/.afk/agent-framework/preexisting-ledger.jsonl. Useful in test environments or when the ledger is not desired. |
 | `AFK_RUN_RECEIPT_DISABLED` | boolean |  |  | `1` | Disable the post-session run receipt (state/receipts/<label>.json and .md). Set to 1 to skip receipt writes; the underlying witness trace is unaffected. Receipts are also implicitly off when AFK_TRACE_DISABLED=1 (no trace to summarize). |
 | `AFK_SESSION_LEDGER_DISABLED` | boolean |  |  | `1` | Disable the per-session durable event ledger (state/sessions/<id>/events.jsonl). Set to 1 to skip ledger writes; live cross-surface watching (e.g. the Telegram /watch command) will report no activity for sessions started while disabled. |
-| `AFK_SESSION_MAX_AGE_DAYS` | number |  | `30` |  | Evict a session sidecar file once it is older than this many days (based on savedAt). Default 30. |
+| `AFK_SESSION_MAX_AGE_DAYS` | number |  | `60` |  | Evict a session sidecar file once it is older than this many days (based on savedAt). Default 60. |
 | `AFK_SESSION_MAX_COUNT` | number |  | `1000` |  | Count-based safety valve: evict oldest session sidecars first once the total exceeds this number. Default 1000. |
 | `AFK_SESSION_RETENTION_DISABLE` | boolean |  |  | `1` | Disable the session sidecar retention sweep entirely, so no state/sessions/*.json file is ever evicted. |
 | `AFK_SKILL_STREAM_VERBOSE` | boolean |  |  |  | Verbose streaming output when a skill is dispatched. Logs sub-agent setup, intermediate events, and final result. |
