@@ -47,6 +47,7 @@
  */
 
 import { BROWSER_ENV_REGISTRY } from './env.browser.js';
+import { DAEMON_ENV_REGISTRY } from './env.daemon.js';
 import { DISPLAY_ENV_REGISTRY } from './env.display.js';
 import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
@@ -1172,6 +1173,10 @@ export const ENV_REGISTRY = [
     category: 'worktree',
   },
 
+
+  // ── Daemon builtins ───────────────────────────────────────────────────────
+  // Entries live in env.daemon.ts (extracted for the 350-line ceiling).
+  ...DAEMON_ENV_REGISTRY,
 
   // ── MCP ───────────────────────────────────────────────────────────────────
   // Entries live in env.mcp.ts (extracted for the 350-line ceiling).

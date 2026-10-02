@@ -99,6 +99,13 @@ export interface CliConfig {
       maxAgeDaysDirty: number;
       scope: string;
     };
+    /** Tool-health builtin configuration. Mirrors worktreePrune shape. */
+    toolHealth?: {
+      /** When false, the builtin is not registered. Defaults to enabled. */
+      enabled: boolean;
+      /** Cron expression. Defaults to '17 * * * *' (hourly). */
+      cron: string;
+    };
     /**
      * Daemon-surface "Done" verification gate (**default: true** — the daemon
      * surface is unattended, so self-certified completions are flagged by
@@ -366,6 +373,10 @@ export interface ConfigFileSchema {
       maxAgeDaysClean?: number;
       maxAgeDaysDirty?: number;
       scope?: string;
+    };
+    toolHealth?: {
+      enabled?: boolean;
+      cron?: string;
     };
     verifyDone?: boolean;
   };
