@@ -9,7 +9,7 @@
  *
  * Sidecar eviction passes run in order:
  *   1. Age pass — remove any sidecar whose `savedAt` timestamp (or mtime
- *      fallback) is older than `AFK_SESSION_MAX_AGE_DAYS` (default 60).
+ *      fallback) is older than `AFK_SESSION_MAX_AGE_DAYS` (default 30).
  *   2. Count pass — evict oldest-first until at most `AFK_SESSION_MAX_COUNT`
  *      (default 1000) files remain.
  *
@@ -35,7 +35,7 @@ const GRACE_MS = 60 * 60 * 1000; // 1 hour
 /** Stamp file name, written to the sessions dir after a sweep completes. */
 const STAMP_FILE = '.last-sweep-sidecars';
 
-const DEFAULT_MAX_AGE_DAYS = 60;
+const DEFAULT_MAX_AGE_DAYS = 30;
 const DEFAULT_MAX_COUNT = 1_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
