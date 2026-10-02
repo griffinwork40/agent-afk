@@ -229,6 +229,7 @@ export async function* runTurnInner(
   };
   let finalAssistantText = '';
   let finalReasoningText = '';
+  let finalReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content';
 
   const maxIterations = resolveMaxToolIterations(ctx.opts.config.maxToolUseIterations);
   const softDeadlineMs = ctx.opts.config.softDeadlineMs ?? 0;
@@ -263,6 +264,7 @@ export async function* runTurnInner(
     ctx.lastUsage = accumulatedUsage;
     if (result.text.length > 0) finalAssistantText = result.text;
     finalReasoningText = result.state.reasoningText;
+    finalReasoningField = result.state.reasoningField;
 
     if (!result.needsToolDispatch) {
       if (isTruncationStopReason(result.state.finishReason)) {
@@ -330,14 +332,16 @@ export async function* runTurnInner(
 
   ctx.abort.clear(controller);
 
-  // Push the final assistant turn to history.
+  // Push the final assistant turn to history. Echo reasoning under the same
+  // wire field it arrived in (Cerebras uses `reasoning`; DeepSeek uses
+  // `reasoning_content`) so the next request is not rejected with HTTP 400.
   if (finalAssistantText.length > 0) {
     const assistantTurn: OpenAIMessage = {
       role: 'assistant',
       content: finalAssistantText,
     };
     if (finalReasoningText.length > 0) {
-      assistantTurn.reasoning_content = finalReasoningText;
+      assistantTurn[finalReasoningField] = finalReasoningText;
     }
     ctx.priorTurns.push(assistantTurn);
   }
