@@ -224,6 +224,44 @@ describe('maxOutputTokensFor — retired-but-Active Opus pin', () => {
   });
 });
 
+describe('Cerebras Shared Inference — context window pins (paid tier)', () => {
+  // Source: inference-docs.cerebras.ai/models/overview (2026-10-02).
+  // Paid-tier context windows: gpt-oss-120b = 131k (131_072), qwen-3.8-27b = 128k (128_000).
+  // Without these entries both ids fall through to wrong defaults:
+  //   gpt-oss-120b → routesToOpenAICompatible (gpt- prefix) → 262_144 (over-reports the window)
+  //   qwen-3.8-27b → Anthropic fallback (200_000) — wrong direction entirely.
+  // No MODEL_MAX_OUTPUT_TOKENS entry is added: Cerebras docs do not document a per-model
+  // output cap; the API reference states completion length is bounded by context length only.
+  it('reports the paid-tier context window for gpt-oss-120b (not the 262k openai-compatible fallback)', () => {
+    expect(contextLimitFor('gpt-oss-120b')).toBe(131_072);
+    // Guard the specific regression: must not fall through to the 262k openai-compat default.
+    expect(contextLimitFor('gpt-oss-120b')).not.toBe(262_144);
+  });
+
+  it('reports the paid-tier context window for qwen-3.8-27b (not any fallback)', () => {
+    expect(contextLimitFor('qwen-3.8-27b')).toBe(128_000);
+    // qwen- prefix does not match routesToOpenAICompatible, so without an explicit
+    // entry it would fall back to DEFAULT_CONTEXT_LIMIT (200_000) — wrong direction.
+    expect(contextLimitFor('qwen-3.8-27b')).not.toBe(200_000);
+    expect(contextLimitFor('qwen-3.8-27b')).not.toBe(262_144);
+  });
+
+  it('maxOutputTokensFor returns the 64k DEFAULT_MAX_OUTPUT guess for both ids (no documented cap)', () => {
+    // Cerebras API reference does not document a per-model max completion tokens
+    // ceiling — it only says output is bounded by context length. We do NOT add a
+    // MODEL_MAX_OUTPUT_TOKENS entry; the default 64k guess is the safe floor.
+    expect(maxOutputTokensFor('gpt-oss-120b')).toBe(64_000);
+    expect(maxOutputTokensFor('qwen-3.8-27b')).toBe(64_000);
+  });
+
+  it('autoCompactLimitFor equals contextLimitFor for both ids (no reduced budget)', () => {
+    // Neither Cerebras model has a MODEL_AUTOCOMPACT_BUDGET entry — auto-compaction
+    // fires at their full window, not a reduced budget.
+    expect(autoCompactLimitFor('gpt-oss-120b')).toBe(contextLimitFor('gpt-oss-120b'));
+    expect(autoCompactLimitFor('qwen-3.8-27b')).toBe(contextLimitFor('qwen-3.8-27b'));
+  });
+});
+
 describe('claude-sonnet-4-6 — explicit limit pins (A/B baseline vs claude-sonnet-5)', () => {
   // Invariant: 4.6 is not a first-class alias but IS reachable by raw wire id and
   // already priced (providers/anthropic-direct/pricing.ts). Both pins below now

@@ -227,6 +227,23 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'mlx-community/qwen3-30b-a3b-4bit': 128_000,
   'mlx-community/qwen3-32b-4bit': 128_000,
   'mlx-community/qwen2.5-coder-32b-instruct-4bit': 131_072,
+  // Cerebras Shared Inference — paid-tier (Pay as You Go) context windows.
+  // Source: inference-docs.cerebras.ai/models/overview (2026-10-02), paid column.
+  // "131k" treated as 131_072 (nearest power-of-2 boundary); "128k" as 128_000
+  // (the overview page states no more precise figure on the per-model detail
+  // pages). Without these entries both ids fall through routesToOpenAICompatible
+  // (gpt-oss-120b starts with `gpt-`; qwen-3.8-27b has a qwen- prefix which
+  // is not in routesToOpenAICompatible, so it falls back to the 200k Anthropic
+  // default — wrong direction). Explicit entries fix both.
+  // Max output tokens: Cerebras API docs state completion length is bounded only
+  // by the context window; no per-model output cap is documented — no
+  // MODEL_MAX_OUTPUT_TOKENS entry added (would require invention, not clamping).
+  // Routing/classification safety: gpt-oss-120b starts with `gpt-` so
+  // routesToOpenAICompatible returns true (correct). isReasoningModel only
+  // matches /^gpt-5/ and isOSeriesModel matches /^o[0-9]/ — neither fires on
+  // `gpt-oss-120b`, preserving standard chat-completions request shaping.
+  'gpt-oss-120b': 131_072,
+  'qwen-3.8-27b': 128_000,
   // xAI Grok — active wire ids only (docs.x.ai models/pricing, 2026-08).
   // Any other `grok-*` still routes and runs; unknown ids fall through to the
   // openai-compatible default via routesToOpenAICompatible (never invent
