@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.282.8] - 2026-10-02
+
+### Fixed
+- echo reasoning under its origin field (Cerebras 400) (#2788) (ae814b46)
+
+## [5.282.7] - 2026-10-02
+
+### Fixed
+- trustworthy outcome, primary_success, produced_pr, tool_errors_total (#2777) (#2781) (bd054244)
+
+## [5.282.6] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2780) (#2786) (677d09a5)
+
 ## [5.282.5] - 2026-10-02
 
 ### Fixed

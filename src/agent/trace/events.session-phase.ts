@@ -65,6 +65,9 @@ export const SessionPhaseNameSchema = z.enum([
   // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
   // types.ts — metadata carries degradedCount, threshold, maxDimension.
   'many_image_degraded',
+  // Mid-stream transport drop accepted as clean completion (#2780).
+  // See SessionPhaseName JSDoc in types.ts for the full contract.
+  'stream_accepted_after_drop',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

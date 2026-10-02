@@ -3,8 +3,9 @@
  * @module agent/session/model-slots.test
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  _resetJsonStringSlotWarnings,
   CLAUDE_FABLE_5_ID,
   CLAUDE_HAIKU_ID,
   CLAUDE_OPUS_ID,
@@ -481,6 +482,108 @@ describe('coerceSlotBindingInput', () => {
   });
 });
 
+describe('parseModelsConfig — JSON-string-as-object recovery (read path)', () => {
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    _resetJsonStringSlotWarnings();
+    stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('recovers a JSON-encoded object string and returns a valid binding', () => {
+    // This is the exact shape observed in the operator's broken config.
+    const result = parseModelsConfig({
+      small: '{"id":"gpt-oss-120b","name":"Cerebras GPT-OSS 120B"}',
+    });
+    expect(result.small).toEqual({ id: 'gpt-oss-120b', name: 'Cerebras GPT-OSS 120B' });
+  });
+
+  it('emits a one-shot warning to stderr when recovering a JSON-string slot', () => {
+    parseModelsConfig({ small: '{"id":"gpt-oss-120b"}' });
+    expect(stderrWrite).toHaveBeenCalledOnce();
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).toMatch(/models\.small/);
+    expect(msg).toMatch(/recovered|JSON-encoded/);
+
+    // Second call for the same slot must NOT produce another warning.
+    parseModelsConfig({ small: '{"id":"gpt-oss-120b"}' });
+    expect(stderrWrite).toHaveBeenCalledOnce();
+  });
+
+  it('never echoes apiKey/baseUrl in the recovery warning and single-quotes the suggestion', () => {
+    const result = parseModelsConfig({
+      local:
+        '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai","baseUrl":"https://api.cerebras.ai/v1","apiKey":"csk-SECRET-should-not-print"}',
+    });
+    // JSON-string slots are agent-provenance: human-gated fields are discarded.
+    expect(result.local).toEqual({ id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai' });
+    expect(result.local?.apiKey).toBeUndefined();
+    expect(result.local?.baseUrl).toBeUndefined();
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).not.toContain('csk-SECRET-should-not-print');
+    expect(msg).not.toContain('api.cerebras.ai');
+    expect(msg).toContain(
+      `afk config set models.local '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai"}'`,
+    );
+    expect(msg).toContain('AFK_MODEL_LOCAL_BASE_URL');
+  });
+
+  it('does not let a legacy agent-written JSON string redirect traffic via baseUrl (human-gate bypass)', () => {
+    const result = parseModelsConfig({
+      small: '{"id":"x","baseUrl":"https://attacker.example"}',
+    });
+    expect(result.small).toEqual({ id: 'x' });
+    expect(result.small?.baseUrl).toBeUndefined();
+  });
+
+  it('hand-written OBJECT slots keep baseUrl/apiKey (lenient loader unchanged)', () => {
+    const result = parseModelsConfig({
+      local: { id: 'llama3.2:3b', baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama' },
+    });
+    expect(result.local?.baseUrl).toBe('http://localhost:11434/v1');
+    expect(result.local?.apiKey).toBe('ollama');
+  });
+
+  it('drops a malformed {-prefixed string and falls back to undefined', () => {
+    const result = parseModelsConfig({ small: '{not valid json}' });
+    expect(result.small).toBeUndefined();
+  });
+
+  it('emits a drop warning for a malformed {-prefixed string', () => {
+    parseModelsConfig({ small: '{not valid json}' });
+    expect(stderrWrite).toHaveBeenCalledOnce();
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).toMatch(/models\.small/);
+    expect(msg).toMatch(/malformed|dropping/);
+  });
+
+  it('bare id strings are NOT affected by the JSON-string recovery path', () => {
+    const result = parseModelsConfig({ small: 'claude-haiku-4-5-20251001' });
+    expect(result.small).toEqual({ id: 'claude-haiku-4-5-20251001' });
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('object values are NOT affected by the JSON-string recovery path', () => {
+    const result = parseModelsConfig({ small: { id: 'gpt-4o-mini', provider: 'openai' } });
+    expect(result.small).toEqual({ id: 'gpt-4o-mini', provider: 'openai' });
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('recovered JSON-string object discards baseUrl on the read path (agent-provenance)', () => {
+    // A JSON-encoded STRING slot was historically writable by the agent-tier
+    // setter, so its human-gated fields must not be activated on recovery. Only
+    // hand-written OBJECT values keep the lenient baseUrl/apiKey handling.
+    const result = parseModelsConfig({
+      small: '{"id":"gpt-oss-120b","baseUrl":"http://localhost/v1"}',
+    });
+    expect(result.small).toEqual({ id: 'gpt-oss-120b' });
+  });
+});
+
 // ── contextWindow override ────────────────────────────────────────────────────
 
 describe('parseModelsConfig: contextWindow field', () => {
@@ -661,8 +764,9 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
     expect(contextLimitFor('gpt-4o')).toBe(128_000);
     // An HF-style org/model id routes to openai-compatible default (262144).
     expect(contextLimitFor('Qwen/Qwen3-8B')).toBe(262_144);
-    // qwen-3.8-27b has no table entry and no org/ prefix → Anthropic default (200k).
-    expect(contextLimitFor('qwen-3.8-27b')).toBe(200_000);
+    // An id with no table entry and no openai-compatible prefix → Anthropic
+    // default (200k). (Not a Cerebras id: #2789 pins those in the table.)
+    expect(contextLimitFor('acme-unlisted-model')).toBe(200_000);
   });
 
   it('override wins over the built-in table for a known model id', () => {
@@ -678,14 +782,17 @@ describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow overri
   });
 
   it('does not change maxOutputTokensFor (output cap is separate)', () => {
+    // Compare with/without the override rather than pinning a number, so this
+    // stays true whatever the table's output ceiling for the id is (#2789 pins
+    // a Cerebras-specific cap).
+    resetSlotBindings();
+    const without = maxOutputTokensFor('qwen-3.8-27b');
     setSlotBindings({
       local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
       small: DEFAULT_SLOT_BINDINGS.small,
       medium: DEFAULT_SLOT_BINDINGS.medium,
       large: DEFAULT_SLOT_BINDINGS.large,
     });
-    // maxOutputTokensFor is unaffected by contextWindow
-    const before = maxOutputTokensFor('qwen-3.8-27b');
-    expect(before).toBe(64_000); // the DEFAULT_MAX_OUTPUT fallback
+    expect(maxOutputTokensFor('qwen-3.8-27b')).toBe(without);
   });
 });

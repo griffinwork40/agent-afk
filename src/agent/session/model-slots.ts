@@ -429,7 +429,7 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
   if (!raw || typeof raw !== 'object') return out;
   const obj = raw as Record<string, unknown>;
   for (const slot of SLOT_NAMES) {
-    const binding = parseBinding(obj[slot]);
+    const binding = parseBinding(obj[slot], slot);
     if (binding) out[slot] = binding;
   }
   return out;
@@ -507,10 +507,88 @@ export function contextWindowOverrideFor(
   return undefined;
 }
 
-function parseBinding(value: unknown): ModelSlotBinding | undefined {
+/** Slots for which we've already emitted a JSON-string recovery warning. */
+const warnedJsonStringSlots = new Set<string>();
+
+/** Reset the JSON-string-slot warning latch. Exported for tests only. */
+export function _resetJsonStringSlotWarnings(): void {
+  warnedJsonStringSlots.clear();
+}
+
+/**
+ * Project a recovered JSON-string slot onto ONLY its agent-settable fields
+ * (`id`, `name`, `provider`). `baseUrl`/`apiKey` are human-gated (and `apiKey`
+ * is a secret that must never be echoed), so they are always omitted. Used both
+ * as the recovered binding and as the re-save suggestion.
+ */
+function safeSlotFields(parsed: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (parsed && typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    for (const key of ['id', 'name', 'provider'] as const) {
+      const v = obj[key];
+      if (typeof v === 'string' && v.trim()) out[key] = v.trim();
+    }
+  }
+  return out;
+}
+
+/** True when a recovered JSON-string slot carried any human-gated field. */
+function hasPrivilegedSlotFields(parsed: unknown): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  const obj = parsed as Record<string, unknown>;
+  return obj['baseUrl'] !== undefined || obj['apiKey'] !== undefined;
+}
+
+function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
     const id = value.trim();
-    return id ? { id } : undefined;
+    if (!id) return undefined;
+    // A string that starts with '{' is almost certainly a JSON-encoded object
+    // that was stored by a caller that serialized a binding object to a string
+    // instead of writing it as an object. Recover by parsing it so already-broken
+    // configs start working, and emit a one-shot warning so the user knows to
+    // re-write the slot value correctly.
+    if (id.startsWith('{')) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(id);
+      } catch {
+        if (slotHint && !warnedJsonStringSlots.has(`drop:${slotHint}`)) {
+          warnedJsonStringSlots.add(`drop:${slotHint}`);
+          process.stderr.write(
+            `[afk] warning: models.${slotHint} is a malformed JSON-encoded string — dropping binding and falling back to default.\n` +
+            `  Fix: run \`afk config set models.${slotHint} <id>\` with a bare model id or an object.\n`,
+          );
+        }
+        return undefined;
+      }
+      // Invariant: a JSON-encoded STRING slot value could historically be written
+      // by the agent-tier `models.*` setter (it accepted any non-empty string), so
+      // it is agent-provenance data. Only the agent-settable fields (id, name,
+      // provider) may be recovered from it. `baseUrl`/`apiKey` are human-gated and
+      // are DISCARDED here — honouring them would let a previously inert,
+      // agent-written string redirect model traffic and pair it with a credential,
+      // bypassing the human-only write gate. Hand-written object values (not
+      // strings) keep the lenient path below and are unaffected.
+      const recovered = safeSlotFields(parsed);
+      const droppedPrivileged = hasPrivilegedSlotFields(parsed);
+      if (slotHint && !warnedJsonStringSlots.has(`recover:${slotHint}`)) {
+        warnedJsonStringSlots.add(`recover:${slotHint}`);
+        // Never echo the raw stored string: it may carry an `apiKey`. Rebuild the
+        // suggestion from the non-secret fields only, single-quoted for the shell.
+        const tier = slotHint.toUpperCase();
+        process.stderr.write(
+          `[afk] warning: models.${slotHint} was stored as a JSON-encoded string instead of an object — recovered, but please re-save:\n` +
+            `  afk config set models.${slotHint} '${JSON.stringify(recovered)}'\n` +
+            (droppedPrivileged
+              ? `  baseUrl/apiKey in that string were IGNORED; set them via AFK_MODEL_${tier}_BASE_URL / AFK_MODEL_${tier}_API_KEY.\n`
+              : ''),
+        );
+      }
+      return parseBinding(recovered, slotHint);
+    }
+    return { id };
   }
   if (value && typeof value === 'object') {
     const obj = value as Record<string, unknown>;

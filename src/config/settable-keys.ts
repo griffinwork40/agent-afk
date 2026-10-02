@@ -395,8 +395,28 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
     }
     case 'model-slot': {
       if (typeof raw === 'string') {
-        if (raw.trim().length === 0) return { ok: false, error: `${spec.path} must not be empty` };
-        return { ok: true, value: raw.trim() };
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) return { ok: false, error: `${spec.path} must not be empty` };
+        // A string that looks like a JSON object (starts with '{') was likely
+        // produced by a caller that serialized the binding object to a string
+        // instead of passing it as an object. Parse it and validate through the
+        // same coerceSlotBindingInput path as a real object value — this ensures
+        // the human-gated baseUrl/apiKey restrictions still apply.
+        if (trimmed.startsWith('{')) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(trimmed);
+          } catch {
+            return {
+              ok: false,
+              error: `${spec.path}: value looks like a JSON object but could not be parsed — pass a bare model id string or a real object, not a JSON-encoded string`,
+            };
+          }
+          const res = coerceSlotBindingInput(parsed);
+          if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
+          return { ok: true, value: res.value };
+        }
+        return { ok: true, value: trimmed };
       }
       const res = coerceSlotBindingInput(raw);
       if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
