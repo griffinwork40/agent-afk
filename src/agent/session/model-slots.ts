@@ -419,7 +419,7 @@ export function parseModelsConfig(raw: unknown): Partial<Record<SlotName, ModelS
   if (!raw || typeof raw !== 'object') return out;
   const obj = raw as Record<string, unknown>;
   for (const slot of SLOT_NAMES) {
-    const binding = parseBinding(obj[slot]);
+    const binding = parseBinding(obj[slot], slot);
     if (binding) out[slot] = binding;
   }
   return out;
@@ -464,10 +464,49 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(DIRECT_MODEL_ALIASES),
 ]);
 
-function parseBinding(value: unknown): ModelSlotBinding | undefined {
+/** Slots for which we've already emitted a JSON-string recovery warning. */
+const warnedJsonStringSlots = new Set<string>();
+
+/** Reset the JSON-string-slot warning latch. Exported for tests only. */
+export function _resetJsonStringSlotWarnings(): void {
+  warnedJsonStringSlots.clear();
+}
+
+function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
     const id = value.trim();
-    return id ? { id } : undefined;
+    if (!id) return undefined;
+    // A string that starts with '{' is almost certainly a JSON-encoded object
+    // that was stored by a caller that serialized a binding object to a string
+    // instead of writing it as an object. Recover by parsing it so already-broken
+    // configs start working, and emit a one-shot warning so the user knows to
+    // re-write the slot value correctly.
+    if (id.startsWith('{')) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(id);
+      } catch {
+        if (slotHint && !warnedJsonStringSlots.has(`drop:${slotHint}`)) {
+          warnedJsonStringSlots.add(`drop:${slotHint}`);
+          process.stderr.write(
+            `[afk] warning: models.${slotHint} is a malformed JSON-encoded string — dropping binding and falling back to default.\n` +
+            `  Fix: run \`afk config set models.${slotHint} <id>\` with a bare model id or an object.\n`,
+          );
+        }
+        return undefined;
+      }
+      if (slotHint && !warnedJsonStringSlots.has(`recover:${slotHint}`)) {
+        warnedJsonStringSlots.add(`recover:${slotHint}`);
+        process.stderr.write(
+          `[afk] warning: models.${slotHint} was stored as a JSON-encoded string instead of an object — recovered, but please re-save:\n` +
+          `  \`afk config set models.${slotHint} ${id}\`\n`,
+        );
+      }
+      // Delegate to the object branch below (do not call coerceSlotBindingInput
+      // here — the loader is lenient about baseUrl/apiKey in hand-edited configs).
+      return parseBinding(parsed, slotHint);
+    }
+    return { id };
   }
   if (value && typeof value === 'object') {
     const obj = value as Record<string, unknown>;
