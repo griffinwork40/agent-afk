@@ -78,7 +78,7 @@ agent-afk: No Anthropic credential found. Run `afk login` to authenticate.
 and Harbor raises `NonZeroAgentExitCodeError` — this is the expected behavior.
 
 > **⚠ Default --max-turns pitfall**: `afk chat` defaults to `--max-turns 10` which is too low for most
-> benchmark tasks. AfkAgent sets `max_turns=100` by default. Override with `-ak max_turns=200` if needed.
+> benchmark tasks. AfkAgent sets `max_turns=100` by default. Override with `--ak max_turns=200` if needed.
 
 > **Cost estimate**: a single Terminal-Bench task with claude-haiku-4-5 costs roughly $0.01–$0.10.  
 > claude-sonnet-4-5 is ~5–10× more expensive per task. **Always run a 10-20 task sample before a full run.**
@@ -107,7 +107,7 @@ PYTHONPATH=. harbor run \
   --model $MODEL \
   --env docker \
   --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  -ak variant=full \
+  --ak variant=full \
   --job-name afk-full-$(date +%Y%m%d) \
   -o bench/harbor/jobs
 
@@ -118,7 +118,7 @@ PYTHONPATH=. harbor run \
   --model $MODEL \
   --env docker \
   --ae ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  -ak variant=minimal \
+  --ak variant=minimal \
   --job-name afk-minimal-$(date +%Y%m%d) \
   -o bench/harbor/jobs
 
@@ -178,7 +178,7 @@ PYTHONPATH=. harbor run \
 
 ## Agent kwargs reference
 
-Pass via `-ak key=value` (repeatable):
+Pass via `--ak key=value` (repeatable):
 
 | Kwarg | Default | Description |
 |-------|---------|-------------|

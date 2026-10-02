@@ -23,7 +23,8 @@
 import { extractReadableMarkdown, THIN_CONTENT_CHARS } from './extract.js';
 import { extractionAdvisory } from './extraction-advisory.js';
 import type { ExtractedContent, FetchFn, RenderFn, RenderedPage } from './types.js';
-import { assertEgressAllowed, guardedFetch, EgressBlockedError } from './egress-guard.js';
+import { assertEgressAllowed, guardedFetch } from './egress-guard.js';
+import { extractEgressBlockedError } from '../utils/errors.js';
 import type { EgressGuardOptions } from './egress-guard.js';
 import { debugLog } from '../utils/debug.js';
 import { errorMessage } from '../utils/errors.js';
@@ -199,7 +200,11 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // egress path (chromium does its own DNS + redirect handling), so degrading
     // to it would hand an attacker exactly the internal fetch the guard just
     // refused. Re-throw before any escalation decision (issue #575).
-    if (err instanceof EgressBlockedError) throw err;
+    // Also handles the connect-time case: undici wraps EgressBlockedError as
+    // TypeError('fetch failed', { cause: EgressBlockedError }) — unwrap and
+    // re-throw the cause so the isinstance check passes for callers.
+    const blockedEgress = extractEgressBlockedError(err);
+    if (blockedEgress !== null) throw blockedEgress;
     // A thrown binary-content error must surface, not silently escalate.
     if (err instanceof Error && err.message.startsWith('web_scrape markdown mode received binary')) {
       throw err;
@@ -273,8 +278,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (opts.signal.aborted) throw renderErr;
     // An egress refusal on the render path is terminal too: degrading to thin
     // fetched content here would report partial success for a request the guard
-    // refused, hiding the block from the caller.
-    if (renderErr instanceof EgressBlockedError) throw renderErr;
+    // refused, hiding the block from the caller. Unwrap undici wrapping too.
+    const blockedRender = extractEgressBlockedError(renderErr);
+    if (blockedRender !== null) throw blockedRender;
     // Render failed (e.g. Playwright not installed). If we have *some* fetched
     // content, degrade gracefully to it. If a missing-Playwright error is the
     // only signal AND we have nothing, re-throw it so the handler can hint.
