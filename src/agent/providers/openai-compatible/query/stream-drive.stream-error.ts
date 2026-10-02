@@ -13,6 +13,7 @@
 
 import {
   isTtfbTimeoutError,
+  TTFB_TIMEOUT_MESSAGE,
 } from '../../shared/first-byte-timeout.js';
 import {
   isStallTimeoutError,
@@ -33,6 +34,13 @@ export interface RetryAction {
   source: 'stream';
   reason: 'stall_timeout' | 'ttfb_timeout' | 'retry-after' | 'backoff' | 'network_termination';
   attempt: number;
+  /**
+   * Sanitized error code from the transport error, set only when `err.code` or
+   * `err.cause.code` matches /^[A-Z][A-Z0-9_]*$/ (never message text). Used by
+   * the caller to thread a safe code into retry-trace metadata without re-reading
+   * the original error. Absent when no matching code exists.
+   */
+  errorCode?: string;
 }
 
 /** The outer generator must yield an `error` event and return null. */
@@ -70,16 +78,26 @@ export type StreamErrorAction = RetryAction | FatalAction | AcceptAction | FallT
  *      emitted is always fatal (mirrors anthropic-direct/loop/stream-consumer.ts).
  *      TTFB watchdog is checked the same way — `ttfbTimedOut` wins over a
  *      network_termination that races the TTFB abort signal.
- *   2. TTFB timeout (by error message or watchdog flag) — retried if budget allows.
+ *   2. TTFB timeout (by error message or watchdog flag):
+ *      a. Retried if budget allows.
+ *      b. When budget is exhausted, returns a fatal action with a TTFB timeout
+ *         error (reusing err when it already carries the TTFB message, or
+ *         constructing one from TTFB_TIMEOUT_MESSAGE) so the caller sees a
+ *         proper TTFB error rather than a raw TypeError('terminated') fall-through.
  *   3. Status-bearing retryable error (429 / 5xx) — retried if budget allows.
  *   4. Mid-stream network termination (TypeError: terminated / ECONNRESET /
  *      UND_ERR_SOCKET / UND_ERR_CLOSED):
- *      a. If the stream already delivered a terminal finish_reason, the response
- *         is complete — accept it instead of retrying or erroring (P2 fix).
- *      b. Otherwise, retried EVEN IF content was already yielded, matching the
- *         status-retry path. The outer loop emits `stream.retry` before
- *         re-connecting, which resets partial text on the consumer side. Falls
- *         through as fatal once the shared budget is exhausted.
+ *      a. If the stream delivered a terminal finish_reason AND the trailing usage
+ *         chunk arrived (`usageReceived`), the response is fully complete — accept
+ *         it instead of retrying or erroring (P2 fix).
+ *      b. If finish_reason arrived but usage did not yet, retry while budget
+ *         allows (the usage-only trailing chunk may arrive on the next attempt);
+ *         once the budget is exhausted, accept anyway — the content is complete
+ *         and failing the turn is worse than degraded usage.
+ *      c. Otherwise (no finish_reason), retried EVEN IF content was already
+ *         yielded, matching the status-retry path. The outer loop emits
+ *         `stream.retry` before re-connecting, which resets partial text on the
+ *         consumer side. Falls through as fatal once the shared budget is exhausted.
  *
  * The caller already checked `ctx.controller.signal.aborted` (the user/turn
  * signal) before calling here, so a user interrupt never reaches this function.
@@ -99,8 +117,15 @@ export type StreamErrorAction = RetryAction | FatalAction | AcceptAction | FallT
  *   (`timeouts.ttfb.timedOut()`). When true, a transport termination that raced
  *   the TTFB abort is classified as a TTFB retry, not network_termination (P1).
  * @param terminalFinishReason      - The finish_reason already set in StreamState,
- *   or null when none arrived yet. A non-null value means the response is complete
- *   even though the transport dropped afterward (P2 fix).
+ *   or null when none arrived yet. A non-null value means the response body has
+ *   been fully delivered even if the transport dropped afterward (P2 fix).
+ * @param usageReceived             - Whether the trailing usage-only chunk has
+ *   already been received (`state.usage !== null`). On Chat Completions the
+ *   usage chunk arrives AFTER the finish_reason chunk, so a drop between them
+ *   leaves `usageReceived=false`. When false and finish_reason is present, we
+ *   retry (the usage may arrive on the next attempt); once the budget is
+ *   exhausted we accept anyway with degraded (missing) usage rather than fail
+ *   the turn. Ignored when `terminalFinishReason` is null.
  * @returns A {@link StreamErrorAction} describing what the caller must do, and
  *   the updated `streamRetries` count (already incremented for retry actions).
  */
@@ -112,6 +137,7 @@ export function classifyStreamError(
   stallTimedOut = false,
   ttfbTimedOut = false,
   terminalFinishReason: string | null = null,
+  usageReceived = false,
 ): { action: StreamErrorAction; newStreamRetries: number } {
   // Branch 1: stall timeout — must win over network_termination.
   //
@@ -143,18 +169,31 @@ export function classifyStreamError(
   }
 
   // Branch 2: TTFB timeout — checked by flag and by error message for the same
-  // race reason as Branch 1. Only retry if budget allows.
-  if ((ttfbTimedOut || isTtfbTimeoutError(err)) && streamRetries < MAX_STREAM_RETRIES) {
-    const next = streamRetries + 1;
+  // race reason as Branch 1.
+  if (ttfbTimedOut || isTtfbTimeoutError(err)) {
+    if (streamRetries < MAX_STREAM_RETRIES) {
+      const next = streamRetries + 1;
+      return {
+        action: {
+          kind: 'retry',
+          delay: computeBackoffDelay(next - 1),
+          source: 'stream',
+          reason: 'ttfb_timeout',
+          attempt: next,
+        },
+        newStreamRetries: next,
+      };
+    }
+    // Budget exhausted: surface a proper TTFB error rather than falling through
+    // as a raw TypeError('terminated') — reuse err when it already carries the
+    // TTFB message, otherwise construct a canonical one.
+    const ttfbErr =
+      err instanceof Error && err.message === TTFB_TIMEOUT_MESSAGE
+        ? err
+        : new Error(TTFB_TIMEOUT_MESSAGE);
     return {
-      action: {
-        kind: 'retry',
-        delay: computeBackoffDelay(next - 1),
-        source: 'stream',
-        reason: 'ttfb_timeout',
-        attempt: next,
-      },
-      newStreamRetries: next,
+      action: { kind: 'fatal', error: ttfbErr },
+      newStreamRetries: streamRetries,
     };
   }
 
@@ -177,20 +216,49 @@ export function classifyStreamError(
 
   // Branch 4: mid-stream transport termination (TypeError: terminated, ECONNRESET, …).
   if (isMidStreamNetworkTermination(err)) {
-    // P2: if a terminal finish_reason already arrived, the response is complete —
-    // the transport reset happened AFTER the payload was fully delivered (e.g. a
-    // proxy closes the TCP connection after sending the last SSE chunk but before
-    // the iterator observes a clean EOF). Accept the accumulated state and let the
-    // normal post-loop path handle tool dispatch / completion, instead of retrying
-    // and re-billing a generation that already finished.
+    // Extract a sanitized error code for trace metadata (#2780). Only codes
+    // matching /^[A-Z][A-Z0-9_]*$/ are safe to surface — never message text.
+    const safeCodeRe = /^[A-Z][A-Z0-9_]*$/;
+    const rawCode =
+      (err as Record<string, unknown>)['code'] ??
+      ((err as { cause?: Record<string, unknown> }).cause?.['code']);
+    const errorCode =
+      typeof rawCode === 'string' && safeCodeRe.test(rawCode) ? rawCode : undefined;
+
     if (terminalFinishReason !== null) {
+      if (usageReceived) {
+        // P2a: finish_reason AND usage arrived — the response is fully complete.
+        // The transport reset happened after the payload was delivered. Accept.
+        return {
+          action: { kind: 'accept' },
+          newStreamRetries: streamRetries,
+        };
+      }
+      if (streamRetries < MAX_STREAM_RETRIES) {
+        // P2b: finish_reason arrived but the trailing usage chunk did not yet.
+        // Retry so the usage can arrive on the next attempt.
+        const next = streamRetries + 1;
+        return {
+          action: {
+            kind: 'retry',
+            delay: computeBackoffDelay(next - 1),
+            source: 'stream',
+            reason: 'network_termination',
+            attempt: next,
+            errorCode,
+          },
+          newStreamRetries: next,
+        };
+      }
+      // Budget exhausted but content is complete — accept with degraded usage.
+      // Failing the turn is worse than missing usage data.
       return {
         action: { kind: 'accept' },
         newStreamRetries: streamRetries,
       };
     }
 
-    // Otherwise retry while the shared budget holds.
+    // No finish_reason: retry while the shared budget holds.
     if (streamRetries < MAX_STREAM_RETRIES) {
       const next = streamRetries + 1;
       return {
@@ -200,6 +268,7 @@ export function classifyStreamError(
           source: 'stream',
           reason: 'network_termination',
           attempt: next,
+          errorCode,
         },
         newStreamRetries: next,
       };

@@ -1,11 +1,11 @@
 // Unit tests for the shared isMidStreamNetworkTermination predicate (#2780).
 //
-// Moved from anthropic-direct/loop.network-termination.test.ts (the predicate
-// itself now lives in providers/shared/network-termination.ts). The pure-unit
-// cases for isMidStreamNetworkTermination live here; isMidStreamCut (which
-// couples to StreamIncompleteError, an anthropic-specific concept) stays in the
-// anthropic-direct test file. The runTurn integration tests stay in their
-// respective provider test files.
+// The predicate itself lives in providers/shared/network-termination.ts; this
+// file is its canonical unit suite. The anthropic-direct network-termination
+// test file still keeps a parallel predicate block beside its isMidStreamCut
+// cases (isMidStreamCut couples to StreamIncompleteError, an anthropic-specific
+// concept). The runTurn integration tests stay in their respective provider
+// test files.
 
 import { describe, it, expect } from 'vitest';
 import { isMidStreamNetworkTermination } from './network-termination.js';

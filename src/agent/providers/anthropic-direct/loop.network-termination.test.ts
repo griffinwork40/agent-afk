@@ -7,6 +7,12 @@
 // the session; these tests pin that it now shares the StreamIncompleteError
 // re-drive and budget, and that the TTFB / stall / user-abort branches still
 // claim a termination they caused.
+//
+// Note: pure-unit predicate tests for isMidStreamNetworkTermination live in
+// providers/shared/network-termination.test.ts (the predicate moved to shared/).
+// The describe('isMidStreamNetworkTermination') block below is kept because it
+// exercises isMidStreamCut (which couples to StreamIncompleteError, an
+// anthropic-specific concept) alongside the predicate.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';

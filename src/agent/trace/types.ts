@@ -884,7 +884,14 @@ export type SessionPhaseName =
   // event makes the repair visible in the trace so operators can diagnose
   // sessions that hit the many-image ceiling without inspecting raw message
   // payloads.
-  | 'many_image_degraded';
+  | 'many_image_degraded'
+  // Mid-stream transport drop was accepted as a clean completion because a
+  // terminal finish_reason had already arrived before the socket closed
+  // (#2780). Emitted in the openai-compatible driveStream accept branch (single
+  // event, no paired start). `metadata` carries only `usageReceived` (whether
+  // the usage-only trailing chunk arrived before the drop; false means the
+  // retry budget ran out and usage is degraded). PURE OBSERVABILITY.
+  | 'stream_accepted_after_drop';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

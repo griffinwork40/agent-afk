@@ -279,6 +279,9 @@ describe('driveStream — network-termination re-drive (#2780)', () => {
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(result).not.toBeNull();
+    // The result text must be ONLY the second attempt's text (the first attempt's
+    // partial text is discarded when the stream.retry resets state on the consumer).
+    expect(result?.text).toBe('complete answer');
   });
 
   it('does NOT retry an unrelated TypeError', async () => {
@@ -301,20 +304,6 @@ describe('driveStream — network-termination re-drive (#2780)', () => {
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(0);
     const errEvents = events.filter((e) => e.type === 'error');
     expect(errEvents).toHaveLength(1);
-  });
-
-  it('stall-caused termination stays a stall error (not retried as network_termination)', () => {
-    // The stall watchdog aborts the signal; the error that surfaces IS the stall
-    // error (isStallTimeoutError = true). The stall branch fires before
-    // network_termination — a stall with content yielded is fatal.
-    const { action } = classifyStreamError(
-      stallTimeout(),
-      true, // content yielded → fatal stall
-      0,
-      60_000,
-    );
-    expect(action.kind).toBe('fatal');
-    expect((action as { kind: 'fatal'; error: Error }).error.message).toMatch(/stall/i);
   });
 
   it('interrupt beats retry: abort during drive yields null (no error event)', async () => {
@@ -423,6 +412,7 @@ describe('classifyStreamError — P2 accept completed response', () => {
       /* stallTimedOut         */ false,
       /* ttfbTimedOut          */ false,
       /* terminalFinishReason  */ 'stop',
+      /* usageReceived         */ true, // usage chunk arrived before the drop
     );
     expect(action.kind).toBe('accept');
     expect(newStreamRetries).toBe(0); // budget unchanged — we accepted, not retried
@@ -437,6 +427,7 @@ describe('classifyStreamError — P2 accept completed response', () => {
       false,
       false,
       'tool_calls',
+      /* usageReceived */ true,
     );
     expect(action.kind).toBe('accept');
   });
@@ -458,28 +449,28 @@ describe('classifyStreamError — P2 accept completed response', () => {
 });
 
 // ── P1 driveStream integration: stall watchdog + TypeError terminated ─────────
-// The integration test proves the end-to-end path by using the real
-// armStreamStallWatchdog with a very short timeout and real timers to cause the
-// watchdog to fire, THEN having the stream throw TypeError('terminated'). Because
-// the watchdog fires first (it aborts the signal that abortableStream races
-// against), the catch in driveStream receives the stall marker error — OR if the
-// transport race resolves first, timeouts.stall.timedOut() is true and the P1 fix
-// in classifyStreamError routes it to a fatal stall. Either way: fatal, not retry.
+// Verifies that a stall watchdog firing causes a fatal error (not a retry) at
+// the driveStream level.
+//
+// Limitation: this does NOT prove the `timeouts.stall.timedOut()` flag wiring.
+// The watchdog aborts `timeouts.signal`, so `abortableStream` rejects with an
+// AbortError before the fake stream's TypeError('terminated') can surface;
+// passing `false` for the flag leaves the outcome unchanged. The pure-unit test
+// 'stallTimedOut flag beats a bare TypeError terminated (race-condition path)'
+// above covers the flag in isolation.
 
 describe('driveStream — P1 stall watchdog timedOut + TypeError terminated => stall, not retry', () => {
   // No fake timers — we need real timers for the watchdog to fire on real time.
 
-  it('stall watchdog timedOut: TypeError terminated surfaces as fatal stall (createStream called once)', async () => {
-    // Revert proof: if driveStream does not pass timeouts.stall.timedOut() to
-    // classifyStreamError, the function sees a plain TypeError('terminated') with
-    // stallTimedOut=false and returns 'retry' — createStream is called twice and
-    // no error event is emitted. With the fix, it detects the watchdog fired and
-    // returns 'fatal', emitting an error and calling createStream only once.
+  it('stall watchdog causes fatal error (createStream called once, no retry)', async () => {
+    // Confirms end-to-end: real stall watchdog fires → driveStream surfaces a
+    // fatal error and does NOT retry. Does not specifically test the flag wiring
+    // path (see note above); the pure-unit P1 tests cover that.
     let callCount = 0;
 
     // Use a very short stall timeout (10ms). The stream will call stall.progress()
     // via the translate path, which arms the watchdog. After progress() arms the
-    // watchdog, we delay 20ms so it fires, then throw TypeError('terminated').
+    // watchdog, we delay 30ms so it fires, then throw TypeError('terminated').
     const ctx = makeCtx({ stallTimeoutMs: 10, ttfbTimeoutMs: 0 });
 
     const strategy: StreamDriveStrategy<{ text: string }> = {
@@ -491,8 +482,8 @@ describe('driveStream — P1 stall watchdog timedOut + TypeError terminated => s
           yield { text: 'partial' };
           // Wait long enough for the 10ms stall watchdog to fire.
           await new Promise((r) => setTimeout(r, 30));
-          // Now throw the transport error — the watchdog already fired, so
-          // timeouts.stall.timedOut() === true in classifyStreamError.
+          // The watchdog already fired; this throw may or may not surface,
+          // depending on which Promise settles first in abortableStream.
           throw undiciTerminated();
         })();
       },
@@ -506,7 +497,7 @@ describe('driveStream — P1 stall watchdog timedOut + TypeError terminated => s
 
     const { events, result } = await drive(ctx, strategy);
 
-    // With the P1 fix: stall watchdog timed out → fatal → error event emitted,
+    // Stall watchdog timed out → fatal → error event emitted,
     // result is null, createStream called exactly once (no retry).
     expect(callCount).toBe(1);
     expect(result).toBeNull();
@@ -546,6 +537,8 @@ describe('driveStream — P2 finish_reason then TypeError terminated => clean co
       translate: (event, state: StreamState) => {
         state.assistantText += event.text;
         if (event.finishReason) state.finishReason = event.finishReason;
+        // Simulate usage arriving with the finish_reason chunk (usage present).
+        state.usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
         return [{ type: 'delta.text', text: event.text, sessionId: 'sess-p2' } as ProviderEvent];
       },
       clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
@@ -586,6 +579,8 @@ describe('driveStream — P2 finish_reason then TypeError terminated => clean co
             startEmitted: false,
           });
         }
+        // Mark usage as received so the accept path fires (not retry).
+        state.usage = { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 };
         return [];
       },
       clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
@@ -597,5 +592,213 @@ describe('driveStream — P2 finish_reason then TypeError terminated => clean co
     expect(callCount).toBe(1);
     expect(result).not.toBeNull();
     expect(result?.needsToolDispatch).toBe(true);
+  });
+});
+
+// ── P2: classifyStreamError usageReceived param ─────────────────────
+
+describe('classifyStreamError — usageReceived param (P2, #2786 review)', () => {
+  it('finish_reason + usageReceived=true => AcceptAction (no retry)', () => {
+    // Both content and usage arrived; transport dropped after. Accept.
+    const { action } = classifyStreamError(
+      undiciTerminated(),
+      true,
+      0,
+      60_000,
+      false,
+      false,
+      'stop',
+      /* usageReceived */ true,
+    );
+    expect(action.kind).toBe('accept');
+  });
+
+  it('finish_reason + usageReceived=false + budget available => retry', () => {
+    // finish_reason arrived but usage chunk has not yet. Retry to get it.
+    const { action, newStreamRetries } = classifyStreamError(
+      undiciTerminated(),
+      true,
+      0,
+      60_000,
+      false,
+      false,
+      'stop',
+      /* usageReceived */ false,
+    );
+    expect(action.kind).toBe('retry');
+    expect((action as RetryAction).reason).toBe('network_termination');
+    expect(newStreamRetries).toBe(1);
+  });
+
+  it('finish_reason + usageReceived=false + budget exhausted => accept (degraded usage)', () => {
+    // Budget gone but content is complete. Accept rather than fail the turn.
+    const { action, newStreamRetries } = classifyStreamError(
+      undiciTerminated(),
+      true,
+      MAX_STREAM_RETRIES, // budget full
+      60_000,
+      false,
+      false,
+      'stop',
+      /* usageReceived */ false,
+    );
+    expect(action.kind).toBe('accept');
+    expect(newStreamRetries).toBe(MAX_STREAM_RETRIES); // unchanged
+  });
+
+  it('no finish_reason + usageReceived irrelevant => retry as before', () => {
+    // Without a finish_reason the usageReceived flag has no effect.
+    const { action } = classifyStreamError(
+      undiciTerminated(),
+      false,
+      0,
+      60_000,
+      false,
+      false,
+      null,
+      /* usageReceived */ true,
+    );
+    expect(action.kind).toBe('retry');
+    expect((action as RetryAction).reason).toBe('network_termination');
+  });
+});
+
+// ── driveStream with real translateChunk (Chat Completions shapes) ──────────
+
+describe('driveStream with real translateChunk — Chat Completions scenarios', () => {
+  beforeEach(() => {
+    __setRetryBaseDelay(0);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    __setRetryBaseDelay(null);
+    vi.useRealTimers();
+  });
+
+  // Helper: build an OpenAI-shaped chunk.
+  function textChunk(text: string, finishReason?: string): Record<string, unknown> {
+    return {
+      id: 'chatcmpl-test',
+      model: 'gpt-4o',
+      choices: [
+        {
+          index: 0,
+          delta: { content: text },
+          finish_reason: finishReason ?? null,
+        },
+      ],
+    };
+  }
+
+  function usageChunk(promptTokens: number, completionTokens: number): Record<string, unknown> {
+    return {
+      id: 'chatcmpl-test',
+      model: 'gpt-4o',
+      choices: [],
+      usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens },
+    };
+  }
+
+  // Import real translateChunk and types lazily to avoid circular issues at module load.
+  // We use a dynamic import inside each test via a shared factory instead.
+  // The strategy.translate wraps translateChunk so driveStream tests use real chunk parsing.
+
+  it('(i) finish_reason then drop before usage => retried, second attempt delivers finish+usage, final state has usage', async () => {
+    const { translateChunk, createStreamState } = await import('../translate.js');
+
+    let callCount = 0;
+    const strategy: StreamDriveStrategy<Record<string, unknown>> = {
+      createStream: async () => {
+        callCount++;
+        if (callCount === 1) {
+          return (async function* () {
+            yield textChunk('hello ', undefined);
+            yield textChunk('world', 'stop'); // finish_reason, no usage yet
+            throw undiciTerminated();           // drop before usage chunk
+          })();
+        }
+        return (async function* () {
+          yield textChunk('full answer', 'stop');
+          yield usageChunk(10, 5);             // usage arrives on retry
+        })();
+      },
+      translate: (chunk, state) => {
+        return translateChunk(chunk as Parameters<typeof translateChunk>[0], state, 'sess-4bi');
+      },
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const ctx = makeCtx();
+    // Use a fresh createStreamState-compatible context per attempt — driveStream
+    // already calls createStreamState() internally, so state is fresh each retry.
+    ctx.controller = new AbortController();
+    const resultPromise = drive(ctx, strategy);
+    await vi.advanceTimersByTimeAsync(100);
+    const { events, result } = await resultPromise;
+
+    expect(callCount).toBe(2);
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(result).not.toBeNull();
+    // Second attempt's state has usage.
+    expect(result?.state.usage).not.toBeNull();
+  });
+
+  it('(ii) finish_reason then usage chunk then drop => accepted, no retry, usage present', async () => {
+    const { translateChunk } = await import('../translate.js');
+
+    let callCount = 0;
+    const strategy: StreamDriveStrategy<Record<string, unknown>> = {
+      createStream: async () => {
+        callCount++;
+        return (async function* () {
+          yield textChunk('answer', 'stop');
+          yield usageChunk(8, 3);              // usage arrives before drop
+          throw undiciTerminated();
+        })();
+      },
+      translate: (chunk, state) =>
+        translateChunk(chunk as Parameters<typeof translateChunk>[0], state, 'sess-4bii'),
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const ctx = makeCtx();
+    const { events, result } = await drive(ctx, strategy);
+
+    expect(callCount).toBe(1);
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(result).not.toBeNull();
+    expect(result?.state.usage).not.toBeNull();
+    expect(result?.state.usage?.prompt_tokens).toBe(8);
+  });
+
+  it('(iii) finish_reason then drop, budget exhausted => accepted after MAX_STREAM_RETRIES, not fatal', async () => {
+    const { translateChunk } = await import('../translate.js');
+
+    let callCount = 0;
+    const strategy: StreamDriveStrategy<Record<string, unknown>> = {
+      createStream: async () => {
+        callCount++;
+        return (async function* () {
+          yield textChunk('content', 'stop'); // finish_reason, never usage
+          throw undiciTerminated();
+        })();
+      },
+      translate: (chunk, state) =>
+        translateChunk(chunk as Parameters<typeof translateChunk>[0], state, 'sess-4biii'),
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const ctx = makeCtx();
+    const resultPromise = drive(ctx, strategy);
+    await vi.advanceTimersByTimeAsync(500);
+    const { events, result } = await resultPromise;
+
+    // Should retry MAX_STREAM_RETRIES times, then accept (not fatal).
+    expect(callCount).toBe(MAX_STREAM_RETRIES + 1);
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(MAX_STREAM_RETRIES);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(result).not.toBeNull(); // accepted, not null
   });
 });

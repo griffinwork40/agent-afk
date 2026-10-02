@@ -258,8 +258,18 @@ export async function* runTurnInner(
     accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
     // Context-window footprint: OpenAI's prompt_tokens already includes cached
     // tokens, so window = input + output (not cumulative across rounds).
-    accumulatedUsage.contextWindowTokens =
-      (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
+    //
+    // When usage is absent (e.g. a drop-then-accept before the usage chunk
+    // arrived), roundUsage.inputTokens and outputTokens are both undefined.
+    // Writing 0 would zero out the footprint and disable the context-overflow
+    // guard. Carry forward the last known value instead — same source as
+    // ctx.lastUsage which was written at the end of the previous round.
+    if (roundUsage.inputTokens !== undefined || roundUsage.outputTokens !== undefined) {
+      accumulatedUsage.contextWindowTokens =
+        (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
+    } else {
+      accumulatedUsage.contextWindowTokens = ctx.lastUsage?.contextWindowTokens ?? 0;
+    }
     ctx.lastUsage = accumulatedUsage;
     if (result.text.length > 0) finalAssistantText = result.text;
     finalReasoningText = result.state.reasoningText;
