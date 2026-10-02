@@ -35,6 +35,30 @@ import { archiveBandPrefixAndRepaintSurvivors } from './terminal-compositor.fram
 import { contentHugFrameSettled } from './terminal-compositor.content-hug.js';
 
 /**
+ * Whether pending band rows may be archived on this repaint. Content-hug: as
+ * soon as the frame is settled. Bottom-pinned: only once the overlay is empty
+ * too (the end-of-turn signal).
+ *
+ * Invariant (no history hole under content-hug, 2026-10-02): in content-hug
+ * mode (the REPL) the trigger is NOT gated on the overlay being empty. A
+ * pending row is on neither the screen nor in scrollback, so holding it for the
+ * rest of a turn opens a visible hole at the scrollback/viewport seam (operator
+ * report: a verdict card's bottom border, the next prompt echo and a tool
+ * header vanished from tmux history until the turn ended). Archiving early is
+ * safe there because content-hug puts unused rows BELOW the prompt. The same
+ * rule makes content-hug archive covered rows on frame GROWTH instead of hiding
+ * them. Bottom-pinned keeps the overlay-empty gate: archiving early there
+ * leaves blank rows ABOVE the band that later scroll into history as a
+ * permanent gap (collapse-void.test.ts). Either mode still holds rows while a
+ * dropdown/picker is open (contentHugFrameSettled), since that growth is brief
+ * and user-initiated. Repro: terminal-compositor.history-hole.repro.test.ts.
+ */
+function pendingEvictionAllowed(self: FrameHost, frameSettled: boolean): boolean {
+  if (!frameSettled) return false;
+  return self.placementMode === 'content-hug' || self.overlay.trim().length === 0;
+}
+
+/**
  * Preserve rows that the next compositor frame is about to cover.
  *
  * Shared by normal input repaints and picker repaints: both ultimately use
@@ -82,8 +106,8 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // archived — SILENT CONTENT LOSS. This branch runs BEFORE render(), owns
     // evictRowsToScrollback, and is the correct place to resolve it.
     //
-    // Trigger (gated on the genuine end-of-turn signal — DELIBERATELY not a
-    // room-magnitude threshold nor a shrink-direction heuristic):
+    // Trigger (pendingEvictionAllowed; content-hug needs only a settled frame).
+    // Bottom-pinned, DELIBERATELY not a room/shrink-direction heuristic:
     //   • the OVERLAY is empty (self.overlay.trim() === '') — i.e. the turn
     //     ended and the live frame is now at its settled (idle) height, so
     //     `room` is the REAL above-frame capacity. This is the only reliable
@@ -109,12 +133,12 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     // at [1, room] hugging the forthcoming frame top, all materialized.
     const room = Math.max(0, desiredTopRow - 1);
     const hasPending = self.committedBandPaintedRows < bandLen;
-    const overlayCollapsed = self.overlay.trim().length === 0 && contentHugFrameSettled(self);
+    const frameSettled = contentHugFrameSettled(self);
     if (
       !self.commitInFlight &&
       hasPending &&
       bandLen > room &&
-      overlayCollapsed &&
+      pendingEvictionAllowed(self, frameSettled) &&
       room > 0
     ) {
       const overflow = bandLen - room;
@@ -133,7 +157,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
     }
 
     const grew = self.hasCommitted && prevTopRow > 1 && desiredTopRow < prevTopRow;
-    if (!grew || bandLen === 0 || self.placementMode === 'content-hug') return; // content-hug.ts: hide-on-growth
+    if (!grew || bandLen === 0 || !frameSettled) return; // content-hug archives on growth too (no-history-hole)
     const growRoom = Math.max(0, desiredTopRow - 1);
     const growOverflow = bandLen - growRoom;
     if (growOverflow <= 0) return; // whole band fits above the new frame — no scroll
@@ -185,7 +209,7 @@ export function preserveRowsBeforeFrameRender(self: FrameHost, desiredTopRow: nu
   const floorBanner = Math.max(self.anchorRow ?? 1, 1);
   const roomBanner = Math.max(0, desiredTopRow - floorBanner);
   const hasPendingBanner = self.committedBandPaintedRows < bandLenBanner;
-  const overlayCollapsedBanner = self.overlay.trim().length === 0 && contentHugFrameSettled(self);
+  const overlayCollapsedBanner = pendingEvictionAllowed(self, contentHugFrameSettled(self));
   if (
     !self.commitInFlight &&
     hasPendingBanner &&

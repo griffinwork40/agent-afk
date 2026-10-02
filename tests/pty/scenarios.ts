@@ -296,6 +296,23 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       maxViewportBlankRun: 1,
       order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-06', 'BODY-TAIL-ROW']],
     },
+    // content-hug archives rows the tall overlay cannot show AS SOON AS they
+    // are covered (no history hole mid-turn — terminal-compositor.frame-preserve.ts
+    // pendingEvictionAllowed), so after the collapse the OLDEST rows live in
+    // scrollback rather than being re-shown on screen. The invariant is the
+    // same whole-buffer one: every row exactly once, in order, no void; only
+    // the newest rows are required on screen.
+    hugExpect: {
+      inViewport: ['PROSE-06', 'BODY-TAIL-ROW', 'pass cwd to scheduler'],
+      exactlyOnce: [
+        'HEADER-MARKER', 'PROSE-01', 'PROSE-03', 'PROSE-06',
+        'BODY-TAIL-ROW', 'pass cwd to scheduler', 'thread cwd through daemon',
+        'Nature',
+      ],
+      maxViewportBlankRun: 1,
+      contentAnchors: ['BODY-TAIL-ROW'],
+      order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-01', 'PROSE-06'], ['PROSE-06', 'BODY-TAIL-ROW']],
+    },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -663,20 +680,10 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // overflow)` (physical rows) makes this measure 4 and fail.
       logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
     },
-    // content-hug hides growth-covered rows as pending rather than evicting
-    // them (terminal-compositor.content-hug.ts), so the eviction precondition
-    // never occurs: the whole run stays on screen, exactly once, in order, with
-    // no blank void before the frame. (On-screen band rows ARE rejoined on a
-    // widen since #2228 fixed reflowBandSplit to re-wrap from logicalText when
-    // meta is present; the rejoin property is still asserted in scrollback here
-    // because this scenario's line reaches scrollback via eviction.)
-    hugExpect: {
-      inViewport: ['LOGSTART', 'FILLER_09'],
-      exactlyOnce: ['LOGSTART', 'LOGEND', 'FILLER_00', 'FILLER_09'],
-      order: [['LOGEND', 'FILLER_00'], ['FILLER_00', 'FILLER_09']],
-      maxViewportBlankRun: 0,
-      contentAnchors: ['FILLER_09'],
-    },
+    // No hugExpect: since the 2026-10-02 no-history-hole change content-hug
+    // evicts growth-covered rows to scrollback exactly like bottom-pinned (it
+    // used to hide them as pending), so both modes share the eviction
+    // precondition and the soft-wrap rejoin assertion above.
   },
 
   // ─────────────────────────────────────────────────────────────────────────

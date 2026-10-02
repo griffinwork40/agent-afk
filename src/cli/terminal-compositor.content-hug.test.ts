@@ -217,7 +217,7 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.dispose();
   });
 
-  it('full viewport: a tall overlay grows then collapses and the prompt returns to the bottom (no bobbing)', async () => {
+  it('full viewport: a tall overlay grows then collapses: covered rows go to scrollback (no history hole) and the prompt hugs the last committed row', async () => {
     const rig = await makeRig(ROWS);
     const committed = Array.from({ length: ROWS * 2 }, (_, i) => `FILL-${String(i).padStart(4, '0')}`);
     rig.c.commitAbove(`${committed.join('\n')}\n`);
@@ -234,9 +234,14 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     const frameIdx = assertNoGaps(lines, committed, PROMPT);
     const dump = dumpOf(lines);
     expect(lines.some((l) => l.includes('THINK-')), `ghost overlay rows:\n${dump}`).toBe(false);
-    // The prompt sits on the last compositor row (absoluteBottom = rows - 1):
-    // hidden-on-growth rows were repainted, so the band still fills the viewport.
-    expect(frameIdx - rig.viewportTop(), `prompt left the bottom after collapse:\n${dump}`).toBe(ROWS - 2);
+    // Since the 2026-10-02 no-history-hole change, rows the grown overlay
+    // covered were archived to scrollback (never hidden as pending), so they
+    // are NOT re-shown after the collapse. assertNoGaps above already proves
+    // they are present exactly once, in order, and that the prompt directly
+    // follows the last committed row. Under content-hug the unused rows lie
+    // BELOW the prompt: assert they are blank (no ghost frame rows).
+    const below = lines.slice(frameIdx + 1).filter((l) => l.includes('FILL-') || l.includes('THINK-'));
+    expect(below, `content below the prompt after collapse:\n${dump}`).toEqual([]);
     rig.dispose();
   });
 
