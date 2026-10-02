@@ -7,6 +7,8 @@
  *      (dedup: subsequent calls do NOT emit additional events).
  *   3. Does not alter `isError`.
  *   4. Leaves successful results untouched.
+ *   5. Batch paths (executeBatch / parallel + sequential) observe calls
+ *      the same as single-call execute() — no double-counting on length-1.
  *
  * Uses InMemoryTraceWriter to capture trace events without filesystem I/O.
  *
@@ -199,5 +201,97 @@ describe('ToolHealthMonitor integration (dispatcher)', () => {
     // The notice should include at least the start of the errorHead
     expect(lastResult.content).toContain('[tool-health]');
     expect(lastResult.content).toContain('SSL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Batch paths: executeBatch — the coverage gap fixed by this PR
+// ---------------------------------------------------------------------------
+
+/**
+ * `failing_tool` is declared concurrency-safe by the schema registry used in
+ * tests (it is not in the built-in set, so it falls back to the default
+ * classifier which marks unknown tools as safe). This lets us test the
+ * concurrent (parallel) batch path without spinning up real network calls.
+ *
+ * `unsafe_tool` is explicitly classified as concurrency-UNSAFE via a custom
+ * classifier so we can exercise the sequential batch branch.
+ */
+describe('ToolHealthMonitor batch integration (executeBatch)', () => {
+  let writer: InMemoryTraceWriter;
+  let dispatcher: SessionToolDispatcher;
+
+  beforeEach(() => {
+    _callSeq = 0;
+    writer = new InMemoryTraceWriter();
+    dispatcher = new SessionToolDispatcher({
+      handlers: new Map<string, ToolHandler>([
+        ['failing_tool', alwaysFailHandler()],
+        ['seq_fail_tool', alwaysFailHandler()],
+        ['ok_tool', alwaysOkHandler()],
+      ]),
+      schemas: [...builtinToolSchemas],
+      permissions: { allowedTools: ['failing_tool', 'seq_fail_tool', 'ok_tool'] },
+      // seq_fail_tool is treated as concurrency-UNSAFE → sequential batch path
+      concurrencyClassifier: (name) => name !== 'seq_fail_tool',
+      traceWriter: writer,
+    });
+  });
+
+  it('parallel batch: HEALTH_MIN_SAMPLE failing calls get observed — notice on triggering call', async () => {
+    // Build HEALTH_MIN_SAMPLE unique failing calls and dispatch as one batch.
+    const calls = Array.from({ length: HEALTH_MIN_SAMPLE }, () => makeCall('failing_tool'));
+    const results = await dispatcher.executeBatch(calls);
+    // All results keep isError: true
+    for (const r of results) {
+      expect(r.isError).toBe(true);
+    }
+    // Exactly one result should have the notice (the call that triggered threshold)
+    const withNotice = results.filter((r) => r.content.includes('[tool-health]'));
+    expect(withNotice).toHaveLength(1);
+  });
+
+  it('parallel batch: emits exactly ONE tool_degraded trace event for concurrent failing calls', async () => {
+    const calls = Array.from({ length: HEALTH_MIN_SAMPLE + 4 }, () => makeCall('failing_tool'));
+    await dispatcher.executeBatch(calls);
+    await new Promise((r) => setTimeout(r, 10));
+    const events = toolDegradedEvents(writer);
+    expect(events).toHaveLength(1);
+  });
+
+  it('sequential batch: HEALTH_MIN_SAMPLE failing calls get observed — notice on triggering call', async () => {
+    // seq_fail_tool is classified as unsafe → runs through runSequentialBatch
+    const calls = Array.from({ length: HEALTH_MIN_SAMPLE }, () => makeCall('seq_fail_tool'));
+    const results = await dispatcher.executeBatch(calls);
+    for (const r of results) {
+      expect(r.isError).toBe(true);
+    }
+    const withNotice = results.filter((r) => r.content.includes('[tool-health]'));
+    expect(withNotice).toHaveLength(1);
+  });
+
+  it('sequential batch: emits exactly ONE tool_degraded trace event', async () => {
+    const calls = Array.from({ length: HEALTH_MIN_SAMPLE + 2 }, () => makeCall('seq_fail_tool'));
+    await dispatcher.executeBatch(calls);
+    await new Promise((r) => setTimeout(r, 10));
+    const events = toolDegradedEvents(writer);
+    expect(events).toHaveLength(1);
+  });
+
+  it('length-1 batch delegates to execute() — no double-counting (exactly one observe)', async () => {
+    // Drive HEALTH_MIN_SAMPLE - 1 calls via execute() to prime the window.
+    for (let i = 0; i < HEALTH_MIN_SAMPLE - 1; i++) {
+      await dispatcher.execute(makeCall('failing_tool'));
+    }
+    // One more via executeBatch([single call]) — length-1 fast path delegates to
+    // execute(), so the monitor sees it exactly once (not twice).
+    const batchResults = await dispatcher.executeBatch([makeCall('failing_tool')]);
+    expect(batchResults).toHaveLength(1);
+    expect(batchResults[0]!.isError).toBe(true);
+    // This is the triggering call — notice must appear exactly once.
+    expect(batchResults[0]!.content).toContain('[tool-health]');
+    // Trace event should have been emitted exactly once (not twice).
+    await new Promise((r) => setTimeout(r, 10));
+    expect(toolDegradedEvents(writer)).toHaveLength(1);
   });
 });

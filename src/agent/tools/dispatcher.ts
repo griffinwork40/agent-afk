@@ -35,7 +35,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
-import { ToolHealthMonitor, emitToolDegraded } from './tool-health-monitor.js';
+import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
@@ -747,16 +747,9 @@ export class SessionToolDispatcher implements ToolDispatcher {
 
     // Tool-health monitor: observe every settled result and, when degraded,
     // append a model notice and emit one trace event per (tool, errorHead).
-    // Fire-and-forget: emitToolDegraded swallows errors; never alters isError.
-    const healthVerdict = this.toolHealthMonitor.observe(call, coreResult);
-    if (healthVerdict.degraded) {
-      if (healthVerdict.emitTrace) emitToolDegraded(this.traceWriter, healthVerdict);
-      if (healthVerdict.notice) {
-        return { ...coreResult, content: coreResult.content + healthVerdict.notice };
-      }
-    }
-
-    return coreResult;
+    // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
+    // never alters isError. Shared helper used by both execute() and batch paths.
+    return applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -778,6 +771,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
       gateDeps: () => this.gateDeps(),
       traceWriter: this.traceWriter,
+      toolHealthMonitor: this.toolHealthMonitor,
     }, onActivity);
   }
 

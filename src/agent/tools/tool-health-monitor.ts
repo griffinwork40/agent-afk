@@ -282,3 +282,30 @@ export function emitToolDegraded(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Shared apply helper — used by execute() and the batch paths.
+// ---------------------------------------------------------------------------
+
+/**
+ * Observe a settled tool result and return a (potentially notice-appended)
+ * result. Used by both the single-call `execute()` path and the batch paths
+ * so the logic lives exactly once.
+ *
+ * Contract:
+ *   - Never changes `isError`.
+ *   - Fire-and-forget for the trace event (via `emitToolDegraded`).
+ *   - When the verdict is not degraded, returns `result` unchanged.
+ */
+export function applyToolHealth(
+  monitor: ToolHealthMonitor,
+  traceWriter: TraceSink | undefined,
+  call: ToolCall,
+  result: ToolResult,
+): ToolResult {
+  const verdict = monitor.observe(call, result);
+  if (!verdict.degraded) return result;
+  if (verdict.emitTrace) emitToolDegraded(traceWriter, verdict);
+  if (verdict.notice) return { ...result, content: result.content + verdict.notice };
+  return result;
+}
