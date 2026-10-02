@@ -11,9 +11,11 @@ import {
   CLAUDE_SONNET_ID,
   coerceSlotBindingInput,
   computeSlotBindings,
+  contextWindowOverrideFor,
   DEFAULT_SLOT_BINDINGS,
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
+  MAX_CONTEXT_WINDOW_OVERRIDE,
   MODEL_ALIASES_HINT,
   OPENAI_MODEL_HINTS,
   parseModelsConfig,
@@ -26,7 +28,7 @@ import {
   unconfiguredSlotError,
   type ModelSlots,
 } from './model-slots.js';
-import { contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
+import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
 
 const ENV_KEYS = [
   'AFK_MODEL_LOCAL',
@@ -476,5 +478,214 @@ describe('coerceSlotBindingInput', () => {
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toMatch(/shadow a built-in alias/);
     }
+  });
+});
+
+// ── contextWindow override ────────────────────────────────────────────────────
+
+describe('parseModelsConfig: contextWindow field', () => {
+  it('parses a valid contextWindow on an object binding', () => {
+    const out = parseModelsConfig({ local: { id: 'qwen-3.8-27b', contextWindow: 128_000 } });
+    expect(out.local).toEqual({ id: 'qwen-3.8-27b', contextWindow: 128_000 });
+  });
+
+  it('silently ignores a non-integer contextWindow', () => {
+    const out = parseModelsConfig({ local: { id: 'qwen-3.8-27b', contextWindow: 1.5 } });
+    expect(out.local).toEqual({ id: 'qwen-3.8-27b' });
+  });
+
+  it('silently ignores a zero or negative contextWindow', () => {
+    expect(parseModelsConfig({ local: { id: 'x', contextWindow: 0 } }).local).toEqual({ id: 'x' });
+    expect(parseModelsConfig({ local: { id: 'x', contextWindow: -100 } }).local).toEqual({ id: 'x' });
+  });
+
+  it('silently ignores an absurdly large contextWindow (> MAX_CONTEXT_WINDOW_OVERRIDE)', () => {
+    const tooLarge = MAX_CONTEXT_WINDOW_OVERRIDE + 1;
+    expect(parseModelsConfig({ local: { id: 'x', contextWindow: tooLarge } }).local).toEqual({ id: 'x' });
+  });
+
+  it('accepts MAX_CONTEXT_WINDOW_OVERRIDE exactly', () => {
+    const out = parseModelsConfig({ local: { id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE } });
+    expect(out.local?.contextWindow).toBe(MAX_CONTEXT_WINDOW_OVERRIDE);
+  });
+
+  it('ignores contextWindow on a bare-string binding (no object)', () => {
+    // Bare string bindings have no place to put contextWindow — they produce { id } only.
+    const out = parseModelsConfig({ local: 'qwen-3.8-27b' });
+    expect(out.local).toEqual({ id: 'qwen-3.8-27b' });
+  });
+});
+
+describe('computeSlotBindings: contextWindow propagation', () => {
+  it('carries contextWindow from file override into resolved bindings', () => {
+    const out = computeSlotBindings({ local: { id: 'qwen-3.8-27b', contextWindow: 128_000 } });
+    expect(out.local.contextWindow).toBe(128_000);
+  });
+
+  it('omits contextWindow when not set in file override', () => {
+    const out = computeSlotBindings({ local: { id: 'qwen-3.8-27b' } });
+    expect(out.local.contextWindow).toBeUndefined();
+  });
+});
+
+describe('coerceSlotBindingInput: contextWindow validation', () => {
+  it('accepts a valid positive integer contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'qwen-3.8-27b', contextWindow: 128_000 });
+    expect(res).toEqual({ ok: true, value: { id: 'qwen-3.8-27b', contextWindow: 128_000 } });
+  });
+
+  it('accepts contextWindow as a numeric string (coerced)', () => {
+    const res = coerceSlotBindingInput({ id: 'qwen-3.8-27b', contextWindow: '131072' });
+    expect(res).toEqual({ ok: true, value: { id: 'qwen-3.8-27b', contextWindow: 131_072 } });
+  });
+
+  it('rejects a non-integer contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: 1.5 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('rejects a zero contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: 0 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('rejects a negative contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: -1 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('rejects a contextWindow exceeding MAX_CONTEXT_WINDOW_OVERRIDE', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE + 1 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('accepts MAX_CONTEXT_WINDOW_OVERRIDE exactly', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE });
+    expect(res).toEqual({ ok: true, value: { id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE } });
+  });
+
+  it('ignores an empty-string contextWindow (treated as absent)', () => {
+    // Empty string is the sentinel for "not provided" — treated as absent.
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: '' });
+    expect(res).toEqual({ ok: true, value: { id: 'x' } });
+  });
+
+  it('accepts contextWindow alongside provider and name', () => {
+    const res = coerceSlotBindingInput({
+      id: 'qwen-3.8-27b',
+      name: 'cerebras',
+      provider: 'openai',
+      contextWindow: 128_000,
+    });
+    expect(res).toEqual({
+      ok: true,
+      value: { id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai', contextWindow: 128_000 },
+    });
+  });
+});
+
+describe('contextWindowOverrideFor', () => {
+  afterEach(() => { resetSlotBindings(); });
+
+  it('returns undefined when no binding has a contextWindow', () => {
+    expect(contextWindowOverrideFor('qwen-3.8-27b')).toBeUndefined();
+  });
+
+  it('returns the override when the slot binding id matches the concrete id', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('qwen-3.8-27b')).toBe(128_000);
+  });
+
+  it('returns undefined when id does not match any binding', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('gpt-4o')).toBeUndefined();
+  });
+});
+
+describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow override', () => {
+  afterEach(() => { resetSlotBindings(); });
+
+  it('uses slot contextWindow override via slot name (tier alias)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', name: 'cerebras', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // 'local' resolves to 'qwen-3.8-27b' which has a contextWindow override
+    expect(contextLimitFor('local')).toBe(128_000);
+    // custom name also works
+    expect(contextLimitFor('cerebras')).toBe(128_000);
+  });
+
+  it('uses slot contextWindow override via concrete id (the real provider path)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // Providers call contextLimitFor with the resolved concrete id — this is the real path.
+    expect(contextLimitFor('qwen-3.8-27b')).toBe(128_000);
+  });
+
+  it('autoCompactLimitFor also honours the override (without budget cap interference)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // qwen-3.8-27b has no MODEL_AUTOCOMPACT_BUDGET entry → returns full window
+    expect(autoCompactLimitFor('qwen-3.8-27b')).toBe(128_000);
+  });
+
+  it('no override → contextLimitFor returns table/default value unchanged', () => {
+    // Ensure no stale bindings from prior tests.
+    resetSlotBindings();
+    // Without any override, a known openai-compatible model returns its table value.
+    expect(contextLimitFor('gpt-4o')).toBe(128_000);
+    // An HF-style org/model id routes to openai-compatible default (262144).
+    expect(contextLimitFor('Qwen/Qwen3-8B')).toBe(262_144);
+    // qwen-3.8-27b has no table entry and no org/ prefix → Anthropic default (200k).
+    expect(contextLimitFor('qwen-3.8-27b')).toBe(200_000);
+  });
+
+  it('override wins over the built-in table for a known model id', () => {
+    setSlotBindings({
+      small: { id: 'gpt-4o', contextWindow: 200_000 },
+      local: DEFAULT_SLOT_BINDINGS.local,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // gpt-4o is normally 128k in the table; override raises it to 200k.
+    expect(contextLimitFor('gpt-4o')).toBe(200_000);
+    expect(contextLimitFor('small')).toBe(200_000);
+  });
+
+  it('does not change maxOutputTokensFor (output cap is separate)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // maxOutputTokensFor is unaffected by contextWindow
+    const before = maxOutputTokensFor('qwen-3.8-27b');
+    expect(before).toBe(64_000); // the DEFAULT_MAX_OUTPUT fallback
   });
 });

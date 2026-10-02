@@ -15,7 +15,7 @@
  */
 
 import type { ClaudeModel } from './types.js';
-import { resolveModelInput } from './session/model-slots.js';
+import { resolveModelInput, contextWindowOverrideFor } from './session/model-slots.js';
 import { isOSeriesModel } from './model-capabilities.js';
 
 /**
@@ -286,6 +286,13 @@ export function contextLimitFor(model: ClaudeModel | string): number {
   // fallback lets mixed-case HF-style ids (e.g.
   // "mlx-community/Qwen3-30B-A3B-4bit") still hit their entry.
   const id = resolveModelInput(model) ?? String(model);
+  // Check per-slot contextWindow override BEFORE the built-in table. This lets
+  // paid-tier users raise the window for providers whose limit depends on
+  // account tier (e.g. Cerebras free 64k vs paid 128k on qwen-3.8-27b).
+  // The override is keyed on the CONCRETE id so the lookup is effective on the
+  // real provider path (providers call contextLimitFor with the resolved wire id).
+  const slotOverride = contextWindowOverrideFor(id);
+  if (slotOverride !== undefined) return slotOverride;
   const known = MODEL_CONTEXT_LIMITS[id] ?? MODEL_CONTEXT_LIMITS[id.toLowerCase()];
   if (known !== undefined) return known;
   return routesToOpenAICompatible(id)

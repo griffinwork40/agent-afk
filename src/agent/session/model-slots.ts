@@ -84,6 +84,14 @@ export interface ModelSlotBinding {
   baseUrl?: string;
   /** Per-slot API key. Wins over global credentials for this tier. */
   apiKey?: string;
+  /**
+   * Optional context-window override (tokens). When set, {@link contextLimitFor}
+   * uses this value instead of the built-in table. Useful for providers whose
+   * window depends on account tier (e.g. Cerebras free 64k vs paid 128k).
+   * Must be a positive integer ≤ 10_000_000. Invalid values are silently ignored
+   * at load time; rejected at the config_set write path.
+   */
+  contextWindow?: number;
 }
 
 /** Full set of resolved tier bindings. */
@@ -306,6 +314,8 @@ export function computeSlotBindings(
     if (baseUrl) binding.baseUrl = baseUrl;
     const apiKey = e.apiKey ?? file?.apiKey;
     if (apiKey) binding.apiKey = apiKey;
+    const contextWindow = file?.contextWindow;
+    if (contextWindow !== undefined) binding.contextWindow = contextWindow;
     out[slot] = binding;
   }
   return out;
@@ -464,6 +474,39 @@ const RESERVED_NAMES: ReadonlySet<string> = new Set([
   ...Object.keys(DIRECT_MODEL_ALIASES),
 ]);
 
+/** Max accepted contextWindow override (10M tokens). Values above are ignored at load / rejected at write. */
+export const MAX_CONTEXT_WINDOW_OVERRIDE = 10_000_000;
+
+/**
+ * Leniently parse a raw config value as a context-window override. Returns
+ * the integer when valid (positive integer, ≤ MAX_CONTEXT_WINDOW_OVERRIDE);
+ * returns `undefined` for anything invalid so the loader can silently skip.
+ */
+function parseContextWindow(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) return undefined;
+  return n;
+}
+
+/**
+ * Return the context-window override for a concrete model id (already resolved),
+ * scanning all active slot bindings. Returns `undefined` when no binding carries
+ * a matching `contextWindow`. Used by `contextLimitFor` in `model-limits.ts` to
+ * honour per-slot overrides on the real provider path (the provider passes the
+ * resolved concrete id, not the tier alias).
+ */
+export function contextWindowOverrideFor(
+  concreteId: string,
+  bindings: ModelSlots = getSlotBindings(),
+): number | undefined {
+  for (const slot of SLOT_NAMES) {
+    const b = bindings[slot];
+    if (b.contextWindow !== undefined && b.id === concreteId) return b.contextWindow;
+  }
+  return undefined;
+}
+
 function parseBinding(value: unknown): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
     const id = value.trim();
@@ -482,6 +525,8 @@ function parseBinding(value: unknown): ModelSlotBinding | undefined {
     if (baseUrl) binding.baseUrl = baseUrl;
     const apiKey = parseStringField(obj['apiKey']);
     if (apiKey) binding.apiKey = apiKey;
+    const cw = parseContextWindow(obj['contextWindow']);
+    if (cw !== undefined) binding.contextWindow = cw;
     return binding;
   }
   return undefined;
@@ -559,6 +604,17 @@ export function coerceSlotBindingInput(
       };
     }
     binding.provider = provider;
+  }
+  if (obj['contextWindow'] !== undefined && obj['contextWindow'] !== '') {
+    const raw = obj['contextWindow'];
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isInteger(n) || n <= 0 || n > MAX_CONTEXT_WINDOW_OVERRIDE) {
+      return {
+        ok: false,
+        error: `model binding "contextWindow" must be a positive integer ≤ ${MAX_CONTEXT_WINDOW_OVERRIDE.toLocaleString()} (got ${JSON.stringify(raw)})`,
+      };
+    }
+    binding.contextWindow = n;
   }
   return { ok: true, value: binding };
 }
