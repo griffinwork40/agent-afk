@@ -512,6 +512,21 @@ describe('parseModelsConfig — JSON-string-as-object recovery (read path)', () 
     expect(stderrWrite).toHaveBeenCalledOnce();
   });
 
+  it('never echoes apiKey/baseUrl in the recovery warning and single-quotes the suggestion', () => {
+    const result = parseModelsConfig({
+      local:
+        '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai","baseUrl":"https://api.cerebras.ai/v1","apiKey":"csk-SECRET-should-not-print"}',
+    });
+    // Recovery still honours the hand-edited credentials (loader is lenient).
+    expect(result.local?.apiKey).toBe('csk-SECRET-should-not-print');
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).not.toContain('csk-SECRET-should-not-print');
+    expect(msg).not.toContain('api.cerebras.ai');
+    expect(msg).toContain(
+      `afk config set models.local '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai"}'`,
+    );
+  });
+
   it('drops a malformed {-prefixed string and falls back to undefined', () => {
     const result = parseModelsConfig({ small: '{not valid json}' });
     expect(result.small).toBeUndefined();

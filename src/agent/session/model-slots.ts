@@ -472,6 +472,24 @@ export function _resetJsonStringSlotWarnings(): void {
   warnedJsonStringSlots.clear();
 }
 
+/**
+ * Build a re-save suggestion from a recovered JSON-string slot using ONLY the
+ * non-secret fields (`id`, `name`, `provider`). `baseUrl`/`apiKey` are
+ * deliberately omitted: they are human-gated and `apiKey` is a secret that must
+ * never be echoed to stderr.
+ */
+function safeSlotSuggestion(parsed: unknown): string {
+  const out: Record<string, string> = {};
+  if (parsed && typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    for (const key of ['id', 'name', 'provider'] as const) {
+      const v = obj[key];
+      if (typeof v === 'string' && v.trim()) out[key] = v.trim();
+    }
+  }
+  return JSON.stringify(out);
+}
+
 function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | undefined {
   if (typeof value === 'string') {
     const id = value.trim();
@@ -497,9 +515,11 @@ function parseBinding(value: unknown, slotHint?: string): ModelSlotBinding | und
       }
       if (slotHint && !warnedJsonStringSlots.has(`recover:${slotHint}`)) {
         warnedJsonStringSlots.add(`recover:${slotHint}`);
+        // Never echo the raw stored string: it may carry an `apiKey`. Rebuild the
+        // suggestion from the non-secret fields only, single-quoted for the shell.
         process.stderr.write(
           `[afk] warning: models.${slotHint} was stored as a JSON-encoded string instead of an object — recovered, but please re-save:\n` +
-          `  \`afk config set models.${slotHint} ${id}\`\n`,
+          `  afk config set models.${slotHint} '${safeSlotSuggestion(parsed)}'\n`,
         );
       }
       // Delegate to the object branch below (do not call coerceSlotBindingInput
