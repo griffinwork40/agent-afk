@@ -884,7 +884,14 @@ export type SessionPhaseName =
   // event makes the repair visible in the trace so operators can diagnose
   // sessions that hit the many-image ceiling without inspecting raw message
   // payloads.
-  | 'many_image_degraded';
+  | 'many_image_degraded'
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) pair per session when >= 90% of the last 10 calls to
+  // a given tool fail with the same error. PURE OBSERVABILITY — never alters
+  // dispatch or isError. A later daemon builtin (PR 3) counts these across
+  // sessions and pushes a Telegram alert.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  | 'tool_degraded';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

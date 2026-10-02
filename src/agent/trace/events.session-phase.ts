@@ -65,6 +65,10 @@ export const SessionPhaseNameSchema = z.enum([
   // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
   // types.ts — metadata carries degradedCount, threshold, maxDimension.
   'many_image_degraded',
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  'tool_degraded',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

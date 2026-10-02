@@ -35,6 +35,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
+import { ToolHealthMonitor, emitToolDegraded } from './tool-health-monitor.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
@@ -346,6 +347,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * refuses execution after consecutive FAILURES of the same normalized call.
    */
   private readonly repeatFailureGuard = new RepeatFailureGuard();
+
+  /**
+   * Per-session sliding-window health monitor (#2774). Mirrors the
+   * repeatFailureGuard pattern: one instance per dispatcher (i.e. per session
+   * or forked child), never module-scope.
+   */
+  private readonly toolHealthMonitor = new ToolHealthMonitor();
 
 
 
@@ -736,6 +744,18 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Reset-on-success: a completed (non-error) tool call is progress, so the
     // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
     if (coreResult.isError !== true) this.resetDenialBreaker();
+
+    // Tool-health monitor: observe every settled result and, when degraded,
+    // append a model notice and emit one trace event per (tool, errorHead).
+    // Fire-and-forget: emitToolDegraded swallows errors; never alters isError.
+    const healthVerdict = this.toolHealthMonitor.observe(call, coreResult);
+    if (healthVerdict.degraded) {
+      if (healthVerdict.emitTrace) emitToolDegraded(this.traceWriter, healthVerdict);
+      if (healthVerdict.notice) {
+        return { ...coreResult, content: coreResult.content + healthVerdict.notice };
+      }
+    }
+
     return coreResult;
   }
 
