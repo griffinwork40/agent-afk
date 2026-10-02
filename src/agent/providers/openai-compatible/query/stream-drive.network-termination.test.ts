@@ -375,6 +375,20 @@ describe('classifyStreamError — P1 watchdog-state (stallTimedOut / ttfbTimedOu
     expect((action as RetryAction).reason).toBe('ttfb_timeout');
   });
 
+  it('ttfbTimedOut flag with an exhausted budget surfaces the TTFB error, not raw terminated', () => {
+    const { action } = classifyStreamError(
+      undiciTerminated(),
+      false,
+      MAX_STREAM_RETRIES,
+      60_000,
+      /* stallTimedOut */ false,
+      /* ttfbTimedOut  */ true,
+      /* terminalFinishReason */ null,
+    );
+    expect(action.kind).toBe('fatal');
+    expect((action as { error: Error }).error.message).toBe(TTFB_TIMEOUT_MESSAGE);
+  });
+
   it('stallTimedOut flag with no content yields stall_timeout retry (not fatal)', () => {
     // No content yet + watchdog fired: should retry (matches existing stall logic
     // where stall without content is retried).
@@ -704,7 +718,7 @@ describe('driveStream with real translateChunk — Chat Completions scenarios', 
   // The strategy.translate wraps translateChunk so driveStream tests use real chunk parsing.
 
   it('(i) finish_reason then drop before usage => retried, second attempt delivers finish+usage, final state has usage', async () => {
-    const { translateChunk, createStreamState } = await import('../translate.js');
+    const { translateChunk } = await import('../translate.js');
 
     let callCount = 0;
     const strategy: StreamDriveStrategy<Record<string, unknown>> = {

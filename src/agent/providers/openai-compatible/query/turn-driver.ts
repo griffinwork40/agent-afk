@@ -34,6 +34,7 @@ import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { supportsVision } from '../../../model-capabilities.js';
 import { usageFromState, finalizedToolCalls, type StreamState } from '../translate.js';
 import { checkContextOverflow } from './context-overflow.js';
+import { roundContextWindowTokens } from './turn-driver.context-window.js';
 import {
   runIteration,
   finishTurn,
@@ -256,20 +257,9 @@ export async function* runTurnInner(
     const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
     const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
     accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-    // Context-window footprint: OpenAI's prompt_tokens already includes cached
-    // tokens, so window = input + output (not cumulative across rounds).
-    //
-    // When usage is absent (e.g. a drop-then-accept before the usage chunk
-    // arrived), roundUsage.inputTokens and outputTokens are both undefined.
-    // Writing 0 would zero out the footprint and disable the context-overflow
-    // guard. Carry forward the last known value instead — same source as
-    // ctx.lastUsage which was written at the end of the previous round.
-    if (roundUsage.inputTokens !== undefined || roundUsage.outputTokens !== undefined) {
-      accumulatedUsage.contextWindowTokens =
-        (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
-    } else {
-      accumulatedUsage.contextWindowTokens = ctx.lastUsage?.contextWindowTokens ?? 0;
-    }
+    // Context-window footprint for this round; carries the last known value
+    // forward (never 0) when the round had no usage. See the helper's Contract.
+    accumulatedUsage.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
     ctx.lastUsage = accumulatedUsage;
     if (result.text.length > 0) finalAssistantText = result.text;
     finalReasoningText = result.state.reasoningText;
