@@ -1104,6 +1104,13 @@
       "category": "model"
     },
     {
+      "name": "AFK_TOOL_HEALTH_DISABLE",
+      "description": "Disable the tool-health daemon builtin entirely. Set to \"1\" to skip registration.",
+      "type": "boolean",
+      "required": false,
+      "category": "daemon"
+    },
+    {
       "name": "AFK_TRACE_DISABLED",
       "description": "Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes.",
       "type": "boolean",
