@@ -367,7 +367,7 @@ export async function bootstrapSession(
     // interactive.ts. Passed by reference so a late producer (anything between
     // here and `return ctx`) still lands.
     bootWarnings,
-    backgroundRegistry,
+    backgroundRegistry, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
     subagentManager: rootManager,
     // Expose the root executor's narrow promotion seam so the turn handler can
     // make Ctrl+B background a running foreground subagent. The executor

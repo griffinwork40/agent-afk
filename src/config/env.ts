@@ -50,6 +50,7 @@ import { BROWSER_ENV_REGISTRY } from './env.browser.js';
 import { DISPLAY_ENV_REGISTRY } from './env.display.js';
 import { MCP_ENV_REGISTRY } from './env.mcp.js';
 import { PATHS_ENV_REGISTRY } from './env.paths.js';
+import { PEER_ENV_REGISTRY } from './env.peer.js';
 import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
 
@@ -942,16 +943,7 @@ export const ENV_REGISTRY = [
     example: 'true',
     category: 'telegram',
   },
-  {
-    name: 'TMUX',
-    description:
-      'OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. ' +
-      'Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.',
-    type: 'string',
-    required: false,
-    example: '/tmp/tmux-501/default,12345,0',
-    category: 'process',
-  },
+
   {
     name: 'AFK_TELEGRAM_TRACE',
     description: 'Set to 1 to dump raw bridge traffic between the agent and the Telegram bot — debugging only.',
@@ -960,6 +952,7 @@ export const ENV_REGISTRY = [
     example: '1',
     category: 'debug',
   },
+  ...PEER_ENV_REGISTRY,
   {
     name: 'AFK_TELEGRAM_CWD',
     description: 'Override the working directory used by the Telegram bot when spawning agent sessions.',

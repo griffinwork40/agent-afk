@@ -35,6 +35,7 @@ export type TraceEventKind =
   | 'claim'
   | 'browser_event'
   | 'queued_user_message'
+  | 'peer_message'
   | 'session_phase'
   | 'session_sealed';
 
@@ -656,6 +657,25 @@ export interface QueuedUserMessagePayload {
   byteLength: number;
 }
 
+/**
+ * Payload for the `peer_message` trace event.
+ *
+ * Invariant: body text is NEVER recorded. Only byte counts and identifiers
+ * are persisted so the trace can never be used to exfiltrate message content.
+ */
+export interface PeerMessagePayload {
+  /** What happened to this message. */
+  action: 'sent' | 'delivered' | 'held' | 'refused' | 'dropped';
+  /** The stable message id (uuid). Absent when action is 'dropped' by a sweep. */
+  messageId?: string;
+  /** The OTHER session's id (sender when action is delivered/held/dropped; target when sent/refused). */
+  peer: string;
+  /** UTF-8 byte length of the body. Never 0 for sent/delivered; may be 0 for refused. */
+  bytes: number;
+  /** Why the message was refused or dropped. Absent for other actions. */
+  reason?: string;
+}
+
 export interface BrowserEventPayload {
   /** Which browser tool ran. */
   tool: BrowserEventTool;
@@ -1013,6 +1033,7 @@ export type TraceEventInput =
   | { kind: 'claim'; payload: ClaimPayload }
   | { kind: 'browser_event'; payload: BrowserEventPayload }
   | { kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
+  | { kind: 'peer_message'; payload: PeerMessagePayload }
   | { kind: 'session_phase'; payload: SessionPhasePayload };
 
 /** What ends up on disk and in readers. `session_sealed` is terminal
@@ -1030,5 +1051,6 @@ export type TraceEvent =
   | { ts: string; seq: number; kind: 'claim'; payload: ClaimPayload }
   | { ts: string; seq: number; kind: 'browser_event'; payload: BrowserEventPayload }
   | { ts: string; seq: number; kind: 'queued_user_message'; payload: QueuedUserMessagePayload }
+  | { ts: string; seq: number; kind: 'peer_message'; payload: PeerMessagePayload }
   | { ts: string; seq: number; kind: 'session_phase'; payload: SessionPhasePayload }
   | { ts: string; seq: number; kind: 'session_sealed'; payload: SessionSealedPayload };

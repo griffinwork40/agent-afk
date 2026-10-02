@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import { statSync } from 'node:fs';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
@@ -379,6 +380,12 @@ export interface InteractiveCtx {
    * `setupFooterSubsystems`, invoked from the swap's `onSwapped` callback.
    */
   clearBgResultBuffer?: () => void;
+  /**
+   * Witness trace writer for REPL-owned emitters that run outside a session
+   * turn (the peer inbox notifier's `peer_message` events). Optional: absent
+   * when tracing is disabled (`AFK_TRACE_DISABLED=1`).
+   */
+  traceWriter?: TraceSink;
   /**
    * Clears the `pendingStopInjection` binding in `runInputLoop` so a
    * mid-session /resume swap cannot leak a Stop-hook `injectContext` from

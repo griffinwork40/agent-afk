@@ -119,6 +119,9 @@ export async function runReplLoop(
     if (compositor) restoreConsole = installConsoleBridge(compositor);
 
     footer = setupFooterSubsystems(ctx, turnState);
+    // Start the peer inbox notifier (fs.watch + poll). Best-effort: start()
+    // never throws. Disposed in the finally alongside bgResultNotifier.
+    footer.peerNotifier.start();
 
     // Invariant: periodic terminal writers (health rail 1s tick, bg-bar spinner,
     // mascot animation) continue writing ANSI cursor escapes while a pager/editor
@@ -159,6 +162,9 @@ export async function runReplLoop(
     // fires (interactive.ts teardown) so cascade-cancelled jobs don't queue
     // notices into a buffer that will never drain.
     footer?.bgResultNotifier.dispose();
+    // Stop the peer inbox notifier (watcher + poll). Must run before the
+    // process exits so no orphaned interval keeps it alive.
+    footer?.peerNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
     // painted before the counts below it change. HealthRail is the topmost
     // reserved row, so it must clear first (its stop fires onRowCountChange(0)

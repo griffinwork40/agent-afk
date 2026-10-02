@@ -118,6 +118,38 @@ export interface PresenceFileInfo {
    * waiting.
    */
   blockedSince?: string;
+  /**
+   * Human-readable label for this session, set via `/name <label>` or
+   * auto-detected from tmux (`#S:#I`). Used by `list_sessions` and
+   * `send_to_session` for friendly discovery. Optional/additive.
+   */
+  name?: string;
+  /**
+   * Current turn state of this session's model loop. Set at turn start and
+   * turn end by the REPL loop so peer senders can see whether the target is
+   * actively running a turn. Optional/additive.
+   *
+   * Values:
+   *   - `'idle'` — REPL is waiting for user input; an incoming peer message
+   *     will be delivered by the next idle-wake cycle.
+   *   - `'busy'` — a model turn is in progress; the peer message is queued
+   *     and will be delivered at the next turn boundary.
+   *   - `'blocked'` — the session is waiting on a human elicitation prompt.
+   */
+  turnState?: 'idle' | 'busy' | 'blocked';
+  /**
+   * ISO 8601 timestamp of the most recent {@link turnState} change. Lets a
+   * consumer render "idle for 4m" without storing a second timestamp.
+   * Optional/additive.
+   */
+  turnStateSince?: string;
+  /**
+   * True once this session's REPL peer-inbox notifier is watching its inbox,
+   * i.e. it will actually read cross-session messages. `send_to_session`
+   * refuses targets without it (one-shot `afk chat`, Telegram, and daemon have
+   * no receiver in v1). Optional/additive.
+   */
+  peerInbox?: boolean;
 }
 
 /**
@@ -321,6 +353,29 @@ export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.heartbeatAt = new Date().toISOString();
+      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+    } catch {
+      // Best-effort — presence is non-critical.
+    }
+  });
+}
+
+/**
+ * Apply `patch` to an existing presence record through this session's
+ * serialized write queue (see the Invariant above). The extension point for
+ * sibling modules (`presence.peer.ts`) that add fields: routing through here
+ * keeps every writer in ONE queue, so their read-modify-write cycles can never
+ * drop each other's mutations. No-op when the file is absent. Never throws.
+ */
+export async function patchPresenceFile(
+  sessionId: string,
+  patch: (record: PresenceFileInfo) => void,
+): Promise<void> {
+  return enqueuePresenceWrite(sessionId, async () => {
+    try {
+      const filePath = presenceFilePath(sessionId);
+      const parsed = JSON.parse(await readFile(filePath, 'utf8')) as PresenceFileInfo;
+      patch(parsed);
       await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
     } catch {
       // Best-effort — presence is non-critical.

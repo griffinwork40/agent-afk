@@ -7,6 +7,7 @@ import { MascotBar } from './mascot-bar.js';
 import { HealthRail } from '../../health-rail.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
+import { createReplPeerNotifier, type PeerInboxNotifier } from './peer-inbox-notifier.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
 import type { TurnState } from './repl-loop-shared.js';
 import { makeForegroundCountsGetter } from './foreground-counts.js';
@@ -26,6 +27,7 @@ export interface FooterSubsystems {
   verdictLedger: ReturnType<typeof createVerdictLedger>;
   shellPassthrough: ShellPassthrough;
   bgResultNotifier: BgResultNotifier;
+  peerNotifier: PeerInboxNotifier;
 }
 
 /**
@@ -311,6 +313,6 @@ export function setupFooterSubsystems(
     healthRail,
     verdictLedger,
     shellPassthrough,
-    bgResultNotifier,
+    bgResultNotifier, peerNotifier: createReplPeerNotifier(ctx),
   };
 }

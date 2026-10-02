@@ -31,6 +31,7 @@ import type { FooterSubsystems } from './footer-subsystems.js';
 import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-block-register.js';
 import { MomentumTicker } from './momentum-ticker.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
+import { prependTurnInjections, markPresenceTurn, autoResumeDirective } from './loop-iteration.injections.js';
 
 /** Per-handler timeout for the post-turn Stop notification. Tighter than the
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
@@ -46,16 +47,6 @@ const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
  * so auto-resume works across arbitrarily many turn boundaries.
  */
 const MAX_AUTO_RESUMES_PER_TURN = 3;
-
-/**
- * User-message text seeded when a background result auto-resumes an idle REPL.
- * The settled-result envelope is prepended at drain time (`runText = envelope +
- * this`), so the model sees the finished result followed by an explicit, honest
- * continue instruction — never a spoofed empty turn. The `[auto-resume]` tag
- * also makes the woken turn legible when scrolling back through history.
- */
-const AUTO_RESUME_DIRECTIVE =
-  '[auto-resume] The background task above has finished. Continue the work it was dispatched for.';
 
 /**
  * Phase 3 of the REPL loop — the main input loop.
@@ -80,7 +71,7 @@ export async function runInputLoop(
   footer: FooterSubsystems,
   history: ReplHistory,
 ): Promise<void> {
-  const { contextPane, loopStageBar, mascotBar, healthRail, verdictLedger, shellPassthrough, bgResultNotifier } =
+  const { contextPane, loopStageBar, mascotBar, healthRail, verdictLedger, shellPassthrough, bgResultNotifier, peerNotifier } =
     footer;
 
   // Init metadata (tools/MCP/SDK version) only resolves once the SDK
@@ -194,7 +185,7 @@ export async function runInputLoop(
   const tryAutoResume = (): void => {
     if (autoResumeCount >= MAX_AUTO_RESUMES_PER_TURN) return;
     if (!surface.isAwaitingInput() || !surface.bufferIsEmpty()) return;
-    if (!bgResultNotifier.hasPendingInjections()) return;
+    if (!bgResultNotifier.hasPendingInjections() && !peerNotifier.hasPendingInjections()) return;
 
     autoResumeCount++;
     // Audible cue (no-op unless AFK_BELL=1 + TTY) before the seeded turn takes
@@ -204,12 +195,13 @@ export async function runInputLoop(
     // the in-flight readLine with an empty payload, tripping the empty-input
     // `continue` below; the next iteration's seed fast-path fires the directive
     // and the drain prepends the result envelope (runText = envelope + directive).
-    seedBuffer = { text: AUTO_RESUME_DIRECTIVE, attachments: [] };
+    seedBuffer = { text: autoResumeDirective(bgResultNotifier.hasPendingInjections()), attachments: [] };
     surface.abortPendingRead();
   };
 
-  // Settled-event path: a background result just landed — try to wake.
+  // Settled-event path: a background result or peer message just landed — try to wake.
   bgResultNotifier.onInjectable = tryAutoResume;
+  peerNotifier.onInjectable = tryAutoResume;
 
   // Prompt-became-receptive path: the REPL just returned to its idle
   // readline after a turn completed. Re-check for results that settled
@@ -548,25 +540,8 @@ export async function runInputLoop(
         }
       }
 
-      // Prepend any pending shell-passthrough output blocks so the model
-      // sees `!cmd` output as context for the next user message. Matches
-      // Claude Code's transcript-injection semantics: shell output sits
-      // between user messages, model reads it on the next turn. The
-      // drain clears the buffer atomically — a single message carries
-      // every output accumulated since the previous user turn.
-      const shellInjection = shellPassthrough.drainInjections();
-      if (shellInjection.length > 0) {
-        runText = shellInjection + runText;
-      }
-
-      // Prepend any settled background-subagent results so the model sees
-      // them as context for the next user message — same next-turn delivery
-      // contract as shell passthrough above. Drain also emits a `delivered`
-      // witness event per job; /bgsub:join remains available for replay.
-      const bgAgentInjection = bgResultNotifier.drainInjections();
-      if (bgAgentInjection.length > 0) {
-        runText = bgAgentInjection + runText;
-      }
+      // Shell output, bg-subagent results, peer messages: see the module.
+      runText = prependTurnInjections(runText, [shellPassthrough, bgResultNotifier, peerNotifier]);
 
       // Prepend a pending post-turn Stop-hook correction stashed after the
       // previous turn's Stop dispatch (e.g. the terminal-state gate bouncing a
@@ -643,6 +618,7 @@ export async function runInputLoop(
         });
       });
       momentumTicker.start();
+      markPresenceTurn(ctx.stats.sessionId, 'busy');
       await runTurn({ text: runText, attachments }, ctx.session.current, ctx.stats, {
         setInFlight(v: boolean) { turnState.turnInFlight = v; },
         // Forward the promotion seam so Ctrl+B can background a running
@@ -708,6 +684,7 @@ export async function runInputLoop(
           // Refresh the health rail with the post-turn snapshot — turn count,
           // elapsed time, and accumulated tool calls are now fully updated.
           healthRail?.update(ctx.stats);
+          markPresenceTurn(ctx.stats.sessionId, 'idle');
         },
         rearmStatus: () => ctx.statusLine.rearm(),
         onTerminalState: (state, meta) => {

@@ -16,6 +16,7 @@ import {
   BASH_PASSTHROUGH_PROMPT,
   BG_SUBAGENT_RESULT_PROMPT,
   QUEUED_USER_MESSAGE_PROMPT,
+  PEER_MESSAGE_PROMPT,
   MEMORY_SYSTEM_PROMPT,
   MEMORY_SYSTEM_PROMPT_READONLY,
   MEMORY_SYSTEM_PROMPT_SEARCH_ONLY,
@@ -47,6 +48,7 @@ describe('resolveToolSystemPrompt', () => {
     expect(TOOL_SYSTEM_PROMPT).toContain(BASH_PASSTHROUGH_PROMPT);
     expect(TOOL_SYSTEM_PROMPT).toContain(BG_SUBAGENT_RESULT_PROMPT);
     expect(TOOL_SYSTEM_PROMPT).toContain(QUEUED_USER_MESSAGE_PROMPT);
+    expect(TOOL_SYSTEM_PROMPT).toContain(PEER_MESSAGE_PROMPT);
   });
 
   it('the base (skill-dispatch) prompt omits the interactive-only fragments', () => {
