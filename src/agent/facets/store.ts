@@ -257,19 +257,17 @@ export function getOrDeriveFacet(
   // Carry forward yield fields that the new derivation left null (#2777).
   // Contract: never downgrade — if derive already set produced_pr=true (from
   // a detected gh pr create URL), keep that; only fill in from stale when null.
+  // Each field is filled independently, so a probed pr_merged survives even
+  // when the new derive itself detected the PR (produced_pr already true).
   if (staleYield !== null) {
     const yt = facet.yield_tracking;
-    if (yt.produced_pr === null && staleYield.produced_pr !== null) {
-      facet.yield_tracking = {
-        ...yt,
-        produced_pr: staleYield.produced_pr,
-        pr_merged: yt.pr_merged === null ? staleYield.pr_merged : yt.pr_merged,
-        ...(yt.pr_url == null && staleYield.pr_url != null ? { pr_url: staleYield.pr_url } : {}),
-      };
-    } else if (yt.pr_url == null && staleYield.pr_url != null) {
-      // produced_pr already set but pr_url is missing — carry it forward
-      facet.yield_tracking = { ...yt, pr_url: staleYield.pr_url };
-    }
+    const producedPr = yt.produced_pr ?? staleYield.produced_pr;
+    facet.yield_tracking = {
+      ...yt,
+      produced_pr: producedPr,
+      pr_merged: producedPr === true ? (yt.pr_merged ?? staleYield.pr_merged) : null,
+      pr_url: yt.pr_url ?? staleYield.pr_url ?? null,
+    };
   }
 
   writeFacet(cachePath, facet);

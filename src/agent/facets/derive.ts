@@ -270,6 +270,7 @@ export function deriveSessionFacet(
   //   - non-empty assistant, no heading → 'unknown' (none)
   let outcome: FacetOutcome;
   let outcomeSource: FacetOutcomeSource;
+  let whatWasDone: string | undefined;
 
   if (turns.length === 0) {
     outcome = 'aborted';
@@ -282,6 +283,7 @@ export function deriveSessionFacet(
     if (parsed !== null) {
       outcome = terminalKindToOutcome(parsed.kind);
       outcomeSource = 'terminal_state';
+      whatWasDone = parsed.whatWasDone;
     } else {
       outcome = 'unknown';
       outcomeSource = 'none';
@@ -298,9 +300,7 @@ export function deriveSessionFacet(
   if (outcome === 'not_achieved' || outcome === 'aborted') {
     primarySuccess = 'none';
   } else if (outcome === 'fully_achieved') {
-    // Try to use whatWasDone from the parsed terminal state
-    const parsed = parseTerminalState(lastAssistant);
-    const whatWasDone = parsed?.whatWasDone;
+    // Prefer the Done block's "What was done" bullet, parsed once above.
     if (whatWasDone) {
       primarySuccess = oneLine(whatWasDone, 160) || sessionType;
     } else {
