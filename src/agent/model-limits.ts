@@ -86,6 +86,14 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'gpt-5.6-sol': 128_000,
   'gpt-5.6-terra': 128_000,
   'gpt-5.6-luna': 128_000,
+  // Cerebras Shared Inference. Invariant: AFK's choice, NOT a documented
+  // provider cap (Cerebras bounds completion length only by the context window).
+  // It must stay well below the free-tier window pinned in MODEL_CONTEXT_LIMITS:
+  // guardContextOverflow fails a request when input + this ceiling > window, so
+  // the 64k default against a ~64k window would fail every turn after the first.
+  // 16k output leaves ~48k for AFK's system prompt + tools + history.
+  'gpt-oss-120b': 16_384,
+  'qwen-3.8-27b': 16_384,
 } as const;
 
 const DEFAULT_MAX_OUTPUT = 64_000;
@@ -227,23 +235,24 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'mlx-community/qwen3-30b-a3b-4bit': 128_000,
   'mlx-community/qwen3-32b-4bit': 128_000,
   'mlx-community/qwen2.5-coder-32b-instruct-4bit': 131_072,
-  // Cerebras Shared Inference — paid-tier (Pay as You Go) context windows.
-  // Source: inference-docs.cerebras.ai/models/overview (2026-10-02), paid column.
-  // "131k" treated as 131_072 (nearest power-of-2 boundary); "128k" as 128_000
-  // (the overview page states no more precise figure on the per-model detail
-  // pages). Without these entries both ids fall through routesToOpenAICompatible
-  // (gpt-oss-120b starts with `gpt-`; qwen-3.8-27b has a qwen- prefix which
-  // is not in routesToOpenAICompatible, so it falls back to the 200k Anthropic
-  // default — wrong direction). Explicit entries fix both.
-  // Max output tokens: Cerebras API docs state completion length is bounded only
-  // by the context window; no per-model output cap is documented — no
-  // MODEL_MAX_OUTPUT_TOKENS entry added (would require invention, not clamping).
+  // Invariant: Cerebras Shared Inference — FREE-tier context windows, on purpose.
+  // Source: inference-docs.cerebras.ai/models/overview (2026-10-02): gpt-oss-120b
+  // 65k free / 131k paid; qwen-3.8-27b 64k free / 128k paid. The window depends
+  // on the ACCOUNT tier, which contextLimitFor() cannot see (it keys on the
+  // model id only), so the table pins the conservative value: overestimating
+  // means a hard provider 400 on long sessions, underestimating only means
+  // compacting earlier. Paid-tier users raise it per slot with the
+  // `contextWindow` binding override (#2793), e.g.
+  //   "local": { "id": "qwen-3.8-27b", "provider": "openai", "contextWindow": 128000 }
+  // "65k" is read as 65_536 and "64k" as 64_000 (no more precise figure is
+  // published). Without these entries gpt-oss-120b falls to the 262k
+  // openai-compatible default and qwen-3.8-27b to the 200k Anthropic default.
   // Routing/classification safety: gpt-oss-120b starts with `gpt-` so
   // routesToOpenAICompatible returns true (correct). isReasoningModel only
   // matches /^gpt-5/ and isOSeriesModel matches /^o[0-9]/ — neither fires on
   // `gpt-oss-120b`, preserving standard chat-completions request shaping.
-  'gpt-oss-120b': 131_072,
-  'qwen-3.8-27b': 128_000,
+  'gpt-oss-120b': 65_536,
+  'qwen-3.8-27b': 64_000,
   // xAI Grok — active wire ids only (docs.x.ai models/pricing, 2026-08).
   // Any other `grok-*` still routes and runs; unknown ids fall through to the
   // openai-compatible default via routesToOpenAICompatible (never invent
