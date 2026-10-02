@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { handleCommandError } from '../errors/index.js';
 import { formatCacheUsage } from './trace-usage-format.js';
 import { fmtBytes, fmtDuration, fmtTime, fmtUsd, label, truncate } from './trace-format.js';
+import { renderSecondaryEvent } from './trace-peer-format.js';
 import { buildTraceResults, DEFAULT_RESULT_LINES, withToolResult } from './trace-results.js';
 import { getTraceDir, getWitnessRoot } from '../../paths.js';
 import { readLedger } from '../../agent/session-ledger.js';
@@ -486,11 +487,9 @@ function renderEvent(event: TraceEvent, ctx: RenderContext): string | null {
       );
     }
 
-    default: {
-      // Forward-compatible: render an unknown future kind rather than drop it.
-      const k = (event as { kind: string }).kind;
-      return line(k, '(unrecognized event kind)');
-    }
+    default:
+      // peer_message + forward-compatible rendering of unknown future kinds.
+      return renderSecondaryEvent(event, line);
   }
 }
 

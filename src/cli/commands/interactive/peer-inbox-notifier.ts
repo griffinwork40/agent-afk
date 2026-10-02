@@ -90,6 +90,13 @@ export class PeerInboxNotifier {
   private watchedId: string | undefined;
   private watchAc: AbortController | undefined;
   private pollHandle: ReturnType<typeof setInterval> | undefined;
+  /**
+   * Set by dispose(). Every async continuation (tick, scan, watcher setup)
+   * re-checks it after its awaits: an in-flight tick that resumed after
+   * dispose() would otherwise resurrect an orphaned watcher that keeps
+   * claiming messages into a buffer nothing drains.
+   */
+  private disposed = false;
   /** Operator `/name` choice; survives until the presence file exists. */
   private desiredName: string | undefined;
 
@@ -113,6 +120,7 @@ export class PeerInboxNotifier {
   /** Begin watching + polling. Idempotent. */
   start(): void {
     if (this.pollHandle !== undefined) return;
+    this.disposed = false;
     this.pollHandle = setInterval(() => void this.tick(), this.pollMs);
     this.pollHandle.unref?.();
     void this.tick();
@@ -120,6 +128,7 @@ export class PeerInboxNotifier {
 
   /** Stop watcher and poll. Idempotent. */
   dispose(): void {
+    this.disposed = true;
     if (this.pollHandle !== undefined) clearInterval(this.pollHandle);
     this.pollHandle = undefined;
     this.stopWatcher();
@@ -160,7 +169,7 @@ export class PeerInboxNotifier {
   /** Run one scan now (tests and the poll tick). Serialized. */
   async scan(): Promise<void> {
     const sessionId = this.opts.getSessionId();
-    if (sessionId === undefined) return;
+    if (sessionId === undefined || this.disposed) return;
     if (this.scanning) { this.rescan = true; return; }
     this.scanning = true;
     try {
@@ -176,6 +185,7 @@ export class PeerInboxNotifier {
   }
 
   private async scanOnce(sessionId: string): Promise<void> {
+    if (this.disposed) return;
     const wasEmpty = this.buffer.length === 0;
     const { claimed, held } = await scanPeerInbox({
       sessionId,
@@ -207,6 +217,7 @@ export class PeerInboxNotifier {
   }
 
   private async tick(): Promise<void> {
+    if (this.disposed) return;
     const sessionId = this.opts.getSessionId();
     if (sessionId !== undefined && sessionId !== this.watchedId) await this.startWatching(sessionId);
     await this.scan();
@@ -237,6 +248,7 @@ export class PeerInboxNotifier {
     } catch {
       return; // the poll keeps retrying scans; nothing to watch yet
     }
+    if (this.disposed || this.watchedId !== sessionId) return; // disposed or re-keyed mid-setup
     void this.advertise(sessionId);
     const ac = new AbortController();
     this.watchAc = ac;

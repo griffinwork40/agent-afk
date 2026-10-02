@@ -7,7 +7,8 @@ import { MascotBar } from './mascot-bar.js';
 import { HealthRail } from '../../health-rail.js';
 import { ShellPassthrough } from './shell-passthrough.js';
 import { BgResultNotifier } from './bg-result-notifier.js';
-import { createReplPeerNotifier, type PeerInboxNotifier } from './peer-inbox-notifier.js';
+import type { PeerInboxNotifier } from './peer-inbox-notifier.js';
+import { buildAndWirePeerNotifier } from './footer-subsystems.peer.js';
 import { setShellPassthrough } from '../../slash/commands/sh.js';
 import type { TurnState } from './repl-loop-shared.js';
 import { makeForegroundCountsGetter } from './foreground-counts.js';
@@ -313,6 +314,6 @@ export function setupFooterSubsystems(
     healthRail,
     verdictLedger,
     shellPassthrough,
-    bgResultNotifier, peerNotifier: createReplPeerNotifier(ctx),
+    bgResultNotifier, peerNotifier: buildAndWirePeerNotifier(ctx),
   };
 }
