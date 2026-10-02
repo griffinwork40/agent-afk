@@ -18,6 +18,7 @@ import {
   FACET_VERSION,
   SessionFacetSchema,
   type FacetOutcome,
+  type FacetOutcomeSource,
   type SessionFacet,
   type StoredSessionInput,
   type SubagentInvocation,
@@ -26,6 +27,7 @@ import {
   type YieldTracking,
 } from './schema.js';
 import { computeParallelDispatch } from './parallel-dispatch.js';
+import { parseTerminalState } from '../outcomes/terminal-state.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -59,35 +61,21 @@ const EVIDENCE_CAP = 50;
 const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
 const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
 
-// Invariant: matches both **Bold** and heading (## / ###) terminal-state markers
-// emitted by the agent's end-of-turn protocol. The global flag lets us iterate
-// all occurrences and pick the last one (last-marker-wins semantics). Reuses the
-// same vocabulary as parseSelfReport in src/agent/outcomes/lf-immediate.ts — the
-// two must stay in sync if new terminal states are added.
-const TERMINAL_STATE_RE = /(?:\*\*|#{2,3}\s*)(Done|Blocked|Asking|Interrupted)\b/gi;
+// Invariant: matches a GitHub PR URL in gh pr create output.
+// gh pr create prints the URL on its own line: https://github.com/<owner>/<repo>/pull/<n>
+const GH_PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 
 /**
- * Map the last terminal-state marker found in `text` to a FacetOutcome.
- * Returns null when no recognizable marker is present (caller falls through
- * to the existing heuristic).
- *
- * Mapping: Done -> fully_achieved; Asking -> partially_achieved;
- *          Blocked -> not_achieved; Interrupted -> aborted.
+ * Map a parsed TerminalKind to a FacetOutcome.
+ * Mapping: done -> fully_achieved; asking -> partially_achieved;
+ *          blocked -> not_achieved; interrupted -> aborted.
  */
-function terminalStateToOutcome(text: string): FacetOutcome | null {
-  let lastWord: string | undefined;
-  let m: RegExpExecArray | null;
-  // Contract: TERMINAL_STATE_RE has the `g` flag; re-use by resetting lastIndex.
-  TERMINAL_STATE_RE.lastIndex = 0;
-  while ((m = TERMINAL_STATE_RE.exec(text)) !== null) {
-    lastWord = m[1]?.toLowerCase();
-  }
-  if (lastWord === undefined) return null;
-  if (lastWord === 'done') return 'fully_achieved';
-  if (lastWord === 'asking') return 'partially_achieved';
-  if (lastWord === 'blocked') return 'not_achieved';
-  if (lastWord === 'interrupted') return 'aborted';
-  return null;
+function terminalKindToOutcome(kind: string): FacetOutcome {
+  if (kind === 'done') return 'fully_achieved';
+  if (kind === 'asking') return 'partially_achieved';
+  if (kind === 'blocked') return 'not_achieved';
+  if (kind === 'interrupted') return 'aborted';
+  return 'unknown';
 }
 
 /** Parse a stringified tool input to an object, swallowing malformed JSON. */
@@ -153,6 +141,8 @@ interface AggregateToolEventsResult {
   filesEdited: number;
   bashCommands: number;
   commits: number;
+  /** GitHub PR URL from a gh pr create result, if found. */
+  detectedPrUrl: string | null;
 }
 
 function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsResult {
@@ -166,6 +156,7 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
   let filesEdited = 0;
   let bashCommands = 0;
   let commits = 0;
+  let detectedPrUrl: string | null = null;
 
   for (const ev of allEvents) {
     const name = ev.toolName;
@@ -196,6 +187,18 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
       // raw-input.ts.
       const cmd = asString(parsed?.['command']) ?? ev.input;
       if (cmd && COMMIT_RE.test(cmd)) commits += 1;
+
+      // PR detection (#2777): when a bash event whose input looks like a
+      // `gh pr create` command has a result containing a GitHub PR URL, record
+      // the URL. We never set produced_pr=false here — that is left to the async
+      // yield probe. Only the first URL wins (last-one-wins could pick up noise).
+      if (detectedPrUrl === null && ev.isError !== true && ev.result) {
+        const inputStr = asString(parsed?.['command']) ?? ev.input ?? '';
+        if (/\bgh\b.*\bpr\b.*\bcreate\b/i.test(inputStr)) {
+          const m = GH_PR_URL_RE.exec(ev.result);
+          if (m) detectedPrUrl = m[0];
+        }
+      }
     }
 
     if (FILE_TOOLS.has(name)) {
@@ -219,7 +222,7 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
     }
   }
 
-  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits };
+  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl };
 }
 
 export function deriveSessionFacet(
@@ -236,7 +239,12 @@ export function deriveSessionFacet(
     : dedupeToolEvents(turns.flatMap((t) => t.toolEvents ?? []));
 
   // --- mechanical: tool + error aggregation ---
-  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits } = aggregateToolEvents(allEvents);
+  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl } = aggregateToolEvents(allEvents);
+
+  // tool_errors_total = parent tool_errors + sum of per-subagent tool_errors (#2777)
+  const subagentToolErrorsTotal = (options.subagentBreakdown ?? [])
+    .reduce((acc, s) => acc + s.tool_errors, 0);
+  const toolErrorsTotal = toolErrors + subagentToolErrorsTotal;
 
   // --- semantic (heuristic) ---
   const firstPrompt = turns[0]?.user ?? '';
@@ -255,24 +263,53 @@ export function deriveSessionFacet(
 
   const lastAssistant = [...turns].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
 
+  // Determine outcome and outcome_source (#2777):
+  //   - zero turns → 'aborted' (structural)
+  //   - empty last assistant → 'partially_achieved' (structural)
+  //   - terminal-state heading found → mapped kind (terminal_state)
+  //   - non-empty assistant, no heading → 'unknown' (none)
   let outcome: FacetOutcome;
+  let outcomeSource: FacetOutcomeSource;
+
   if (turns.length === 0) {
     outcome = 'aborted';
+    outcomeSource = 'structural';
   } else if (lastAssistant.trim().length === 0) {
     outcome = 'partially_achieved';
+    outcomeSource = 'structural';
   } else {
-    // When the last assistant turn carries a terminal-state heading, derive the
-    // outcome from it. Falls through to 'fully_achieved' when no marker is found
-    // (preserving the prior behaviour exactly for sessions without a heading).
-    outcome = terminalStateToOutcome(lastAssistant) ?? 'fully_achieved';
+    const parsed = parseTerminalState(lastAssistant);
+    if (parsed !== null) {
+      outcome = terminalKindToOutcome(parsed.kind);
+      outcomeSource = 'terminal_state';
+    } else {
+      outcome = 'unknown';
+      outcomeSource = 'none';
+    }
   }
 
-  // Skip-gate semantics (consumers compare primary_success === 'none' and read
-  // friction_detail non-emptiness): 'none' for non-completing sessions.
-  const succeeded = outcome === 'fully_achieved' || outcome === 'partially_achieved';
-  const primarySuccess = succeeded
-    ? oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType
-    : 'none';
+  // primary_success (#2777):
+  //   - Done + whatWasDone parsed → oneLine(whatWasDone, 160)
+  //   - Done, no whatWasDone → existing behavior (lastAssistant fallback)
+  //   - partially_achieved (empty/structural) → firstPrompt or sessionType
+  //   - not_achieved / aborted → 'none'
+  //   - unknown → existing last-assistant fallback (not 'none')
+  let primarySuccess: string;
+  if (outcome === 'not_achieved' || outcome === 'aborted') {
+    primarySuccess = 'none';
+  } else if (outcome === 'fully_achieved') {
+    // Try to use whatWasDone from the parsed terminal state
+    const parsed = parseTerminalState(lastAssistant);
+    const whatWasDone = parsed?.whatWasDone;
+    if (whatWasDone) {
+      primarySuccess = oneLine(whatWasDone, 160) || sessionType;
+    } else {
+      primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+    }
+  } else {
+    // partially_achieved or unknown — use existing fallback
+    primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  }
 
   const frictionDetail =
     toolErrors > 0
@@ -301,10 +338,13 @@ export function deriveSessionFacet(
   // Yield tracking: is_scheduled_session is mechanical (from source); produced_pr
   // and pr_merged require async git/gh probes run by the session-end hook after
   // teardown, so they start as null here and are written back by that hook.
+  // Exception: when derive detects a `gh pr create` URL in bash output (#2777),
+  // set produced_pr=true and record the URL immediately. Never set false here.
   const yieldTracking: YieldTracking = {
     is_scheduled_session: source === 'daemon',
-    produced_pr: null,
+    produced_pr: detectedPrUrl !== null ? true : null,
     pr_merged: null,
+    ...(detectedPrUrl !== null ? { pr_url: detectedPrUrl } : { pr_url: null }),
   };
 
   const facet: SessionFacet = {
@@ -337,11 +377,13 @@ export function deriveSessionFacet(
     subagents,
 
     tool_errors: toolErrors,
+    tool_errors_total: toolErrorsTotal,
     tool_error_categories: toolErrorCategories,
     friction_counts: { ...toolErrorCategories },
     friction_detail: frictionDetail,
 
     outcome,
+    outcome_source: outcomeSource,
     primary_success: primarySuccess,
     world_changes: {
       files_written: filesWritten,

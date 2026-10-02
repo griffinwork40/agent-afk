@@ -10,10 +10,12 @@ Every downstream use of session data (routing, skill evolution, evals, any
 future training) needs to know whether a session actually worked. Today it
 cannot:
 
-- `outcome` is `fully_achieved` whenever the last assistant reply is non-empty
-  (`src/agent/facets/derive.ts:237-240`). 4,444 of 4,497 facets say
-  `fully_achieved`. The label never abstains, so it carries almost no
-  information.
+- `outcome` was `fully_achieved` whenever the last assistant reply was non-empty
+  (pre-v7). As of v7 (#2777), sessions without a recognizable terminal-state
+  heading now get `outcome='unknown'` rather than `'fully_achieved'`. This is a
+  step toward the verified outcome goal — the label now abstains instead of
+  fabricating success — but the `verified_outcome` LF system below is still the
+  right long-term answer for evidence-backed labels.
 - `yield_tracking.produced_pr / pr_merged` exists but is probed once, at
   teardown, by branch name (`src/agent/facets/yield-probe.ts`). In the newest
   1,500 facets it is `null/null` for 1,439, and `pr_merged` is read before most

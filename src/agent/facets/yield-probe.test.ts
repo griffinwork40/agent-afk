@@ -8,7 +8,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { getCurrentBranch, queryPrState, writeFacetYield, patchYieldFields } from './yield-probe.js';
+import { getCurrentBranch, queryPrState, queryPrStateByUrl, writeFacetYield, patchYieldFields } from './yield-probe.js';
 import type { ExecFnYield } from './yield-probe.js';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +84,49 @@ describe('queryPrState', () => {
 });
 
 // ---------------------------------------------------------------------------
+// queryPrStateByUrl (#2777)
+// ---------------------------------------------------------------------------
+
+describe('queryPrStateByUrl', () => {
+  const prUrl = 'https://github.com/owner/repo/pull/42';
+
+  it('returns "merged" for a merged PR', async () => {
+    const exec: ExecFnYield = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ state: 'MERGED' }),
+      stderr: '',
+    });
+    expect(await queryPrStateByUrl(exec, prUrl)).toBe('merged');
+    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'view', prUrl, '--json', 'state'], expect.any(Object));
+  });
+
+  it('returns "open" for an open PR', async () => {
+    const exec: ExecFnYield = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ state: 'OPEN' }),
+      stderr: '',
+    });
+    expect(await queryPrStateByUrl(exec, prUrl)).toBe('open');
+  });
+
+  it('returns "closed" for a closed PR', async () => {
+    const exec: ExecFnYield = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({ state: 'CLOSED' }),
+      stderr: '',
+    });
+    expect(await queryPrStateByUrl(exec, prUrl)).toBe('closed');
+  });
+
+  it('returns "error" on gh failure', async () => {
+    const exec: ExecFnYield = vi.fn().mockRejectedValue(new Error('gh not found'));
+    expect(await queryPrStateByUrl(exec, prUrl)).toBe('error');
+  });
+
+  it('returns "error" on malformed JSON', async () => {
+    const exec: ExecFnYield = vi.fn().mockResolvedValue({ stdout: 'not json', stderr: '' });
+    expect(await queryPrStateByUrl(exec, prUrl)).toBe('error');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // writeFacetYield integration
 // ---------------------------------------------------------------------------
 
@@ -149,9 +192,9 @@ describe('patchYieldFields', () => {
     const sessionId = 'sess-atomic-write-test';
     const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-test-'));
 
-    // Minimal valid facet JSON — satisfies SessionFacetSchema (passthrough allows any version).
+    // Minimal valid facet JSON — satisfies SessionFacetSchema v7 (passthrough allows extra fields).
     const facet = {
-      facet_version: 6,
+      facet_version: 7, // v7: added outcome_source, tool_errors_total, pr_url
       session_id: sessionId,
       source: 'cli',
       model: 'claude-opus-4-5',
@@ -176,14 +219,16 @@ describe('patchYieldFields', () => {
       skills: [],
       subagents: [],
       tool_errors: 0,
+      tool_errors_total: 0,
       tool_error_categories: {},
       friction_counts: {},
       friction_detail: '',
       outcome: 'fully_achieved',
+      outcome_source: 'terminal_state',
       primary_success: 'test',
       world_changes: { files_written: 0, files_edited: 0, bash_commands: 0, commits: 0, mutated: false },
       parallel_dispatch: { total_tool_calls: 0, parallel_tool_calls: 0, parallel_turns: 0, tool_turns: 0, ratio: null },
-      yield_tracking: { is_scheduled_session: false, produced_pr: null, pr_merged: null },
+      yield_tracking: { is_scheduled_session: false, produced_pr: null, pr_merged: null, pr_url: null },
       decisions: [],
       evidence_pointers: [],
     };
@@ -197,5 +242,62 @@ describe('patchYieldFields', () => {
     ) as { yield_tracking: { produced_pr: unknown; pr_merged: unknown } };
     expect(written.yield_tracking.produced_pr).toBe(true);
     expect(written.yield_tracking.pr_merged).toBe(true);
+  });
+
+  it('never downgrades produced_pr=true to false when probe finds no PR on branch (#2777)', () => {
+    const sessionId = 'sess-no-downgrade';
+    const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-test-'));
+
+    // Cached facet with produced_pr=true (set by derive.ts detecting gh pr create URL)
+    const facet = {
+      facet_version: 7,
+      session_id: sessionId,
+      source: 'cli',
+      model: 'claude-opus-4-5',
+      derived_at: new Date().toISOString(),
+      derived_from: 'afk-session',
+      source_session_path: `/fake/path/${sessionId}.json`,
+      source_session_mtime_ms: Date.now(),
+      subagent_persistence: 'not_persisted',
+      start_time: new Date().toISOString(),
+      end_time: new Date().toISOString(),
+      duration_minutes: 1,
+      underlying_goal: 'test goal',
+      first_prompt: 'test prompt',
+      goal_categories: {},
+      session_type: 'task',
+      brief_summary: 'test summary',
+      total_turns: 1,
+      user_message_count: 1,
+      assistant_message_count: 1,
+      tool_counts: {},
+      commands: [],
+      skills: [],
+      subagents: [],
+      tool_errors: 0,
+      tool_errors_total: 0,
+      tool_error_categories: {},
+      friction_counts: {},
+      friction_detail: '',
+      outcome: 'fully_achieved',
+      outcome_source: 'terminal_state',
+      primary_success: 'test',
+      world_changes: { files_written: 0, files_edited: 0, bash_commands: 0, commits: 0, mutated: false },
+      parallel_dispatch: { total_tool_calls: 0, parallel_tool_calls: 0, parallel_turns: 0, tool_turns: 0, ratio: null },
+      yield_tracking: { is_scheduled_session: false, produced_pr: true, pr_merged: null, pr_url: 'https://github.com/owner/repo/pull/42' },
+      decisions: [],
+      evidence_pointers: [],
+    };
+
+    writeFileSync(join(cacheDir, `${sessionId}.json`), JSON.stringify(facet, null, 2) + '\n', 'utf8');
+
+    // Calling patchYieldFields with produced_pr=false must NOT overwrite the existing true
+    patchYieldFields(sessionId, false, null, cacheDir);
+
+    const written = JSON.parse(
+      require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),
+    ) as { yield_tracking: { produced_pr: unknown; pr_merged: unknown; pr_url: unknown } };
+    expect(written.yield_tracking.produced_pr).toBe(true); // not downgraded
+    expect(written.yield_tracking.pr_url).toBe('https://github.com/owner/repo/pull/42'); // preserved
   });
 });
