@@ -27,10 +27,13 @@ from the agent grading its own transcript, (2) allowed to say "unknown", and
 
 ## Design principles
 
-1. **Additive.** `outcome` and `primary_success` stay byte-identical. They have
-   string-level consumers: `fragility-audit`, `omission-audit`,
-   `scope-debt-collector`, `error-locality`, the `get_facet` tool, and three
-   pinned tests in `derive.test.ts:107-160`.
+1. **Additive.** `outcome` and `primary_success` remain stable for existing
+   consumers. Note: as of #2777, `outcome` gained the `unknown` value (sessions
+   without a recognizable terminal-state heading, previously `fully_achieved`),
+   and `primary_success` for Done sessions now comes from the Done block's
+   "What was done" bullet rather than the raw last-assistant text. Existing
+   consumers: `fragility-audit`, `omission-audit`, `scope-debt-collector`,
+   `error-locality`, the `get_facet` tool, and tests in `derive.test.ts`.
 2. **Self-report is never sufficient.** A `**Done**` block is recorded as
    evidence but cannot by itself produce `succeeded`. This is the Goodhart
    guard: the label must not reward the agent for claiming success.

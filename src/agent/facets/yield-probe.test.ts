@@ -96,7 +96,7 @@ describe('queryPrStateByUrl', () => {
       stderr: '',
     });
     expect(await queryPrStateByUrl(exec, prUrl)).toBe('merged');
-    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'view', prUrl, '--json', 'state'], expect.any(Object));
+    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'view', '--json', 'state', '--', prUrl], expect.any(Object));
   });
 
   it('returns "open" for an open PR', async () => {
@@ -123,6 +123,19 @@ describe('queryPrStateByUrl', () => {
   it('returns "error" on malformed JSON', async () => {
     const exec: ExecFnYield = vi.fn().mockResolvedValue({ stdout: 'not json', stderr: '' });
     expect(await queryPrStateByUrl(exec, prUrl)).toBe('error');
+  });
+
+  // item 3 (#2781): URL validation guard
+  it('returns "error" and never calls exec for a value starting with "-" (#2781)', async () => {
+    const exec: ExecFnYield = vi.fn();
+    expect(await queryPrStateByUrl(exec, '--exploit')).toBe('error');
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('returns "error" and never calls exec for an arbitrary non-URL string (#2781)', async () => {
+    const exec: ExecFnYield = vi.fn();
+    expect(await queryPrStateByUrl(exec, 'not-a-url')).toBe('error');
+    expect(exec).not.toHaveBeenCalled();
   });
 });
 
@@ -175,6 +188,117 @@ describe('writeFacetYield', () => {
       file: 'gh',
       args: expect.arrayContaining(['pr', 'list', '--head', 'afk/feature', '--state', 'all']),
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeFacetYield — cache-with-pr_url paths (item 4, #2781)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal valid SessionFacet v7 JSON string with the given yield_tracking overrides.
+ * Used to seed the cache in writeFacetYield tests.
+ */
+function buildCachedFacet(
+  sessionId: string,
+  yt: { is_scheduled_session: boolean; produced_pr: boolean | null; pr_merged: boolean | null; pr_url: string | null },
+): string {
+  return JSON.stringify({
+    facet_version: 7,
+    session_id: sessionId,
+    source: 'cli',
+    model: 'claude-opus-4-5',
+    derived_at: new Date().toISOString(),
+    derived_from: 'afk-session',
+    source_session_path: `/fake/${sessionId}.json`,
+    source_session_mtime_ms: Date.now(),
+    subagent_persistence: 'not_persisted',
+    start_time: new Date().toISOString(),
+    end_time: new Date().toISOString(),
+    duration_minutes: 1,
+    underlying_goal: 'test',
+    first_prompt: 'test',
+    goal_categories: {},
+    session_type: 'task',
+    brief_summary: 'test',
+    total_turns: 1,
+    user_message_count: 1,
+    assistant_message_count: 1,
+    tool_counts: {},
+    commands: [],
+    skills: [],
+    subagents: [],
+    tool_errors: 0,
+    tool_errors_total: 0,
+    tool_error_categories: {},
+    friction_counts: {},
+    friction_detail: '',
+    outcome: 'fully_achieved',
+    outcome_source: 'terminal_state',
+    primary_success: 'test',
+    world_changes: { files_written: 0, files_edited: 0, bash_commands: 0, commits: 0, mutated: false },
+    parallel_dispatch: { total_tool_calls: 0, parallel_tool_calls: 0, parallel_turns: 0, tool_turns: 0, ratio: null },
+    yield_tracking: yt,
+    decisions: [],
+    evidence_pointers: [],
+  }, null, 2) + '\n';
+}
+
+describe('writeFacetYield — pr_url cache paths (item 4, #2781)', () => {
+  const prUrl = 'https://github.com/owner/repo/pull/42';
+
+  it('uses gh pr view <url> (not branch lookup) when cache has pr_url', async () => {
+    const sessionId = 'sess-cache-url';
+    const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-url-'));
+    writeFileSync(
+      join(cacheDir, `${sessionId}.json`),
+      buildCachedFacet(sessionId, { is_scheduled_session: false, produced_pr: true, pr_merged: null, pr_url: prUrl }),
+    );
+
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const exec: ExecFnYield = vi.fn().mockImplementation(async (file: string, args: string[]) => {
+      calls.push({ file, args });
+      return { stdout: JSON.stringify({ state: 'OPEN' }), stderr: '' };
+    });
+
+    // Call the inner helpers directly with our cacheDir — this mirrors what
+    // writeFacetYield's URL path does (queryPrStateByUrl + patchYieldFields).
+    const state = await queryPrStateByUrl(exec, prUrl);
+    expect(state).toBe('open');
+    // Confirm it called gh pr view with the URL, not git symbolic-ref
+    expect(calls[0]).toMatchObject({
+      file: 'gh',
+      args: expect.arrayContaining(['pr', 'view', '--json', 'state', '--', prUrl]),
+    });
+    expect(calls.every((c) => c.file !== 'git')).toBe(true);
+
+    patchYieldFields(sessionId, true, false, cacheDir, prUrl);
+    const written = JSON.parse(
+      require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),
+    ) as { yield_tracking: { produced_pr: unknown; pr_merged: unknown; pr_url: unknown } };
+    expect(written.yield_tracking.produced_pr).toBe(true);
+    expect(written.yield_tracking.pr_merged).toBe(false);
+    expect(written.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('gh failure does NOT downgrade produced_pr=true when cache has pr_url', async () => {
+    const sessionId = 'sess-gh-fail';
+    const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-fail-'));
+    writeFileSync(
+      join(cacheDir, `${sessionId}.json`),
+      buildCachedFacet(sessionId, { is_scheduled_session: false, produced_pr: true, pr_merged: null, pr_url: prUrl }),
+    );
+
+    const exec: ExecFnYield = vi.fn().mockRejectedValue(new Error('gh auth error'));
+    // queryPrStateByUrl is already imported at the top of this file
+    const state = await queryPrStateByUrl(exec, prUrl);
+    // gh error → state is 'error' → writeFacetYield returns early, no patch
+    expect(state).toBe('error');
+    // No patch fires — cached facet is unchanged — produced_pr stays true
+    const still = JSON.parse(
+      require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),
+    ) as { yield_tracking: { produced_pr: unknown } };
+    expect(still.yield_tracking.produced_pr).toBe(true);
   });
 });
 

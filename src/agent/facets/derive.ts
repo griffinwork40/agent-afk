@@ -28,6 +28,7 @@ import {
 } from './schema.js';
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
+import { BARE_PR_URL_RESULT, PR_QUERY_INPUT } from '../outcomes/artifacts.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -61,9 +62,23 @@ const EVIDENCE_CAP = 50;
 const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
 const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
 
-// Invariant: matches a GitHub PR URL in gh pr create output.
-// gh pr create prints the URL on its own line: https://github.com/<owner>/<repo>/pull/<n>
-const GH_PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
+// Invariant: a GitHub PR URL that is the whole of one output line. gh pr create
+// prints the URL on its own line; a URL embedded in grep/rg output or prose is
+// on a line with other text and does not match.
+const GH_PR_URL_LINE_RE = /^[ \t]*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+)[ \t]*$/gm;
+
+// Invariant: `gh pr create` counts as an invocation only at the start of a
+// line or right after a shell separator (`;`, `&&`, `||`, `|`). This rejects
+// the phrase as an argument (rg -n "gh pr create" src). It is an approximation:
+// a separator inside a quoted string can still match.
+const GH_PR_CREATE_INVOCATION_RE = /(?:^|[;|&])[ \t]*gh[ \t]+pr[ \t]+create(?:[ \t]|$)/m;
+
+/** Last GitHub PR URL that sits alone on an output line, or null. */
+function lastOwnLinePrUrl(result: string): string | null {
+  let url: string | null = null;
+  for (const m of result.matchAll(GH_PR_URL_LINE_RE)) url = m[1] ?? url;
+  return url;
+}
 
 /**
  * Map a parsed TerminalKind to a FacetOutcome.
@@ -188,15 +203,22 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
       const cmd = asString(parsed?.['command']) ?? ev.input;
       if (cmd && COMMIT_RE.test(cmd)) commits += 1;
 
-      // PR detection (#2777): when a bash event whose input looks like a
-      // `gh pr create` command has a result containing a GitHub PR URL, record
-      // the URL. We never set produced_pr=false here — that is left to the async
-      // yield probe. Only the first URL wins (last-one-wins could pick up noise).
-      if (detectedPrUrl === null && ev.isError !== true && ev.result) {
+      // PR detection (#2777): when a bash event whose input looks like a real
+      // `gh pr create` invocation has a result containing a GitHub PR URL on
+      // its own line, record the URL. The LAST URL wins (in case of multiple).
+      // We never set produced_pr=false here — that is left to the async yield probe.
+      // Truncated-input path: if the stored input ends in '…', the command may
+      // have been cut before `gh pr create`; treat a bare-PR-URL result with a
+      // non-query truncated input the same as artifacts.ts does.
+      if (ev.isError !== true && ev.result) {
         const inputStr = asString(parsed?.['command']) ?? ev.input ?? '';
-        if (/\bgh\b.*\bpr\b.*\bcreate\b/i.test(inputStr)) {
-          const m = GH_PR_URL_RE.exec(ev.result);
-          if (m) detectedPrUrl = m[0];
+        const truncated = inputStr.trimEnd().endsWith('\u2026');
+        // The truncated path requires the WHOLE result to be a bare PR URL
+        // (gh pr create's stdout shape), same as artifacts.ts isPRCreateEvent.
+        const isTruncatedCreate =
+          truncated && BARE_PR_URL_RESULT.test(ev.result) && !PR_QUERY_INPUT.test(inputStr);
+        if (GH_PR_CREATE_INVOCATION_RE.test(inputStr) || isTruncatedCreate) {
+          detectedPrUrl = lastOwnLinePrUrl(ev.result) ?? detectedPrUrl;
         }
       }
     }

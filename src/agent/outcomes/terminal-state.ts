@@ -129,14 +129,43 @@ export function parseTerminalState(text: string): TerminalState | null {
   if (!text) return null;
 
   const lines = text.split('\n');
+
+  // Pre-compute which lines are inside a fenced code block (``` or ~~~).
+  // A forward pass over the WHOLE text ensures a fence opened before the tail
+  // window is still tracked correctly. Fence-delimiter lines themselves are
+  // also marked as fenced (they are skipped together with the content).
+  const isFenced: boolean[] = new Array(lines.length).fill(false);
+  let inFence = false;
+  let fenceMarker = '';
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = (lines[i] ?? '').trimStart();
+    if (!inFence) {
+      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+        inFence = true;
+        fenceMarker = trimmed.startsWith('```') ? '```' : '~~~';
+        isFenced[i] = true;
+      }
+    } else {
+      isFenced[i] = true;
+      if (trimmed.startsWith(fenceMarker)) {
+        inFence = false;
+        fenceMarker = '';
+      }
+    }
+  }
+
   const tail = lines.slice(Math.max(0, lines.length - TAIL_LINES));
+  const tailOffset = Math.max(0, lines.length - TAIL_LINES);
 
   // Walk backward looking for the most recent heading-like line that resolves
   // to a terminal kind. The model's own structure puts it last.
+  // Skip lines inside fenced code blocks — a bare `done` in a shell for-loop
+  // must not be treated as the Done heading.
   let headingIdx = -1;
   let kind: TerminalKind | null = null;
 
   for (let i = tail.length - 1; i >= 0; i--) {
+    if (isFenced[tailOffset + i]) continue;
     const line = tail[i] ?? '';
     const k = lineToKind(line);
     if (k) {

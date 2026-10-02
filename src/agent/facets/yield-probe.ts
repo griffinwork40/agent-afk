@@ -40,6 +40,11 @@ export type ExecFnYield = (
 
 const EXEC_TIMEOUT_MS = 10_000;
 
+// Invariant: only a well-formed GitHub PR URL is passed to gh pr view.
+// A value starting with '-' would be mis-parsed as a flag; other malformed
+// values could produce surprising gh output. Validated before any exec call.
+const GITHUB_PR_URL_RE = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/;
+
 /**
  * Return the short branch name for the cwd, or null on failure.
  *
@@ -114,10 +119,12 @@ export async function queryPrStateByUrl(
   prUrl: string,
   cwd?: string,
 ): Promise<'merged' | 'open' | 'closed' | 'error'> {
+  // Guard: reject malformed or flag-like values before passing to gh.
+  if (!GITHUB_PR_URL_RE.test(prUrl)) return 'error';
   try {
     const { stdout } = await execFn(
       'gh',
-      ['pr', 'view', prUrl, '--json', 'state'],
+      ['pr', 'view', '--json', 'state', '--', prUrl],
       { cwd, timeout: EXEC_TIMEOUT_MS },
     );
     let parsed: unknown;
@@ -255,11 +262,7 @@ export async function writeFacetYield(
 
   // Path 2: no detected pr_url — branch-based lookup
   const branch = await getCurrentBranch(execFn, cwd);
-  if (!branch) {
-    // If cached facet already has produced_pr=true (from derive), don't erase it
-    if (cachedProducedPr === true) return;
-    return;
-  }
+  if (!branch) return;
 
   const prState = await queryPrState(execFn, branch, cwd);
   if (prState === 'error') {

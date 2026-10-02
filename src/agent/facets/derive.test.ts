@@ -649,6 +649,136 @@ describe('deriveSessionFacet', () => {
     expect(facet.yield_tracking.pr_url).toBeNull();
   });
 
+  // item 1: quoted search must NOT be detected as a gh pr create invocation
+  it('yield_tracking: rg search for "gh pr create" with PR URL in output is NOT detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/99';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-quoted-search',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'find gh pr create',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'search-1',
+          // A grep/rg command that CONTAINS "gh pr create" inside quotes is not an invocation
+          input: JSON.stringify({ command: 'rg -n "gh pr create" src' }),
+          result: `src/agent/facets/derive.ts:197: if (/gh pr create/.test(inputStr)) {\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    // The search command is not a `gh pr create` invocation — must not detect PR
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // item 1: real gh pr create invocation with a URL line is detected; last URL wins
+  it('yield_tracking: real gh pr create with two URL lines records the LAST one (#2781)', () => {
+    const url1 = 'https://github.com/owner/repo/pull/10';
+    const url2 = 'https://github.com/owner/repo/pull/11';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-last-url',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'create PRs',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-two',
+          input: JSON.stringify({ command: 'gh pr create --title "feat"' }),
+          result: `${url1}\n${url2}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(url2);
+  });
+
+  // item 5: truncated bash input ending in '…' with a bare-URL result is detected
+  it('yield_tracking: truncated bash input (ends in …) with bare PR URL result is detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/55';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-truncated',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'push and create PR',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-trunc',
+          // Truncated summary: the `gh pr create` part was cut off entirely
+          input: 'cd .afk-worktrees/feat-x && git push -u origin afk/feat-x && \u2026',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: truncated non-create input whose multi-line output has a URL line is NOT detected (#2781)', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-truncated-neg',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'look at notes',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-trunc-neg',
+          input: 'cd .afk-worktrees/feat-x && cat docs/notes/very-long-file-name.md \u2026',
+          result: 'See the earlier PR:\nhttps://github.com/other/repo/pull/9\nfor details.\n',
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url ?? null).toBeNull();
+  });
+
+  it('yield_tracking: gh pr create chained after git push is detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/77';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-chained',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-chained',
+          input: JSON.stringify({ command: 'cd .afk-worktrees/x && git push && gh pr create --body-file /tmp/b.md' }),
+          result: `Warning: 1 uncommitted change\n${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
   // outcome derived from terminal-state heading
   function oneAssistant(assistant: string): StoredSessionInput {
     return {
