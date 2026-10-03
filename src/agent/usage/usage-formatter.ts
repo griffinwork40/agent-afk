@@ -122,16 +122,30 @@ function latestObservedAt(rec: UsageRecord): number | undefined {
 export function summarizeUsageRecord(rec: UsageRecord, now: number = Date.now()): ProviderUsageSummary {
   const observedAt = latestObservedAt(rec);
   if (observedAt === undefined) return unknownProviderSummary(rec.provider, rec.account);
+  const providerStale = isStale(observedAt, now);
+  // When the provider is 'ok' (at least one section is fresh), omit individual
+  // sections whose own observedAt is stale so stale data does not appear current.
+  // When the provider is already 'stale', keep all sections — omitting them all
+  // would render nothing useful.
   const windows: Partial<Record<WindowKey, UsageWindowSummary>> = {};
-  for (const k of WINDOW_KEYS) {
-    const w = rec.windows?.[k];
-    if (w !== undefined) windows[k] = windowSummary(w.utilization, w.resetsAt, now);
+  if (rec.windows !== undefined) {
+    const windowsStale = !providerStale && isStale(rec.windows.observedAt, now);
+    if (!windowsStale) {
+      for (const k of WINDOW_KEYS) {
+        const w = rec.windows[k];
+        if (w !== undefined) windows[k] = windowSummary(w.utilization, w.resetsAt, now);
+      }
+    }
   }
-  const perMinute = perMinuteSummary(rec, now);
+  let perMinute: PerMinuteSummary | undefined;
+  if (rec.perMinute !== undefined) {
+    const pmStale = !providerStale && isStale(rec.perMinute.observedAt, now);
+    if (!pmStale) perMinute = perMinuteSummary(rec, now);
+  }
   return {
     provider: rec.provider,
     account: rec.account,
-    status: isStale(observedAt, now) ? 'stale' : 'ok',
+    status: providerStale ? 'stale' : 'ok',
     ageMs: Math.max(0, now - observedAt),
     ...(perMinute !== undefined ? { perMinute } : {}),
     ...windows,

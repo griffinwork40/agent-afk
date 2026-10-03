@@ -108,3 +108,46 @@ describe('formatUsageSummaryText / usageRows', () => {
     expect(json.providers[0]?.fiveHour?.utilizationPct).toBe(45);
   });
 });
+
+describe('summarizeUsageRecord — per-section staleness (Item 3)', () => {
+  const STALE = USAGE_STALE_AFTER_MS + 1;
+
+  it('fresh windows, stale perMinute → perMinute omitted, status ok', () => {
+    const s = summarizeUsageRecord(rec({
+      windows: { fiveHour: { utilization: 0.5 }, observedAt: NOW },
+      perMinute: { requestsRemaining: 10, observedAt: NOW - STALE },
+    }), NOW);
+    expect(s.status).toBe('ok');
+    expect(s.fiveHour?.utilizationPct).toBe(50);
+    expect(s.perMinute).toBeUndefined();
+  });
+
+  it('fresh perMinute, stale windows → windows omitted, status ok', () => {
+    const s = summarizeUsageRecord(rec({
+      windows: { fiveHour: { utilization: 0.8 }, observedAt: NOW - STALE },
+      perMinute: { requestsRemaining: 5, observedAt: NOW },
+    }), NOW);
+    expect(s.status).toBe('ok');
+    expect(s.fiveHour).toBeUndefined();
+    expect(s.perMinute?.requestsRemaining).toBe(5);
+  });
+
+  it('both stale → status stale, sections kept (whole provider is stale)', () => {
+    const s = summarizeUsageRecord(rec({
+      windows: { sevenDay: { utilization: 0.9 }, observedAt: NOW - STALE },
+      perMinute: { requestsRemaining: 3, observedAt: NOW - STALE },
+    }), NOW);
+    expect(s.status).toBe('stale');
+    expect(s.sevenDay?.utilizationPct).toBe(90);
+    expect(s.perMinute?.requestsRemaining).toBe(3);
+  });
+
+  it('compactUsageEntries derives from summarizeUsageRecord (stale windows omitted in compact)', () => {
+    const entries = compactUsageEntries([rec({
+      windows: { fiveHour: { utilization: 0.6 }, observedAt: NOW - STALE },
+      perMinute: { requestsRemaining: 7, observedAt: NOW },
+    })], NOW);
+    expect(entries[0]?.status).toBe('ok');
+    expect(entries[0]?.fiveHourPct).toBeUndefined();
+  });
+});
