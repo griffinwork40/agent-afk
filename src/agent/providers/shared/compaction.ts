@@ -618,6 +618,13 @@ export interface CompactionCoreDeps<M> {
    * without fake timers.
    */
   retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /**
+   * Abort signal for the surrounding compaction scope. When provided, threads
+   * through to `withTransientRetry` so a `sleepWithAbort` backoff wait is
+   * interrupted immediately on `session.close()` or `/interrupt` rather than
+   * blocking teardown for up to the full backoff duration.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -685,6 +692,7 @@ export async function runCompactionCore<M>(
         shouldStop: () => timedOut || isAborted(),
         onRetry: deps.onRetry,
         ...(deps.retrySleep !== undefined ? { sleep: deps.retrySleep } : {}),
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
       },
     );
     summary = await withTimeout(retryingAttempt(), timeoutMs, () => {

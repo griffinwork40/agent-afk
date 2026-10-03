@@ -292,6 +292,7 @@ export async function compactOpenAIHistory(
         });
       },
       onRetry: traceTransientRetry(deps.traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
+      signal: controller.signal,
     });
   } finally {
     deps.clearAbort(controller);

@@ -3,8 +3,9 @@
  *
  * Emits the same `connection_retry` session_phase shape the streaming turn
  * path uses (`anthropic-direct/loop/round-request.ts` traceConnectionRetry):
- * `durationMs` = the backoff wait, `metadata.error` = message head (≤200
- * chars), plus `attempt`, `maxRetries`, and `code`/`status` when present.
+ * `durationMs` = the planned backoff delay, not elapsed wall-clock time.
+ * `metadata.error` = message head (≤200 chars), plus `attempt`, `maxRetries`,
+ * and `code`/`status` when present.
  * `metadata.source` names the caller (e.g. 'compaction') so one-shot retries
  * are distinguishable from turn-loop retries in the trace.
  *
@@ -12,6 +13,7 @@
  */
 
 import { emitSessionPhase } from '../../trace/emit.js';
+import { redactSecrets } from '../../redact-secrets.js';
 import type { TraceSink } from '../../trace/index.js';
 import type { RetryInfo } from './transient-retry.js';
 
@@ -30,7 +32,7 @@ export function traceTransientRetry(
         source,
         attempt: info.attempt,
         maxRetries,
-        error: message.slice(0, 200),
+        error: redactSecrets(message).slice(0, 200),
         ...(info.code !== undefined ? { code: info.code } : {}),
         ...(info.status !== undefined ? { status: info.status } : {}),
       },

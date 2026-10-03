@@ -186,6 +186,7 @@ export async function compactHistory(
         });
       },
       onRetry: traceTransientRetry(traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
+      signal: controller.signal,
     });
   } finally {
     abort.clear(controller);

@@ -114,6 +114,9 @@ export class BackgroundSummarizer {
       // Contract: maxRetries: 1 — one retry for transient errors; the existing
       // stale-on-failure fallback (catch block in refreshJobSummary) handles
       // permanent failures. No trace sink needed here.
+      // onRetry increments callsThisSession so each actual LLM call (initial
+      // + each retry) is counted toward the budget cap, preventing a 1-retry
+      // scenario from making 2 calls against a budget that charged only 1.
       this.callLLM = (prompt: string, signal?: AbortSignal) =>
         withTransientRetry(
           () => oneShotCompletion({
@@ -124,7 +127,11 @@ export class BackgroundSummarizer {
             maxTokens: this.maxOutputTokens,
             signal,
           }),
-          { maxRetries: 1, signal },
+          {
+            maxRetries: 1,
+            signal,
+            onRetry: () => { this.callsThisSession++; },
+          },
         );
     }
 

@@ -424,3 +424,62 @@ describe('runCompactionCore — transient retry', () => {
     expect(result.reason).toBe('aborted');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Item 2: signal threading — aborting during retrySleep resolves promptly
+// ---------------------------------------------------------------------------
+
+describe('runCompactionCore — signal threading', () => {
+  const baseDeps = (): CompactionCoreDeps<FakeMsg> => ({
+    messages: history(),
+    ops: fakeOps,
+    keepLastN: 2,
+    isAborted: () => false,
+  });
+
+  it('aborting the signal during retrySleep interrupts the backoff promptly', async () => {
+    const controller = new AbortController();
+    const transientErr = makeTransientError(500);
+    let sleepReject: ((err: unknown) => void) | undefined;
+
+    // retrySleep that holds until the test aborts the controller
+    const blockingSleep = (_ms: number, signal: AbortSignal): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        sleepReject = reject;
+        signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('AbortError'), { name: 'AbortError' }));
+        }, { once: true });
+        // Also resolve if not aborted (safety valve — should not be reached)
+        void resolve;
+      });
+
+    // summarize always fails transiently so we enter the backoff wait
+    const summarize = vi.fn(async () => { throw transientErr; });
+
+    const corePromise = runCompactionCore({
+      ...baseDeps(),
+      signal: controller.signal,
+      isAborted: () => controller.signal.aborted,
+      retrySleep: blockingSleep,
+      summarize,
+    });
+
+    // Give the first summarize call a tick to fire and enter the sleep
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const startMs = Date.now();
+    controller.abort();
+
+    const result = await corePromise;
+    const elapsedMs = Date.now() - startMs;
+
+    // The abort should resolve within ~50ms, not wait for the full backoff
+    expect(elapsedMs).toBeLessThan(200);
+    expect(result.compacted).toBe(false);
+    // After abort, the shouldStop / abort path fires
+    expect(['aborted', 'summarization-failed: AbortError']).toContain(result.reason);
+
+    void sleepReject; // suppress unused warning
+  });
+});
