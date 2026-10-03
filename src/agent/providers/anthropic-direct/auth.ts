@@ -85,8 +85,9 @@ export function detectAuthMode(token: string): AuthMode {
  * authority. The SDK default of 2 would silently stack under those loops —
  * turning each failing call into up to 3× the attempts AFK believes it is
  * making, with the SDK-level retries invisible in the witness trace
- * (issue #2422). `oneshot.ts` is the deliberate exception: it has no AFK
- * retry wrapper and receives SDK retries intentionally (see that module).
+ * (issue #2422). `oneshot.ts` also builds its client through this function, so
+ * it gets `maxRetries: 0` and, having no AFK retry wrapper, makes exactly one
+ * attempt; its callers own retry policy (see that module's JSDoc).
  */
 export function buildClientOptions(
   token: string,

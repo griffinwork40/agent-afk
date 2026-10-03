@@ -11,6 +11,25 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.289.0] - 2026-10-03
+
+### Added
+- disabledPluginHooks config key; warn before marketplace update discards local edits (#2841) (f8c0c4fe)
+
+## [5.288.3] - 2026-10-03
+
+### Fixed
+- retry and pause on status-less mid-stream overload errors (#2845) (42457e6f)
+- per-file retention for inbox delivered/ receipts (#2840) (7cd2d35b)
+- never forward an Anthropic credential to OpenAI-routed compose nodes (#2846) (f831dffc)
+
+## [5.288.2] - 2026-10-03
+
+### Fixed
+- enforce CommonMark fence rules in fencedLines() so unbalanced fence-like lines no longer hide the end-of-turn heading (#2833) (16bb8711)
+- retry connection-phase network errors (regression from #2422) (#2838) (fe5c90aa)
+- make default provider stores lazy so importing a provider opens no SQLite files (#2842) (2096f82e)
+
 ## [5.288.1] - 2026-10-03
 
 ### Fixed

@@ -296,6 +296,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // because that would let an agent expand its own hook subprocesses\' env access.
   // Value shape: Record<pluginName, string[]> — see issue #2459.
   { path: 'pluginHookEnv', tier: 'human', type: 'object', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
+  // Human-tier: disabling a plugin hook is an operator decision — mirroring
+  // pluginHookEnv which is also human-tier. The agent must not be able to
+  // silence third-party hooks on its own config.
+  // Value shape: Record<pluginName, string[]> where each string is
+  // "<Event>" or "<Event>:<matcher>" — see issue #2816.
+  { path: 'disabledPluginHooks', tier: 'human', type: 'object', description: 'Per-plugin hook disable list: maps plugin name (from plugin.json) → array of "<Event>" or "<Event>:<matcher>" specifiers to suppress. Human-tier: disabling a hook is an operator decision the agent must not reverse.' },
   // Human-tier: hiding a skill from the model is an operator decision the agent
   // must not be able to reverse on its own config. Accepts bare skill names
   // (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Each
