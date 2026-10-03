@@ -39,6 +39,8 @@ import {
   getTraceDir,
   sessionLabelFromTracePath,
   getWhatifDir,
+  getPluginDataDir,
+  getPluginsDir,
 } from './paths.js';
 import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
@@ -401,6 +403,42 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
 // ---------------------------------------------------------------------------
 // getWhatifDir
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// getPluginDataDir — traversal guard
+// ---------------------------------------------------------------------------
+
+describe('getPluginDataDir', () => {
+  it('returns a path under plugins/data for a normal key', () => {
+    const dir = getPluginDataDir('my-plugin');
+    expect(dir).toBe(join(getPluginsDir(), 'data', 'my-plugin'));
+  });
+
+  it('sanitises filesystem-unsafe characters', () => {
+    const dir = getPluginDataDir('marketplace:my-plugin');
+    expect(dir).toBe(join(getPluginsDir(), 'data', 'marketplace__my-plugin'));
+  });
+
+  it.each([
+    ['bare dot-dot', '..'],
+    ['bare dot', '.'],
+    ['empty string', ''],
+  ])('normalises %s to __ (traversal prevention)', (_label, key) => {
+    expect(getPluginDataDir(key)).toBe(join(getPluginsDir(), 'data', '__'));
+  });
+
+  it('accepts keys that sanitise to underscores', () => {
+    // '///' sanitises to '__', which is a valid (non-traversal) directory name.
+    const dir = getPluginDataDir('///');
+    expect(dir).toBe(join(getPluginsDir(), 'data', '__'));
+  });
+
+  it('does not escape for keys containing dots among other chars', () => {
+    const dir = getPluginDataDir('a..b');
+    // 'a..b' is safe — dots are allowed, and the result is not '.' or '..'.
+    expect(dir).toBe(join(getPluginsDir(), 'data', 'a..b'));
+  });
+});
 
 describe('getWhatifDir', () => {
   afterEach(() => {

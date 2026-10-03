@@ -150,6 +150,83 @@ follow-up tracking item.
 
 ---
 
+---
+
+## Plugin-hook environment variables  (#2373)
+
+Hook subprocesses for **user-scope installed plugins** receive three additional
+categories of env vars beyond the standard AFK set.
+
+### `CLAUDE_PLUGIN_OPTION_<KEY>`
+
+For every key declared in the plugin's `userConfig` block in `plugin.json`:
+
+```json
+{
+  "userConfig": {
+    "provider": { "type": "string", "default": "anthropic", "description": "LLM provider" },
+    "apiKey":   { "type": "string", "sensitive": true }
+  }
+}
+```
+
+AFK exports `CLAUDE_PLUGIN_OPTION_PROVIDER` (uppercased; non-`[A-Z0-9_]` chars
+replaced with `_`, matching Claude Code).  The value resolution order is:
+
+1. The value the user stored via `afk plugin config <name> provider <value>`.
+2. The `default` from the manifest when no stored value exists.
+3. Nothing — the var is not set when neither applies.
+
+**Sensitive fields (`"sensitive": true`) are NEVER exported**, even if a value
+is stored.  They must flow through the explicit `pluginHookEnv` allowlist
+instead (see issue #2459).
+
+**Stale keys** (removed from the manifest after an update) are silently skipped
+at export time; they remain in the index until explicitly unset.
+
+**Collision detection**: if two manifest keys normalise to the same env-var name
+(e.g. `provider` and `PROVIDER`) AFK refuses to load the manifest and warns
+instead of letting one silently win.
+
+#### Managing options
+
+```sh
+afk plugin config <name>                     # list all declared options
+afk plugin config <name> provider            # show one option (and its default)
+afk plugin config <name> provider openai     # set a value
+afk plugin config <name> provider --unset    # remove the stored value
+```
+
+Values are stored in `~/.afk/plugins/.index.json` under the plugin's entry.
+Reinstalling or updating a plugin preserves stored option values.
+
+**Scope**: user-scope installs only.  Project-scope (`<cwd>/.afk/plugins`) and
+bundled plugins have no index entry and receive no `CLAUDE_PLUGIN_OPTION_*` vars.
+`CLAUDE_PLUGIN_DATA` (below) is always exported for plugin-sourced hooks.
+
+### `CLAUDE_PLUGIN_DATA`
+
+`CLAUDE_PLUGIN_DATA` is the absolute path to a plugin-private writable directory:
+
+```
+~/.afk/plugins/data/<sanitised-plugin-key>/
+```
+
+The directory is created lazily (mode `0700`) the first time a hook fires.
+Plugin hook scripts can use it to store logs, caches, or any persistent state
+without hard-coding paths.
+
+Index keys like `marketplace:my-plugin` are sanitised (`:` → `__`) to produce
+a filesystem-safe directory name.
+
+The path is resolved via `getPluginDataDir()` in `src/paths.ts`.  Never
+hand-join paths under `~/.afk` — call that helper.
+
+**`CLAUDE_CONFIG_DIR` is NOT exported** — it would point plugin scripts at
+Claude Code's own config directory, which is outside AFK's scope.
+
+---
+
 ## Hook stdout — response fields
 
 A hook command may write a JSON object to stdout. Recognised fields:
