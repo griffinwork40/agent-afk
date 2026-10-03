@@ -31,6 +31,7 @@ import {
   WIND_DOWN_NOTE,
   formatRoundLabel,
   shouldWindDown,
+  pickRoundWarning,
 } from '../../shared/tool-loop-cap.js';
 import { dispatchToolCalls } from './tool-dispatch.js';
 import { emitAndCommitToolResults } from './tool-results.js';
@@ -54,6 +55,13 @@ export async function* runToolRound(
   turn: TurnAccumulator,
   maxIterations: number,
   softDeadlineMs: number,
+  /**
+   * Mutable state for advance round warnings — shares the same per-turn
+   * lifetime as `turn` itself. Accepts `TurnAccumulator` directly since it
+   * now carries `lastWarnedThreshold`; the parameter type is minimal so tests
+   * can pass a plain object without importing the accumulator.
+   */
+  warnState: { lastWarnedThreshold: number | undefined },
 ): AsyncGenerator<ProviderEvent, ToolRoundOutcome, void> {
   // Rollback contract: capture the pre-push length so any throw between here
   // and the `tool_result` commit can splice the orphaned assistant message back
@@ -138,6 +146,24 @@ export async function* runToolRound(
       sessionId: input.ctx.sessionId,
     };
     return 'terminated';
+  }
+
+  // Advance remaining-round warning: inject once per threshold crossing so the
+  // model can reprioritize before the budget is fully spent. Only fires when a
+  // cap is in effect; never fires on the same threshold twice per turn (warnState
+  // is shared across rounds). The wind-down note at cap=0 covers the terminal
+  // case — this fills the gap for rounds well before the cap fires.
+  const [warnText, newThreshold] = pickRoundWarning(
+    turn.iterations,
+    maxIterations,
+    warnState.lastWarnedThreshold,
+  );
+  if (warnText !== null) {
+    warnState.lastWarnedThreshold = newThreshold;
+    const lastMsg = input.messages[input.messages.length - 1];
+    if (lastMsg !== undefined && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
+      lastMsg.content.push({ type: 'text', text: warnText });
+    }
   }
 
   // Two independent budgets trip the SAME wind-down mechanism: the tool-round

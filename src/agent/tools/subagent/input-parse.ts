@@ -145,6 +145,27 @@ export interface AgentInput {
    * (not silently no-oped) when this is not set.
    */
   progress_events?: boolean;
+  /**
+   * Opaque coordinator-assigned chain identifier for a continuation dispatch.
+   * When supplied together with a {@link SubagentExecutorContext.continuationBudget},
+   * the executor charges this dispatch against the chain's aggregate round
+   * budget before forking. The identifier is advisory-only on the executor side
+   * — it is NOT inherited by the child, does NOT widen any permission, and is
+   * NOT forwarded into the child's config. Its sole purpose is to signal
+   * coordinator intent so the budget gate fires for this dispatch.
+   *
+   * A coordinator MUST supply both `continuation_chain_id` AND `max_tool_use_iterations`
+   * for the budget accounting to be meaningful: the chain budget allocates
+   * `max_tool_use_iterations` rounds, and the child's actual cap is set by that
+   * field — the budget gate and the child cap must be in sync.
+   */
+  continuation_chain_id?: string;
+}
+
+/** Extract the optional `continuation_chain_id` field. Outside parseAgentInput to stay within the funcsize baseline. */
+function parseContinuationChainId(a: Record<string, unknown>): { continuation_chain_id?: string } {
+  const v = readOptionalString(a, 'continuation_chain_id');
+  return v !== undefined ? { continuation_chain_id: v } : {};
 }
 
 /**
@@ -554,6 +575,6 @@ export function parseAgentInput(input: unknown): AgentInput {
     ...(writeRoots !== undefined ? { writeRoots } : {}),
     ...(readRoots !== undefined ? { readRoots } : {}),
     ...(isolation !== undefined ? { isolation } : {}),
-    ...(progress_events !== undefined ? { progress_events } : {}),
+    ...(progress_events !== undefined ? { progress_events } : {}), ...parseContinuationChainId(agentInput),
   };
 }
