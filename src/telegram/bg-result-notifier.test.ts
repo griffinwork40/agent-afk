@@ -279,6 +279,45 @@ describe('TelegramBgResultNotifier', () => {
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(17 * 1024);
   });
 
+  // ── #2849: redactSecrets applied at Telegram delivery boundary ───────────
+  // formatBgResultBody (push path) must strip secrets before they leave the
+  // process. buildBgResultInjection (local model-context path) must NOT strip
+  // them so the model receives the full result unmodified.
+
+  it('redacts Anthropic API key in Telegram push but preserves it in local injection', async () => {
+    // Synthetic secret that matches the sk-ant-* pattern in redactSecrets.
+    const syntheticKey = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890abcd';
+    const output = `Token recovered: ${syntheticKey} — please rotate immediately.`;
+
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'secret task', model: 'sonnet' });
+
+    fireTerminal(succeed(job.jobId, output));
+
+    // Push path — secret must be redacted.
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    const pushed = pushMock.mock.calls[0]![0];
+    expect(pushed).not.toContain(syntheticKey);
+    expect(pushed).toContain('[REDACTED]');
+
+    // Local injection — raw content preserved for model context.
+    const injection = notifier.drainInjections();
+    expect(injection).toContain(syntheticKey);
+  });
+
+  it('redacts Bearer token in Telegram push', async () => {
+    const output = 'Authorization: Bearer ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678';
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'bearer task', model: 'sonnet' });
+
+    fireTerminal(succeed(job.jobId, output));
+
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    const pushed = pushMock.mock.calls[0]![0];
+    expect(pushed).not.toContain('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678');
+    expect(pushed).toContain('[REDACTED]');
+  });
+
   it('buffers the result for next-turn injection and drains it exactly once', () => {
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({ handle, prompt: 'inject task', model: 'sonnet' });
