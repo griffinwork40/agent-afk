@@ -47,12 +47,14 @@ export interface PresenceActivity {
   /**
    * First ≤120 chars of the raw user-typed text for this turn, after whitespace
    * collapsing and newline normalization, passed through `redactSecrets`.
-   * Set at TURN START so a busy session shows what it is doing now.
+   * Set at TURN START so a busy session shows what it is doing now. Absent when
+   * the first turn ended before a session id was minted (extremely rare) and no
+   * raw text was passed to setPresenceActivityTurnEnd.
    *
    * "Raw user-typed" means the text BEFORE peer-message / bg-subagent-result
    * injections are prepended — those injections must never appear here.
    */
-  promptHead: string;
+  promptHead?: string;
   /**
    * Total completed turns for this session. Incremented at turn end.
    * Zero until the first turn completes.
@@ -73,8 +75,11 @@ export interface PresenceActivity {
  * Normalize raw user text for safe storage in the presence file:
  *   1. Collapse all whitespace runs (newlines, tabs, etc.) to a single space.
  *   2. Trim leading/trailing whitespace.
- *   3. Truncate to {@link ACTIVITY_PROMPT_HEAD_MAX} characters.
- *   4. Run through {@link redactSecrets} to strip common token patterns.
+ *   3. Run through {@link redactSecrets} on the FULL collapsed string BEFORE
+ *      truncating — truncating first can split a secret below the redactor's
+ *      minimum match length (e.g. generic tokens need ≥32 chars, sk-ant- needs
+ *      ≥20 chars after the prefix) and leave a near-complete credential.
+ *   4. Truncate to {@link ACTIVITY_PROMPT_HEAD_MAX} characters.
  *
  * Returns `undefined` when the input is empty/whitespace-only after
  * normalization — the presence patch will leave any existing promptHead intact
@@ -83,8 +88,9 @@ export interface PresenceActivity {
 export function normalizePromptHead(raw: string): string | undefined {
   const collapsed = raw.replace(/\s+/g, ' ').trim();
   if (collapsed.length === 0) return undefined;
-  const truncated = collapsed.slice(0, ACTIVITY_PROMPT_HEAD_MAX);
-  return redactSecrets(truncated);
+  // Invariant: redact before truncating so a secret straddling the boundary
+  // is never split below the pattern's minimum match length.
+  return redactSecrets(collapsed).slice(0, ACTIVITY_PROMPT_HEAD_MAX);
 }
 
 // ---------------------------------------------------------------------------
@@ -97,9 +103,11 @@ export function normalizePromptHead(raw: string): string | undefined {
  * Should be called with the RAW user-typed text, BEFORE any injections are
  * prepended (peer messages, bg-subagent results, etc.).
  *
- * No-op when `rawText` normalizes to empty (e.g. a slash-command expansion
- * where the original text is the command name; in that case the previous
- * promptHead is preserved). Best-effort and never throws.
+ * No-op when `rawText` normalizes to empty (e.g. whitespace-only input).
+ * Note: plugin-forward ('/cmd …') and slash-command submit expansions produce
+ * non-empty text (the command token itself, or the expanded message), so
+ * promptHead IS written for those paths — only genuinely empty/whitespace-only
+ * inputs are skipped. Best-effort and never throws.
  */
 export async function setPresenceActivityPromptHead(
   sessionId: string,
@@ -120,17 +128,40 @@ export async function setPresenceActivityPromptHead(
 }
 
 /**
- * Increment `activity.turns` and stamp `activity.lastTurnEndedAt` on this
- * session's presence file at TURN END.
+ * Stamp `activity.turns` and `activity.lastTurnEndedAt` on this session's
+ * presence file at TURN END.
+ *
+ * @param sessionId   The session whose presence file to update.
+ * @param totalTurns  `ctx.stats.totalTurns` AFTER the turn was counted —
+ *   stored directly rather than incrementing the presence file's own counter,
+ *   so a resumed session starts from the correct historical total instead of
+ *   resetting to 1 (presence-lifecycle.ts rewrites the record without activity
+ *   on resume while stats.totalTurns is restored from the stored session).
+ * @param rawUserText Optional RAW user-typed text for this turn. When provided
+ *   and no promptHead has been recorded yet (e.g. first turn of a new session
+ *   where ctx.stats.sessionId was undefined at turn start), it is stored as
+ *   the promptHead so the first prompt is never silently lost. Never pass the
+ *   composited runText — that would leak peer/bg-injection bodies.
  *
  * Best-effort and never throws.
  */
-export async function setPresenceActivityTurnEnd(sessionId: string): Promise<void> {
+export async function setPresenceActivityTurnEnd(
+  sessionId: string,
+  totalTurns: number,
+  rawUserText?: string,
+): Promise<void> {
   return patchPresenceFile(sessionId, (rec) => {
     const prev = rec.activity;
+    // Contract: if no promptHead has been written yet (first turn where sessionId
+    // was undefined at turn start), seed it now from rawUserText. Never write
+    // an empty string — omit the field if we have nothing useful.
+    const head = prev?.promptHead !== undefined
+      ? prev.promptHead
+      : (rawUserText !== undefined ? normalizePromptHead(rawUserText) : undefined);
     rec.activity = {
-      promptHead: prev?.promptHead ?? '',
-      turns: (prev?.turns ?? 0) + 1,
+      // promptHead is omitted rather than written as '' when absent. See JSDoc.
+      ...(head !== undefined ? { promptHead: head } : {}),
+      turns: totalTurns,
       lastTurnEndedAt: new Date().toISOString(),
     };
   });

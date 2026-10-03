@@ -153,19 +153,23 @@ export interface PresenceFileInfo {
   /**
    * What this session is (or was last) working on. Written at REPL turn
    * boundaries by `src/agent/awareness/presence.activity.ts`. Optional/additive:
-   * absent for sessions on non-REPL surfaces, or before the first turn starts.
+   * absent for sessions on non-REPL surfaces, or before the first turn ends.
    *
    * `promptHead` is sourced from the RAW user-typed text BEFORE peer-message or
    * background-subagent-result injections are prepended — injected text never
    * appears here. Callers that only have access to the composited `runText`
-   * must pass the pre-injection raw text instead.
+   * must pass the pre-injection raw text instead. Absent when the first turn
+   * ended before a session id was minted and no raw text was supplied to
+   * setPresenceActivityTurnEnd.
    *
-   * `turns` counts completed turns; `lastTurnEndedAt` is when the most recent
-   * turn finished. Both update at turn end; `promptHead` updates at turn start
-   * so a busy session shows what it is working on RIGHT NOW.
+   * `turns` is seeded from `ctx.stats.totalTurns` after each turn completes,
+   * so it survives resume (stats.totalTurns is restored from the stored session
+   * while a plain increment would reset to 1). `lastTurnEndedAt` is when the
+   * most recent turn finished. Both update at turn end; `promptHead` updates at
+   * turn start so a busy session shows what it is working on RIGHT NOW.
    */
   activity?: {
-    promptHead: string;
+    promptHead?: string;
     turns: number;
     lastTurnEndedAt?: string;
   };

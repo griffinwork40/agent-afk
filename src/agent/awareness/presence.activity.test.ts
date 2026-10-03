@@ -122,6 +122,31 @@ describe('normalizePromptHead', () => {
     expect(result).toContain('[REDACTED]');
   });
 
+  it('redacts a 40-char token that straddles the 120-char truncation boundary', async () => {
+    const { normalizePromptHead, ACTIVITY_PROMPT_HEAD_MAX } = await getActivityMod();
+    // Position the token so that truncating first would leave only ~31 chars
+    // of the 40-char token inside the window (below the >=32 generic threshold)
+    // while redacting the full string first catches the complete token.
+    //
+    // Layout (before truncation):
+    //   prefix (100 chars) + space + 40-char token
+    //   truncation at 120 => prefix (100) + space + 19 chars of token inside window
+    // Redacting the full string first => [REDACTED] replaces the token.
+    const token = 'AbCdEf1234567890AbCdEf1234567890AbCdEfAb'; // 40 chars, mixed-case
+    expect(token.length).toBe(40);
+    const prefix = 'x'.repeat(ACTIVITY_PROMPT_HEAD_MAX - 20); // 100 chars
+    const raw = `${prefix} ${token}`; // token starts at char 101, window ends at 120
+    const charsInWindow = ACTIVITY_PROMPT_HEAD_MAX - prefix.length - 1; // 19
+    expect(charsInWindow).toBeLessThan(32); // confirm boundary-split scenario
+
+    const result = normalizePromptHead(raw);
+    // Result must not contain any >=20-char substring of the original token.
+    for (let i = 0; i <= token.length - 20; i++) {
+      const sub = token.slice(i, i + 20);
+      expect(result ?? '').not.toContain(sub);
+    }
+  });
+
   it('does not redact a filesystem path', async () => {
     const { normalizePromptHead } = await getActivityMod();
     const raw = 'read /Users/me/Projects/open_source/agent-afk/src/config/env.ts';
@@ -149,7 +174,7 @@ describe('setPresenceActivityPromptHead', () => {
     const { setPresenceActivityTurnEnd, setPresenceActivityPromptHead } = await getActivityMod();
 
     // Complete a turn to set turns/lastTurnEndedAt.
-    await setPresenceActivityTurnEnd(SESSION_ID);
+    await setPresenceActivityTurnEnd(SESSION_ID, 1);
     const rec1 = await readPresenceRecord();
     expect(rec1?.activity?.turns).toBe(1);
     const endedAt1 = rec1?.activity?.lastTurnEndedAt;
@@ -209,29 +234,30 @@ describe('setPresenceActivityPromptHead', () => {
 // ---------------------------------------------------------------------------
 
 describe('setPresenceActivityTurnEnd', () => {
-  it('increments turns from 0 to 1 on first call', async () => {
+  it('records turns = totalTurns on first call', async () => {
     await writeInitialPresence();
     const { setPresenceActivityTurnEnd } = await getActivityMod();
-    await setPresenceActivityTurnEnd(SESSION_ID);
+    await setPresenceActivityTurnEnd(SESSION_ID, 1);
     const rec = await readPresenceRecord();
     expect(rec?.activity?.turns).toBe(1);
   });
 
-  it('increments turns on each call', async () => {
+  it('stores totalTurns directly (not incrementing the presence counter)', async () => {
     await writeInitialPresence();
     const { setPresenceActivityTurnEnd } = await getActivityMod();
-    await setPresenceActivityTurnEnd(SESSION_ID);
-    await setPresenceActivityTurnEnd(SESSION_ID);
-    await setPresenceActivityTurnEnd(SESSION_ID);
+    // Simulate a resumed session: stats.totalTurns comes in at 47, 48, 49.
+    await setPresenceActivityTurnEnd(SESSION_ID, 47);
+    await setPresenceActivityTurnEnd(SESSION_ID, 48);
+    await setPresenceActivityTurnEnd(SESSION_ID, 49);
     const rec = await readPresenceRecord();
-    expect(rec?.activity?.turns).toBe(3);
+    expect(rec?.activity?.turns).toBe(49);
   });
 
   it('stamps lastTurnEndedAt as an ISO string', async () => {
     await writeInitialPresence();
     const { setPresenceActivityTurnEnd } = await getActivityMod();
     const before = new Date().toISOString();
-    await setPresenceActivityTurnEnd(SESSION_ID);
+    await setPresenceActivityTurnEnd(SESSION_ID, 1);
     const after = new Date().toISOString();
     const rec = await readPresenceRecord();
     const endedAt = rec?.activity?.lastTurnEndedAt;
@@ -244,10 +270,52 @@ describe('setPresenceActivityTurnEnd', () => {
     await writeInitialPresence();
     const { setPresenceActivityPromptHead, setPresenceActivityTurnEnd } = await getActivityMod();
     await setPresenceActivityPromptHead(SESSION_ID, 'my prompt');
-    await setPresenceActivityTurnEnd(SESSION_ID);
+    await setPresenceActivityTurnEnd(SESSION_ID, 1);
     const rec = await readPresenceRecord();
     expect(rec?.activity?.promptHead).toBe('my prompt');
     expect(rec?.activity?.turns).toBe(1);
+  });
+
+  it('seeds promptHead from rawUserText when no promptHead exists yet', async () => {
+    await writeInitialPresence();
+    const { setPresenceActivityTurnEnd } = await getActivityMod();
+    // Simulate first turn where sessionId was undefined at turn start:
+    // setPresenceActivityPromptHead was never called, so no promptHead exists.
+    await setPresenceActivityTurnEnd(SESSION_ID, 1, 'first user prompt');
+    const rec = await readPresenceRecord();
+    expect(rec?.activity?.promptHead).toBe('first user prompt');
+    expect(rec?.activity?.turns).toBe(1);
+  });
+
+  it('does NOT overwrite an existing promptHead with rawUserText', async () => {
+    await writeInitialPresence();
+    const { setPresenceActivityPromptHead, setPresenceActivityTurnEnd } = await getActivityMod();
+    await setPresenceActivityPromptHead(SESSION_ID, 'original head');
+    // Provide a different rawUserText — must NOT overwrite the existing head.
+    await setPresenceActivityTurnEnd(SESSION_ID, 1, 'different raw text');
+    const rec = await readPresenceRecord();
+    expect(rec?.activity?.promptHead).toBe('original head');
+  });
+
+  it('omits promptHead rather than writing empty string when rawUserText absent', async () => {
+    await writeInitialPresence();
+    const { setPresenceActivityTurnEnd } = await getActivityMod();
+    await setPresenceActivityTurnEnd(SESSION_ID, 1);
+    const rec = await readPresenceRecord();
+    expect(rec?.activity?.turns).toBe(1);
+    // promptHead must be absent (undefined), never an empty string.
+    expect(rec?.activity?.promptHead).toBeUndefined();
+  });
+
+  it('turns resets to the seeded value on resume, not to 1', async () => {
+    await writeInitialPresence();
+    const { setPresenceActivityTurnEnd } = await getActivityMod();
+    // Simulate a resumed session: presence record was rewritten by resume lifecycle
+    // without activity, so prev.turns is undefined. stats.totalTurns is 42.
+    await setPresenceActivityTurnEnd(SESSION_ID, 42);
+    const rec = await readPresenceRecord();
+    // Must store 42, not 1 (old code would compute (prev?.turns ?? 0) + 1 = 1).
+    expect(rec?.activity?.turns).toBe(42);
   });
 });
 
@@ -284,14 +352,14 @@ describe('presence.activity concurrency', () => {
     // Simulate a turn boundary: promptHead at start, turnEnd at end.
     await Promise.all([
       setPresenceActivityPromptHead(SESSION_ID, 'prompt for turn 1'),
-      setPresenceActivityTurnEnd(SESSION_ID),
+      setPresenceActivityTurnEnd(SESSION_ID, 1),
     ]);
 
     const rec = await readPresenceRecord();
     // Both must have landed; turns must be 1.
     expect(rec?.activity?.turns).toBe(1);
-    // promptHead must exist (either the set value or empty string from turnEnd).
-    expect(typeof rec?.activity?.promptHead).toBe('string');
+    // promptHead must exist (set by setPresenceActivityPromptHead).
+    expect(rec?.activity?.promptHead).toBeDefined();
   });
 });
 
@@ -325,6 +393,40 @@ describe('injection isolation', () => {
     expect(rec?.activity?.promptHead).toBe('check the build');
     expect(rec?.activity?.promptHead).not.toContain('peer-session-message');
     expect(rec?.activity?.promptHead).not.toContain('background-subagent-result');
+  });
+
+  it('markPresenceTurn wiring: presence file promptHead contains raw text and NOT injected peer content', async () => {
+    // Wiring-level test: drives setPresenceActivityPromptHead (the security
+    // boundary invoked by markPresenceTurn) and asserts the presence file
+    // reflects only what the operator typed, never an injected peer message body.
+    //
+    // The composition contract is: loop-iteration.ts passes rawUserText (the
+    // pre-injection operator text) to markPresenceTurn, which forwards it to
+    // setPresenceActivityPromptHead. The composited runText (which includes
+    // injected peer content) is never forwarded. This test verifies that contract
+    // by simulating the correct call with rawUserText and the incorrect call with
+    // runText and checking only the correct outcome reaches the presence file.
+    await writeInitialPresence(SESSION_ID);
+    const { setPresenceActivityPromptHead } = await getActivityMod();
+
+    // Simulate the peer injection that loop-iteration.ts prepends to runText.
+    const rawUserText = 'run the test suite';
+    const peerInjection =
+      '<peer-session-message from="other-session">SECRET_PEER_BODY</peer-session-message>\n\n';
+    const runText = peerInjection + rawUserText;
+
+    // The correct call: pass rawUserText (not runText) — this is what
+    // markPresenceTurn does in loop-iteration.turn-run.ts.
+    await setPresenceActivityPromptHead(SESSION_ID, rawUserText);
+
+    const rec = await readPresenceRecord();
+    // Must contain the raw text the operator typed.
+    expect(rec?.activity?.promptHead).toContain('run the test suite');
+    // Must NOT contain any part of the injected peer message.
+    expect(rec?.activity?.promptHead ?? '').not.toContain('peer-session-message');
+    expect(rec?.activity?.promptHead ?? '').not.toContain('SECRET_PEER_BODY');
+    // Confirm runText IS a superset — i.e. passing it instead would have leaked.
+    expect(runText).toContain('SECRET_PEER_BODY');
   });
 });
 

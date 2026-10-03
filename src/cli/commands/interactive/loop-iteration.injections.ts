@@ -64,19 +64,22 @@ export function prependTurnInjections(runText: string, sources: readonly Injecti
  * This parameter MUST be the pre-injection text; passing the composited
  * `runText` would leak peer message bodies into the presence file.
  *
- * When state is `'idle'`, `rawUserText` is ignored; `activity.turns` and
- * `activity.lastTurnEndedAt` are updated instead.
+ * When state is `'idle'`, `totalTurns` is `ctx.stats.totalTurns` after the
+ * turn is counted — stored directly so resumed sessions start from the
+ * correct historical total rather than resetting to 1. `rawUserText` is also
+ * forwarded for first-turn fallback (see setPresenceActivityTurnEnd JSDoc).
  */
 export function markPresenceTurn(
   sessionId: string | undefined,
   state: 'idle' | 'busy',
   rawUserText?: string,
+  totalTurns?: number,
 ): void {
   if (!sessionId) return;
   void setPresenceTurnState(sessionId, state);
   if (state === 'busy' && rawUserText !== undefined) {
     void setPresenceActivityPromptHead(sessionId, rawUserText);
   } else if (state === 'idle') {
-    void setPresenceActivityTurnEnd(sessionId);
+    void setPresenceActivityTurnEnd(sessionId, totalTurns ?? 0, rawUserText);
   }
 }

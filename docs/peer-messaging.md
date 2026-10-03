@@ -73,9 +73,9 @@ Returns an array of live peer sessions excluding self. Each entry:
 | `pendingMessages` | `number` | Count of unread messages already queued in the session's inbox |
 | `blocked` | `boolean` | Whether the session is currently waiting on a human elicitation |
 | `acceptsMessages` | `boolean` | `true` when the session has a peer-inbox receiver (REPL sessions only in v1); `false` means `send_to_session` will refuse with `no-receiver` |
-| `activity` | `object?` | What the session is working on (absent until the first REPL turn starts) |
-| `activity.promptHead` | `string` | First ≤120 chars of the raw user-typed text, whitespace-collapsed and redacted of secrets; set at turn start so a busy session shows the current prompt |
-| `activity.turns` | `number` | Total completed turns for this session |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn ends) |
+| `activity.promptHead` | `string?` | First ≤120 chars of the raw user-typed text, whitespace-collapsed and redacted of secrets; set at turn start so a busy session shows the current prompt. Absent only if the session id was not yet minted when the first turn started and no raw text was available at turn end. |
+| `activity.turns` | `number` | Total completed turns for this session (seeded from `stats.totalTurns`, so it survives resume and reflects the true historical count) |
 | `activity.lastTurnEndedAt` | `string?` | ISO timestamp of when the most recent turn completed |
 
 For deeper per-turn detail — tool calls, subagents, session phases — call `read_witness` with the peer's `sessionId`. Note: `read_witness` may return empty results for a very new session that has not yet written its witness trace.
