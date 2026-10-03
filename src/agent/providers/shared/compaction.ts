@@ -704,8 +704,14 @@ export async function runCompactionCore<M>(
     // provider wiring also trips the shared abort signal — so check the timeout
     // sentinel BEFORE isAborted(), or a genuine timeout would be misreported as
     // a user-initiated 'aborted'.
-    if (err instanceof CompactionTimeoutError) {
-      return { compacted: false, reason: 'summarization-failed: ' + err.message, ...unchanged };
+    //
+    // We check `timedOut` BEFORE `instanceof CompactionTimeoutError` because
+    // abortInFlight() may cause the in-flight request to throw an AbortError
+    // rather than a CompactionTimeoutError — `timedOut` is the authoritative
+    // sentinel regardless of the error shape.
+    if (timedOut || err instanceof CompactionTimeoutError) {
+      const msg = err instanceof CompactionTimeoutError ? err.message : errorMessage(err);
+      return { compacted: false, reason: 'summarization-failed: ' + msg, ...unchanged };
     }
     if (isAborted()) {
       return { compacted: false, reason: 'aborted', ...unchanged };

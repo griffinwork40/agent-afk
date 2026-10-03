@@ -210,8 +210,16 @@ export class BackgroundSummarizer {
 
   private async refreshJob(jobId: string, now: number): Promise<void> {
     // Budget slot was reserved (incremented) by tick() before dispatch.
-    // We must decrement it on any failure path so the counter stays balanced.
+    //
+    // Accounting invariant: every real API call must be charged exactly once.
+    //   - tick() charges 1 for the initial attempt.
+    //   - The withTransientRetry onRetry callback charges 1 per retry attempt.
+    //   - We must only decrement the reservation when NO real API call was made
+    //     (e.g. empty transcript early-return, or abort before the call launched).
+    //     If at least one API call happened the slot was consumed; decrementing
+    //     would under-count actual spend and allow the cap to be exceeded.
     let succeeded = false;
+    let apiCallAttempted = false;
     try {
       const transcript = this.getTranscriptFn(jobId);
       if (transcript === undefined || transcript.trim().length === 0) {
@@ -247,6 +255,7 @@ export class BackgroundSummarizer {
 
       this.lastRefreshedAt.set(jobId, now);
 
+      apiCallAttempted = true;
       const text = await this.callLLM(userPrompt, this.abortController.signal);
       this.summaries.set(jobId, {
         text: text.trim(),
@@ -264,11 +273,13 @@ export class BackgroundSummarizer {
         }
       }
     } finally {
-      // Always decrement on failure — including empty-transcript early-return
-      // and abort-by-stop() — so the budget reservation made in tick() never
-      // permanently inflates the counter.  On success `succeeded` is true and
-      // we do NOT decrement (the reservation converts to a real spend).
-      if (!succeeded) {
+      // Decrement the budget reservation ONLY when no real API call was made
+      // (empty-transcript early-return or abort before the call launched).
+      // When apiCallAttempted=true, the initial slot from tick() was consumed
+      // by the real call; any retries were individually charged by the onRetry
+      // callback in the constructor.  Decrementing here in that case would
+      // undercount actual spend and allow the cap to be exceeded on retry paths.
+      if (!succeeded && !apiCallAttempted) {
         this.callsThisSession--;
       }
     }

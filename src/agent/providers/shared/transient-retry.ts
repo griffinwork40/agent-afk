@@ -220,7 +220,13 @@ export async function withTransientRetry<T>(
       await sleepFn(delayMs, effectiveSignal);
 
       // Post-wait abort check.
-      if (isStopped()) throw lastErr;
+      // Throw an AbortError (not lastErr) so callers can distinguish a
+      // stop-during-backoff from the original transient API error.
+      if (isStopped()) {
+        const abortErr = new Error('aborted during retry backoff');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
     }
   }
 
