@@ -191,8 +191,20 @@ export interface WakeBudget {
    * Attempt to consume one wake credit for `senderId`. Returns `true` when the
    * budget has remaining capacity, `false` when the limit has been reached.
    * Expired entries (> 1 hour old) are pruned before checking.
+   *
+   * Callers must call `refund(senderId)` if the consuming action ultimately
+   * did not succeed (e.g. the claim returned null due to a lost race). This
+   * keeps the budget accurate: only actions that actually wake the session
+   * consume a permanent slot.
    */
   tryConsume(senderId: string): boolean;
+  /**
+   * Return the most recently recorded wake credit for `senderId`. Call when
+   * `tryConsume` returned `true` but the subsequent action did not complete
+   * (e.g. `claimPending` returned `null`). Safe to call after `tryConsume`
+   * returned `false` — it is a no-op in that case.
+   */
+  refund(senderId: string): void;
 }
 
 /**
@@ -222,6 +234,13 @@ export function createWakeBudget(opts?: WakeBudgetOpts): WakeBudget {
       prev.push(nowMs);
       slots.set(senderId, prev);
       return true;
+    },
+    refund(senderId: string): void {
+      const existing = slots.get(senderId);
+      if (!existing || existing.length === 0) return;
+      // Remove the most recently added timestamp for this sender.
+      existing.pop();
+      slots.set(senderId, existing);
     },
   };
 }

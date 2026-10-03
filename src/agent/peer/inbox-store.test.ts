@@ -4,7 +4,7 @@
  * Isolates AFK_STATE_DIR to a temp directory so no real state is touched.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -447,6 +447,141 @@ describe('sweepPeerInboxes', () => {
       liveSessionIds: new Set<string>(),
     });
     expect(removed).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkOrphanPending (item 4a)
+// ---------------------------------------------------------------------------
+
+describe('checkOrphanPending', () => {
+  it('returns none when no delivered receipt exists', async () => {
+    const { writeEnvelope, listPending, checkOrphanPending } = await getInboxStore();
+    await writeEnvelope(makeEnvelope());
+    const [file] = await listPending(TARGET_ID);
+    expect(await checkOrphanPending(TARGET_ID, file!)).toBe('none');
+    // Pending file is still there.
+    const still = await listPending(TARGET_ID);
+    expect(still).toHaveLength(1);
+  });
+
+  it('returns valid and removes pending when a valid receipt exists', async () => {
+    const { writeEnvelope, listPending, checkOrphanPending } = await getInboxStore();
+    const envelope = makeEnvelope();
+    await writeEnvelope(envelope);
+    const [file] = await listPending(TARGET_ID);
+    const base = path.join(tmpDir, 'inbox', TARGET_ID);
+    // Simulate crash-after-link: create the delivered receipt manually.
+    fs.mkdirSync(path.join(base, 'delivered'), { recursive: true });
+    fs.copyFileSync(path.join(base, 'pending', file!), path.join(base, 'delivered', file!));
+
+    const verdict = await checkOrphanPending(TARGET_ID, file!);
+    expect(verdict).toBe('valid');
+    // Pending source removed.
+    expect(fs.existsSync(path.join(base, 'pending', file!))).toBe(false);
+    // Delivered receipt untouched.
+    expect(fs.existsSync(path.join(base, 'delivered', file!))).toBe(true);
+  });
+
+  it('returns corrupt and leaves pending intact when receipt is unparseable', async () => {
+    const { writeEnvelope, listPending, checkOrphanPending } = await getInboxStore();
+    await writeEnvelope(makeEnvelope());
+    const [file] = await listPending(TARGET_ID);
+    const base = path.join(tmpDir, 'inbox', TARGET_ID);
+    // Create a corrupt (partial-write) delivered receipt.
+    fs.mkdirSync(path.join(base, 'delivered'), { recursive: true });
+    fs.writeFileSync(path.join(base, 'delivered', file!), 'PARTIAL DATA NOT JSON');
+
+    const verdict = await checkOrphanPending(TARGET_ID, file!);
+    expect(verdict).toBe('corrupt');
+    // Pending source must NOT be removed on a bad receipt.
+    expect(fs.existsSync(path.join(base, 'pending', file!))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// claimPending fallback (item 5)
+// ---------------------------------------------------------------------------
+
+describe('claimPending — fallback when link() is unsupported', () => {
+  // Re-import inbox-store against an fs/promises whose link() always throws
+  // `code`, as on exFAT/FAT, SMB, or FUSE mounts without hard-link support.
+  async function importStoreWithLinkError(code: string) {
+    vi.resetModules();
+    vi.doMock('fs/promises', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('fs/promises')>();
+      return {
+        ...actual,
+        link: async () => { throw Object.assign(new Error(`link: ${code}`), { code }); },
+      };
+    });
+    return import('./inbox-store.js');
+  }
+
+  afterEach(() => {
+    vi.doUnmock('fs/promises');
+    vi.resetModules();
+  });
+
+  it('delivers via copyFile(COPYFILE_EXCL) when link() throws ENOTSUP', async () => {
+    const store = await importStoreWithLinkError('ENOTSUP');
+    const envelope = makeEnvelope();
+    await store.writeEnvelope(envelope);
+    const [file] = await store.listPending(TARGET_ID);
+    const claimed = await store.claimPending(TARGET_ID, file!);
+    expect(claimed?.messageId).toBe(envelope.messageId);
+    const base = path.join(tmpDir, 'inbox', TARGET_ID);
+    expect(fs.readdirSync(path.join(base, 'delivered'))).toEqual([file]);
+    expect(await store.listPending(TARGET_ID)).toEqual([]);
+  });
+
+  it('keeps exactly one winner among concurrent claimers on the fallback path', async () => {
+    const store = await importStoreWithLinkError('EPERM');
+    await store.writeEnvelope(makeEnvelope({ messageId: 'concurrent-fallback-test' }));
+    const [file] = await store.listPending(TARGET_ID);
+    const N = 10;
+    const results = await Promise.all(
+      Array.from({ length: N }, () => store.claimPending(TARGET_ID, file!)),
+    );
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+  });
+
+  it('still propagates permission errors (EACCES) instead of falling back', async () => {
+    const store = await importStoreWithLinkError('EACCES');
+    await store.writeEnvelope(makeEnvelope());
+    const [file] = await store.listPending(TARGET_ID);
+    await expect(store.claimPending(TARGET_ID, file!)).rejects.toMatchObject({ code: 'EACCES' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findDeliveredEnvelope — endsWith fix (item 8)
+// ---------------------------------------------------------------------------
+
+describe('findDeliveredEnvelope — endsWith match', () => {
+  it('a short id that is a substring of another delivered file does not match', async () => {
+    const { writeEnvelope, listPending, claimPending, findDeliveredEnvelope } = await getInboxStore();
+    // Deliver two envelopes: one whose messageId is a prefix of the other's.
+    const shortId = 'abc';
+    const longId = `abc-extra-suffix`;
+    // Write both; deliver both.
+    const envShort = makeEnvelope({ messageId: shortId, ts: '2026-10-01T00:00:00.001Z' });
+    const envLong = makeEnvelope({ messageId: longId, ts: '2026-10-01T00:00:00.002Z' });
+    await writeEnvelope(envShort);
+    await writeEnvelope(envLong);
+    const files = await listPending(TARGET_ID);
+    for (const f of files) {
+      await claimPending(TARGET_ID, f);
+    }
+    // Looking up the long id must not match the short-id filename.
+    const foundLong = await findDeliveredEnvelope(TARGET_ID, longId);
+    expect(foundLong).not.toBeNull();
+    expect(foundLong!.messageId).toBe(longId);
+
+    // Looking up short must not match the long filename.
+    const foundShort = await findDeliveredEnvelope(TARGET_ID, shortId);
+    expect(foundShort).not.toBeNull();
+    expect(foundShort!.messageId).toBe(shortId);
   });
 });
 

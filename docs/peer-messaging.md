@@ -94,7 +94,7 @@ Sends a message to another session.
 
 **Busy (mid-turn)**: the envelope sits in `pending/` until the current turn completes. At the top of the next turn, `prependTurnInjections` drains the buffer. The running turn is **never interrupted**.
 
-**Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:185-199`).
+**Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:91-99`).
 
 **Multi-line body**: stays as one envelope, arrives in one turn as one `<peer-session-message>` block.
 
@@ -112,7 +112,7 @@ $AFK_STATE_DIR/inbox/<sessionId>/
 Directories: mode `0700`. Files: mode `0600`.
 
 **Write**: sender writes `.tmp-<id>` then renames to final name (atomic).
-**Claim**: receiver hardlinks `pending/<file>` to `delivered/<file>` (exclusive receipt creation), then unlinks the pending name. Existing receipts are never overwritten: `EEXIST` or `ENOENT` returns `null`. This requires hardlink support within the inbox filesystem. A crash after linking can leave a pending source, but its delivered receipt prevents redelivery; a claimed message not yet injected into a turn can still be lost on process exit.
+**Claim**: receiver attempts to hardlink `pending/<file>` to `delivered/<file>` (exclusive receipt creation), then unlinks the pending name. On filesystems without hardlink support (exFAT/FAT, SMB, some FUSE), falls back to `copyFile(COPYFILE_EXCL)` for the same exclusive-create guarantee. Existing receipts are never overwritten: `EEXIST` or `ENOENT` returns `null`. A crash after receipt creation can leave a pending source; its delivered receipt prevents redelivery. If the receipt is corrupt (e.g. partial copy on crash), the pending source is left intact. A claimed message not yet injected into a turn can still be lost on process exit.
 
 **Hold contention**: hold still moves pending to held by rename. A concurrent hold can win before the claim link (claim returns `null`), or leave a held copy after receipt creation. Releasing that copy cannot redeliver it because the receipt exists. This is not a transaction across all three directories; a stale held/orphan pending entry may remain for operator review.
 
@@ -184,6 +184,8 @@ Peer messages carry **no user authority**. The model system prompt (`system-prom
 - A peer message is from ANOTHER afk session (another agent), not the user.
 - It inherits no permission or configuration authority.
 - The model should verify before taking any risky action a peer requests.
+
+**Sender identity is not authenticated.** The envelope `from.id` field is set by the sender and is not cryptographically verified. Trust rests entirely on same-user filesystem access (inbox directories are mode `0700`, files `0600`): any process running as the same uid can write an envelope with any sender id, which grants nothing beyond what that process can already do directly. The `send_to_session` tool always stamps the caller's own session id, but a rogue process on the same uid is outside the threat model.
 
 **Accepted risk** (operator decision 2026-10-02): `autonomous`/`bypass` receivers accept peer messages by default (`AFK_PEER_INBOUND=accept`). The 64KB body cap, hop cap, wake budget, and XML escaping mitigate the worst prompt-injection paths. The `/inbox` hold path is available for sensitive deployments.
 
