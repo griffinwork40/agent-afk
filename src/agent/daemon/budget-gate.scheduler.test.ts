@@ -310,8 +310,20 @@ describe('CronScheduler + budget gate: one alert per episode', () => {
 
   it('alerts on the first skip, suppresses the rest, and re-alerts after a pass', async () => {
     const delivered: TelemetryRecord[] = [];
+    // A fake session so the pass tick closes cleanly (a real one would hold
+    // state/kv/kv.db open and Windows could not delete the temp dir).
+    const fakeSession = {
+      sendMessage: vi.fn().mockResolvedValue({
+        response: { content: [{ type: 'text', text: 'Done' }] },
+        metadata: { successfulToolNames: [] },
+      }),
+      dispose: vi.fn(),
+      close: vi.fn(),
+      traceWriter: undefined,
+    };
     const scheduler = new CronScheduler({
       telemetryPath: join(dir, 'forge-telemetry.jsonl'),
+      sessionFactory: () => fakeSession as unknown as import('../session/agent-session.js').AgentSession,
       // fireOnTaskComplete applies the notifyOn filter before this callback.
       onTaskComplete: (record) => delivered.push(record),
     });
@@ -329,7 +341,8 @@ describe('CronScheduler + budget gate: one alert per episode', () => {
     expect(lines.filter((l) => l.includes('budget-over'))).toHaveLength(3); // every skip is still recorded
 
     budgetMock.result = { skip: false };
-    await scheduler.tick('a').catch(() => undefined); // passes the gate (session may fail in this harness)
+    const passed = await scheduler.tick('a'); // passes the gate, re-arming the latch
+    expect(passed.skipReason).not.toBe('budget-over');
     budgetMock.result = overSkipResult();
     await scheduler.tick('b');
     await scheduler.stop();
