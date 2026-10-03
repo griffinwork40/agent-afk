@@ -4,7 +4,8 @@
  * Mirrors the anthropic-direct counterpart
  * (`anthropic-direct/query/overload-pause-tier.test.ts`) but uses the
  * openai-compatible signal shape: an `{ type:'error' }` event with status 529
- * or 503 (exhausted stream retries on this wire).
+ * or 503, or a status-less SDK overload error (`isOpenAIOverloadError`), after
+ * stream retries on this wire are exhausted.
  *
  * Invariants under test:
  *  - Interactive surfaces (cli/repl/telegram/web) pause and re-probe.

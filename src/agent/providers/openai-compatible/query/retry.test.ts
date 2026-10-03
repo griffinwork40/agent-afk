@@ -136,6 +136,14 @@ describe('isOpenAIOverloadError', () => {
     expect(isOpenAIOverloadError(new Error('network drop'))).toBe(false);
   });
 
+  it('does not free-text match the error object itself (only the server body)', () => {
+    // A non-SDK throw whose own message mentions "overloaded" carries no server
+    // body, so it must not be treated as a provider overload.
+    expect(isOpenAIOverloadError(new Error('worker pool overloaded'))).toBe(false);
+    // A JSON-stringified body in .message without a parsed .error body: no match.
+    expect(isOpenAIOverloadError(new Error('{"note":"not overloaded"}'))).toBe(false);
+  });
+
   it('does not match non-objects', () => {
     expect(isOpenAIOverloadError(null)).toBe(false);
     expect(isOpenAIOverloadError(undefined)).toBe(false);

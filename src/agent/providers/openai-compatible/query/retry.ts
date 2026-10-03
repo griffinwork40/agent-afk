@@ -149,11 +149,19 @@ const OVERLOAD_TYPES = new Set(['service_unavailable_error', 'overloaded_error']
 /** Message text that signals a transient server overload. */
 const OVERLOAD_MESSAGE_RE = /overloaded/i;
 
-/** True when a `{ code?, type?, message? }` record carries an overload marker. */
-function hasOverloadMarker(rec: { code?: unknown; type?: unknown; message?: unknown }): boolean {
+/**
+ * True when a `{ code?, type?, message? }` record carries an overload marker.
+ * `checkMessage` is false for the error object itself: its `.message` may be a
+ * non-SDK throw or a JSON-stringified body, so free-text matching is limited to
+ * the parsed server body, where the SDK puts the server's own message.
+ */
+function hasOverloadMarker(
+  rec: { code?: unknown; type?: unknown; message?: unknown },
+  checkMessage: boolean,
+): boolean {
   if (typeof rec.code === 'string' && OVERLOAD_CODES.has(rec.code)) return true;
   if (typeof rec.type === 'string' && OVERLOAD_TYPES.has(rec.type)) return true;
-  return typeof rec.message === 'string' && OVERLOAD_MESSAGE_RE.test(rec.message);
+  return checkMessage && typeof rec.message === 'string' && OVERLOAD_MESSAGE_RE.test(rec.message);
 }
 
 /**
@@ -177,13 +185,13 @@ export function isOpenAIOverloadError(err: unknown): boolean {
   if (err === null || typeof err !== 'object') return false;
   if (getErrorStatus(err) !== undefined) return false;
   const e = err as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
-  if (hasOverloadMarker(e)) return true;
+  if (hasOverloadMarker(e, false)) return true;
   const body = e.error;
   if (body === null || typeof body !== 'object') return false;
   const b = body as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
-  if (hasOverloadMarker(b)) return true;
+  if (hasOverloadMarker(b, true)) return true;
   const inner = b.error;
-  return inner !== null && typeof inner === 'object' && hasOverloadMarker(inner);
+  return inner !== null && typeof inner === 'object' && hasOverloadMarker(inner, true);
 }
 
 /**
