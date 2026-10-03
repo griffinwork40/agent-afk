@@ -200,7 +200,8 @@ describe('aggregateTraces', () => {
       payload: {
         phase: 'completed', toolUseId: 'root-1', name: 'bash',
         resultBytes: 100, isError: false, truncated: false, durationMs: 200,
-        // no subagentId → root session
+        // no subagentId → root session (subagentId is z.string().optional(); absence
+        // is the authoritative root-session signal — the guard uses === undefined)
       },
     });
     const subCall = JSON.stringify({
