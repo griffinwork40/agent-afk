@@ -27,6 +27,7 @@ import { getPresenceDir } from '../../paths.js';
 import type { RuntimeWorkspace } from './types.js';
 import type { TraceActor } from '../session/session-identity.js';
 import { classifyPidLiveness, type ProcessLiveness } from '../process-liveness.js';
+import { filterVerifiedLive, type StartTimeProbe } from './presence.liveness.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,6 +66,15 @@ export interface PresenceFileInfo {
   model: { provider: string; name: string };
   workspace: RuntimeWorkspace;
   pid: number;
+  /**
+   * Epoch ms at which the process owning {@link pid} started, as this process
+   * computed it (`Date.now() - process.uptime() * 1000`, captured at module
+   * load). Display readers compare it with the start time the OS reports for
+   * `pid` today; a mismatch means the pid was recycled by an unrelated process
+   * (see `presence.liveness.ts`). Optional/additive: absent on records written
+   * by older builds.
+   */
+  pidStartedAt?: number;
   /**
    * AFK remote-control marker (bidirectional Telegram). Set `true` by the REPL
    * `/afk on` toggle and cleared on `/afk off` via {@link setPresenceAfk}. A
@@ -579,6 +589,8 @@ export interface ReadLivePresenceOptions {
    * visible.
    */
   maxHeartbeatAgeMs?: number;
+  /** Start-time probe seam for tests; defaults to the OS probe. */
+  startTimeProbe?: StartTimeProbe;
 }
 
 /**
@@ -597,12 +609,16 @@ export interface ReadLivePresenceOptions {
  * `process.once('exit'|'SIGINT'|'SIGTERM')`, none of which fire on SIGKILL or an
  * OOM kill, and nothing else reaps the directory. Before this, a crashed session
  * appeared live forever to every consumer.
+ *
+ * Also hides records whose pid was RECYCLED by an unrelated process (start-time
+ * mismatch) and legacy records with a long-stale heartbeat — see
+ * `presence.liveness.ts` for the verdict rules and thresholds.
  */
 export async function readLivePresenceFiles(
   options: ReadLivePresenceOptions = {},
 ): Promise<PresenceRecord[]> {
-  const records = await readPresenceFiles();
-  const { maxHeartbeatAgeMs } = options;
+  const { maxHeartbeatAgeMs, startTimeProbe } = options;
+  const records = await filterVerifiedLive(await readPresenceFiles(), startTimeProbe);
   return records.filter((r) => {
     if (r.liveness === 'dead') return false;
     if (

@@ -21,12 +21,18 @@ vi.mock('../../../agent/awareness/presence.js', () => ({
   readLivePresenceFiles: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock('../../../agent/awareness/presence.reaper.js', () => ({
+  sweepDeadPresence: vi.fn().mockResolvedValue(0),
+}));
+
 import { schedulePeerInboxSweep } from './peer-inbox-startup-sweep.js';
+import { sweepDeadPresence } from '../../../agent/awareness/presence.reaper.js';
 import { sweepPeerInboxes } from '../../../agent/peer/inbox-store.js';
 import { readLivePresenceFiles } from '../../../agent/awareness/presence.js';
 
 const mockSweep = sweepPeerInboxes as ReturnType<typeof vi.fn>;
 const mockRead = readLivePresenceFiles as ReturnType<typeof vi.fn>;
+const mockReap = sweepDeadPresence as ReturnType<typeof vi.fn>;
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -34,9 +40,18 @@ afterEach(() => {
 
 describe('schedulePeerInboxSweep', () => {
   it('does not call sweepPeerInboxes synchronously (deferred)', () => {
-    schedulePeerInboxSweep(50);
-    // sweepPeerInboxes must NOT have been called yet — the setTimeout is pending.
-    expect(mockSweep).not.toHaveBeenCalled();
+    // Fake timers so the pending timer cannot leak into, and fire during, a
+    // later test in this file.
+    vi.useFakeTimers();
+    try {
+      schedulePeerInboxSweep(50);
+      // sweepPeerInboxes must NOT have been called yet — the setTimeout is pending.
+      expect(mockSweep).not.toHaveBeenCalled();
+      expect(mockReap).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it('calls sweepPeerInboxes after the delay with live session ids', async () => {
@@ -72,5 +87,19 @@ describe('schedulePeerInboxSweep', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       })(),
     ).resolves.toBeUndefined();
+  });
+
+  it('fires the dead-presence reaper after the delay and swallows its rejection', async () => {
+    mockReap.mockRejectedValueOnce(new Error('reap fail'));
+    vi.useFakeTimers();
+    try {
+      schedulePeerInboxSweep(1000);
+      expect(mockReap).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockReap).toHaveBeenCalledTimes(1);
+      expect(mockSweep).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

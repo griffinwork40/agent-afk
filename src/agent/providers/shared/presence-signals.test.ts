@@ -29,6 +29,8 @@ import {
   registerPresenceCleanup,
   unregisterPresenceCleanup,
   _resetPresenceSignalsForTest,
+  _getPresenceHeartbeatTimerForTest,
+  PRESENCE_HEARTBEAT_INTERVAL_MS,
 } from './presence-signals.js';
 import { writePresenceFile, readPresenceFiles } from '../../awareness/presence.js';
 
@@ -167,5 +169,46 @@ describe('presence cleanup registry — signal ownership', () => {
       process.removeAllListeners('SIGTERM');
       for (const listener of saved) process.on('SIGTERM', listener as () => void);
     }
+  });
+});
+
+describe('presence heartbeat timer', () => {
+  it('starts one unref\'d interval on registration and refreshes heartbeatAt', async () => {
+    const stale = new Date(Date.now() - 3_600_000).toISOString();
+    await writePresenceFile({ ...record('hb'), heartbeatAt: stale });
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      registerPresenceCleanup('hb');
+      registerPresenceCleanup('hb2');
+      const timer = _getPresenceHeartbeatTimerForTest();
+      expect(timer).not.toBeNull();
+      expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
+      vi.advanceTimersByTime(PRESENCE_HEARTBEAT_INTERVAL_MS);
+      // The heartbeat write is async I/O; poll until it lands.
+      let refreshed: string | undefined;
+      for (let i = 0; i < 50 && (refreshed === undefined || refreshed === stale); i++) {
+        await new Promise((r) => setImmediate(r));
+        refreshed = (await readPresenceFiles()).find((r) => r.sessionId === 'hb')?.heartbeatAt;
+      }
+      expect(refreshed).toBeDefined();
+      expect(Date.parse(refreshed as string)).toBeGreaterThan(Date.parse(stale));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the interval when the last session unregisters, on exit, and on reset', () => {
+    registerPresenceCleanup('a');
+    expect(_getPresenceHeartbeatTimerForTest()).not.toBeNull();
+    unregisterPresenceCleanup('a');
+    expect(_getPresenceHeartbeatTimerForTest()).toBeNull();
+
+    registerPresenceCleanup('b');
+    lastListener('exit')();
+    expect(_getPresenceHeartbeatTimerForTest()).toBeNull();
+
+    registerPresenceCleanup('c');
+    _resetPresenceSignalsForTest();
+    expect(_getPresenceHeartbeatTimerForTest()).toBeNull();
   });
 });

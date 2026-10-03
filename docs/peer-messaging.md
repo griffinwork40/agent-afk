@@ -40,6 +40,8 @@ Peer-relevant fields added to the presence schema (`src/agent/awareness/presence
 | `turnStateSince` | ISO string | When `turnState` last changed |
 | `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox |
 
+**Liveness**: `list_sessions` (and every other display reader of `readLivePresenceFiles`) hides a record when its pid is gone, when the OS-reported start time of the pid differs from the record's `pidStartedAt` by more than 5 s (the pid was recycled by an unrelated process; probed with one batched `ps -o pid= -o etime=` on macOS, `/proc/<pid>/stat` on Linux), or when a legacy record without `pidStartedAt` has a heartbeat at least 6 h old. An unprobeable start time never hides a session. Each process refreshes `heartbeatAt` every 60 s, and REPL startup reaps presence files whose pid fails `kill(pid, 0)` with `ESRCH` only (`src/agent/awareness/presence.liveness.ts`, `presence.reaper.ts`).
+
 **Auto-naming**: on startup (when `$TMUX` is set) the notifier runs `tmux display-message -p '#S:#I'` to derive a `session:window` label (e.g. `research:5`), applied via `setPresenceNameIfUnset` so `/name` always wins (`src/agent/awareness/presence.peer.ts:76`).
 
 **Reachability**: a session becomes visible in `list_sessions` after its first turn, when its presence file is written and `peerInbox` is set to `true`.
