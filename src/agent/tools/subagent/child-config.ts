@@ -145,6 +145,19 @@ export interface BuildChildConfigResult {
   childWriteCapable: boolean;
   /** True only when every granted tool is proven free of persistent side effects. */
   childSideEffectFree: boolean;
+  /**
+   * The nested-dispatch allowlist for the child just built. Equals
+   * `resolvedAccess.nestedAgentTypes` when a named agent declared a scoped
+   * `Agent(x)` grant; `undefined` otherwise (unscoped / no-registry dispatch).
+   *
+   * The executor must pass this value as `ForkSubagentOptions.nestedAgentAllowlist`
+   * when calling `forkSubagent`, so it reaches `assembleChildConfig` and is
+   * included in the child's identity preamble. The executor ALSO stamps the
+   * same value onto the child executor's `SubagentExecutorContext.nestedAgentAllowlist`
+   * (at line ~460 in this file), ensuring text and enforcement derive from one
+   * resolved value.
+   */
+  nestedAgentAllowlist: readonly string[] | undefined;
 }
 
 /**
@@ -507,5 +520,5 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     );
   }
 
-  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree };
+  return { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist: resolvedAccess?.nestedAgentTypes };
 }

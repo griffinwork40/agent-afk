@@ -1,0 +1,73 @@
+feat(preamble): tell scoped children which agent_type values they may dispatch
+
+## Problem
+
+Witness traces show 92 tool-round rejections (4-16/day through 2026-10-03)
+where children with a scoped `Agent(x)` grant tried to dispatch:
+  - an out-of-scope named type (most common), OR
+  - a bare dispatch with no `agent_type` (bare dispatches always rejected for
+    scoped agents, and the preamble never mentioned this restriction)
+
+Each rejection wastes one child tool round. The root cause: the executor
+(`SubagentExecutor.executeOnce`) enforces `ctx.nestedAgentAllowlist` but the
+child's identity preamble never mentions which types are allowed, so the child
+has to guess — and frequently guesses wrong.
+
+## Fix
+
+Surface the allowed types in the child's identity preamble so the child knows
+before it tries to dispatch.
+
+### Invariant: text and enforcement derive from one value
+
+The allowlist originates at `resolvedAccess.nestedAgentTypes` in
+`buildChildConfig` (child-config.ts). This same value is:
+  1. Stamped onto the child executor's `ctx.nestedAgentAllowlist` (the
+     enforcement gate, line ~460 in child-config.ts) — unchanged.
+  2. Now also returned in `BuildChildConfigResult.nestedAgentAllowlist`, passed
+     as `ForkSubagentOptions.nestedAgentAllowlist`, threaded through
+     `assembleChildConfig` → `applyForkPreambles` → `injectSubagentIdentityPreamble`
+     → `renderSubagentIdentityPreamble`, and rendered in the child's system prompt.
+
+Both the preamble and the executor gate read the identical value — no dual
+maintenance, no drift.
+
+### Preamble text
+
+- **Unscoped child** (`nestedAgentAllowlist` undefined): unchanged — no new
+  section emitted.
+- **Scoped child** (e.g. `nestedAgentAllowlist: ['git-investigator']`):
+  > When dispatching nested agents, agent_type is required and must be one
+  > of: git-investigator. A bare dispatch with no agent_type is not permitted
+  > here.
+- **Deny-all child** (`nestedAgentAllowlist: []`, from `Agent()` grant):
+  > Nested dispatch is not permitted for this agent (its definition granted
+  > the dispatch tool but named zero allowed types, e.g. `Agent()`). Complete
+  > the task with your own tools.
+
+## Files changed
+
+- `src/agent/subagent/identity-preamble.ts` — `SubagentIdentityFacts.nestedAgentAllowlist`
+  field; render logic in `renderSubagentIdentityPreamble`; `injectSubagentIdentityPreamble`
+  accepts optional `nestedAgentAllowlist` parameter
+- `src/agent/subagent/fork-child-config.ts` — `AssembleChildConfigArgs.nestedAgentAllowlist`;
+  `applyForkPreambles` threads it to `injectSubagentIdentityPreamble`
+- `src/agent/subagent/fork-types.ts` — `ForkSubagentOptions.nestedAgentAllowlist`
+  (transport from executor to assembleChildConfig via forkSubagent)
+- `src/agent/subagent.ts` — threads `options.nestedAgentAllowlist` into
+  `assembleChildConfig`
+- `src/agent/tools/subagent/child-config.ts` — `BuildChildConfigResult.nestedAgentAllowlist`
+  returns `resolvedAccess?.nestedAgentTypes`
+- `src/agent/tools/subagent-executor.ts` — passes `nestedAgentAllowlist` from
+  `BuildChildConfigResult` to `forkSubagent`
+- `src/agent/subagent/identity-preamble.test.ts` — 8 new tests: scoped child
+  gets the allowed-types line, unscoped child unchanged, empty-list deny-all
+  wording, ordering, consistency invariant
+
+## Gates
+
+All pass: `pnpm lint`, `pnpm test` (touched files), `pnpm audit:funcsize:check`,
+`pnpm audit:filesize:check`, `pnpm fix:pins:check`, `pnpm build`.
+
+`config-types.ts` not touched (895 lines, well over ceiling; avoidance is
+per task spec). No changes to vendored agents or bundled skills.
