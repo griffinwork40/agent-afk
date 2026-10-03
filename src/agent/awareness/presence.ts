@@ -150,6 +150,25 @@ export interface PresenceFileInfo {
    * no receiver in v1). Optional/additive.
    */
   peerInbox?: boolean;
+  /**
+   * What this session is (or was last) working on. Written at REPL turn
+   * boundaries by `src/agent/awareness/presence.activity.ts`. Optional/additive:
+   * absent for sessions on non-REPL surfaces, or before the first turn starts.
+   *
+   * `promptHead` is sourced from the RAW user-typed text BEFORE peer-message or
+   * background-subagent-result injections are prepended — injected text never
+   * appears here. Callers that only have access to the composited `runText`
+   * must pass the pre-injection raw text instead.
+   *
+   * `turns` counts completed turns; `lastTurnEndedAt` is when the most recent
+   * turn finished. Both update at turn end; `promptHead` updates at turn start
+   * so a busy session shows what it is working on RIGHT NOW.
+   */
+  activity?: {
+    promptHead: string;
+    turns: number;
+    lastTurnEndedAt?: string;
+  };
 }
 
 /**

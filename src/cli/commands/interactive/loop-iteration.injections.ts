@@ -13,6 +13,10 @@
  */
 
 import { setPresenceTurnState } from '../../../agent/awareness/presence.peer.js';
+import {
+  setPresenceActivityPromptHead,
+  setPresenceActivityTurnEnd,
+} from '../../../agent/awareness/presence.activity.js';
 
 /**
  * User-message text seeded when a pending injection auto-resumes an idle REPL.
@@ -53,7 +57,26 @@ export function prependTurnInjections(runText: string, sources: readonly Injecti
  * Best-effort, fire-and-forget presence `turnState` update so peers'
  * `list_sessions` can see whether this session is idle or mid-turn. No-op
  * before the first turn mints a session id.
+ *
+ * When state is `'busy'`, `rawUserText` is the RAW user-typed text (before
+ * peer-message or bg-subagent injections are prepended) — it is stored as
+ * `activity.promptHead` so peers can see what this session is working on.
+ * This parameter MUST be the pre-injection text; passing the composited
+ * `runText` would leak peer message bodies into the presence file.
+ *
+ * When state is `'idle'`, `rawUserText` is ignored; `activity.turns` and
+ * `activity.lastTurnEndedAt` are updated instead.
  */
-export function markPresenceTurn(sessionId: string | undefined, state: 'idle' | 'busy'): void {
-  if (sessionId) void setPresenceTurnState(sessionId, state);
+export function markPresenceTurn(
+  sessionId: string | undefined,
+  state: 'idle' | 'busy',
+  rawUserText?: string,
+): void {
+  if (!sessionId) return;
+  void setPresenceTurnState(sessionId, state);
+  if (state === 'busy' && rawUserText !== undefined) {
+    void setPresenceActivityPromptHead(sessionId, rawUserText);
+  } else if (state === 'idle') {
+    void setPresenceActivityTurnEnd(sessionId);
+  }
 }

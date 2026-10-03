@@ -38,7 +38,8 @@ Peer-relevant fields added to the presence schema (`src/agent/awareness/presence
 | `name` | `string?` | Human-readable label, max 64 chars (`src/agent/awareness/presence.peer.ts:23`) |
 | `turnState` | `'idle'|'busy'|'blocked'` | Current REPL state |
 | `turnStateSince` | ISO string | When `turnState` last changed |
-| `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox |
+| `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox; `send_to_session` refuses targets without it |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn starts); see `list_sessions` field table below |
 
 **Auto-naming**: on startup (when `$TMUX` is set) the notifier runs `tmux display-message -p '#S:#I'` to derive a `session:window` label (e.g. `research:5`), applied via `setPresenceNameIfUnset` so `/name` always wins (`src/agent/awareness/presence.peer.ts:76`).
 
@@ -56,10 +57,28 @@ Returns an array of live peer sessions excluding self. Each entry:
 
 ```
 { sessionId, name, surface, cwd, branch, turnState, turnStateSince,
-  heartbeatAgeMs, pendingMessages, blocked }
+  heartbeatAgeMs, pendingMessages, blocked, acceptsMessages, activity? }
 ```
 
-`pendingMessages` is the count already queued in the target's inbox. `turnState` lets the sender decide whether to send now (idle) or expect queued delivery (busy).
+| Field | Type | Description |
+|---|---|---|
+| `sessionId` | `string` | Unique session identifier |
+| `name` | `string?` | Human-readable label (from `/name` or auto-detected tmux `session:window`) |
+| `surface` | `string` | Session surface (`cli`, `telegram`, etc.) |
+| `cwd` | `string` | Current working directory |
+| `branch` | `string?` | Current git branch |
+| `turnState` | `string` | `idle` (ready to be woken), `busy` (running a turn), or `blocked` (waiting on a human prompt) |
+| `turnStateSince` | `string?` | ISO timestamp of the last `turnState` change |
+| `heartbeatAgeMs` | `number?` | Milliseconds since the last presence heartbeat |
+| `pendingMessages` | `number` | Count of unread messages already queued in the session's inbox |
+| `blocked` | `boolean` | Whether the session is currently waiting on a human elicitation |
+| `acceptsMessages` | `boolean` | `true` when the session has a peer-inbox receiver (REPL sessions only in v1); `false` means `send_to_session` will refuse with `no-receiver` |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn starts) |
+| `activity.promptHead` | `string` | First ≤120 chars of the raw user-typed text, whitespace-collapsed and redacted of secrets; set at turn start so a busy session shows the current prompt |
+| `activity.turns` | `number` | Total completed turns for this session |
+| `activity.lastTurnEndedAt` | `string?` | ISO timestamp of when the most recent turn completed |
+
+For deeper per-turn detail — tool calls, subagents, session phases — call `read_witness` with the peer's `sessionId`. Note: `read_witness` may return empty results for a very new session that has not yet written its witness trace.
 
 ### `send_to_session({ to, message, reply_to? })`
 
