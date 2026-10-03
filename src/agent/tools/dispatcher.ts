@@ -601,12 +601,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    const available = this.subagentExecutor?.supportsBackgroundJobs?.()
+    const withBg = this.subagentExecutor?.supportsBackgroundJobs?.()
       ? this.schemas
       : this.schemas.filter(
           (schema) =>
             schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
         );
+    // Peer-messaging tools are top-level only: subagents (parentSessionId set)
+    // cannot use list_sessions or send_to_session.
+    const available = this.parentSessionId === undefined
+      ? withBg
+      : withBg.filter((s) => s.name !== 'list_sessions' && s.name !== 'send_to_session');
     const allowed = this.permissions?.allowedTools;
     if (!allowed) return available;
     const set = new Set(allowed);

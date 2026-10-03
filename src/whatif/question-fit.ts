@@ -98,6 +98,11 @@ export function classifyQuestionFit(predictions: readonly Prediction[]): Questio
 
   // ── No predictions ────────────────────────────────────────────────────────
   if (total === 0) {
+    // Invariant: an empty prediction set returns 'supported' by convention —
+    // "nothing is measurable" is indistinguishable from "everything is measurable"
+    // when there are no predictions to classify.  The accompanying line makes
+    // the vacuous nature explicit so users understand the experiment will produce
+    // no confirmation signal even though the level string reads 'supported'.
     return {
       level: 'supported',
       decisionCount: 0,

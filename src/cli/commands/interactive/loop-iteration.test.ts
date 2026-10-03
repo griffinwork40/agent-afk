@@ -24,7 +24,12 @@ const surfaceState = vi.hoisted(() => ({
   // `beforeReturn` (optional) runs just before the entry is returned — used
   // to fire mid-loop side effects (e.g. settling a background job) at a
   // point where the loop's subsystems are already constructed.
-  readLineQueue: [] as Array<{ text: string; attachments: unknown[]; beforeReturn?: () => void }>,
+  readLineQueue: [] as Array<{
+    text: string;
+    attachments: unknown[];
+    beforeReturn?: () => void;
+    beforeReturnAsync?: () => Promise<void>;
+  }>,
   readLineCalls: 0,
 }));
 const shellState = vi.hoisted(() => ({
@@ -107,6 +112,7 @@ vi.mock('../../input/input-surface.js', () => {
       surfaceState.readLineCalls += 1;
       const entry = surfaceState.readLineQueue.shift() ?? { text: '/exit', attachments: [] };
       entry.beforeReturn?.();
+      await entry.beforeReturnAsync?.();
       return { text: entry.text, attachments: entry.attachments };
     }
     toRunTurnRefs(_prompt: string): Record<string, unknown> { return {}; }
@@ -462,6 +468,59 @@ describe('runReplLoop — background-subagent result auto-delivery', () => {
     // Human notice rendered at the top of the iteration.
     const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => l.includes('subagent completed'))).toBe(true);
+  });
+});
+
+describe('runReplLoop -- peer session messages', () => {
+  it('prepends a peer message claimed from the session inbox to the next turn', async () => {
+    const { writeEnvelope } = await import('../../../agent/peer/inbox-store.js');
+    const { getPeerInboxDir } = await import('../../../paths.js');
+    const { existsSync, readdirSync } = await import('node:fs');
+    const ctx = makeCtx();
+    const inbox = getPeerInboxDir(ctx.stats.sessionId!);
+    const deliveredDir = `${inbox}/delivered`;
+
+    surfaceState.readLineQueue = [
+      {
+        text: 'first turn',
+        attachments: [],
+        // The real PeerInboxNotifier is running (footer subsystems). Drop an
+        // envelope into this session's inbox and wait until the notifier has
+        // claimed it, so the drain at the top of the turn must include it.
+        beforeReturnAsync: async () => {
+          await writeEnvelope({
+            v: 1,
+            messageId: 'msg-peer-1',
+            from: { id: 'sender-session-1', name: 'research:0' },
+            to: ctx.stats.sessionId!,
+            hop: 0,
+            ts: new Date().toISOString(),
+            body: 'line one\nline two',
+          });
+          // Wait for the notifier's human line: it is written AFTER the
+          // claim's parse + buffer push (the rename into delivered/ is earlier).
+          await vi.waitFor(() => {
+            const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+            expect(lines.some((l) => l.includes('peer message from'))).toBe(true);
+          }, { timeout: 5000, interval: 25 });
+        },
+      },
+      { text: '/exit', attachments: [] },
+    ];
+
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    const text = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
+    expect(text).toContain('<peer-session-message from="sender-session-1"');
+    // Multi-line body arrives as ONE block in ONE turn, user text at the tail.
+    expect(text).toContain('line one\nline two');
+    expect(text.match(/<peer-session-message /g)).toHaveLength(1);
+    expect(text.trimEnd().endsWith('first turn')).toBe(true);
+    // Claimed exactly once: the envelope now lives in delivered/.
+    expect(existsSync(deliveredDir) && readdirSync(deliveredDir)).toHaveLength(1);
+    const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.includes('peer message from research:0'))).toBe(true);
   });
 });
 

@@ -26,7 +26,7 @@
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
-import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta } from '../paths.js';
+import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult } from '../paths.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
 import type { OutputEvent } from './types/session-types.js';
 
@@ -54,6 +54,36 @@ export interface BgJobMeta {
    * before this field existed simply lack it (schemaVersion stays 1).
    */
   stopReason?: string;
+  schemaVersion: 1;
+}
+
+/**
+ * Persisted result body for a completed or failed background job.
+ *
+ * Written atomically to `result.json` next to `meta.json` by
+ * `BgJobLogWriter.writeResult()`, which `markTerminal()` calls for completed
+ * and failed jobs. The `/bgsub:join` cross-session fallback path reads this via
+ * `BgJobLogReader.readResult()` so the synthesized output text survives after
+ * the in-memory registry entry is TTL-evicted.
+ *
+ * `outputText` is the human-readable output as extracted by `extractOutput()`
+ * in `bg-result-notifier.ts` — the same string the model would receive via
+ * auto-delivery. The cross-session join replays this text rather than rebuilding
+ * it from raw events, so the two paths are always byte-identical.
+ *
+ * Cancelled jobs are NOT written here — cancellation carries no meaningful
+ * output and the operator-facing result is already communicated via the witness
+ * trace and the terminal-state notice.
+ */
+export interface BgJobResult {
+  jobId: string;
+  status: 'completed' | 'failed';
+  /**
+   * The synthesized output text (same string surfaced to the model on
+   * auto-delivery). Never undefined for completed/failed jobs — set to '' when
+   * the subagent produced no extractable content.
+   */
+  outputText: string;
   schemaVersion: 1;
 }
 
@@ -209,6 +239,31 @@ export class BgJobLogWriter {
       process.stderr.write(`[afk] bg-job-log: writeMeta failed for ${this.jobId}: ${String(e)}\n`);
     }
   }
+
+  /**
+   * Persist the synthesized result body for a completed or failed job.
+   *
+   * Called by `markTerminal()` in `BackgroundAgentRegistry` after status is
+   * committed. Writes atomically to `result.json` next to `meta.json`. The
+   * `/bgsub:join` cross-session fallback path reads this file so the operator
+   * can recover the exact output text even after the in-memory entry is
+   * TTL-evicted. Best-effort — errors are logged and never thrown.
+   */
+  async writeResult(result: BgJobResult): Promise<void> {
+    const resultPath = getBgJobResult(this.jobId);
+    try {
+      // Invariant: use mkdirp: true so the result is never silently lost when
+      // the job directory was not created (constructor mkdirSync failed and
+      // set `this.errored`, or the directory was swept between open and close).
+      await atomicWriteFileAsync(resultPath, JSON.stringify(result, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+        mkdirp: true,
+      });
+    } catch (e) {
+      process.stderr.write(`[afk] bg-job-log: writeResult failed for ${this.jobId}: ${String(e)}\n`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +321,34 @@ export class BgJobLogReader {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       // Corrupted meta — log and return null
       process.stderr.write(`[afk] bg-job-log: readMeta parse error for ${jobId}: ${String(e)}\n`);
+      return null;
+    }
+  }
+
+  /**
+   * Read the persisted result body for a completed or failed job.
+   *
+   * Returns `null` when the file does not exist (job predates result
+   * persistence, was cancelled, or write failed) or on any parse error.
+   * Callers treat `null` as "fall back to event-log replay".
+   */
+  static async readResult(jobId: string): Promise<BgJobResult | null> {
+    let resultPath: string;
+    try {
+      resultPath = getBgJobResult(jobId);
+    } catch {
+      return null;
+    }
+    try {
+      const raw = await fsp.readFile(resultPath, 'utf8');
+      const parsed = JSON.parse(raw) as BgJobResult;
+      if (parsed.schemaVersion !== 1) return null;
+      // Guard against corrupted files where outputText is missing or wrong type.
+      if (typeof parsed.outputText !== 'string') return null;
+      return parsed;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      process.stderr.write(`[afk] bg-job-log: readResult parse error for ${jobId}: ${String(e)}\n`);
       return null;
     }
   }

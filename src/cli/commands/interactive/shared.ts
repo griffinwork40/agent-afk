@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import { statSync } from 'node:fs';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
@@ -379,6 +380,19 @@ export interface InteractiveCtx {
    * `setupFooterSubsystems`, invoked from the swap's `onSwapped` callback.
    */
   clearBgResultBuffer?: () => void;
+  /**
+   * Resets the peer-inbox notifier's in-session state (injection buffer,
+   * wake budget, and generation counter) so the resumed session starts clean.
+   * Mirrors `clearBgResultBuffer`: owned by `setupFooterSubsystems`'s
+   * closure, invoked from the swap's `onSwapped` callback in bootstrap.ts.
+   */
+  resetPeerNotifier?: () => void;
+  /**
+   * Witness trace writer for REPL-owned emitters that run outside a session
+   * turn (the peer inbox notifier's `peer_message` events). Optional: absent
+   * when tracing is disabled (`AFK_TRACE_DISABLED=1`).
+   */
+  traceWriter?: TraceSink;
   /**
    * Clears the `pendingStopInjection` binding in `runInputLoop` so a
    * mid-session /resume swap cannot leak a Stop-hook `injectContext` from

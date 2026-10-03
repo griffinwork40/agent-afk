@@ -32,6 +32,7 @@ function mkSource(): RuntimeStateSource {
     }),
     getSubagents: () => ({ active: [], backgroundJobs: [] }),
     getWorkspace: () => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null }),
+    getUsage: () => [],
   };
 }
 
@@ -118,6 +119,7 @@ describe('createGetRuntimeStateHandler', () => {
       getTools: () => ({ enabled: [], mcpServers: [] }),
       getSubagents: () => ({ active: [], backgroundJobs: [] }),
       getWorkspace: () => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null }),
+      getUsage: () => [],
     };
     const handler = createGetRuntimeStateHandler(badSource);
     await expect(

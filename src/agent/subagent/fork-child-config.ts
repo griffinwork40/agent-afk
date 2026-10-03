@@ -57,6 +57,17 @@ export interface AssembleChildConfigArgs<T> {
   parentTraceWriter: TraceSink | undefined;
   parentSurface: Surface | undefined;
   parentCanUseTool: CanUseTool | undefined;
+  /**
+   * The nested-dispatch allowlist for the CHILD being assembled. Derived from
+   * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` (child-config.ts)
+   * and threaded here via `ForkSubagentOptions.nestedAgentAllowlist` so the
+   * identity preamble can name the allowed types — the same value the child's
+   * executor will enforce at every nested dispatch attempt.
+   *
+   * Undefined = unscoped child (no restriction emitted in the preamble).
+   * Empty array = deny-all (preamble says dispatch is forbidden).
+   */
+  nestedAgentAllowlist?: readonly string[];
 }
 
 /**
@@ -71,9 +82,13 @@ export interface AssembleChildConfigArgs<T> {
  * the last of the fork-injected sections, not the final section of the assembled
  * system prompt. It likewise
  * reads the final resolved `maxToolUseIterations`.
+ *
+ * @param nestedAgentAllowlist - Forwarded from {@link AssembleChildConfigArgs}
+ *   to {@link injectSubagentIdentityPreamble} so the child's preamble names
+ *   the types it may dispatch. Single source: same value the executor enforces.
  */
-function applyForkPreambles(config: AgentConfig): AgentConfig {
-  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config));
+function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[]): AgentConfig {
+  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist));
 }
 
 /**
@@ -348,7 +363,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
       : {}),
-  });
+  }, args.nestedAgentAllowlist);
 
   return args.workspaceStore
     ? injectWorkspacePreamble(assembled, workspaceEntries)

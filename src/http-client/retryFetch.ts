@@ -20,6 +20,7 @@
 
 import type { FetchFn } from './types.js';
 import { debugLog } from '../utils/debug.js';
+import { extractEgressBlockedError } from '../utils/errors.js';
 
 /** HTTP statuses worth retrying on an idempotent GET. */
 const RETRYABLE_STATUS = new Set<number>([429, 502, 503, 504]);
@@ -125,6 +126,7 @@ export async function retryFetch(
       await sleep(wait, signal);
     } catch (err) {
       if (signal?.aborted) throw err; // abort is terminal — never retried
+      if (extractEgressBlockedError(err) !== null) throw err; // policy block is terminal — never retried
       lastErr = err;
       if (attempt === retries) throw err; // exhausted → surface the last error
       const waitMs = backoffMs(attempt, baseDelayMs, maxDelayMs);

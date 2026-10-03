@@ -31,6 +31,7 @@
 
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../http-client/scrape.js';
+import { emptyScrapeMessage } from '../../../http-client/scrape-diagnostics.js';
 import { rateLimitMessage } from '../../../http-client/retryFetch.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../http-client/search.js';
 import { checkEgressTarget, guardedFetch } from '../../../http-client/egress-guard.js';
@@ -289,10 +290,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
           });
           if (result.markdown.trim().length === 0) {
-            return {
-              content: `web_scrape extracted no readable content from ${parsed.url}.`,
-              isError: true,
-            };
+            const capped = capBody(emptyScrapeMessage(parsed.url!, result), parsed.maxBytes);
+            return { content: capped.content, isError: true, ...(capped.truncated ? { truncated: true } : {}) };
           }
           // Cap the combined output. headAndTail preserves the advisory at the
           // tail without violating the caller's max_bytes contract.

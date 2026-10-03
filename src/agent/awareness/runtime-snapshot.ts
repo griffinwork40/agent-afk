@@ -46,6 +46,7 @@ export function buildRuntimeSnapshot(
         tools: source.getTools(),
         subagents: source.getSubagents(),
         workspace: source.getWorkspace(),
+        usage: source.getUsage(),
       };
   }
 }
