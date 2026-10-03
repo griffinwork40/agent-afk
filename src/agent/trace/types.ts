@@ -366,6 +366,16 @@ export interface SubagentStartedPayload {
    * dispatched?" without the render-label noise.
    */
   resolvedAgentType?: string;
+  /**
+   * The child's effective tool-round budget, read from the FINAL assembled
+   * child config (after call-site, named-agent frontmatter, compose node, and
+   * the `SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS` fallback have all resolved).
+   * `0` means unbounded. Present so a trace reader can compute cap rates per
+   * budget value and join a `tool_use_loop_capped` stop reason to the ceiling
+   * that produced it, instead of inferring the budget from source constants.
+   * Absent on traces written before this field existed.
+   */
+  maxToolUseIterations?: number;
 }
 
 export interface SubagentSucceededPayload {

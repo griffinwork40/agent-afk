@@ -324,6 +324,17 @@ describe('subagent_lifecycle payload', () => {
     expect(parsed).toMatchObject({ resolvedAgentType: 'Explore' });
   });
 
+  it('accepts started variant with maxToolUseIterations (0 = unbounded) and rejects a negative budget', () => {
+    const base = { transition: 'started', subagentId: 'child-1', parentId: 'root', model: 'sonnet' };
+    expect(SubagentLifecyclePayloadSchema.parse({ ...base, maxToolUseIterations: 80 })).toMatchObject({
+      maxToolUseIterations: 80,
+    });
+    expect(SubagentLifecyclePayloadSchema.parse({ ...base, maxToolUseIterations: 0 })).toMatchObject({
+      maxToolUseIterations: 0,
+    });
+    expect(() => SubagentLifecyclePayloadSchema.parse({ ...base, maxToolUseIterations: -1 })).toThrow();
+  });
+
   it("accepts failed variant with failureClass 'timeout'", () => {
     const parsed = SubagentLifecyclePayloadSchema.parse({
       transition: 'failed',
