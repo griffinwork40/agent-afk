@@ -151,6 +151,24 @@
       "category": "paths"
     },
     {
+      "name": "AFK_DAEMON_BUDGET_GATE_DISABLED",
+      "description": "Set to 1 to disable the subscription-usage budget gate for daemon/cron agent tasks. When unset (default) the daemon checks Claude subscription utilization before starting each agent task and skips the run if any window is at or above AFK_DAEMON_BUDGET_SKIP_PCT. Shell and builtin tasks are never gated regardless of this setting.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_SKIP_PCT",
+      "description": "Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window's utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the skip without fully disabling the gate. Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).",
+      "type": "number",
+      "required": false,
+      "default": "90",
+      "example": "80",
+      "category": "daemon"
+    },
+    {
       "name": "AFK_DAEMON_CWD",
       "description": "Working directory used by the daemon process for spawned agent sessions.",
       "type": "string",
@@ -1136,6 +1154,15 @@
       "required": false,
       "example": "0",
       "category": "misc"
+    },
+    {
+      "name": "AFK_USAGE_LEDGER_DISABLED",
+      "description": "Set to 1 to stop publishing/reading the cross-process usage ledger (namespace `usage` in state/kv/kv.db). Usage surfaces (`afk usage`, get_runtime_state, fan-out notice, daemon budget gate) then see only this process's in-memory quota cache. Default 0 (ledger active).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_USER_CARD_MAX_ROWS",

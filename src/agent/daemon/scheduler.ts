@@ -46,7 +46,8 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord } from './scheduler.overlap-guard.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord } from './scheduler.overlap-guard.js';
+import { evaluateBudgetGate, formatBudgetSkipMessage } from './budget-gate.js';
 
 
 export interface SchedulerOptions {
@@ -113,6 +114,12 @@ export interface SchedulerOptions {
   primaryChatId?: number;
   /** Optional topic thread ID for supergroup delivery. */
   primaryThreadId?: number;
+  /**
+   * Override the budget gate (tests). When absent, the real `evaluateBudgetGate`
+   * from `./budget-gate.ts` is used. Provide `async () => ({ skip: false })` to
+   * bypass the gate in tests that exercise other scheduler logic.
+   */
+  budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -387,6 +394,21 @@ export class CronScheduler {
           { now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task) },
         );
       } finally { this.idleDetector.decrement(); }
+    }
+
+    // Budget gate: check subscription usage before spawning an agent session.
+    // Shell and builtin tasks are never gated (they don't consume model quota).
+    // Fail-open: if usage is unavailable the gate passes.
+    const budgetResult = await (this.options.budgetGate ?? evaluateBudgetGate)();
+    if (budgetResult.skip) {
+      const record = makeBudgetSkipRecord(task, trigger, this.now(), budgetResult);
+      // Use 'always' semantics for budget skips: we want the operator to know.
+      // notifyOn filter is bypassed below by passing task with notifyOn override.
+      const notifyTask = { ...task, notifyOn: 'always' as const };
+      this.writeTelemetry(record, notifyTask, {
+        responseText: formatBudgetSkipMessage(budgetResult, task.taskId, this.now()),
+      });
+      return record;
     }
 
     return await executeAgentTask(

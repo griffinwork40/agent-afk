@@ -930,7 +930,13 @@ export type SessionPhaseName =
   // `code`. Exists because #2422 disabled the SDK's silent retries, which had
   // been absorbing these blips. A lone event followed by success means the
   // retry saved the turn; `attempt === maxRetries` then an error means it ran out.
-  | 'connection_retry';
+  | 'connection_retry'
+  // Fan-out dispatch usage notice (compose / agent wave start). Emitted once at
+  // dispatch start when the Anthropic quota snapshot shows warn (≥80%) or over
+  // (≥100%) usage. PURE OBSERVABILITY — no blocking, no routing change.
+  // `metadata` carries `level` ('warn'|'over'), `pct` (0–100), `windowLabel`
+  // ('5h window'|'7d window'), and optionally `resetsAtMs` (epoch ms).
+  | 'usage_notice';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

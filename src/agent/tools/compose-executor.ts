@@ -45,6 +45,7 @@ import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
 import type { AgentRegistry } from '../agents/index.js';
+import { evaluateDispatchUsageForModel, prependUsageNotice } from './usage-notice.js';
 export interface ComposeExecutorContext {
   // NOTE: compose nodes are NOT wired for the parent-registry fallback. The
   // DAG executor (dag-subagent.ts) forks each node with `parent: { sessionId }`
@@ -477,6 +478,10 @@ export class ComposeExecutor {
     // much work it had done, and `isError` then failed the whole compose call,
     // discarding healthy siblings too.
     const maxToolRoundsPerNode = parsed.max_tool_rounds_per_node;
+
+    // Usage notice: evaluate quota at compose-wave start (observer-only, no blocking).
+    const usageNotice = await evaluateDispatchUsageForModel(this.ctx.defaultModel, this.ctx.traceWriter);
+
     let manager: SubagentManager;
     // Resolve the ambient sink when an event is delivered (rather than when
     // the manager is constructed), while preserving compose's historical
@@ -871,7 +876,7 @@ export class ComposeExecutor {
       const warningPrefix = allWarnings.length > 0
         ? `> [compose warnings]\n${allWarnings.map((w) => `> - ${w}`).join('\n')}\n\n`
         : '';
-      const content = warningPrefix + dagContent;
+      const content = prependUsageNotice(usageNotice, warningPrefix + dagContent);
       const hasFailures = result.failed.length > 0;
       return { content, isError: hasFailures };
     } catch (err) {
