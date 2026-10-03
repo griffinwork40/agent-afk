@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Changed
+- document SessionFacet v7 outcome semantics for public consumers (#2797)
+
 ## [5.289.0] - 2026-10-03
 
 ### Added
