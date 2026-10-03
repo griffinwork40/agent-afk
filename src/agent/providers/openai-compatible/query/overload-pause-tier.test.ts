@@ -22,6 +22,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { APIError } from 'openai';
 import type { ProviderEvent } from '../../../provider.js';
 import {
   runIterationWithOverloadPause,
@@ -130,6 +131,20 @@ describe('isOverloadErrorEvent', () => {
     expect(isOverloadErrorEvent({ type: 'delta.text', text: 'hi', sessionId: 's' })).toBe(false));
   it('does not match an error with no status', () =>
     expect(isOverloadErrorEvent({ type: 'error', error: new Error('generic') })).toBe(false));
+  it('matches a status-less SDK mid-stream overload throw', () => {
+    // openai's stream iterator: new APIError(undefined, data.error, undefined, headers)
+    const err = new APIError(
+      undefined,
+      { message: 'Our servers are currently overloaded. Please try again later.' },
+      undefined,
+      new Headers(),
+    );
+    expect(isOverloadErrorEvent({ type: 'error', error: err })).toBe(true);
+  });
+  it('does not match a status-less unrelated SDK error', () => {
+    const err = new APIError(undefined, { type: 'invalid_request_error', message: 'bad' }, undefined, new Headers());
+    expect(isOverloadErrorEvent({ type: 'error', error: err })).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

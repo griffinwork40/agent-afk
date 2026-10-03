@@ -17,12 +17,16 @@
 // and driveStream 'stall watchdog timedOut + TypeError terminated => stall, not retry'
 // tests FAIL without the stallTimedOut parameter being checked in classifyStreamError.
 //
+// Status-less overload test: the 'status-less mid-stream overload re-drive'
+// test FAILS without isOpenAIOverloadError wired into isRetryableStreamError.
+//
 // P2 tests (accept completed response): the 'terminal finish_reason before drop =>
 // AcceptAction' and driveStream 'finish_reason then TypeError terminated => clean
 // completion, no retry, createStream called once' tests FAIL without the
 // terminalFinishReason guard in classifyStreamError.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { APIError } from 'openai';
 import {
   classifyStreamError,
   type RetryAction,
@@ -814,5 +818,59 @@ describe('driveStream with real translateChunk — Chat Completions scenarios', 
     expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(MAX_STREAM_RETRIES);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(result).not.toBeNull(); // accepted, not null
+  });
+});
+
+// ── Status-less mid-stream overload (SDK SSE `error` payload) ────────────────
+// openai's stream iterator throws `new APIError(undefined, data.error, …)` for
+// a mid-stream SSE error payload; it has no status, so before the fix it fell
+// through classifyStreamError and surfaced raw. It must now take branch 3.
+
+describe('driveStream — status-less mid-stream overload re-drive', () => {
+  beforeEach(() => {
+    __setRetryBaseDelay(0);
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    __setRetryBaseDelay(null);
+    vi.useRealTimers();
+  });
+
+  it('retries (stream.retry) instead of surfacing the error, then succeeds', async () => {
+    let callCount = 0;
+    const strategy: StreamDriveStrategy<{ text: string }> = {
+      createStream: async () => {
+        callCount++;
+        if (callCount === 1) {
+          return (async function* (): AsyncIterable<{ text: string }> {
+            yield { text: 'partial ' };
+            throw new APIError(
+              undefined,
+              { message: 'Our servers are currently overloaded. Please try again later.' },
+              undefined,
+              new Headers(),
+            );
+          })();
+        }
+        return (async function* (): AsyncIterable<{ text: string }> {
+          yield { text: 'recovered answer' };
+        })();
+      },
+      translate: (event, state: StreamState) => {
+        state.assistantText += event.text;
+        if (event.text === 'recovered answer') state.finishReason = 'stop';
+        return [];
+      },
+      clarifyError: (e) => (e instanceof Error ? e : new Error(String(e))),
+    };
+
+    const resultPromise = drive(makeCtx(), strategy);
+    await vi.advanceTimersByTimeAsync(100);
+    const { events, result } = await resultPromise;
+
+    expect(callCount).toBe(2);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
+    expect(result?.text).toBe('recovered answer');
   });
 });
