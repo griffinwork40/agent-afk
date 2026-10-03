@@ -191,6 +191,33 @@ describe('aggregateTraces', () => {
     expect(result.toolDurationsMs['read_file']).toBe(123);
   });
 
+  it('subagent tool call durations are NOT added to toolDurationsMs (interleaving guard)', () => {
+    writeSession('sess-1', makeSession({ sessionId: 'sess-1' }));
+    // Root-session call (no subagentId) + subagent call (subagentId present).
+    // Only the root call should count toward toolDurationsMs.
+    const rootCall = JSON.stringify({
+      ts: NOW_ISO, seq: 1, kind: 'tool_call',
+      payload: {
+        phase: 'completed', toolUseId: 'root-1', name: 'bash',
+        resultBytes: 100, isError: false, truncated: false, durationMs: 200,
+        // no subagentId → root session
+      },
+    });
+    const subCall = JSON.stringify({
+      ts: NOW_ISO, seq: 2, kind: 'tool_call',
+      payload: {
+        phase: 'completed', toolUseId: 'sub-1', name: 'bash',
+        resultBytes: 100, isError: false, truncated: false, durationMs: 999,
+        subagentId: 'child-abc', // interleaved subagent call — must be excluded
+      },
+    });
+    writeTrace('sess-1', [rootCall, subCall]);
+
+    const result = aggregateTraces({ days: 30, afkHome: tmpRoot });
+    // Only the 200ms root call should count; the 999ms subagent call must be excluded.
+    expect(result.toolDurationsMs['bash']).toBe(200);
+  });
+
   it('malformed JSONL line in trace → skipped, no throw', () => {
     writeSession('sess-1', makeSession({ sessionId: 'sess-1' }));
     writeTrace('sess-1', [
