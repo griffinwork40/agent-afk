@@ -1,14 +1,9 @@
 /**
  * Pure event translator for the `anthropic-direct` provider.
  *
- * Converts an Anthropic SDK `RawMessageStreamEvent` async iterable into a
- * stream of {@link TranslateOutput} discriminated-union values. The harness
- * sees `{kind: 'event', ...}` items immediately; the loop consumes the final
- * `{kind: 'turn-result', ...}` to decide whether to dispatch tools and
- * continue or terminate the turn.
- *
- * No I/O, no SDK construction, no random IDs — `sessionId` is threaded in via
- * {@link TranslateCtx}. State lives entirely in the generator's local scope.
+ * Converts an Anthropic SDK `RawMessageStreamEvent` async iterable into a stream of
+ * {@link TranslateOutput} values. No I/O, no SDK construction, no random IDs.
+ * `input_transformations` warnings are delegated to {@link warnOnDroppedThinkingBlocks}.
  *
  * @module agent/providers/anthropic-direct/translate
  */
@@ -23,6 +18,7 @@ import type { TranslateCtx, TranslateOutput, TurnResult } from './types.js';
 import { env } from '../../../config/env.js';
 import { incompleteStreamError, isStreamComplete } from './stream-completeness.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { warnOnDroppedThinkingBlocks } from './input-transformations.js';
 
 /**
  * Per-block accumulator. The block kind dictates which fields are populated
@@ -52,12 +48,7 @@ function parseToolInput(partialJson: string): unknown {
   }
 }
 
-/**
- * Build the final {@link TurnResult} from accumulated per-block state.
- *
- * Blocks are emitted in original index order (sparse arrays preserve gaps,
- * which a misbehaving stream might produce; we filter undefined slots out).
- */
+/** Build the final {@link TurnResult} from accumulated per-block state. Sparse slots are filtered. */
 function buildTurnResult(
   blocks: Array<BlockAcc | undefined>,
   stopReason: string | null,
@@ -117,38 +108,6 @@ function buildTurnResult(
 }
 
 /**
- * Emit a bounded diagnostic when the server reports dropped thinking blocks
- * via `input_transformations` (thinking-binding-controls beta, drop_block
- * policy). Safe contract: logs ONLY structural metadata (block count, index
- * positions). No thinking text, no signature bytes, no secret values cross
- * this boundary — the server never includes them in the SSE frame.
- *
- * Wire shape (documented in the Anthropic preserved-thinking API reference):
- *   message.input_transformations?: Array<{
- *     type: 'thinking_block_removed';
- *     thinking_block_index: number;
- *   }>
- */
-function warnOnDroppedThinkingBlocks(message: Record<string, unknown>): void {
-  const transformations = message?.['input_transformations'];
-  if (!Array.isArray(transformations) || transformations.length === 0) return;
-  const dropped = transformations.filter(
-    (t): t is { type: 'thinking_block_removed'; thinking_block_index: number } =>
-      typeof t === 'object' && t !== null && (t as Record<string, unknown>)['type'] === 'thinking_block_removed',
-  );
-  if (dropped.length === 0) return;
-  const indices = dropped.map((d) => d.thinking_block_index).join(', ');
-  // eslint-disable-next-line no-console
-  console.warn(
-    `[afk] Fable 5.1 drop_block: server dropped ${dropped.length} thinking block(s) ` +
-      `at index position(s) [${indices}] due to prefix mismatch. ` +
-      `AFK mutates prefixes (tool-result injection, cache stamps) so explicit drop_block ` +
-      `compatibility was chosen over a full append-only rewrite. Reasoning is regenerated ` +
-      `fresh for the current context; no thinking content is lost from the response.`,
-  );
-}
-
-/**
  * Async generator that translates an Anthropic streaming response into
  * harness-shaped {@link TranslateOutput} items.
  *
@@ -189,7 +148,10 @@ export async function* translateMessageStream(
       switch (evt.type) {
         case 'message_start': {
           if (evt.message?.usage) usage = { ...evt.message.usage };
-          warnOnDroppedThinkingBlocks(evt.message as unknown as Record<string, unknown>);
+          warnOnDroppedThinkingBlocks(
+            (evt.message as unknown as Record<string, unknown>)?.['input_transformations'],
+            'message_start',
+          );
           break;
         }
 
@@ -308,6 +270,12 @@ export async function* translateMessageStream(
           if (evt.delta && evt.delta.stop_reason !== undefined) {
             stopReason = evt.delta.stop_reason;
           }
+          // After a server-side model fallback the final message_delta carries
+          // the serving model's input_transformations entries (docs: preserved-thinking).
+          warnOnDroppedThinkingBlocks(
+            (evt as unknown as Record<string, unknown>)?.['input_transformations'],
+            'message_delta',
+          );
           const deltaUsage = evt.usage;
           if (deltaUsage) {
             if (usage !== null) {

@@ -25,7 +25,7 @@ Two policy choices exist once a prefix mismatch is detected:
 
 | Policy | Mechanism | Trade-off |
 |---|---|---|
-| `drop_block` | Server silently drops the invalidated thinking block and regenerates from the current context | Minimal: one console.warn, reasoning regenerated afresh |
+| `drop_block` | Server drops the invalidated thinking block; the model answers that turn without it | Minimal: one console.warn; prior reasoning unavailable for the dropped turn |
 | Append-only history | AFK never mutates message history — impossible given tool-result injection | Would require a full architectural rewrite of the tool-use loop |
 
 AFK opts into `drop_block` via the `thinking-binding-controls-2026-08-01` beta
@@ -33,8 +33,9 @@ header.  This is the correct choice because:
 
 1. AFK's tool-result injection is load-bearing — eliminating it would require
    rewriting the loop in loop.ts and all retry tiers.
-2. The model regenerates reasoning from its current full context; no information
-   is permanently lost.
+2. Dropped blocks are not billed and the model answers from its current context.
+   Prior reasoning is unavailable for the affected turn; blocks still in history
+   that the current model can read remain usable.
 3. The drop is *observable*: the server populates
    `message.input_transformations` in the SSE `message_start` frame, which
    AFK surfaces as a bounded `console.warn` (structural metadata only — block
@@ -44,21 +45,29 @@ header.  This is the correct choice because:
 
 ```
 // SSE message_start frame (documented in the Anthropic preserved-thinking API reference)
+// Real field names: type:'thinking_dropped', path:'messages.N.content.M'
 {
   type: 'message_start',
   message: {
     ...
     input_transformations: [
-      { type: 'thinking_block_removed', thinking_block_index: 0 }
+      { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' }
     ]
   }
 }
 ```
 
+Known `reason` values: `prefix_binding_mismatch`, `model_binding_mismatch`,
+`organization_binding_mismatch`. Unknown `type` or `reason` values are ignored
+(forward-compat per spec). `thinking_mismatch_allowed` entries are NOT drops —
+they mean the block failed the prefix check but was allowed through on an older
+account; AFK does not warn for them.
+
 ## Implementation
 
 - **`translate.ts`**: `warnOnDroppedThinkingBlocks()` — safe helper called at
-  `message_start`; logs count + index positions only.
+  `message_start` and `message_delta`; logs drop count + reason category
+  breakdown only. `path` values are never logged.
 - **`auth.ts`**: `THINKING_BINDING_CONTROLS_BETA_HEADER` constant; wired into
   `buildRequestHeaders` as the `thinkingBindingControls` optional flag.
 - **`loop/round-request.ts`**: `buildRoundParams` merges `block_binding:
@@ -69,11 +78,15 @@ header.  This is the correct choice because:
 
 ## Tests
 
-- `translate.test.ts` — five cases covering the real documented wire shape:
-  single drop, multi-drop, absent field, empty array, stream continues normally.
-- `auth.test.ts` — four cases: oauth + active, api-key + active, oauth +
-  inactive, api-key + inactive (empty object), oauth + both effort and
-  thinkingBindingControls.
+- `translate.test.ts` — thirteen `input_transformations` cases: `prefix_binding_mismatch`,
+  `model_binding_mismatch`, `organization_binding_mismatch`, multi-drop mixed reasons,
+  `thinking_mismatch_allowed` (no warn), unknown type (no warn), unknown reason (warn
+  as `unknown_reason`), absent field, empty array, warn cap at 10 with cap note,
+  `message_delta` fallback path, stream continues after drop, malformed entries skipped.
+- `auth.test.ts` — five cases: oauth + active, api-key + active, oauth + inactive,
+  api-key + inactive (empty object), oauth + both effort and thinkingBindingControls.
+- `loop/round-request.test.ts` — three `buildRoundParams` cases: block_binding wired,
+  block_binding absent for non-Fable, thinking omitted entirely.
 
 ## History mutated-prefix representative test
 
