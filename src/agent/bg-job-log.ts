@@ -252,10 +252,13 @@ export class BgJobLogWriter {
   async writeResult(result: BgJobResult): Promise<void> {
     const resultPath = getBgJobResult(this.jobId);
     try {
+      // Invariant: use mkdirp: true so the result is never silently lost when
+      // the job directory was not created (constructor mkdirSync failed and
+      // set `this.errored`, or the directory was swept between open and close).
       await atomicWriteFileAsync(resultPath, JSON.stringify(result, null, 2), {
         encoding: 'utf8',
         mode: 0o600,
-        mkdirp: false,
+        mkdirp: true,
       });
     } catch (e) {
       process.stderr.write(`[afk] bg-job-log: writeResult failed for ${this.jobId}: ${String(e)}\n`);
@@ -340,6 +343,8 @@ export class BgJobLogReader {
       const raw = await fsp.readFile(resultPath, 'utf8');
       const parsed = JSON.parse(raw) as BgJobResult;
       if (parsed.schemaVersion !== 1) return null;
+      // Guard against corrupted files where outputText is missing or wrong type.
+      if (typeof parsed.outputText !== 'string') return null;
       return parsed;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
