@@ -27,7 +27,7 @@ export const DAEMON_ENV_REGISTRY = [
   },
   {
     name: 'AFK_DAEMON_BUDGET_SKIP_PCT',
-    description: 'Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window\'s utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the skip without fully disabling the gate. Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).',
+    description: 'Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window\'s utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to never skip (the gate stays enabled but always passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).',
     type: 'number',
     required: false,
     default: '90',

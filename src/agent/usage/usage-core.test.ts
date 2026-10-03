@@ -201,6 +201,31 @@ describe('usage ledger + reader', () => {
     expect(fetchCodex).not.toHaveBeenCalled();
     expect(out.codex).toBeUndefined();
   });
+
+  it('a publish that exhausts all CAS attempts does not suppress the next identical publish within 5s (Item 4)', () => {
+    const observation = rec({ windows: { fiveHour: { utilization: 0.5 }, observedAt: NOW } });
+
+    // Seed the row so the retry path exercises cas() rather than insertIfAbsent().
+    publishUsage(observation, NOW - 10_000); // older timestamp — different sig, outside throttle window
+    expect(readLedgerRecords()).toHaveLength(1);
+
+    // Now make cas() always report a lost race so writeMerged returns false.
+    const casSpy = vi.spyOn(StateStore.prototype, 'cas').mockReturnValue({ matched: false });
+    publishUsage(observation, NOW);
+    // cas was called (MAX_CAS_ATTEMPTS times) but nothing new landed — the merged
+    // record is not updated; that is fine, we just care about the throttle state.
+    casSpy.mockRestore();
+
+    // Second identical publish within 5s: must still be attempted because
+    // lastPublish was never set by the failed write.
+    const casSpy2 = vi.spyOn(StateStore.prototype, 'cas');
+    publishUsage(observation, NOW + 1_000);
+    expect(casSpy2).toHaveBeenCalled();
+    casSpy2.mockRestore();
+
+    // The ledger must reflect the merged result from the successful retry.
+    expect(readLedgerRecords()[0]?.windows?.fiveHour?.utilization).toBe(0.5);
+  });
 });
 
 describe('observation adapters', () => {

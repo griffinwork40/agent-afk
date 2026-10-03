@@ -112,6 +112,9 @@ export async function evaluateBudgetGate(options: BudgetGateOptions = {}): Promi
   const target = options.target === undefined ? ANTHROPIC_OAUTH : options.target;
   if (target === null) return { skip: false };
   const skipPct = resolveSkipPct(options.skipPct);
+  // When skipPct reaches 100 no real utilization can exceed it, so skip the
+  // network round-trip entirely and pass unconditionally.
+  if (skipPct >= 100) return { skip: false };
   const now = options.now ?? Date.now();
   const isCodex = target.provider === CODEX_SUBSCRIPTION.provider;
   try {

@@ -106,25 +106,29 @@ function signature(rec: UsageRecord): string {
   ]);
 }
 
+// Invariant: throttled is a pure read — it never mutates lastPublish.
+// publishUsage records lastPublish only after writeMerged reports success,
+// so a CAS-exhausted write does not suppress the next attempt within the throttle window.
 function throttled(key: string, rec: UsageRecord, now: number): boolean {
   if (rec.perMinute?.frozenUntil !== undefined) return false;
   const sig = signature(rec);
   const prev = lastPublish.get(key);
-  if (prev && prev.sig === sig && now - prev.at < PUBLISH_MIN_INTERVAL_MS) return true;
-  lastPublish.set(key, { at: now, sig });
-  return false;
+  return prev !== undefined && prev.sig === sig && now - prev.at < PUBLISH_MIN_INTERVAL_MS;
 }
 
-function writeMerged(db: StateStore, key: string, rec: UsageRecord): void {
+// Returns true when the write landed (insert or CAS succeeded); false when all
+// CAS attempts were exhausted and the record was NOT committed.
+function writeMerged(db: StateStore, key: string, rec: UsageRecord): boolean {
   for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
     const row = db.get(NAMESPACE, key);
     if (row === null) {
-      if (db.insertIfAbsent(NAMESPACE, key, rec).created) return;
+      if (db.insertIfAbsent(NAMESPACE, key, rec).created) return true;
       continue;
     }
     const merged = mergeUsageRecords(parseUsageRecord(row.value), rec);
-    if (db.cas(NAMESPACE, key, row.version, merged).matched) return;
+    if (db.cas(NAMESPACE, key, row.version, merged).matched) return true;
   }
+  return false;
 }
 
 /**
@@ -137,7 +141,9 @@ export function publishUsage(rec: UsageRecord, now: number = Date.now()): void {
     if (db === null) return;
     const key = usageKey(rec.provider, rec.account);
     if (throttled(key, rec, now)) return;
-    writeMerged(db, key, rec);
+    if (writeMerged(db, key, rec)) {
+      lastPublish.set(key, { at: now, sig: signature(rec) });
+    }
   } catch {
     // Observability only — a ledger failure must never touch the request path.
   }

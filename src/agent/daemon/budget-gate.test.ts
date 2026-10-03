@@ -103,12 +103,14 @@ describe('evaluateBudgetGate', () => {
     expect(result.skip).toBe(true);
   });
 
-  it('passes when skipPct is 100 (disabled via threshold)', async () => {
+  it('passes when skipPct is 100 (never-skip) even at 100% utilization, without calling fetchUsage', async () => {
+    let called = false;
     const result = await evaluateBudgetGate({
       skipPct: 100,
-      fetchUsage: async () => makeOkResult(0.99),
+      fetchUsage: async () => { called = true; return makeOkResult(1.0); },
     });
     expect(result.skip).toBe(false);
+    expect(called).toBe(false);
   });
 
   it('env opt-out: AFK_DAEMON_BUDGET_GATE_DISABLED=1 skips network call and passes', async () => {
