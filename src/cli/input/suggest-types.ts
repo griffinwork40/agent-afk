@@ -22,8 +22,6 @@ import type { ProviderRouteHints } from '../../agent/providers/index.js';
 export interface SuggestContext {
   /** Model id in use for the current session (e.g. `'claude-sonnet-4-5'`). */
   model: string;
-  /** Explicit API key to forward to the provider, if available. */
-  apiKey?: string;
   /** Endpoint override (local shim / Anthropic-shim baseURL), if set. */
   baseUrl?: string;
   /** Absolute working directory for the session (basename used in prompt). */
@@ -116,6 +114,16 @@ export interface SuggestEngineOptions {
     model: string | undefined,
     hints: ProviderRouteHints | undefined,
   ) => ModelProvider;
+
+  /**
+   * Inject the credential lookup used for real-provider calls (tests). Called
+   * with the SUGGESTION model, never the session model; memoized per provider
+   * kind. Defaults to `resolveCredentialForModel`.
+   */
+  resolveCredentialFn?: (
+    model: string | undefined,
+    hints: ProviderRouteHints | undefined,
+  ) => string | undefined;
 
   /** Override debounce delay (ms). Useful in tests to set 0. */
   debounceMs?: number;

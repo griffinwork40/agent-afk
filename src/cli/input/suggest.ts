@@ -28,6 +28,7 @@
 import type { ProviderRouteHints } from '../../agent/providers/index.js';
 import { getDeterministicGhost } from './suggest-tier1.js';
 import { createProviderPool, pickModel } from './suggest-provider.js';
+import { createSuggestCredentialResolver } from './suggest-credential.js';
 import { createPromptSuggestionState } from './suggest-prompt-state.js';
 import { stripGhostControlChars } from './suggest-sanitize.js';
 import { createTier2Runner, DEBOUNCE_MS, TIMEOUT_MS } from './suggest-tier2.js';
@@ -55,6 +56,7 @@ export { getDeterministicGhost } from './suggest-tier1.js';
 export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEngine {
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
   const providers = createProviderPool(opts.resolveProviderFn);
+  const credentials = createSuggestCredentialResolver(opts.resolveCredentialFn);
 
   /**
    * Resolve the completion function both producers share: the injected
@@ -68,7 +70,12 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
       : undefined;
     const provider = providers.resolve(model, hints);
     if (typeof provider.complete !== 'function') return null;
-    return provider.complete.bind(provider);
+    const complete = provider.complete.bind(provider);
+    // Invariant: the credential is resolved for the SUGGESTION model's
+    // provider, never borrowed from the session (see ./suggest-credential).
+    // Attached here, the single chokepoint both producers call through.
+    const apiKey = credentials.resolve(model, hints);
+    return (req) => complete(apiKey !== undefined ? { ...req, apiKey } : req);
   }
 
   const tier2 = createTier2Runner({
