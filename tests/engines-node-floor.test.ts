@@ -25,8 +25,24 @@ describe('parseNodeFloor', () => {
     expect(parseNodeFloor('>=18.17.0')).toEqual([18, 17, 0]);
   });
 
+  it('parses >=X (major-only) with minor and patch defaulting to 0', () => {
+    expect(parseNodeFloor('>=24')).toEqual([24, 0, 0]);
+    expect(parseNodeFloor('>=18')).toEqual([18, 0, 0]);
+  });
+
+  it('parses >=X.Y (major.minor only) with patch defaulting to 0', () => {
+    expect(parseNodeFloor('>=24.0')).toEqual([24, 0, 0]);
+    expect(parseNodeFloor('>=22.13')).toEqual([22, 13, 0]);
+  });
+
+  it('parses >= X.Y.Z with a space after >=', () => {
+    expect(parseNodeFloor('>= 24.0.0')).toEqual([24, 0, 0]);
+    expect(parseNodeFloor('>= 22.13.0')).toEqual([22, 13, 0]);
+  });
+
   it('strips surrounding whitespace before parsing', () => {
     expect(parseNodeFloor('  >=22.0.0  ')).toEqual([22, 0, 0]);
+    expect(parseNodeFloor('  >= 24.0.0  ')).toEqual([24, 0, 0]);
   });
 
   it('returns null for caret / tilde / star ranges', () => {
@@ -104,15 +120,22 @@ describe('nodeFloorStatus', () => {
     expect(nodeFloorStatus('>=22.13.0', '>=22.0.0')).toBe('same-or-lower');
   });
 
-  it('returns unparseable when the old range is not a simple >=X.Y.Z', () => {
-    expect(nodeFloorStatus('^22.0.0', '>=22.13.0')).toBe('unparseable');
+  it('returns raised when floor is bumped using tolerant spellings', () => {
+    expect(nodeFloorStatus('>=22.0.0', '>=24')).toBe('raised');
+    expect(nodeFloorStatus('>=22.0.0', '>=24.0')).toBe('raised');
+    expect(nodeFloorStatus('>=22.0.0', '>= 24.0.0')).toBe('raised');
   });
 
-  it('returns unparseable when the new range is not a simple >=X.Y.Z', () => {
-    expect(nodeFloorStatus('>=22.0.0', '^22.13.0')).toBe('unparseable');
+  it('returns changed-unparseable when ranges changed but at least one cannot be parsed', () => {
+    // Fail-closed: the gate cannot confirm the floor was not raised.
+    expect(nodeFloorStatus('^22.0.0', '>=22.13.0')).toBe('changed-unparseable');
+    expect(nodeFloorStatus('>=22.0.0', '^22.13.0')).toBe('changed-unparseable');
+    expect(nodeFloorStatus('^22.0.0', '^23.0.0')).toBe('changed-unparseable');
   });
 
-  it('returns unparseable when both ranges are non-standard', () => {
+  it('returns unparseable when both refs have the same unparseable value (no change)', () => {
+    // Same raw string — floor cannot have changed, so this is safe-to-skip.
     expect(nodeFloorStatus('*', '*')).toBe('unparseable');
+    expect(nodeFloorStatus('^22.0.0', '^22.0.0')).toBe('unparseable');
   });
 });

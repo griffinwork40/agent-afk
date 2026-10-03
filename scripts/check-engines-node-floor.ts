@@ -13,11 +13,12 @@
  *   If there is no previous tag the script exits 0 (no comparison possible).
  *
  * Exit codes:
- *   0 — floor unchanged / lowered / unparseable (no action needed)
- *   1 — floor was RAISED → caller must treat this as BUMP=major
+ *   0 — floor unchanged / lowered / same-ref-unparseable (no action needed)
+ *   1 — floor was RAISED, or engines.node CHANGED but could not be parsed
+ *       (fail closed — an un-parseable bump may still be a floor raise)
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -30,8 +31,15 @@ function sh(cmd: string): string {
 }
 
 function getPackageEnginesNode(ref: string): string | null {
+  // Contract: use execFileSync so the caller-supplied ref is passed as a
+  // positional argument to git rather than interpolated into a shell command
+  // string, preventing command injection. Posix-guard R1 forbids literal sh/bash
+  // as exec commands — execFileSync('git', ...) is the correct pattern here.
   try {
-    const raw = sh(`git show ${ref}:package.json`);
+    const raw = execFileSync('git', ['show', `${ref}:package.json`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
     const pkg = JSON.parse(raw) as { engines?: { node?: string } };
     return pkg.engines?.node ?? null;
   } catch {
@@ -62,9 +70,24 @@ if (!oldRange || !newRange) {
 
 const status = nodeFloorStatus(oldRange, newRange);
 
+if (status === 'changed-unparseable') {
+  // Fail closed: engines.node changed between refs but at least one value
+  // could not be parsed. We cannot confirm the floor was not raised.
+  console.error(
+    `check-engines-node-floor: engines.node changed between refs but could not be parsed ` +
+    `(${lastTag}: ${JSON.stringify(oldRange)}, HEAD: ${JSON.stringify(newRange)}). ` +
+    `Cannot confirm the floor was not raised — treating as BUMP=major. ` +
+    `Fix engines.node to use a supported >=X.Y.Z form, or run the Auto Release ` +
+    `workflow manually with bump=minor/patch if the range did not raise the floor.`,
+  );
+  process.exit(1);
+}
+
 if (status === 'unparseable') {
+  // Both refs have the same raw value and it cannot be parsed, or both are
+  // independently unparseable with no change — floor cannot have been raised.
   console.log(
-    `check-engines-node-floor: could not parse engines.node as >=X.Y.Z ` +
+    `check-engines-node-floor: could not parse engines.node as a >=X[.Y[.Z]] range ` +
     `(${lastTag}: ${JSON.stringify(oldRange)}, HEAD: ${JSON.stringify(newRange)}) — skipping.`,
   );
   process.exit(0);

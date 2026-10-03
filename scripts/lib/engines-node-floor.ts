@@ -12,19 +12,31 @@
 /**
  * Parse the minimum Node.js version from an `engines.node` range string.
  *
- * Accepts the `>=X.Y.Z` form that this repo uses.  Returns null for any
- * value that cannot be reliably parsed as a simple lower-bound semver, so
- * the caller can decide whether to warn or skip.
+ * Accepts common `>=`-prefixed lower-bound forms used in npm package.json:
+ *   >=X.Y.Z  >=X.Y  >=X  (with optional leading whitespace after `>=`)
  *
- * @example parseNodeFloor('>=22.13.0')  // => [22, 13, 0]
- * @example parseNodeFloor('>=22.0.0')   // => [22, 0, 0]
- * @example parseNodeFloor('^22.0.0')    // => null  (caret — not a floor)
+ * Returns null for any value that cannot be reliably parsed as a simple
+ * lower-bound semver so the caller can decide whether to warn or skip.
+ * Missing minor / patch components default to 0 (e.g. `>=24` → [24, 0, 0]).
+ *
+ * @example parseNodeFloor('>=22.13.0')   // => [22, 13, 0]
+ * @example parseNodeFloor('>=22.0.0')    // => [22, 0, 0]
+ * @example parseNodeFloor('>=24')        // => [24, 0, 0]
+ * @example parseNodeFloor('>=24.0')      // => [24, 0, 0]
+ * @example parseNodeFloor('>= 24.0.0')   // => [24, 0, 0]
+ * @example parseNodeFloor('^22.0.0')     // => null  (caret — not a floor)
  */
 export function parseNodeFloor(enginesNode: string): [number, number, number] | null {
-  // Trim and require a leading `>=` so we only handle lower-bound ranges.
-  const match = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(enginesNode.trim());
+  // Invariant: only `>=`-prefixed lower bounds with no additional constraints
+  // (e.g. no upper bound, no `||`, no spaces between version components) are
+  // valid floor specifiers. Tolerate optional whitespace after `>=` to accept
+  // common npm range spellings like `>= 24.0.0`.
+  const match = /^>= ?(\d+)(?:\.(\d+)(?:\.(\d+))?)?$/.exec(enginesNode.trim());
   if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const major = Number(match[1]);
+  const minor = match[2] !== undefined ? Number(match[2]) : 0;
+  const patch = match[3] !== undefined ? Number(match[3]) : 0;
+  return [major, minor, patch];
 }
 
 /**
@@ -49,17 +61,26 @@ export function compareSemver(
  * Determine whether a move from `oldRange` to `newRange` raises the minimum
  * Node.js version floor.
  *
- * @returns `'raised'`        — the floor is strictly higher in `newRange`
- *          `'same-or-lower'` — the floor stayed the same or went down
- *          `'unparseable'`   — at least one range could not be parsed; caller
- *                             should warn but not block the release
+ * @returns `'raised'`          — the floor is strictly higher in `newRange`
+ *          `'same-or-lower'`   — the floor stayed the same or went down
+ *          `'unparseable'`     — at least one range could not be parsed
+ *          `'changed-unparseable'` — the ranges DIFFER as raw strings but
+ *                                   at least one cannot be parsed; the caller
+ *                                   MUST NOT silently ignore this case because
+ *                                   an un-parseable bump may still be a floor
+ *                                   raise and the gate would silently bypass.
  */
 export function nodeFloorStatus(
   oldRange: string,
   newRange: string,
-): 'raised' | 'same-or-lower' | 'unparseable' {
+): 'raised' | 'same-or-lower' | 'unparseable' | 'changed-unparseable' {
   const oldFloor = parseNodeFloor(oldRange);
   const newFloor = parseNodeFloor(newRange);
-  if (!oldFloor || !newFloor) return 'unparseable';
+  if (!oldFloor || !newFloor) {
+    // Contract: if the raw strings changed we cannot guarantee the floor
+    // was NOT raised — return a distinct variant so callers fail closed.
+    if (oldRange.trim() !== newRange.trim()) return 'changed-unparseable';
+    return 'unparseable';
+  }
   return compareSemver(newFloor, oldFloor) === 1 ? 'raised' : 'same-or-lower';
 }
