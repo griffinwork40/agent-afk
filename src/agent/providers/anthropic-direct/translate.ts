@@ -108,6 +108,43 @@ function buildTurnResult(
 }
 
 /**
+ * Merge a `message_delta` usage payload into the running usage accumulator.
+ *
+ * Contract: always returns a valid {@link Usage} object — when no prior
+ * `message_start` usage was captured (`existing` is null) a minimal fallback
+ * is synthesised from `delta` alone; otherwise the existing accumulator is updated.
+ */
+function applyDeltaUsage(
+  existing: Usage | null,
+  delta: Extract<RawMessageStreamEvent, { type: 'message_delta' }>['usage'],
+): Usage {
+  if (existing !== null) {
+    existing.output_tokens = delta.output_tokens;
+    if (delta.cache_creation_input_tokens != null) {
+      existing.cache_creation_input_tokens = delta.cache_creation_input_tokens;
+    }
+    if (delta.cache_read_input_tokens != null) {
+      existing.cache_read_input_tokens = delta.cache_read_input_tokens;
+    }
+    if (delta.input_tokens != null) {
+      existing.input_tokens = delta.input_tokens;
+    }
+    return existing;
+  }
+  // No message_start usage captured — synthesize a minimal Usage.
+  return {
+    cache_creation: null,
+    cache_creation_input_tokens: delta.cache_creation_input_tokens ?? null,
+    cache_read_input_tokens: delta.cache_read_input_tokens ?? null,
+    inference_geo: null,
+    input_tokens: delta.input_tokens ?? 0,
+    output_tokens: delta.output_tokens,
+    server_tool_use: null,
+    service_tier: null,
+  } as unknown as Usage;
+}
+
+/**
  * Async generator that translates an Anthropic streaming response into
  * harness-shaped {@link TranslateOutput} items.
  *
@@ -276,36 +313,8 @@ export async function* translateMessageStream(
             (evt as unknown as Record<string, unknown>)?.['input_transformations'],
             'message_delta',
           );
-          const deltaUsage = evt.usage;
-          if (deltaUsage) {
-            if (usage !== null) {
-              usage.output_tokens = deltaUsage.output_tokens;
-              if (deltaUsage.cache_creation_input_tokens != null) {
-                usage.cache_creation_input_tokens =
-                  deltaUsage.cache_creation_input_tokens;
-              }
-              if (deltaUsage.cache_read_input_tokens != null) {
-                usage.cache_read_input_tokens =
-                  deltaUsage.cache_read_input_tokens;
-              }
-              if (deltaUsage.input_tokens != null) {
-                usage.input_tokens = deltaUsage.input_tokens;
-              }
-            } else {
-              // No message_start usage captured — synthesize a minimal Usage.
-              usage = {
-                cache_creation: null,
-                cache_creation_input_tokens:
-                  deltaUsage.cache_creation_input_tokens ?? null,
-                cache_read_input_tokens:
-                  deltaUsage.cache_read_input_tokens ?? null,
-                inference_geo: null,
-                input_tokens: deltaUsage.input_tokens ?? 0,
-                output_tokens: deltaUsage.output_tokens,
-                server_tool_use: null,
-                service_tier: null,
-              } as unknown as Usage;
-            }
+          if (evt.usage) {
+            usage = applyDeltaUsage(usage, evt.usage);
           }
           break;
         }
