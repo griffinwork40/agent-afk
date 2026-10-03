@@ -269,7 +269,9 @@ describe('TelegramBgResultNotifier', () => {
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({ handle, prompt: 'huge task', model: 'sonnet' });
 
-    fireTerminal(succeed(job.jobId, 'x'.repeat(40_000)));
+    // Use whitespace-separated words so redactSecrets does not collapse the
+    // body into a single [REDACTED] token before truncation is reached.
+    fireTerminal(succeed(job.jobId, 'output line\n'.repeat(4_000)));
 
     await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const text = pushMock.mock.calls[0]![0];

@@ -54,6 +54,12 @@ export interface TerminalCapture {
  * @param installSoftStop   Setter for the per-turn ESC soft-stop handler.
  * @param maxTurnsNum       Parsed numeric maxTurns (for status-line display).
  * @param autosaveState     Single-element array holding `autosaveFailureLogged`.
+ * @param rawUserText       RAW user-typed text before injections — used for
+ *                          `activity.promptHead` in the presence file so peer
+ *                          message bodies never leak into presence. Required;
+ *                          omitting it would fall back to the composited runText
+ *                          and leak peer/bg-injection content into the presence
+ *                          file (finding #4 in PR #2850 review).
  */
 export async function runOneTurn(
   runText: string,
@@ -66,6 +72,7 @@ export async function runOneTurn(
   installSoftStop: (handler: (() => void) | null) => void,
   maxTurnsNum: number | undefined,
   autosaveState: [autosaveFailureLogged: boolean],
+  rawUserText: string,
 ): Promise<TerminalCapture> {
   const { verdictLedger, loopStageBar, mascotBar, healthRail } = footer;
   const capture: TerminalCapture = { kind: undefined, doneHasEvidence: undefined, doneClassification: undefined };
@@ -82,7 +89,9 @@ export async function runOneTurn(
     });
   });
   momentumTicker.start();
-  markPresenceTurn(ctx.stats.sessionId, 'busy');
+  // Contract: pass rawUserText (pre-injection) so activity.promptHead records
+  // what the operator typed, never peer message bodies or bg-result content.
+  markPresenceTurn(ctx.stats.sessionId, 'busy', rawUserText);
 
   await runTurn(
     { text: runText, attachments: attachments as ImageAttachment[] },
@@ -122,7 +131,10 @@ export async function runOneTurn(
         ctx.statusLine.rearm();
         loopStageBar?.repaint('observing');
         healthRail?.update(ctx.stats);
-        markPresenceTurn(ctx.stats.sessionId, 'idle');
+        // Pass totalTurns (post-increment) so resumed sessions seed the correct
+        // historical count. Pass rawUserText for first-turn promptHead fallback
+        // when sessionId was undefined at turn start.
+        markPresenceTurn(ctx.stats.sessionId, 'idle', rawUserText, ctx.stats.totalTurns);
       },
       rearmStatus: () => ctx.statusLine.rearm(),
       onTerminalState: (state, meta) => {

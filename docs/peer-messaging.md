@@ -38,7 +38,10 @@ Peer-relevant fields added to the presence schema (`src/agent/awareness/presence
 | `name` | `string?` | Human-readable label, max 64 chars (`src/agent/awareness/presence.peer.ts:23`) |
 | `turnState` | `'idle'|'busy'|'blocked'` | Current REPL state |
 | `turnStateSince` | ISO string | When `turnState` last changed |
-| `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox |
+| `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox; `send_to_session` refuses targets without it |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn starts); see `list_sessions` field table below |
+
+**Liveness**: `list_sessions` (and every other display reader of `readLivePresenceFiles`) hides a record when its pid is gone, when the OS-reported start time of the pid differs from the record's `pidStartedAt` by more than 5 s (the pid was recycled by an unrelated process; probed with one batched `ps -o pid= -o etime=` on macOS, `/proc/<pid>/stat` on Linux), or when a legacy record without `pidStartedAt` has a heartbeat at least 6 h old. On Linux the record also carries `pidStartTicks` (raw `/proc/self/stat` starttime), compared exactly in preference to the epoch because `btime` shifts when the wall clock is stepped. Probe results are cached per `(pid, recorded identity)` for 30 s. An unprobeable start time never hides a session. Each process refreshes `heartbeatAt` every 60 s with an atomic write that never recreates a removed file, and REPL startup reaps presence files whose pid fails `kill(pid, 0)` with `ESRCH` only, re-reading each file right before unlink so a resumed session's rewrite survives (`src/agent/awareness/presence.liveness.ts`, `presence.reaper.ts`). This filter is display/routing only: the peer-inbox sweep, like the worktree sweep, protects every raw record whose pid is not proven dead.
 
 **Auto-naming**: on startup (when `$TMUX` is set) the notifier runs `tmux display-message -p '#S:#I'` to derive a `session:window` label (e.g. `research:5`), applied via `setPresenceNameIfUnset` so `/name` always wins (`src/agent/awareness/presence.peer.ts:76`).
 
@@ -56,10 +59,28 @@ Returns an array of live peer sessions excluding self. Each entry:
 
 ```
 { sessionId, name, surface, cwd, branch, turnState, turnStateSince,
-  heartbeatAgeMs, pendingMessages, blocked }
+  heartbeatAgeMs, pendingMessages, blocked, acceptsMessages, activity? }
 ```
 
-`pendingMessages` is the count already queued in the target's inbox. `turnState` lets the sender decide whether to send now (idle) or expect queued delivery (busy).
+| Field | Type | Description |
+|---|---|---|
+| `sessionId` | `string` | Unique session identifier |
+| `name` | `string?` | Human-readable label (from `/name` or auto-detected tmux `session:window`) |
+| `surface` | `string` | Session surface (`cli`, `telegram`, etc.) |
+| `cwd` | `string` | Current working directory |
+| `branch` | `string?` | Current git branch |
+| `turnState` | `string` | `idle` (ready to be woken), `busy` (running a turn), or `blocked` (waiting on a human prompt) |
+| `turnStateSince` | `string?` | ISO timestamp of the last `turnState` change |
+| `heartbeatAgeMs` | `number?` | Milliseconds since the last presence heartbeat |
+| `pendingMessages` | `number` | Count of unread messages already queued in the session's inbox |
+| `blocked` | `boolean` | Whether the session is currently waiting on a human elicitation |
+| `acceptsMessages` | `boolean` | `true` when the session has a peer-inbox receiver (REPL sessions only in v1); `false` means `send_to_session` will refuse with `no-receiver` |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn ends) |
+| `activity.promptHead` | `string?` | First ≤120 chars of the raw user-typed text, whitespace-collapsed and redacted of secrets; set at turn start so a busy session shows the current prompt. Absent only if the session id was not yet minted when the first turn started and no raw text was available at turn end. |
+| `activity.turns` | `number` | Total completed turns for this session (seeded from `stats.totalTurns`, so it survives resume and reflects the true historical count) |
+| `activity.lastTurnEndedAt` | `string?` | ISO timestamp of when the most recent turn completed |
+
+For deeper per-turn detail — tool calls, subagents, session phases — call `read_witness` with the peer's `sessionId`. Note: `read_witness` may return empty results for a very new session that has not yet written its witness trace.
 
 ### `send_to_session({ to, message, reply_to? })`
 

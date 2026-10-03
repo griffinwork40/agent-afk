@@ -272,6 +272,9 @@ export const bgsubJoinCmd: SlashCommand = {
           const truncated = outputLines.length > 40;
           for (const line of outputLines.slice(0, 40)) ctx.out.line(`  ${line}`);
           if (truncated) {
+            // Invariant: getBgJobResult(id) cannot throw here — readResult(id)
+            // above already validated `id` via assertSafeJobId internally, so
+            // the same id is guaranteed safe on this second call.
             ctx.out.line(palette.dim(`  … (truncated; full result in ${getBgJobResult(id)})`));
           }
         }
