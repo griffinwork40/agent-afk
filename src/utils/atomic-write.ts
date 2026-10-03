@@ -92,6 +92,20 @@ export interface AtomicWriteOptions {
    * original mode verbatim. Defaults to `false`.
    */
   exactMode?: boolean;
+  /**
+   * Async variant only. Evaluated immediately before the commit; when it
+   * returns `false` the temp file is removed, `dest` is left untouched, and the
+   * call resolves `false` instead of `true`.
+   *
+   * Invariant: when set, the guard and the rename run SYNCHRONOUSLY in one
+   * event-loop tick (`renameSync`, no Windows retry loop). An async rename is
+   * dispatched to the threadpool, so other JS on this thread (e.g. a
+   * synchronous unlink of `dest`) could run between the guard and the syscall
+   * and the rename would resurrect a file the guard just saw. With the sync
+   * pair no same-process code can interleave; only another PROCESS can act in
+   * the microseconds between the check and the rename.
+   */
+  commitGuard?: () => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +236,7 @@ export async function atomicWriteFileAsync(
   dest: string,
   content: string | Buffer,
   opts: AtomicWriteOptions = {},
-): Promise<void> {
+): Promise<boolean> {
   const mode = opts.mode ?? 0o600;
   const encoding = opts.encoding ?? 'utf-8';
   const mkdirp = opts.mkdirp ?? true;
@@ -238,7 +252,17 @@ export async function atomicWriteFileAsync(
     if (opts.exactMode) await chmod(tmp, mode);
     // Commit point: an abort that landed after the temp write must not rename.
     opts.signal?.throwIfAborted();
+    if (opts.commitGuard !== undefined) {
+      // Same tick: see the `commitGuard` invariant.
+      if (!opts.commitGuard()) {
+        await rm(tmp, { force: true });
+        return false;
+      }
+      renameSync(tmp, dest);
+      return true;
+    }
     await renameWithRetry(tmp, dest);
+    return true;
   } catch (err) {
     // Best-effort cleanup — suppress unlink errors.
     try { await rm(tmp, { force: true }); } catch { /* ignore */ }

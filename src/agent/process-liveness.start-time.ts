@@ -20,18 +20,39 @@
  *     (`[[dd-]hh:]mm:ss`), which is locale-independent unlike `lstart`. One
  *     batched invocation covers every pid. A missing pid makes `ps` exit 1 but
  *     it still prints the rows it found, so stdout is parsed on failure too.
- *   - linux: `/proc/<pid>/stat` field 22 (`starttime`, clock ticks since boot)
- *     plus `btime` from `/proc/stat`. Ticks/sec is assumed to be 100 (USER_HZ
- *     is 100 on every mainstream Linux ABI; reading the real value would need
- *     `getconf CLK_TCK`). `etime` has 1s resolution and `btime` is rounded to
- *     the second, so callers compare with a multi-second tolerance.
+ *   - linux: `/proc/<pid>/stat` field 22 (`starttime`, clock ticks since boot).
+ *     The raw tick count is reported as `startTicks` and is the identity
+ *     callers should compare: it never changes for a running process. The
+ *     epoch fallback adds `btime` from `/proc/stat`, but `btime` is recomputed
+ *     from the CURRENT wall clock, so an NTP step or VM/WSL2 resume shifts it
+ *     and would make every live process look restarted. Ticks/sec is assumed
+ *     to be 100 (USER_HZ is 100 on every mainstream Linux ABI; reading the real
+ *     value would need `getconf CLK_TCK`); only the epoch fallback uses it.
  *   - win32: unsupported, every pid is unknown.
  *
  * @module agent/process-liveness.start-time
  */
 
 import { execFile } from 'child_process';
+import { readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
+
+/**
+ * What the OS reports about when a pid's current owner started.
+ *
+ *   - `startedAtMs`: wall-clock epoch ms. On darwin this is the kernel's own
+ *     wall-clock start stamp (`now - etime`, and `etime` is itself `now -
+ *     p_start`, so a clock step cancels out). On Linux it is derived from
+ *     `btime`, which MOVES when the wall clock is stepped (NTP makestep,
+ *     VM/WSL2 resume), so it is only a fallback there.
+ *   - `startTicks`: Linux only. Raw `/proc/<pid>/stat` field 22, clock ticks
+ *     since boot. Fixed for the life of the process and immune to wall-clock
+ *     steps, so it is the preferred identity whenever both sides have it.
+ */
+export interface ProcessStartInfo {
+  startedAtMs?: number;
+  startTicks?: number;
+}
 
 /** Minimal process-exec seam: resolves stdout even when the command exits non-zero. */
 export type StartTimeExec = (file: string, args: string[]) => Promise<{ stdout: string }>;
@@ -113,21 +134,24 @@ export function parseProcBootTime(procStat: string): number | undefined {
 async function probeLinux(
   pids: readonly number[],
   read: (path: string) => Promise<string>,
-): Promise<Map<number, number | undefined>> {
-  const out = new Map<number, number | undefined>(pids.map((p) => [p, undefined]));
+): Promise<Map<number, ProcessStartInfo | undefined>> {
+  const out = new Map<number, ProcessStartInfo | undefined>(pids.map((p) => [p, undefined]));
+  // btime is optional: without it the step-immune tick identity still works.
   let bootSec: number | undefined;
   try {
     bootSec = parseProcBootTime(await read('/proc/stat'));
   } catch {
-    return out;
+    bootSec = undefined;
   }
-  if (bootSec === undefined) return out;
   for (const pid of pids) {
     try {
       const ticks = parseProcStatStartTicks(await read(`/proc/${pid}/stat`));
-      if (ticks !== undefined) {
-        out.set(pid, Math.round((bootSec + ticks / LINUX_CLOCK_TICKS_PER_SEC) * 1000));
+      if (ticks === undefined) continue;
+      const info: ProcessStartInfo = { startTicks: ticks };
+      if (bootSec !== undefined) {
+        info.startedAtMs = Math.round((bootSec + ticks / LINUX_CLOCK_TICKS_PER_SEC) * 1000);
       }
+      out.set(pid, info);
     } catch {
       // Unreadable or gone — unknown.
     }
@@ -136,15 +160,15 @@ async function probeLinux(
 }
 
 /**
- * Best-effort OS start time (epoch ms) for each pid. Unknown → `undefined`.
+ * Best-effort OS start identity for each pid. Unknown → `undefined`.
  * Never throws. See the module header for per-platform probes.
  */
 export async function probeProcessStartTimes(
   pids: readonly number[],
   deps: StartTimeProbeDeps = {},
-): Promise<Map<number, number | undefined>> {
+): Promise<Map<number, ProcessStartInfo | undefined>> {
   const unique = [...new Set(pids.filter((p) => Number.isInteger(p) && p > 0))];
-  const out = new Map<number, number | undefined>(unique.map((p) => [p, undefined]));
+  const out = new Map<number, ProcessStartInfo | undefined>(unique.map((p) => [p, undefined]));
   if (unique.length === 0) return out;
   const platform = deps.platform ?? process.platform;
   try {
@@ -153,7 +177,10 @@ export async function probeProcessStartTimes(
     const exec = deps.exec ?? defaultExec;
     const { stdout } = await exec('ps', ['-o', 'pid=', '-o', 'etime=', '-p', unique.join(',')]);
     const parsed = parsePsStartTimes(stdout, (deps.now ?? Date.now)());
-    for (const pid of unique) out.set(pid, parsed.get(pid));
+    for (const pid of unique) {
+      const startedAtMs = parsed.get(pid);
+      out.set(pid, startedAtMs === undefined ? undefined : { startedAtMs });
+    }
   } catch {
     // Never throw — every pid stays unknown.
   }
@@ -171,4 +198,36 @@ const OWN_PROCESS_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000);
 /** This process's own start time (epoch ms), in the same terms the probes report. */
 export function ownProcessStartedAt(): number {
   return OWN_PROCESS_STARTED_AT;
+}
+
+/** Injection seams for {@link readOwnStartTicks}. */
+export interface OwnStartTicksDeps {
+  platform?: NodeJS.Platform;
+  readFileSync?: (path: string) => string;
+}
+
+/**
+ * This process's raw Linux `starttime` ticks from `/proc/self/stat`, or
+ * `undefined` off Linux or on any read/parse failure. Never throws.
+ */
+export function readOwnStartTicks(deps: OwnStartTicksDeps = {}): number | undefined {
+  if ((deps.platform ?? process.platform) !== 'linux') return undefined;
+  try {
+    const read = deps.readFileSync ?? ((p: string) => readFileSync(p, 'utf8'));
+    return parseProcStatStartTicks(read('/proc/self/stat'));
+  } catch {
+    return undefined;
+  }
+}
+
+// Lazily filled on first call; the value is fixed for the process lifetime.
+let ownStartTicksMemo: { value: number | undefined } | null = null;
+
+/**
+ * This process's clock-step-immune start identity on Linux (see
+ * {@link ProcessStartInfo.startTicks}); `undefined` elsewhere. Memoized.
+ */
+export function ownProcessStartTicks(): number | undefined {
+  if (ownStartTicksMemo === null) ownStartTicksMemo = { value: readOwnStartTicks() };
+  return ownStartTicksMemo.value;
 }

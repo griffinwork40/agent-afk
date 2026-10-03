@@ -22,6 +22,7 @@
 
 import { mkdir, writeFile, unlink, readdir, readFile } from 'fs/promises';
 import { unlinkSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import { join } from 'path';
 import { getPresenceDir } from '../../paths.js';
 import type { RuntimeWorkspace } from './types.js';
@@ -75,6 +76,13 @@ export interface PresenceFileInfo {
    * by older builds.
    */
   pidStartedAt?: number;
+  /**
+   * Linux only: raw `starttime` (field 22 of `/proc/self/stat`, clock ticks
+   * since boot) of the process owning {@link pid}. Unlike {@link pidStartedAt}
+   * it is immune to wall-clock steps, so readers compare it tick-for-tick when
+   * both the record and the probe have it. Optional/additive.
+   */
+  pidStartTicks?: number;
   /**
    * AFK remote-control marker (bidirectional Telegram). Set `true` by the REPL
    * `/afk on` toggle and cleared on `/afk off` via {@link setPresenceAfk}. A
@@ -345,25 +353,52 @@ export function writePresenceFileSync(info: PresenceFileInfo): void {
   }
 }
 
+/** Options for {@link touchPresenceHeartbeat}. */
+export interface TouchHeartbeatOptions {
+  /**
+   * Re-checked inside the write queue, before the read AND again right before
+   * the commit. Return `false` once the caller no longer owns `sessionId` (the
+   * heartbeat loop passes "still registered for cleanup"), and the refresh is
+   * dropped instead of rewriting a record that was retired meanwhile.
+   */
+  stillOwned?: () => boolean;
+}
+
 /**
  * Refresh the `heartbeatAt` timestamp on an existing presence file (best-effort,
  * read-modify-write). Preserves every other field.
  *
- * Call this at turn boundaries. A session that is alive but wedged, or whose pid
- * has been recycled after a SIGKILL, is indistinguishable from a healthy one on
- * pid-liveness alone — a stale heartbeat is what separates them.
+ * Invariant: a heartbeat must never CREATE or RESURRECT a presence file. The
+ * write is atomic (tmp + rename, so a concurrent reader never sees a truncated
+ * record), and the rename only commits when the file still exists and
+ * `stillOwned()` still holds, checked in the same tick as the rename (see
+ * `commitGuard` in utils/atomic-write.ts). `removePresenceFileSync` is
+ * synchronous and runs outside this queue, so it lands either before the guard
+ * (the refresh is dropped) or after the rename (the unlink wins). Residual
+ * race: another PROCESS unlinking the file in the microseconds between the
+ * guard and the rename. Only the dead-presence reaper does that, and only for a
+ * pid proven gone, which excludes this live writer.
  *
  * No-op when the presence file is absent (subagents never have one). Never
  * throws: presence is non-critical and the session must proceed regardless.
  */
-export async function touchPresenceHeartbeat(sessionId: string): Promise<void> {
+export async function touchPresenceHeartbeat(
+  sessionId: string,
+  options: TouchHeartbeatOptions = {},
+): Promise<void> {
+  const owned = options.stillOwned ?? (() => true);
   return enqueuePresenceWrite(sessionId, async () => {
     try {
+      if (!owned()) return;
       const filePath = presenceFilePath(sessionId);
       const raw = await readFile(filePath, 'utf8');
       const parsed = JSON.parse(raw) as PresenceFileInfo;
       parsed.heartbeatAt = new Date().toISOString();
-      await writeFile(filePath, JSON.stringify(parsed, null, 2), { encoding: 'utf8', mode: 0o600 });
+      await atomicWriteFileAsync(filePath, JSON.stringify(parsed, null, 2), {
+        mode: 0o600,
+        mkdirp: false,
+        commitGuard: () => owned() && existsSync(filePath),
+      });
     } catch {
       // Best-effort — presence is non-critical.
     }

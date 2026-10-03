@@ -15,7 +15,7 @@
  * @module agent/awareness/presence.reaper
  */
 
-import { unlink } from 'fs/promises';
+import { readFile, unlink } from 'fs/promises';
 import { readPresenceFiles } from './presence.js';
 
 /** Injection seams for {@link sweepDeadPresence}. */
@@ -26,6 +26,8 @@ export interface SweepDeadPresenceOptions {
   kill?: (pid: number, signal: 0) => void;
   /** `unlink` seam for tests. */
   remove?: (path: string) => Promise<void>;
+  /** `readFile` seam for the pre-unlink revalidation (tests). */
+  read?: (path: string) => Promise<string>;
 }
 
 /** True only when probing `pid` throws ESRCH. */
@@ -39,19 +41,43 @@ function provenGone(pid: unknown, kill: (pid: number, signal: 0) => void): boole
   }
 }
 
+/** The `pid` currently on disk at `path`, or `undefined` when unreadable/garbage/gone. */
+async function currentPid(path: string, read: (p: string) => Promise<string>): Promise<unknown> {
+  try {
+    const parsed: unknown = JSON.parse(await read(path));
+    return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>)['pid'] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Delete presence files whose owning pid is proven gone. Returns the number of
+ * Delete presence files whose owning pid is proven gone.
+ *
+ * Invariant: the snapshot from `readPresenceFiles()` can be stale by the time
+ * we unlink. A session resumed under the same id (`resolveTopLevelSessionId`
+ * reuses `--resume`'s id) by a NEW process rewrites the same path with its own
+ * live pid, and deleting it then would hide that session for the rest of its
+ * life (presence is written once per advertised id). So immediately before
+ * each unlink the file is re-read and removed only if it still names the SAME
+ * pid and that pid is still ESRCH. The re-read and the unlink are separate
+ * syscalls, so a rewrite in that sub-millisecond window remains possible; it
+ * is bounded to a rewrite racing this exact instruction, not the whole scan. Returns the number of
  * files removed. Best-effort and never throws.
  */
 export async function sweepDeadPresence(opts: SweepDeadPresenceOptions = {}): Promise<number> {
   const selfIds = opts.selfIds ?? new Set<string>();
   const kill = opts.kill ?? ((pid: number, signal: 0) => void process.kill(pid, signal));
   const remove = opts.remove ?? ((p: string) => unlink(p));
+  const read = opts.read ?? ((p: string) => readFile(p, 'utf8'));
   let removed = 0;
   try {
     for (const record of await readPresenceFiles()) {
       if (selfIds.has(record.sessionId)) continue;
       if (record.pid === process.pid) continue;
+      if (!provenGone(record.pid, kill)) continue;
+      // Revalidate against the CURRENT file — see the Invariant above.
+      if ((await currentPid(record.path, read)) !== record.pid) continue;
       if (!provenGone(record.pid, kill)) continue;
       try {
         await remove(record.path);

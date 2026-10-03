@@ -52,7 +52,7 @@ import {
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { actorFromDepth } from '../../session/session-identity.js';
-import { ownProcessStartedAt } from '../../process-liveness.start-time.js';
+import { ownProcessStartedAt, ownProcessStartTicks } from '../../process-liveness.start-time.js';
 import { debugLog } from '../../../utils/debug.js';
 import {
   registerPresenceCleanup,
@@ -271,6 +271,8 @@ export function registerPresenceLifecycle(args: PresenceLifecycleArgs): string |
     pid: process.pid,
     // Lets readers detect a recycled pid (presence.liveness.ts).
     pidStartedAt: ownProcessStartedAt(),
+    // Linux: clock-step-immune identity, compared in preference to the epoch.
+    pidStartTicks: ownProcessStartTicks(),
   });
   // Cleanup on process exit/signal is owned by the process-level registry —
   // one set of listeners per process, not three per session, and it never

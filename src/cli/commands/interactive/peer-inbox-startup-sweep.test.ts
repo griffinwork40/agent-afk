@@ -4,7 +4,8 @@
  * Verifies that schedulePeerInboxSweep:
  *   - is deferred (does not run synchronously)
  *   - never throws even when sweepPeerInboxes rejects
- *   - uses readLivePresenceFiles to build the live-sessions set
+ *   - builds the protected set from RAW readPresenceFiles minus proven-dead
+ *     records (never the display filter readLivePresenceFiles)
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -18,6 +19,7 @@ vi.mock('../../../agent/peer/inbox-store.js', () => ({
 }));
 
 vi.mock('../../../agent/awareness/presence.js', () => ({
+  readPresenceFiles: vi.fn().mockResolvedValue([]),
   readLivePresenceFiles: vi.fn().mockResolvedValue([]),
 }));
 
@@ -28,10 +30,11 @@ vi.mock('../../../agent/awareness/presence.reaper.js', () => ({
 import { schedulePeerInboxSweep } from './peer-inbox-startup-sweep.js';
 import { sweepDeadPresence } from '../../../agent/awareness/presence.reaper.js';
 import { sweepPeerInboxes } from '../../../agent/peer/inbox-store.js';
-import { readLivePresenceFiles } from '../../../agent/awareness/presence.js';
+import { readPresenceFiles, readLivePresenceFiles } from '../../../agent/awareness/presence.js';
 
 const mockSweep = sweepPeerInboxes as ReturnType<typeof vi.fn>;
-const mockRead = readLivePresenceFiles as ReturnType<typeof vi.fn>;
+const mockRead = readPresenceFiles as ReturnType<typeof vi.fn>;
+const mockReadLive = readLivePresenceFiles as ReturnType<typeof vi.fn>;
 const mockReap = sweepDeadPresence as ReturnType<typeof vi.fn>;
 
 afterEach(() => {
@@ -56,13 +59,16 @@ describe('schedulePeerInboxSweep', () => {
 
   it('calls sweepPeerInboxes after the delay with live session ids', async () => {
     mockRead.mockResolvedValueOnce([
-      { sessionId: 'sess-aaa' },
-      { sessionId: 'sess-bbb' },
+      { sessionId: 'sess-aaa', liveness: 'alive' },
+      { sessionId: 'sess-bbb', liveness: 'unknown' },
+      { sessionId: 'sess-dead', liveness: 'dead' },
     ]);
     schedulePeerInboxSweep(0);
     // Flush all microtasks and the zero-ms timer.
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(mockRead).toHaveBeenCalled();
+    // The display filter must never feed a destructive sweep.
+    expect(mockReadLive).not.toHaveBeenCalled();
     expect(mockSweep).toHaveBeenCalledWith({
       liveSessionIds: new Set(['sess-aaa', 'sess-bbb']),
     });
@@ -79,7 +85,7 @@ describe('schedulePeerInboxSweep', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('never throws even when readLivePresenceFiles rejects', async () => {
+  it('never throws even when readPresenceFiles rejects', async () => {
     mockRead.mockRejectedValueOnce(new Error('presence read fail'));
     await expect(
       (async () => {

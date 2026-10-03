@@ -76,6 +76,36 @@ describe('sweepDeadPresence', () => {
     expect(removed).toBe(0);
   });
 
+  it('does not delete a record rewritten by a resumed session between the scan and the unlink', async () => {
+    const { getPresenceDir } = await import('../../paths.js');
+    await writePresenceFile(info('resumed', 900001));
+    const file = path.join(getPresenceDir(), 'resumed.json');
+    let rewritten = false;
+    const kill = (pid: number): void => {
+      // First ESRCH probe: a new process resumes the same session id and
+      // rewrites the file with its own live pid before the reaper unlinks.
+      if (pid === 900001 && !rewritten) {
+        rewritten = true;
+        fs.writeFileSync(file, JSON.stringify({ ...info('resumed', process.pid) }));
+      }
+      if (pid === 900001) throw errno('ESRCH');
+    };
+    expect(await sweepDeadPresence({ kill })).toBe(0);
+    const left = await readPresenceFiles();
+    expect(left.map((r) => [r.sessionId, r.pid])).toEqual([['resumed', process.pid]]);
+  });
+
+  it('skips the unlink when the file vanished or became unreadable before revalidation', async () => {
+    await writePresenceFile(info('gone', 900001));
+    const remove = async (): Promise<void> => { throw new Error('must not be called'); };
+    const removed = await sweepDeadPresence({
+      kill: () => { throw errno('ESRCH'); },
+      read: async () => { throw errno('ENOENT'); },
+      remove,
+    });
+    expect(removed).toBe(0);
+  });
+
   it('really removes a dead pid with the default kill', async () => {
     // Find a pid that does not exist on this host.
     let pid = 4_000_000;

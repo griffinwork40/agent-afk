@@ -11,6 +11,8 @@ import {
   parseProcBootTime,
   probeProcessStartTimes,
   ownProcessStartedAt,
+  ownProcessStartTicks,
+  readOwnStartTicks,
   LINUX_CLOCK_TICKS_PER_SEC,
 } from './process-liveness.start-time.js';
 
@@ -61,9 +63,28 @@ describe('Linux /proc parsing', () => {
       throw Object.assign(new Error('nope'), { code: 'ENOENT' });
     });
     const out = await probeProcessStartTimes([999, 1000], { platform: 'linux', readFile });
-    expect(out.get(999)).toBe((1_700_000_000 + 4242 / LINUX_CLOCK_TICKS_PER_SEC) * 1000);
+    expect(out.get(999)).toEqual({
+      startTicks: 4242,
+      startedAtMs: (1_700_000_000 + 4242 / LINUX_CLOCK_TICKS_PER_SEC) * 1000,
+    });
     expect(out.has(1000)).toBe(true);
     expect(out.get(1000)).toBeUndefined();
+  });
+
+  it('still reports step-immune ticks when /proc/stat btime is unreadable', async () => {
+    const readFile = vi.fn(async (p: string) => {
+      if (p === '/proc/999/stat') return stat;
+      throw Object.assign(new Error('nope'), { code: 'EACCES' });
+    });
+    const out = await probeProcessStartTimes([999], { platform: 'linux', readFile });
+    expect(out.get(999)).toEqual({ startTicks: 4242 });
+  });
+
+  it('reads own start ticks from /proc/self/stat on linux only, never throwing', () => {
+    expect(readOwnStartTicks({ platform: 'linux', readFileSync: () => stat })).toBe(4242);
+    expect(readOwnStartTicks({ platform: 'darwin', readFileSync: () => stat })).toBeUndefined();
+    expect(readOwnStartTicks({ platform: 'linux', readFileSync: () => { throw new Error('x'); } })).toBeUndefined();
+    expect(readOwnStartTicks({ platform: 'linux', readFileSync: () => 'garbage' })).toBeUndefined();
   });
 });
 
@@ -75,7 +96,7 @@ describe('probeProcessStartTimes (ps)', () => {
     const out = await probeProcessStartTimes([10, 11, 10], { platform: 'darwin', exec, now: () => 100_000 });
     expect(exec).toHaveBeenCalledTimes(1);
     expect(exec).toHaveBeenCalledWith('ps', ['-o', 'pid=', '-o', 'etime=', '-p', '10,11']);
-    expect(out.get(10)).toBe(70_000);
+    expect(out.get(10)).toEqual({ startedAtMs: 70_000 });
     expect(out.get(11)).toBeUndefined();
   });
 
@@ -103,8 +124,12 @@ describe('probeProcessStartTimes (ps)', () => {
     // result is undefined and the assertion is vacuous by design.
     const out = await probeProcessStartTimes([process.pid]);
     const probed = out.get(process.pid);
-    if (probed !== undefined) {
-      expect(Math.abs(probed - ownProcessStartedAt())).toBeLessThan(5_000);
+    if (probed?.startedAtMs !== undefined) {
+      expect(Math.abs(probed.startedAtMs - ownProcessStartedAt())).toBeLessThan(5_000);
+    }
+    // Where ticks are available (Linux) they must match our own exactly.
+    if (probed?.startTicks !== undefined) {
+      expect(probed.startTicks).toBe(ownProcessStartTicks());
     }
   });
 });

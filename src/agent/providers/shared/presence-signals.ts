@@ -53,7 +53,11 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 function startHeartbeat(): void {
   if (heartbeatTimer !== null) return;
   heartbeatTimer = setInterval(() => {
-    for (const id of liveSessionIds) void touchPresenceHeartbeat(id);
+    // `stillOwned` closes the retire race: an id unregistered (and its file
+    // removed) while this refresh is queued must not be written back to disk.
+    for (const id of liveSessionIds) {
+      void touchPresenceHeartbeat(id, { stillOwned: () => liveSessionIds.has(id) });
+    }
   }, PRESENCE_HEARTBEAT_INTERVAL_MS);
   heartbeatTimer.unref?.();
 }

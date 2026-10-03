@@ -14,14 +14,21 @@
  *   - Never delays startup: the setTimeout fires off the construction path.
  *   - The timer is `.unref()`'d so a short-lived process exits without paying
  *     for the sweep (matching the witness-sweep invariant).
- *   - `readLivePresenceFiles` is called inside the timeout callback (at sweep
- *     time, not at schedule time) so the presence list is fresh.
+ *   - Presence is read inside the timeout callback (at sweep time, not at
+ *     schedule time) so the protected set is fresh.
+ *
+ * Invariant: the protected set comes from RAW `readPresenceFiles()` filtered
+ * only on `liveness !== 'dead'` — the same rule the worktree sweep uses — and
+ * never from `readLivePresenceFiles()`. The display filter hides records it
+ * merely suspects (start-time mismatch, legacy heartbeat age), and a running
+ * session hidden by a wrong guess would otherwise have its unread inbox
+ * deleted. Unknown liveness protects.
  *
  * @module cli/commands/interactive/peer-inbox-startup-sweep
  */
 
 import { sweepPeerInboxes } from '../../../agent/peer/inbox-store.js';
-import { readLivePresenceFiles } from '../../../agent/awareness/presence.js';
+import { readPresenceFiles } from '../../../agent/awareness/presence.js';
 import { sweepDeadPresence } from '../../../agent/awareness/presence.reaper.js';
 
 /** Mirrors `WITNESS_SWEEP_START_DELAY_MS` in `session-setup.ts`. */
@@ -42,8 +49,10 @@ export function schedulePeerInboxSweep(delayMs = PEER_SWEEP_START_DELAY_MS): voi
     void sweepDeadPresence().catch(() => undefined);
     void (async () => {
       try {
-        const records = await readLivePresenceFiles();
-        const liveSessionIds = new Set(records.map((r) => r.sessionId));
+        const records = await readPresenceFiles();
+        const liveSessionIds = new Set(
+          records.filter((r) => r.liveness !== 'dead').map((r) => r.sessionId),
+        );
         await sweepPeerInboxes({ liveSessionIds });
       } catch {
         // Best-effort — must never throw or surface errors to the REPL.
