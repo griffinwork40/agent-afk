@@ -13,7 +13,6 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Fixed
 - keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
-- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
 
 ### Changed
 - document SessionFacet v7 outcome semantics for public consumers (#2797)
