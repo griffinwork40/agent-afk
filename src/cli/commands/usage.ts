@@ -27,12 +27,28 @@ import {
 } from '../../agent/usage/usage-formatter.js';
 import { loadAnthropicCredential, loadXaiApiKey } from '../../agent/auth/credential-resolver.js';
 import { getCodexApiKey } from '../shared-helpers.js';
+import { resolveOpenAIAuth, type OpenAIAuthResolution } from '../../agent/providers/openai-compatible/auth.js';
 import { statusPanel } from '../render.js';
 import type { StatusKind, StatusRow } from '../render/status-panel.js';
 import { handleCommandError } from '../errors/index.js';
 
+/** Credential probes behind the `unknown` placeholders; injectable for tests. */
+export interface UsageCredentialProbes {
+  /** Forced ChatGPT-subscription resolution (same probe as model-availability's `chatgpt-oauth` slot). */
+  readonly chatgpt: () => Pick<OpenAIAuthResolution, 'source'>;
+  readonly openaiApiKey: () => string | undefined;
+}
+
+const DEFAULT_PROBES: UsageCredentialProbes = {
+  chatgpt: () => resolveOpenAIAuth(undefined, {}, true),
+  openaiApiKey: getCodexApiKey,
+};
+
 /** Build the summary: ledger + endpoint records, then credential-only placeholders. */
-export async function collectUsageSummary(now: number = Date.now()): Promise<UsageSummary> {
+export async function collectUsageSummary(
+  now: number = Date.now(),
+  probes: UsageCredentialProbes = DEFAULT_PROBES,
+): Promise<UsageSummary> {
   const { records, anthropic } = await collectUsage({ now });
   const providers: ProviderUsageSummary[] = records.map((r) => summarizeUsageRecord(r, now));
   const has = (provider: string): boolean => providers.some((p) => p.provider === provider);
@@ -44,9 +60,15 @@ export async function collectUsageSummary(now: number = Date.now()): Promise<Usa
         : unknownProviderSummary(ANTHROPIC_OAUTH.provider, ANTHROPIC_OAUTH.account),
     );
   }
-  // Codex subscription traffic goes to the ChatGPT backend, which emits no
-  // rate-limit headers — usage is genuinely unknown, not zero.
-  if (getCodexApiKey() && !has('openai')) providers.push(unknownProviderSummary('codex', 'subscription'));
+  // Codex subscription traffic (~/.codex/auth.json sign-in) goes to the ChatGPT
+  // backend, which emits no rate-limit headers — usage is genuinely unknown,
+  // not zero. An OpenAI API key is a different account with its own headers;
+  // it is only a placeholder until its first response lands in the ledger.
+  const chatgpt = probes.chatgpt().source;
+  if (chatgpt === 'chatgpt-oauth' || chatgpt === 'chatgpt-oauth-expired') {
+    providers.push(unknownProviderSummary('codex', 'chatgpt-subscription'));
+  }
+  if (probes.openaiApiKey() && !has('openai')) providers.push(unknownProviderSummary('openai', 'api-key'));
   if (loadXaiApiKey()) providers.push(unknownProviderSummary('xai', 'api-key'));
   if (providers.length === 0) providers.push(unknownProviderSummary(ANTHROPIC_OAUTH.provider, ANTHROPIC_OAUTH.account));
   return { asOfMs: now, providers };
