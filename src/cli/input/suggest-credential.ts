@@ -19,16 +19,32 @@
  * Anthropic path can read the OS keychain, which must not run per keystroke.
  * That matches the previous session-stable capture.
  *
+ * Cache key: `binding.provider` (the raw slot provider string such as
+ * `'chatgpt-oauth'` or `'openai'`), NOT the collapsed `providerForModel`
+ * return value. `providerForModel` collapses both `'openai'` and
+ * `'chatgpt-oauth'` to `'openai-compatible'`, which would cause a chatgpt-oauth
+ * slot and a plain openai slot to share the same cache entry and receive the
+ * wrong credential. Using the raw binding provider preserves the distinction.
+ *
  * @module cli/input/suggest-credential
  */
 
 import { resolveCredentialForModel } from '../../agent/auth/credential-resolver.js';
-import {
-  providerForModel,
-  type ProviderRouteHints,
-} from '../../agent/providers/index.js';
+import { resolveBinding } from '../../agent/session/model-slots.js';
+import type { ProviderRouteHints } from '../../agent/providers/index.js';
+import { debugLog } from '../../utils/debug.js';
 
-/** Resolve a credential for `model` under `hints` (injectable for tests). */
+/** Result returned by a credential resolve call. */
+export interface SuggestCredential {
+  apiKey?: string;
+  forceChatgptOAuth?: boolean;
+}
+
+/**
+ * Resolve a credential for `model` under `hints` (injectable for tests).
+ * Returns a {@link SuggestCredential} object or `undefined` when no credential
+ * is available.
+ */
 export type ResolveCredentialFn = (
   model: string | undefined,
   hints: ProviderRouteHints | undefined,
@@ -37,20 +53,34 @@ export type ResolveCredentialFn = (
 /** Memoized per-provider-kind credential lookup for one suggest engine. */
 export interface SuggestCredentialResolver {
   /** The credential for the provider that serves `model`, or undefined. */
-  resolve(model: string, hints: ProviderRouteHints | undefined): string | undefined;
+  resolve(model: string, hints: ProviderRouteHints | undefined): SuggestCredential | undefined;
 }
 
 export function createSuggestCredentialResolver(
   resolveFn: ResolveCredentialFn = resolveCredentialForModel,
 ): SuggestCredentialResolver {
-  const cache = new Map<string, string | undefined>();
+  // Cache key: the raw binding provider string (e.g. 'chatgpt-oauth', 'openai',
+  // undefined → ''), not the collapsed providerForModel return value. This
+  // ensures chatgpt-oauth and openai slots get separate cache entries.
+  const cache = new Map<string, SuggestCredential | undefined>();
   return {
     resolve(model, hints) {
-      const kind = providerForModel(model, hints);
-      if (cache.has(kind)) return cache.get(kind);
-      const credential = resolveFn(model, hints);
-      cache.set(kind, credential);
-      return credential;
+      const binding = resolveBinding(model, hints?.slots);
+      // Use the raw provider field as the cache key; fall back to a sentinel
+      // that groups all id-inferred (non-slot) providers together.
+      const kind = binding.provider ?? `__inferred__:${model}`;
+      if (cache.has(kind)) {
+        debugLog('[suggest-credential] cache hit', kind);
+        return cache.get(kind);
+      }
+      const apiKey = resolveFn(model, hints);
+      const isChatgptOAuth = binding.provider === 'chatgpt-oauth';
+      const result: SuggestCredential | undefined =
+        apiKey !== undefined || isChatgptOAuth
+          ? { ...(apiKey !== undefined ? { apiKey } : {}), ...(isChatgptOAuth ? { forceChatgptOAuth: true } : {}) }
+          : undefined;
+      cache.set(kind, result);
+      return result;
     },
   };
 }

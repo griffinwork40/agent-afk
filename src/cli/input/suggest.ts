@@ -74,8 +74,10 @@ export function createSuggestEngine(opts: SuggestEngineOptions = {}): SuggestEng
     // Invariant: the credential is resolved for the SUGGESTION model's
     // provider, never borrowed from the session (see ./suggest-credential).
     // Attached here, the single chokepoint both producers call through.
-    const apiKey = credentials.resolve(model, hints);
-    return (req) => complete(apiKey !== undefined ? { ...req, apiKey } : req);
+    // cred carries both apiKey and forceChatgptOAuth when the binding
+    // provider is 'chatgpt-oauth', so the Responses wire is selected.
+    const cred = credentials.resolve(model, hints);
+    return (req) => complete(cred !== undefined ? { ...req, ...cred } : req);
   }
 
   const tier2 = createTier2Runner({

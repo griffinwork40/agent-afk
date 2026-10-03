@@ -87,6 +87,8 @@ export interface CompleteRequest {
   maxTokens: number;
   signal: AbortSignal;
   apiKey?: string;
+  /** When true, the completion call uses ChatGPT-subscription OAuth auth. */
+  forceChatgptOAuth?: boolean;
   baseUrl?: string;
 }
 
