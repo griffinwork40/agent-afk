@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+
 ### Changed
 - document SessionFacet v7 outcome semantics for public consumers (#2797)
 

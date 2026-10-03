@@ -247,7 +247,7 @@ export const YieldTrackingSchema = z.object({
    * a `gh pr create` bash result. Null when URL not available.
    * Added v7 (#2777).
    */
-  pr_url: z.string().nullable(),
+  pr_url: z.string().nullable().default(null),
 });
 export type YieldTracking = z.infer<typeof YieldTrackingSchema>;
 
