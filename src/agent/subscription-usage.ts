@@ -144,12 +144,12 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   const record = value as Record<string, unknown>;
   const utilizationRaw = record['utilization'];
   if (typeof utilizationRaw !== 'number' || !Number.isFinite(utilizationRaw)) return undefined;
-  // Contract: the endpoint's utilization unit is unverified — it may be a
-  // 0..1 fraction or a 0..100 percentage. Values >1 are interpreted as a
-  // percentage and divided by 100: a fraction can only exceed 1 by a small
-  // overage (upstream jitter), whereas a percentage routinely does, so this
-  // is the safer reading of the ambiguity. Result is then clamped to [0, 1].
-  const normalized = utilizationRaw > 1 ? utilizationRaw / 100 : utilizationRaw;
+  // Contract: the endpoint reports utilization as a 0..100 PERCENTAGE
+  // (verified live 2026-10-03: five_hour 27, seven_day 5). Always divide by
+  // 100. History: the parser used to guess the unit (values <=1 read as a
+  // 0..1 fraction), so a real 1% came back as 100% (a phantom full window
+  // that the daemon budget gate would act on). Result clamped to [0, 1].
+  const normalized = utilizationRaw / 100;
   const utilization = Math.min(1, Math.max(0, normalized));
   const resetsAt = parseResetsAt(record['resets_at']);
   return {
