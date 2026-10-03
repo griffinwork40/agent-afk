@@ -11,6 +11,16 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.290.4] - 2026-10-03
+
+### Fixed
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
+
+## [5.290.3] - 2026-10-03
+
+### Fixed
+- retry SDK connect timeouts; redact connection_retry trace text (#2856) (f4332787)
+
 ## [5.290.2] - 2026-10-03
 
 ### Fixed

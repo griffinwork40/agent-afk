@@ -440,6 +440,20 @@ describe('assembleChildConfig', () => {
     expect(vi.mocked(injectSubagentIdentityPreamble).mock.calls[0]?.[0]?.isNonInteractive).toBe(false);
   });
 
+  it('passes nestedAgentAllowlist as the second argument to the identity injector', () => {
+    vi.mocked(injectSubagentIdentityPreamble).mockClear();
+    assembleChildConfig(makeArgs({
+      options: {
+        parent: { sessionId: 'p' },
+        config: { systemPrompt: 'TASK' },
+        agentType: 't',
+      },
+      nestedAgentAllowlist: ['git-investigator'],
+    }));
+    const calls = vi.mocked(injectSubagentIdentityPreamble).mock.calls;
+    expect(calls[0]?.[1]).toEqual(['git-investigator']);
+  });
+
   it('runs the identity injector before the budget preamble, feeding its output forward', () => {
     const identity = vi.mocked(injectSubagentIdentityPreamble);
     const budget = vi.mocked(injectToolBudgetPreamble);

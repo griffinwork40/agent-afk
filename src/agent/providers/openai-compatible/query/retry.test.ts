@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { APIError } from 'openai';
+import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 import {
   RETRY_AFTER_MAX_WAIT_MS,
   computeBackoffDelay,
@@ -74,8 +74,18 @@ describe('retryability predicates', () => {
     expect(isRetryableConnectionError(apiError(400))).toBe(false);
     expect(isRetryableConnectionError(apiError(401))).toBe(false);
     expect(isRetryableConnectionError(apiError(404))).toBe(false);
-    // Statusless network errors are now retried (the SDK no longer silently retries them)
-    expect(isRetryableConnectionError(new Error('Connection error.'))).toBe(false); // no ctor name match
+    // Statusless transport failures are retried (the SDK no longer silently
+    // retries them): the real SDK class, and a raw fetch rejection whose cause
+    // chain carries a socket code.
+    expect(isRetryableConnectionError(new APIConnectionError({ message: undefined }))).toBe(true);
+    const fetchFailed = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+    });
+    expect(isRetryableConnectionError(fetchFailed)).toBe(true);
+    // A plain Error with the same text is NOT (classification is by class/code, not message)
+    expect(isRetryableConnectionError(new Error('Connection error.'))).toBe(false);
+    // The SDK timeout is retried by runConnectionPhase (signal-gated), not by this predicate
+    expect(isRetryableConnectionError(new APIConnectionTimeoutError())).toBe(false);
   });
 
   it('mid-stream: retries 429/5xx but NOT statusless errors (stream errors always have status)', () => {
