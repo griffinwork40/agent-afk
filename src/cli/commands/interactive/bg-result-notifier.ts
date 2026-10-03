@@ -256,8 +256,30 @@ export class BgResultNotifier {
     return this.pendingInjections.length > 0;
   }
 
-  /** Unsubscribe from the registry. Idempotent. */
+  /**
+   * Unsubscribe from the registry. Idempotent.
+   *
+   * Any jobs buffered in `pendingInjections` at this point have COMPLETED but
+   * were never drained into a turn (the user exited before the next message).
+   * They are NOT marked delivered — that would mislabel them in the witness
+   * trace. Instead, we print a one-line notice naming the job ids so the
+   * operator can recover them via `/bgsub:join` in the next session.
+   *
+   * The notice goes to `process.stderr` (not `console.log`) so it does not
+   * corrupt any piped stdout stream and survives surfaces where the compositor
+   * has already been torn down.
+   */
   dispose(): void {
     this.registry.off('settled', this.onSettled);
+    if (this.pendingInjections.length > 0) {
+      const ids = this.pendingInjections.map((j) => j.jobId).join(', ');
+      process.stderr.write(
+        `[afk] ${this.pendingInjections.length} background job(s) completed but were never delivered ` +
+        `(session ended before next user message). Recover with: /bgsub:join <id>\n` +
+        `  Job IDs: ${ids}\n`,
+      );
+    }
+    this.pendingInjections = [];
+    this.pendingNotifications = [];
   }
 }

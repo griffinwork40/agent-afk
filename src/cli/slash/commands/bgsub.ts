@@ -30,6 +30,7 @@ import type { SlashCommand } from '../types.js';
 import type { BackgroundAgentRegistry, BackgroundJob } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { BgJobLogReader } from '../../../agent/bg-job-log.js';
+import type { BgJobResult } from '../../../agent/bg-job-log.js';
 import { annotateIfIncomplete, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { formatDiskEvent } from '../../output-event-format.js';
@@ -258,16 +259,33 @@ export const bgsubJoinCmd: SlashCommand = {
         ctx.out.line(`  ${annotateIfIncomplete('', diskMeta.stopReason).trimEnd()}`);
         ctx.out.line('');
       }
-      let lineCount = 0;
-      for await (const event of BgJobLogReader.readEvents(id)) {
-        const text = formatDiskEvent(event);
-        if (text !== null) {
-          ctx.out.line(text);
-          lineCount++;
+      // Fast path: use the persisted result body when available. This file is
+      // written by `markTerminal()` for completed/failed jobs — it contains the
+      // same synthesized output text the model would have received on
+      // auto-delivery, so the cross-session join is byte-identical to an
+      // in-session join. Fall back to raw event replay for cancelled jobs or
+      // jobs from before result persistence was introduced.
+      const diskResult: BgJobResult | null = await BgJobLogReader.readResult(id);
+      if (diskResult !== null && diskResult.outputText !== '') {
+        ctx.out.line('');
+        const lines = diskResult.outputText.split('\n').slice(0, 40);
+        for (const line of lines) ctx.out.line(`  ${line}`);
+        if (diskResult.outputText.split('\n').length > 40) {
+          ctx.out.line(palette.dim('  … (truncated; full result available via /bgsub:join again)'));
         }
-      }
-      if (lineCount === 0) {
-        ctx.out.info(`  (no events recorded for job ${id})`);
+      } else {
+        // Fallback to raw event-log replay (cancelled jobs, legacy logs).
+        let lineCount = 0;
+        for await (const event of BgJobLogReader.readEvents(id)) {
+          const text = formatDiskEvent(event);
+          if (text !== null) {
+            ctx.out.line(text);
+            lineCount++;
+          }
+        }
+        if (lineCount === 0) {
+          ctx.out.info(`  (no events recorded for job ${id})`);
+        }
       }
       ctx.out.line('');
       ctx.out.line(
