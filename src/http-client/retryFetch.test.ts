@@ -147,6 +147,26 @@ describe('retryFetch', () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it('does not retry a connect-time egress block (fetchFn called exactly once)', async () => {
+    // EgressBlockedError surfaced directly
+    const egressDirect = Object.assign(new Error('egress blocked'), { name: 'EgressBlockedError' });
+    const fetchDirect = vi.fn().mockRejectedValue(egressDirect);
+    await expect(
+      retryFetch(fetchDirect as unknown as FetchFn, 'https://x', {}, { sleep: noSleep }),
+    ).rejects.toThrow('egress blocked');
+    expect(fetchDirect).toHaveBeenCalledTimes(1);
+
+    // EgressBlockedError wrapped as undici's TypeError('fetch failed', { cause })
+    const egressCause = Object.assign(new Error('egress blocked'), { name: 'EgressBlockedError' });
+    const wrapped = new TypeError('fetch failed');
+    (wrapped as unknown as { cause: Error }).cause = egressCause;
+    const fetchWrapped = vi.fn().mockRejectedValue(wrapped);
+    await expect(
+      retryFetch(fetchWrapped as unknown as FetchFn, 'https://x', {}, { sleep: noSleep }),
+    ).rejects.toThrow('fetch failed');
+    expect(fetchWrapped).toHaveBeenCalledTimes(1);
+  });
+
   it('does not retry once the signal aborts mid-flight', async () => {
     const ac = new AbortController();
     const fetchFn = vi.fn().mockImplementation(() => {
