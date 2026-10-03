@@ -135,7 +135,6 @@ export async function* usageLimitNoTimestampPause(
   next: TierGenerator,
   pendingErrorEvent: ProviderEvent,
 ): AsyncGenerator<ProviderEvent, void, void> {
-  const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
   const startedAt = Date.now();
   // waitDeadline bounds the park at TWO_HOURS_MS from now so a subagent's idle
   // watchdog and pause-aware ceiling cover the park even though resetsAt is
@@ -144,7 +143,11 @@ export async function* usageLimitNoTimestampPause(
   yield {
     type: 'paused',
     reason: 'usage-limit',
-    accountId,
+    // accountId is only needed when we will actually park (auto-resume path);
+    // read it lazily so fail-fast callers never touch the keychain.
+    accountId: ctx.autoResumeOnUsageLimit
+      ? parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '')
+      : undefined,
     autoResume: ctx.autoResumeOnUsageLimit,
     ...(ctx.autoResumeOnUsageLimit ? { waitDeadline: new Date(startedAt + TWO_HOURS_MS) } : {}),
   };
@@ -159,6 +162,7 @@ export async function* usageLimitNoTimestampPause(
       source: 'retry-layer',
       hasResetTimestamp: false,
       autoResume: ctx.autoResumeOnUsageLimit,
+      failFast: !ctx.autoResumeOnUsageLimit,
     },
   });
 
@@ -172,6 +176,7 @@ export async function* usageLimitNoTimestampPause(
     return;
   }
 
+  const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
   yield* runHotSwapParkLoop(
     ctx, runInput, isClosed, next, accountId, startedAt,
   );
