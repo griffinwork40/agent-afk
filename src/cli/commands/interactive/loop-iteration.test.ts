@@ -31,6 +31,9 @@ const shellState = vi.hoisted(() => ({
   dispatch: vi.fn(async (_input: string) => true),
 }));
 
+const versionState = vi.hoisted(() => ({ check: vi.fn<() => string | undefined>() }));
+vi.mock('./version-notice.js', () => ({ createVersionNotice: () => versionState.check }));
+
 vi.mock('../../input/history.js', () => ({
   loadHistory: vi.fn(async () => ({ push: vi.fn(), cursor: 0, entries: [] })),
 }));
@@ -181,6 +184,7 @@ function makeTurnState(): TurnState {
 }
 
 beforeEach(() => {
+  versionState.check.mockReset();
   surfaceState.readLineQueue = [];
   surfaceState.readLineCalls = 0;
   shellState.dispatch.mockClear();
@@ -1063,3 +1067,23 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
 });
 
 
+
+
+describe('REPL version warning boundary', () => {
+  it('checks after idle input resolves and writes through the renderer before dispatch', async () => {
+    const ctx = makeCtx();
+    versionState.check.mockReturnValueOnce('upgrade warning');
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [], beforeReturn: () => {
+        expect(versionState.check).not.toHaveBeenCalled();
+      } },
+      { text: '/exit', attachments: [] },
+    ];
+    vi.mocked(runTurn).mockImplementationOnce(async () => {
+      expect(ctx.replRenderer.writeLine).toHaveBeenCalledWith('upgrade warning');
+    });
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+    expect(versionState.check).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ctx.replRenderer.writeLine).mock.calls.filter(([line]) => line === 'upgrade warning')).toHaveLength(1);
+  });
+});

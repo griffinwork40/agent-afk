@@ -316,4 +316,42 @@ describe('McpManager (integration: stdio fixture)', () => {
     },
     { timeout: 15_000 },
   );
+
+  it(
+    // Issue #2760: the per-server timeout timer in disconnectAll() was never
+    // cleared when disconnect() succeeded — causing a spurious "timed out"
+    // console.warn ~1s after a clean teardown. The fix adds a `.finally()`
+    // that calls clearTimeout() regardless of which branch of the race won.
+    'disconnectAll does not log "disconnect timed out" when disconnect succeeds (#2760)',
+    async () => {
+      manager = await McpManager.fromConfig({
+        fast: {
+          type: 'stdio',
+          command: process.execPath,
+          args: [FIXTURE],
+        },
+      });
+
+      const state = manager.getServerStates();
+      expect(state[0]!.status).toBe('connected');
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await manager.disconnectAll();
+        manager = undefined;
+
+        // Wait slightly longer than the 1s timeout to let the stale timer
+        // fire IF the bug is present.
+        await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+
+        const warnLines = warnSpy.mock.calls.map((c) => String(c[0]));
+        expect(
+          warnLines.some((l) => l.includes('disconnect timed out')),
+        ).toBe(false);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    },
+    { timeout: 10_000 },
+  );
 });

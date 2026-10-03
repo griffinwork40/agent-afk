@@ -11,6 +11,87 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.286.0] - 2026-10-03
+
+### Added
+- warn when agent-afk was upgraded under a running session (#2809) (5e4eeea6)
+
+### Fixed
+- back off harder on HTTP 429 and guide retries (#2807) (b6e0a6ad)
+
+## [5.285.0] - 2026-10-03
+
+### Added
+- context_window kwarg for the Harbor afk adapter (#2802) (9e1a92af)
+- run it, don't relay it; stop handing safe commands to the user (#2803) (2efa268e)
+
+### Fixed
+- no history hole while a tall overlay covers committed rows (content-hug) (#2804) (f17c7e46)
+
+### Changed
+- harden 30-day boundary coverage for session-sidecar and session-dir sweep (#2800) (54d208c8)
+
+## [5.284.0] - 2026-10-02
+
+### Added
+- per-slot contextWindow override (#2793) (6ced67c5)
+
+## [5.283.0] - 2026-10-02
+
+### Added
+- add Cerebras gpt-oss-120b and qwen-3.8-27b context windows (#2789) (11a5e1b8)
+
+## [5.282.9] - 2026-10-02
+
+### Fixed
+- reject/recover JSON-string model-slot values instead of treating them as a model id (#2790) (ce285210)
+
+## [5.282.8] - 2026-10-02
+
+### Fixed
+- echo reasoning under its origin field (Cerebras 400) (#2788) (ae814b46)
+
+## [5.282.7] - 2026-10-02
+
+### Fixed
+- trustworthy outcome, primary_success, produced_pr, tool_errors_total (#2777) (#2781) (bd054244)
+
+## [5.282.6] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2780) (#2786) (677d09a5)
+
+## [5.282.5] - 2026-10-02
+
+### Fixed
+- clear disconnect timeout timer when disconnect succeeds (#2764) (e0749da6)
+
+## [5.282.4] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2776) (#2779) (28e4f60b)
+
+## [5.282.3] - 2026-10-02
+
+### Fixed
+- read Claude Code OAuth credentials on Windows (#2755) (9a4b20b8)
+
+### Changed
+- use --ak for Harbor agent kwargs (#2775) (dd1fbcbf)
+
+## [5.282.2] - 2026-10-02
+
+### Fixed
+- honor undici lookup all:true contract in egress guard (web_scrape fetch failed) (#2754) (86f77d75)
+
+## [5.282.1] - 2026-10-01
+
+### Fixed
+- add fake-timer comment and extract rmSyncRetry test helper (#2673) (2d76fda3)
+
+### Changed
+- remove retired capture-flag deprecation notice (#2668) (ab2bbd75)
+
 ## [5.282.0] - 2026-10-01
 
 ### Added

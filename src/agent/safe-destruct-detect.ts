@@ -76,9 +76,11 @@ export const SAFE_DESTRUCT_DETECT_REASON_PREFIX =
 export const SAFE_DESTRUCT_BLOCK_INJECT_CONTEXT =
   'This command was blocked by the safe-destruct hook because it matches an ' +
   'irrecoverable or externally-irreversible operation pattern. The block ' +
-  'cannot be self-bypassed. If the destructive action is genuinely required, ' +
-  'stop and ask the operator to run it manually, or use a safer alternative ' +
-  'named in the block reason above.';
+  'cannot be self-bypassed. First, use the safer alternative named in the ' +
+  'block reason above. The block covers this command only: keep running ' +
+  'other non-destructive commands yourself, but do not reach the same ' +
+  'destructive effect another way. Only if the destructive action is ' +
+  'genuinely required, stop and ask the operator to run it manually.';
 
 /**
  * Return the ids of every destructive pattern the command matches.

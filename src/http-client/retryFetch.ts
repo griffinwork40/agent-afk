@@ -7,8 +7,8 @@
  * single blip and one that survives it.
  *
  * Invariant: abort is terminal — a request whose signal has fired is NEVER
- * retried; the abort error propagates immediately. Honors a numeric
- * `Retry-After` header on a retryable response when present, otherwise uses
+ * retried; the abort error propagates immediately. Honors delta-seconds or
+ * HTTP-date `Retry-After` headers when present, otherwise uses
  * exponential backoff with full jitter, capped.
  *
  * Scope: deliberately NOT used by the browser ACTION layer, where actions are
@@ -25,7 +25,7 @@ import { debugLog } from '../utils/debug.js';
 const RETRYABLE_STATUS = new Set<number>([429, 502, 503, 504]);
 
 export interface RetryFetchOptions {
-  /** Max ADDITIONAL attempts after the first (default 3 → up to 4 calls). */
+  /** Max ADDITIONAL attempts (default 3; 429 defaults to only 2 retries). */
   retries?: number;
   /** Base backoff in ms; grows exponentially per attempt (default 500). */
   baseDelayMs?: number;
@@ -59,13 +59,28 @@ function backoffMs(attempt: number, base: number, max: number): number {
   return Math.round(Math.random() * ceiling);
 }
 
-/** Parse a numeric `Retry-After` (delta-seconds) into ms, capped. Ignores HTTP-date form. */
+// Contract: preserve the Response surface; metadata follows its lifetime without
+// leaking into headers or retaining completed requests.
+const responseAttempts = new WeakMap<Response, number>();
+
+export function rateLimitMessage(res: Response, url: string): string {
+  const host = new URL(res.url || url).host;
+  const attempts = responseAttempts.get(res) ?? 1;
+  return `web_scrape HTTP 429 (rate limited by ${host}) for ${url} after ${attempts} attempts; ` +
+    'do not re-request this host in parallel; wait before retrying or use a different source.';
+}
+
+/** Parse delta-seconds or HTTP-date into a non-negative, capped wait. */
 function retryAfterMs(res: Response, maxDelayMs: number): number | null {
   const raw = res.headers.get('retry-after');
   if (raw === null) return null;
-  const secs = Number(raw.trim());
-  if (!Number.isFinite(secs) || secs < 0) return null;
-  return Math.min(secs * 1000, maxDelayMs);
+  const value = raw.trim();
+  if (!value) return null;
+  const secs = Number(value);
+  if (Number.isFinite(secs)) return secs < 0 ? null : Math.min(secs * 1000, maxDelayMs);
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return null;
+  return Math.min(Math.max(0, date - Date.now()), maxDelayMs);
 }
 
 /**
@@ -91,12 +106,20 @@ export async function retryFetch(
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
     try {
       const res = await fetchFn(url, init);
-      // Success, non-retryable status, or out of attempts → return as-is.
-      if (!RETRYABLE_STATUS.has(res.status) || attempt === retries) {
+      responseAttempts.set(res, attempt + 1);
+      // Invariant: throttled parallel callers must not amplify a burst with
+      // subsecond retries. Default to two retries and 5s plus jitter when
+      // Retry-After is unusable. Explicit retry limits and delay caps still win.
+      // Sleep observes the caller's signal, including its tool timeout budget.
+      const retryLimit = res.status === 429 ? (opts.retries ?? 2) : retries;
+      if (!RETRYABLE_STATUS.has(res.status) || attempt >= retryLimit) {
         return res;
       }
       // Retryable status with attempts left: free the connection, wait, retry.
-      const wait = retryAfterMs(res, maxDelayMs) ?? backoffMs(attempt, baseDelayMs, maxDelayMs);
+      const fallback = res.status === 429
+        ? Math.min(5000 + backoffMs(attempt, baseDelayMs, maxDelayMs), maxDelayMs)
+        : backoffMs(attempt, baseDelayMs, maxDelayMs);
+      const wait = retryAfterMs(res, maxDelayMs) ?? fallback;
       debugLog('[web/retryFetch] retrying', { url, attempt, status: res.status, waitMs: wait });
       await res.body?.cancel().catch(() => undefined);
       await sleep(wait, signal);

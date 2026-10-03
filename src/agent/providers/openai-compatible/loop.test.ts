@@ -178,6 +178,34 @@ describe('assistantMessageWithToolCalls', () => {
       expect(msg.content).toBeNull();
       expect(msg.reasoning_content).toBe('I need to run a command.');
     });
+
+    it('echoes under reasoning field for Cerebras-style providers (tool-call turn)', () => {
+      const msg = assistantMessageWithToolCalls(
+        '',
+        [{ index: 0, id: 'a', name: 'bash', argumentsRaw: '{}', startEmitted: false }],
+        'Cerebras inner thought.',
+        'reasoning',
+      );
+      expect(msg.reasoning).toBe('Cerebras inner thought.');
+      expect(msg).not.toHaveProperty('reasoning_content');
+    });
+
+    it('echoes under reasoning_content when field is explicitly reasoning_content (DeepSeek regression guard)', () => {
+      const msg = assistantMessageWithToolCalls(
+        'Let me check.',
+        [{ index: 0, id: 'a', name: 'bash', argumentsRaw: '{}', startEmitted: false }],
+        'DeepSeek thought.',
+        'reasoning_content',
+      );
+      expect(msg.reasoning_content).toBe('DeepSeek thought.');
+      expect(msg).not.toHaveProperty('reasoning');
+    });
+
+    it('omits both reasoning fields when reasoningText is empty regardless of reasoningField', () => {
+      const msg = assistantMessageWithToolCalls('Answer.', [], '', 'reasoning');
+      expect(msg).not.toHaveProperty('reasoning');
+      expect(msg).not.toHaveProperty('reasoning_content');
+    });
   });
 });
 
