@@ -40,8 +40,11 @@ export interface UsageCredentialProbes {
 }
 
 const DEFAULT_PROBES: UsageCredentialProbes = {
+  // Invariant: resolve lazily. Reading an imported binding at module eval
+  // breaks every test that partially mocks `shared-helpers.js` (cli/index.ts
+  // imports this module transitively).
   chatgpt: () => resolveOpenAIAuth(undefined, {}, true),
-  openaiApiKey: getCodexApiKey,
+  openaiApiKey: () => getCodexApiKey(),
 };
 
 /** Build the summary: ledger + endpoint records, then credential-only placeholders. */

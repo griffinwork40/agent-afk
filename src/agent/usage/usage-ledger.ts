@@ -25,6 +25,7 @@
  * @module agent/usage/usage-ledger
  */
 
+import { existsSync } from 'node:fs';
 import { StateStore } from '../state/state-store.js';
 import { getStateDatabasePath } from '../../paths.js';
 import { env } from '../../config/env.js';
@@ -57,10 +58,16 @@ const FREEZE_MAX_MS = 120_000;
 let store: { path: string; db: StateStore | null } | undefined;
 const lastPublish = new Map<string, { at: number; sig: string }>();
 
-function ledgerStore(): StateStore | null {
+// Invariant: readers never CREATE or hold the database. `forRead` returns null
+// (without caching) when no store file exists yet, so a process that only
+// reads usage opens no SQLite file: nothing to lock on Windows, nothing
+// created as a side effect of `afk usage` or a fan-out notice. Only a publish
+// creates the file.
+function ledgerStore(forRead = false): StateStore | null {
   if (env.AFK_USAGE_LEDGER_DISABLED === '1') return null;
   const path = getStateDatabasePath();
   if (store?.path === path) return store.db;
+  if (forRead && !existsSync(path)) return null;
   closeStore();
   let db: StateStore | null;
   try {
@@ -139,7 +146,7 @@ export function publishUsage(rec: UsageRecord, now: number = Date.now()): void {
 /** Every parseable record in the ledger. Never throws; `[]` when unavailable. */
 export function readLedgerRecords(): UsageRecord[] {
   try {
-    const db = ledgerStore();
+    const db = ledgerStore(true);
     if (db === null) return [];
     return db
       .query(NAMESPACE, { limit: 100 })
@@ -157,7 +164,7 @@ export function readLedgerRecords(): UsageRecord[] {
  */
 export function readLedgerRecord(provider: string, account: string): UsageRecord | undefined {
   try {
-    const db = ledgerStore();
+    const db = ledgerStore(true);
     if (db === null) return undefined;
     const row = db.get(NAMESPACE, usageKey(provider, account));
     return row === null ? undefined : parseUsageRecord(row.value);

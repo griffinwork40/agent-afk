@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -109,6 +109,16 @@ describe('usage ledger + reader', () => {
     if (savedHome === undefined) delete process.env['AFK_HOME'];
     else process.env['AFK_HOME'] = savedHome;
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reading with no store file creates no database (nothing to lock on Windows)', () => {
+    expect(readLedgerRecords()).toEqual([]);
+    expect(readUsageRecord('anthropic', 'oauth')).toBeUndefined();
+    expect(existsSync(getStateDatabasePath())).toBe(false);
+    // A later publish still creates it.
+    publishUsage(rec({ windows: { fiveHour: { utilization: 0.2 }, observedAt: NOW } }), NOW);
+    expect(existsSync(getStateDatabasePath())).toBe(true);
+    expect(readLedgerRecords()).toHaveLength(1);
   });
 
   it('publishes and reads back a record', () => {
