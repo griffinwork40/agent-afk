@@ -87,7 +87,7 @@ function tsFromFilename(filename: string): number {
  */
 async function scanInboxDir(
   targetId: string,
-  subdir: 'pending' | 'delivered',
+  subdir: 'pending' | 'delivered' | 'held',
   senderId: string,
   windowMs: number,
   now: () => number,
@@ -133,8 +133,10 @@ export interface CheckSendGuardsOpts {
  * Returns `null` if all checks pass, or the {@link PeerRefusal} code that
  * fired first.
  *
- * Scanning the target's `pending/` + `delivered/` directories is the chosen
- * approach (cross-process correct; no sender-side state file needed).
+ * Scanning the target's `pending/` + `delivered/` + `held/` directories is
+ * the chosen approach (cross-process correct; no sender-side state file
+ * needed). `held/` is included so rate/dup guards are not bypassed when the
+ * receiver is in hold mode.
  */
 export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRefusal | null> {
   const { senderId, targetId, body, hop, now: getNow = Date.now } = opts;
@@ -142,12 +144,17 @@ export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRe
   if (Buffer.byteLength(body, 'utf8') > PEER_MAX_BODY_BYTES) return 'too-large';
   if (hop > PEER_MAX_HOPS) return 'hop-limit';
 
-  // Scan both pending and delivered to build history for rate/dedup checks.
-  const [pendingHistory, deliveredHistory] = await Promise.all([
-    scanInboxDir(targetId, 'pending', senderId, Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS), getNow),
-    scanInboxDir(targetId, 'delivered', senderId, Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS), getNow),
+  // Scan pending, delivered, AND held to build history for rate/dedup checks.
+  // Including held/ prevents bypass when the receiver is in hold mode: a
+  // sender that hits hold-mode gets a valid receipt in held/, so subsequent
+  // sends still count against the rate limit and dedup window.
+  const windowMs = Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS);
+  const [pendingHistory, deliveredHistory, heldHistory] = await Promise.all([
+    scanInboxDir(targetId, 'pending', senderId, windowMs, getNow),
+    scanInboxDir(targetId, 'delivered', senderId, windowMs, getNow),
+    scanInboxDir(targetId, 'held', senderId, windowMs, getNow),
   ]);
-  const history = [...pendingHistory, ...deliveredHistory];
+  const history = [...pendingHistory, ...deliveredHistory, ...heldHistory];
 
   const nowMs = getNow();
   const rateCutoff = nowMs - RATE_WINDOW_MS;

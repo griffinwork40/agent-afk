@@ -207,7 +207,32 @@ A `peer_message` trace event is emitted for every state transition (`src/agent/t
 ## v1 limits / deferred
 
 - **Receivers**: REPL sessions only. Telegram receiver, daemon receiver deferred.
-- **Delivery timing**: messages cannot be injected mid-turn (between tool calls). They wait for the next turn boundary.
+- **Delivery timing**: messages cannot be injected mid-turn (between tool calls). They wait for the next tool-round boundary or (fallback) the next REPL turn.
 - **Shared task board**: deferred (see plan for design notes).
 - **`afk send` shell subcommand**: deferred.
 - **Windows**: filesystem rename semantics and `fs.watch` differ; not tested on Windows.
+
+---
+
+## Mid-turn boundary delivery (cooperative steering)
+
+Peer messages that arrive while a tool batch is running are not injected immediately. They wait for a **safe inter-round boundary**: after the current tool batch completes and before the next model request is issued. Both the Anthropic and OpenAI providers support this via `setBeforeNextRound`.
+
+### Contract
+
+- **Provider forwarding**: `ProviderRouter.setBeforeNextRound` stores the callback and forwards it to the active inner provider, and re-forwards it whenever the inner is rebuilt (model swap). No steering callback is silently dropped across `/model` switches.
+- **Message injection**: the Anthropic provider appends a fresh user turn after the tool-result batch (a new `MessageParam` object, not an in-place mutation). This guarantees `JournalSync` detects the change by reference comparison (see `docs/message-journal.md`).
+- **OpenAI**: the OpenAI provider likewise injects a fresh user turn after the tool-result batch (`priorTurns`). The old capability-check that incorrectly refused OpenAI sessions has been removed.
+- **Next-turn fallback**: messages that arrive when no tool round is running (idle REPL) are injected by the existing `prependTurnInjections` / `drainInjections` path at the top of the next REPL turn.
+
+### Guards improvements
+
+- **`held/` directory included**: the sender-side rate-limit and dedup guards now scan the target's `held/` directory in addition to `pending/` and `delivered/`. Previously, messages moved to `held/` by the receiver's hold mode were invisible to the guards, allowing a sender to bypass the rate limit by targeting a session in hold mode.
+- **Live trace writer**: `PeerInboxNotifier` now uses a live getter (`getTraceWriter`) rather than a value captured at construction. This ensures trace events after a mid-session `/resume` are written to the correct, current writer.
+- **Rekey isolation**: when the session id changes (mid-session resume), messages buffered for the old session are discarded rather than injected into the new session's conversation.
+
+### Deferred
+
+- Human boundary compositor reserve/drop (structural queue arbitration with explicit user-priority selection, not just prompt-prepend ordering): deferred to a follow-up PR.
+- Admission queue with per-source sequence numbers, bounded snapshot, cutoff arrivals: deferred to a follow-up PR. Current delivery uses the existing `drainInjections` FIFO.
+- Attachments, `/slash`, and `!shell` input as barrier (preventing peers jumping ahead of pending human input): deferred.
