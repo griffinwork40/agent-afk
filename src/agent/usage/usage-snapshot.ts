@@ -61,6 +61,8 @@ export function readUsageRecord(provider: string, account: string): UsageRecord 
 export interface CollectUsageOptions {
   /** Injectable for tests. Defaults to the real OAuth usage endpoint fetch. */
   readonly fetchUsage?: (opts?: FetchSubscriptionUsageOptions) => Promise<UsageResult>;
+  /** Refresh the Claude subscription windows. Default true. */
+  readonly includeClaude?: boolean;
   /** Also refresh the ChatGPT (Codex) subscription windows. Default true. */
   readonly includeCodex?: boolean;
   /** Injectable for tests. Defaults to the ChatGPT `wham/usage` fetch. */
@@ -71,7 +73,8 @@ export interface CollectUsageOptions {
 export interface CollectedUsage {
   readonly records: UsageRecord[];
   /** Raw endpoint outcomes, so callers can surface why a refresh failed. */
-  readonly anthropic: UsageResult;
+  /** Absent when `includeClaude` was false. */
+  readonly anthropic?: UsageResult;
   /** Absent when `includeCodex` was false. */
   readonly codex?: UsageResult;
 }
@@ -97,7 +100,8 @@ async function refresh(
 
 /**
  * Refresh the subscription windows from their usage endpoints (Claude OAuth,
- * and ChatGPT/Codex unless `includeCodex` is false), publishing each to the
+ * and ChatGPT/Codex; either can be skipped with `includeClaude` /
+ * `includeCodex` set to false), publishing each to the
  * ledger, then read everything. Fetches run in parallel. Never throws: an
  * endpoint failure leaves the ledger/cache records as the answer.
  */
@@ -106,13 +110,13 @@ export async function collectUsage(opts: CollectUsageOptions = {}): Promise<Coll
   const fetchClaude = opts.fetchUsage ?? fetchSubscriptionUsage;
   const fetchCodex = opts.fetchCodex ?? fetchCodexUsage;
   const [anthropic, codex] = await Promise.all([
-    refresh(ANTHROPIC_OAUTH, () => fetchClaude(), now),
+    opts.includeClaude === false ? undefined : refresh(ANTHROPIC_OAUTH, () => fetchClaude(), now),
     opts.includeCodex === false ? undefined : refresh(CODEX_SUBSCRIPTION, () => fetchCodex(), now),
   ]);
-  const extra = [anthropic.record, codex?.record].filter((r): r is UsageRecord => r !== undefined);
+  const extra = [anthropic?.record, codex?.record].filter((r): r is UsageRecord => r !== undefined);
   return {
     records: readUsageRecords(extra),
-    anthropic: anthropic.result,
+    ...(anthropic !== undefined ? { anthropic: anthropic.result } : {}),
     ...(codex !== undefined ? { codex: codex.result } : {}),
   };
 }

@@ -170,7 +170,7 @@ describe('usage ledger + reader', () => {
     expect(ok.records[0]?.windows?.sevenDay?.utilization).toBe(0.3);
     expect(readLedgerRecords()[0]?.windows?.sevenDay?.utilization).toBe(0.3);
     const bad = await collectUsage({ now: NOW, fetchCodex: noCodex, fetchUsage: async () => { throw new Error('x'); } });
-    expect(bad.anthropic.kind).toBe('unavailable');
+    expect(bad.anthropic?.kind).toBe('unavailable');
   });
 
   it('collectUsage refreshes Codex in parallel and publishes it under codex/chatgpt-subscription', async () => {

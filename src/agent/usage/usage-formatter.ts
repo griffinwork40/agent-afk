@@ -164,8 +164,9 @@ export function compactUsageEntries(records: readonly UsageRecord[], now: number
 }
 
 /** Display name for a provider id in one-line notices. */
+const PROVIDER_DISPLAY: Readonly<Record<string, string>> = { anthropic: 'Claude', codex: 'Codex' };
 function providerDisplayName(provider: string): string {
-  return provider === 'anthropic' ? 'Claude' : provider;
+  return PROVIDER_DISPLAY[provider] ?? provider;
 }
 
 /**

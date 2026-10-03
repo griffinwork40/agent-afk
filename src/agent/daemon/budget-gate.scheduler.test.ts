@@ -290,3 +290,49 @@ describe('CronScheduler + budget gate', () => {
     expect(notifications.length).toBeGreaterThan(0);
   });
 });
+
+describe('CronScheduler + budget gate: one alert per episode', () => {
+  let dir: string;
+  let savedAfkHome: string | undefined;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+    savedAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = dir;
+    budgetMock.result = { skip: false };
+  });
+
+  afterEach(() => {
+    if (savedAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = savedAfkHome;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('alerts on the first skip, suppresses the rest, and re-alerts after a pass', async () => {
+    const delivered: TelemetryRecord[] = [];
+    const scheduler = new CronScheduler({
+      telemetryPath: join(dir, 'forge-telemetry.jsonl'),
+      // fireOnTaskComplete applies the notifyOn filter before this callback.
+      onTaskComplete: (record) => delivered.push(record),
+    });
+    for (const id of ['a', 'b']) {
+      scheduler.register({ taskId: id, command: 'run', trigger: 'cron', cronExpression: '* * * * *', executor: 'agent' });
+    }
+
+    budgetMock.result = overSkipResult();
+    await scheduler.tick('a');
+    await scheduler.tick('b');
+    await scheduler.tick('a');
+    expect(delivered).toHaveLength(1);
+
+    const lines = readFileSync(join(dir, 'forge-telemetry.jsonl'), 'utf-8').trim().split('\n');
+    expect(lines.filter((l) => l.includes('budget-over'))).toHaveLength(3); // every skip is still recorded
+
+    budgetMock.result = { skip: false };
+    await scheduler.tick('a').catch(() => undefined); // passes the gate (session may fail in this harness)
+    budgetMock.result = overSkipResult();
+    await scheduler.tick('b');
+    await scheduler.stop();
+    expect(delivered.filter((r) => r.skipReason === 'budget-over')).toHaveLength(2);
+  });
+});

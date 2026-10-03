@@ -14,6 +14,8 @@ import {
   evaluateBudgetGate,
   formatBudgetSkipMessage,
   type BudgetGateSkip,
+  resolveDaemonUsageTarget,
+  BudgetAlertLatch,
 } from './budget-gate.js';
 import type { UsageResult } from '../subscription-usage.js';
 
@@ -191,3 +193,59 @@ describe('formatBudgetSkipMessage', () => {
     expect(msg).not.toContain('resets');
   });
 });
+
+describe('provider-aware daemon gate', () => {
+  const NOW_MS = 1_800_000_000_000;
+  const noClaude = vi.fn(async (): Promise<UsageResult> => ({ kind: 'unavailable', reason: 'no-token', detail: '' }));
+
+  beforeEach(() => {
+    vi.stubEnv('AFK_DAEMON_BUDGET_GATE_DISABLED', '');
+    vi.stubEnv('AFK_USAGE_LEDGER_DISABLED', '1');
+    resetQuotaCacheForTests();
+    noClaude.mockClear();
+  });
+
+  it('resolveDaemonUsageTarget maps the daemon model to the subscription it draws on', () => {
+    expect(resolveDaemonUsageTarget('sonnet')).toEqual({ provider: 'anthropic', account: 'oauth' });
+    expect(resolveDaemonUsageTarget(undefined)).toEqual({ provider: 'anthropic', account: 'oauth' });
+    expect(resolveDaemonUsageTarget('gpt-5', undefined, () => true)).toEqual({ provider: 'codex', account: 'chatgpt-subscription' });
+    expect(resolveDaemonUsageTarget('gpt-5', 'sk-key', () => false)).toBeNull(); // API key: no subscription windows
+    expect(resolveDaemonUsageTarget('gpt-5', undefined, () => { throw new Error('bad auth'); })).toBeNull();
+  });
+
+  it('target null passes without any usage fetch', async () => {
+    const fetchCodex = vi.fn();
+    expect(await evaluateBudgetGate({ target: null, fetchUsage: noClaude, fetchCodex, now: NOW_MS })).toEqual({ skip: false });
+    expect(noClaude).not.toHaveBeenCalled();
+    expect(fetchCodex).not.toHaveBeenCalled();
+  });
+
+  it('a Codex daemon is graded on Codex windows only (Claude full does not stop it)', async () => {
+    const fullClaude = vi.fn(async (): Promise<UsageResult> => ({ kind: 'ok', sevenDay: { utilization: 1 } }));
+    const okCodex = vi.fn(async (): Promise<UsageResult> => ({ kind: 'ok', sevenDay: { utilization: 0.47 } }));
+    const pass = await evaluateBudgetGate({ target: CODEX_TARGET, fetchUsage: fullClaude, fetchCodex: okCodex, now: NOW_MS });
+    expect(pass).toEqual({ skip: false });
+    expect(fullClaude).not.toHaveBeenCalled();
+
+    const fullCodex = vi.fn(async (): Promise<UsageResult> => ({ kind: 'ok', sevenDay: { utilization: 0.95 } }));
+    const skip = await evaluateBudgetGate({ target: CODEX_TARGET, fetchUsage: noClaude, fetchCodex: fullCodex, now: NOW_MS });
+    expect(skip.skip).toBe(true);
+    if (skip.skip) {
+      expect(skip.provider).toBe('codex');
+      expect(formatBudgetSkipMessage(skip, 'nightly', NOW_MS)).toContain('Codex 7d window at 95%');
+    }
+  });
+
+  it('BudgetAlertLatch alerts once per episode and re-arms after clear or a new reset time', () => {
+    const latch = new BudgetAlertLatch();
+    const skip = (resetsAt?: number) =>
+      ({ skip: true, provider: 'anthropic', binding: { key: 'sevenDay', label: '7d', utilization: 1, pct: 100, ...(resetsAt ? { resetsAt } : {}) } }) as const;
+    expect(latch.shouldAlert(skip(1))).toBe(true);
+    expect(latch.shouldAlert(skip(1))).toBe(false);
+    expect(latch.shouldAlert(skip(2))).toBe(true); // window rolled over and filled again
+    latch.clear();
+    expect(latch.shouldAlert(skip(2))).toBe(true);
+  });
+});
+
+const CODEX_TARGET = { provider: 'codex', account: 'chatgpt-subscription' } as const;

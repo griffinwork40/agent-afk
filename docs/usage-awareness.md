@@ -33,11 +33,17 @@ matters.
   routing change, no model downgrade, nothing in the system prompt (which would
   break prompt caching).
 - **Daemon budget gate** (`src/agent/daemon/budget-gate.ts`): before an
-  `executor: 'agent'` task runs, the binding Claude window is graded at
-  `AFK_DAEMON_BUDGET_SKIP_PCT`. At or over it the task is skipped
-  (`skipReason: 'budget-over'` in telemetry, visible in `get_schedule_history`)
-  and a Telegram notice is always sent. Shell and builtin tasks are never
-  gated. Fail-open: no token, a network error, or a stale reading all pass.
+  `executor: 'agent'` task runs, the gate grades the subscription the daemon's
+  model actually draws on (`resolveDaemonUsageTarget`): Claude windows for an
+  Anthropic model, Codex windows for an OpenAI-compatible model signed in
+  through ChatGPT, nothing otherwise (API keys, xAI, local). It refreshes only
+  that subscription. At or over `AFK_DAEMON_BUDGET_SKIP_PCT` the task is
+  skipped (`skipReason: 'budget-over'` in telemetry for every skip, visible in
+  `get_schedule_history`). Telegram alerts once per episode
+  (`BudgetAlertLatch`: provider + window + reset time); later skips in the
+  same episode are telemetry-only, and any pass re-arms the alert. Shell and
+  builtin tasks are never gated. Fail-open: no token, a network error, or a
+  stale reading all pass.
 
 ## Environment
 
@@ -46,6 +52,12 @@ matters.
 | `AFK_USAGE_LEDGER_DISABLED` | `0` | `1` stops publishing/reading the cross-process ledger; surfaces see only this process's cache. |
 | `AFK_DAEMON_BUDGET_SKIP_PCT` | `90` | Daemon skip threshold (0 to 100). |
 | `AFK_DAEMON_BUDGET_GATE_DISABLED` | `0` | `1` disables the daemon gate (no usage-endpoint call). Forced to `1` in the vitest setup (`src/__test-utils__/clean-config-env.ts`) because the default path reads the real keychain token. |
+
+## Units
+
+The Claude `api/oauth/usage` endpoint reports `utilization` as a 0..100
+percentage (verified live). It is always divided by 100. An earlier parser
+guessed the unit and read a real 1% as 100%.
 
 ## Known gaps
 
@@ -56,7 +68,7 @@ matters.
 - **Codex is refreshed only on demand** (`afk usage`, or any `collectUsage`
   caller). AFK's own ChatGPT-backend traffic is still bypassed by the admission
   fetch, so between refreshes a Codex reading ages out to `unknown` after 10
-  minutes. The fan-out notice and daemon gate grade only the Claude windows.
+  minutes. The fan-out notice grades only the Claude windows.
 - **The Anthropic ledger account is the auth mode** (`oauth` / `apiKey`), not
   a per-credential identity, so two different API keys on one machine share a
   bucket.
