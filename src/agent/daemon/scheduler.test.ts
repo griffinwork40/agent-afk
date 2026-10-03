@@ -740,7 +740,7 @@ describe('CronScheduler — MCP fixture wiring', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -818,7 +818,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -887,7 +887,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -962,7 +962,7 @@ describe('CronScheduler — mcp_connect_* trace phases', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 

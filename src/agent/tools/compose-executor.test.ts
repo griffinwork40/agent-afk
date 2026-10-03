@@ -23,7 +23,7 @@ interface CapturedManagerOpts {
 let lastManagerOpts: CapturedManagerOpts | undefined;
 
 vi.mock('../subagent.js', () => ({
-  SubagentManager: vi.fn((opts: CapturedManagerOpts = {}) => {
+  SubagentManager: vi.fn(function (opts: CapturedManagerOpts = {}) {
     lastManagerOpts = opts;
     return {
       forkSubagent: mockForkSubagent,
