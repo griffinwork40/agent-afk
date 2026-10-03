@@ -13,7 +13,8 @@ matters.
 | Record model | `src/agent/usage/usage-record.ts` | `UsageRecord` per provider+account; monotone merge rules (a section is replaced only by an observation with a newer `observedAt`; `frozenUntil` merges by max). |
 | Ledger | `src/agent/usage/usage-ledger.ts` | The single cross-process store: SQLite state store (`state/kv/kv.db`, namespace `usage`), lossless read-modify-write via `StateStore.cas` / `insertIfAbsent`. Unchanged publishes are throttled to one per 5s per key; 429 freezes publish immediately. |
 | Admission | `src/agent/providers/shared/rate-limit-bucket.registry.ts` | One `RateLimitBucket` per provider+account (Anthropic per auth mode, OpenAI-compatible per endpoint host), so one provider's headers never overwrite another's. Each bucket reads its own ledger key at most once per second and adopts a peer's unexpired freeze and any lower, fresher remaining count, so every process backs off together. Adoption only ever makes a bucket more cautious. |
-| Reader | `src/agent/usage/usage-snapshot.ts` | The one reader every consumer uses (`readUsageRecords`, `readUsageRecord`, `collectUsage`). Merges the ledger with this process's quota cache and, for `collectUsage`, a fresh Claude OAuth usage-endpoint read. |
+| Endpoint fetchers | `src/agent/subscription-usage.ts` (Claude), `src/agent/usage/codex-usage.ts` (Codex) | Both return the same `UsageResult` shape over one shared transport (`src/agent/usage/usage-http.ts`: timeout, error taxonomy, never echo a response body). Claude: `api.anthropic.com/api/oauth/usage`. Codex: `chatgpt.com/backend-api/wham/usage` with the `~/.codex/auth.json` sign-in (read-only) and AFK's usual ChatGPT headers (`originator: agent-afk`). Codex windows are classified by `limit_window_seconds` (~5h or ~7d), never by position; other lengths are dropped. |
+| Reader | `src/agent/usage/usage-snapshot.ts` | The one reader every consumer uses (`readUsageRecords`, `readUsageRecord`, `collectUsage`). Merges the ledger with this process's quota cache. `collectUsage` also refreshes both endpoints in parallel and publishes them (`includeCodex: false` skips Codex). Readers never create the store file. |
 | Evaluator | `src/agent/usage/usage-budget.ts` | The one grader: binding window, `ok` / `warn` / `over` / `unknown`. Readings older than 10 minutes are `unknown`, never stale numbers. Defaults: warn at 80%, over at 100%. |
 | Formatter | `src/agent/usage/usage-formatter.ts` | The one formatter for the CLI, `get_runtime_state`, the fan-out notice, and the daemon Telegram message. |
 
@@ -21,8 +22,8 @@ matters.
 
 - **`afk usage [--json]`** (`src/cli/commands/usage.ts`): per provider/account
   per-minute headroom, active freeze, 5h / 7d utilization with reset
-  countdowns, and data age. Providers with credentials but no signal are listed
-  as `unknown`.
+  countdowns, and data age, for Claude and Codex. A credential whose endpoint
+  failed shows the reason; one with no signal is listed as `unknown`.
 - **`get_runtime_state`**: the `all` view carries a compact `usage` field
   (`src/agent/awareness/runtime-source.ts`).
 - **Fan-out notice** (`src/agent/tools/usage-notice.ts`): when an `agent` or
@@ -48,11 +49,14 @@ matters.
 
 ## Known gaps
 
-- **Codex / ChatGPT subscription usage is unknown.** The ChatGPT OAuth backend
-  (`chatgpt.com/backend-api/codex`) is bypassed by the admission fetch
-  (`openai-compatible/query/client.ts`) and no usage header is known for it.
-- **`anthropic-ratelimit-unified-*` headers are undocumented** by Anthropic;
-  they work today but can change without notice.
+- **Both subscription sources are undocumented.** The Codex `wham/usage`
+  route is what the open-source Codex client calls, and the
+  `anthropic-ratelimit-unified-*` headers are not in Anthropic's public docs.
+  Either can change without notice.
+- **Codex is refreshed only on demand** (`afk usage`, or any `collectUsage`
+  caller). AFK's own ChatGPT-backend traffic is still bypassed by the admission
+  fetch, so between refreshes a Codex reading ages out to `unknown` after 10
+  minutes. The fan-out notice and daemon gate grade only the Claude windows.
 - **The Anthropic ledger account is the auth mode** (`oauth` / `apiKey`), not
   a per-credential identity, so two different API keys on one machine share a
   bucket.

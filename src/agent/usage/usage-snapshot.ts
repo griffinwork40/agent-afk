@@ -9,8 +9,9 @@
  *      this machine has observed.
  *   2. This process's quota cache (`quota-cache.ts`) — so usage stays visible
  *      when the ledger is disabled or its store failed to open.
- *   3. Optionally, a fresh read of the Claude OAuth usage endpoint
- *      ({@link collectUsage}); the result is also published to the ledger.
+ *   3. Optionally, fresh reads of the Claude OAuth and ChatGPT (Codex)
+ *      usage endpoints ({@link collectUsage}); results are also published to
+ *      the ledger.
  *
  * @module agent/usage/usage-snapshot
  */
@@ -22,6 +23,7 @@ import {
   type UsageResult,
 } from '../subscription-usage.js';
 import { mergeUsageRecords, usageKey, type UsageRecord } from './usage-record.js';
+import { CODEX_SUBSCRIPTION, fetchCodexUsage } from './codex-usage.js';
 import {
   publishUsage,
   readLedgerRecords,
@@ -59,35 +61,58 @@ export function readUsageRecord(provider: string, account: string): UsageRecord 
 export interface CollectUsageOptions {
   /** Injectable for tests. Defaults to the real OAuth usage endpoint fetch. */
   readonly fetchUsage?: (opts?: FetchSubscriptionUsageOptions) => Promise<UsageResult>;
+  /** Also refresh the ChatGPT (Codex) subscription windows. Default true. */
+  readonly includeCodex?: boolean;
+  /** Injectable for tests. Defaults to the ChatGPT `wham/usage` fetch. */
+  readonly fetchCodex?: () => Promise<UsageResult>;
   readonly now?: number;
 }
 
 export interface CollectedUsage {
   readonly records: UsageRecord[];
-  /** Raw endpoint outcome, so callers can surface why a refresh failed. */
+  /** Raw endpoint outcomes, so callers can surface why a refresh failed. */
   readonly anthropic: UsageResult;
+  /** Absent when `includeCodex` was false. */
+  readonly codex?: UsageResult;
+}
+
+/** Run one endpoint fetch; on success publish it to the ledger and return the record. */
+async function refresh(
+  ids: { readonly provider: string; readonly account: string },
+  doFetch: () => Promise<UsageResult>,
+  now: number,
+): Promise<{ result: UsageResult; record?: UsageRecord }> {
+  let result: UsageResult;
+  try {
+    result = await doFetch();
+  } catch {
+    result = { kind: 'unavailable', reason: 'network-error', detail: 'usage fetch threw' };
+  }
+  const windows = windowsFromUsageResult(result, now);
+  if (windows === undefined) return { result };
+  const record: UsageRecord = { v: 1, ...ids, windows };
+  publishUsage(record, now);
+  return { result, record };
 }
 
 /**
- * Refresh the Claude subscription windows from the OAuth usage endpoint
- * (publishing them to the ledger), then read everything. Never throws: an
+ * Refresh the subscription windows from their usage endpoints (Claude OAuth,
+ * and ChatGPT/Codex unless `includeCodex` is false), publishing each to the
+ * ledger, then read everything. Fetches run in parallel. Never throws: an
  * endpoint failure leaves the ledger/cache records as the answer.
  */
 export async function collectUsage(opts: CollectUsageOptions = {}): Promise<CollectedUsage> {
   const now = opts.now ?? Date.now();
-  const doFetch = opts.fetchUsage ?? fetchSubscriptionUsage;
-  let anthropic: UsageResult;
-  try {
-    anthropic = await doFetch();
-  } catch {
-    anthropic = { kind: 'unavailable', reason: 'network-error', detail: 'usage fetch threw' };
-  }
-  const windows = windowsFromUsageResult(anthropic, now);
-  const extra: UsageRecord[] = [];
-  if (windows !== undefined) {
-    const rec: UsageRecord = { v: 1, ...ANTHROPIC_OAUTH, windows };
-    publishUsage(rec, now);
-    extra.push(rec);
-  }
-  return { records: readUsageRecords(extra), anthropic };
+  const fetchClaude = opts.fetchUsage ?? fetchSubscriptionUsage;
+  const fetchCodex = opts.fetchCodex ?? fetchCodexUsage;
+  const [anthropic, codex] = await Promise.all([
+    refresh(ANTHROPIC_OAUTH, () => fetchClaude(), now),
+    opts.includeCodex === false ? undefined : refresh(CODEX_SUBSCRIPTION, () => fetchCodex(), now),
+  ]);
+  const extra = [anthropic.record, codex?.record].filter((r): r is UsageRecord => r !== undefined);
+  return {
+    records: readUsageRecords(extra),
+    anthropic: anthropic.result,
+    ...(codex !== undefined ? { codex: codex.result } : {}),
+  };
 }

@@ -52,6 +52,17 @@ describe('collectUsageSummary credential placeholders', () => {
     expect(s.providers[0]?.account).toBe('api.openai.com');
   });
 
+  it('shows why a signed-in Codex has no numbers when its endpoint fails', async () => {
+    collectUsage.mockResolvedValue({
+      records: [],
+      anthropic: { kind: 'unavailable', reason: 'no-token' },
+      codex: { kind: 'unavailable', reason: 'http-error', detail: 'Usage endpoint returned HTTP 403.' },
+    });
+    const s = await collectUsageSummary(NOW, { chatgpt: () => ({ source: 'chatgpt-oauth' }), openaiApiKey: () => undefined });
+    expect(ids(s)).toEqual(['codex/chatgpt-subscription:error']);
+    expect(s.providers[0]?.errorDetail).toBe('Usage endpoint returned HTTP 403.');
+  });
+
   it('falls back to an unknown anthropic row when nothing is configured', async () => {
     const s = await collectUsageSummary(NOW, { chatgpt: () => ({ source: 'no-usable-auth' }), openaiApiKey: () => undefined });
     expect(ids(s)).toEqual(['anthropic/oauth:unknown']);

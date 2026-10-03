@@ -66,7 +66,11 @@ export async function evaluateBudgetGate(options: BudgetGateOptions = {}): Promi
   const skipPct = resolveSkipPct(options.skipPct);
   const now = options.now ?? Date.now();
   try {
-    const { records } = await collectUsage({ now, ...(options.fetchUsage ? { fetchUsage: options.fetchUsage } : {}) });
+    const { records } = await collectUsage({
+      now,
+      includeCodex: false, // this gate grades only the Claude windows
+      ...(options.fetchUsage ? { fetchUsage: options.fetchUsage } : {}),
+    });
     const rec = records.find((r) => r.provider === ANTHROPIC_OAUTH.provider && r.windows !== undefined);
     const ev = evaluateUsage(rec, now, { warnPct: skipPct, overPct: skipPct });
     if (ev.level === 'over' && ev.binding !== undefined) {

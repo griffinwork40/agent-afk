@@ -116,7 +116,7 @@ Rate-limit and subscription-window state is shared by every AFK process on the m
 - **One store, one reader, one evaluator, one formatter** under `src/agent/usage/` (`usage-ledger.ts` over the SQLite state store, namespace `usage`; `usage-snapshot.ts`; `usage-budget.ts`; `usage-formatter.ts`). New consumers must reuse them, not re-read headers or the quota cache.
 - **Admission is per provider+account** (`providers/shared/rate-limit-bucket.registry.ts`): each bucket adopts a peer process's 429 freeze from the ledger. `globalRateLimitBucket` remains only for legacy importers.
 - **Consumers**: `afk usage [--json]`, the `usage` field of `get_runtime_state`, a one-line fan-out notice on `agent`/`compose` results at warn/over (observer only), and a daemon gate that skips `agent` tasks at `AFK_DAEMON_BUDGET_SKIP_PCT` (default 90) with a Telegram notice.
-- **Gaps**: Codex/ChatGPT subscription usage is unknown (no headers from `chatgpt.com`), and the `anthropic-ratelimit-unified-*` headers are undocumented.
+- **Endpoints**: Claude windows from `api/oauth/usage`, Codex windows from `chatgpt.com/backend-api/wham/usage` (`usage/codex-usage.ts`), both over `usage/usage-http.ts` and both undocumented. Codex is refreshed on demand only; the fan-out notice and daemon gate grade Claude only.
 
 ### Peer (cross-session) messaging
 

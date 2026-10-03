@@ -165,11 +165,41 @@ describe('usage ledger + reader', () => {
   });
 
   it('collectUsage publishes endpoint windows and reports failures without throwing', async () => {
-    const ok = await collectUsage({ now: NOW, fetchUsage: async () => ({ kind: 'ok', sevenDay: { utilization: 0.3 } }) });
+    const noCodex = async () => ({ kind: 'unavailable', reason: 'no-token', detail: '' }) as const;
+    const ok = await collectUsage({ now: NOW, fetchCodex: noCodex, fetchUsage: async () => ({ kind: 'ok', sevenDay: { utilization: 0.3 } }) });
     expect(ok.records[0]?.windows?.sevenDay?.utilization).toBe(0.3);
     expect(readLedgerRecords()[0]?.windows?.sevenDay?.utilization).toBe(0.3);
-    const bad = await collectUsage({ now: NOW, fetchUsage: async () => { throw new Error('x'); } });
+    const bad = await collectUsage({ now: NOW, fetchCodex: noCodex, fetchUsage: async () => { throw new Error('x'); } });
     expect(bad.anthropic.kind).toBe('unavailable');
+  });
+
+  it('collectUsage refreshes Codex in parallel and publishes it under codex/chatgpt-subscription', async () => {
+    const out = await collectUsage({
+      now: NOW,
+      fetchUsage: async () => ({ kind: 'unavailable', reason: 'no-token', detail: '' }),
+      fetchCodex: async () => ({ kind: 'ok', sevenDay: { utilization: 0.47 } }),
+    });
+    expect(out.codex?.kind).toBe('ok');
+    expect(readUsageRecord('codex', 'chatgpt-subscription')?.windows?.sevenDay?.utilization).toBe(0.47);
+    // A throwing Codex fetch is contained.
+    const thrown = await collectUsage({
+      now: NOW,
+      fetchUsage: async () => ({ kind: 'unavailable', reason: 'no-token', detail: '' }),
+      fetchCodex: async () => { throw new Error('boom'); },
+    });
+    expect(thrown.codex?.kind).toBe('unavailable');
+  });
+
+  it('collectUsage skips Codex entirely when includeCodex is false', async () => {
+    const fetchCodex = vi.fn(async () => ({ kind: 'ok', sevenDay: { utilization: 0.9 } }) as const);
+    const out = await collectUsage({
+      now: NOW,
+      includeCodex: false,
+      fetchCodex,
+      fetchUsage: async () => ({ kind: 'unavailable', reason: 'no-token', detail: '' }),
+    });
+    expect(fetchCodex).not.toHaveBeenCalled();
+    expect(out.codex).toBeUndefined();
   });
 });
 
