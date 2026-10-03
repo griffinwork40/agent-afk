@@ -12,15 +12,13 @@ export function emptyScrapeMessage(url: string, result: ScrapeResult): string {
     if (response.rawBodyBytes !== undefined) details.push(`raw body ${response.rawBodyBytes} UTF-8 bytes`);
   }
   if (diagnostics !== undefined) {
-    details.push(`headless render ${diagnostics.render}`);
+    if (diagnostics.render !== 'not-run') details.push(`headless render ${diagnostics.render}`);
     if (diagnostics.renderHttpStatus != null) {
       details.push(`render HTTP ${diagnostics.renderHttpStatus}`);
     }
     if (diagnostics.renderFinalUrl && diagnostics.renderFinalUrl !== url) {
       details.push(`render final URL ${diagnostics.renderFinalUrl}`);
     }
-  } else if (result.finalUrl && result.finalUrl !== url) {
-    details.push(`final URL ${result.finalUrl}`);
   }
   const metadata = details.length > 0 ? ` (${details.join('; ')})` : '';
   return `web_scrape extracted no readable content from ${url}${metadata}. ` +

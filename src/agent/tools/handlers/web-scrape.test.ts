@@ -69,6 +69,44 @@ function exaResponse(results: Array<{ title?: string | null; url?: string; highl
   } as unknown as Response;
 }
 
+describe('web_scrape rate limiting', () => {
+  it.each(['raw', 'markdown'])('reports cooldown guidance in %s without rendering', async (mode) => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = makeFetch(() => new Response('', { status: 429 }));
+      const renderFn = vi.fn();
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
+      const pending = handler({ mode, url: 'https://arxiv.org/search' }, signal());
+      await vi.advanceTimersByTimeAsync(12000);
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('web_scrape HTTP 429 (rate limited by arxiv.org) ' +
+        'for https://arxiv.org/search after 3 attempts; do not re-request this host in parallel; ' +
+        'wait before retrying or use a different source.');
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+      expect(renderFn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['raw', 'markdown'])('timeout interrupts the 429 sleep in %s', async (mode) => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = makeFetch(() => new Response('', { status: 429 }));
+      const renderFn = vi.fn();
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
+      const pending = handler({ mode, url: 'https://arxiv.org/search', timeout_ms: 100 }, signal());
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('web_scrape timeout after 100ms');
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(renderFn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
 describe('web_scrape handler — input validation', () => {
   const handler = createWebScrapeHandler({
     fetchFn: makeFetch(() => makeResponse({ body: 'unused' })),
@@ -246,6 +284,23 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     expect(renderFn).toHaveBeenCalledOnce();
   });
 
+  it('caps the empty-extraction diagnostic at max_bytes', async () => {
+    const empty = '<!DOCTYPE html><html><head></head><body></body></html>';
+    const longRedirectUrl = 'https://example.com/redirected?token=' + 'x'.repeat(200);
+    const fetchFn = makeFetch(() => {
+      const response = makeResponse({ body: empty, contentType: 'text/html' });
+      Object.defineProperty(response, 'url', { value: longRedirectUrl });
+      return response;
+    });
+    const renderFn = vi.fn<RenderFn>(async () => ({ html: empty, finalUrl: longRedirectUrl, httpStatus: 200 }));
+    const handler = createWebScrapeHandler({ fetchFn, renderFn, lookupFn: publicLookup });
+
+    const r = await handler({ url: 'https://example.com/empty', max_bytes: 200 }, signal());
+    expect(r.isError).toBe(true);
+    expect(Buffer.byteLength(r.content as string)).toBeLessThanOrEqual(200);
+    expect(r.truncated).toBe(true);
+  });
+
   it('reports render not-run for an empty plain-text response', async () => {
     const fetchFn = makeFetch(() => makeResponse({ body: '  ', contentType: 'text/plain' }));
     const renderFn = vi.fn<RenderFn>();
@@ -255,7 +310,7 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
     expect(r.isError).toBe(true);
     expect(r.content).toContain('fetch HTTP 200');
     expect(r.content).toContain('raw body 2 UTF-8 bytes');
-    expect(r.content).toContain('headless render not-run');
+    expect(r.content).not.toContain('headless render not-run');
     expect(r.content).not.toContain('final URL');
     expect(renderFn).not.toHaveBeenCalled();
   });

@@ -28,6 +28,7 @@ import { extractEgressBlockedError } from '../utils/errors.js';
 import type { EgressGuardOptions } from './egress-guard.js';
 import { debugLog } from '../utils/debug.js';
 import { errorMessage } from '../utils/errors.js';
+import { rateLimitMessage } from './retryFetch.js';
 
 /** Content-types we treat as HTML (run the extraction pipeline). */
 const HTMLISH_RE = /(text\/html|application\/xhtml\+xml)/i;
@@ -186,6 +187,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     );
     fetchStatus = res.status;
     fetchedUrl = res.url || url;
+    // Invariant: rendering a throttled host immediately is another request,
+    // not a recovery path. Surface the cooldown guidance without escalation.
+    if (res.status === 429) throw new Error(rateLimitMessage(res, url));
     const contentType = res.headers.get('content-type') ?? '';
     diagnostics.fetch = { httpStatus: res.status, finalUrl: fetchedUrl, contentType };
 
@@ -225,6 +229,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // re-throw the cause so the isinstance check passes for callers.
     const blockedEgress = extractEgressBlockedError(err);
     if (blockedEgress !== null) throw blockedEgress;
+    if (err instanceof Error && err.message.startsWith('web_scrape HTTP 429')) throw err;
     // A thrown binary-content error must surface, not silently escalate.
     if (err instanceof Error && err.message.startsWith('web_scrape markdown mode received binary')) {
       throw err;

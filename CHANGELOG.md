@@ -11,6 +11,23 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.286.1] - 2026-10-03
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2745) (da8899f6)
+
+### Changed
+- unskip clipboard and tildifyHome tests on Windows (#2744) (f1c022f4)
+- exercise real undici + egress-guard fetch path (#2774) (#2783) (510a003c)
+
+## [5.286.0] - 2026-10-03
+
+### Added
+- warn when agent-afk was upgraded under a running session (#2809) (5e4eeea6)
+
+### Fixed
+- back off harder on HTTP 429 and guide retries (#2807) (b6e0a6ad)
+
 ## [5.285.0] - 2026-10-03
 
 ### Added
