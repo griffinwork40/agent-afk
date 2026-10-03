@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Command } from 'commander';
 import { registerDoctorCommand } from './commands/doctor.js';
+import { checkNpmBinOnPath } from './commands/doctor-checks.js';
 
 // Mock the keychain fallback so a real Claude Code-credentials entry on the
 // dev machine doesn't satisfy the missing-API-key checks this suite asserts.
@@ -147,8 +148,10 @@ describe('afk doctor', () => {
 
   it('should exit with code 0 when all checks pass or warn', async () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'test-key-12345');
-    // Make the npm bin check pass by putting /usr/local/bin on PATH.
-    vi.stubEnv('PATH', '/usr/local/bin:/usr/bin:/bin');
+    // Contract: PATH must contain both /usr/local/bin (POSIX binDir) and /usr/local
+    // (Windows binDir, where npm config get prefix already points at the bin dir).
+    // This makes the npm-bin check pass regardless of process.platform on the CI host.
+    vi.stubEnv('PATH', '/usr/local/bin:/usr/local:/usr/bin:/bin');
     vi.mocked(execSync).mockReturnValue('/usr/local\n' as unknown as ReturnType<typeof execSync>);
     exitSpy.mockReset();
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
@@ -208,43 +211,31 @@ describe('afk doctor', () => {
   });
 
   // ─── checkNpmBinOnPath tests ────────────────────────────────────────────────
+  // Contract: these tests call checkNpmBinOnPath() directly with injected
+  // platform deps (platform:'linux', pathDelimiter:':') so behaviour is
+  // deterministic on any host OS.  Cross-platform coverage (Windows paths,
+  // ';' delimiter, no /bin suffix) lives in doctor-checks.test.ts where
+  // full injection is available without going through the commander pipeline.
 
   it('checkNpmBinOnPath: returns pass when npm bin is on PATH', async () => {
-    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key-12345');
     vi.stubEnv('PATH', '/usr/local/bin:/usr/bin:/bin');
     vi.mocked(execSync).mockReturnValue('/usr/local\n' as unknown as ReturnType<typeof execSync>);
 
-    let jsonOutput: string = '';
-    logSpy.mockImplementation((msg: string) => { jsonOutput = msg; });
+    const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':' });
 
-    await program.parseAsync(['node', 'afk', 'doctor', '--format', 'json']);
-
-    const parsed = JSON.parse(jsonOutput);
-    const npmCheck = parsed.checks.find(
-      (c: Record<string, unknown>) => (c.name as string) === 'npm bin on PATH',
-    );
-    expect(npmCheck).toBeDefined();
-    expect(npmCheck.state).toBe('pass');
-    expect(npmCheck.detail).toBe('/usr/local/bin');
+    expect(result.state).toBe('pass');
+    expect(result.detail).toBe('/usr/local/bin');
   });
 
   it('checkNpmBinOnPath: returns fail when npm bin is NOT on PATH', async () => {
     vi.stubEnv('PATH', '/usr/bin:/bin');
     vi.mocked(execSync).mockReturnValue('/usr/local\n' as unknown as ReturnType<typeof execSync>);
 
-    let jsonOutput: string = '';
-    logSpy.mockImplementation((msg: string) => { jsonOutput = msg; });
+    const result = await checkNpmBinOnPath({ platform: 'linux', pathDelimiter: ':' });
 
-    await program.parseAsync(['node', 'afk', 'doctor', '--format', 'json']);
-
-    const parsed = JSON.parse(jsonOutput);
-    const npmCheck = parsed.checks.find(
-      (c: Record<string, unknown>) => (c.name as string) === 'npm bin on PATH',
-    );
-    expect(npmCheck).toBeDefined();
-    expect(npmCheck.state).toBe('fail');
-    expect(npmCheck.detail).toBe('/usr/local/bin');
-    expect(npmCheck.fix).toMatch(/usr\/local\/bin/);
+    expect(result.state).toBe('fail');
+    expect(result.detail).toBe('/usr/local/bin');
+    expect(result.fix).toMatch(/usr\/local\/bin/);
   });
 
   it('checkNpmBinOnPath: returns warn when execSync throws', async () => {
