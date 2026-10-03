@@ -32,6 +32,7 @@ import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-bloc
 import { MomentumTicker } from './momentum-ticker.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
 import { prependTurnInjections, markPresenceTurn, autoResumeDirective } from './loop-iteration.injections.js';
+import { setupPeerBoundary, drainAdmissionQueueFallback } from './loop-iteration.boundary.js';
 
 /** Per-handler timeout for the post-turn Stop notification. Tighter than the
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
@@ -158,6 +159,10 @@ export async function runInputLoop(
   // bg-result buffer). Optional on ctx — early /resume calls before runInputLoop
   // runs are a safe no-op.
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
+
+  // Peer inter-round boundary delivery — see loop-iteration.boundary.ts.
+  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier);
+  ctx.reinstallPeerBoundary = reinstallBoundary; // wired to onSwapped in bootstrap.ts
   // Parsed terminal-state kind + corroborating-evidence flag of the current
   // turn, captured from onTerminalState (which fires during runTurn) so the
   // post-turn Stop dispatch can carry them on StopContext for policy handlers.
@@ -540,8 +545,10 @@ export async function runInputLoop(
         }
       }
 
-      // Shell output, bg-subagent results, peer messages: see the module.
+      // Shell output, bg-subagent results, peer messages; then drain any
+      // admission-queue remainder not consumed by the boundary (see .boundary.ts).
       runText = prependTurnInjections(runText, [shellPassthrough, bgResultNotifier, peerNotifier]);
+      runText = drainAdmissionQueueFallback(runText, admissionQueue);
 
       // Prepend a pending post-turn Stop-hook correction stashed after the
       // previous turn's Stop dispatch (e.g. the terminal-state gate bouncing a

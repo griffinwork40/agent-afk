@@ -303,6 +303,11 @@ export async function bootstrapSession(
         // its injectContext cannot leak into the resumed session's first turn.
         // Mirrors clearVerdictLedger and clearBgResultBuffer above.
         ctx.clearPendingStopInjection?.();
+        // Re-install the peer inter-round boundary callback on the newly-built
+        // resumed session. This also clears the admission queue so old-session
+        // peer entries (already in peer-inbox delivered/ for forensics) are not
+        // injected into the resumed session's conversation.
+        ctx.reinstallPeerBoundary?.();
         // Re-point every long-lived holder of the outgoing (now sealed) writer
         // at the incoming session's live one. These are built once in
         // createBootstrapInfra and survive the swap, so without this the

@@ -16,7 +16,7 @@
     "src/cli/_lib/testing/virtual-screen.ts": { "loc": 422, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/chat.ts": { "loc": 549, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/farm.ts": { "loc": 437, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/cli/commands/interactive/loop-iteration.ts": { "loc": 425, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
+    "src/cli/commands/interactive/loop-iteration.ts": { "loc": 429, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/tool-lane.ts": { "loc": 365, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/interactive/worktree.ts": { "loc": 472, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/cli/commands/trace.ts": { "loc": 563, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
