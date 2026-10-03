@@ -70,6 +70,16 @@ export class AdmissionQueue {
   get pending(): boolean { return this.entries.length > 0; }
 
   /**
+   * True when the queue has reached its `maxCount` ceiling and will reject the
+   * next `submitPeer` regardless of byte size. Callers that hold the peer text
+   * in their own buffer (e.g. `PeerInboxNotifier`) can check `full` before
+   * calling `drainInjections()` so they only drain what will actually be admitted
+   * — leaving the remainder in their buffer for the next boundary turn or
+   * next-turn fallback instead of silently discarding it.
+   */
+  get full(): boolean { return this.entries.length >= this.maxCount; }
+
+  /**
    * Submit a human queued-user-message.
    * Returns true if admitted, false if the queue is full.
    */

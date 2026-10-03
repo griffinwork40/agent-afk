@@ -665,7 +665,7 @@ export interface QueuedUserMessagePayload {
  */
 export interface PeerMessagePayload {
   /** What happened to this message. */
-  action: 'sent' | 'delivered' | 'held' | 'refused' | 'dropped';
+  action: 'sent' | 'claimed' | 'injected' | 'delivered' | 'held' | 'refused' | 'dropped' | 'reclaimed';
   /** The stable message id (uuid). Absent when action is 'dropped' by a sweep. */
   messageId?: string;
   /** The OTHER session's id (sender when action is delivered/held/dropped; target when sent/refused). */

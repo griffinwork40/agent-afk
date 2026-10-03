@@ -24,14 +24,28 @@ function makePeerNotifier(buffered: string[] = []) {
       const result = buffered.splice(0).join('\n\n') + '\n\n';
       return result;
     },
+    reclaim: async () => { buffered.splice(0); return 0; },
   };
 }
 
+/**
+ * Fake compositor that mirrors the real BoundaryCompositor interface.
+ *
+ * `hasPendingSubmission` returns true when there is any queued payload
+ * (text or attachment), mirroring the real compositor semantics:
+ *   - text-only payloads → hasPendingSubmission=true, peekQueuedText returns text
+ *   - attachment-bearing payloads → hasPendingSubmission=true, peekQueuedText=undefined
+ *   - no payloads → hasPendingSubmission=false, peekQueuedText=undefined
+ *
+ * Use `makeCompositorWithAttachment()` to simulate an image/attachment payload
+ * where hasPendingSubmission=true but peekQueuedText=undefined.
+ */
 function makeCompositor(queuedText?: string) {
   const payloads = queuedText !== undefined ? [{ id: 'p1' }] : [];
   const reservations = new Set<unknown>();
   const dropped: unknown[] = [];
   return {
+    hasPendingSubmission: () => payloads.length > 0 && !payloads.every((p) => reservations.has(p)),
     peekQueuedText: () =>
       queuedText !== undefined
         ? { text: queuedText, preview: queuedText, payloads }
@@ -44,11 +58,31 @@ function makeCompositor(queuedText?: string) {
     },
     dropQueued: (snap: { payloads: readonly unknown[] }) => {
       dropped.push(...snap.payloads);
+      payloads.splice(0); // consumed
       queuedText = undefined; // consumed
       return snap.payloads.length;
     },
     _reservations: reservations,
     _dropped: dropped,
+  };
+}
+
+/**
+ * Compositor where hasPendingSubmission=true but peekQueuedText=undefined.
+ * Simulates a payload that contains an image attachment or slash command
+ * with no extractable text (the real compositor returns undefined from
+ * peekQueuedText for image-bearing payloads).
+ */
+function makeCompositorWithAttachment() {
+  const attachmentPayload = [{ id: 'attachment-p1', hasImage: true }];
+  const reservations = new Set<unknown>();
+  return {
+    hasPendingSubmission: () => attachmentPayload.length > 0 && !attachmentPayload.every((p) => reservations.has(p)),
+    peekQueuedText: () => undefined, // image payload → no extractable text
+    reserveQueued: () => {},
+    releaseQueued: () => {},
+    dropQueued: () => 0,
+    _attachmentPayload: attachmentPayload,
   };
 }
 
@@ -140,9 +174,10 @@ describe('installPeerBoundary', () => {
     // Only human text returned first.
     expect(result).toBe('user typed this');
     expect(result).not.toContain('peer message');
-    // Peer is still in the peer notifier buffer (it was drained into queue but
-    // human barrier excluded it from this snapshot).
-    // Second invocation (human gone) returns peer.
+    // hasPendingSubmission=true blocked peer injection — peer stays in the
+    // notifier buffer (NOT drained into the admission queue). On the second
+    // invocation, the human queue is empty so the barrier lifts and peer
+    // is admitted from the notifier buffer.
     const result2 = session.invokeCallback();
     expect(result2).toContain('peer message');
   });
@@ -417,7 +452,7 @@ describe('REPL adapter integration', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     let currentSession: ReturnType<typeof makeSession> = session;
-    const peerBuffer = ['msg-after-resume'];
+    const peerBuffer: string[] = [];
     const peerNotifier = makePeerNotifier(peerBuffer);
 
     const opts = {
@@ -427,9 +462,13 @@ describe('REPL adapter integration', () => {
       admissionQueue,
     };
 
+    // Reinstall (simulating /resume — buffer is empty at this point so nothing to reclaim).
     reinstallPeerBoundary(opts, undefined);
 
-    // New peer arrives — should be injected at next boundary.
+    // New peer arrives AFTER reinstall.
+    peerBuffer.push('msg-after-resume');
+
+    // Should be injected at next boundary.
     const result = session.invokeCallback();
     expect(result).toContain('msg-after-resume');
   });
@@ -460,5 +499,230 @@ describe('REPL adapter integration', () => {
     // No cross-contamination.
     expect(t1).not.toContain('second peer');
     expect(t2).not.toContain('first peer');
+  });
+});
+
+// ── Human barrier: attachments, slash, shell blocking peers ─────────────────
+// The barrier is driven by `hasPendingSubmission()` (not `peekQueuedText()`).
+// This is critical because peekQueuedText() returns undefined for attachment-
+// bearing payloads, so the old approach would have incorrectly allowed peer
+// injection past an active human queue when the user had queued an image.
+
+describe('Human barrier — attachment blocking', () => {
+  it('peer is BLOCKED when compositor has attachment-bearing payload (hasPendingSubmission=true, peekQueuedText=undefined)', () => {
+    // This is the critical regression path: peekQueuedText() returns undefined for
+    // images, but hasPendingSubmission() returns true. The boundary must use
+    // hasPendingSubmission as the barrier — not peekQueuedText — so the human
+    // queue (which includes the pending image payload) blocks peer injection.
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    // Compositor simulating an image attachment: hasPendingSubmission=true but
+    // peekQueuedText=undefined (the real compositor behaves this way for images).
+    const compositor = makeCompositorWithAttachment();
+    const peerNotifier = makePeerNotifier(['peer msg during image upload']);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // MUST be blocked: hasPendingSubmission=true blocks peer even though
+    // peekQueuedText=undefined (no text to extract from the attachment).
+    // Peer stays in the notifier buffer for the next-turn fallback.
+    const result = session.invokeCallback();
+    expect(result).toBeUndefined(); // peer blocked by attachment barrier
+    // Peer is still in the notifier buffer (not consumed).
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
+  });
+
+  it('peer is delivered when compositor is null (no human queue at all)', () => {
+    // null compositor = non-TTY or no compositor available. No human barrier.
+    // Peer should be admitted normally.
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerNotifier = makePeerNotifier(['peer msg with no compositor']);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    const result = session.invokeCallback();
+    expect(result).toContain('peer msg with no compositor');
+  });
+
+  it('peer is blocked when compositor has non-empty text queued (slash/shell text in pendingSubmissions)', () => {
+    // A slash command or shell passthrough that ends up in pendingSubmissions
+    // will have hasPendingSubmission()=true AND peekQueuedText() returning the text.
+    // The boundary treats it the same as any queued human text: human wins, peer waits.
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    // Compositor with queued text (could be a slash command like "/model gpt-4"
+    // or a shell passthrough that was queued while streaming).
+    const compositor = makeCompositor('/model gpt-4');
+    const peerNotifier = makePeerNotifier(['peer wants in']);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // First boundary: hasPendingSubmission=true and peekQueuedText returns text.
+    // Human wins; peer waits in notifier buffer.
+    const first = session.invokeCallback();
+    expect(first).toBe('/model gpt-4');
+    expect(first).not.toContain('peer wants in');
+
+    // Second boundary: human queue empty (hasPendingSubmission=false);
+    // peer is admitted from the notifier buffer.
+    const second = session.invokeCallback();
+    expect(second).toContain('peer wants in');
+  });
+
+  it('compositor queue is consumed exactly once (no duplicate delivery)', () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const compositor = makeCompositor('exact-once-text');
+    const peerNotifier = makePeerNotifier();
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    const first = session.invokeCallback();
+    expect(first).toBe('exact-once-text');
+    // Consumed from compositor.
+    expect(compositor._dropped).toHaveLength(1);
+
+    // Second call: compositor is empty.
+    const second = session.invokeCallback();
+    expect(second).toBeUndefined();
+    // No second drop.
+    expect(compositor._dropped).toHaveLength(1);
+  });
+
+  it('peer stays in notifier buffer after attachment barrier — delivered at next boundary once attachment is gone', () => {
+    // Proves that peer messages blocked by an attachment barrier are NOT lost:
+    // they remain in the notifier buffer and are delivered once the attachment
+    // is submitted (hasPendingSubmission becomes false).
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerBuffer = ['peer-during-upload'];
+    const peerNotifier = makePeerNotifier(peerBuffer);
+
+    // Start with an attachment compositor.
+    let currentCompositor: ReturnType<typeof makeCompositorWithAttachment> | null =
+      makeCompositorWithAttachment();
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => currentCompositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // First boundary: attachment present → peer blocked.
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(peerNotifier.hasPendingInjections()).toBe(true); // still in notifier
+
+    // Human submits the attachment (attachment queue is now empty).
+    currentCompositor = null; // simulates no compositor or empty compositor
+
+    // Second boundary: no human barrier → peer is admitted.
+    const result = session.invokeCallback();
+    expect(result).toContain('peer-during-upload');
+  });
+});
+
+// ── Reclaim on reinstall ─────────────────────────────────────────────────────
+
+describe('reinstallPeerBoundary — reclaim on swap', () => {
+  it('reclaim() is called on the notifier during reinstall, clearing its buffer', async () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerBuffer = ['stale-message'];
+    let reclaimCalled = false;
+    const peerNotifier = {
+      hasPendingInjections: () => peerBuffer.length > 0,
+      drainInjections: () => {
+        if (peerBuffer.length === 0) return '';
+        peerBuffer.splice(0);
+        return 'stale-message\n\n';
+      },
+      reclaim: async () => { peerBuffer.splice(0); reclaimCalled = true; return 1; },
+    };
+
+    const opts = {
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    };
+
+    reinstallPeerBoundary(opts, undefined);
+    // reclaim() is async void; wait a microtask tick for it to settle.
+    await Promise.resolve();
+    expect(reclaimCalled).toBe(true);
+    expect(peerBuffer).toHaveLength(0);
+  });
+});
+
+// ── Saturation regression: peer stays queued and is later delivered ───────────
+// Verifies that a peer message is NOT silently discarded when the admission queue
+// is full (maxCount reached). The message must remain in the notifier buffer and
+// be delivered at a subsequent boundary once the queue drains.
+
+describe('AdmissionQueue saturation — peer not lost on full queue', () => {
+  it('peer stays in notifier buffer when admission queue is at maxCount; delivered after drain', () => {
+    // Create a tiny admission queue (maxCount=1) to simulate saturation easily.
+    const admissionQueue = new AdmissionQueue({ maxCount: 1 });
+    const session = makeSession();
+    const peerBuffer = ['peer-overflow-message'];
+    const peerNotifier = makePeerNotifier(peerBuffer);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // Fill the admission queue to capacity with a human entry (occupies the 1 slot).
+    admissionQueue.submitHuman('human-fills-queue');
+    expect(admissionQueue.full).toBe(true);
+
+    // Invoke boundary: queue is full → peer must NOT be drained from notifier.
+    const result1 = session.invokeCallback();
+    // The human message is delivered (it was already in the queue).
+    expect(result1).toBe('human-fills-queue');
+    // Peer should still be in the notifier buffer (not lost).
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
+
+    // Queue is now empty (human message was drained). Next boundary: peer is admitted.
+    const result2 = session.invokeCallback();
+    expect(result2).toContain('peer-overflow-message');
+    expect(peerNotifier.hasPendingInjections()).toBe(false);
+  });
+
+  it('admissionQueue.full getter reflects maxCount ceiling correctly', () => {
+    const q = new AdmissionQueue({ maxCount: 2 });
+    expect(q.full).toBe(false);
+    q.submitPeer('s1', 'first');
+    expect(q.full).toBe(false);
+    q.submitPeer('s2', 'second');
+    expect(q.full).toBe(true);
+    // After draining, full becomes false again.
+    const snap = q.snapshot();
+    q.drain(snap);
+    expect(q.full).toBe(false);
   });
 });

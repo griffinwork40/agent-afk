@@ -29,7 +29,7 @@
 import { watch, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { getPeerInboxDir } from '../../../paths.js';
-import { listHeld, releaseHeld, claimPending } from '../../../agent/peer/inbox-store.js';
+import { listHeld, releaseHeld, claimPending, reclaimDelivered, envelopeFilename } from '../../../agent/peer/inbox-store.js';
 import { resolvePeerInboundMode, type PeerInboundMode } from '../../../agent/peer/inbound-mode.js';
 import { createWakeBudget, type WakeBudget } from '../../../agent/peer/guards.js';
 import { renderPeerMessageBlock, type PeerEnvelope } from '../../../agent/peer/envelope.js';
@@ -85,11 +85,18 @@ function sizeLabel(bytes: number): string {
   return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
 }
 
+/** Buffered claimed envelope with enough context to reclaim it on dispose/resume. */
+interface BufferedClaim {
+  envelope: PeerEnvelope;
+  /** Session-id whose delivered/ directory holds the claimed file. */
+  sessionId: string;
+}
+
 export class PeerInboxNotifier {
   /** Wake hook; wired to the REPL's `tryAutoResume`. */
   onInjectable: (() => void) | null = null;
 
-  private readonly buffer: PeerEnvelope[] = [];
+  private readonly buffer: BufferedClaim[] = [];
   private readonly wakeBudget: WakeBudget;
   private readonly pollMs: number;
   private readonly getMode: () => PeerInboundMode;
@@ -122,11 +129,53 @@ export class PeerInboxNotifier {
     return this.buffer.length > 0;
   }
 
-  /** Render and clear the buffer (one block per envelope). '' when empty. */
+  /**
+   * Render and clear the buffer (one block per envelope). Returns '' when
+   * empty. Each drained envelope emits an `'injected'` trace event — distinct
+   * from `'claimed'` (which fires at claim time) so the trace accurately
+   * reflects what the model actually saw.
+   */
   drainInjections(): string {
     if (this.buffer.length === 0) return '';
-    const envelopes = this.buffer.splice(0);
-    return envelopes.map((e) => renderPeerMessageBlock(e)).join('\n') + '\n\n';
+    const claims = this.buffer.splice(0);
+    const text = claims.map(({ envelope }) => renderPeerMessageBlock(envelope)).join('\n') + '\n\n';
+    for (const { envelope } of claims) {
+      const bytes = Buffer.byteLength(envelope.body, 'utf8');
+      void emitPeerMessage(this.resolveTraceWriter(), { action: 'injected', messageId: envelope.messageId, peer: envelope.from.id, bytes });
+    }
+    return text;
+  }
+
+  /**
+   * Reclaim all currently buffered (claimed-but-not-yet-injected) envelopes
+   * back to `pending/` in their originating session's inbox. Call this before
+   * clearing the buffer on a session swap (`/resume`) so the new session can
+   * re-claim them on its next scan. Best-effort: individual rename failures
+   * are swallowed so a partial reclaim doesn't block the swap.
+   *
+   * Returns the number of envelopes successfully reclaimed.
+   */
+  async reclaim(): Promise<number> {
+    if (this.buffer.length === 0) return 0;
+    const claims = this.buffer.splice(0);
+    let reclaimed = 0;
+    for (const { envelope, sessionId } of claims) {
+      const file = envelopeFilename(envelope);
+      try {
+        const ok = await reclaimDelivered(sessionId, file);
+        const bytes = Buffer.byteLength(envelope.body, 'utf8');
+        void emitPeerMessage(this.resolveTraceWriter(), {
+          action: ok ? 'reclaimed' : 'dropped',
+          messageId: envelope.messageId,
+          peer: envelope.from.id,
+          bytes,
+        });
+        if (ok) reclaimed++;
+      } catch {
+        // Best-effort: never crash the swap sequence.
+      }
+    }
+    return reclaimed;
   }
 
   /** Begin watching + polling. Idempotent. */
@@ -161,7 +210,7 @@ export class PeerInboxNotifier {
       if (!(await releaseHeld(sessionId, file))) continue;
       const claimed = await claimPending(sessionId, file).catch(() => null);
       if (claimed === null) continue;
-      this.accept(claimed);
+      this.accept(claimed, sessionId);
       injected++;
     }
     if (wasEmpty && injected > 0) this.fireInjectable();
@@ -206,17 +255,35 @@ export class PeerInboxNotifier {
       wakeBudget: this.wakeBudget,
       capacity: MAX_PENDING_INJECTIONS - this.buffer.length,
     });
+    // Reject stale scan: if the session id changed while this scan was in
+    // flight (await above), the envelopes were claimed from the old session's
+    // inbox. They are NOT accessible under the new session id, so reclaim them
+    // back to the old inbox rather than injecting them into the wrong session.
+    if (this.disposed || this.opts.getSessionId() !== sessionId) {
+      for (const e of claimed) {
+        const file = envelopeFilename(e);
+        void reclaimDelivered(sessionId, file);
+        const bytes = Buffer.byteLength(e.body, 'utf8');
+        void emitPeerMessage(this.resolveTraceWriter(), { action: 'reclaimed', messageId: e.messageId, peer: e.from.id, bytes });
+      }
+      return;
+    }
     for (const h of held) this.noteHeld(h.envelope, h.reason);
-    for (const e of claimed) this.accept(e);
+    for (const e of claimed) this.accept(e, sessionId);
     if (wasEmpty && claimed.length > 0) this.fireInjectable();
   }
 
-  private accept(e: PeerEnvelope): void {
+  private accept(e: PeerEnvelope, sessionId?: string): void {
+    const sid = sessionId ?? this.lastScanId ?? '';
     const bytes = Buffer.byteLength(e.body, 'utf8');
-    this.buffer.push(e);
+    this.buffer.push({ envelope: e, sessionId: sid });
     this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} · ${sizeLabel(bytes)}`));
-    // resolveTraceWriter() reads live so mid-session resume is reflected.
-    void emitPeerMessage(this.resolveTraceWriter(), { action: 'delivered', messageId: e.messageId, peer: e.from.id, bytes });
+    // Emit 'claimed': the envelope has been moved to delivered/ on disk. The
+    // 'injected' event fires separately in drainInjections() when the text
+    // actually reaches a model turn. These are distinct: a crash between claim
+    // and inject leaves 'claimed' with no matching 'injected'; a reclaim on
+    // resume emits 'reclaimed'. resolveTraceWriter() reads live.
+    void emitPeerMessage(this.resolveTraceWriter(), { action: 'claimed', messageId: e.messageId, peer: e.from.id, bytes });
   }
 
   private noteHeld(e: PeerEnvelope, reason: HeldReason): void {
@@ -248,11 +315,13 @@ export class PeerInboxNotifier {
       // the OLD session: they belong to that session's conversation, not the
       // newly-resumed one. The files already moved to delivered/ stay there
       // for forensics; they are just no longer injected into the new session.
-      // Guard: only clear when the buffer actually holds messages from a
+      // Guard: only reclaim when the buffer actually holds messages from a
       // DIFFERENT session id (not just from an initial undefined watchedId
-      // where no scan has run yet).
+      // where no scan has run yet). reclaim() moves claimed-but-uninjected
+      // envelopes back to pending/ so the next poll can re-deliver them; this
+      // is the correct path for ordinary /resume (not just crash forensics).
       if (this.lastScanId !== undefined && this.lastScanId !== sessionId && this.buffer.length > 0) {
-        this.buffer.splice(0);
+        void this.reclaim(); // best-effort; splices buffer internally
       }
       await this.startWatching(sessionId);
     }

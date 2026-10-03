@@ -322,7 +322,7 @@ export const QueuedUserMessagePayloadSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const PeerMessagePayloadSchema = z.object({
-  action: z.enum(['sent', 'delivered', 'held', 'refused', 'dropped']),
+  action: z.enum(['sent', 'claimed', 'injected', 'delivered', 'held', 'refused', 'dropped', 'reclaimed']),
   messageId: z.string().optional(),
   peer: z.string(),
   bytes: z.number().int().nonnegative(),
