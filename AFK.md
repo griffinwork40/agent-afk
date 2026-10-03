@@ -109,6 +109,15 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 - **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction; install/remove/update + git-based sources.
 - **MCP client** (`src/agent/mcp/`) — Wraps `@modelcontextprotocol/sdk`. `McpManager.fromConfig()` connects every server resolved by `loadMcpConfig()`. Config layers (lowest → highest priority): plugin-contributed `<plugin>/.claude-plugin/mcp.json` → `~/.afk/config/mcp.json` → `<cwd>/.mcp.json` → `--mcp-config <path>`. Per-name conflicts: higher layer wins, displaced source surfaced as a warning. Transports: stdio + streamable-HTTP + SSE fallback + OAuth. Tools are bridged as `mcp__<server>__<tool>` and read fresh per-query in the dispatcher so `notifications/tools/list_changed` refreshes are picked up without restarting the session. Per-surface manager (REPL); subagents share parent by reference. Sampling capability deliberately not advertised — eliminates the "stub or hang" footgun. `/mcp` lists servers; `/mcp auth` surfaces pending OAuth URLs from `~/.afk/state/mcp/server-status.json`.
 
+### Usage awareness
+
+Rate-limit and subscription-window state is shared by every AFK process on the machine. See [`docs/usage-awareness.md`](docs/usage-awareness.md).
+
+- **One store, one reader, one evaluator, one formatter** under `src/agent/usage/` (`usage-ledger.ts` over the SQLite state store, namespace `usage`; `usage-snapshot.ts`; `usage-budget.ts`; `usage-formatter.ts`). New consumers must reuse them, not re-read headers or the quota cache.
+- **Admission is per provider+account** (`providers/shared/rate-limit-bucket.registry.ts`): each bucket adopts a peer process's 429 freeze from the ledger. `globalRateLimitBucket` remains only for legacy importers.
+- **Consumers**: `afk usage [--json]`, the `usage` field of `get_runtime_state`, a one-line fan-out notice on `agent`/`compose` results at warn/over (observer only), and a daemon gate that skips `agent` tasks at `AFK_DAEMON_BUDGET_SKIP_PCT` (default 90) with a Telegram notice.
+- **Gaps**: Codex/ChatGPT subscription usage is unknown (no headers from `chatgpt.com`), and the `anthropic-ratelimit-unified-*` headers are undocumented.
+
 ### Peer (cross-session) messaging
 
 Replaces ad-hoc `tmux send-keys` relays (which split multi-line text into many turns, had no delivery receipts, and raced with busy REPLs) with a durable filesystem mailbox per session. See [`docs/peer-messaging.md`](docs/peer-messaging.md) for the full spec.
