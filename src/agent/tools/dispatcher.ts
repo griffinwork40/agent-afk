@@ -688,6 +688,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
       subagentExecutor: this.subagentExecutor,
       skillExecutor: this.skillExecutor,
       composeExecutor: this.composeExecutor,
+      // Detach registry (#2542): forwarded to executeCompose so the compose
+      // executor can register its DAG and respond to Ctrl+B detachment.
+      // Mirrors the `callHandlerContext` injection path for bash.
+      ...(this.detachRegistry !== undefined ? { detachRegistry: this.detachRegistry } : {}),
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,
