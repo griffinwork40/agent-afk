@@ -9,7 +9,6 @@ import { isDebugEnabled, debugLog } from '../../../utils/debug.js';
 import { sanitizeForDisplay } from '../../../utils/terminal-sanitize.js';
 import { env } from '../../../config/env.js';
 import { palette } from '../../palette.js';
-import { truncateDisplayWidth } from '../../display.js';
 import { ringBellIfEnabled } from '../../_lib/capture-mode.js';
 import { cyclePermissionMode } from '../../permission-mode-cycle.js';
 import {
@@ -31,6 +30,8 @@ import type { FooterSubsystems } from './footer-subsystems.js';
 import { enableCodeBlockRegister, resetCodeBlockRegister } from '../../code-block-register.js';
 import { MomentumTicker } from './momentum-ticker.js';
 import { runFirstTurnHookIfNeeded } from './loop-iteration.first-turn.js';
+import { createVersionNotice } from './version-notice.js';
+import { drainLoopNotifications } from './loop-notifications.js';
 
 /** Per-handler timeout for the post-turn Stop notification. Tighter than the
  *  registry default (HOOK_HANDLER_TIMEOUT_MS = 30s) because Stop fires every
@@ -185,6 +186,7 @@ export async function runInputLoop(
   // circuit breaker. TTY-only: isAwaitingInput() is false on the non-TTY reader.
   const maxTurnsNum = (() => { const mt = parseInt(ctx.options.maxTurns, 10); return mt > 0 ? mt : undefined; })();
 
+  const versionNotice = createVersionNotice();
   let autoResumeCount = 0;
   // Extracted wake logic so both the settled-event path (onInjectable) and
   // the prompt-became-receptive path (onAwaitingInput) share the same gate
@@ -239,45 +241,7 @@ export async function runInputLoop(
         ctx.replRenderer.writeLine('');
         pendingShadowingNotices = [];
       }
-      // Shell-passthrough completion notifications — one-line summary per
-      // backgrounded `!&cmd` that finished since the last prompt. Kept
-      // single-line (instead of `card({...})`) because shell jobs typically
-      // produce dense output and a multi-line card adds vertical noise.
-      // The injected output reaches the model via `pendingShellInjection`
-      // below, so the human-visible notice is summary-only.
-      const shellNotifications = shellPassthrough.drainNotifications();
-      for (const { job, result } of shellNotifications) {
-        const glyph = result.errorReason === undefined ? '✓' : '✗';
-        const exitPart = result.errorReason === 'abort'
-          ? 'killed'
-          : result.errorReason === 'timeout'
-            ? 'timed out'
-            : result.errorReason === 'signal-killed'
-              ? 'killed by signal'
-              : `exit ${result.exitCode ?? 0}`;
-        const seconds = Math.max(0, Math.round(result.durationMs / 100) / 10);
-        ctx.replRenderer.writeLine(
-          palette.dim(`  ${glyph} [${job.id}] ${exitPart} · ${seconds}s · `) + job.command,
-        );
-      }
-      // Background-subagent completion notifications — one line per settled
-      // `agent`-tool background job (mode:"background" or Ctrl+B promotion)
-      // since the last prompt. The result itself reaches the model via
-      // `bgResultNotifier.drainInjections()` below; this notice is
-      // human-summary-only, matching the shell-job style above.
-      const bgAgentNotifications = bgResultNotifier.drainNotifications();
-      for (const { job } of bgAgentNotifications) {
-        const glyph = job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '⊘';
-        const seconds = job.endedAt !== undefined
-          ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
-          : 0;
-        // Display-width truncation, not code-unit — see the same fix in
-        // slash/commands/bgsub.ts: `slice(0, 60) + '…'` measured 61 cells.
-        const label = truncateDisplayWidth(job.label, 60);
-        ctx.replRenderer.writeLine(
-          palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
-        );
-      }
+      drainLoopNotifications(ctx, shellPassthrough, bgResultNotifier);
       const paneLines = contextPane.renderIfChanged(ctx.stats.sessionId);
       if (paneLines.length > 0) {
         for (const l of paneLines) ctx.replRenderer.writeLine(l);
@@ -360,6 +324,11 @@ export async function runInputLoop(
         text = result.text.trim();
         attachments = result.attachments;
       }
+      // Invariant: await readLine first so idle upgrades are checked before
+      // dispatch. writeLine commits above the persistent compositor, never raw
+      // stdout while the input overlay owns the cursor. No timer can interrupt it.
+      const notice = versionNotice();
+      if (notice) ctx.replRenderer.writeLine(notice);
       if (!text && attachments.length === 0) continue;
 
       // Shell-passthrough branch — `!cmd` foreground / `!&cmd` background.
