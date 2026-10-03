@@ -312,7 +312,7 @@ export function createImageGenerateHandler(
     // 7. Save to disk
     const imageId = crypto.randomUUID().slice(0, 8);
     const ext = parsed.output_format;
-    const cwd = context?.cwd ?? process.cwd();
+    const cwd = context?.resolveBase ?? process.cwd();
 
     let savePath: string;
     if (parsed.output_path) {

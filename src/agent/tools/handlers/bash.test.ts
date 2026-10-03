@@ -595,7 +595,7 @@ describe('bashHandler', () => {
       const result = await handler(
         { command: 'pwd' },
         new AbortController().signal,
-        { cwd: dir },
+        { resolveBase: dir },
       );
 
       expect(result.isError).toBeFalsy();
@@ -722,7 +722,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it('without cwd: spawns in process.cwd() (legacy behavior)', async () => {
+  it('without resolveBase: spawns in process.cwd() (default behavior)', async () => {
     const handler = createBashHandler('default');
     const result = await handler({ command: 'pwd' }, createSignal());
     // No cwd opt → bash runs in process.cwd(), which is the test runner cwd.
@@ -730,7 +730,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
     expect(realpathSync(result.content.trim())).toBe(realpathSync(process.cwd()));
   });
 
-  it('with cwd: spawns in the configured directory', async () => {
+  it('with factory cwd: spawns in the configured directory', async () => {
     // Drop a sentinel file inside tmpDir so we can distinguish from process.cwd()
     await fs.writeFile(join(tmpDir, 'sentinel.txt'), 'hello', 'utf8');
     const handler = createBashHandler('default', tmpDir);

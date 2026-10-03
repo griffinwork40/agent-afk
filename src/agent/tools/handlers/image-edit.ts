@@ -359,7 +359,7 @@ export function createImageEditHandler(
     }
 
     // 6. Load reference images.
-    const cwd = context?.cwd ?? process.cwd();
+    const cwd = context?.resolveBase ?? process.cwd();
     const loadResult = await loadRefImages(parsed.image_paths, context, cwd);
     if ('error' in loadResult) {
       decrementSessionCount(sessionId);

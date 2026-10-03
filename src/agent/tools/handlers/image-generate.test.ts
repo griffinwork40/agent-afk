@@ -81,7 +81,7 @@ describe('image_generate handler', () => {
     mockResolveAuth.mockReturnValue({ apiKey: 'sk-resolved', source: 'env', envVar: 'OPENAI_API_KEY' });
     const handler = createImageGenerateHandler();
     // Should NOT error on missing key — proceeds to input validation.
-    const result = await handler({}, signal, { cwd: tmpDir, sessionId: 'fallback-auth-test' });
+    const result = await handler({}, signal, { resolveBase: tmpDir, sessionId: 'fallback-auth-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
     expect(result.content).not.toContain('auth');
@@ -94,7 +94,7 @@ describe('image_generate handler', () => {
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
     mockResolveAuth.mockClear(); // clear prior calls from other tests
-    await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'pref-test' });
+    await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'pref-test' });
     // Should use the dedicated key, not the OAuth token.
     const [, opts] = fetchFn.mock.calls[0]!;
     expect(opts.headers['Authorization']).toBe('Bearer dedicated-key');
@@ -116,7 +116,7 @@ describe('image_generate handler', () => {
     });
     const fetchFn = vi.fn(); // should NOT be called directly
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'oauth-test' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'oauth-test' });
 
     expect(result.isError).toBeUndefined();
     // The direct fetchFn should NOT be called — ChatGPT path uses its own fetch.
@@ -144,7 +144,7 @@ describe('image_generate handler', () => {
       error: 'ChatGPT backend returned 429: usage limit reached',
     });
     const handler = createImageGenerateHandler();
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'oauth-err' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'oauth-err' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('429');
     vi.unstubAllEnvs();
@@ -166,7 +166,7 @@ describe('image_generate handler', () => {
   it('rejects missing prompt', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const handler = createImageGenerateHandler();
-    const result = await handler({}, signal, { cwd: tmpDir, sessionId: 'val-prompt-test' });
+    const result = await handler({}, signal, { resolveBase: tmpDir, sessionId: 'val-prompt-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
     vi.unstubAllEnvs();
@@ -175,7 +175,7 @@ describe('image_generate handler', () => {
   it('rejects invalid model', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const handler = createImageGenerateHandler();
-    const result = await handler({ prompt: 'test', model: 'dall-e-3' }, signal, { cwd: tmpDir, sessionId: 'val-model-test' });
+    const result = await handler({ prompt: 'test', model: 'dall-e-3' }, signal, { resolveBase: tmpDir, sessionId: 'val-model-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid model');
     vi.unstubAllEnvs();
@@ -184,7 +184,7 @@ describe('image_generate handler', () => {
   it('rejects invalid size', async () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const handler = createImageGenerateHandler();
-    const result = await handler({ prompt: 'test', size: '512x512' }, signal, { cwd: tmpDir, sessionId: 'val-size-test' });
+    const result = await handler({ prompt: 'test', size: '512x512' }, signal, { resolveBase: tmpDir, sessionId: 'val-size-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid size');
     vi.unstubAllEnvs();
@@ -208,7 +208,7 @@ describe('image_generate handler', () => {
     vi.stubEnv('AFK_IMAGE_ALLOW_DAEMON', '1');
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'daemon-allow-test' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'daemon-allow-test' });
     expect(result.isError).toBeUndefined();
     vi.unstubAllEnvs();
   });
@@ -225,7 +225,7 @@ describe('image_generate handler', () => {
       .mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
     const sid = `limit-test-${Date.now()}`;
-    const ctx = { cwd: tmpDir, sessionId: sid };
+    const ctx = { resolveBase: tmpDir, sessionId: sid };
 
     // First two should succeed
     const r1 = await handler({ prompt: 'test1' }, signal, ctx);
@@ -252,7 +252,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', model: 'gpt-image-1', size: '1024x1024' },
       signal,
-      { cwd: tmpDir, sessionId: 'gen-test-session' },
+      { resolveBase: tmpDir, sessionId: 'gen-test-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -289,7 +289,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'test', output_path: customPath },
       signal,
-      { cwd: tmpDir, sessionId: 'custom-path-session' },
+      { resolveBase: tmpDir, sessionId: 'custom-path-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -308,7 +308,7 @@ describe('image_generate handler', () => {
       makeErrorResponse(429, 'Rate limit exceeded'),
     );
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'err-session' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'err-session' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('429');
     vi.unstubAllEnvs();
@@ -318,7 +318,7 @@ describe('image_generate handler', () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const fetchFn = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'net-err-session' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'net-err-session' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('ECONNREFUSED');
     vi.unstubAllEnvs();
@@ -330,7 +330,7 @@ describe('image_generate handler', () => {
       new Response(JSON.stringify({ data: [{}] }), { status: 200 }),
     );
     const handler = createImageGenerateHandler(fetchFn);
-    const result = await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'no-data-session' });
+    const result = await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'no-data-session' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('no image data');
     vi.unstubAllEnvs();
@@ -345,7 +345,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', inspect: true },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-on-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-on-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -366,7 +366,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat' },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-off-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-off-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -381,7 +381,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', inspect: false },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-false-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-false-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -398,7 +398,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', inspect: true },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-cap-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-cap-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -415,7 +415,7 @@ describe('image_generate handler', () => {
     const result = await handler(
       { prompt: 'a cat', output_format: 'jpeg', inspect: true },
       signal,
-      { cwd: tmpDir, sessionId: 'inspect-jpeg-session' },
+      { resolveBase: tmpDir, sessionId: 'inspect-jpeg-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -436,7 +436,7 @@ describe('image_generate handler', () => {
     vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
     const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
     const handler = createImageGenerateHandler(fetchFn);
-    await handler({ prompt: 'test' }, signal, { cwd: tmpDir, sessionId: 'defaults-session' });
+    await handler({ prompt: 'test' }, signal, { resolveBase: tmpDir, sessionId: 'defaults-session' });
 
     const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
     expect(body.model).toBe('gpt-image-1');

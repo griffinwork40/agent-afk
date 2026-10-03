@@ -75,7 +75,7 @@ describe('image_edit handler', () => {
     mockResolveAuth.mockReturnValue({ apiKey: 'sk-resolved', source: 'env', envVar: 'OPENAI_API_KEY' });
     const handler = createImageEditHandler();
     // Proceeds past auth to input validation — no auth error.
-    const result = await handler({}, signal, { cwd: tmpDir, sessionId: 'fallback-auth-test' });
+    const result = await handler({}, signal, { resolveBase: tmpDir, sessionId: 'fallback-auth-test' });
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
     expect(result.content).not.toContain('auth');
@@ -90,7 +90,7 @@ describe('image_edit handler', () => {
     await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'pref-key-test' },
+      { resolveBase: tmpDir, sessionId: 'pref-key-test' },
     );
     const [, opts] = fetchFn.mock.calls[0]!;
     expect(opts.headers['Authorization']).toBe('Bearer dedicated-key');
@@ -129,7 +129,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'daemon-allow-test' },
+      { resolveBase: tmpDir, sessionId: 'daemon-allow-test' },
     );
     expect(result.isError).toBeUndefined();
   });
@@ -142,7 +142,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-prompt-test' },
+      { resolveBase: tmpDir, sessionId: 'val-prompt-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('prompt');
@@ -154,7 +154,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test' },
       signal,
-      { cwd: tmpDir, sessionId: 'val-paths-test' },
+      { resolveBase: tmpDir, sessionId: 'val-paths-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('image_paths');
@@ -166,7 +166,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-empty-paths-test' },
+      { resolveBase: tmpDir, sessionId: 'val-empty-paths-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('image_paths');
@@ -179,7 +179,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: paths },
       signal,
-      { cwd: tmpDir, sessionId: 'val-too-many-paths' },
+      { resolveBase: tmpDir, sessionId: 'val-too-many-paths' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('16');
@@ -191,7 +191,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath], model: 'dall-e-3' },
       signal,
-      { cwd: tmpDir, sessionId: 'val-model-test' },
+      { resolveBase: tmpDir, sessionId: 'val-model-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Invalid model');
@@ -205,7 +205,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [gifPath] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-ext-test' },
+      { resolveBase: tmpDir, sessionId: 'val-ext-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('unsupported extension');
@@ -217,7 +217,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [path.join(tmpDir!, 'nonexistent.png')] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-missing-file-test' },
+      { resolveBase: tmpDir, sessionId: 'val-missing-file-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('Cannot stat');
@@ -233,7 +233,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [largePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'val-size-test' },
+      { resolveBase: tmpDir, sessionId: 'val-size-test' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('25 MiB');
@@ -250,7 +250,7 @@ describe('image_edit handler', () => {
       .mockResolvedValueOnce(makeOkResponse(TINY_PNG_B64));
     const handler = createImageEditHandler(fetchFn);
     const sid = `limit-test-${Date.now()}`;
-    const ctx = { cwd: tmpDir, sessionId: sid };
+    const ctx = { resolveBase: tmpDir, sessionId: sid };
     const args = { prompt: 'test', image_paths: [refImagePath] };
 
     const r1 = await handler(args, signal, ctx);
@@ -274,7 +274,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'make it blue', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'gen-test-session' },
+      { resolveBase: tmpDir, sessionId: 'gen-test-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -309,7 +309,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [jpgPath] },
       signal,
-      { cwd: tmpDir, sessionId: `ext-test-jpg-${Date.now()}` },
+      { resolveBase: tmpDir, sessionId: `ext-test-jpg-${Date.now()}` },
     );
     expect(result.isError).toBeUndefined();
   });
@@ -323,7 +323,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [webpPath] },
       signal,
-      { cwd: tmpDir, sessionId: `ext-test-webp-${Date.now()}-b` },
+      { resolveBase: tmpDir, sessionId: `ext-test-webp-${Date.now()}-b` },
     );
     expect(result.isError).toBeUndefined();
   });
@@ -336,7 +336,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath], output_path: customPath },
       signal,
-      { cwd: tmpDir, sessionId: 'custom-path-session' },
+      { resolveBase: tmpDir, sessionId: 'custom-path-session' },
     );
 
     expect(result.isError).toBeUndefined();
@@ -355,7 +355,7 @@ describe('image_edit handler', () => {
     await handler(
       { prompt: 'blend', image_paths: [refImagePath, ref2Path] },
       signal,
-      { cwd: tmpDir, sessionId: 'multi-img-session' },
+      { resolveBase: tmpDir, sessionId: 'multi-img-session' },
     );
     expect(fetchFn).toHaveBeenCalledOnce();
     const [, opts] = fetchFn.mock.calls[0]!;
@@ -373,7 +373,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'err-session' },
+      { resolveBase: tmpDir, sessionId: 'err-session' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('429');
@@ -386,7 +386,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'net-err-session' },
+      { resolveBase: tmpDir, sessionId: 'net-err-session' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('ECONNREFUSED');
@@ -401,7 +401,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'no-data-session' },
+      { resolveBase: tmpDir, sessionId: 'no-data-session' },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('no image data');
@@ -416,7 +416,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: 'defaults-session' },
+      { resolveBase: tmpDir, sessionId: 'defaults-session' },
     );
     expect(result.isError).toBeUndefined();
     const meta = JSON.parse(result.content);
@@ -434,7 +434,7 @@ describe('image_edit handler', () => {
     const result = await handler(
       { prompt: 'test', image_paths: [refImagePath] },
       signal,
-      { cwd: tmpDir, sessionId: sid },
+      { resolveBase: tmpDir, sessionId: sid },
     );
     const meta = JSON.parse(result.content);
     expect(meta.session_edits_used).toBe(1);
