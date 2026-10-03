@@ -56,6 +56,14 @@ export interface PeerInboxNotifierOpts {
   writeLine: (text: string) => void;
   /** Inbound mode getter (default: `AFK_PEER_INBOUND`). */
   mode?: () => PeerInboundMode;
+  /**
+   * Live getter for the trace writer. Called on every emit so a mid-session
+   * resume (which swaps the trace writer) is automatically reflected.
+   * When both `getTraceWriter` and `traceWriter` are provided, `getTraceWriter`
+   * takes precedence. When neither is provided, tracing is disabled.
+   */
+  getTraceWriter?: () => TraceSink | undefined;
+  /** @deprecated Prefer `getTraceWriter` for correct behaviour after resume. */
   traceWriter?: TraceSink;
   now?: () => number;
   /** Poll interval override (ms). Falls back to `AFK_PEER_POLL_MS`, then 1000. */
@@ -85,6 +93,7 @@ export class PeerInboxNotifier {
   private readonly wakeBudget: WakeBudget;
   private readonly pollMs: number;
   private readonly getMode: () => PeerInboundMode;
+  private readonly resolveTraceWriter: () => TraceSink | undefined;
   private scanning = false;
   private rescan = false;
   private watchedId: string | undefined;
@@ -104,6 +113,9 @@ export class PeerInboxNotifier {
     this.wakeBudget = createWakeBudget(opts.now !== undefined ? { now: opts.now } : {});
     this.pollMs = resolvePollMs(opts.pollMs);
     this.getMode = opts.mode ?? resolvePeerInboundMode;
+    // Prefer live getter so a mid-session resume that swaps the trace writer is
+    // automatically picked up. Fall back to the static value for backwards compat.
+    this.resolveTraceWriter = opts.getTraceWriter ?? (() => opts.traceWriter);
   }
 
   hasPendingInjections(): boolean {
@@ -186,6 +198,7 @@ export class PeerInboxNotifier {
 
   private async scanOnce(sessionId: string): Promise<void> {
     if (this.disposed) return;
+    this.lastScanId = sessionId;
     const wasEmpty = this.buffer.length === 0;
     const { claimed, held } = await scanPeerInbox({
       sessionId,
@@ -202,24 +215,47 @@ export class PeerInboxNotifier {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     this.buffer.push(e);
     this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} · ${sizeLabel(bytes)}`));
-    void emitPeerMessage(this.opts.traceWriter, { action: 'delivered', messageId: e.messageId, peer: e.from.id, bytes });
+    // resolveTraceWriter() reads live so mid-session resume is reflected.
+    void emitPeerMessage(this.resolveTraceWriter(), { action: 'delivered', messageId: e.messageId, peer: e.from.id, bytes });
   }
 
   private noteHeld(e: PeerEnvelope, reason: HeldReason): void {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     const why = reason === 'wake-budget' ? 'wake budget reached' : 'AFK_PEER_INBOUND=hold';
     this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} held (${why}) · /inbox to review`));
-    void emitPeerMessage(this.opts.traceWriter, { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
+    // resolveTraceWriter() reads live so mid-session resume is reflected.
+    void emitPeerMessage(this.resolveTraceWriter(), { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
   }
 
   private fireInjectable(): void {
     try { this.onInjectable?.(); } catch { /* best-effort */ }
   }
 
+  /**
+   * The id that was active during the last scan (via `scan()` or `tick()`).
+   * Tracked separately from `watchedId` so the rekey buffer-clear fires even
+   * when the first `tick()` sees a different id than the first `scan()` did.
+   * `watchedId` tracks the fs-watcher only; `lastScanId` tracks the session
+   * the buffer contents belong to.
+   */
+  private lastScanId: string | undefined;
+
   private async tick(): Promise<void> {
     if (this.disposed) return;
     const sessionId = this.opts.getSessionId();
-    if (sessionId !== undefined && sessionId !== this.watchedId) await this.startWatching(sessionId);
+    if (sessionId !== undefined && sessionId !== this.watchedId) {
+      // Session id changed (resume/rekey). Clear any messages buffered for
+      // the OLD session: they belong to that session's conversation, not the
+      // newly-resumed one. The files already moved to delivered/ stay there
+      // for forensics; they are just no longer injected into the new session.
+      // Guard: only clear when the buffer actually holds messages from a
+      // DIFFERENT session id (not just from an initial undefined watchedId
+      // where no scan has run yet).
+      if (this.lastScanId !== undefined && this.lastScanId !== sessionId && this.buffer.length > 0) {
+        this.buffer.splice(0);
+      }
+      await this.startWatching(sessionId);
+    }
     await this.scan();
   }
 
@@ -276,6 +312,9 @@ export function createReplPeerNotifier(ctx: InteractiveCtx): PeerInboxNotifier {
   return new PeerInboxNotifier({
     getSessionId: () => ctx.stats.sessionId,
     writeLine: (text) => ctx.replRenderer.writeLine(text),
-    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    // Live getter: ctx.traceWriter is reassigned on mid-session resume, so a
+    // static capture at construction time would emit to the WRONG writer after
+    // a /resume. The getter always reads the current value.
+    getTraceWriter: () => ctx.traceWriter,
   });
 }

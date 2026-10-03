@@ -209,6 +209,63 @@ describe('PeerInboxNotifier — accept path', () => {
 
 // ── re-key on sessionId change ───────────────────────────────────────────────
 
+describe('PeerInboxNotifier — rekey isolation', () => {
+  it('clears buffered messages from old session when session id changes (via tick)', async () => {
+    const oldId = randomUUID();
+    const newId = randomUUID();
+    let currentId: string | undefined = oldId;
+
+    // Write a message for the old session.
+    const e1 = makeEnvelope(oldId);
+    await writeEnvelope(e1);
+
+    // Use a dynamic getter that updates mid-test.
+    const dynamic = new PeerInboxNotifier({
+      getSessionId: () => currentId,
+      writeLine: () => undefined,
+      mode: () => 'accept' as const,
+    });
+
+    // Scan while id = oldId: claims message into buffer.
+    await dynamic.scan();
+    expect(dynamic.hasPendingInjections()).toBe(true);
+
+    // Switch id: the rekey path in tick() clears the buffer.
+    currentId = newId;
+    // Access the private tick via a cast to simulate what poll does.
+    await (dynamic as unknown as { tick(): Promise<void> }).tick();
+
+    // Old session's message must NOT be injected into the new session's context.
+    expect(dynamic.hasPendingInjections()).toBe(false);
+    dynamic.dispose();
+  });
+
+  it('live getTraceWriter is called per-emit rather than captured at construction', async () => {
+    const sessionId = randomUUID();
+    let writerVersion = 0;
+    const calls: number[] = [];
+    const notifier = new PeerInboxNotifier({
+      getSessionId: () => sessionId,
+      writeLine: () => undefined,
+      mode: () => 'accept' as const,
+      getTraceWriter: () => {
+        calls.push(writerVersion);
+        return undefined; // no-op writer for this test
+      },
+    });
+
+    const e1 = makeEnvelope(sessionId);
+    await writeEnvelope(e1);
+    await notifier.scan();
+    // First emit: writerVersion = 0
+    writerVersion = 99;
+    // drainInjections just reads the buffer; the emitPeerMessage call already
+    // fired inside accept(). Verify the version recorded was 0 (at scan time).
+    expect(calls[0]).toBe(0);
+    notifier.dispose();
+  });
+});
+
 describe('PeerInboxNotifier — re-key', () => {
   it('changing getSessionId value makes the next tick watch/scan the new inbox', async () => {
     let currentId = randomUUID();

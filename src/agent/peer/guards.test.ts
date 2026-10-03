@@ -216,6 +216,64 @@ describe('checkSendGuards — duplicate window', () => {
 });
 
 // ---------------------------------------------------------------------------
+// held/ directory inclusion (rate/dup bypass in hold mode)
+// ---------------------------------------------------------------------------
+
+describe('checkSendGuards — held/ directory included in rate+dup scan', () => {
+  it('counts held messages toward the rate limit', async () => {
+    const { checkSendGuards } = await getGuards();
+    const { writeEnvelope, listPending, holdPending } = await import('./inbox-store.js');
+
+    const nowMs = Date.now();
+    // Write 10 messages and move them to held/ (simulating hold mode).
+    for (let i = 0; i < 10; i++) {
+      const ts = new Date(nowMs - (10 - i) * 1000).toISOString();
+      const env = {
+        v: 1 as const,
+        messageId: `held-rate-${i}`,
+        from: { id: SENDER },
+        to: TARGET,
+        hop: 0,
+        ts,
+        body: `held unique ${i}`,
+      };
+      await writeEnvelope(env);
+      const files = await listPending(TARGET);
+      const file = files.find((f) => f.includes(`held-rate-${i}`))!;
+      await holdPending(TARGET, file);
+    }
+
+    // 11th attempt should be rate-limited despite messages being in held/.
+    const result = await checkSendGuards(baseOpts({ body: 'eleventh', now: () => nowMs }));
+    expect(result).toBe('rate-limited');
+  });
+
+  it('detects duplicate body against a held message', async () => {
+    const { checkSendGuards } = await getGuards();
+    const { writeEnvelope, listPending, holdPending } = await import('./inbox-store.js');
+
+    const nowMs = Date.now();
+    const dupBody = 'duplicate in held';
+    const ts = new Date(nowMs - 1000).toISOString();
+    const env = {
+      v: 1 as const,
+      messageId: 'held-dup-1',
+      from: { id: SENDER },
+      to: TARGET,
+      hop: 0,
+      ts,
+      body: dupBody,
+    };
+    await writeEnvelope(env);
+    const files = await listPending(TARGET);
+    await holdPending(TARGET, files[0]!);
+
+    const result = await checkSendGuards(baseOpts({ body: dupBody, now: () => nowMs }));
+    expect(result).toBe('duplicate');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Wake budget (injected clock)
 // ---------------------------------------------------------------------------
 
