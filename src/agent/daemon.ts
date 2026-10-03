@@ -361,6 +361,22 @@ async function handleRequestAsync(
     }
     const notifyChatRaw = obj['notifyChat'];
     const executorRaw = obj['executor'];
+    // Security: reject executor:"shell" over the unauthenticated HTTP control
+    // surface. Shell tasks must be created through the schedule store or CLI
+    // where operator intent is explicit. The live-sync path from create_schedule
+    // uses executor:"agent" (or omits the field); shell tasks land on next
+    // daemon restart via the store, not through this route.
+    if (executorRaw === 'shell') {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error:
+            'executor "shell" is not accepted over the HTTP control surface; ' +
+            'create shell tasks via the schedule store or CLI instead',
+        }),
+      );
+      return;
+    }
     const task: ScheduledTask = {
       taskId: obj['taskId'] as string,
       command: obj['command'] as string,
@@ -372,9 +388,7 @@ async function handleRequestAsync(
       ...(typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
         ? { notifyChat: notifyChatRaw }
         : {}),
-      ...(executorRaw === 'agent' || executorRaw === 'shell'
-        ? { executor: executorRaw as TaskExecutor }
-        : {}),
+      ...(executorRaw === 'agent' ? { executor: executorRaw as TaskExecutor } : {}),
       ...(cwd !== undefined ? { cwd } : {}),
     };
     try {

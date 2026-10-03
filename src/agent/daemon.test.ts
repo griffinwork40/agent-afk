@@ -782,7 +782,12 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
     expect(task?.notifyChat).toBeUndefined();
   });
 
-  it('POST /tasks preserves executor: "shell" through GET /tasks', async () => {
+  it('POST /tasks rejects executor: "shell" with 400 (security: shell blocked over HTTP)', async () => {
+    // Security fix (#2300): executor:"shell" is not accepted over the
+    // unauthenticated HTTP control surface. Any local process could otherwise
+    // register a persistent shell cron job without going through the CLI or
+    // create_schedule tool. Shell tasks must be created via the schedule store
+    // or CLI where operator intent is explicit.
     const h = await spinDaemon();
     const res = await fetch(`http://localhost:${h.port}/tasks`, {
       method: 'POST',
@@ -794,17 +799,42 @@ describe('POST /tasks and DELETE /tasks/:id routes', () => {
         executor: 'shell',
       }),
     });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/executor "shell"/);
+
+    // The task must NOT have been registered.
+    const listRes = await fetch(`http://localhost:${h.port}/tasks`);
+    const tasks = (await listRes.json()) as Array<{ taskId: string }>;
+    expect(tasks.some((t) => t.taskId === 'shell-task')).toBe(false);
+  });
+
+  it('POST /tasks still accepts executor: "agent" over HTTP', async () => {
+    // Regression guard: the shell block must not break agent-executor live-sync
+    // (the create_schedule tool path).
+    const h = await spinDaemon();
+    const res = await fetch(`http://localhost:${h.port}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        taskId: 'agent-task',
+        command: '/forge-friction --auto',
+        cron: '* * * * *',
+        executor: 'agent',
+      }),
+    });
     expect(res.status).toBe(201);
 
     const listRes = await fetch(`http://localhost:${h.port}/tasks`);
     const tasks = (await listRes.json()) as Array<{ taskId: string; executor?: string }>;
-    const task = tasks.find((t) => t.taskId === 'shell-task');
-    expect(task?.executor).toBe('shell');
+    const task = tasks.find((t) => t.taskId === 'agent-task');
+    expect(task?.executor).toBe('agent');
   });
 
   it('POST /tasks does not propagate executor: "builtin" — body guard drops it', async () => {
     // Regression guard: the body guard previously accepted 'builtin' while the
-    // tool handler and CLI both explicitly rejected it. Tightened to 'agent'|'shell' only.
+    // tool handler and CLI both explicitly rejected it. Now only 'agent' is
+    // accepted over HTTP ('shell' is explicitly rejected; see #2300).
     // The guard silently drops unrecognised executor values; the task is still
     // registered, but without an executor field (it must not be 'builtin').
     const h = await spinDaemon();
