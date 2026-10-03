@@ -3,7 +3,8 @@
 // With the SDK's own retries disabled (`maxRetries: 0`), a single stale-socket
 // or DNS blip on `messages.create` surfaced as a fatal
 // `APIConnectionError: Connection error.` and killed the turn. These tests pin
-// both the classifier and the retry behaviour in `createWithRetry`.
+// both the classifier and the retry behaviour in `createWithRetry`, including
+// status-bearing connection-phase errors (408/500/502/504) added in PR #2838.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
@@ -153,5 +154,74 @@ describe('createWithRetry: connection-phase network failures', () => {
     const res = await run(client);
     expect(res.ok).toBe(false);
     expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createWithRetry: connection-phase status retries (408/500/502/504)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const params = {} as AnthropicMessagesCreateParams;
+  const stream: AsyncIterable<unknown> = { async *[Symbol.asyncIterator]() { /* empty */ } };
+
+  function clientFailing(times: number, makeErr: () => unknown) {
+    let calls = 0;
+    const create = vi.fn(async () => {
+      calls++;
+      if (calls <= times) throw makeErr();
+      return stream;
+    });
+    return { client: { messages: { create } }, create };
+  }
+
+  async function run(client: { messages: { create(p: unknown, o: unknown): unknown } }, onRetry?: (i: ConnectionRetryInfo) => void) {
+    vi.useFakeTimers();
+    const signal = new AbortController().signal;
+    const p = createWithRetry(client, params, {}, signal, signal, onRetry);
+    const settled = p.then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    await vi.runAllTimersAsync();
+    return settled;
+  }
+
+  for (const status of [500, 502, 408]) {
+    it(`retries a ${status} status error via connection budget and succeeds`, async () => {
+      const { client, create } = clientFailing(1, () => new APIError(status, `http ${status}`));
+      const retries: ConnectionRetryInfo[] = [];
+      const res = await run(client, (i) => retries.push(i));
+      expect(res.ok).toBe(true);
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(retries).toHaveLength(1);
+      expect(retries[0]?.attempt).toBe(1);
+    });
+  }
+
+  it('gives up after CONNECTION_ERROR_MAX_RETRIES on a persistent 502', async () => {
+    const { client, create } = clientFailing(Infinity, () => new APIError(502, 'Bad Gateway'));
+    const res = await run(client);
+    expect(res.ok).toBe(false);
+    expect(create).toHaveBeenCalledTimes(CONNECTION_ERROR_MAX_RETRIES + 1);
+  });
+
+  it('routes 529 to the overload budget (not the connection budget)', async () => {
+    // 529 is handled by isTransientServerError → overload budget (OVERLOAD_MAX_RETRIES=3),
+    // NOT by isRetryableConnectionStatus → connection budget (CONNECTION_ERROR_MAX_RETRIES=2).
+    // A persistent 529 exhausts the overload budget and throws ConnectionOverloadExhaustedError.
+    const { client, create } = clientFailing(Infinity, () => new APIError(529, 'Overloaded'));
+    const res = await run(client);
+    expect(res.ok).toBe(false);
+    // Overload budget: 3 retries → 4 total calls (1 initial + 3 retries), then sentinel thrown.
+    expect(create).toHaveBeenCalledTimes(4);
+    // The error from createWithRetry is the ConnectionOverloadExhaustedError sentinel,
+    // not the raw 529 APIError.
+    if (!res.ok) expect((res.e as Error).message).toMatch(/overload/i);
+  });
+
+  it('routes 503 to the overload budget (not the connection budget)', async () => {
+    const { client, create } = clientFailing(Infinity, () => new APIError(503, 'Service Unavailable'));
+    const res = await run(client);
+    expect(res.ok).toBe(false);
+    expect(create).toHaveBeenCalledTimes(4);
+    if (!res.ok) expect((res.e as Error).message).toMatch(/overload/i);
   });
 });

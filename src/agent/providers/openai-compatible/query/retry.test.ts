@@ -58,13 +58,29 @@ describe('retryAfterDelayMs — server backoff-hint honoring (#536)', () => {
   });
 });
 
-describe('retryability predicates (unchanged)', () => {
-  it('treats 429/5xx with an explicit status as retryable, status-less errors as not', () => {
+describe('retryability predicates', () => {
+  it('connection-phase: retries 429/5xx with status, 408/409/504 (new), and statusless network errors', () => {
+    // Status-based retries (unchanged set + new connection-phase additions)
     expect(isRetryableConnectionError(apiError(429))).toBe(true);
     expect(isRetryableConnectionError(apiError(503))).toBe(true);
-    expect(isRetryableStreamError(apiError(500))).toBe(true);
+    expect(isRetryableConnectionError(apiError(500))).toBe(true);
+    // Connection-phase additions (PR #2838)
+    expect(isRetryableConnectionError(apiError(408))).toBe(true);
+    expect(isRetryableConnectionError(apiError(409))).toBe(true);
+    expect(isRetryableConnectionError(apiError(504))).toBe(true);
+    // Deterministic client errors are never retried
     expect(isRetryableConnectionError(apiError(400))).toBe(false);
-    expect(isRetryableConnectionError(new Error('network drop'))).toBe(false);
+    expect(isRetryableConnectionError(apiError(401))).toBe(false);
+    expect(isRetryableConnectionError(apiError(404))).toBe(false);
+    // Statusless network errors are now retried (the SDK no longer silently retries them)
+    expect(isRetryableConnectionError(new Error('Connection error.'))).toBe(false); // no ctor name match
+  });
+
+  it('mid-stream: retries 429/5xx but NOT statusless errors (stream errors always have status)', () => {
+    expect(isRetryableStreamError(apiError(500))).toBe(true);
+    expect(isRetryableStreamError(apiError(429))).toBe(true);
+    expect(isRetryableStreamError(apiError(400))).toBe(false);
+    expect(isRetryableStreamError(new Error('network drop'))).toBe(false);
   });
 });
 

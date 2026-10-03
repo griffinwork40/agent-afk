@@ -44,6 +44,7 @@ import {
   CONNECTION_ERROR_MAX_RETRIES,
   connectionErrorCode,
   isConnectionPhaseNetworkError,
+  isRetryableConnectionStatus,
 } from './connection-error.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
@@ -130,7 +131,10 @@ export async function createWithRetry(
         delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadAttempts - 1));
         continue;
       }
-      if (isConnectionPhaseNetworkError(e) && connectionAttempts < CONNECTION_ERROR_MAX_RETRIES) {
+      if (
+        (isConnectionPhaseNetworkError(e) || isRetryableConnectionStatus(e)) &&
+        connectionAttempts < CONNECTION_ERROR_MAX_RETRIES
+      ) {
         connectionAttempts++;
         delay = jitterBackoff(CONNECTION_ERROR_BASE_DELAY_MS * Math.pow(2, connectionAttempts - 1));
         onConnectionRetry?.({ attempt: connectionAttempts, delayMs: delay, error: e });
@@ -152,6 +156,7 @@ export interface ConnectionRetryInfo {
 function traceConnectionRetry(input: RunTurnInput): (info: ConnectionRetryInfo) => void {
   return (info) => {
     const code = connectionErrorCode(info.error);
+    const status = (info.error as { status?: unknown }).status;
     void emitSessionPhase(input.traceWriter, {
       phase: 'connection_retry',
       durationMs: info.delayMs,
@@ -161,6 +166,7 @@ function traceConnectionRetry(input: RunTurnInput): (info: ConnectionRetryInfo) 
         maxRetries: CONNECTION_ERROR_MAX_RETRIES,
         error: info.error.message.slice(0, 200),
         ...(code !== undefined ? { code } : {}),
+        ...(typeof status === 'number' ? { status } : {}),
       },
     });
   };
