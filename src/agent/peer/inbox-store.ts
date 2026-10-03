@@ -20,9 +20,9 @@
  * @module agent/peer/inbox-store
  */
 
+import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
 import {
   mkdir,
-  writeFile,
   rename,
   readdir,
   readFile,
@@ -89,11 +89,12 @@ export async function writeEnvelope(env: PeerEnvelope): Promise<void> {
   const base = getPeerInboxDir(env.to);
   const pendingDir = join(base, 'pending');
   const filename = `${sortableTs(env.ts)}-${env.messageId}.json`;
-  const tmpPath = join(pendingDir, `.tmp-${env.messageId}`);
-  const finalPath = join(pendingDir, filename);
-  const content = JSON.stringify(env);
-  await writeFile(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
-  await rename(tmpPath, finalPath);
+  // INV-023: tmp+rename via the shared helper. Its `.tmp-*` sibling is what
+  // listPending() skips, so a reader never sees a half-written envelope.
+  await atomicWriteFileAsync(join(pendingDir, filename), JSON.stringify(env), {
+    mode: 0o600,
+    mkdirp: false,
+  });
 }
 
 /**
