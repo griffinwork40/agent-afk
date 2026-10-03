@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   chmodSync,
+  existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -14,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { commitFileWrite, resolveWriteTarget } from './write-file.atomic.js';
 import { writeFileHandler } from './write-file.js';
+import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
 
 let dir: string;
 const live = (): AbortSignal => new AbortController().signal;
@@ -134,5 +137,68 @@ describe('write_file handler abort', () => {
     expect(result.content).toMatch(/^Aborted; .*h\.txt was not modified$/);
     expect(readFileSync(f, 'utf8')).toBe('original');
     expect(readdirSync(dir)).toEqual(['h.txt']);
+  });
+});
+
+describe('write_file handler: dangling-symlink containment', () => {
+  let root: string;
+  let outside: string;
+  const confined = (): Parameters<typeof writeFileHandler>[2] =>
+    ({ cwd: root, resolveBase: root, writeRoots: [root], readRoots: [root] }) as Parameters<
+      typeof writeFileHandler
+    >[2];
+
+  beforeEach(() => {
+    root = path.join(dir, 'root');
+    outside = path.join(dir, 'outside');
+    mkdirSync(root);
+    mkdirSync(outside);
+    _resetWriteDenylistCacheForTests();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetWriteDenylistCacheForTests();
+  });
+
+  it('refuses a contained dangling link to an outside target and does not create its parent dir', async () => {
+    const outsideParent = path.join(outside, 'new-parent');
+    const link = path.join(root, 'escape.txt');
+    symlinkSync(path.join(outsideParent, 'pwned.txt'), link);
+    const result = await writeFileHandler({ file_path: link, content: 'x' }, live(), confined());
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside the allowed write roots/);
+    expect(existsSync(outsideParent)).toBe(false);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it('refuses a contained dangling link into an existing outside dir and creates no file', async () => {
+    const link = path.join(root, 'escape.txt');
+    symlinkSync(path.join(outside, 'pwned.txt'), link);
+    const result = await writeFileHandler({ file_path: link, content: 'x' }, live(), confined());
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside the allowed write roots/);
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  it('refuses a dangling link whose target is denylisted', async () => {
+    const protectedDir = path.join(root, 'protected');
+    mkdirSync(protectedDir);
+    vi.stubEnv('AFK_WRITE_DENYLIST', protectedDir);
+    const link = path.join(root, 'sneaky.txt');
+    symlinkSync(path.join(protectedDir, 'secret.json'), link);
+    const result = await writeFileHandler({ file_path: link, content: 'x' }, live(), confined());
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/refusing to write to protected path/);
+    expect(readdirSync(protectedDir)).toEqual([]);
+  });
+
+  it('still writes through a dangling link whose target stays inside the root', async () => {
+    const link = path.join(root, 'ok-link.txt');
+    const target = path.join(root, 'sub', 'real.txt');
+    symlinkSync(target, link);
+    const result = await writeFileHandler({ file_path: link, content: 'fine' }, live(), confined());
+    expect(result.isError).toBeFalsy();
+    expect(readFileSync(target, 'utf8')).toBe('fine');
   });
 });
