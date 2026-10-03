@@ -16,16 +16,80 @@ import { installPeerBoundary, reinstallPeerBoundary } from './loop-iteration.bou
 
 // ── Minimal fakes ────────────────────────────────────────────────────────────
 
+/**
+ * Fake PeerInboxNotifier that wraps a string array. Each string in `buffered`
+ * represents one peer envelope's body. The fake exposes the full interface
+ * that boundary.ts uses: `hasPendingInjections`, `peekEnvelopes`,
+ * `consumeEnvelopes`, `drainInjections`, and `reclaim`.
+ *
+ * `peekEnvelopes` returns a readonly array of fake BufferedClaim-shaped objects
+ * whose `envelope.from.id` is a stable per-entry sender id derived from the
+ * entry's position in the original buffer, and whose `envelope.body` is the
+ * text itself. `consumeEnvelopes(n)` removes the first n entries, mimicking
+ * the transactional peek/consume semantics.
+ */
 function makePeerNotifier(buffered: string[] = []) {
-  return {
-    hasPendingInjections: () => buffered.length > 0,
-    drainInjections: () => {
-      if (buffered.length === 0) return '';
-      const result = buffered.splice(0).join('\n\n') + '\n\n';
-      return result;
-    },
-    reclaim: async () => { buffered.splice(0); return 0; },
+  // Assign stable sender ids per entry (id is the index at push time).
+  // We store entries as { text, senderId } tuples so `peekEnvelopes` can
+  // return a stable senderId that survives partial consumption.
+  const entries: Array<{ text: string; senderId: string }> = buffered.map((t, i) => ({
+    text: t,
+    senderId: `fake-sender-${i}`,
+  }));
+  // Sync the entries array when the caller mutates the `buffered` array via
+  // `buffered.push(...)`. We track a cursor so new pushes append new entries.
+  let lastSynced = entries.length;
+  const syncFromBuffered = () => {
+    // Rebuild entries from buffered when buffered has grown (tests push to it).
+    // We track the original buffered reference; only new entries (past lastSynced
+    // in the CURRENT buffered state) are appended.
+    const currentLen = buffered.length;
+    for (let i = lastSynced; i < currentLen; i++) {
+      entries.push({ text: buffered[i]!, senderId: `fake-sender-${entries.length}` });
+    }
+    lastSynced = currentLen;
   };
+
+  const fake = {
+    hasPendingInjections: () => { syncFromBuffered(); return entries.length > 0; },
+    peekEnvelopes: () => {
+      syncFromBuffered();
+      // Return fake BufferedClaim-shaped objects matching what boundary.ts reads:
+      // { envelope: { from: { id }, body, ... } }
+      return entries.map((e) => ({
+        envelope: {
+          from: { id: e.senderId },
+          body: e.text,
+          // renderPeerMessageBlock is imported in boundary.ts but boundary tests
+          // use a fake notifier, so boundary calls renderPeerMessageBlock(envelope).
+          // The rendered output just needs to contain the text. In the test fake
+          // we store the text as the body; renderPeerMessageBlock will wrap it.
+          // Provide the minimal PeerEnvelope fields renderPeerMessageBlock needs:
+          v: 1 as const,
+          messageId: `msg-${e.senderId}`,
+          to: 'fake-to',
+          hop: 0,
+          ts: new Date().toISOString(),
+        },
+        sessionId: 'fake-session',
+      }));
+    },
+    consumeEnvelopes: (count: number) => {
+      syncFromBuffered();
+      if (count <= 0 || entries.length === 0) return '';
+      const consumed = entries.splice(0, count);
+      // Keep buffered in sync (remove the first count entries from buffered too).
+      buffered.splice(0, count);
+      lastSynced = Math.max(0, lastSynced - count);
+      return consumed.map((e) => e.text).join('\n\n') + '\n\n';
+    },
+    drainInjections: () => {
+      syncFromBuffered();
+      return fake.consumeEnvelopes(entries.length);
+    },
+    reclaim: async () => { entries.splice(0); buffered.splice(0); lastSynced = 0; return 0; },
+  };
+  return fake;
 }
 
 /**
@@ -724,5 +788,264 @@ describe('AdmissionQueue saturation — peer not lost on full queue', () => {
     const snap = q.snapshot();
     q.drain(snap);
     expect(q.full).toBe(false);
+  });
+});
+
+// ── Five near-64KiB messages: no loss, all delivered in order ────────────────
+// Regression test for the data-loss bug where boundary.ts drained ALL notifier
+// envelopes into a single merged string, then called submitPeer once with the
+// entire batch. If the batch exceeded the byte ceiling, all messages were lost.
+//
+// Five 64KiB messages span 320KiB — well above the default 256KiB queue byte
+// ceiling. The fix: each envelope is submitted individually; rejected envelopes
+// stay in the notifier buffer and are retried on the next boundary. All five
+// must eventually be delivered across at most five boundary invocations.
+
+describe('Data-loss regression — five near-64KiB messages delivered without loss', () => {
+  it('all 5 near-64KiB messages are eventually injected, none silently dropped', () => {
+    // Each message is ~60KiB (below PEER_MAX_BODY_BYTES=64KiB sender guard).
+    // Default AdmissionQueue maxBytes=256KiB, maxCount=50. With per-envelope
+    // submission, the queue accepts 4 messages per drain (4×60KiB=240KiB<256KiB)
+    // then rejects the 5th. The 5th stays in the notifier buffer and is admitted
+    // on the next boundary turn after the queue drains.
+    const NEAR_64K = 60 * 1024; // 60 KiB per message
+    const messages = Array.from({ length: 5 }, (_, i) =>
+      `msg-${i + 1}-` + 'x'.repeat(NEAR_64K - 10),
+    );
+
+    const admissionQueue = new AdmissionQueue(); // defaults: maxCount=50, maxBytes=256KiB
+    const session = makeSession();
+    const peerBuffer = [...messages];
+    const peerNotifier = makePeerNotifier(peerBuffer);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    const delivered: string[] = [];
+
+    // Keep invoking boundaries until all 5 messages are delivered.
+    // Safety: cap at 10 iterations to detect infinite loops.
+    for (let iter = 0; iter < 10 && delivered.join('').split('msg-').length - 1 < 5; iter++) {
+      const result = session.invokeCallback();
+      if (result) {
+        // Extract message ids (msg-1 through msg-5) from the rendered block.
+        const found = result.match(/msg-\d+/g) ?? [];
+        delivered.push(...found);
+      }
+    }
+
+    // All five messages must have been delivered.
+    expect(delivered.filter((m) => m === 'msg-1')).toHaveLength(1);
+    expect(delivered.filter((m) => m === 'msg-2')).toHaveLength(1);
+    expect(delivered.filter((m) => m === 'msg-3')).toHaveLength(1);
+    expect(delivered.filter((m) => m === 'msg-4')).toHaveLength(1);
+    expect(delivered.filter((m) => m === 'msg-5')).toHaveLength(1);
+
+    // Nothing left in notifier buffer after all are delivered.
+    expect(peerNotifier.hasPendingInjections()).toBe(false);
+  });
+
+  it('each message is injected exactly once (no duplication across boundaries)', () => {
+    const NEAR_64K = 60 * 1024;
+    const messages = Array.from({ length: 5 }, (_, i) =>
+      `unique-${i + 1}-` + 'y'.repeat(NEAR_64K - 12),
+    );
+
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerBuffer = [...messages];
+    const peerNotifier = makePeerNotifier(peerBuffer);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    const seenIds = new Map<string, number>();
+    for (let iter = 0; iter < 10; iter++) {
+      const result = session.invokeCallback();
+      if (result) {
+        const found = result.match(/unique-\d+/g) ?? [];
+        for (const id of found) {
+          seenIds.set(id, (seenIds.get(id) ?? 0) + 1);
+        }
+      }
+    }
+
+    // Each unique marker must appear exactly once.
+    for (let i = 1; i <= 5; i++) {
+      expect(seenIds.get(`unique-${i}`)).toBe(1);
+    }
+  });
+
+  it('admitted messages from first boundary reflect in correct FIFO order', () => {
+    // With 5×60KiB messages and a 256KiB queue, the first boundary delivers
+    // messages 1-4 in order; message 5 is delivered on the next boundary.
+    const NEAR_64K = 60 * 1024;
+    const messages = Array.from({ length: 5 }, (_, i) =>
+      `order-msg-${i + 1}-` + 'z'.repeat(NEAR_64K - 14),
+    );
+
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const peerBuffer = [...messages];
+    const peerNotifier = makePeerNotifier(peerBuffer);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => null,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // First boundary: messages 1-4 should be admitted (≤256KiB), msg-5 stays.
+    const batch1 = session.invokeCallback() ?? '';
+    const ids1 = (batch1.match(/order-msg-\d+/g) ?? []).filter((v, i, a) => a.indexOf(v) === i);
+
+    // msg-5 must NOT appear in batch1 (it didn't fit).
+    expect(ids1).not.toContain('order-msg-5');
+    // msg-1 through msg-4 must appear in order within batch1.
+    expect(ids1).toEqual(['order-msg-1', 'order-msg-2', 'order-msg-3', 'order-msg-4']);
+
+    // Second boundary: msg-5 is now admitted.
+    const batch2 = session.invokeCallback() ?? '';
+    expect(batch2).toContain('order-msg-5');
+    expect(batch2).not.toContain('order-msg-1');
+  });
+});
+
+// ── Slash / shell barrier: submitHuman is GATED (not unconditional) ───────────
+// Verifies that /slash and !shell text in the compositor queue acts as a human
+// barrier (blocks peer) AND that the submitHuman call is only made when
+// hasPendingSubmission() is true — it is NOT called unconditionally.
+// Also verifies that slash/shell text does NOT appear when the compositor is
+// empty (no spurious injection).
+
+describe('Slash and shell passthrough as human barriers', () => {
+  it('/slash command in compositor blocks peer injection (hasPendingSubmission=true)', () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    // A slash command is queued as human text in the compositor.
+    const compositor = makeCompositor('/model gpt-4o');
+    const peerNotifier = makePeerNotifier(['peer while slash pending']);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // First boundary: /slash command wins; peer is blocked.
+    const result1 = session.invokeCallback();
+    expect(result1).toBe('/model gpt-4o');
+    expect(result1).not.toContain('peer while slash pending');
+    // Peer still buffered — not lost.
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
+
+    // Second boundary: slash is consumed; peer is now admitted.
+    const result2 = session.invokeCallback();
+    expect(result2).toContain('peer while slash pending');
+  });
+
+  it('!shell passthrough text in compositor blocks peer injection', () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    // A shell passthrough queued as human text.
+    const compositor = makeCompositor('!ls -la');
+    const peerNotifier = makePeerNotifier(['peer while shell pending']);
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    // First boundary: shell text wins.
+    const result1 = session.invokeCallback();
+    expect(result1).toBe('!ls -la');
+    expect(result1).not.toContain('peer while shell pending');
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
+
+    // Second boundary: peer delivered.
+    const result2 = session.invokeCallback();
+    expect(result2).toContain('peer while shell pending');
+  });
+
+  it('submitHuman is NOT called when compositor hasPendingSubmission=false', () => {
+    // When the compositor has no pending submission, the humanPending branch is
+    // NOT entered, so submitHuman is never called. This ensures peer messages
+    // are not accidentally blocked by a spurious human submission.
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    // Empty compositor: hasPendingSubmission=false, peekQueuedText=undefined.
+    const compositor = makeCompositor(/* no text */ undefined);
+    const peerNotifier = makePeerNotifier(['only peer message']);
+    const submitHumanSpy = vi.spyOn(admissionQueue, 'submitHuman');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    const result = session.invokeCallback();
+    // submitHuman was never called (no human text).
+    expect(submitHumanSpy).not.toHaveBeenCalled();
+    // Peer was admitted.
+    expect(result).toContain('only peer message');
+  });
+
+  it('submitHuman is called ONLY when hasPendingSubmission=true and peekQueuedText returns text', () => {
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const compositor = makeCompositor('queued human text');
+    const peerNotifier = makePeerNotifier([]);
+    const submitHumanSpy = vi.spyOn(admissionQueue, 'submitHuman');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    session.invokeCallback();
+    // submitHuman called exactly once with the queued text.
+    expect(submitHumanSpy).toHaveBeenCalledTimes(1);
+    expect(submitHumanSpy).toHaveBeenCalledWith('queued human text');
+  });
+
+  it('attachment barrier (hasPendingSubmission=true, peekQueuedText=undefined) does NOT call submitHuman', () => {
+    // An image attachment is pending: hasPendingSubmission=true but
+    // peekQueuedText=undefined. submitHuman must NOT be called (no text to admit).
+    const admissionQueue = new AdmissionQueue();
+    const session = makeSession();
+    const compositor = makeCompositorWithAttachment();
+    const peerNotifier = makePeerNotifier(['peer during image upload']);
+    const submitHumanSpy = vi.spyOn(admissionQueue, 'submitHuman');
+
+    installPeerBoundary({
+      getSession: () => session,
+      getCompositor: () => compositor as never,
+      peerNotifier: peerNotifier as never,
+      admissionQueue,
+    });
+
+    const result = session.invokeCallback();
+    // No human text to extract → submitHuman not called.
+    expect(submitHumanSpy).not.toHaveBeenCalled();
+    // Peer blocked by attachment barrier.
+    expect(result).toBeUndefined();
+    // Peer still in buffer.
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
   });
 });

@@ -19,10 +19,11 @@
  *     concern; the boundary callback doesn't touch readline state.
  *   - Attachments or slash-commands in the compositor queue → human-first tier
  *     handles it; peer remains in the PeerInboxNotifier buffer.
- *   - Admission queue is full (`admissionQueue.full`) → peer stays in the
- *     PeerInboxNotifier buffer for the next boundary turn or next-turn fallback.
- *     The notifier is NOT drained when the queue cannot accept, preventing silent
- *     message loss under the maxCount/maxBytes ceiling.
+ *   - Admission queue byte or count ceiling reached mid-batch → only admitted
+ *     envelopes are consumed from the notifier buffer; rejected envelopes stay
+ *     in FIFO order for the next boundary turn or next-turn fallback. Each
+ *     envelope is attempted individually (not as a merged batch) so a single
+ *     large envelope never causes loss of smaller following envelopes.
  *
  * Consume-once semantics: the boundary callback drains its snapshot exactly once.
  * If the session ends before a boundary fires (single-model-call turns with no
@@ -38,6 +39,7 @@
 
 import type { PeerInboxNotifier } from './peer-inbox-notifier.js';
 import { AdmissionQueue } from '../../../agent/peer/admission-queue.js';
+import { renderPeerMessageBlock } from '../../../agent/peer/envelope.js';
 import type { InteractiveCtx } from './shared.js';
 import type { InputSurface } from '../../input/input-surface.js';
 
@@ -85,10 +87,12 @@ export interface PeerBoundaryOpts {
  *      (including attachment-bearing payloads that `peekQueuedText` returns
  *      undefined for), the human-priority barrier is active: peer injection is
  *      skipped entirely this boundary. Peer messages stay in the notifier buffer.
- *   2. If no human barrier: tries to admit queued human text (via peekQueuedText)
- *      and then peer messages (from the PeerInboxNotifier buffer) into the
- *      AdmissionQueue — but ONLY if the queue has capacity (`!admissionQueue.full`)
- *      so peer messages are never silently discarded on a saturated queue.
+ *   2. If no human barrier: admits peer messages one envelope at a time using
+ *      `peekEnvelopes()` + `consumeEnvelopes()` — each envelope is attempted
+ *      individually with its stable source id. Only admitted envelopes are
+ *      consumed from the notifier buffer; rejected envelopes stay in FIFO order
+ *      for the next boundary or next-turn drain. No peer message is ever
+ *      silently discarded: rejection always means "retry later", not data loss.
  *   3. Takes an AdmissionQueue snapshot and returns the drained text, or
  *      `undefined` if nothing is ready to deliver.
  *
@@ -135,28 +139,36 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
       // the next boundary (once the human queue is empty) or by the next-turn
       // fallback.
     } else {
-      // ── 2. No human barrier: admit peer messages ─────────────────────────
-      // Guard: do not drain from the notifier buffer if the admission queue is
-      // already full — a failed submitPeer would silently discard the peer text
-      // since drainInjections() is a destructive operation. Leaving the messages
-      // in the notifier buffer allows the next boundary turn or next-turn
-      // fallback to deliver them once the queue has capacity.
-      if (peerNotifier.hasPendingInjections() && !admissionQueue.full) {
-        const raw = peerNotifier.drainInjections();
-        if (raw.length > 0) {
-          // The raw string may contain multiple envelopes rendered as one block.
-          // Admit as a single peer submission; senderId = 'peer-batch'.
-          const admitted = admissionQueue.submitPeer('peer-batch', raw.trimEnd());
+      // ── 2. No human barrier: admit peer messages one envelope at a time ──
+      // Peek the buffered envelopes without consuming them, then attempt to
+      // admit each individually into the admission queue using the envelope's
+      // stable source id. Only consume (remove from notifier buffer) the
+      // envelopes that were actually admitted — rejected envelopes remain in
+      // the buffer for the next boundary turn or next-turn fallback, so no
+      // peer messages are ever silently discarded on a byte or count ceiling.
+      //
+      // Five 64 KiB messages must each be admitted across successive turns:
+      // the per-envelope loop + retain-on-reject guarantee ensures every
+      // message is eventually injected once capacity exists, never dropped.
+      if (peerNotifier.hasPendingInjections()) {
+        const pending = peerNotifier.peekEnvelopes();
+        let admitCount = 0;
+        for (const { envelope } of pending) {
+          // Render the envelope to its presentation block so the byte
+          // accounting in the admission queue reflects what the model sees.
+          const rendered = renderPeerMessageBlock(envelope);
+          const admitted = admissionQueue.submitPeer(envelope.from.id, rendered.trimEnd());
           if (!admitted) {
-            // Queue rejected the batch (byte ceiling exceeded). The text has
-            // already been drained from the notifier buffer — we cannot push it
-            // back. This path should be extremely rare (the `!full` guard above
-            // blocks the common count-limit case); log nothing (best-effort) and
-            // leave it for next-turn recovery via prependTurnInjections.
-            // The `full` guard makes this path reachable only when the byte
-            // ceiling is hit without the count ceiling, which requires a single
-            // very large peer batch (> 256 KiB). Acceptable loss in that edge case.
+            // Queue full or byte/sender ceiling reached. Stop trying further
+            // envelopes — they stay in the notifier buffer in FIFO order and
+            // will be re-attempted at the next boundary or next-turn drain.
+            break;
           }
+          admitCount++;
+        }
+        // Consume only the admitted prefix; rejected tail stays in the buffer.
+        if (admitCount > 0) {
+          peerNotifier.consumeEnvelopes(admitCount);
         }
       }
     }

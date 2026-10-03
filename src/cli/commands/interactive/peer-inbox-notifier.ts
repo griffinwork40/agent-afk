@@ -130,20 +130,49 @@ export class PeerInboxNotifier {
   }
 
   /**
-   * Render and clear the buffer (one block per envelope). Returns '' when
-   * empty. Each drained envelope emits an `'injected'` trace event — distinct
-   * from `'claimed'` (which fires at claim time) so the trace accurately
-   * reflects what the model actually saw.
+   * Peek at the buffered envelopes without consuming them. Returns a readonly
+   * snapshot of the current buffer in FIFO order. Use with `consumeEnvelopes`
+   * to implement transactional admit-then-consume semantics: peek all entries,
+   * call `submitPeer` on each in the admission queue, then consume only those
+   * that were accepted — so rejected entries remain in the buffer for the next
+   * boundary turn instead of being silently discarded.
    */
-  drainInjections(): string {
-    if (this.buffer.length === 0) return '';
-    const claims = this.buffer.splice(0);
-    const text = claims.map(({ envelope }) => renderPeerMessageBlock(envelope)).join('\n') + '\n\n';
-    for (const { envelope } of claims) {
+  peekEnvelopes(): readonly BufferedClaim[] {
+    return this.buffer;
+  }
+
+  /**
+   * Consume (remove and emit 'injected' trace events for) the first `count`
+   * envelopes from the buffer. Callers must only consume envelopes that were
+   * successfully admitted to the downstream queue — unconsumed tail entries
+   * remain in the buffer for the next boundary turn or next-turn fallback.
+   *
+   * Returns the rendered text of the consumed envelopes joined by '\n'.
+   */
+  consumeEnvelopes(count: number): string {
+    if (count <= 0 || this.buffer.length === 0) return '';
+    const toConsume = this.buffer.splice(0, count);
+    const text = toConsume.map(({ envelope }) => renderPeerMessageBlock(envelope)).join('\n') + '\n\n';
+    for (const { envelope } of toConsume) {
       const bytes = Buffer.byteLength(envelope.body, 'utf8');
       void emitPeerMessage(this.resolveTraceWriter(), { action: 'injected', messageId: envelope.messageId, peer: envelope.from.id, bytes });
     }
     return text;
+  }
+
+  /**
+   * Render and clear the buffer (one block per envelope). Returns '' when
+   * empty. Each drained envelope emits an `'injected'` trace event — distinct
+   * from `'claimed'` (which fires at claim time) so the trace accurately
+   * reflects what the model actually saw.
+   *
+   * Prefer `peekEnvelopes()` + `consumeEnvelopes()` for admission-gated paths
+   * where some envelopes may be rejected by a downstream queue. This method
+   * is a convenience wrapper for callers that always consume all pending entries
+   * (e.g. the next-turn fallback `prependTurnInjections` path).
+   */
+  drainInjections(): string {
+    return this.consumeEnvelopes(this.buffer.length);
   }
 
   /**
