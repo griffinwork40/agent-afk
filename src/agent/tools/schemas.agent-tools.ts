@@ -84,7 +84,7 @@ export const agentTool: AnthropicToolDef = {
           'Default 0 = unlimited. Set a positive integer to bound a runaway loop. On cap, the subagent gets one final tools-stripped round to summarize (no silent mid-loop stop). ' +
           'A named agent may set its own default via `maxToolUseIterations` frontmatter (explicit value here wins). Honored uniformly by both providers.\n\n' +
           'Budget guidance: unnamed subagents are uncapped by default; `general-purpose` defaults to 150; read-only types default to 50. A round with N parallel tool calls costs 1, not N. Sizing:\n' +
-          '- Narrow lookup/research: 15-30.\n- Implementation (multi-file edits + test + PR): 80-120 — the default 50 is too tight.\n' +
+          '- Narrow lookup/research: 15-30.\n- Multi-dimension review of a large diff (>300 lines): ~80.\n- Implementation (multi-file edits + test + PR): 80-120 — a 50-round cap is too tight.\n' +
           '- Deep investigation/debugging: 100-150.\nSet this explicitly for implementation-heavy children rather than relying on the default.',
       },
       id_prefix: {
@@ -268,7 +268,8 @@ export const composeTool: AnthropicToolDef = {
           'A round with N parallel tool calls costs 1, not N. On cap, the node gets one tools-stripped wind-down round to synthesize — not killed. ' +
           'Default: 50. Per-node `max_tool_rounds` overrides this compose-level value. Must be 1-1000.\n\n' +
           'Budget guidance — set based on the heaviest node:\n' +
-          '- Read-only research/review: 30-50 (default is fine).\n' +
+          '- Narrow read-only research or a small review: 30-50 (default is fine).\n' +
+          '- Multi-dimension review of a large diff (>300 lines): ~80 — such nodes exhaust the default 50 often.\n' +
           '- Implementation (edit + test + commit/PR): 80-120.\n' +
           '- Mixed DAGs: use per-node `max_tool_rounds` to differentiate.',
       },

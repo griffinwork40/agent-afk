@@ -559,4 +559,92 @@ describe('anthropic-direct translateMessageStream', () => {
     expect(last.result.stopReason).toBe('end_turn');
     expect(last.result.text).toBe('Complete answer');
   });
+
+  // P2 regression: transport drop AFTER message_delta (with stop_reason) but BEFORE
+  // message_stop must yield a turn-result, not an error (#2787).
+  it('transport drop after message_delta (stop_reason set) but before message_stop => turn-result, not error', async () => {
+    // Revert proof: remove the `isMidStreamNetworkTermination(err) && stopReason !== null`
+    // guard in translate.ts's catch block and this test fails — the catch then yields an
+    // error event and returns, so the last item is an error, not a turn-result.
+    const terminated = new TypeError('terminated');
+
+    async function* streamWithDrop(): AsyncIterable<RawMessageStreamEvent> {
+      yield messageStart();
+      yield textBlockStart(0);
+      yield textDelta(0, 'answer text');
+      yield blockStop(0);
+      yield messageDelta('end_turn'); // stop_reason arrives here
+      // message_stop never arrives — transport resets instead:
+      throw terminated;
+    }
+
+    const out = await collect(
+      translateMessageStream(streamWithDrop(), { sessionId: SESSION_ID }),
+    );
+
+    // Must yield a turn-result (not an error) because the response was complete.
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'turn-result') {
+      throw new Error(
+        `expected turn-result but got: ${last?.kind ?? 'nothing'} — ` +
+        'transport drop after stop_reason must be accepted as complete',
+      );
+    }
+    expect(last.result.stopReason).toBe('end_turn');
+    expect(last.result.text).toBe('answer text');
+
+    // No error event must have been emitted.
+    const errorOutputs = out.filter((o) => o.kind === 'event' && o.event.type === 'error');
+    expect(errorOutputs).toHaveLength(0);
+  });
+
+  it('transport drop BEFORE message_delta (no stop_reason) => error event, not turn-result', async () => {
+    // Negative guard: when the transport drops before a stop_reason arrives, the
+    // response is NOT complete and must still surface as an error so the round is
+    // re-driven by stream-consumer.ts (isMidStreamCut path).
+    const terminated = new TypeError('terminated');
+
+    async function* dropBeforeStopReason(): AsyncIterable<RawMessageStreamEvent> {
+      yield messageStart();
+      yield textBlockStart(0);
+      yield textDelta(0, 'partial');
+      // No message_delta, no stop_reason — transport drops here:
+      throw terminated;
+    }
+
+    const out = await collect(
+      translateMessageStream(dropBeforeStopReason(), { sessionId: SESSION_ID }),
+    );
+
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'event' || last.event.type !== 'error') {
+      throw new Error('expected error event when transport drops before stop_reason');
+    }
+    expect(last.event.error).toBe(terminated);
+
+    const turnResults = out.filter((o) => o.kind === 'turn-result');
+    expect(turnResults).toHaveLength(0);
+  });
+
+  it('unrelated mid-stream error (not a network termination) is NOT accepted => error event', async () => {
+    // Sanity check: a non-network TypeError must still surface as an error.
+    async function* midStreamError(): AsyncIterable<RawMessageStreamEvent> {
+      yield messageStart();
+      yield textBlockStart(0);
+      yield textDelta(0, 'partial');
+      yield blockStop(0);
+      yield messageDelta('end_turn'); // stop_reason is set
+      throw new TypeError('boom'); // NOT a termination — must not be accepted
+    }
+
+    const out = await collect(
+      translateMessageStream(midStreamError(), { sessionId: SESSION_ID }),
+    );
+
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'event' || last.event.type !== 'error') {
+      throw new Error('expected error event for non-termination TypeError even after stop_reason');
+    }
+    expect(last.event.error.message).toBe('boom');
+  });
 });

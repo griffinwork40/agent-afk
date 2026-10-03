@@ -51,9 +51,9 @@ OpenAI and xAI do **not** have an equivalent cliff:
 ## Encoding path
 
 The openai-compatible provider sends images as `image_url` data-URIs on the
-Chat Completions wire (`messages.ts:buildUserContent`, `loop.ts:toolResults
-ToMessages`) and as `input_image` objects on the Responses API wire
-(`responses-messages.ts`). Both are standard OpenAI wire shapes.
+Chat Completions wire (`messages.ts:buildUserContent`, called from
+`query/turn-iteration.ts`) and as `input_image` objects on the Responses API
+wire (`responses-messages.ts`). Both are standard OpenAI wire shapes.
 
 ## Verdict
 

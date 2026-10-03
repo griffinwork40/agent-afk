@@ -17,6 +17,7 @@ import type { ToolResult } from '../providers/shared/tool-result.js';
 import type { TraceSink } from '../trace/index.js';
 import type { SpawnedPidRegistry } from './handlers/pid-registry.js';
 import type { UserAttention } from './user-yield.js';
+import type { DetachableToolRegistry } from './detach-registry.js';
 
 /**
  * Per-invocation context forwarded to every tool handler.
@@ -150,6 +151,20 @@ export interface ToolHandlerContext {
    * subagents, and for headless surfaces.
    */
   userAttention?: UserAttention;
+  /**
+   * Detach registry for the Ctrl+B backgrounding contract (#2542).
+   *
+   * Attached by the dispatcher ONLY for tools in `DETACHABLE_TOOLS` and
+   * only on interactive sessions that have a detach registry wired. A
+   * detachable handler calls `register(toolUseId)` to obtain a
+   * {@link import('./detach-registry.js').DetachToken}, polls
+   * `token.shouldDetach()`, and on fire returns `token.detachResult()` while
+   * keeping the underlying operation alive, then calls `token.deliver()` when
+   * the operation eventually completes.
+   *
+   * Absent for non-detachable tools, subagents, and headless surfaces.
+   */
+  detachRegistry?: DetachableToolRegistry;
 }
 
 /**

@@ -198,6 +198,11 @@ describe('StateStore', () => {
     expect(store.get('ttlns', 'expiring')).toBeNull();
 
     // Confirm GC also removes it on a fresh open (runTtlGc runs in constructor).
+    // NOTE: fake timers are still active here (vi.useRealTimers() runs in
+    // afterEach, not here) — the constructor sees the faked clock at
+    // start+150ms, which is past the TTL, so GC correctly prunes the entry.
+    // Do NOT move vi.useRealTimers() before this line to "fix" it; that would
+    // restore wall-clock time, making the TTL expiry non-deterministic under load.
     store.close();
     const reopened = new StateStore(dbPath);
     try {

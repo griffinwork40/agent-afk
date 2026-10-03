@@ -4,7 +4,7 @@
  *
  * Invariant: this lives in its OWN module (not `streaming.ts`) so that the
  * message handler can `import { StreamTimeoutError }` and use `instanceof`
- * WITHOUT being affected by the many tests that `vi.mock('./streaming.js')`.
+ * WITHOUT being affected by the many tests that `vi.mock` './streaming.js'.
  * Those mocks replace streaming.ts's exports with stubs, which would make a
  * `StreamTimeoutError` imported from there resolve to `undefined` — turning
  * `error instanceof StreamTimeoutError` into a TypeError at runtime. Keeping the

@@ -7,7 +7,7 @@ import { isRateLimitError, isNetworkError, isTelegramTransportError } from '../e
 import { streamResponse } from '../streaming.js';
 import { withTypingIndicator } from '../typing-indicator.js';
 // Import StreamTimeoutError from its own module, NOT '../streaming.js': many
-// handler tests vi.mock('../streaming.js'), which would make the class resolve
+// handler tests `vi.mock` '../streaming.js', which would make the class resolve
 // to undefined and turn `instanceof StreamTimeoutError` into a TypeError.
 import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';

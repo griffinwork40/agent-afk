@@ -708,6 +708,13 @@ export class BrowserLauncher {
    * Always resolves — never throws. Used for ephemeral render contexts where
    * a frozen context must not hold the Node event loop open after a subagent
    * times out (issue #2519).
+   *
+   * Idempotent by design: `onAbort`, the `finally` block of `renderHtml`, and
+   * the process-wide cleanup-registry callback can all invoke this method on
+   * the same `(context, browser)` pair. Playwright's `context.close()` is a
+   * no-op when called on an already-closed context, and `browser.process()`
+   * returns `null` after the browser exits — so re-entrant calls resolve
+   * quickly without side-effects.
    */
   private async closeContextSafe(
     context: BrowserContext,
@@ -733,8 +740,14 @@ export class BrowserLauncher {
       ]);
     } catch {
       // context.close() timed out or threw — fall back to killing the process.
+      // Wrap kill() in its own try/catch so a throw here cannot escape and
+      // violate the "always resolves, never throws" contract.
       debugLog('[browser/launcher] context.close() timed out; sending SIGKILL to browser process');
-      browserWithProcess.process?.()?.kill('SIGKILL');
+      try {
+        browserWithProcess.process?.()?.kill('SIGKILL');
+      } catch (killErr) {
+        debugLog('[browser/launcher] SIGKILL failed (process already exited?)', killErr);
+      }
     } finally {
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }

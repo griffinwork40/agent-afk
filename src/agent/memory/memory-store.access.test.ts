@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import Database from 'better-sqlite3';
 import { MemoryStore } from './memory-store.js';
 import type { AccessStats } from './types.js';
 
@@ -21,6 +22,23 @@ import type { AccessStats } from './types.js';
 
 let tmpDir: string;
 let store: MemoryStore;
+
+/**
+ * Backdate `created_at` for one or more fact rows via a direct SQL UPDATE so
+ * that `getUnaccessed(N)` cutoff logic is deterministic regardless of
+ * sub-millisecond timing jitter.  The store's own connection remains open;
+ * better-sqlite3 in WAL mode allows concurrent readers, so we open a short-
+ * lived second connection purely for the UPDATE and close it immediately.
+ */
+function backdateFacts(ids: number[], pastIso: string): void {
+  const db = new Database(join(tmpDir, 'memory.db'));
+  try {
+    const stmt = db.prepare('UPDATE facts SET created_at = ? WHERE id = ?');
+    for (const id of ids) stmt.run(pastIso, id);
+  } finally {
+    db.close();
+  }
+}
 
 beforeEach(() => {
   tmpDir = join(
@@ -114,24 +132,22 @@ describe('getUnaccessed — minAgeDays filter', () => {
     expect(store.getUnaccessed(30)).toEqual([]);
   });
 
-  it('returns recently created facts when minAgeDays = 0', () => {
-    // minAgeDays = 0 means cutoff = now, so any fact created before now qualifies.
-    // In practice, a fact stored a millisecond ago is older than "0 days ago".
+  it('returns a fact whose created_at is backdated past the cutoff when minAgeDays = 0', () => {
+    // Backdate the fact 1 second into the past so the minAgeDays=0 cutoff
+    // (computed as Date.now()) is guaranteed to be strictly after created_at.
+    // This eliminates the sub-millisecond race where a fact stored "now" might
+    // not yet satisfy created_at < cutoff depending on execution timing.
     const id = store.storeFact({
       category: 'learning',
       content: 'freshly stored fact',
       source_surface: 'test',
     });
-    // A fact created right now should NOT appear with minAgeDays=0 because the
-    // cutoff is computed at call time. Allow a tiny timing tolerance by checking
-    // getUnaccessed(0) returns either 0 or 1 result (both are valid depending
-    // on sub-millisecond timing), but the id is correct when present.
+    const oneSecondAgo = new Date(Date.now() - 1000).toISOString();
+    backdateFacts([id], oneSecondAgo);
+
     const results = store.getUnaccessed(0);
-    if (results.length > 0) {
-      expect(results[0]!.id).toBe(id);
-    }
-    // Either way, no exception and the type is correct.
-    expect(Array.isArray(results)).toBe(true);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.id).toBe(id);
   });
 
   it('excludes facts that have been accessed (access_count > 0)', () => {
@@ -163,17 +179,22 @@ describe('getUnaccessed — minAgeDays filter', () => {
   });
 
   it('returns facts ordered by created_at ascending (oldest first)', () => {
-    // Store multiple facts and search none of them.
-    store.storeFact({ category: 'preference', content: 'fact alpha', source_surface: 'test' });
-    store.storeFact({ category: 'preference', content: 'fact beta', source_surface: 'test' });
-    store.storeFact({ category: 'preference', content: 'fact gamma', source_surface: 'test' });
+    // Store multiple facts, then backdate them with distinct timestamps spread
+    // 1 second apart so the ORDER BY is deterministic regardless of wall-clock
+    // resolution.  All three are backdated far enough in the past that
+    // getUnaccessed(0) will include them.
+    const idA = store.storeFact({ category: 'preference', content: 'fact alpha', source_surface: 'test' });
+    const idB = store.storeFact({ category: 'preference', content: 'fact beta', source_surface: 'test' });
+    const idC = store.storeFact({ category: 'preference', content: 'fact gamma', source_surface: 'test' });
+
+    const base = Date.now() - 10_000; // 10 s ago
+    backdateFacts([idA], new Date(base).toISOString());
+    backdateFacts([idB], new Date(base + 1000).toISOString());
+    backdateFacts([idC], new Date(base + 2000).toISOString());
 
     const unaccessed = store.getUnaccessed(0);
-    // When there are results, they should be in ascending created_at order.
-    if (unaccessed.length > 1) {
-      for (let i = 1; i < unaccessed.length; i++) {
-        expect(unaccessed[i]!.created_at >= unaccessed[i - 1]!.created_at).toBe(true);
-      }
-    }
+    expect(unaccessed).toHaveLength(3);
+    const ids = unaccessed.map((f) => f.id);
+    expect(ids).toEqual([idA, idB, idC]);
   });
 });

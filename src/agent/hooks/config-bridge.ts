@@ -19,7 +19,7 @@
 
 import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '../hooks.js';
 import type { LoadedHooksConfig } from './config-loader.js';
-import { compileMatcher } from './config-loader.js';
+import { compileMatcher, isPluginHookDisabled } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
 import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
 import { resolveContextSessionId } from './hook-utils.js';
@@ -168,6 +168,25 @@ export function loadAndRegisterConfigHooks(
       // register regardless — their enablePluginHooks gate was enforced by the
       // loader, which only emits plugin-tier groups when it is set.
       if (group.tier !== 'plugin' && !userGlobalEnabled) continue;
+
+      // Per-hook disable: skip plugin groups that the user has listed in
+      // `disabledPluginHooks`. The check is at group level (event+matcher)
+      // so a single specifier can suppress an entire matcher group at once.
+      // Non-plugin groups are never subject to this gate (it applies only to
+      // plugin hooks; shell hooks have the enableShellHooks gate instead).
+      if (group.tier === 'plugin') {
+        const firstHook = group.hooks[0];
+        const pName = firstHook?.pluginName;
+        if (pName !== undefined &&
+            isPluginHookDisabled(hookConfig.disabledPluginHooks, pName, event, group.matcher)) {
+          console.warn(
+            `[hooks] plugin hook suppressed by disabledPluginHooks: plugin="${pName}" ` +
+              `event="${event}"` +
+              (group.matcher !== undefined ? ` matcher="${group.matcher}"` : ''),
+          );
+          continue;
+        }
+      }
 
       // Compile the matcher once per group — not per dispatch.
       // Pass a warn sink so invalid regex patterns are surfaced via console.warn
