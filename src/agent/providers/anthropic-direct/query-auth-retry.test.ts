@@ -934,8 +934,8 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     const events = await collect(query);
     const types = events.map((e) => e.type);
 
-    // autoResume=false: far-reset is surfaced immediately with paused+error, no resumed.
-    expect(types).toContain('paused');
+    // autoResume=false: reset too far away — no waiting, no paused card, just the error.
+    expect(types).not.toContain('paused');
     expect(types).not.toContain('resumed');
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
   });

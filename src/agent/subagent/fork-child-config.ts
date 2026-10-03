@@ -291,8 +291,8 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     softDeadlineMs: options.config.softDeadlineMs ?? resolveSoftDeadlineMs(effectiveTimeoutMs),
     // Opt-in park-and-wait on OAuth usage-limit 429 (see usage-limit-park-policy.ts
     // for precedence rules). Precedence: explicit caller value > env var
-    // AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT > false. Forced false for daemon
-    // surface (no human can switch accounts there). When false a fork fails fast
+    // AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT (ignored on the daemon surface,
+    // where no human can switch accounts) > false. When false a fork fails fast
     // so the parent can decide: retry, reroute, or surface the pause itself.
     autoResumeOnUsageLimit: resolveChildAutoResume(
       options.config.autoResumeOnUsageLimit,

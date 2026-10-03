@@ -137,15 +137,16 @@ export async function* usageLimitNoTimestampPause(
 ): AsyncGenerator<ProviderEvent, void, void> {
   const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
   const startedAt = Date.now();
-  // waitDeadline bounds the park at TWO_HOURS_MS from now so watchdog/ceiling
-  // can arm an accurate timer (the park is bounded even though resetsAt is absent).
-  const waitDeadline = new Date(startedAt + TWO_HOURS_MS);
+  // waitDeadline bounds the park at TWO_HOURS_MS from now so a subagent's idle
+  // watchdog and pause-aware ceiling cover the park even though resetsAt is
+  // absent. Only set when we will actually park: a fail-fast pause ends with
+  // the error right after this event, so advertising a 2h window would lie.
   yield {
     type: 'paused',
     reason: 'usage-limit',
     accountId,
     autoResume: ctx.autoResumeOnUsageLimit,
-    waitDeadline,
+    ...(ctx.autoResumeOnUsageLimit ? { waitDeadline: new Date(startedAt + TWO_HOURS_MS) } : {}),
   };
   // Witness layer: a usage-limit park is otherwise invisible in the trace —
   // the turn simply stops emitting for up to two hours. Record it so the
@@ -205,29 +206,11 @@ export async function* usageLimitResetPause(
 
   if (isFarReset) {
     if (!ctx.autoResumeOnUsageLimit) {
-      // Reset too far in the future AND auto-resume is off — surface immediately.
-      // Emit paused first (same as the within-2h path) so the UI can render
-      // truthful "resumes at X" copy, then error. Mark snapshot stale so the
-      // next turn picks up a fresh credential without /reauth.
-      const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
-      yield {
-        type: 'paused',
-        reason: 'usage-limit',
-        resetsAt,
-        accountId,
-        autoResume: false,
-      };
-      void emitSessionPhase(runInput.traceWriter, {
-        phase: 'usage_limit_pause',
-        metadata: {
-          reason: 'usage-limit',
-          source: 'retry-layer',
-          hasResetTimestamp: true,
-          farReset: true,
-          resetsAt: resetsAt.toISOString(),
-          autoResume: false,
-        },
-      });
+      // Reset too far in the future AND auto-resume is off (the default for
+      // every subagent fork): surface the error without waiting, exactly as
+      // before this path learned to park. No replay follows this bail, so
+      // mark the snapshot stale (see `credentialSnapshotStale`) — same
+      // reasoning as the no-ts fail-fast.
       ctx.markCredentialSnapshotStale();
       yield pendingErrorEvent;
       return;

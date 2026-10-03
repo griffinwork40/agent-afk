@@ -913,7 +913,7 @@
     },
     {
       "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
-      "description": "When set to 1/true, forked sub-agents that hit an OAuth usage-limit 429 will park and wait (up to 2 hours) for a keychain account hot-swap before surfacing the error — the same behaviour as top-level interactive sessions. When false (the default), forks fail fast so the parent session can decide how to recover. Forced to false for daemon-surface sessions regardless of this setting, because no human can switch accounts there. Callers may override per-fork via config.autoResumeOnUsageLimit; an explicit value always wins over this env var.",
+      "description": "When set to 1/true, forked sub-agents that hit an OAuth usage-limit 429 will park and wait (up to 2 hours) for a keychain account hot-swap before surfacing the error — the same behaviour as top-level interactive sessions. When false (the default), forks fail fast so the parent session can decide how to recover. Ignored for daemon-surface sessions, because no human can switch accounts there. Callers may override per-fork via config.autoResumeOnUsageLimit; an explicit value always wins over this env var.",
       "type": "boolean",
       "required": false,
       "default": "0",

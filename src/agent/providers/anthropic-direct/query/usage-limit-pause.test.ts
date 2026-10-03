@@ -148,7 +148,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('usageLimitNoTimestampPause', () => {
-  it('emits paused with no resetsAt but with waitDeadline, then errors when autoResume=false', async () => {
+  it('emits paused with no resetsAt and no waitDeadline, then errors when autoResume=false', async () => {
     const ctx = makeCtx(false);
     const input = makeInput();
     const pending: ProviderEvent = { type: 'error', error: makeError() };
@@ -159,7 +159,8 @@ describe('usageLimitNoTimestampPause', () => {
 
     expect(events[0]).toMatchObject({ type: 'paused', reason: 'usage-limit', autoResume: false });
     expect((events[0] as Extract<ProviderEvent, { type: 'paused' }>).resetsAt).toBeUndefined();
-    expect((events[0] as Extract<ProviderEvent, { type: 'paused' }>).waitDeadline).toBeInstanceOf(Date);
+    // Fail-fast never parks, so it must not advertise a park window.
+    expect((events[0] as Extract<ProviderEvent, { type: 'paused' }>).waitDeadline).toBeUndefined();
     expect(events[1]).toMatchObject({ type: 'error' });
     expect(events).toHaveLength(2);
     expect((ctx as RetryTierContext & { _markStale: ReturnType<typeof vi.fn> })._markStale).toHaveBeenCalled();
@@ -265,23 +266,18 @@ describe('usageLimitResetPause — far-reset', () => {
     return new Date(Date.now() + TWO_HOURS_MS + 60_000);
   }
 
-  it('far-reset + autoResume=false: emits paused with real resetsAt, then errors immediately', async () => {
+  it('far-reset + autoResume=false: surfaces the error immediately with no paused (unchanged behavior)', async () => {
     const ctx = makeCtx(false);
     const input = makeInput();
     const pending: ProviderEvent = { type: 'error', error: makeError() };
-    const rs = farResetsAt();
 
     const events = await drain(
-      usageLimitResetPause(ctx, input, () => false, nextOk(), pending, rs),
+      usageLimitResetPause(ctx, input, () => false, nextOk(), pending, farResetsAt()),
     );
 
-    // paused emitted first (UI can render "resumes at X")
-    expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({ type: 'paused', reason: 'usage-limit', autoResume: false });
-    const paused = events[0] as Extract<ProviderEvent, { type: 'paused' }>;
-    // resetsAt is the real timestamp (accurate for UI copy when autoResume=false)
-    expect(paused.resetsAt).toEqual(rs);
-    expect(events[1]?.type).toBe('error');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('error');
+    expect(waitForHotSwapMock).not.toHaveBeenCalled();
     expect((ctx as RetryTierContext & { _markStale: ReturnType<typeof vi.fn> })._markStale).toHaveBeenCalled();
   });
 
