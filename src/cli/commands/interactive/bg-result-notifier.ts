@@ -35,6 +35,7 @@ import type {
   BackgroundJob,
 } from '../../../agent/background-registry.js';
 import { extractOutputText } from '../../../agent/background-registry.result.js';
+import { redactSecrets } from '../../../agent/redact-secrets.js';
 import { env } from '../../../config/env.js';
 import { formatDuration } from '../../format-utils.js';
 
@@ -108,9 +109,15 @@ function truncateBytes(text: string, maxBytes: number, jobId: string): string {
  * escaping), capped at {@link MAX_INJECTION_BYTES} with the same
  * `/bgsub:join <jobId>` marker. Used by push surfaces (Telegram) that show
  * the result to the operator rather than the model.
+ *
+ * Secret redaction is applied here because this is the off-device delivery
+ * boundary: the returned string is forwarded verbatim to Telegram (and any
+ * future push surface). The persisted `result.json` body is intentionally
+ * left unredacted — local consumers (REPL replay via `/bgsub:join`,
+ * `buildBgResultInjection`) read the full text from disk without this filter.
  */
 export function formatBgResultBody(job: BackgroundJob): string {
-  return truncateBytes(extractOutput(job), MAX_INJECTION_BYTES, job.jobId);
+  return truncateBytes(redactSecrets(extractOutput(job)), MAX_INJECTION_BYTES, job.jobId);
 }
 
 /**

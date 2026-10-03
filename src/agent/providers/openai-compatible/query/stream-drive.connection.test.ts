@@ -5,13 +5,14 @@
  * Covers:
  *   (a) retries a statusless APIConnectionError-shaped error and succeeds
  *   (b) retries a 408 and a 504 then succeeds
- *   (c) does NOT retry APIConnectionTimeoutError
+ *   (c) retries the SDK connect timeout (APIConnectionTimeoutError) while the
+ *       stream signal is live, but not once a watchdog aborted it
  *   (d) does NOT retry a 400
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { runConnectionPhase } from './stream-drive.connection.js';
-import { __setRetryBaseDelay } from './retry.js';
+import { MAX_CONNECTION_RETRIES, __setRetryBaseDelay } from './retry.js';
 
 // SDK error stand-ins with the exact constructor names and shapes the
 // classifier keys on. No real SDK import (audit:sdk lock).
@@ -59,7 +60,24 @@ describe('runConnectionPhase — statusless connection errors', () => {
     expect(createStream).toHaveBeenCalledTimes(2);
   });
 
-  it('does NOT retry APIConnectionTimeoutError (TTFB watchdog owns that window)', async () => {
+  it('retries the SDK connect timeout (APIConnectionTimeoutError) while the stream signal is live', async () => {
+    __setRetryBaseDelay(0);
+    vi.useFakeTimers();
+    let calls = 0;
+    const createStream = vi.fn(async (_signal: AbortSignal) => {
+      calls++;
+      if (calls === 1) throw new APIConnectionTimeoutError();
+      return emptyStream;
+    });
+    const ac = new AbortController();
+    const p = runConnectionPhase(createStream, ac.signal, ac.signal, undefined, 'test-model');
+    await vi.runAllTimersAsync();
+    const result = await p;
+    expect(result.ok).toBe(true);
+    expect(createStream).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up on a persistent connect timeout after MAX_CONNECTION_RETRIES', async () => {
     __setRetryBaseDelay(0);
     vi.useFakeTimers();
     const createStream = vi.fn(async (_signal: AbortSignal) => {
@@ -67,6 +85,22 @@ describe('runConnectionPhase — statusless connection errors', () => {
     });
     const ac = new AbortController();
     const p = runConnectionPhase(createStream, ac.signal, ac.signal, undefined, 'test-model');
+    await vi.runAllTimersAsync();
+    const result = await p;
+    expect(result.ok).toBe(false);
+    expect(createStream).toHaveBeenCalledTimes(MAX_CONNECTION_RETRIES + 1);
+  });
+
+  it('does NOT retry a timeout once a watchdog aborted the stream signal (TTFB owns it)', async () => {
+    __setRetryBaseDelay(0);
+    vi.useFakeTimers();
+    const createStream = vi.fn(async (_signal: AbortSignal) => {
+      throw new APIConnectionTimeoutError();
+    });
+    const watchdog = new AbortController();
+    watchdog.abort();
+    const user = new AbortController();
+    const p = runConnectionPhase(createStream, watchdog.signal, user.signal, undefined, 'test-model');
     await vi.runAllTimersAsync();
     const result = await p;
     expect(result.ok).toBe(false);

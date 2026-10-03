@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { APIError } from 'openai';
+import { APIConnectionError, APIConnectionTimeoutError, APIError } from 'openai';
 import {
   RETRY_AFTER_MAX_WAIT_MS,
   computeBackoffDelay,
@@ -74,8 +74,18 @@ describe('retryability predicates', () => {
     expect(isRetryableConnectionError(apiError(400))).toBe(false);
     expect(isRetryableConnectionError(apiError(401))).toBe(false);
     expect(isRetryableConnectionError(apiError(404))).toBe(false);
-    // Statusless network errors are now retried (the SDK no longer silently retries them)
-    expect(isRetryableConnectionError(new Error('Connection error.'))).toBe(false); // no ctor name match
+    // Statusless transport failures are retried (the SDK no longer silently
+    // retries them): the real SDK class, and a raw fetch rejection whose cause
+    // chain carries a socket code.
+    expect(isRetryableConnectionError(new APIConnectionError({ message: undefined }))).toBe(true);
+    const fetchFailed = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }),
+    });
+    expect(isRetryableConnectionError(fetchFailed)).toBe(true);
+    // A plain Error with the same text is NOT (classification is by class/code, not message)
+    expect(isRetryableConnectionError(new Error('Connection error.'))).toBe(false);
+    // The SDK timeout is retried by runConnectionPhase (signal-gated), not by this predicate
+    expect(isRetryableConnectionError(new APIConnectionTimeoutError())).toBe(false);
   });
 
   it('mid-stream: retries 429/5xx but NOT statusless errors (stream errors always have status)', () => {
@@ -182,5 +192,32 @@ describe('isRetryableStreamError — status-less overload', () => {
 
   it('connection-phase predicate is unchanged (still requires a status)', () => {
     expect(isRetryableConnectionError(sdkMidStreamError({ code: 'server_is_overloaded' }))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OVERLOAD_MESSAGE_RE word-boundary guard (#2855)
+// ---------------------------------------------------------------------------
+
+describe('OVERLOAD_MESSAGE_RE word-boundary false-positive guard (#2855)', () => {
+  it('does NOT match "Model context window is overloaded" (issue example)', () => {
+    // The substring match /overloaded/i would fire here; /\boverloaded\b/i must not.
+    const err = sdkMidStreamError({ message: 'Model context window is overloaded' });
+    // The SDK copies `code` and `type` from the body onto the error; neither is
+    // set here, so the only candidate is the message match via OVERLOAD_MESSAGE_RE.
+    // A false positive would make isOpenAIOverloadError return true even though
+    // this is a client-side context-window error, not a provider overload.
+    expect(isOpenAIOverloadError(err)).toBe(false);
+  });
+
+  it('still matches the canonical provider overload message (word boundary present)', () => {
+    const err = sdkMidStreamError({ message: 'Our servers are currently overloaded. Please try again.' });
+    expect(isOpenAIOverloadError(err)).toBe(true);
+  });
+
+  it('does not match if "overloaded" is part of a longer word (no word boundary)', () => {
+    // Hypothetical: the prefix/suffix of "overloaded" attached to other chars.
+    const err = sdkMidStreamError({ message: 'requestoverloaded status' });
+    expect(isOpenAIOverloadError(err)).toBe(false);
   });
 });

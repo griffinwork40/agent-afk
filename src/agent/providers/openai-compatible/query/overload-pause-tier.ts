@@ -93,6 +93,23 @@ export function isOverloadErrorEvent(event: ProviderEvent): boolean {
   return status !== undefined && OVERLOAD_STATUS_CODES.has(status);
 }
 
+/**
+ * Classify how a detected overload error event was triggered — useful for trace
+ * metadata so observers can distinguish HTTP-status overloads (529/503) from
+ * body-detected overloads (status-less SSE `error` payload).
+ *
+ * Returns `'body'` when the error carries no HTTP status and is identified by
+ * its `code` / `type` / `message` fields (e.g. the SDK mid-stream overload
+ * throw). Returns `'status'` when a numeric HTTP status code (529 or 503) is
+ * present.
+ *
+ * Precondition: `isOverloadErrorEvent(event)` is true.
+ */
+export function overloadTrigger(event: ProviderEvent): 'status' | 'body' {
+  if (event.type !== 'error') return 'status';
+  return isOpenAIOverloadError(event.error) ? 'body' : 'status';
+}
+
 /** Context threaded through from `OpenAICompatibleQuery` to the tier. */
 export interface OverloadPauseTierContext {
   /** AgentConfig.surface — determines whether to park or fail-fast. */
@@ -132,6 +149,9 @@ export async function* runIterationWithOverloadPause(
   // must not silently consume the operator's pause budget before any probe fires.
   let pauseStartedAt: number | null = null;
   let pauseEmitted = false;
+  // Classify how the first overload was detected — set once and reused for the
+  // trace so HTTP-status overloads and body-detected overloads are distinguishable.
+  let firstTrigger: 'status' | 'body' | null = null;
 
   for (;;) {
     // ── Manual generator protocol: preserves the typed return value ──────────
@@ -155,6 +175,8 @@ export async function* runIterationWithOverloadPause(
         const terminal = await gen.next();
         returnValue = terminal.done ? terminal.value : null;
         overloadEvent = event;
+        // Record trigger on the first overload; subsequent replays reuse it.
+        firstTrigger ??= overloadTrigger(event);
         // Generator is exhausted (done step consumed); `return(null)` signals
         // intent to close it and satisfies the gen.return() cleanup contract.
         await gen.return(null);
@@ -226,6 +248,9 @@ export async function* runIterationWithOverloadPause(
         metadata: {
           reason: 'overloaded',
           source: 'openai-compat',
+          // 'status' = HTTP 529/503 triggered the pause; 'body' = status-less
+          // SSE error payload identified by code/type/message fields.
+          trigger: firstTrigger ?? 'status',
           hasResetTimestamp: false,
           ceilingMs,
           surface: ctx.surface ?? 'unknown',

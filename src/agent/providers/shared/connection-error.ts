@@ -88,11 +88,12 @@ export function isRetryableConnectionStatus(err: unknown): boolean {
  *   - any error whose own `code`, or a `code` on its bounded `cause` chain, is
  *     one of the known socket/DNS codes.
  *
- * Deliberately excludes `APIConnectionTimeoutError` (the SDK's own request
- * timeout; AFK's TTFB watchdog owns that window) and anything carrying an
- * HTTP status (those are server answers, routed by the status-based tiers).
- * Callers must check their abort signal BEFORE this, so a user interrupt or a
- * watchdog abort is never mistaken for a network blip.
+ * Deliberately excludes `APIConnectionTimeoutError` (classified separately by
+ * {@link isConnectionTimeoutError}, whose retry is gated on the caller's request
+ * signal) and anything carrying an HTTP status (those are server answers,
+ * routed by the status-based tiers). Callers must check their abort signal
+ * BEFORE this, so a user interrupt or a watchdog abort is never mistaken for a
+ * network blip.
  */
 export function isConnectionPhaseNetworkError(err: unknown): boolean {
   if (err === null || typeof err !== 'object') return false;
@@ -115,4 +116,25 @@ export function isConnectionPhaseNetworkError(err: unknown): boolean {
     cur = cause;
   }
   return false;
+}
+
+/**
+ * Contract: true when `err` is the SDK's `APIConnectionTimeoutError` (exact
+ * constructor name; both the Anthropic and OpenAI SDKs use it).
+ *
+ * Invariant: callers retry this ONLY when their own request signal is NOT
+ * aborted. The SDK raises `APIUserAbortError`, never this class, when the
+ * caller's signal fires, so a non-aborted request signal proves the timeout came
+ * from the SDK itself, not from an AFK watchdog. In practice that is almost always
+ * undici's 10 s CONNECT timeout: the SDK (anthropic 0.74 `client.js:254-274`,
+ * openai `client.js:374-396`) turns any fetch rejection whose text matches
+ * `/timed? ?out/` into a cause-less `APIConnectionTimeoutError`. That fires
+ * long before AFK's TTFB watchdog (default 180 s) and was retried by the SDK's
+ * own retries until #2422 set `maxRetries: 0`, so without this it was
+ * the one connection-phase blip still fatal after PR #2838.
+ */
+export function isConnectionTimeoutError(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false;
+  const ctorName = (err as { constructor?: { name?: unknown } }).constructor?.name;
+  return ctorName === 'APIConnectionTimeoutError';
 }

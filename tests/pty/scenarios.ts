@@ -60,6 +60,18 @@ export interface PtyExpect {
   /** Substrings that MUST NOT appear anywhere in the buffer. */
   absent?: string[];
   /**
+   * Content-hug only. Discount the one sanctioned duplicate before the
+   * exactlyOnce / absent / order checks: rows a tall overlay covered are in
+   * scrollback AND re-shown on screen after the collapse (archived prefix,
+   * src/cli/terminal-compositor.band-archived-prefix.ts), so the longest
+   * scrollback TAIL equal to the viewport's FIRST rows is counted once. A
+   * duplicate anywhere else (inside scrollback, or not at the seam) still
+   * fails. A real pty cannot expose compositor state, so this is the
+   * structural form of src/cli/_lib/testing/scrollback-seam.ts, which unit
+   * tests use to pin the overlap to the compositor-reported row count.
+   */
+  seamOverlap?: boolean;
+  /**
    * Max run of consecutive blank rows between the first content row and the
    * live frame in the viewport. One blank is the legit rhythm separator; a
    * larger run is the "void" regression. Default (undefined) = not checked.
@@ -254,6 +266,20 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
       maxViewportBlankRun: 1,
     },
+    // content-hug: rows covered by the held overlay are archived AND re-shown
+    // after it clears (archived prefix), so they also sit at the scrollback
+    // tail; seamOverlap discounts exactly that overlap.
+    hugExpect: {
+      inScrollback: ['TOOL_OUTPUT_00', 'TOOL_OUTPUT_01'],
+      inViewport: ['Done (114 tools)'],
+      seamOverlap: true,
+      exactlyOnce: [
+        'TOOL_OUTPUT_00', 'TOOL_OUTPUT_05', 'TOOL_OUTPUT_11', 'TOOL_OUTPUT_17',
+        'Done (114 tools)', 'STATUSMODELXYZ',
+      ],
+      contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
+      maxViewportBlankRun: 1,
+    },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -296,14 +322,15 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       maxViewportBlankRun: 1,
       order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-06', 'BODY-TAIL-ROW']],
     },
-    // content-hug archives rows the tall overlay cannot show AS SOON AS they
-    // are covered (no history hole mid-turn — terminal-compositor.frame-preserve.ts
-    // pendingEvictionAllowed), so after the collapse the OLDEST rows live in
-    // scrollback rather than being re-shown on screen. The invariant is the
-    // same whole-buffer one: every row exactly once, in order, no void; only
-    // the newest rows are required on screen.
+    // content-hug archives rows the tall overlay covers as soon as they are
+    // covered (no history hole mid-turn) and RETAINS them as the archived
+    // prefix, so the collapse re-shows the whole report on screen (no blank
+    // gap below the prompt). The covered rows are therefore also at the tail
+    // of scrollback until new output displaces them: seamOverlap discounts
+    // exactly that overlap; everything else stays exactly-once, in order.
     hugExpect: {
-      inViewport: ['PROSE-06', 'BODY-TAIL-ROW', 'pass cwd to scheduler'],
+      inViewport: ['HEADER-MARKER', 'PROSE-01', 'PROSE-06', 'BODY-TAIL-ROW', 'pass cwd to scheduler'],
+      seamOverlap: true,
       exactlyOnce: [
         'HEADER-MARKER', 'PROSE-01', 'PROSE-03', 'PROSE-06',
         'BODY-TAIL-ROW', 'pass cwd to scheduler', 'thread cwd through daemon',

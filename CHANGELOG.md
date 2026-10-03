@@ -13,9 +13,31 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ### Fixed
 - keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
 
 ### Changed
 - document SessionFacet v7 outcome semantics for public consumers (#2797)
+
+## [5.290.4] - 2026-10-03
+
+### Fixed
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
+
+## [5.290.3] - 2026-10-03
+
+### Fixed
+- retry SDK connect timeouts; redact connection_retry trace text (#2856) (f4332787)
+
+## [5.290.2] - 2026-10-03
+
+### Fixed
+- refill the screen after a tall overlay collapses (content-hug blank gap) (#2857) (eed966f0)
+
+## [5.290.1] - 2026-10-03
+
+### Fixed
+- invariant comment + redactSecrets at Telegram delivery boundary (#2849) (#2858) (e17db879)
+- address advisory findings from #2805 atomic-write review (#2837) (9e1b9b10)
 
 ## [5.290.0] - 2026-10-03
 

@@ -51,6 +51,15 @@ export const MISC_ENV_REGISTRY = [
     category: 'model',
   },
   {
+    name: 'AFK_USAGE_LEDGER_DISABLED',
+    description: 'Set to 1 to stop publishing/reading the cross-process usage ledger (namespace `usage` in state/kv/kv.db). Usage surfaces (`afk usage`, get_runtime_state, fan-out notice, daemon budget gate) then see only this process\'s in-memory quota cache. Default 0 (ledger active).',
+    type: 'boolean',
+    required: false,
+    default: '0',
+    example: '1',
+    category: 'model',
+  },
+  {
     name: 'AFK_RATE_LIMIT_STAGGER_MAX_MS',
     description: 'Jitter ceiling (ms) for the rate-limit admission bucket: each waiter at a window boundary wakes at reset + random(0..ceiling) to avoid re-storming the API. Default 500. Set to 0 in tests for deterministic timing.',
     type: 'number',

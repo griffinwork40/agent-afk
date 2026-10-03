@@ -28,6 +28,7 @@ import type { ProviderEvent } from '../../../provider.js';
 import {
   runIterationWithOverloadPause,
   isOverloadErrorEvent,
+  overloadTrigger,
   OPENAI_COMPAT_OVERLOAD_EXHAUSTED_NOTICE,
   type OverloadPauseTierContext,
 } from './overload-pause-tier.js';
@@ -145,6 +146,35 @@ describe('isOverloadErrorEvent', () => {
   it('does not match a status-less unrelated SDK error', () => {
     const err = new APIError(undefined, { type: 'invalid_request_error', message: 'bad' }, undefined, new Headers());
     expect(isOverloadErrorEvent({ type: 'error', error: err })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// overloadTrigger — classify status vs. body detection (#2855)
+// ---------------------------------------------------------------------------
+
+describe('overloadTrigger (#2855)', () => {
+  it('returns "status" for a 529 error event', () => {
+    expect(overloadTrigger(err529)).toBe('status');
+  });
+
+  it('returns "status" for a 503 error event', () => {
+    expect(overloadTrigger(err503)).toBe('status');
+  });
+
+  it('returns "body" for a status-less SDK mid-stream overload throw', () => {
+    const err = new APIError(
+      undefined,
+      { message: 'Our servers are currently overloaded. Please try again later.' },
+      undefined,
+      new Headers(),
+    );
+    expect(overloadTrigger({ type: 'error', error: err })).toBe('body');
+  });
+
+  it('returns "body" for a status-less overload identified by code field', () => {
+    const err = new APIError(undefined, { code: 'server_is_overloaded' }, undefined, new Headers());
+    expect(overloadTrigger({ type: 'error', error: err })).toBe('body');
   });
 });
 
@@ -396,9 +426,9 @@ describe('overload pause tier -- trace fidelity and replay hygiene', () => {
 
   function makeCapturingCtx(surface: string): {
     ctx: OverloadPauseTierContext;
-    phases: { phase: string; outcome?: unknown; ceilingMs?: unknown }[];
+    phases: { phase: string; outcome?: unknown; ceilingMs?: unknown; trigger?: unknown }[];
   } {
-    const phases: { phase: string; outcome?: unknown; ceilingMs?: unknown }[] = [];
+    const phases: { phase: string; outcome?: unknown; ceilingMs?: unknown; trigger?: unknown }[] = [];
     const ctx: OverloadPauseTierContext = {
       surface,
       signal: new AbortController().signal,
@@ -412,6 +442,7 @@ describe('overload pause tier -- trace fidelity and replay hygiene', () => {
               phase: String(row.payload['phase']),
               outcome: md['outcome'],
               ceilingMs: md['ceilingMs'],
+              trigger: md['trigger'],
             });
           }
           return Promise.resolve();
@@ -490,5 +521,81 @@ describe('overload pause tier -- trace fidelity and replay hygiene', () => {
 
     expect(phases.filter((p) => p.phase === 'overload_pause')).toHaveLength(0);
     expect(phases.filter((p) => p.phase === 'overload_resume')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trigger field in overload_pause trace metadata (#2855)
+// ---------------------------------------------------------------------------
+
+describe('overload pause tier — trigger field in trace metadata (#2855)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    delete process.env['AFK_OVERLOAD_PAUSE_MS'];
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete process.env['AFK_OVERLOAD_PAUSE_MS'];
+  });
+
+  function makeTriggerCapturingCtx(surface: string): {
+    ctx: OverloadPauseTierContext;
+    triggers: (unknown)[];
+  } {
+    const triggers: unknown[] = [];
+    const ctx: OverloadPauseTierContext = {
+      surface,
+      signal: new AbortController().signal,
+      isClosed: () => false,
+      sessionId: 'sess-trigger-test',
+      traceWriter: {
+        write: (row: { kind: string; payload: Record<string, unknown> }) => {
+          if (row.kind === 'session_phase' && row.payload['phase'] === 'overload_pause') {
+            const md = (row.payload['metadata'] ?? {}) as Record<string, unknown>;
+            triggers.push(md['trigger']);
+          }
+          return Promise.resolve();
+        },
+      } as OverloadPauseTierContext['traceWriter'],
+    };
+    return { ctx, triggers };
+  }
+
+  it('emits trigger:"status" when a 529 HTTP error fires the pause', async () => {
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '600000';
+    const { makeIteration } = scriptIterations(
+      { events: [err529], result: null },
+      { events: [], result: cleanResult },
+    );
+    const { ctx, triggers } = makeTriggerCapturingCtx('cli');
+    const promise = drain(runIterationWithOverloadPause(makeIteration, ctx));
+    await vi.advanceTimersByTimeAsync(600_000);
+    await promise;
+
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]).toBe('status');
+  });
+
+  it('emits trigger:"body" when a status-less SDK overload throw fires the pause', async () => {
+    const sdkOverloadErr = new APIError(
+      undefined,
+      { message: 'Our servers are currently overloaded. Please try again later.' },
+      undefined,
+      new Headers(),
+    );
+    const bodyEvent: ProviderEvent = { type: 'error', error: sdkOverloadErr };
+    process.env['AFK_OVERLOAD_PAUSE_MS'] = '600000';
+    const { makeIteration } = scriptIterations(
+      { events: [bodyEvent], result: null },
+      { events: [], result: cleanResult },
+    );
+    const { ctx, triggers } = makeTriggerCapturingCtx('cli');
+    const promise = drain(runIterationWithOverloadPause(makeIteration, ctx));
+    await vi.advanceTimersByTimeAsync(600_000);
+    await promise;
+
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0]).toBe('body');
   });
 });

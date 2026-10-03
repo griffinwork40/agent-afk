@@ -31,7 +31,7 @@
  * # Cleanup
  *
  * The temp file is cleaned up in a `finally` block using best-effort
- * semantics — the unlink error is suppressed because the rename may already
+ * semantics — the rm error is suppressed because the rename may already
  * have succeeded and the target path no longer exists, or another process may
  * have removed it concurrently.  The original error from the write/rename is
  * always re-thrown.
@@ -137,28 +137,71 @@ function makeTmpPath(dest: string): string {
 const WIN_RENAME_TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
 /**
- * Attempt `rename(tmp, dest)`, retrying up to `maxRetries` times on transient
- * Windows errors (EPERM / EACCES / EBUSY).  Each retry waits an exponentially
- * increasing delay (10 ms, 20 ms, 40 ms …) so callers converge quickly.
+ * Synchronous sleep using `Atomics.wait` on a shared buffer.
+ * `setTimeout` is not available in synchronous contexts; this is the
+ * standard portable alternative for a sync delay.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Attempt `rename(tmp, dest)` synchronously, retrying up to `maxRetries`
+ * times on transient Windows errors (EPERM / EACCES / EBUSY).  Each retry
+ * waits an exponentially increasing, clamped delay so callers converge quickly.
  *
  * Contract: the retry path is ONLY activated on Windows (`_platform === 'win32'`).
  * On POSIX, EPERM/EACCES/EBUSY indicate permanent error conditions and are
  * re-thrown immediately without retry.
  *
- * @param _platform  - Injected platform string; defaults to `process.platform`.
- *                     Pass a literal string in tests to exercise both branches
- *                     portably without skipping by host platform (repo rule R4).
- * @param _renameFn  - Injectable rename implementation.  Defaults to the real
- *                     `fs/promises.rename`.  Tests pass a simple mock function
- *                     so they never need to spy on a non-configurable ES module
- *                     export.
+ * @internal Test-only injectable params (`_platform`, `_renameFn`) are
+ *   intentionally excluded from the public signature; the overload below
+ *   accepts them only when the caller explicitly opts in for test purposes.
+ */
+export function renameWithRetrySync(
+  tmp: string,
+  dest: string,
+  maxRetries?: number,
+  /** @internal */ _platform?: string,
+  /** @internal */ _renameFn?: (from: string, to: string) => void,
+): void {
+  const retries = maxRetries ?? 5;
+  const platform = _platform ?? process.platform;
+  const renameFn = _renameFn ?? renameSync;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      renameFn(tmp, dest);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
+      lastErr = err;
+      if (attempt < retries) sleepSync(Math.min(10 * 2 ** attempt, 5000));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Attempt `rename(tmp, dest)`, retrying up to `maxRetries` times on transient
+ * Windows errors (EPERM / EACCES / EBUSY).  Each retry waits an exponentially
+ * increasing, clamped delay (max 5 s) so callers converge quickly.
+ *
+ * Contract: the retry path is ONLY activated on Windows (`_platform === 'win32'`).
+ * On POSIX, EPERM/EACCES/EBUSY indicate permanent error conditions and are
+ * re-thrown immediately without retry.
+ *
+ * @internal Test-only injectable params (`_platform`, `_renameFn`) allow
+ *   portable testing of both branches without `vi.spyOn` on a non-configurable
+ *   ES module export and without skipping by host OS (repo rule R4).
  */
 export async function renameWithRetry(
   tmp: string,
   dest: string,
   maxRetries = 5,
-  _platform: string = process.platform,
-  _renameFn: (from: string, to: string) => Promise<void> = rename,
+  /** @internal */ _platform: string = process.platform,
+  /** @internal */ _renameFn: (from: string, to: string) => Promise<void> = rename,
 ): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -172,7 +215,7 @@ export async function renameWithRetry(
       if (_platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
       lastErr = err;
       // Skip the sleep on the final attempt — we are about to throw anyway.
-      if (attempt < maxRetries) await sleep(10 * 2 ** attempt);
+      if (attempt < maxRetries) await sleep(Math.min(10 * 2 ** attempt, 5000));
     }
   }
   throw lastErr;
@@ -186,6 +229,9 @@ export async function renameWithRetry(
  * Write `content` to `dest` atomically: write to a sibling temp file, then
  * `rename` it over the target.  The rename is atomic on POSIX and NTFS within
  * a single filesystem — a crash mid-write never leaves a half-written file.
+ *
+ * On Windows, the rename step uses a retry wrapper (EPERM/EACCES/EBUSY) to
+ * tolerate transient concurrent-access races.
  *
  * @param dest    - Absolute path of the destination file.
  * @param content - String (or Buffer) to write.
@@ -212,9 +258,9 @@ export function atomicWriteFile(
   const tmp = makeTmpPath(dest);
   try {
     writeFileSync(tmp, content, { mode, encoding, flag });
-    renameSync(tmp, dest);
+    renameWithRetrySync(tmp, dest);
   } catch (err) {
-    // Best-effort cleanup — suppress unlink errors.
+    // Best-effort cleanup — suppress rm errors.
     try { unlinkSync(tmp); } catch { /* ignore */ }
     throw err;
   }
@@ -264,7 +310,7 @@ export async function atomicWriteFileAsync(
     await renameWithRetry(tmp, dest);
     return true;
   } catch (err) {
-    // Best-effort cleanup — suppress unlink errors.
+    // Best-effort cleanup — suppress rm errors.
     try { await rm(tmp, { force: true }); } catch { /* ignore */ }
     throw err;
   }

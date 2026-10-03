@@ -32,6 +32,7 @@ import type { KeyDispatchHost } from './terminal-compositor.input-dispatch.js';
 import { handleResizeImmediate, handleDisarmWindowResize } from './terminal-compositor.lifecycle.resize.js';
 import { enterRawMode, exitRawMode, enableBracketedPasteAndScrollKey, disableBracketedPasteAndScrollKey } from './terminal-compositor.lifecycle.mode.js';
 import { flushPendingCommittedBand, endTurnFlush, appendLinesAtCursor } from './terminal-compositor.lifecycle.teardown.js';
+import { dropScrollingArchivedRows, flushLinesSkippingArchived } from './terminal-compositor.band-archived-prefix.js';
 import { decomposeCommitText } from './terminal-compositor.commit-text.js';
 import { buildBandMeta, buildScrollbackArchiveEscape, scrollbackFlushLines } from './terminal-compositor.scrollback.js';
 import { installObserver, type SuspendObserverHandle } from './terminal-compositor.lifecycle.suspend-observer.js';
@@ -95,18 +96,20 @@ export interface LifecycleHost {
   // SIGWINCH subscriber to snapshot the pre-resize footprint for erase.
   lastKnownRows: number;
   pendingResizeErase: { top: number; bottom: number } | null;
-  readonly committedBand: string[];
+  committedBand: string[];
   // #540: per-physical-row logical provenance, index-aligned 1:1 with
   // committedBand. Read by flushPendingCommittedBand to archive the pending
   // prefix as soft-wrappable logical lines instead of pre-wrapped physical rows.
-  readonly committedBandMeta: BandRowMeta[];
-  readonly committedBandTopRow: number;
+  committedBandMeta: BandRowMeta[];
+  committedBandTopRow: number;
   // #540 Stage 3: bottom row of the on-screen painted band suffix. Read by
   // endTurnFlush to determine the erase range for painted rows.
-  readonly committedBandBottomRow: number;
+  committedBandBottomRow: number;
   // Read by disarm() to flush genuinely-unpainted committed-band rows to
   // scrollback before teardown. See committedBandPaintedRows on the class.
-  readonly committedBandPaintedRows: number;
+  committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   // F2: set by the SIGWINCH-immediate handler; cleared by the next debounced
   // repaint once repositionCommittedBand re-establishes real geometry. See the
   // field doc on the class (terminal-compositor.ts).
@@ -505,7 +508,7 @@ export function disarm(self: LifecycleHost): void {
       // because it uses buildScrollbackArchiveEscape which erases at anchorFloor.
       const pendingCount = self.committedBand.length - self.committedBandPaintedRows;
       if (pendingCount > 0) {
-        const pendingLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, pendingCount);
+        const pendingLines = flushLinesSkippingArchived(self.committedBand, self.committedBandMeta, pendingCount, self.committedBandArchivedPrefix);
         appendLinesAtCursor(pendingLines, disarmCursorRow, self);
       }
       self.forgetCommittedBand();
@@ -557,6 +560,11 @@ export function disarm(self: LifecycleHost): void {
   // untouched; re-emitting it would duplicate it in scrollback (HARD CONSTRAINT
   // #1). Pending rows go to scrollback ONLY, never an on-screen truncated copy
   // (HARD CONSTRAINT #2).
+  // Invariant (archived rows never reach history twice): once disarmed the
+  // screen is plain terminal content that later output scrolls into history,
+  // so re-shown archived-prefix rows (content-hug; already in scrollback) are
+  // dropped by repaint here, BEFORE the flush and the frame clear.
+  dropScrollingArchivedRows(self, Number.POSITIVE_INFINITY);
   flushPendingCommittedBand(self);
 
   if (self.logUpdate) {
