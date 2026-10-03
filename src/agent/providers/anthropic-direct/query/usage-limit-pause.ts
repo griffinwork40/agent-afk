@@ -18,52 +18,26 @@ import type { RetryTierContext, TierGenerator } from './retry-context.js';
 import { NO_TS_RETRY_INTERVAL_MS, TWO_HOURS_MS } from './retry-constants.js';
 
 /**
- * `oauth-limit-no-ts` path — a 429 with no reset timestamp.
+ * Shared hot-swap wait loop for both the no-timestamp and far-reset parks.
  *
- * No authoritative deadline exists, so poll-retry the turn on
- * {@link NO_TS_RETRY_INTERVAL_MS} — replaying to probe whether the limit has
- * lifted — while still waking immediately on a keychain hot-swap. Stays in the
- * `paused` state across failed probes and emits `resumed` only once the limit
- * genuinely lifts, so the UI's "auto-resume when the limit resets" promise is
- * actually kept on a same-account reset (previously this path waited on a
- * hot-swap ONLY, so a same-account reset never resumed and the session hung
- * forever). Bounded at {@link TWO_HOURS_MS} — past that the error surfaces
- * instead of polling forever.
+ * Emits `paused` once, then polls `waitForHotSwap` until the limit lifts (a
+ * replay probe returns without re-limiting), the abort signal fires, or the
+ * TWO_HOURS_MS cap is reached. Emits `resumed` exactly once when the limit
+ * lifts. If the cap is reached without a recovery, yields `pendingErrorEvent`
+ * and marks the credential snapshot stale.
+ *
+ * Contract: the caller emits `paused` BEFORE calling this helper so the UI
+ * can render the pause panel immediately. The helper assumes that has happened
+ * and does NOT emit `paused` itself.
  */
-export async function* usageLimitNoTimestampPause(
+async function* runHotSwapParkLoop(
   ctx: RetryTierContext,
   runInput: RunTurnInput,
   isClosed: () => boolean,
   next: TierGenerator,
-  pendingErrorEvent: ProviderEvent,
+  accountId: string,
+  startedAt: number,
 ): AsyncGenerator<ProviderEvent, void, void> {
-  const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
-  yield { type: 'paused', reason: 'usage-limit', accountId, autoResume: ctx.autoResumeOnUsageLimit };
-  // Witness layer: a usage-limit park is otherwise invisible in the trace —
-  // the turn simply stops emitting for up to two hours. Record it so the
-  // stall is legible (mirrors the `rate_limit` phase for transient backoff).
-  // Fire-and-forget; trace latency must never stall the pause/resume.
-  void emitSessionPhase(runInput.traceWriter, {
-    phase: 'usage_limit_pause',
-    metadata: {
-      reason: 'usage-limit',
-      source: 'retry-layer',
-      hasResetTimestamp: false,
-      autoResume: ctx.autoResumeOnUsageLimit,
-    },
-  });
-
-  if (!ctx.autoResumeOnUsageLimit) {
-    // Fail-fast (autoResumeOnUsageLimit=false, e.g. a subagent fork): no
-    // replay follows, so the operator's fix — logging into a different
-    // account — needs the NEXT turn to pick up the new credential
-    // without a manual `/reauth`. See `credentialSnapshotStale`.
-    ctx.markCredentialSnapshotStale();
-    yield pendingErrorEvent;
-    return;
-  }
-
-  const startedAt = Date.now();
   let resumeEmitted = false;
   for (;;) {
     let noTsResult: 'aborted' | 'hot-swap' | 'timer';
@@ -133,6 +107,7 @@ export async function* usageLimitNoTimestampPause(
 
     if (Date.now() - startedAt > TWO_HOURS_MS) {
       // Limit never lifted within the cap — stop polling and surface it.
+      ctx.markCredentialSnapshotStale();
       yield reLimited;
       return;
     }
@@ -141,10 +116,82 @@ export async function* usageLimitNoTimestampPause(
 }
 
 /**
+ * `oauth-limit-no-ts` path — a 429 with no reset timestamp.
+ *
+ * No authoritative deadline exists, so poll-retry the turn on
+ * {@link NO_TS_RETRY_INTERVAL_MS} — replaying to probe whether the limit has
+ * lifted — while still waking immediately on a keychain hot-swap. Stays in the
+ * `paused` state across failed probes and emits `resumed` only once the limit
+ * genuinely lifts, so the UI's "auto-resume when the limit resets" promise is
+ * actually kept on a same-account reset (previously this path waited on a
+ * hot-swap ONLY, so a same-account reset never resumed and the session hung
+ * forever). Bounded at {@link TWO_HOURS_MS} — past that the error surfaces
+ * instead of polling forever.
+ */
+export async function* usageLimitNoTimestampPause(
+  ctx: RetryTierContext,
+  runInput: RunTurnInput,
+  isClosed: () => boolean,
+  next: TierGenerator,
+  pendingErrorEvent: ProviderEvent,
+): AsyncGenerator<ProviderEvent, void, void> {
+  const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+  const startedAt = Date.now();
+  // waitDeadline bounds the park at TWO_HOURS_MS from now so watchdog/ceiling
+  // can arm an accurate timer (the park is bounded even though resetsAt is absent).
+  const waitDeadline = new Date(startedAt + TWO_HOURS_MS);
+  yield {
+    type: 'paused',
+    reason: 'usage-limit',
+    accountId,
+    autoResume: ctx.autoResumeOnUsageLimit,
+    waitDeadline,
+  };
+  // Witness layer: a usage-limit park is otherwise invisible in the trace —
+  // the turn simply stops emitting for up to two hours. Record it so the
+  // stall is legible (mirrors the `rate_limit` phase for transient backoff).
+  // Fire-and-forget; trace latency must never stall the pause/resume.
+  void emitSessionPhase(runInput.traceWriter, {
+    phase: 'usage_limit_pause',
+    metadata: {
+      reason: 'usage-limit',
+      source: 'retry-layer',
+      hasResetTimestamp: false,
+      autoResume: ctx.autoResumeOnUsageLimit,
+    },
+  });
+
+  if (!ctx.autoResumeOnUsageLimit) {
+    // Fail-fast (autoResumeOnUsageLimit=false, e.g. a subagent fork): no
+    // replay follows, so the operator's fix — logging into a different
+    // account — needs the NEXT turn to pick up the new credential
+    // without a manual `/reauth`. See `credentialSnapshotStale`.
+    ctx.markCredentialSnapshotStale();
+    yield pendingErrorEvent;
+    return;
+  }
+
+  yield* runHotSwapParkLoop(
+    ctx, runInput, isClosed, next, accountId, startedAt,
+  );
+}
+
+/**
  * `oauth-limit` path — a 429 carrying a `|<unix-ts>` reset timestamp.
  *
  * Wait for the deadline (or a hot-swap), then replay. Reset windows beyond
- * {@link TWO_HOURS_MS} are surfaced immediately without waiting.
+ * {@link TWO_HOURS_MS} are surfaced immediately without waiting when
+ * `autoResumeOnUsageLimit` is false. When `autoResumeOnUsageLimit` is true,
+ * a far-reset window enters the hot-swap wait loop (bounded at TWO_HOURS_MS)
+ * instead of surfacing the error immediately — because an account switch during
+ * that window can resume the turn within the 2-hour cap even when the original
+ * account's reset is days away.
+ *
+ * UI copy for the far-reset park: `resetsAt` is left undefined so the REPL and
+ * Telegram show "No reset time available / auto-resume on account switch" rather
+ * than a days-away timestamp that would be false (we actually give up after 2h,
+ * not at resetsAt). `waitDeadline` is set to parkStart + TWO_HOURS_MS so the
+ * watchdog and pause-ceiling arm accurately.
  */
 export async function* usageLimitResetPause(
   ctx: RetryTierContext,
@@ -154,12 +201,69 @@ export async function* usageLimitResetPause(
   pendingErrorEvent: ProviderEvent,
   resetsAt: Date,
 ): AsyncGenerator<ProviderEvent, void, void> {
-  if (resetsAt.getTime() - Date.now() > TWO_HOURS_MS) {
-    // Reset too far in the future — surface the error without waiting.
-    // No replay follows this bail either, so mark the snapshot stale (see
-    // `credentialSnapshotStale`) — same reasoning as the no-ts fail-fast.
-    ctx.markCredentialSnapshotStale();
-    yield pendingErrorEvent;
+  const isFarReset = resetsAt.getTime() - Date.now() > TWO_HOURS_MS;
+
+  if (isFarReset) {
+    if (!ctx.autoResumeOnUsageLimit) {
+      // Reset too far in the future AND auto-resume is off — surface immediately.
+      // Emit paused first (same as the within-2h path) so the UI can render
+      // truthful "resumes at X" copy, then error. Mark snapshot stale so the
+      // next turn picks up a fresh credential without /reauth.
+      const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+      yield {
+        type: 'paused',
+        reason: 'usage-limit',
+        resetsAt,
+        accountId,
+        autoResume: false,
+      };
+      void emitSessionPhase(runInput.traceWriter, {
+        phase: 'usage_limit_pause',
+        metadata: {
+          reason: 'usage-limit',
+          source: 'retry-layer',
+          hasResetTimestamp: true,
+          farReset: true,
+          resetsAt: resetsAt.toISOString(),
+          autoResume: false,
+        },
+      });
+      ctx.markCredentialSnapshotStale();
+      yield pendingErrorEvent;
+      return;
+    }
+
+    // Far reset + autoResume=true: park in the hot-swap loop bounded at 2h.
+    // Do NOT emit the real resetsAt — it is days away, which would display
+    // a false "resumes at <distant time>" to the user. Instead emit no resetsAt
+    // (→ "no reset time available / resume on account switch") and set
+    // waitDeadline so watchdog/ceiling arm for exactly the 2h park window.
+    const accountId = parseAccountIdentifier(loadClaudeCodeOauthToken() ?? '');
+    const startedAt = Date.now();
+    const waitDeadline = new Date(startedAt + TWO_HOURS_MS);
+    yield {
+      type: 'paused',
+      reason: 'usage-limit',
+      accountId,
+      autoResume: true,
+      waitDeadline,
+      // resetsAt intentionally omitted: displaying the real distant timestamp
+      // would mislead the user (we give up after 2h, not at the far reset).
+    };
+    void emitSessionPhase(runInput.traceWriter, {
+      phase: 'usage_limit_pause',
+      metadata: {
+        reason: 'usage-limit',
+        source: 'retry-layer',
+        hasResetTimestamp: true,
+        farReset: true,
+        resetsAt: resetsAt.toISOString(),
+        autoResume: true,
+      },
+    });
+    yield* runHotSwapParkLoop(
+      ctx, runInput, isClosed, next, accountId, startedAt,
+    );
     return;
   }
 

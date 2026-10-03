@@ -919,9 +919,34 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
     await it.return?.();
   }, 10_000);
 
-  it('2h cap: 429 with resetsAt > 2h from now → error surfaces immediately, no paused/resumed', async () => {
+  it('2h cap: 429 with resetsAt > 2h from now + autoResume=false → error surfaces immediately', async () => {
+    // With autoResume=false, far-reset is always surfaced immediately (unchanged behavior).
     messagesCreateMock.mockImplementation(() => {
       throw make429UsageLimitError(3 * 60 * 60 * 1_000); // 3h reset
+    });
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: singleInput('hello'),
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
+    });
+
+    const events = await collect(query);
+    const types = events.map((e) => e.type);
+
+    // autoResume=false: far-reset is surfaced immediately with paused+error, no resumed.
+    expect(types).toContain('paused');
+    expect(types).not.toContain('resumed');
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  });
+
+  it('2h cap: 429 with resetsAt > 2h from now + autoResume=true → parks in hot-swap loop (emits paused, no resetsAt)', async () => {
+    // With autoResume=true, far-reset parks in the hot-swap loop (bounded at 2h).
+    // The paused event must carry no resetsAt (days-away timestamp would mislead)
+    // and must carry waitDeadline ≈ now + 2h.
+    // Close the query immediately after receiving `paused` to exit the loop without waiting 2h.
+    messagesCreateMock.mockImplementation(() => {
+      throw make429UsageLimitError(3 * 60 * 60 * 1_000); // 3h reset always
     });
 
     const provider = new AnthropicDirectProvider();
@@ -930,14 +955,26 @@ describe('AnthropicDirectProvider — turnWithUsageLimitRetry', () => {
       config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
     });
 
-    const events = await collect(query);
-    const types = events.map((e) => e.type);
+    const events: ProviderEvent[] = [];
+    for await (const ev of query) {
+      events.push(ev);
+      if (ev.type === 'paused') {
+        // Close the query (abort) so the hot-swap loop exits immediately.
+        query.close();
+      }
+    }
 
-    // 2h cap: reset too far away — no waiting, no paused card, just the error.
-    expect(types).not.toContain('paused');
+    const types = events.map((e) => e.type);
+    // Parks: emits paused
+    expect(types).toContain('paused');
+    const pausedEvt = events.find((e) => e.type === 'paused') as Extract<ProviderEvent, { type: 'paused' }> | undefined;
+    // Far-reset: resetsAt must NOT be the actual 3h distant value (would mislead UI)
+    expect(pausedEvt?.resetsAt).toBeUndefined();
+    // waitDeadline must be set (for watchdog/ceiling)
+    expect(pausedEvt?.waitDeadline).toBeInstanceOf(Date);
+    // No resume since we closed immediately
     expect(types).not.toContain('resumed');
-    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
-  });
+  }, 15_000);
 
   it('credit-exhausted: 400+credit → error surfaces immediately, no paused', async () => {
     messagesCreateMock.mockImplementation(() => {
@@ -1452,9 +1489,10 @@ describe('AnthropicDirectProvider — credential re-resolve after a usage-limit 
     expect(staleFlag(query)).toBe(true);
   });
 
-  it('the >2h reset bail marks the credential snapshot stale', async () => {
-    // resetsAt beyond TWO_HOURS_MS: the layer surfaces the error without
-    // parking, so no hot-swap poller is alive to notice a `claude login`.
+  it('the >2h reset bail + autoResume=false marks the credential snapshot stale', async () => {
+    // autoResume=false: far-reset surfaces immediately and marks snapshot stale.
+    // (autoResume=true now parks in the hot-swap loop; stale is marked when the
+    // cap is hit, which requires fake timers — tested in usage-limit-pause.test.ts.)
     messagesCreateMock.mockImplementation(() => {
       throw make429UsageLimitError(3 * 60 * 60 * 1_000);
     });
@@ -1462,7 +1500,7 @@ describe('AnthropicDirectProvider — credential re-resolve after a usage-limit 
     const provider = new AnthropicDirectProvider();
     const query = provider.query({
       prompt: singleInput('hello'),
-      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: true },
+      config: { model: 'claude-sonnet-5', apiKey: 'sk-ant-oat01-test', autoResumeOnUsageLimit: false },
     });
 
     await collect(query);
