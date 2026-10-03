@@ -707,6 +707,24 @@
       "category": "model"
     },
     {
+      "name": "AFK_PEER_INBOUND",
+      "description": "How this REPL session handles incoming peer messages. 'accept' (default) delivers messages to the model at the next idle turn. 'hold' writes them to held/ for /inbox review. 'off' ignores incoming messages. Invalid values fall back to 'accept' with a one-time warning emitted via debugLog (visible under AFK_DEBUG=1).",
+      "type": "string",
+      "required": false,
+      "default": "accept",
+      "example": "hold",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_PEER_POLL_MS",
+      "description": "Polling interval in milliseconds for the peer inbox notifier when fs.watch is unavailable or unreliable. Default 1000.",
+      "type": "number",
+      "required": false,
+      "default": "1000",
+      "example": "2000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_PLAIN_OUTPUT",
       "description": "Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the TerminalCompositor live overlay (both the persistent between-turn compositor AND the per-turn StreamRenderer overlay), AND the input surface downgrades to the simple non-TTY line reader instead of the fancy compositor-backed input box. Same code path already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior (live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true (case-insensitive).",
       "type": "boolean",
@@ -1599,10 +1617,18 @@
     },
     {
       "name": "TMUX",
-      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
+      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
       "type": "string",
       "required": false,
       "example": "/tmp/tmux-501/default,12345,0",
+      "category": "process"
+    },
+    {
+      "name": "TMUX_PANE",
+      "description": "tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label.",
+      "type": "string",
+      "required": false,
+      "example": "%0",
       "category": "process"
     },
     {

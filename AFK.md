@@ -107,6 +107,17 @@ Both providers emit a normalized `ProviderEvent` stream consumed by `src/agent/s
 - **Plugins** (`src/agent/plugins-scanner.ts`, `src/agent/plugins/`) — Scans `~/.afk/plugins/` at session construction; install/remove/update + git-based sources.
 - **MCP client** (`src/agent/mcp/`) — Wraps `@modelcontextprotocol/sdk`. `McpManager.fromConfig()` connects every server resolved by `loadMcpConfig()`. Config layers (lowest → highest priority): plugin-contributed `<plugin>/.claude-plugin/mcp.json` → `~/.afk/config/mcp.json` → `<cwd>/.mcp.json` → `--mcp-config <path>`. Per-name conflicts: higher layer wins, displaced source surfaced as a warning. Transports: stdio + streamable-HTTP + SSE fallback + OAuth. Tools are bridged as `mcp__<server>__<tool>` and read fresh per-query in the dispatcher so `notifications/tools/list_changed` refreshes are picked up without restarting the session. Per-surface manager (REPL); subagents share parent by reference. Sampling capability deliberately not advertised — eliminates the "stub or hang" footgun. `/mcp` lists servers; `/mcp auth` surfaces pending OAuth URLs from `~/.afk/state/mcp/server-status.json`.
 
+### Peer (cross-session) messaging
+
+Replaces ad-hoc `tmux send-keys` relays (which split multi-line text into many turns, had no delivery receipts, and raced with busy REPLs) with a durable filesystem mailbox per session. See [`docs/peer-messaging.md`](docs/peer-messaging.md) for the full spec.
+
+- **Discovery**: live sessions enumerated via `$AFK_STATE_DIR/presence/`; presence fields `name`, `turnState`, and `peerInbox=true` are set once a REPL session's first turn runs (`src/agent/awareness/presence.peer.ts`).
+- **Tools**: `list_sessions` (show live peers) + `send_to_session` (write to inbox, idle receiver wakes immediately, busy receiver gets it at next turn boundary) — top-level sessions only (`src/agent/tools/schemas.peer.ts`).
+- **Mailbox**: `$AFK_STATE_DIR/inbox/<id>/{pending,delivered,held}/`; atomic tmp+rename writes; an exclusive-create claim receipt (hardlink, `copyFile(COPYFILE_EXCL)` fallback) guarantees exactly one claimer wins (`src/agent/peer/inbox-store.ts`).
+- **Wake path**: idle + empty-buffer receiver is woken via the existing `tryAutoResume` / `surface.abortPendingRead()` path; half-typed input is never touched; busy turns deliver at the next boundary (`src/cli/commands/interactive/loop-iteration.ts:91-103`).
+- **Guards**: rate ~10/min, 60 s dedup, hop cap 6, 64 KB body, wake budget ~20/hour/sender; over-budget → `held/` not `pending/` (`src/agent/peer/guards.ts`). `AFK_PEER_INBOUND=accept|hold|off`; `/inbox` to review held messages.
+- **Security**: peer messages carry no user authority; the system prompt frames them explicitly as coming from another agent (`system-prompt.ts:81`). Accepted risk: autonomous/bypass receivers accept by default (operator decision 2026-10-02).
+
 ### User-scope state
 
 All AFK state under `~/.afk/` (never `~/.claude/`), resolved exclusively through `src/paths.ts`:

@@ -11,6 +11,22 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.287.1] - 2026-10-03
+
+### Fixed
+- diagnostic detail on no readable content errors (#2808) (42a5be5e)
+
+## [5.287.0] - 2026-10-03
+
+### Added
+- cross-session peer messaging (list_sessions / send_to_session) (#2806) (dff4418f)
+
+## [5.286.2] - 2026-10-03
+
+### Fixed
+- retry rename on Windows EPERM/EACCES/EBUSY (#2805) (1d3ef5ca)
+- right-size /review budgets, fix compose guidance, trace the effective budget (#2815) (c90e1303)
+
 ## [5.286.1] - 2026-10-03
 
 ### Fixed

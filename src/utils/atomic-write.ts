@@ -41,6 +41,7 @@
 
 import { mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { mkdir, writeFile, rename, rm, chmod } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -107,6 +108,60 @@ function makeTmpPath(dest: string): string {
   const dir = dirname(dest);
   const hex = randomBytes(6).toString('hex');
   return join(dir, `.tmp-${hex}`);
+}
+
+/**
+ * Transient error codes emitted by Windows when a concurrent rename targets
+ * the same destination file.  On POSIX, `rename(2)` is guaranteed atomic and
+ * these codes never appear; on POSIX these codes signal permanent conditions
+ * (unwritable directory, mount boundary) and must NOT be retried.
+ *
+ * - `EPERM`  (-4048): most common; destination briefly locked by the winner.
+ * - `EACCES` (-4092): alternative Windows access-denied code.
+ * - `EBUSY`  (-4082): file in use by another process during the rename window.
+ */
+const WIN_RENAME_TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Attempt `rename(tmp, dest)`, retrying up to `maxRetries` times on transient
+ * Windows errors (EPERM / EACCES / EBUSY).  Each retry waits an exponentially
+ * increasing delay (10 ms, 20 ms, 40 ms …) so callers converge quickly.
+ *
+ * Contract: the retry path is ONLY activated on Windows (`_platform === 'win32'`).
+ * On POSIX, EPERM/EACCES/EBUSY indicate permanent error conditions and are
+ * re-thrown immediately without retry.
+ *
+ * @param _platform  - Injected platform string; defaults to `process.platform`.
+ *                     Pass a literal string in tests to exercise both branches
+ *                     portably without skipping by host platform (repo rule R4).
+ * @param _renameFn  - Injectable rename implementation.  Defaults to the real
+ *                     `fs/promises.rename`.  Tests pass a simple mock function
+ *                     so they never need to spy on a non-configurable ES module
+ *                     export.
+ */
+export async function renameWithRetry(
+  tmp: string,
+  dest: string,
+  maxRetries = 5,
+  _platform: string = process.platform,
+  _renameFn: (from: string, to: string) => Promise<void> = rename,
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await _renameFn(tmp, dest);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // Invariant: only retry transient Windows rename races; on POSIX these
+      // codes are permanent and must propagate immediately.
+      if (_platform !== 'win32' || !WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
+      lastErr = err;
+      // Skip the sleep on the final attempt — we are about to throw anyway.
+      if (attempt < maxRetries) await sleep(10 * 2 ** attempt);
+    }
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +238,7 @@ export async function atomicWriteFileAsync(
     if (opts.exactMode) await chmod(tmp, mode);
     // Commit point: an abort that landed after the temp write must not rename.
     opts.signal?.throwIfAborted();
-    await rename(tmp, dest);
+    await renameWithRetry(tmp, dest);
   } catch (err) {
     // Best-effort cleanup — suppress unlink errors.
     try { await rm(tmp, { force: true }); } catch { /* ignore */ }

@@ -256,6 +256,43 @@ describe('emitForkStarted', () => {
     expect(payload?.resolvedAgentType).toBe('research-agent');
   });
 
+  it('records the effective tool-round budget from childConfig, including 0 (unbounded)', () => {
+    for (const budget of [50, 0]) {
+      vi.mocked(emitSubagentLifecycle).mockClear();
+      emitForkStarted({
+        effectiveTraceWriter: undefined,
+        id: 'c',
+        parentSessionId: 'p',
+        rootId: 'r',
+        effectiveChildModel: 'sonnet',
+        childConfig: { maxToolUseIterations: budget },
+        promptHead: undefined,
+        effectiveAgentType: undefined,
+        effectiveResolvedAgentType: undefined,
+      });
+
+      const payload = vi.mocked(emitSubagentLifecycle).mock.calls[0]?.[1];
+      expect(payload).toHaveProperty('maxToolUseIterations', budget);
+    }
+  });
+
+  it('omits maxToolUseIterations when childConfig carries no budget', () => {
+    emitForkStarted({
+      effectiveTraceWriter: undefined,
+      id: 'c',
+      parentSessionId: 'p',
+      rootId: 'r',
+      effectiveChildModel: 'sonnet',
+      childConfig: {},
+      promptHead: undefined,
+      effectiveAgentType: undefined,
+      effectiveResolvedAgentType: undefined,
+    });
+
+    const payload = vi.mocked(emitSubagentLifecycle).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty('maxToolUseIterations');
+  });
+
   it('includes allowedTools from childConfig.tools when set', () => {
     emitForkStarted({
       effectiveTraceWriter: undefined,

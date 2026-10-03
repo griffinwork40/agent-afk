@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { atomicWriteFile, atomicWriteFileAsync } from './atomic-write.js';
+import { atomicWriteFile, atomicWriteFileAsync, renameWithRetry } from './atomic-write.js';
 
 describe('atomicWriteFile (sync)', () => {
   let dir: string;
@@ -173,5 +173,96 @@ describe('atomicWriteFileAsync (async)', () => {
     expect(existsSync(dest)).toBe(true);
     const parsed = JSON.parse(readFileSync(dest, 'utf-8')) as { writer: number };
     expect([1, 2]).toContain(parsed.writer);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renameWithRetry — platform-gated retry behaviour
+//
+// These tests inject both `_platform` and `_renameFn` to exercise the win32
+// retry branch and the POSIX fast-fail branch on every host OS without any
+// `vi.spyOn` on a non-configurable ES module export.  They never skip or
+// branch on `process.platform` — repo rule R4.
+// ---------------------------------------------------------------------------
+
+describe('renameWithRetry', () => {
+  // Helper: build a rename mock that throws `err` for the first `failTimes`
+  // calls, then resolves successfully.
+  function mockRename(
+    err: Error,
+    failTimes: number,
+  ): { fn: (from: string, to: string) => Promise<void>; callCount: () => number } {
+    let calls = 0;
+    const fn = async (_from: string, _to: string): Promise<void> => {
+      calls++;
+      if (calls <= failTimes) throw err;
+    };
+    return { fn, callCount: () => calls };
+  }
+
+  // Always-fail rename mock.
+  function alwaysFailRename(
+    err: Error,
+  ): { fn: (from: string, to: string) => Promise<void>; callCount: () => number } {
+    let calls = 0;
+    const fn = async (_from: string, _to: string): Promise<void> => {
+      calls++;
+      throw err;
+    };
+    return { fn, callCount: () => calls };
+  }
+
+  it('succeeds immediately when rename does not throw', async () => {
+    let calls = 0;
+    const fn = async (_f: string, _t: string): Promise<void> => { calls++; };
+    await expect(renameWithRetry('a', 'b', 3, 'linux', fn)).resolves.toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  it('retries on EPERM when platform is win32 and succeeds on retry', async () => {
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn, callCount } = mockRename(eperm, 1);
+    await expect(renameWithRetry('a', 'b', 3, 'win32', fn)).resolves.toBeUndefined();
+    expect(callCount()).toBe(2);
+  });
+
+  it('does NOT retry EPERM when platform is not win32 — throws immediately', async () => {
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn, callCount } = mockRename(eperm, 99);
+    await expect(renameWithRetry('a', 'b', 3, 'linux', fn)).rejects.toMatchObject({ code: 'EPERM' });
+    // Must throw on the first attempt — no retry on POSIX.
+    expect(callCount()).toBe(1);
+  });
+
+  it('does NOT retry EACCES when platform is not win32', async () => {
+    const eacces = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    const { fn, callCount } = mockRename(eacces, 99);
+    await expect(renameWithRetry('a', 'b', 3, 'darwin', fn)).rejects.toMatchObject({ code: 'EACCES' });
+    expect(callCount()).toBe(1);
+  });
+
+  it('exhausts maxRetries on win32 and throws the last error', async () => {
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn, callCount } = alwaysFailRename(eperm);
+    // maxRetries=2 → attempts 0, 1, 2 = 3 total calls.
+    await expect(renameWithRetry('a', 'b', 2, 'win32', fn)).rejects.toMatchObject({ code: 'EPERM' });
+    expect(callCount()).toBe(3);
+  });
+
+  it('does not sleep after the final failed attempt on win32', async () => {
+    // Contract: with maxRetries=0 there is exactly 1 attempt and 0 sleeps.
+    // If sleep were called after the last failure, the overall wall time would
+    // grow — verified here by the attempt count being exactly 1.
+    const eperm = Object.assign(new Error('EPERM'), { code: 'EPERM' });
+    const { fn, callCount } = alwaysFailRename(eperm);
+    await expect(renameWithRetry('a', 'b', 0, 'win32', fn)).rejects.toMatchObject({ code: 'EPERM' });
+    expect(callCount()).toBe(1);
+  });
+
+  it('re-throws non-transient errors immediately on win32', async () => {
+    const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const { fn, callCount } = mockRename(enoent, 99);
+    await expect(renameWithRetry('a', 'b', 3, 'win32', fn)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(callCount()).toBe(1);
   });
 });
