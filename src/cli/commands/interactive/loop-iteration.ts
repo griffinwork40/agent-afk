@@ -648,6 +648,9 @@ export async function runInputLoop(
         // Forward the promotion seam so Ctrl+B can background a running
         // foreground subagent (else fall back to whole-turn backgrounding).
         ...(ctx.subagentControl ? { subagentControl: ctx.subagentControl } : {}),
+        // #2542/#2735: Forward the detach registry so the Ctrl+B handler can
+        // free the model's turn while a bash process keeps running.
+        ...(ctx.detachRegistry ? { detachRegistry: ctx.detachRegistry } : {}),
         async onUserMessage(userInput) {
           // Write the user's message to the transcript immediately — the
           // appendTurn below then closes the turn with the assistant block.

@@ -301,6 +301,9 @@ export function registerInteractiveCommand(program: Command): void {
         const runningJobs = ctx.backgroundRegistry.list().filter((j) => j.status === 'running');
         if (runningJobs.length > 0) await snapshotGitStateForCancelAll(ctx.stats.cwd ?? process.cwd());
         await ctx.backgroundRegistry.cancelAll().catch(() => { /* best-effort */ });
+        // #2542/#2735: Cancel in-flight detachable tool calls so detached bash
+        // processes are killed on session exit (Invariant:D3). Best-effort.
+        ctx.detachRegistry?.cancelAll();
         await Promise.race([
           ctx.session.current.close(),
           new Promise<void>(resolve => {
