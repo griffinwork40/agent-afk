@@ -31,6 +31,7 @@
 
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../http-client/scrape.js';
+import { emptyScrapeMessage } from '../../../http-client/scrape-diagnostics.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../http-client/search.js';
 import { checkEgressTarget, guardedFetch } from '../../../http-client/egress-guard.js';
 import type { EgressGuardOptions as GuardOpts } from '../../../http-client/egress-guard.js';
@@ -288,7 +289,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
           });
           if (result.markdown.trim().length === 0) {
             return {
-              content: `web_scrape extracted no readable content from ${parsed.url}.`,
+              content: emptyScrapeMessage(parsed.url!, result),
               isError: true,
             };
           }

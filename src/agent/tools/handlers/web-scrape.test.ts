@@ -212,7 +212,52 @@ describe('web_scrape handler — markdown mode (fetch-first)', () => {
 
     const r = await handler({ url: 'https://example.com/empty' }, signal());
     expect(r.isError).toBe(true);
-    expect(r.content).toMatch(/no readable content/i);
+    expect(r.content).toMatch(/^web_scrape extracted no readable content from/);
+    expect(r.content).toContain('fetch HTTP 200');
+    expect(r.content).toContain('content-type text/html');
+    expect(r.content).toContain(`raw body ${Buffer.byteLength(empty)} UTF-8 bytes`);
+    expect(r.content).toContain('headless render succeeded');
+    expect(r.content).toContain('render HTTP 200');
+    expect(r.content).toContain('render final URL https://e.com');
+    expect(r.content).toContain('one retry with mode: "raw"');
+    expect(r.content).toContain('back off rather than re-request in parallel');
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it('diagnoses a tiny redirected body even when render fails', async () => {
+    const fetchFn = makeFetch(() => {
+      const response = makeResponse({ body: '<body></body>', contentType: 'text/html; charset=utf-8' });
+      Object.defineProperty(response, 'url', { value: 'https://example.com/interstitial' });
+      return response;
+    });
+    const renderFn = vi.fn<RenderFn>(async () => { throw new Error('navigation failed'); });
+    const handler = createWebScrapeHandler({ fetchFn, renderFn, lookupFn: publicLookup });
+
+    const r = await handler({ url: 'https://example.com/empty' }, signal());
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('fetch HTTP 200');
+    expect(r.content).toContain('fetch final URL https://example.com/interstitial');
+    expect(r.content).toContain('content-type text/html; charset=utf-8');
+    expect(r.content).toContain('raw body 13 UTF-8 bytes');
+    expect(r.content).toContain('headless render failed');
+    expect(r.content).not.toContain('render HTTP');
+    expect(r.content).toContain('short body during parallel requests to the same host often means throttling');
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(renderFn).toHaveBeenCalledOnce();
+  });
+
+  it('reports render not-run for an empty plain-text response', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: '  ', contentType: 'text/plain' }));
+    const renderFn = vi.fn<RenderFn>();
+    const handler = createWebScrapeHandler({ fetchFn, renderFn, lookupFn: publicLookup });
+
+    const r = await handler({ url: 'https://example.com/empty' }, signal());
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain('fetch HTTP 200');
+    expect(r.content).toContain('raw body 2 UTF-8 bytes');
+    expect(r.content).toContain('headless render not-run');
+    expect(r.content).not.toContain('final URL');
+    expect(renderFn).not.toHaveBeenCalled();
   });
 
   it('adds a Playwright install hint when fetch fails and render is unavailable', async () => {

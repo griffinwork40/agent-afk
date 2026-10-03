@@ -66,6 +66,21 @@ export interface ScrapeOptions {
   lookupFn?: EgressGuardOptions['lookupFn'];
 }
 
+export interface ScrapeDiagnostics {
+  /** Plain-fetch response metadata, absent when no response was received. */
+  fetch?: {
+    httpStatus: number;
+    finalUrl: string;
+    contentType: string;
+    /** UTF-8 bytes of the decoded, unextracted body (not wire/compressed bytes). */
+    rawBodyBytes?: number;
+  };
+  /** Navigation outcome, not whether rendered HTML yielded readable content. */
+  render: 'not-run' | 'failed' | 'succeeded';
+  renderHttpStatus?: number | null;
+  renderFinalUrl?: string;
+}
+
 export interface ScrapeResult {
   title: string;
   markdown: string;
@@ -73,6 +88,8 @@ export interface ScrapeResult {
   finalUrl: string;
   /** True when the result came from the Playwright-render escalation. */
   usedRender: boolean;
+  /** Additive metadata for diagnosing empty extraction without another request. */
+  diagnostics?: ScrapeDiagnostics;
   /**
    * Set when extraction retained suspiciously little of the source's visible
    * text — see `extraction-advisory.ts`. Optional and non-blocking: the result
@@ -155,6 +172,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
   let fetchedUrl = url;
   let fetchStatus: number | null = null;
   let fetchErr: unknown = null;
+  const diagnostics: ScrapeDiagnostics = { render: 'not-run' };
 
   try {
     // guardedFetch = retryFetch (transient 429/5xx + network blips on an
@@ -169,6 +187,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     fetchStatus = res.status;
     fetchedUrl = res.url || url;
     const contentType = res.headers.get('content-type') ?? '';
+    diagnostics.fetch = { httpStatus: res.status, finalUrl: fetchedUrl, contentType };
 
     if (res.ok) {
       if (BINARY_RE.test(contentType)) {
@@ -178,9 +197,10 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
         );
       }
       const body = await res.text();
+      diagnostics.fetch.rawBodyBytes = Buffer.byteLength(body, 'utf8');
       if (TEXTISH_RE.test(contentType) && !HTMLISH_RE.test(contentType)) {
         // JSON / XML / plain text / CSV — already readable; return verbatim.
-        return { title: '', markdown: body.trim(), finalUrl: fetchedUrl, usedRender: false };
+        return { title: '', markdown: body.trim(), finalUrl: fetchedUrl, usedRender: false, diagnostics };
       }
       // HTML or unknown content-type → extraction pipeline.
       fetchedHtml = body;
@@ -230,6 +250,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
       markdown: fetched.markdown,
       finalUrl: fetchedUrl,
       usedRender: false,
+      diagnostics,
       ...(advisory !== undefined ? { advisory } : {}),
     };
   }
@@ -242,6 +263,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     // then re-validate `finalUrl` after, because an in-browser redirect chain is
     // opaque to us (same pre/post pattern `act()` uses for the domain policy).
     await assertEgressAllowed(url, guardOpts);
+    diagnostics.render = 'failed';
     const rendered = await renderFn(url, {
       timeoutMs: opts.timeoutMs,
       signal: opts.signal,
@@ -254,6 +276,9 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
     if (rendered.finalUrl !== url && /^https?:\/\//i.test(rendered.finalUrl)) {
       await assertEgressAllowed(rendered.finalUrl, guardOpts);
     }
+    diagnostics.render = 'succeeded';
+    diagnostics.renderHttpStatus = rendered.httpStatus;
+    diagnostics.renderFinalUrl = rendered.finalUrl;
     const renderedContent = await safeExtract(rendered.html, rendered.finalUrl);
     // Same async-boundary abort re-check as the fetch path above: extraction
     // does not observe the signal, so honor a cancel/timeout that landed during
@@ -270,6 +295,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
         markdown: renderedContent.markdown,
         finalUrl: rendered.finalUrl,
         usedRender: true,
+        diagnostics,
         ...(advisory !== undefined ? { advisory } : {}),
       };
     }
@@ -306,6 +332,7 @@ export async function scrapeToMarkdown(url: string, opts: ScrapeOptions): Promis
       markdown: fetched.markdown,
       finalUrl: fetchedUrl,
       usedRender: false,
+      diagnostics,
     };
   }
 
