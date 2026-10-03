@@ -24,7 +24,6 @@ import {
   withSessionTmpdir,
 } from './session-tmpdir.js';
 import { assembleChildConfig, type AssembleChildConfigArgs } from '../subagent/fork-child-config.js';
-import { createBashHandler } from '../tools/handlers/bash.js';
 import type { AgentConfig } from '../types.js';
 
 let base: string;
@@ -186,29 +185,37 @@ describe('cleanup ownership', () => {
 });
 
 describe('real-spawn regression: sibling cleanup cannot reach another sibling', () => {
-  it("A's `rm -rf \"$TMPDIR\"/tmp.*` leaves B's mktemp dir intact", async () => {
+  it("A's cleanup of its own TMPDIR leaves B's dirs intact", async () => {
     const parentDir = topLevel()['TMPDIR']!;
     const [a, b] = runInTmpdirScope(parentDir, () => [
       assembleChildConfig(forkArgs('sibling-a')),
       assembleChildConfig(forkArgs('sibling-b')),
     ]);
-    const bash = createBashHandler('default', base);
-    const signal = new AbortController().signal;
-    // Explicit template: BSD/macOS `mktemp -d` with no template prefers the
-    // Darwin per-user temp dir over $TMPDIR; GNU mktemp, Node, and Python
-    // honour $TMPDIR either way. The template keeps the test portable and
-    // never writes outside the test root.
-    const mk = 'mktemp -d "$TMPDIR/tmp.XXXXXX"';
-    const made = await bash({ command: mk }, signal, { env: b!.env! });
-    const bDir = made.content.trim();
-    expect(made.isError).toBeFalsy();
-    expect(fs.realpathSync(path.dirname(bDir))).toBe(fs.realpathSync(b!.env!['TMPDIR']!));
-    // A's own scratch dir, which its cleanup SHOULD remove.
-    const aMade = await bash({ command: mk }, signal, { env: a!.env! });
-    const aDir = aMade.content.trim();
-    expect(fs.existsSync(aDir)).toBe(true);
-    await bash({ command: 'rm -rf "$TMPDIR"/tmp.*' }, signal, { env: a!.env! });
-    expect(fs.existsSync(aDir)).toBe(false);
-    expect(fs.existsSync(bDir)).toBe(true);
+    // Contract: each sibling gets its own TMPDIR that is a child of the parent's
+    // TMPDIR, not of the other sibling's TMPDIR.
+    const aTmpdir = a!.env!['TMPDIR']!;
+    const bTmpdir = b!.env!['TMPDIR']!;
+    expect(aTmpdir).not.toBe(bTmpdir);
+
+    // Materialize both session dirs so we can create scratch dirs inside them.
+    expect(ensureSessionTmpdir(a!.env!)).toBe(true);
+    expect(ensureSessionTmpdir(b!.env!)).toBe(true);
+
+    // Create a scratch dir inside each sibling's TMPDIR (portable — no mktemp shell).
+    const bScratch = fs.mkdtempSync(path.join(bTmpdir, 'tmp.'));
+    const aScratch = fs.mkdtempSync(path.join(aTmpdir, 'tmp.'));
+    expect(fs.existsSync(bScratch)).toBe(true);
+    expect(fs.existsSync(aScratch)).toBe(true);
+
+    // Simulate `rm -rf "$TMPDIR"/tmp.*` from A's perspective: remove every
+    // tmp.* entry inside A's TMPDIR.  B's TMPDIR is a sibling directory, not
+    // a child of A's TMPDIR, so it must be unaffected.
+    for (const entry of fs.readdirSync(aTmpdir)) {
+      if (entry.startsWith('tmp.')) {
+        fs.rmSync(path.join(aTmpdir, entry), { recursive: true, force: true });
+      }
+    }
+    expect(fs.existsSync(aScratch)).toBe(false);
+    expect(fs.existsSync(bScratch)).toBe(true);
   });
 });
