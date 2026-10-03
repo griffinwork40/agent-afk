@@ -150,7 +150,6 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
-    "@types/jest": "^30.0.0",
     "@types/jsdom": "^28.0.3",
     "@types/node": "^22.19.10",
     "@types/node-cron": "^3.0.11",
