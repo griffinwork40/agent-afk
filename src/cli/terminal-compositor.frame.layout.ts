@@ -194,9 +194,9 @@ export function hiddenIndicatorGutter(
  *
  * Invariant (band reserve): when the overlay grows tall in content-hug mode
  * the hugging frame rises over the committed band. Covered band rows are
- * archived to scrollback (the archive-on-cover invariant in
- * terminal-compositor.content-hug.ts), so they leave the screen for the rest of
- * the fan-out. Reducing overlayBudget by `bandReserveRows` shortens
+ * archived to scrollback and retained hidden as the archived prefix (the
+ * archive-and-retain invariant in terminal-compositor.content-hug.ts), so they
+ * are off screen until the overlay shrinks. Reducing overlayBudget by `bandReserveRows` shortens
  * trimmedOverlay and therefore the frame, keeping the newest band rows —
  * including the prompt echo — on screen.
  *

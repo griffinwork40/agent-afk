@@ -50,6 +50,7 @@ export async function listSessionsHandler(
         heartbeatAgeMs: r.heartbeatAgeMs,
         pendingMessages: pending,
         blocked: r.blockedSince !== undefined,
+        ...(r.activity !== undefined ? { activity: r.activity } : {}),
       };
     }),
   );

@@ -540,6 +540,12 @@ export class TerminalCompositor {
   // clearCommittedBand() and (transitively) resetState().
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandPaintedRows = 0;
+  // Content-hug archive-and-retain: count of LEADING committedBand rows already
+  // in native scrollback (kept so a shrink can re-show them). Always 0 in
+  // bottom-pinned mode; 0 <= value <= committedBand.length. Reset with the band.
+  // Invariant + helpers: terminal-compositor.band-archived-prefix.ts.
+  /** @internal Relaxed from `private` for the committed-band + frame + lifecycle modules. */
+  committedBandArchivedPrefix = 0;
   // Memoization for terminal-compositor.band-reflow.ts's reflowCommittedBandToWidth:
   // records the (band-reference, paintedRows, width) triple the LAST reflow call
   // produced, so a steady-width repeat repaint (no commit, no resize since) skips

@@ -51,6 +51,13 @@ const RATE_WINDOW_MS = 60_000;
 /** Duplicate-drop window: same sender+target+body hash within 60 seconds. */
 const DEDUP_WINDOW_MS = 60_000;
 
+/**
+ * Duration of the wake-budget window. Exported so `inbox-retention.ts` can
+ * derive the delivered-receipt retention threshold from the same constant
+ * rather than hardcoding a separate magic number.
+ */
+export const PEER_WAKE_BUDGET_WINDOW_MS = 3_600_000; // 1 hour
+
 // ---------------------------------------------------------------------------
 // Sender-side: rate limit and duplicate detection via inbox scan
 // ---------------------------------------------------------------------------
@@ -217,7 +224,6 @@ export interface WakeBudget {
 export function createWakeBudget(opts?: WakeBudgetOpts): WakeBudget {
   const limit = opts?.perSenderPerHour ?? 20;
   const getNow = opts?.now ?? Date.now;
-  const HOUR_MS = 3_600_000;
 
   // Map<senderId, timestamps[]> — each entry is the time a wake was granted.
   const slots = new Map<string, number[]>();
@@ -225,7 +231,7 @@ export function createWakeBudget(opts?: WakeBudgetOpts): WakeBudget {
   return {
     tryConsume(senderId: string): boolean {
       const nowMs = getNow();
-      const cutoff = nowMs - HOUR_MS;
+      const cutoff = nowMs - PEER_WAKE_BUDGET_WINDOW_MS;
       const prev = (slots.get(senderId) ?? []).filter((t) => t >= cutoff);
       if (prev.length >= limit) {
         slots.set(senderId, prev);

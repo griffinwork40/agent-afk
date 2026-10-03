@@ -272,11 +272,11 @@ describe('F2(c): fully-pending band (F3 scenario): pending rows survive disarm-o
     expect(countLabel(vs, 'PENDING-BAND-BOTTOM'), `PENDING-BAND-BOTTOM must appear exactly once:\n${dump}`).toBe(1);
   });
 
-  it('band under a full-viewport overlay is not lost when owner scrolls before disarm (content-hug)', async () => {
+  it('partially-pending band is not lost when owner scrolls before disarm (content-hug)', async () => {
     // Commit a band LARGER than contentHugBandReserve (max(3, rows/4) = 6 at 24
-    // rows) under a full-viewport overlay. The older rows used to be held as
-    // pending; they are now archived to scrollback instead. Either way every
-    // row must survive disarm-owner-wrote exactly once.
+    // rows) under a full-viewport overlay so the older rows are genuinely
+    // pending (already in scrollback as the archived prefix, hidden on screen),
+    // then assert every row survives disarm-owner-wrote exactly once.
     const overlay = Array.from({ length: ROWS }, (_, i) => `overlay-hug-${i}`).join('\n');
     const { c, vs, stdout, repaint } = await makeRig({ overlay, contentHug: true });
 
@@ -286,14 +286,10 @@ describe('F2(c): fully-pending band (F3 scenario): pending rows survive disarm-o
 
     const raw = c as unknown as { committedBand: string[]; committedBandPaintedRows: number };
     expect(raw.committedBand.length, 'precondition: band must be non-empty').toBeGreaterThan(0);
-    // Since the 2026-10-02 no-history-hole change, content-hug archives rows the
-    // overlay cannot show instead of holding them as pending, so nothing is left
-    // pending here. The invariant this test guards is unchanged: every label
-    // survives the owner-wrote disarm exactly once.
     expect(
       raw.committedBandPaintedRows,
-      'content-hug keeps no pending rows under a settled frame',
-    ).toBe(raw.committedBand.length);
+      'precondition: some band rows must be pending (paintedRows < band length)',
+    ).toBeLessThan(raw.committedBand.length);
 
     c.suspendInput();
 

@@ -1310,6 +1310,7 @@ describe('CronScheduler — overlap guard (#2299)', () => {
     let sessionCallCount = 0;
     const scheduler = new CronScheduler({
       telemetryPath,
+      budgetGate: async () => ({ skip: false }),
       sessionFactory: () => {
         sessionCallCount += 1;
         return {

@@ -16,10 +16,14 @@ export const listSessionsTool: AnthropicToolDef = {
   concurrencySafe: true,
   description:
     'List live afk peer sessions on this machine (excluding yourself). ' +
-    'Returns an array of session objects: { sessionId, name, surface, cwd, branch, turnState, turnStateSince, heartbeatAgeMs, pendingMessages, blocked }. ' +
+    'Returns an array of session objects: { sessionId, name, surface, cwd, branch, turnState, turnStateSince, heartbeatAgeMs, pendingMessages, blocked, acceptsMessages, activity? }. ' +
     'Use to discover who to send a message to before calling send_to_session. ' +
     'turnState reflects whether the session is idle (ready to be woken), busy (running a turn), or blocked (waiting on a human prompt). ' +
-    'pendingMessages is the count of unread messages already queued in that session\'s inbox.',
+    'pendingMessages is the count of unread messages already queued in that session\'s inbox. ' +
+    'acceptsMessages is true when the session has a peer-inbox receiver (REPL sessions only in v1). ' +
+    'activity (optional, absent until the first REPL turn starts) contains: promptHead (≤120 chars of the raw user-typed text for the current or most recent turn, redacted of secrets), turns (total completed turns), lastTurnEndedAt (ISO timestamp of last turn end). ' +
+    'For deeper per-turn detail — tool calls, subagents, session phases — call read_witness with the peer\'s sessionId. ' +
+    'Note: read_witness may return empty results for a very new session that has not yet written its witness trace.',
   input_schema: {
     type: 'object',
     properties: {},

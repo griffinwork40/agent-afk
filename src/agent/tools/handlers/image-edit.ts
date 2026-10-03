@@ -31,7 +31,7 @@ import { env } from '../../../config/env.js';
 import { resolveOpenAIAuth } from '../../providers/openai-compatible/auth.js';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import type { ToolResult } from '../../providers/shared/tool-result.js';
-import { resolveAndContain } from './_cwd-utils.js';
+import { resolveAndContain, assertWriteTargetContained } from './_cwd-utils.js';
 import { assertNotDenylisted } from './write-denylist.js';
 
 // ---------------------------------------------------------------------------
@@ -248,9 +248,12 @@ async function saveEditedImage(
 
   let savePath: string;
   if (outputPath) {
+    // F-2823: Also re-validate the symlink target — a dangling link inside the
+    // write root can point outside it, bypassing containment and denylist checks.
     try {
       savePath = resolveAndContain(outputPath, context, 'write', cwd);
       assertNotDenylisted(savePath, 'image_edit');
+      assertWriteTargetContained(savePath, context, 'image_edit', cwd);
     } catch (err: unknown) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
