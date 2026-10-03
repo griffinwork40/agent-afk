@@ -70,6 +70,7 @@ export const SessionPhaseNameSchema = z.enum([
   'stream_accepted_after_drop',
   // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
   'connection_retry',
+  'usage_notice',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({
