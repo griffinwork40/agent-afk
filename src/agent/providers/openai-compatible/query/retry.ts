@@ -169,8 +169,16 @@ const OVERLOAD_CODES = new Set(['server_is_overloaded']);
 /** Body/error `type` values that signal a transient server overload. */
 const OVERLOAD_TYPES = new Set(['service_unavailable_error', 'overloaded_error']);
 
-/** Message text that signals a transient server overload. */
-const OVERLOAD_MESSAGE_RE = /overloaded/i;
+/**
+ * Message text that signals a transient server overload. Requires the word
+ * "server" to appear near "overloaded" (within 40 chars), anchoring the match
+ * on known provider phrases like "Our servers are currently overloaded" while
+ * excluding unrelated messages where an unrelated subsystem is overloaded
+ * (e.g. "Model context window is overloaded", "worker pool overloaded").
+ * The lookahead/lookbehind window is intentionally wide (40 chars) to stay
+ * robust across provider-specific phrasing variations.
+ */
+const OVERLOAD_MESSAGE_RE = /server.{0,40}overloaded|overloaded.{0,40}server/i;
 
 /**
  * True when a `{ code?, type?, message? }` record carries an overload marker.
@@ -203,11 +211,23 @@ function hasOverloadMarker(
  * `.error` body (flat `{type,code,message}` or nested `{error:{...}}` shapes,
  * mirroring anthropic-direct's `isOverloadedErrorEvent`). A status-bearing
  * error is never matched here; the numeric-status paths already own it.
+ *
+ * Note on the top-level `hasOverloadMarker(e, false)` call: `checkMessage` is
+ * deliberately `false` here because `e.message` on the error object itself may
+ * be a non-SDK throw or a JSON-stringified body — free-text matching is
+ * restricted to the parsed server body (`.error`). The SDK's `APIError`
+ * constructor does copy `code` and `type` from the body onto the error itself,
+ * so those fields are available and safe to match here. For plain-object shapes
+ * (non-SDK throws that carry no `status`), this path serves as the primary
+ * guard; it is never reached when `getErrorStatus` returns a status (the
+ * early-return above ensures that), so the status-keyed paths remain exclusive.
  */
 export function isOpenAIOverloadError(err: unknown): boolean {
   if (err === null || typeof err !== 'object') return false;
   if (getErrorStatus(err) !== undefined) return false;
   const e = err as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
+  // Match code/type on the error itself (SDK copies these from the body); skip
+  // .message here since it may be a non-SDK throw or a JSON-stringified body.
   if (hasOverloadMarker(e, false)) return true;
   const body = e.error;
   if (body === null || typeof body !== 'object') return false;
