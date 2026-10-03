@@ -345,6 +345,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         }
       }
 
+      // Intentional: nestedAgentAllowlist not forwarded — DAG nodes are task-workers (INV-028), not scoped agents. (#2848)
       let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
       try {
         handle = await manager.forkSubagent({

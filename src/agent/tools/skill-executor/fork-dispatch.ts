@@ -390,6 +390,11 @@ export async function runForkedSkillToResult(
     // entry as a child of THIS skill's tool-lane entry rather than at root.
     // Mirrors `ComposeExecutor` (compose-executor.ts:227-232); paired with
     // `'skill'` in NESTING_TOOLS so the renderer recurses into the children.
+    // Intentional: `nestedAgentAllowlist` is NOT forwarded here. Skill forks are
+    // not user-defined scoped agents (they carry no `Agent(x)` grant from a type
+    // definition), so there is no caller-supplied allowlist to propagate. The
+    // executor still enforces any allowlist the skill child's own session carries;
+    // omitting it here is correct, not a gap. (#2848)
     handle = await manager.forkSubagent({
       parent: internals.ctx.parentSession,
       config: childConfig,

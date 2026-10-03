@@ -122,9 +122,9 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
   }
 
   // Nested-dispatch scope. Emitted only when the allowlist is set (scoped agent),
-  // so unscoped children are unchanged. Text mirrors the executor rejection message
-  // (subagent-executor.ts nestedScope gate) so the child sees both the preamble
-  // instruction and the error text as consistent, single-source guidance.
+  // so unscoped children are unchanged. Text is semantically consistent with the
+  // executor rejection message (subagent-executor.ts nestedScope gate) so the child
+  // sees the preamble instruction and error text as aligned, single-source guidance.
   const { nestedAgentAllowlist } = facts;
   if (nestedAgentAllowlist !== undefined) {
     if (nestedAgentAllowlist.length === 0) {
@@ -137,7 +137,7 @@ export function renderSubagentIdentityPreamble(facts: SubagentIdentityFacts): st
       lines.push(
         '',
         `When dispatching nested agents, agent_type is required and must be one of: ${nestedAgentAllowlist.join(', ')}.`,
-        'A bare dispatch with no agent_type is not permitted here.',
+        'A bare dispatch with no agent_type is not permitted here — set agent_type to one of the allowed types, or complete the task with your own tools.',
       );
     }
   }
