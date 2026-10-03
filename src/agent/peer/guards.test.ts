@@ -292,3 +292,89 @@ describe('createWakeBudget', () => {
     expect(budget.tryConsume('sender-x')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// held/ directory included in rate/dedup history (PR2806 fix #2)
+// ---------------------------------------------------------------------------
+
+describe('checkSendGuards — held messages count toward rate/dedup limits', () => {
+  it('rate-limits when 10 messages are held (inbound-mode=hold)', async () => {
+    const { checkSendGuards } = await getGuards();
+    const { writeEnvelope, listPending, holdPending } = await getInboxStore();
+
+    const nowMs = Date.now();
+    // Write 10 messages and hold them all (simulating AFK_PEER_INBOUND=hold).
+    for (let i = 0; i < 10; i++) {
+      const ts = new Date(nowMs - (10 - i) * 1000).toISOString();
+      const env = {
+        v: 1 as const,
+        messageId: `held-rate-msg-${i}`,
+        from: { id: SENDER },
+        to: TARGET,
+        hop: 0,
+        ts,
+        body: `held unique msg ${i}`,
+      };
+      await writeEnvelope(env);
+      const files = await listPending(TARGET);
+      const file = files.find((f) => f.includes(`held-rate-msg-${i}`))!;
+      await holdPending(TARGET, file);
+    }
+
+    // 11th message in the minute should be rate-limited even though all prior
+    // messages are in held/ (not pending/ or delivered/).
+    const result = await checkSendGuards(baseOpts({ body: 'eleventh', now: () => nowMs }));
+    expect(result).toBe('rate-limited');
+  });
+
+  it('dedup-rejects a duplicate body whose original is held (wake-budget path)', async () => {
+    const { checkSendGuards } = await getGuards();
+    const { writeEnvelope, listPending, holdPending } = await getInboxStore();
+
+    const nowMs = Date.now();
+    const dupBody = 'wake-budget held duplicate body';
+    const ts = new Date(nowMs - 20_000).toISOString();
+    const env = {
+      v: 1 as const,
+      messageId: 'held-dup-msg-1',
+      from: { id: SENDER },
+      to: TARGET,
+      hop: 0,
+      ts,
+      body: dupBody,
+    };
+    await writeEnvelope(env);
+    const files = await listPending(TARGET);
+    await holdPending(TARGET, files[0]!);
+
+    // Same body within 60s, but the original is now in held/ — must still
+    // be detected as a duplicate.
+    const result = await checkSendGuards(baseOpts({ body: dupBody, now: () => nowMs }));
+    expect(result).toBe('duplicate');
+  });
+});
+
+describe('checkSendGuards — crash-leftover hard-link receipts', () => {
+  it.each(['pending', 'held'])('counts five receipt/%s pairs as five sends, not ten', async (source) => {
+    const { checkSendGuards } = await getGuards();
+    const { writeEnvelope, listPending } = await getInboxStore();
+    const { getPeerInboxDir } = await import('../../paths.js');
+    const nowMs = Date.now();
+    for (let i = 0; i < 5; i++) {
+      await writeEnvelope({ v: 1, messageId: `receipt-${i}`, from: { id: SENDER },
+        to: TARGET, hop: 0, ts: new Date(nowMs - i * 1000).toISOString(), body: `receipt body ${i}` });
+      const file = (await listPending(TARGET)).find((f) => f.includes(`receipt-${i}`))!;
+      const root = getPeerInboxDir(TARGET);
+      fs.linkSync(path.join(root, 'pending', file), path.join(root, 'delivered', file));
+      if (source === 'held') fs.renameSync(path.join(root, 'pending', file), path.join(root, 'held', file));
+    }
+    expect(await checkSendGuards(baseOpts({ body: 'sixth distinct body', now: () => nowMs }))).toBeNull();
+    expect(await checkSendGuards(baseOpts({ body: 'receipt body 0', now: () => nowMs }))).toBe('duplicate');
+    // Five more distinct identities must still exhaust the real ten-send limit.
+    for (let i = 5; i < 10; i++) {
+      await writeEnvelope({ v: 1, messageId: `receipt-${i}`, from: { id: SENDER },
+        to: TARGET, hop: 0, ts: new Date(nowMs).toISOString(), body: `receipt body ${i}` });
+    }
+    expect(await checkSendGuards(baseOpts({ body: 'eleventh distinct body', now: () => nowMs }))).toBe('rate-limited');
+  });
+});

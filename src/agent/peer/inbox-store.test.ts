@@ -194,6 +194,50 @@ describe('claimPending', () => {
     const result = await claimPending(TARGET_ID, 'ghost.json');
     expect(result).toBeNull();
   });
+
+  it('concurrent claims (N=10) on one file: exactly one non-null (hardlink-wins regression)', async () => {
+    // Windows CI observed duplicate claims. Exclusive receipt creation must
+    // enforce one winner independently of rename replacement semantics.
+    const { writeEnvelope, listPending, claimPending } = await getInboxStore();
+    const env = makeEnvelope({ messageId: 'concurrent-hardlink-test' });
+    await writeEnvelope(env);
+    const files = await listPending(TARGET_ID);
+    const file = files[0]!;
+
+    const N = 10;
+    const results = await Promise.all(Array.from({ length: N }, () => claimPending(TARGET_ID, file)));
+    const winners = results.filter((r) => r !== null);
+    const losers = results.filter((r) => r === null);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(N - 1);
+    expect(winners[0]!.messageId).toBe(env.messageId);
+  });
+
+  it('does not overwrite an existing delivered target', async () => {
+    const { writeEnvelope, listPending, claimPending } = await getInboxStore();
+    await writeEnvelope(makeEnvelope());
+    const [file] = await listPending(TARGET_ID);
+    const dst = path.join(tmpDir, 'inbox', TARGET_ID, 'delivered', file!);
+    fs.writeFileSync(dst, 'existing receipt');
+    expect(await claimPending(TARGET_ID, file!)).toBeNull();
+    expect(fs.readFileSync(dst, 'utf8')).toBe('existing receipt');
+  });
+
+  it('a crash after link leaves a receipt that prevents orphan-source redelivery', async () => {
+    const { writeEnvelope, listPending, claimPending, holdPending, releaseHeld } = await getInboxStore();
+    const envelope = makeEnvelope();
+    await writeEnvelope(envelope);
+    const [file] = await listPending(TARGET_ID);
+    const base = path.join(tmpDir, 'inbox', TARGET_ID);
+    // Simulate process exit immediately after exclusive receipt creation.
+    fs.linkSync(path.join(base, 'pending', file!), path.join(base, 'delivered', file!));
+    expect(await claimPending(TARGET_ID, file!)).toBeNull();
+    expect(await holdPending(TARGET_ID, file!)).toBe(true);
+    expect(await releaseHeld(TARGET_ID, file!)).toBe(true);
+    expect(await claimPending(TARGET_ID, file!)).toBeNull();
+    expect(JSON.parse(fs.readFileSync(path.join(base, 'delivered', file!), 'utf8'))).toEqual(envelope);
+    expect(fs.existsSync(path.join(base, 'lock'))).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

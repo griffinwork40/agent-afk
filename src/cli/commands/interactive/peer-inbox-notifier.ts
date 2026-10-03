@@ -1,5 +1,5 @@
 /**
- * REPL-side receiver for cross-session peer messages.
+ * Contract: REPL-side receiver for cross-session peer messages.
  *
  * Watches this session's peer inbox (`$AFK_STATE_DIR/inbox/<id>/pending/`)
  * with `fs.watch` plus an unref'd poll (the poll is the safety net: macOS
@@ -18,7 +18,7 @@
  *     the first turn mints it, and changes on `/resume`; the poll re-keys the
  *     watcher whenever the id changes.
  *   - Body text is never written to the trace; only ids and byte counts.
- *   - Crash window: an envelope claimed (renamed into `delivered/`) but not yet
+ *   - Crash window: an envelope claimed (linked into `delivered/`) but not yet
  *     drained into a turn is lost from the conversation if the process dies.
  *     The file stays in `delivered/` for forensics.
  *   - Scans are serialized; overlapping triggers coalesce into one rescan.
@@ -56,7 +56,15 @@ export interface PeerInboxNotifierOpts {
   writeLine: (text: string) => void;
   /** Inbound mode getter (default: `AFK_PEER_INBOUND`). */
   mode?: () => PeerInboundMode;
+  /** Static sink retained for existing callers; a getter takes precedence. */
   traceWriter?: TraceSink;
+  /**
+   * Live getter for the current trace writer. Called on every emit so that
+   * after a `/resume` swap the notifier automatically writes to the new
+   * session's writer rather than the sealed outgoing one. Pass a getter
+   * instead of a static value to pick up writer re-points in `onSwapped`.
+   */
+  getTraceWriter?: () => TraceSink | undefined;
   now?: () => number;
   /** Poll interval override (ms). Falls back to `AFK_PEER_POLL_MS`, then 1000. */
   pollMs?: number;
@@ -82,7 +90,7 @@ export class PeerInboxNotifier {
   onInjectable: (() => void) | null = null;
 
   private readonly buffer: PeerEnvelope[] = [];
-  private readonly wakeBudget: WakeBudget;
+  private wakeBudget: WakeBudget;
   private readonly pollMs: number;
   private readonly getMode: () => PeerInboundMode;
   private scanning = false;
@@ -99,11 +107,38 @@ export class PeerInboxNotifier {
   private disposed = false;
   /** Operator `/name` choice; survives until the presence file exists. */
   private desiredName: string | undefined;
+  /**
+   * Generation counter incremented on each `onSwapped()` reset. Every async
+   * scan captures the generation at start and discards its results if the
+   * counter has advanced by the time it completes (A→B→A resume race).
+   */
+  private generation = 0;
 
   constructor(private readonly opts: PeerInboxNotifierOpts) {
     this.wakeBudget = createWakeBudget(opts.now !== undefined ? { now: opts.now } : {});
     this.pollMs = resolvePollMs(opts.pollMs);
     this.getMode = opts.mode ?? resolvePeerInboundMode;
+  }
+
+  /**
+   * Invariant: reset per-session state synchronously at the resume-swap commit point
+   * (call from `onSwapped` in bootstrap.ts before the drain cycle runs).
+   *
+   * - Clears the injection buffer so outgoing-session messages cannot leak
+   *   into the resumed session's first turn.
+   * - Resets the wake budget so resumed-session senders start from a clean
+   *   credit pool.
+   * - Advances the generation counter so any async scan that is still in
+   *   flight (forceAccept, watcher-triggered scan, rescan loop) sees a stale
+   *   generation and discards its results instead of injecting them.
+   * - Stops the current watcher (watchedId is cleared) so the next tick
+   *   re-establishes a watcher for the new session's inbox directory.
+   */
+  resetForNewSession(): void {
+    this.buffer.splice(0);
+    this.generation++;
+    this.wakeBudget = createWakeBudget(this.opts.now !== undefined ? { now: this.opts.now } : {});
+    this.stopWatcher(); // clears watchedId → next tick re-keys to new sessionId
   }
 
   hasPendingInjections(): boolean {
@@ -138,20 +173,31 @@ export class PeerInboxNotifier {
    * Operator override (`/inbox accept`): move the named held envelopes back
    * through pending into the buffer, bypassing the wake budget. Returns how
    * many were injected.
+   *
+   * Generation-checked: if a resume swap fires while the async listHeld +
+   * releaseHeld + claimPending chain is in flight, results from the outgoing
+   * session are discarded (generation mismatch) rather than injected into the
+   * resumed session's first turn.
    */
   async forceAccept(messageIds: ReadonlySet<string> | 'all'): Promise<number> {
     const sessionId = this.opts.getSessionId();
-    if (sessionId === undefined) return 0;
+    if (sessionId === undefined || this.disposed) return 0;
+    const gen = this.generation;
     const wasEmpty = this.buffer.length === 0;
     let injected = 0;
     for (const { file, envelope } of await listHeld(sessionId)) {
+      if (!this.isCurrent(sessionId, gen)) return 0; // swap fired mid-flight; discard
       if (messageIds !== 'all' && !messageIds.has(envelope.messageId)) continue;
-      if (!(await releaseHeld(sessionId, file))) continue;
+      const released = await releaseHeld(sessionId, file);
+      if (!this.isCurrent(sessionId, gen)) return 0; // swap fired between release and claim
+      if (!released) continue;
       const claimed = await claimPending(sessionId, file).catch(() => null);
+      if (!this.isCurrent(sessionId, gen)) return 0; // swap fired after claim; discard
       if (claimed === null) continue;
       this.accept(claimed);
       injected++;
     }
+    if (!this.isCurrent(sessionId, gen)) return 0;
     if (wasEmpty && injected > 0) this.fireInjectable();
     return injected;
   }
@@ -172,10 +218,14 @@ export class PeerInboxNotifier {
     if (sessionId === undefined || this.disposed) return;
     if (this.scanning) { this.rescan = true; return; }
     this.scanning = true;
+    const gen = this.generation;
     try {
       do {
         this.rescan = false;
-        await this.scanOnce(sessionId);
+        // Re-read sessionId each iteration: a swap may have changed it.
+        const currentId = this.opts.getSessionId();
+        if (currentId === undefined || !this.isCurrent(sessionId, gen)) break;
+        await this.scanOnce(currentId, gen);
       } while (this.rescan);
     } catch {
       // Best-effort: the REPL must never crash on inbox I/O.
@@ -184,8 +234,12 @@ export class PeerInboxNotifier {
     }
   }
 
-  private async scanOnce(sessionId: string): Promise<void> {
-    if (this.disposed) return;
+  private isCurrent(sessionId: string, gen: number): boolean {
+    return !this.disposed && this.generation === gen && this.opts.getSessionId() === sessionId;
+  }
+
+  private async scanOnce(sessionId: string, gen: number): Promise<void> {
+    if (!this.isCurrent(sessionId, gen)) return;
     const wasEmpty = this.buffer.length === 0;
     const { claimed, held } = await scanPeerInbox({
       sessionId,
@@ -193,6 +247,8 @@ export class PeerInboxNotifier {
       wakeBudget: this.wakeBudget,
       capacity: MAX_PENDING_INJECTIONS - this.buffer.length,
     });
+    // Drop results if a swap fired while the async scan was in flight.
+    if (!this.isCurrent(sessionId, gen)) return;
     for (const h of held) this.noteHeld(h.envelope, h.reason);
     for (const e of claimed) this.accept(e);
     if (wasEmpty && claimed.length > 0) this.fireInjectable();
@@ -202,14 +258,17 @@ export class PeerInboxNotifier {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     this.buffer.push(e);
     this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} · ${sizeLabel(bytes)}`));
-    void emitPeerMessage(this.opts.traceWriter, { action: 'delivered', messageId: e.messageId, peer: e.from.id, bytes });
+    // Use the live getter so post-resume emissions go to the new session's
+    // writer, not the sealed outgoing one (item 3 / PR2806).
+    void emitPeerMessage((this.opts.getTraceWriter ? this.opts.getTraceWriter() : this.opts.traceWriter), { action: 'delivered', messageId: e.messageId, peer: e.from.id, bytes });
   }
 
   private noteHeld(e: PeerEnvelope, reason: HeldReason): void {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     const why = reason === 'wake-budget' ? 'wake budget reached' : 'AFK_PEER_INBOUND=hold';
     this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} held (${why}) · /inbox to review`));
-    void emitPeerMessage(this.opts.traceWriter, { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
+    // Live getter — same rationale as accept() above.
+    void emitPeerMessage((this.opts.getTraceWriter ? this.opts.getTraceWriter() : this.opts.traceWriter), { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
   }
 
   private fireInjectable(): void {
@@ -230,16 +289,19 @@ export class PeerInboxNotifier {
   }
 
   /** Mark presence as a reader and apply the `/name` or tmux label. Best-effort. */
-  private async advertise(sessionId: string): Promise<void> {
+  private async advertise(sessionId: string, gen: number): Promise<void> {
+    if (!this.isCurrent(sessionId, gen)) return;
     await setPresencePeerInbox(sessionId, true);
+    if (!this.isCurrent(sessionId, gen)) return;
     if (this.desiredName !== undefined) return setPresenceName(sessionId, this.desiredName);
     const label = await resolveTmuxLabel();
-    if (label !== undefined) await setPresenceNameIfUnset(sessionId, label);
+    if (this.isCurrent(sessionId, gen) && label !== undefined) await setPresenceNameIfUnset(sessionId, label);
   }
 
   private async startWatching(sessionId: string): Promise<void> {
     this.stopWatcher();
     this.watchedId = sessionId;
+    const startGen = this.generation;
     const base = getPeerInboxDir(sessionId);
     try {
       for (const sub of ['pending', 'delivered', 'held']) {
@@ -248,13 +310,18 @@ export class PeerInboxNotifier {
     } catch {
       return; // the poll keeps retrying scans; nothing to watch yet
     }
-    if (this.disposed || this.watchedId !== sessionId) return; // disposed or re-keyed mid-setup
-    void this.advertise(sessionId);
+    // Guard: disposed, re-keyed, OR a swap fired between the awaited mkdir and now.
+    if (this.disposed || this.watchedId !== sessionId || !this.isCurrent(sessionId, startGen)) return;
+    void this.advertise(sessionId, startGen);
     const ac = new AbortController();
     this.watchAc = ac;
+    const watchGen = this.generation;
     void (async () => {
       try {
-        for await (const _event of watch(join(base, 'pending'), { signal: ac.signal })) void this.scan();
+        for await (const _event of watch(join(base, 'pending'), { signal: ac.signal })) {
+          // Ignore watcher events from a prior session's generation.
+          if (this.isCurrent(sessionId, watchGen)) void this.scan();
+        }
       } catch {
         // AbortError on dispose/re-key, or a dead watcher: the poll is the safety net.
       }
@@ -271,11 +338,16 @@ export function createPeerInboxNotifier(opts: PeerInboxNotifierOpts): PeerInboxN
  * The REPL's notifier: keyed on `ctx.stats.sessionId` (the presence id; see
  * module Contract), rendering through the REPL renderer and tracing to the
  * session's witness writer when one is attached.
+ *
+ * `getTraceWriter` is a live getter over `ctx.traceWriter` so that after a
+ * `/resume` swap — which re-points `ctx.traceWriter` to the new session's
+ * writer in `onSwapped` — peer-message trace events automatically go to the
+ * correct (non-sealed) writer without the notifier needing to be rebuilt.
  */
 export function createReplPeerNotifier(ctx: InteractiveCtx): PeerInboxNotifier {
   return new PeerInboxNotifier({
     getSessionId: () => ctx.stats.sessionId,
     writeLine: (text) => ctx.replRenderer.writeLine(text),
-    ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
+    getTraceWriter: () => ctx.traceWriter,
   });
 }

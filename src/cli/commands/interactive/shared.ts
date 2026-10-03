@@ -381,6 +381,13 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+   * Resets the peer-inbox notifier's in-session state (injection buffer,
+   * wake budget, and generation counter) so the resumed session starts clean.
+   * Mirrors `clearBgResultBuffer`: owned by `setupFooterSubsystems`'s
+   * closure, invoked from the swap's `onSwapped` callback in bootstrap.ts.
+   */
+  resetPeerNotifier?: () => void;
+  /**
    * Witness trace writer for REPL-owned emitters that run outside a session
    * turn (the peer inbox notifier's `peer_message` events). Optional: absent
    * when tracing is disabled (`AFK_TRACE_DISABLED=1`).

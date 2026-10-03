@@ -1,5 +1,5 @@
 /**
- * Filesystem mailbox operations for peer messaging.
+ * Contract: filesystem mailbox operations for peer messaging.
  *
  * Each session's inbox lives at:
  *   `$AFK_STATE_DIR/inbox/<sessionId>/{pending,delivered,held}/`
@@ -8,10 +8,10 @@
  * atomically renamed to `<ts-sortable>-<messageId>.json`. This guarantees
  * that a reader never sees a partially-written message.
  *
- * Claim protocol (rename-wins): exactly one claimer wins the
- * `pending/ → delivered/` rename. A concurrent claim that loses gets ENOENT
- * from the rename and returns null — the caller treats null as "someone else
- * delivered it".
+ * Claim protocol (exclusive receipt): link `pending/F` to `delivered/F`,
+ * then unlink the source. Only one link can create the destination; EEXIST
+ * and ENOENT return null. A crash after linking leaves a delivered receipt
+ * that prevents an orphaned pending source from being claimed again.
  *
  * File modes:
  *   - Directories: 0o700 (only the owning user can list/enter)
@@ -28,6 +28,7 @@ import {
   readFile,
   unlink,
   stat,
+  link,
 } from 'fs/promises';
 import { join } from 'path';
 import { getPeerInboxDir } from '../../paths.js';
@@ -113,10 +114,10 @@ export async function listPending(sessionId: string): Promise<string[]> {
 }
 
 /**
- * Atomically claim a pending envelope by renaming it to `delivered/`.
- *
- * Returns the parsed envelope on success; `null` when the rename fails
- * with ENOENT (another claimer won the race). Any other error is propagated.
+ * Create an exclusive delivered receipt, then remove the pending name.
+ * EEXIST/ENOENT mean another receiver won or the source disappeared.
+ * A crash after linking leaves a receipt preventing orphan-source redelivery.
+ * Requires hardlink support within the inbox filesystem; other errors propagate.
  */
 export async function claimPending(
   sessionId: string,
@@ -126,19 +127,18 @@ export async function claimPending(
   const src = join(base, 'pending', file);
   const dst = join(base, 'delivered', file);
   try {
-    await rename(src, dst);
+    await link(src, dst);
   } catch (err: unknown) {
     const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return null;
+    if (e.code === 'EEXIST' || e.code === 'ENOENT') return null;
     throw err;
   }
+  // Keep the receipt even if cleanup fails; it is the claim authority.
+  await unlink(src).catch(() => undefined);
   try {
-    const raw = await readFile(dst, 'utf8');
-    return parseEnvelope(raw);
+    return parseEnvelope(await readFile(dst, 'utf8'));
   } catch {
-    // If the read fails after a successful rename we still "won" the claim;
-    // return null to indicate a corrupt/unreadable message.
-    return null;
+    return null; // corrupt/unreadable receipt is still claimed
   }
 }
 

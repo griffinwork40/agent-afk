@@ -14,6 +14,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
+import { closeStore } from '../../goals/goal-store.js';
 
 // ---------------------------------------------------------------------------
 // Env isolation
@@ -32,6 +33,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Defensively close the goal-store singleton before Windows temp cleanup.
+  // Its actual opener is getGoal -> store() (goal-store.ts), not handler import
+  // evaluation. This is a no-op when this worker has not used the goal store.
+  closeStore();
   fs.rmSync(tmpDir, { recursive: true, force: true });
   if (origAfkHome === undefined) delete process.env['AFK_HOME'];
   else process.env['AFK_HOME'] = origAfkHome;

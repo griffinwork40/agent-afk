@@ -80,18 +80,18 @@ function tsFromFilename(filename: string): number {
 }
 
 /**
- * Read all envelope files from a single inbox sub-directory (pending or
- * delivered) for the target, filtering by sender and time window.
+ * Read all envelope files from a single inbox sub-directory (pending,
+ * delivered, or held) for the target, filtering by sender and time window.
  * Returns matching parsed envelopes. Best-effort: any unreadable file is
  * skipped silently.
  */
 async function scanInboxDir(
   targetId: string,
-  subdir: 'pending' | 'delivered',
+  subdir: 'pending' | 'delivered' | 'held',
   senderId: string,
   windowMs: number,
   now: () => number,
-): Promise<{ ts: number; bodyHash: string }[]> {
+): Promise<{ messageId: string; ts: number; bodyHash: string }[]> {
   const dir = join(getPeerInboxDir(targetId), subdir);
   let files: string[];
   try {
@@ -100,7 +100,7 @@ async function scanInboxDir(
     return [];
   }
   const cutoff = now() - windowMs;
-  const results: { ts: number; bodyHash: string }[] = [];
+  const results: { messageId: string; ts: number; bodyHash: string }[] = [];
   for (const file of files) {
     if (file.startsWith('.tmp-')) continue;
     const ts = tsFromFilename(file);
@@ -109,7 +109,7 @@ async function scanInboxDir(
       const raw = await readFile(join(dir, file), 'utf8');
       const env = parseEnvelope(raw);
       if (env && env.from.id === senderId) {
-        results.push({ ts, bodyHash: bodyHash(env.body) });
+        results.push({ messageId: env.messageId, ts, bodyHash: bodyHash(env.body) });
       }
     } catch {
       // Skip unreadable / partially-written files silently.
@@ -133,7 +133,7 @@ export interface CheckSendGuardsOpts {
  * Returns `null` if all checks pass, or the {@link PeerRefusal} code that
  * fired first.
  *
- * Scanning the target's `pending/` + `delivered/` directories is the chosen
+ * Scanning the target's `pending/`, `delivered/`, and `held/` directories is the chosen
  * approach (cross-process correct; no sender-side state file needed).
  */
 export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRefusal | null> {
@@ -142,12 +142,17 @@ export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRe
   if (Buffer.byteLength(body, 'utf8') > PEER_MAX_BODY_BYTES) return 'too-large';
   if (hop > PEER_MAX_HOPS) return 'hop-limit';
 
-  // Scan both pending and delivered to build history for rate/dedup checks.
-  const [pendingHistory, deliveredHistory] = await Promise.all([
-    scanInboxDir(targetId, 'pending', senderId, Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS), getNow),
-    scanInboxDir(targetId, 'delivered', senderId, Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS), getNow),
+  // Scan pending, delivered, AND held to build history for rate/dedup checks.
+  // Held envelopes (inbound-mode=hold or wake-budget exhausted) must be
+  // counted to prevent a sender from bypassing rate limiting or duplicate
+  // detection by inducing enough held messages to obscure their send history.
+  const window = Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS);
+  const [pendingHistory, deliveredHistory, heldHistory] = await Promise.all([
+    scanInboxDir(targetId, 'pending', senderId, window, getNow),
+    scanInboxDir(targetId, 'delivered', senderId, window, getNow),
+    scanInboxDir(targetId, 'held', senderId, window, getNow),
   ]);
-  const history = [...pendingHistory, ...deliveredHistory];
+  const history = [...pendingHistory, ...deliveredHistory, ...heldHistory];
 
   const nowMs = getNow();
   const rateCutoff = nowMs - RATE_WINDOW_MS;
@@ -155,7 +160,11 @@ export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRe
   const bHash = bodyHash(body);
 
   let rateCount = 0;
+  const seen = new Set<string>();
   for (const entry of history) {
+    // A receipt and crash-leftover source represent one envelope, not two sends.
+    if (seen.has(entry.messageId)) continue;
+    seen.add(entry.messageId);
     if (entry.ts >= rateCutoff) rateCount++;
     if (entry.ts >= dedupCutoff && entry.bodyHash === bHash) return 'duplicate';
   }

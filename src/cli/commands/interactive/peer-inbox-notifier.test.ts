@@ -11,6 +11,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { InMemoryTraceWriter } from '../../../agent/trace/writer.js';
 import { PeerInboxNotifier } from './peer-inbox-notifier.js';
 import { writeEnvelope } from '../../../agent/peer/inbox-store.js';
 import { writePresenceFile } from '../../../agent/awareness/presence.js';
@@ -168,19 +169,14 @@ describe('PeerInboxNotifier — accept path', () => {
 
     await Promise.all([n1.scan(), n2.scan()]);
 
-    const total = n1.drainInjections().length + n2.drainInjections().length;
-    // Exactly one of them got it (the other gets '')
-    const claimed1 = total > 0 ? 1 : 0;
-    // Actually verify: exactly one notifier has content
-    const d1 = n1.hasPendingInjections();
-    const d2 = n2.hasPendingInjections();
-    // Re-run scan so buffer is correct
-    // Both already scanned; at most one wins the rename-claim
-    const got1 = (await (async () => { const { notifier: na } = makeNotifier(sessionId); await na.scan(); return na.drainInjections(); })()).length;
-    // After both scanned, the file is gone — a fresh scan gets nothing
-    expect(got1).toBe(0);
-    // One of the two should have gotten the message
-    expect(d1 !== d2 || (!d1 && !d2)).toBe(true); // at most one can be true
+    const drains = [n1.drainInjections(), n2.drainInjections()];
+    expect(drains.filter((text) => text !== '')).toHaveLength(1);
+    expect((drains.join('').match(/<peer-session-message /g) ?? [])).toHaveLength(1);
+    expect(n1.drainInjections()).toBe('');
+    expect(n2.drainInjections()).toBe('');
+    const { notifier: fresh } = makeNotifier(sessionId);
+    await fresh.scan();
+    expect(fresh.drainInjections()).toBe('');
   });
 
   it('forceAccept("all") moves held envelopes into the buffer bypassing budget', async () => {
@@ -298,6 +294,77 @@ describe('PeerInboxNotifier — start/dispose lifecycle', () => {
     notifier.start();
     notifier.dispose();
     expect(() => notifier.dispose()).not.toThrow();
+  });
+});
+
+describe('PeerInboxNotifier — resetForNewSession (resume swap)', () => {
+  it('resetForNewSession clears the buffer synchronously', async () => {
+    const sessionId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId));
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan();
+    expect(notifier.hasPendingInjections()).toBe(true);
+
+    notifier.resetForNewSession();
+    expect(notifier.hasPendingInjections()).toBe(false);
+    expect(notifier.drainInjections()).toBe('');
+  });
+
+  it('reset clears exhausted sender wake credit without advancing the clock', async () => {
+    const sessionId = randomUUID();
+    const { notifier } = makeNotifier(sessionId, { now: () => 0 });
+    for (let i = 0; i < 21; i++) {
+      await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'same-sender' } }));
+      await notifier.scan();
+      const delivered = notifier.drainInjections();
+      expect(delivered.length > 0).toBe(i < 20);
+    }
+    notifier.resetForNewSession();
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'same-sender' } }));
+    await notifier.scan();
+    expect(notifier.drainInjections()).toContain('same-sender');
+  });
+});
+
+describe('PeerInboxNotifier — live trace writer', () => {
+  it('routes delivered AND held events after switching writers; getter beats static sink', async () => {
+    const sessionId = randomUUID();
+    const oldWriter = new InMemoryTraceWriter();
+    const newWriter = new InMemoryTraceWriter();
+    let currentWriter = oldWriter;
+    let mode: 'accept' | 'hold' = 'accept';
+    const notifier = new PeerInboxNotifier({
+      getSessionId: () => sessionId, writeLine: () => undefined,
+      mode: () => mode, traceWriter: oldWriter,
+      getTraceWriter: () => currentWriter,
+    });
+    await writeEnvelope(makeEnvelope(sessionId));
+    await notifier.scan();
+    expect(oldWriter.events).toHaveLength(1);
+    currentWriter = newWriter;
+    const delivered = makeEnvelope(sessionId);
+    await writeEnvelope(delivered);
+    await notifier.scan();
+    mode = 'hold';
+    const held = makeEnvelope(sessionId);
+    await writeEnvelope(held);
+    await notifier.scan();
+    expect(oldWriter.events).toHaveLength(1);
+    expect(newWriter.events).toEqual([
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'delivered', messageId: delivered.messageId }) }),
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'held', messageId: held.messageId }) }),
+    ]);
+  });
+
+  it('retains static traceWriter support without a getter', async () => {
+    const sessionId = randomUUID();
+    const writer = new InMemoryTraceWriter();
+    const notifier = new PeerInboxNotifier({ getSessionId: () => sessionId, writeLine: () => undefined, mode: () => 'accept', traceWriter: writer });
+    await writeEnvelope(makeEnvelope(sessionId));
+    await notifier.scan();
+    expect(writer.events).toHaveLength(1);
+    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'delivered' } });
   });
 });
 

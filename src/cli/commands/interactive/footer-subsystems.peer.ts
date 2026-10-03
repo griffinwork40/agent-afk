@@ -15,10 +15,11 @@ import { setNamePeerNotifier } from '../../slash/commands/name.js';
 import type { InteractiveCtx } from './shared.js';
 
 /**
- * Construct the REPL peer-inbox notifier and wire it into the `/inbox` and
- * `/name` slash-command singletons. Mirrors `setShellPassthrough` (used by
- * `/sh`) — each singleton lives in exactly one file for the module-state
- * audit (`pnpm audit:module-state:check`).
+ * Construct the REPL peer-inbox notifier, wire it into the `/inbox` and
+ * `/name` slash-command singletons, and expose `resetForNewSession` on `ctx`
+ * so the `/resume` swap path can clear per-session state synchronously.
+ * Mirrors `setShellPassthrough` (used by `/sh`) — each singleton lives in
+ * exactly one file for the module-state audit (`pnpm audit:module-state:check`).
  *
  * Returns the notifier so `setupFooterSubsystems` can include it in the
  * `FooterSubsystems` bag without knowing about the wiring details.
@@ -27,5 +28,7 @@ export function buildAndWirePeerNotifier(ctx: InteractiveCtx): PeerInboxNotifier
   const peerNotifier = createReplPeerNotifier(ctx);
   setPeerNotifier(peerNotifier, () => ctx.stats.sessionId);
   setNamePeerNotifier(peerNotifier);
+  // Wire the swap reset so bootstrap-resume.ts:clearSwapBuffers() can invoke it.
+  ctx.resetPeerNotifier = () => peerNotifier.resetForNewSession();
   return peerNotifier;
 }

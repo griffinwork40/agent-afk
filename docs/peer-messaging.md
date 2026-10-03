@@ -112,7 +112,9 @@ $AFK_STATE_DIR/inbox/<sessionId>/
 Directories: mode `0700`. Files: mode `0600`.
 
 **Write**: sender writes `.tmp-<id>` then renames to final name (atomic).
-**Claim**: receiver renames `pending/<file>` → `delivered/<file>`; exactly one claimer wins; others get `ENOENT` and return `null`.
+**Claim**: receiver hardlinks `pending/<file>` to `delivered/<file>` (exclusive receipt creation), then unlinks the pending name. Existing receipts are never overwritten: `EEXIST` or `ENOENT` returns `null`. This requires hardlink support within the inbox filesystem. A crash after linking can leave a pending source, but its delivered receipt prevents redelivery; a claimed message not yet injected into a turn can still be lost on process exit.
+
+**Hold contention**: hold still moves pending to held by rename. A concurrent hold can win before the claim link (claim returns `null`), or leave a held copy after receipt creation. Releasing that copy cannot redeliver it because the receipt exists. This is not a transaction across all three directories; a stale held/orphan pending entry may remain for operator review.
 
 The envelope JSON schema (`src/agent/peer/envelope.ts`):
 
@@ -189,7 +191,7 @@ Peer messages carry **no user authority**. The model system prompt (`system-prom
 
 ## Crash window
 
-An envelope renamed into `delivered/` but not yet drained into a turn is lost if the process dies. The file stays in `delivered/` for forensics; it is never retried. This window is intentionally small (the rename and turn-start are close in wall time) and is documented as a known limitation.
+An envelope claimed by an exclusive hard-link receipt in `delivered/` but not yet drained into a turn is lost if the process dies. The receipt stays in `delivered/` for forensics; it is never retried, even if a crash leaves its source in `pending/` or `held/`. Rate history counts these copies once by message identity. This window is intentionally small (the claim and turn-start are close in wall time) and is documented as a known limitation.
 
 ---
 
