@@ -11,6 +11,18 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.285.0] - 2026-10-03
+
+### Added
+- context_window kwarg for the Harbor afk adapter (#2802) (9e1a92af)
+- run it, don't relay it; stop handing safe commands to the user (#2803) (2efa268e)
+
+### Fixed
+- no history hole while a tall overlay covers committed rows (content-hug) (#2804) (f17c7e46)
+
+### Changed
+- harden 30-day boundary coverage for session-sidecar and session-dir sweep (#2800) (54d208c8)
+
 ## [5.284.0] - 2026-10-02
 
 ### Added

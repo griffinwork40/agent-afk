@@ -51,7 +51,9 @@ Attributes on the opening tag:
 - \`duration="1.3s"\` — wall-clock runtime
 - \`truncated="true"\` — output was capped; full output not available
 
-The \`<command>\` child contains the literal command the user typed (XML-escaped). The \`<output>\` child contains ANSI-stripped, XML-escaped captured stdout/stderr.`;
+The \`<command>\` child contains the literal command the user typed (XML-escaped). The \`<output>\` child contains ANSI-stripped, XML-escaped captured stdout/stderr.
+
+The \`!\` prefix is the user's own channel, not a hand-off target. Never tell the user to run something with \`!\` (or to paste a command into their terminal) when your \`bash\` tool can run it: run it yourself and report the result.`;
 
 /**
  * Background-subagent result-delivery explanation — interactive-only, like

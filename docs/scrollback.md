@@ -621,6 +621,34 @@ the genuine overflow ... R10 visible" — no premature eviction). Verified again
 a real `@xterm/headless` buffer across varied collapsed-frame heights (extraRows,
 spinner-at-settle, multi-step collapse) — no content loss, no premature archival.
 
+### Fixed: mid-turn history hole under content-hug (2026-10-02)
+
+Repro / regression guard: `src/cli/terminal-compositor.history-hole.repro.test.ts`.
+Operator symptom (pre-fix, tmux copy-mode): a verdict card's bottom border, the
+next prompt echo and a tool header were missing from BOTH scrollback and the
+screen mid-turn; the screen's row 1 already showed newer rows. The rows
+reappeared in history only after the turn ended.
+
+Mechanism: in content-hug placement (the REPL), rows covered by a tall live
+overlay were kept PENDING in the band model ("hide-on-growth") and rows
+committed while the overlay was tall stayed pending via band-hold. Pending rows
+were archived only once the overlay emptied, so for the rest of the turn they
+were on neither the screen nor in scrollback.
+
+Fix (`terminal-compositor.frame-preserve.ts`, `pendingEvictionAllowed`): under
+content-hug, covered and pending rows are archived to scrollback as soon as the
+frame is settled (no open dropdown/picker), on overlay growth and on the next
+repaint after a commit. Bottom-pinned placement keeps the overlay-empty gate,
+because archiving early there leaves blank rows ABOVE the band that later
+scroll into history (`terminal-compositor.collapse-void.test.ts`).
+
+Accepted trade-off: archived rows cannot return to the screen, so after a tall
+overlay collapses the prompt may sit mid-screen with blank rows BELOW it
+(content-hug never puts blanks above committed content). History is always
+contiguous. The PTY scenario `collapse-void` carries a `hugExpect` for this,
+and `width-resize-fragment-evict-growth` now runs the eviction precondition in
+both modes.
+
 ## What is and isn't in scrollback after a commit
 
 After a single `commitAbove(text)`:
