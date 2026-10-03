@@ -128,8 +128,9 @@ export async function evaluateBudgetGate(options: BudgetGateOptions = {}): Promi
     if (ev.level === 'over' && ev.binding !== undefined) {
       return { skip: true, provider: target.provider, binding: ev.binding };
     }
-  } catch {
+  } catch (err) {
     // Fail-open (see module Invariant).
+    console.debug(`[daemon] budget-gate: collectUsage failed, passing task through (${err instanceof Error ? err.message : String(err)})`);
   }
   return { skip: false };
 }
