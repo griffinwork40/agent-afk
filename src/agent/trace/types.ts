@@ -930,8 +930,9 @@ export type SessionPhaseName =
   // slept, and `metadata` carries `attempt`, `maxRetries`, `error` (truncated,
   // passed through redactSecrets) and, when present, `code` and `status`.
   // Built by `connectionRetryMetadata`. Exists because #2422 disabled the
-  // SDK's silent retries, which had been absorbing these blips. A lone event followed by success means the
-  // retry saved the turn; `attempt === maxRetries` then an error means it ran out.
+  // SDK's silent retries, which had been absorbing these blips. A lone event
+  // followed by success means the retry saved the turn; `attempt === maxRetries`
+  // then an error means it ran out.
   | 'connection_retry';
 
 export interface SessionPhasePayload {

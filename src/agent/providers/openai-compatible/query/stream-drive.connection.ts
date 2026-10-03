@@ -51,7 +51,7 @@ export async function runConnectionPhase<TEvent>(
       return { ok: true, stream };
     } catch (err) {
       // A watchdog abort during connection is NOT a user interrupt. Check the
-      // USER signal explicitly so TTFB/stall timeouts are not swallowed.
+      // userSignal explicitly so TTFB/stall timeouts are not swallowed.
       if (userSignal.aborted) return { ok: false, error: 'aborted' };
       // An `APIConnectionTimeoutError` while `streamSignal` is NOT aborted is the
       // SDK's own connect timeout (an AFK watchdog abort surfaces as

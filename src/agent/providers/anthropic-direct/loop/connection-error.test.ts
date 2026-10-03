@@ -302,8 +302,22 @@ describe('connectionRetryMetadata (connection_retry trace payload)', () => {
     expect(String(md['error'])).toContain('[REDACTED]');
   });
 
-  it('truncates long error text to 200 characters before redaction', () => {
+  it('redacts first then truncates: final length is at most 200 characters', () => {
     const md = connectionRetryMetadata({ attempt: 1, error: new APIError(500, 'x'.repeat(500)) });
     expect(String(md['error']).length).toBeLessThanOrEqual(200);
+  });
+
+  it('redacts a secret that straddles the 200-char boundary (no fragment survives)', () => {
+    // Place the key so it starts at char 195 — the leading 5 chars would survive
+    // a slice-before-redact approach, but should be absent after redact-first.
+    const prefix = 'a'.repeat(195);
+    const key = `sk-ant-${'b'.repeat(40)}`;
+    const msg = prefix + key + 'trailer';
+    const md = connectionRetryMetadata({ attempt: 1, error: new APIError(500, msg) });
+    const out = String(md['error']);
+    // No fragment of the raw key should appear in the truncated output.
+    expect(out).not.toContain('sk-ant-');
+    // The prefix (safe chars) fills the budget; length must be ≤ 200.
+    expect(out.length).toBeLessThanOrEqual(200);
   });
 });

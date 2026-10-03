@@ -67,11 +67,12 @@ const TRACE_ERROR_MAX_CHARS = 200;
 
 /**
  * Contract: the `metadata` object of one `connection_retry` session_phase event.
- * `error` is truncated and passed through `redactSecrets`, the same treatment
- * `tool_call.completed.errorHead` gets: the status-retry path (408/500/502/504)
- * carries SDK `APIError` messages that embed the response body, so proxy or
- * gateway text would otherwise land in the trace verbatim. `code` and `status`
- * are included only when present.
+ * `error` is passed through `redactSecrets` first, then truncated — the same
+ * ordering `tool_call.completed.errorHead` uses (`compact-summarizer.ts:217`)
+ * so a secret straddling the 200-char boundary is never written as a fragment.
+ * The status-retry path (408/500/502/504) carries SDK `APIError` messages that
+ * embed the response body, so proxy or gateway text would otherwise land in the
+ * trace verbatim. `code` and `status` are included only when present.
  */
 export function connectionRetryMetadata(
   info: { attempt: number; error: Error },
@@ -82,7 +83,7 @@ export function connectionRetryMetadata(
   return {
     attempt: info.attempt,
     maxRetries,
-    error: redactSecrets(info.error.message.slice(0, TRACE_ERROR_MAX_CHARS)),
+    error: redactSecrets(info.error.message).slice(0, TRACE_ERROR_MAX_CHARS),
     ...(code !== undefined ? { code } : {}),
     ...(typeof status === 'number' ? { status } : {}),
   };
