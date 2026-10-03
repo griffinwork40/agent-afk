@@ -997,6 +997,97 @@ describe('deriveSessionFacet', () => {
     expect(facet.yield_tracking.pr_url).toBe(prUrl);
   });
 
+  // ---------------------------------------------------------------------------
+  // #2834: $() inside double-quoted spans and GH_PR_CREATE_WORD_RE anchoring
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: PR_URL="$(gh pr create --fill)" double-quoted command substitution is detected (#2834)', () => {
+    // stripQuotedSpans erases the entire "$(gh pr create --fill)" span, so the
+    // invocation RE must also be tested against the raw (unstripped) input.
+    const prUrl = 'https://github.com/owner/repo/pull/300';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-dq-subst',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'dq-sub-1',
+          input: JSON.stringify({ command: 'PR_URL="$(gh pr create --fill)" && echo "$PR_URL"' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: quoted-separator rg search is NOT false-positive even with raw input test (#2834)', () => {
+    // Regression guard: testing raw input must not re-introduce the quoted-separator
+    // false positive that stripQuotedSpans was added to prevent.
+    // In raw form, 'rg "gh pr view|gh pr create" src' does NOT match INVOCATION_RE
+    // because `gh pr create"` ends with `"` (no trailing space or EOL) so the
+    // mandatory trailing `(?:[ \t]|$)` fails. Both raw and stripped paths must be false.
+    const prUrl = 'https://github.com/owner/repo/pull/301';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-dq-quoted-sep-guard',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'search',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'dq-sep-1',
+          input: JSON.stringify({ command: 'rg "gh pr view|gh pr create" src' }),
+          result: `src/agent/facets/derive.ts:90:\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: path-prefixed gh (e.g. /usr/bin/gh pr create) is NOT detected by word-boundary fallback (#2834)', () => {
+    // GH_PR_CREATE_WORD_RE previously used \b which matched 'gh' after '/' (a
+    // non-word char). The lookbehind (?<![\\/\w-]) rejects it.
+    const prUrl = 'https://github.com/owner/repo/pull/302';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-path-prefix-guard',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'check help',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'path-gh-1',
+          // Flattened-style input (no inputRaw): the stored summary string
+          // happens to contain '/usr/local/bin/gh pr create' with no separator
+          // before 'gh'. WORD_RE fallback must NOT fire since gh follows '/'.
+          input: 'git push /usr/local/bin/gh pr create --fill',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
   // outcome derived from terminal-state heading
   function oneAssistant(assistant: string): StoredSessionInput {
     return {

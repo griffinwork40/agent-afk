@@ -71,8 +71,11 @@ const GH_PR_URL_LINE_RE = /^[ \t]*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull
  * Strip double- and single-quoted spans so that shell-separator characters
  * (|, &, ;) inside argument strings (e.g. `rg "gh pr view|gh pr create"`)
  * do not masquerade as command separators for the invocation regex below.
- * Replacement preserves length so that any other index-based logic stays
- * consistent, though in practice we only use the result for regex matching.
+ * Used only for regex matching — no index-based logic relies on the result.
+ *
+ * Contract: $() command substitutions inside double-quoted spans are also
+ * erased (e.g. `PR_URL="$(gh pr create --fill)"` becomes spaces). Use
+ * GH_CMD_SUBST_CREATE_RE on the raw input to catch that case separately.
  */
 function stripQuotedSpans(s: string): string {
   return s.replace(/(?:"[^"]*"|'[^']*')/g, (m) => ' '.repeat(m.length));
@@ -83,20 +86,33 @@ function stripQuotedSpans(s: string): string {
 //   - right after a shell separator (`;`, `&&`, `||`, `|`)
 //   - right after an open-paren (`(` covers bare subshell and `$(...)`)
 // optionally with env assignments (`GH_TOKEN=x gh pr create`).
-// Always apply stripQuotedSpans before testing so that a `|` inside a quoted
-// argument (rg "gh pr view|gh pr create" src) is not treated as a separator.
-// The /m flag is dropped: stored bash inputs are always flattened to a single
-// line by summarizeToolInput, so ^ and $ behave identically with or without it.
+// Always apply stripQuotedSpans before testing GH_PR_CREATE_INVOCATION_RE so
+// that a `|` inside a quoted argument (rg "gh pr view|gh pr create" src) is
+// not treated as a separator. See GH_CMD_SUBST_CREATE_RE below for the
+// complementary raw-input scan that recovers $() inside double-quoted spans.
+// The /m flag is dropped: stored bash inputs are flattened to a single line
+// by summarizeToolInput when inputRaw is absent, so ^ and $ behave identically
+// with or without it.
 const GH_PR_CREATE_INVOCATION_RE =
   /(?:^|[;|&(])[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*gh[ \t]+pr[ \t]+create(?:[ \t]|$)/;
 
+// Complementary pattern for command substitutions inside double-quoted spans.
+// stripQuotedSpans erases "$(gh pr create --fill)" entirely, so a bare
+// `PR_URL="$(gh pr create --fill)"` is never matched by GH_PR_CREATE_INVOCATION_RE
+// on the stripped input. This RE scans the raw (unstripped) input for the `$(`
+// opener followed immediately by `gh pr create`, which is unambiguously an
+// invocation and not a quoted shell separator. It does NOT match `|gh pr create`
+// so the rg "...| gh pr create " false-positive is not reintroduced.
+const GH_CMD_SUBST_CREATE_RE =
+  /\$\([ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*gh[ \t]+pr[ \t]+create(?:[ \t]|\))/;
+
 // Secondary pattern for the flattened multi-line case: two separate shell
 // commands (`git push\ngh pr create`) are collapsed to one line by
-// summarizeToolInput, losing the newline separator. A word-boundary match on
-// the stripped input detects `gh pr create` when the result is a bare PR URL
-// (same shape as `gh pr create`'s stdout) and the input is not a read-only
-// gh query. Combining all three conditions keeps the false-positive rate low.
-const GH_PR_CREATE_WORD_RE = /\bgh[ \t]+pr[ \t]+create(?:[ \t]|$)/;
+// summarizeToolInput, losing the newline separator. The negative lookbehind
+// rejects `gh` that is part of a path or hyphenated token (e.g.
+// `/usr/bin/gh` or `my-gh`), keeping only `gh` that appears as a command
+// word. Combined with a bare-PR-URL result gate the false-positive rate is low.
+const GH_PR_CREATE_WORD_RE = /(?<![\\/\w-])gh[ \t]+pr[ \t]+create(?:[ \t]|$)/;
 
 /** Last GitHub PR URL that sits alone on an output line, or null. */
 function lastOwnLinePrUrl(result: string): string | null {
@@ -241,8 +257,10 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
         const truncated = inputStr.trimEnd().endsWith('\u2026');
         // The truncated path requires the WHOLE result to be a bare PR URL
         // (gh pr create's stdout shape), same as artifacts.ts isPRCreateEvent.
+        // Use raw inputStr for PR_QUERY_INPUT (aligns with artifacts.ts:100)
+        // so a query flag outside quotes is not missed by the stripped form.
         const isTruncatedCreate =
-          truncated && BARE_PR_URL_RESULT.test(ev.result) && !PR_QUERY_INPUT.test(stripped);
+          truncated && BARE_PR_URL_RESULT.test(ev.result) && !PR_QUERY_INPUT.test(inputStr);
         // Flattened multi-line path: two commands on separate lines (e.g.
         // `git push\ngh pr create`) are joined by summarizeToolInput into one
         // space-separated string with no shell separator before `gh`. Accept
@@ -252,7 +270,16 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
           GH_PR_CREATE_WORD_RE.test(stripped) &&
           BARE_PR_URL_RESULT.test(ev.result) &&
           !PR_QUERY_INPUT.test(stripped);
-        if (GH_PR_CREATE_INVOCATION_RE.test(stripped) || isTruncatedCreate || isFlattenedCreate) {
+        // Detection: stripped catches most invocations while blocking quoted-separator
+        // false positives. GH_CMD_SUBST_CREATE_RE catches the $() case that stripping
+        // erases (e.g. `PR_URL="$(gh pr create --fill)"`), scanning raw input only for
+        // the unambiguous `$(gh pr create` opener.
+        if (
+          GH_PR_CREATE_INVOCATION_RE.test(stripped) ||
+          GH_CMD_SUBST_CREATE_RE.test(inputStr) ||
+          isTruncatedCreate ||
+          isFlattenedCreate
+        ) {
           detectedPrUrl = lastOwnLinePrUrl(ev.result) ?? detectedPrUrl;
         }
       }
