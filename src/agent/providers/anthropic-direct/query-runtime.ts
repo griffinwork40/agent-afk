@@ -29,6 +29,7 @@
  */
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'node:crypto';
+import { isFable51 } from './resolve-params.js';
 import type {
   ProviderAccountInfo,
   ProviderAgentInfo,
@@ -224,6 +225,11 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get thinking() { return query.thinking; },
       get effort() { return query.effort; },
       get temperature() { return query.temperature; },
+      get thinkingBlockBinding() {
+        return isFable51(query.state.currentModel.toLowerCase())
+          ? ({ prefix_mismatch_behavior: 'drop_block' as const })
+          : undefined;
+      },
       get baseUrl() { return query.baseUrl; },
       get maxToolUseIterations() { return query.maxToolUseIterations; },
       get softDeadlineMs() { return query.softDeadlineMs; },

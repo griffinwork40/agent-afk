@@ -108,7 +108,7 @@ export function buildProviderQuery(
 
   const resolvedEffort = resolveEffort(config.effort, model);
   const resolvedTemperature = config.temperature !== undefined
-    ? resolveAnthropicTemperature(config.temperature)
+    ? resolveAnthropicTemperature(config.temperature, model)
     : undefined;
   // Use requestedModel (the alias, e.g. sonnet_1m) rather than the resolved
   // wire id so safeAutoCompactThresholdFor sees the full 1M window when

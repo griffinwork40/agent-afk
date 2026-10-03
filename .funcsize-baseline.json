@@ -5,8 +5,6 @@
     "src/agent/default-hook-registry.ts::createDefaultHookRegistry": { "loc": 234, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop.ts::runTurn": { "loc": 246, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop/stream-consumer.ts::consumeRoundStream": { "loc": 279, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/providers/anthropic-direct/query-turn-driver.ts::driveTurns": { "loc": 209, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/providers/anthropic-direct/translate.ts::translateMessageStream": { "loc": 209, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/session/stream-consumer.ts::transformProviderEvent": { "loc": 264, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/session/wire-executors.ts::wireExecutors": { "loc": 201, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/shell-jobs/streamer.ts::startShell": { "loc": 284, "reason": "legacy: predates the function-size gate; pending helper extraction" },
