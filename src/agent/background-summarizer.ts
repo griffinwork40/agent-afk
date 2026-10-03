@@ -19,6 +19,7 @@
 import { debugLog } from '../utils/debug.js';
 import type { BackgroundAgentRegistry } from './background-registry.js';
 import { oneShotCompletion } from './providers/anthropic-direct/oneshot.js';
+import { withTransientRetry } from './providers/shared/transient-retry.js';
 import { redactSecrets } from './redact-secrets.js';
 
 export interface SummaryEntry {
@@ -110,15 +111,28 @@ export class BackgroundSummarizer {
     if (opts.callLLM !== undefined) {
       this.callLLM = opts.callLLM;
     } else {
+      // Contract: maxRetries: 1 — one retry for transient errors; the existing
+      // stale-on-failure fallback (catch block in refreshJobSummary) handles
+      // permanent failures. No trace sink needed here.
+      // onRetry increments callsThisSession so each actual LLM call (initial
+      // + each retry) is counted toward the budget cap, preventing a 1-retry
+      // scenario from making 2 calls against a budget that charged only 1.
       this.callLLM = (prompt: string, signal?: AbortSignal) =>
-        oneShotCompletion({
-          token: this.apiKey,
-          model: this.model,
-          system: SYSTEM_PROMPT,
-          user: prompt,
-          maxTokens: this.maxOutputTokens,
-          signal,
-        });
+        withTransientRetry(
+          () => oneShotCompletion({
+            token: this.apiKey,
+            model: this.model,
+            system: SYSTEM_PROMPT,
+            user: prompt,
+            maxTokens: this.maxOutputTokens,
+            signal,
+          }),
+          {
+            maxRetries: 1,
+            signal,
+            onRetry: () => { this.callsThisSession++; },
+          },
+        );
     }
 
     this.getTranscriptFn = opts.getTranscript ?? ((jobId) => this.registry.getTranscript(jobId));

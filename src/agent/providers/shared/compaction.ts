@@ -37,6 +37,7 @@
 import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { withTransientRetry, type RetryInfo } from './transient-retry.js';
 
 /**
  * System instruction for the summarization call. Crafted to preserve what a
@@ -604,6 +605,26 @@ export interface CompactionCoreDeps<M> {
   timeoutMs?: number;
   /** Fired after a successful in-place splice, for witness-layer emit. */
   onSuccess?(info: CompactionSuccess<M>): void;
+  /**
+   * Called once per transient-retry of the summarize call (after the failed
+   * attempt, before the backoff wait). Route to the witness trace as a
+   * `connection_retry` session_phase event. Fire-and-forget — errors here are
+   * not caught.
+   */
+  onRetry?(info: RetryInfo): void;
+  /**
+   * Injected sleep function for tests. When omitted, defaults to the real
+   * `sleepWithAbort`. Lets unit tests fast-forward through backoff waits
+   * without fake timers.
+   */
+  retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /**
+   * Abort signal for the surrounding compaction scope. When provided, threads
+   * through to `withTransientRetry` so a `sleepWithAbort` backoff wait is
+   * interrupted immediately on `session.close()` or `/interrupt` rather than
+   * blocking teardown for up to the full backoff duration.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -655,9 +676,29 @@ export async function runCompactionCore<M>(
   const olderSlice = messages.slice(0, boundary);
   const transcript = renderTranscript(olderSlice, ops);
 
+  // `timedOut` is set when the timeout fires (before `abortInFlight()`) and
+  // feeds the retry loop's `shouldStop`, so a retry waiting in backoff never
+  // launches another summarize after the core has given up. The catch block's
+  // timeout-vs-abort classification is unchanged (CompactionTimeoutError first).
+  let timedOut = false;
   let summary: string;
   try {
-    summary = await withTimeout(summarize(transcript), timeoutMs, deps.abortInFlight);
+    // Invariant: the retry loop runs INSIDE withTimeout so backoff shares the
+    // 60s compaction budget. `shouldStop` is checked before each wait so neither
+    // a timeout nor an abort can launch another attempt after the core gives up.
+    const retryingAttempt = () => withTransientRetry(
+      () => summarize(transcript),
+      {
+        shouldStop: () => timedOut || isAborted(),
+        onRetry: deps.onRetry,
+        ...(deps.retrySleep !== undefined ? { sleep: deps.retrySleep } : {}),
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+      },
+    );
+    summary = await withTimeout(retryingAttempt(), timeoutMs, () => {
+      timedOut = true;
+      deps.abortInFlight?.();
+    });
   } catch (err) {
     // A timeout fires abortInFlight() to cancel the request, which in the real
     // provider wiring also trips the shared abort signal — so check the timeout
