@@ -261,6 +261,16 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
   }
 }
 
+/**
+ * Run a subagent DAG by topologically ordering nodes and executing each in
+ * dependency order.
+ *
+ * Intentional omission: `nestedAgentAllowlist` is NOT forwarded to forked DAG
+ * nodes. DAG nodes are task-workers (INV-028), not scoped agents, so the
+ * allowlist concept does not apply — forwarding it would silently grant
+ * scope-narrowing semantics that only make sense on the agent-tool path.
+ * (#2848)
+ */
 export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRunResult> {
   const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs, delegationBudget, anchorCwd } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
@@ -345,7 +355,6 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
         }
       }
 
-      // Intentional: nestedAgentAllowlist not forwarded — DAG nodes are task-workers (INV-028), not scoped agents. (#2848)
       let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
       try {
         handle = await manager.forkSubagent({

@@ -1,7 +1,7 @@
 {
   "limit": 200,
   "entries": {
-    "src/agent/dag-subagent.ts::runSubagentDAG": { "loc": 250, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/agent/dag-subagent.ts::runSubagentDAG": { "loc": 249, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/default-hook-registry.ts::createDefaultHookRegistry": { "loc": 234, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop.ts::runTurn": { "loc": 246, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/providers/anthropic-direct/loop/stream-consumer.ts::consumeRoundStream": { "loc": 279, "reason": "legacy: predates the function-size gate; pending helper extraction" },
