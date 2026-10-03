@@ -94,7 +94,7 @@ Sends a message to another session.
 
 **Busy (mid-turn)**: the envelope sits in `pending/` until the current turn completes. At the top of the next turn, `prependTurnInjections` drains the buffer. The running turn is **never interrupted**.
 
-**Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:91-99`).
+**Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:92-100`).
 
 **Multi-line body**: stays as one envelope, arrives in one turn as one `<peer-session-message>` block.
 

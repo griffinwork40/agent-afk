@@ -114,7 +114,7 @@ Replaces ad-hoc `tmux send-keys` relays (which split multi-line text into many t
 - **Discovery**: live sessions enumerated via `$AFK_STATE_DIR/presence/`; presence fields `name`, `turnState`, and `peerInbox=true` are set once a REPL session's first turn runs (`src/agent/awareness/presence.peer.ts`).
 - **Tools**: `list_sessions` (show live peers) + `send_to_session` (write to inbox, idle receiver wakes immediately, busy receiver gets it at next turn boundary) — top-level sessions only (`src/agent/tools/schemas.peer.ts`).
 - **Mailbox**: `$AFK_STATE_DIR/inbox/<id>/{pending,delivered,held}/`; atomic tmp+rename writes; an exclusive-create claim receipt (hardlink, `copyFile(COPYFILE_EXCL)` fallback) guarantees exactly one claimer wins (`src/agent/peer/inbox-store.ts`).
-- **Wake path**: idle + empty-buffer receiver is woken via the existing `tryAutoResume` / `surface.abortPendingRead()` path; half-typed input is never touched; busy turns deliver at the next boundary (`src/cli/commands/interactive/loop-iteration.ts:90-102`).
+- **Wake path**: idle + empty-buffer receiver is woken via the existing `tryAutoResume` / `surface.abortPendingRead()` path; half-typed input is never touched; busy turns deliver at the next boundary (`src/cli/commands/interactive/loop-iteration.ts:91-103`).
 - **Guards**: rate ~10/min, 60 s dedup, hop cap 6, 64 KB body, wake budget ~20/hour/sender; over-budget → `held/` not `pending/` (`src/agent/peer/guards.ts`). `AFK_PEER_INBOUND=accept|hold|off`; `/inbox` to review held messages.
 - **Security**: peer messages carry no user authority; the system prompt frames them explicitly as coming from another agent (`system-prompt.ts:81`). Accepted risk: autonomous/bypass receivers accept by default (operator decision 2026-10-02).
 
