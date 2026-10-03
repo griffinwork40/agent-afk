@@ -208,6 +208,22 @@ A `peer_message` trace event is emitted for every state transition (`src/agent/t
 
 ---
 
+## delivered/ retention
+
+Individual files in `delivered/` are pruned by a throttled sweep that runs from the notifier tick (`src/agent/peer/inbox-retention.ts`).
+
+| Property | Value |
+|---|---|
+| Retention threshold | wake-budget window (1 h) + dedup window (60 s) + 60 s safety margin ≈ **62 minutes** |
+| Throttle | at most once per **5 minutes** per receiver session |
+| Invariant | a receipt is **never removed** while its `pending/` source still exists (receipt-as-claim-authority) |
+
+The threshold is derived from `PEER_WAKE_BUDGET_WINDOW_MS` (`src/agent/peer/guards.ts`) rather than hardcoded separately. `checkSendGuards` reads only files within the 60 s rate/dedup window, so receipts outside that window are not needed by the guard path; `findDeliveredEnvelope` (reply-hop lookup) needs receipts within roughly the wake-budget window; the extra margin covers edge cases where a reply arrives shortly after the wake budget resets.
+
+`sweepPeerInboxes` in `inbox-store.ts` still handles whole-directory cleanup for dead sessions (after 7 days).
+
+---
+
 ## v1 limits / deferred
 
 - **Receivers**: REPL sessions only. Telegram receiver, daemon receiver deferred.
