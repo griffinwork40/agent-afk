@@ -50,6 +50,7 @@ import { createTransport } from './transport.js';
 import { KeychainOAuthProvider } from './oauth.js';
 import type { McpServerLayer } from './env-containment.js';
 import { errorMessage } from '../../utils/errors.js';
+import { buildMcpSchemaValidator } from './schema-validator.js';
 
 /** Client identity advertised in the MCP handshake. */
 const CLIENT_INFO = {
@@ -72,6 +73,18 @@ const CLIENT_CAPABILITIES = {
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Shared JSON Schema validator for all MCP `Client` instances in this
+ * process. Lazily created on first use. Pre-registered with no-op stubs for
+ * gRPC integer formats (`uint32`, `uint64`, `int32`, `int64`) so Ajv does not
+ * emit "unknown format … ignored in schema" warnings when connecting to
+ * servers whose tool schemas advertise those formats (issue #2761).
+ */
+let _mcpSchemaValidator: ReturnType<typeof buildMcpSchemaValidator> | undefined;
+function getMcpSchemaValidator() {
+  return (_mcpSchemaValidator ??= buildMcpSchemaValidator());
+}
 
 export interface McpClientConnectResult {
   /** Tools the server exposed at first `tools/list`. */
@@ -164,7 +177,8 @@ export class McpClient {
       this.trustedAllowSecretEnv,
     );
 
-    const client = new Client(CLIENT_INFO, { capabilities: CLIENT_CAPABILITIES });
+    const client = new Client(CLIENT_INFO,
+      { capabilities: CLIENT_CAPABILITIES, jsonSchemaValidator: getMcpSchemaValidator() });
 
     // Wire transport-level error reporting so the manager can downgrade
     // status without the process crashing.
@@ -227,7 +241,8 @@ export class McpClient {
         // transport reference from the failed streamable-HTTP attempt and
         // cannot be reused without triggering the SDK's "Already connected"
         // guard. A new instance is cleaner than awaiting close() first.
-        const sseClient = new Client(CLIENT_INFO, { capabilities: CLIENT_CAPABILITIES });
+        const sseClient = new Client(CLIENT_INFO,
+          { capabilities: CLIENT_CAPABILITIES, jsonSchemaValidator: getMcpSchemaValidator() });
         try {
           const { ToolListChangedNotificationSchema } = await import(
             '@modelcontextprotocol/sdk/types.js'
