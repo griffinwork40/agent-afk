@@ -507,4 +507,70 @@ describe('image_generate handler', () => {
     _resetRootRealpathCacheForTests();
     _resetWriteDenylistCacheForTests();
   });
+
+  // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────
+
+  it('refuses output_path via intermediate symlinked dir whose relative target escapes root', async () => {
+    // Scenario:
+    //   root/subdir/         (real directory)
+    //   root/dirLink -> root/subdir/  (directory symlink)
+    //   root/subdir/hop.png -> ../../outside/escaped.png  (relative escape)
+    //   Access via: root/dirLink/hop.png
+    //
+    // The physical-parent fix resolves the relative symlink against the real
+    // parent (root/subdir), so ../../ correctly escapes root. Without the fix
+    // the lexical parent (root/dirLink) would be used, which may resolve
+    // differently.
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-gen-outside-'));
+    try {
+      // Create outside destination.
+      await fs.mkdir(path.join(outsideDir, 'outside'), { recursive: true });
+      const escapedFile = path.join(outsideDir, 'outside', 'escaped.png');
+      await fs.writeFile(escapedFile, 'sensitive');
+
+      // Create subdir inside root.
+      const subdir = path.join(tmpDir!, 'subdir');
+      await fs.mkdir(subdir);
+
+      // Create directory symlink: root/dirLink -> root/subdir.
+      const dirLink = path.join(tmpDir!, 'dirLink');
+      fsSync.symlinkSync(subdir, dirLink);
+
+      // Create relative escape symlink inside subdir.
+      // Relative from subdir: go up to outsideDir then into outside/escaped.png.
+      const relEscape = path.join(
+        path.relative(subdir, path.dirname(outsideDir)),
+        'outside',
+        'escaped.png',
+      );
+      fsSync.symlinkSync(relEscape, path.join(subdir, 'hop.png'));
+
+      // Access via the directory symlink.
+      const accessPath = path.join(dirLink, 'hop.png');
+
+      const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+      const handler = createImageGenerateHandler(fetchFn);
+      const result = await handler(
+        { prompt: 'test', output_path: accessPath },
+        signal,
+        { cwd: tmpDir, sessionId: 'dirlink-escape-test', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/outside.*write roots|write roots/i);
+      // The outside file must NOT have been created by the handler.
+      await expect(fs.access(escapedFile)).resolves.toBeUndefined(); // file exists (we created it)
+      const stat = await fs.stat(escapedFile);
+      expect(stat.size).toBe('sensitive'.length); // must not have grown
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+      _resetRootRealpathCacheForTests();
+      _resetWriteDenylistCacheForTests();
+    }
+  });
 });

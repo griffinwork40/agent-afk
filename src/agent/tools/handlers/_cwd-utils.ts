@@ -338,12 +338,34 @@ function resolveSymlinkTarget(p: string): string {
     let isLink: boolean;
     try {
       isLink = lstatSync(current).isSymbolicLink();
-    } catch {
-      return current; // path does not exist or is not accessible
+    } catch (err) {
+      // Treat ENOENT (dangling chain) and ENOTDIR (non-directory component) as
+      // "not a symlink / end of chain" — return current unchanged. Any other
+      // error (EACCES, EPERM, …) must fail closed: a permission-denied stat on
+      // a symlink inside the write root cannot be silently treated as "not a
+      // link", because fs.writeFile would still follow it. Throw so the caller
+      // reports the access error rather than granting a silent pass.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return current;
+      throw new Error(
+        `Cannot stat \`${current}\` while resolving symlink chain from \`${p}\`: ${(err as Error).message}`,
+      );
     }
     if (!isLink) return current;
     const dest = readlinkSync(current);
-    current = path.isAbsolute(dest) ? dest : path.join(path.dirname(current), dest);
+    // Item 1: Resolve relative symlinks against the PHYSICAL parent directory,
+    // not the lexical one. If current was reached through a symlinked directory,
+    // path.dirname(current) is the lexical parent, which may differ from the
+    // filesystem parent the kernel uses. realpathSafe resolves the real parent
+    // first, preventing an intermediate-directory symlink from providing a
+    // different relative-path base than the kernel would use.
+    if (path.isAbsolute(dest)) {
+      current = dest;
+    } else {
+      const parentDir = path.dirname(current);
+      const physicalParent = realpathSafe(parentDir);
+      current = path.join(physicalParent, dest);
+    }
   }
   return current; // hit ELOOP ceiling
 }
