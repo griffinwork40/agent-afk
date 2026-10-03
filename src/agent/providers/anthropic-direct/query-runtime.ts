@@ -102,6 +102,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
   private readonly effort?: import('../../types/sdk-types.js').EffortLevel;
   private readonly temperature?: number;
+  private readonly thinkingBlockBinding?: import('./types.js').RunTurnInput['thinkingBlockBinding'];
   private readonly baseUrl?: string;
   private readonly maxToolUseIterations?: number;
   private readonly softDeadlineMs?: number;
@@ -165,6 +166,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.thinking = opts.thinking;
     if (opts.effort !== undefined) this.effort = opts.effort;
     if (opts.temperature !== undefined) this.temperature = opts.temperature;
+    if (opts.thinkingBlockBinding !== undefined) this.thinkingBlockBinding = opts.thinkingBlockBinding;
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
     if (opts.maxToolUseIterations !== undefined)
       this.maxToolUseIterations = opts.maxToolUseIterations;
@@ -224,6 +226,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get thinking() { return query.thinking; },
       get effort() { return query.effort; },
       get temperature() { return query.temperature; },
+      get thinkingBlockBinding() { return query.thinkingBlockBinding; },
       get baseUrl() { return query.baseUrl; },
       get maxToolUseIterations() { return query.maxToolUseIterations; },
       get softDeadlineMs() { return query.softDeadlineMs; },

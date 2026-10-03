@@ -47,6 +47,7 @@ export interface TurnDriverContext {
   readonly thinking: import('@anthropic-ai/sdk/resources').ThinkingConfigParam | undefined;
   readonly effort: import('../../types/sdk-types.js').EffortLevel | undefined;
   readonly temperature: number | undefined;
+  readonly thinkingBlockBinding: import('./types.js').RunTurnInput['thinkingBlockBinding'] | undefined;
   readonly baseUrl: string | undefined;
   readonly maxToolUseIterations: number | undefined;
   readonly softDeadlineMs: number | undefined;
@@ -201,6 +202,7 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
         ...(ctx.thinking !== undefined ? { thinking: ctx.thinking } : {}),
         ...(ctx.effort !== undefined ? { effort: ctx.effort } : {}),
         ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
+        ...(ctx.thinkingBlockBinding !== undefined ? { thinkingBlockBinding: ctx.thinkingBlockBinding } : {}),
         ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
         ...(ctx.maxToolUseIterations !== undefined ? { maxToolUseIterations: ctx.maxToolUseIterations } : {}),
         ...(ctx.softDeadlineMs !== undefined ? { softDeadlineMs: ctx.softDeadlineMs } : {}),
