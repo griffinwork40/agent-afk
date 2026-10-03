@@ -1030,4 +1030,99 @@ describe('translateMessageStream: input_transformations (thinking drop_block)', 
     const last = out[out.length - 1];
     expect(last?.kind).toBe('turn-result');
   });
+
+  // ── Finding 3: per-stream dedup (double-counting guard) ─────────────────
+  // Both message_start and message_delta may carry input_transformations for the
+  // same stream. Without the per-stream guard both would increment warnCount,
+  // exhausting the cap at 5 streams instead of 10. With the guard, each stream
+  // increments warnCount exactly ONCE regardless of which frame carries the drops.
+
+  it('counts only ONE warn per stream even when both message_start and message_delta carry drops', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_both_frames',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'response'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        // Server echoes the same drop in message_delta — should NOT add a second warn
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    // Must be exactly 1 warn, not 2
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('cap counts streams (not frames): 10 streams each with both frames fire 10 warns total', async () => {
+    // Without the per-stream dedup, 10 streams × 2 frames = 20 warnCount
+    // increments would exhaust the cap at 5 streams. With dedup, 10 streams
+    // × 1 increment = 10, exhausting exactly at 10.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const makeBothFramesStream = (): RawMessageStreamEvent[] => [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_both',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'x'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    // Run exactly 10 streams — should produce 10 warns (cap hit on 10th)
+    for (let i = 0; i < 10; i++) {
+      await collect(translateMessageStream(fromArray(makeBothFramesStream()), { sessionId: SESSION_ID }));
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(10);
+
+    // An 11th stream should produce no warn (cap already exhausted)
+    await collect(translateMessageStream(fromArray(makeBothFramesStream()), { sessionId: SESSION_ID }));
+    expect(warnSpy).toHaveBeenCalledTimes(10);
+  });
 });

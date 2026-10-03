@@ -34,6 +34,40 @@ type BlockAcc =
   | { kind: 'tool_use'; id: string; name: string; partialJson: string };
 
 /**
+ * Returns true when the raw `input_transformations` value contains at least one
+ * `{type: 'thinking_dropped'}` entry — the check used to decide whether to mark
+ * a stream as "already warned" for the per-stream dedup guard.
+ */
+function hasDroppedBlocks(transformations: unknown): boolean {
+  if (!Array.isArray(transformations)) return false;
+  return transformations.some(
+    (t) =>
+      typeof t === 'object' &&
+      t !== null &&
+      (t as Record<string, unknown>)['type'] === 'thinking_dropped',
+  );
+}
+
+/**
+ * Emit the drop-block warning at most once per stream (per-stream dedup).
+ *
+ * Returns the new value of the `warnedThisStream` flag. Pass the current flag
+ * value in; when it is already `true`, both the check and the warn are skipped
+ * (this frame duplicates what message_start already warned). Returns `true`
+ * when a warn was emitted or was already emitted before.
+ */
+function warnDropsDeduped(
+  transformations: unknown,
+  source: 'message_start' | 'message_delta',
+  alreadyWarned: boolean,
+): boolean {
+  if (alreadyWarned) return true;
+  const fired = hasDroppedBlocks(transformations);
+  warnOnDroppedThinkingBlocks(transformations, source);
+  return fired;
+}
+
+/**
  * Best-effort parse of an accumulated tool-use input JSON buffer. Returns
  * `{}` when the buffer is empty or unparseable so the dispatcher always
  * receives a structurally valid object.
@@ -174,6 +208,14 @@ export async function* translateMessageStream(
   let stopReason: string | null = null;
   let usage: Usage | null = null;
   let stopped = false;
+  // Dedup: only count one warn per stream for the process-global warnCount cap.
+  // Both message_start and message_delta can carry input_transformations entries,
+  // and the server may echo the same drops in both frames. Counting both exhausts
+  // the process-global cap (10) at 2× the intended rate — 5 streams instead of 10.
+  // Guard: set to true when message_start already had drops; the message_delta
+  // path is then a no-op. When message_start had no drops, message_delta still
+  // fires normally (server-side fallback path where only delta has drops).
+  let warnedThisStream = false;
 
   // Hoist the flag once — avoids a getter call on every streaming event.
   const traceEnabled = !!env.AFK_TELEGRAM_TRACE;
@@ -185,9 +227,10 @@ export async function* translateMessageStream(
       switch (evt.type) {
         case 'message_start': {
           if (evt.message?.usage) usage = { ...evt.message.usage };
-          warnOnDroppedThinkingBlocks(
+          warnedThisStream = warnDropsDeduped(
             (evt.message as unknown as Record<string, unknown>)?.['input_transformations'],
             'message_start',
+            warnedThisStream,
           );
           break;
         }
@@ -309,9 +352,12 @@ export async function* translateMessageStream(
           }
           // After a server-side model fallback the final message_delta carries
           // the serving model's input_transformations entries (docs: preserved-thinking).
-          warnOnDroppedThinkingBlocks(
+          // warnDropsDeduped skips when message_start already warned (same drops,
+          // both frames carry them) but fires normally when only delta has drops.
+          warnedThisStream = warnDropsDeduped(
             (evt as unknown as Record<string, unknown>)?.['input_transformations'],
             'message_delta',
+            warnedThisStream,
           );
           if (evt.usage) {
             usage = applyDeltaUsage(usage, evt.usage);

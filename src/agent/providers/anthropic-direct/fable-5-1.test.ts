@@ -21,12 +21,14 @@
  *  - https://platform.claude.com/docs/en/build-with-claude/context-windows
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  isFable51,
   resolveEffort,
   resolveThinkingParam,
   resolveAnthropicTemperature,
   isNonDefaultSamplingForbiddenModel,
+  _resetWarnedTemperatureClampsForTest,
 } from './resolve-params.js';
 import { deriveCallCostUsd } from './pricing.js';
 import { starterModels } from './query-options.js';
@@ -202,5 +204,94 @@ describe('Fable 5.1 model picker', () => {
     // Fable 5 stays reachable by raw wire id at the /model surface, but is no
     // longer promoted in the picker now that Fable 5.1 is the stable target.
     expect(starterModels().map((m) => m.value)).not.toContain('claude-fable-5');
+  });
+});
+
+// ── isFable51 regex boundary (Finding 1) ──────────────────────────────────
+// The regex must NOT match fable-5-10, fable-5-11, or any hypothetical
+// fable-5-1x suffix — only fable-5-1 terminated by a non-identifier character
+// or end-of-string.
+
+describe('isFable51 regex boundary', () => {
+  // Must MATCH
+  it('matches claude-fable-5-1 (canonical wire id)', () => {
+    expect(isFable51('claude-fable-5-1')).toBe(true);
+  });
+
+  it('matches fable-5-1 (without claude- prefix)', () => {
+    expect(isFable51('fable-5-1')).toBe(true);
+  });
+
+  it('matches claude-fable-5-1-20261001 (dated release)', () => {
+    expect(isFable51('claude-fable-5-1-20261001')).toBe(true);
+  });
+
+  it('matches claude-fable-5-1@beta (at-sign separator)', () => {
+    expect(isFable51('claude-fable-5-1@beta')).toBe(true);
+  });
+
+  it('matches claude-fable-5-1.0 (dot separator)', () => {
+    expect(isFable51('claude-fable-5-1.0')).toBe(true);
+  });
+
+  // Must NOT MATCH — the anchored boundary prevents these
+  it('does NOT match claude-fable-5-10', () => {
+    expect(isFable51('claude-fable-5-10')).toBe(false);
+  });
+
+  it('does NOT match fable-5-11', () => {
+    expect(isFable51('fable-5-11')).toBe(false);
+  });
+
+  it('does NOT match claude-fable-5-1x', () => {
+    expect(isFable51('claude-fable-5-1x')).toBe(false);
+  });
+
+  // Confirm guard also holds through isNonDefaultSamplingForbiddenModel (which
+  // calls isFable51 internally).
+  it('isNonDefaultSamplingForbiddenModel is false for fable-5-10', () => {
+    expect(isNonDefaultSamplingForbiddenModel('claude-fable-5-10')).toBe(false);
+  });
+
+  it('isNonDefaultSamplingForbiddenModel is false for fable-5-11', () => {
+    expect(isNonDefaultSamplingForbiddenModel('fable-5-11')).toBe(false);
+  });
+});
+
+// ── Finding 4: silent temperature-drop warning ────────────────────────────
+
+describe('Fable 5.1 temperature-drop warning', () => {
+  beforeEach(() => {
+    // Reset the module-level dedup Set so each test starts clean.
+    _resetWarnedTemperatureClampsForTest();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('emits a console.warn when temperature is dropped for a Fable 5.1 model', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    resolveAnthropicTemperature(0.7, ID);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('temperature=0.7');
+    expect(msg).toContain(ID);
+    expect(msg).toContain('non-default sampling forbidden');
+  });
+
+  it('deduplicates: a second call with the same model does NOT warn again', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Two calls for the same model — only one warn expected (Set dedup).
+    resolveAnthropicTemperature(0.5, ID);
+    resolveAnthropicTemperature(0.9, ID);
+    // The Set key is keyed on model, not on temperature value, so both calls
+    // share the same dedup key and only one warn fires.
+    expect(warnSpy).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT warn for non-Fable models', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    resolveAnthropicTemperature(0.5, 'claude-sonnet-4-6');
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

@@ -115,8 +115,6 @@ export interface AnthropicDirectQueryOptions {
   effort?: import('../../types/sdk-types.js').EffortLevel;
   /** Sampling temperature forwarded to `messages.create`. Omit for server default. */
   temperature?: number;
-  /** Fable 5.1 preserved-thinking policy: drop prefix-mismatched thinking blocks. */
-  thinkingBlockBinding?: import('./types.js').RunTurnInput['thinkingBlockBinding'];
   /**
    * Local-server base URL. When set, prompt-cache markers are suppressed
    * across all turns (see `isCacheEnabled({baseUrl})`).

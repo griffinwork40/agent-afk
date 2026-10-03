@@ -27,7 +27,7 @@ const isOpus47Plus = (model: string): boolean => /opus-4-(7|[89])/.test(model);
  * as Opus 4.8). Note: `opus-5-5` is matched by the `opus-5` branch of the
  * regex below.
  */
-const isFable51 = (model: string): boolean => /(claude-)?fable-5-1/.test(model);
+export const isFable51 = (model: string): boolean => /(claude-)?fable-5-1(?:[-.@]|$)/.test(model);
 
 const requiresAdaptiveThinking = (model: string): boolean =>
   isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model);
@@ -48,6 +48,14 @@ const warnedTemperatureClamps = new Set<string>();
 
 /** Anthropic Messages API maximum temperature. */
 const ANTHROPIC_MAX_TEMPERATURE = 1.0;
+
+/**
+ * Reset temperature-clamp dedup state. Exposed for tests only — do not call in production code.
+ * @internal
+ */
+export function _resetWarnedTemperatureClampsForTest(): void {
+  warnedTemperatureClamps.clear();
+}
 
 /**
  * Validate and clamp the sampling temperature for the Anthropic Messages API.
@@ -72,7 +80,16 @@ export function resolveAnthropicTemperature(
   model?: string,
 ): number | undefined {
   if (temperature === undefined) return undefined;
-  if (isNonDefaultSamplingForbiddenModel(model)) return undefined;
+  if (isNonDefaultSamplingForbiddenModel(model)) {
+    const key = `fable-temp-drop:${model}`;
+    if (!warnedTemperatureClamps.has(key)) {
+      warnedTemperatureClamps.add(key);
+      console.warn(
+        `[afk] temperature=${temperature} dropped for ${model} (non-default sampling forbidden)`,
+      );
+    }
+    return undefined;
+  }
   if (!Number.isFinite(temperature) || temperature < 0) return undefined;
   if (temperature > ANTHROPIC_MAX_TEMPERATURE) {
     const key = `temp:${temperature}`;

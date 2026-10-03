@@ -107,9 +107,6 @@ export function buildProviderQuery(
       });
 
   const resolvedEffort = resolveEffort(config.effort, model);
-  const thinkingBlockBinding = model.toLowerCase().includes('fable-5-1')
-    ? { prefix_mismatch_behavior: 'drop_block' as const }
-    : undefined;
   const resolvedTemperature = config.temperature !== undefined
     ? resolveAnthropicTemperature(config.temperature, model)
     : undefined;
@@ -155,7 +152,6 @@ export function buildProviderQuery(
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
     ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
-    ...(thinkingBlockBinding !== undefined ? { thinkingBlockBinding } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),
     ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
