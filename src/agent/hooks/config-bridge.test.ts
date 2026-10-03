@@ -901,7 +901,12 @@ describe('disabledPluginHooks — per-hook disable', () => {
 
   it('suppresses only the matching matcher group, not other matchers', async () => {
     const hitPath = join(tmp, 'hit.txt');
-    const hitScript = writeScript('record-hit.sh', `#!/bin/sh\ntouch ${hitPath}\n`);
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'record-hit.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
     const misScript = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
     const registry = createHookRegistry();
 
@@ -939,7 +944,12 @@ describe('disabledPluginHooks — per-hook disable', () => {
 
   it('does not suppress a plugin hook from a different plugin', async () => {
     const hitPath = join(tmp, 'different-plugin-hit.txt');
-    const hitScript = writeScript('different-plugin-hook.sh', `#!/bin/sh\ntouch ${hitPath}\n`);
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'different-plugin-hook.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
     const registry = createHookRegistry();
 
     const config = makeEnabledConfig({
