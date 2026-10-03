@@ -188,8 +188,7 @@ confirmation. Accepts a boolean per surface key.
   "autoRouting": {
     "interactive": false,
     "chat": true,
-    "telegram": true,
-    "daemon": true
+    "telegram": true
   }
 }
 ```
@@ -199,9 +198,8 @@ confirmation. Accepts a boolean per surface key.
 | `interactive` | `boolean` | Enable auto-routing in the REPL (`afk interactive`). |
 | `chat` | `boolean` | Enable auto-routing for one-shot `afk chat` calls. |
 | `telegram` | `boolean` | Enable auto-routing in the Telegram bot surface. |
-| `daemon` | `boolean` | Enable auto-routing in the headless daemon. |
 
-Env override: `AFK_AUTO_ROUTING=true` sets all four surfaces simultaneously.
+Env override: `AFK_AUTO_ROUTING=true` sets all three surfaces simultaneously.
 
 ---
 
