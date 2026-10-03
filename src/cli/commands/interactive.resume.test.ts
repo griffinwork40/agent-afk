@@ -60,6 +60,7 @@ vi.mock('../shared-helpers.js', () => ({
   getEffort: vi.fn(() => undefined),
   getMaxOutputTokens: vi.fn(() => undefined),
   getMaxToolUseIterations: vi.fn(() => undefined),
+  getMaxBudgetUsd: vi.fn(() => undefined),
   loadSystemPrompt: vi.fn(() => undefined),
   loadConfigSystemPrompt: vi.fn(() => undefined),
   resolveBaseSystemPrompt: vi.fn(() => ({ prompt: undefined, source: 'none' })),

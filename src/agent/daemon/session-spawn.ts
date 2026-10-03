@@ -226,6 +226,17 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     rawMaxToolIters !== undefined && Number.isFinite(Number(rawMaxToolIters)) && Number(rawMaxToolIters) > 0
       ? Math.floor(Number(rawMaxToolIters))
       : undefined;
+  // Session-wide USD budget ceiling (AFK_MAX_BUDGET_USD). Parsed inline (same
+  // agent→cli layering rationale as AFK_MAX_TOOL_USE_ITERATIONS above).
+  // Mirrors parseBudget() in cli/shared-helpers.ts: unset/non-numeric/NaN/
+  // negative → undefined = uncapped (no behavior change for operators who have
+  // not set the variable). Placed BEFORE the `...sessionConfig` spread so an
+  // explicit sessionConfig.maxBudgetUsd still wins (escape-hatch parity).
+  const rawMaxBudget = env.AFK_MAX_BUDGET_USD;
+  const parsedMaxBudget =
+    rawMaxBudget !== undefined && Number.isFinite(Number(rawMaxBudget)) && Number(rawMaxBudget) >= 0
+      ? Number(rawMaxBudget)
+      : undefined;
   const config: AgentConfig = {
     model: 'sonnet',
     // Daemon-spawned sessions run autonomously and require tool use without
@@ -252,6 +263,9 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     // Opt-in top-level tool-round ceiling default; overridable by an explicit
     // sessionConfig.maxToolUseIterations via the spread below.
     ...(parsedMaxToolIters !== undefined ? { maxToolUseIterations: parsedMaxToolIters } : {}),
+    // USD budget ceiling default; overridable by an explicit
+    // sessionConfig.maxBudgetUsd via the spread below.
+    ...(parsedMaxBudget !== undefined ? { maxBudgetUsd: parsedMaxBudget } : {}),
     // sessionConfig may override permissionMode if the operator explicitly
     // wants a different mode for daemon tasks (intentional escape hatch).
     ...options.sessionConfig,

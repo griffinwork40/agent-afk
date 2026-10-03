@@ -37,6 +37,8 @@ export interface TelegramSessionBuildContext {
   maxOutputTokens: number | undefined;
   /** Applies to BOTH providers via `resolveMaxToolIterations()`. */
   maxToolUseIterations: number | undefined;
+  /** Session-wide USD budget ceiling from `AFK_MAX_BUDGET_USD`. `undefined` = uncapped. */
+  maxBudgetUsd: number | undefined;
   traceWriter: TelegramTraceWriter;
   mcpManager: TelegramMcpManager;
   /** Bot-global store shared across every chat's hook bundle. */

@@ -346,3 +346,60 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
     void session.close().catch(() => undefined);
   });
 });
+
+describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
+  // Verifies AFK_MAX_BUDGET_USD is honored by daemon sessions so the budget
+  // knob is not silently ignored on unattended surfaces.
+  let tmpAfkHome: string;
+
+  beforeAll(() => {
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'dsf-budget-'));
+    process.env['AFK_HOME'] = tmpAfkHome;
+  });
+
+  afterAll(() => {
+    delete process.env['AFK_HOME'];
+    rmSync(tmpAfkHome, { recursive: true, force: true });
+  });
+
+  it('forwards config.maxBudgetUsd when already set (e.g. by session-spawn.ts)', () => {
+    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = factory(makeConfig({ maxBudgetUsd: 7.5 }));
+    const internals = session as unknown as { config?: AgentConfig };
+    expect(internals.config?.maxBudgetUsd).toBe(7.5);
+    void session.close().catch(() => undefined);
+  });
+
+  it('reads AFK_MAX_BUDGET_USD from env when config.maxBudgetUsd is absent', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '3.00';
+      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = factory(makeConfig());
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBe(3);
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is unset (uncapped)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      delete process.env[key];
+      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = factory(makeConfig());
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+    } finally {
+      if (original !== undefined) process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+});

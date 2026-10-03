@@ -75,7 +75,7 @@ export async function bootstrapSession(
 
   const {
     resumeTarget, resumeConfig, effectiveCwd, sessionModel,
-    thinking, effort, maxOutputTokens, maxToolUseIterations,
+    thinking, effort, maxOutputTokens, maxToolUseIterations, maxBudgetUsd,
     basePrompt, systemPrompt, systemPromptSource, cliConfig,
   } = resolveBootstrapConfig(options, extras);
 
@@ -161,7 +161,7 @@ export async function bootstrapSession(
   // Capture deps needed by both the initial build and the swap closure.
   const sharedDeps = buildSharedDeps({
     sessionModel, resumeConfig, systemPrompt, systemPromptSource, thinking, effort,
-    maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
+    maxOutputTokens, maxToolUseIterations, maxBudgetUsd, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
     bashOutputTailReporter,
     // Cascade-abort and drain in-flight children before the writer seals,

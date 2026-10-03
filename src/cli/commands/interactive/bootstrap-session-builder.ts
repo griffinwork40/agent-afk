@@ -31,6 +31,13 @@ export interface BuildAgentSessionDeps {
    */
   maxToolUseIterations: number | undefined;
   /**
+   * Session-wide USD budget ceiling from `AFK_MAX_BUDGET_USD`.
+   * `undefined` = uncapped (no behavior change for operators who have not set
+   * the variable). Flows to `AgentConfig.maxBudgetUsd` and is enforced by
+   * `stream-consumer.ts`.
+   */
+  maxBudgetUsd: number | undefined;
+  /**
    * Fully-wired provider factory. Passed as `config.providerFactory` so the
    * ProviderRouter builds a wired provider (with executors, memoryStore,
    * mcpManager) on every turn — enabling cross-family /model swaps without
@@ -84,6 +91,7 @@ export function buildAgentSession(deps: BuildAgentSessionDeps): AgentSession {
     ...(deps.temperature !== undefined ? { temperature: deps.temperature } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     ...(deps.maxToolUseIterations !== undefined ? { maxToolUseIterations: deps.maxToolUseIterations } : {}),
+    ...(deps.maxBudgetUsd !== undefined ? { maxBudgetUsd: deps.maxBudgetUsd } : {}),
     ...deps.resumeConfig,
     ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}),
     ...(deps.traceWriter !== undefined ? { traceWriter: deps.traceWriter } : {}),
@@ -114,6 +122,7 @@ export function buildSharedDeps(a: {
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
   maxToolUseIterations: number | undefined;
+  maxBudgetUsd: number | undefined;
   cliConfig: CliConfig;
   providerFactory: (m: string | undefined) => ModelProvider;
   hookRegistry: HookRegistry;
@@ -134,6 +143,7 @@ export function buildSharedDeps(a: {
     effort: a.effort,
     maxOutputTokens: a.maxOutputTokens,
     maxToolUseIterations: a.maxToolUseIterations,
+    maxBudgetUsd: a.maxBudgetUsd,
     ...(a.cliConfig.baseUrl !== undefined ? { baseUrl: a.cliConfig.baseUrl } : {}),
     ...(a.cliConfig.temperature !== undefined ? { temperature: a.cliConfig.temperature } : {}),
     providerFactory: a.providerFactory,
