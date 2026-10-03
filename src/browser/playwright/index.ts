@@ -32,6 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
+import { checkEgressTarget } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -114,6 +115,13 @@ export class PlaywrightProvider implements BrowserProvider {
    * blocked URLs never touch the browser process. The BrowserContext is
    * created lazily on first open() via ensurePage().
    *
+   * Invariant: the SSRF egress guard ({@link checkEgressTarget}) is applied
+   * BEFORE the domain policy check, blocking private/loopback/link-local/
+   * cloud-metadata ranges — including 169.254.169.254 (IMDS) and 127.x.x.x
+   * daemon surfaces — that the domain allow/block glob lists cannot cover.
+   * Honoured escape hatch: `AFK_WEB_ALLOW_PRIVATE_HOSTS=1` disables the guard,
+   * consistent with the same escape hatch on web_request / web_scrape (#2301).
+   *
    * Invariant: domain policy is ALSO re-enforced on the URL the tab actually
    * landed on, because goto() follows 30x redirects. Defense in depth — the
    * pre-navigation check is kept, not replaced. Both checks are required: the
@@ -121,6 +129,18 @@ export class PlaywrightProvider implements BrowserProvider {
    * redirect-laundered blocked host from being observed.
    */
   async open(input: OpenInput): Promise<OpenOutcome> {
+    // SSRF guard: block private/loopback/link-local/metadata ranges.
+    // Runs before the domain policy check and before any browser interaction.
+    // Honours AFK_WEB_ALLOW_PRIVATE_HOSTS, matching web_request / web_scrape.
+    const egressVerdict = await checkEgressTarget(input.url);
+    if (!egressVerdict.allowed) {
+      return {
+        outcome: 'blocked_by_policy',
+        url: input.url,
+        reason: egressVerdict.reason,
+      };
+    }
+
     // Domain policy check before any browser interaction.
     const policyResult = enforceDomainPolicy(input.url, this.config);
     if (!policyResult.allowed) {
