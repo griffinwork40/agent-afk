@@ -184,3 +184,30 @@ describe('isRetryableStreamError — status-less overload', () => {
     expect(isRetryableConnectionError(sdkMidStreamError({ code: 'server_is_overloaded' }))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// OVERLOAD_MESSAGE_RE word-boundary guard (#2855)
+// ---------------------------------------------------------------------------
+
+describe('OVERLOAD_MESSAGE_RE word-boundary false-positive guard (#2855)', () => {
+  it('does NOT match "Model context window is overloaded" (issue example)', () => {
+    // The substring match /overloaded/i would fire here; /\boverloaded\b/i must not.
+    const err = sdkMidStreamError({ message: 'Model context window is overloaded' });
+    // The SDK copies `code` and `type` from the body onto the error; neither is
+    // set here, so the only candidate is the message match via OVERLOAD_MESSAGE_RE.
+    // A false positive would make isOpenAIOverloadError return true even though
+    // this is a client-side context-window error, not a provider overload.
+    expect(isOpenAIOverloadError(err)).toBe(false);
+  });
+
+  it('still matches the canonical provider overload message (word boundary present)', () => {
+    const err = sdkMidStreamError({ message: 'Our servers are currently overloaded. Please try again.' });
+    expect(isOpenAIOverloadError(err)).toBe(true);
+  });
+
+  it('does not match if "overloaded" is part of a longer word (no word boundary)', () => {
+    // Hypothetical: the prefix/suffix of "overloaded" attached to other chars.
+    const err = sdkMidStreamError({ message: 'requestoverloaded status' });
+    expect(isOpenAIOverloadError(err)).toBe(false);
+  });
+});
