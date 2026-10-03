@@ -45,7 +45,7 @@ import {
   nextProbeDelayMs,
 } from '../../anthropic-direct/overload-pause.js';
 import { OVERLOAD_EXHAUSTED } from '../../shared/overload-sentinel.js';
-import { getErrorStatus } from './retry.js';
+import { getErrorStatus, isOpenAIOverloadError } from './retry.js';
 import type { IterationResult } from './stream-drive.js';
 import { createStreamState } from '../translate.js';
 
@@ -60,8 +60,8 @@ const OVERLOAD_STATUS_CODES = new Set([529, 503]);
  * into `conversationHistory`.
  */
 export const OPENAI_COMPAT_OVERLOAD_EXHAUSTED_NOTICE =
-  'The provider returned HTTP 529/503 (server overloaded) and did not recover within ' +
-  "this turn's retry budget. This is an upstream capacity event, not an afk error. " +
+  'The provider reported it is overloaded (HTTP 529/503 or an overload error event) and ' +
+  "did not recover within this turn's retry budget. This is an upstream capacity event, not an afk error. " +
   'The turn was committed, so the conversation so far is preserved — resume with ' +
   '`afk --resume <sessionId>` to continue from saved state once capacity frees up.';
 
@@ -81,10 +81,14 @@ function exhaustedIterationResult(): IterationResult {
 
 /**
  * True when `event` is an error event whose underlying status indicates server
- * overload (529 = Anthropic overloaded, 503 = service unavailable).
+ * overload (529 = Anthropic overloaded, 503 = service unavailable), or a
+ * status-less SDK overload throw ({@link isOpenAIOverloadError}). Must accept
+ * every error `isRetryableStreamError` retries as an overload, otherwise an
+ * overload that exhausts the inline budget would skip this pause tier.
  */
 export function isOverloadErrorEvent(event: ProviderEvent): boolean {
   if (event.type !== 'error') return false;
+  if (isOpenAIOverloadError(event.error)) return true;
   const status = getErrorStatus(event.error);
   return status !== undefined && OVERLOAD_STATUS_CODES.has(status);
 }

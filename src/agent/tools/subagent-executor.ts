@@ -464,7 +464,7 @@ export class SubagentExecutor implements SubagentControl {
     // Build the child config + nested-dispatch wiring. All context this needs
     // is passed explicitly; the recursive child executor is injected as a
     // factory so child-config.ts never imports this class at runtime.
-    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree } = buildChildConfig({
+    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist } = buildChildConfig({
       parsed,
       namedAgent,
       depth,
@@ -593,7 +593,7 @@ export class SubagentExecutor implements SubagentControl {
         // subagent.ts this makes every sub-agent uniformly non-interactive.
         // (Previously only background denied; foreground leaked elicitations to
         // the REPL/Telegram human via the process-wide elicitation router.)
-        denyElicitations: true, progressEvents: parsed.progress_events,
+        denyElicitations: true, progressEvents: parsed.progress_events, ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
       });
       // Backfill: give the depth-1 child executor a real parentId (handle.id) and the
       // child's OWN journal, so depth-2 forks journal via its forSubagent (never ours).

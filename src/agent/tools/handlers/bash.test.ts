@@ -829,7 +829,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     // Must complete quickly — SIGKILL terminates the process immediately;
     // SIGTERM would leave it running for up to 60s.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it('[abort path] terminates a SIGTERM-immune process when AbortSignal fires', async () => {
     const controller = new AbortController();
@@ -847,7 +847,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     expect(result.content).toContain('aborted');
     // Same reasoning: SIGKILL terminates promptly; SIGTERM would not.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it(
     '[process-group kill] reaps descendant processes, not just the direct child',

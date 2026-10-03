@@ -329,9 +329,14 @@ describe('TelegramBgResultNotifier', () => {
     expect(drainBgInjections('777')).toBe('');
   });
 
-  // ── #2380: dispose() must markDelivered for buffered-but-undrained jobs ────
+  // ── Fix: dispose() must NOT call markDelivered for buffered-but-undrained jobs ────
+  // (#2380 originally made dispose() call markDelivered, but that mislabeled
+  // jobs as "delivered to model context" when they were only push-notified.
+  // The correct behavior: dispose() silently discards the injection buffer
+  // without any witness event — the operator received a push notification and
+  // can recover via /bgsub:join in the next session.)
 
-  it('calls markDelivered for buffered jobs when dispose() is called without draining', () => {
+  it('does NOT call markDelivered for buffered-but-undrained jobs on dispose()', () => {
     const markDelivered = vi.spyOn(registry, 'markDelivered');
 
     const { handle, fireTerminal } = makeBgHandle();
@@ -344,8 +349,9 @@ describe('TelegramBgResultNotifier', () => {
     // is never reached.
     notifier.dispose();
 
-    // dispose() must account for the buffered job via markDelivered.
-    expect(markDelivered).toHaveBeenCalledWith(job.jobId);
+    // dispose() must NOT mislabel this as delivered. drainInjections() was never
+    // called, so no injection reached the model — markDelivered must not fire.
+    expect(markDelivered).not.toHaveBeenCalled();
   });
 });
 

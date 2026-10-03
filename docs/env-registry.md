@@ -147,7 +147,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 
 | Name | Type | Required | Default | Example | Description |
 |------|------|----------|---------|---------|-------------|
-| `AFK_AUTO_ROUTING` | boolean |  |  | `true` | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces. |
+| `AFK_AUTO_ROUTING` | boolean |  |  | `true` | Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces. |
 | `AFK_INTERNAL` | boolean |  |  | `1` | Tier gate. Set to exactly `1` to unlock — only the literal string "1" unlocks (other truthy values like "true"/"yes" leave the tier locked). When unlocked, skills tagged `audience: 'internal'` (e.g. /audit-fit, harvest/distill plugins) become visible at end-user surfaces (slash-command list, --help, tab-complete, system-prompt skill manifest). Default unset = public tier — internal skills are hidden. Not an access-control boundary; it gates surfacing, not the underlying registry. |
 
 ## Browser

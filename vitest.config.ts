@@ -47,14 +47,22 @@ export default defineConfig({
         'src/**/__fixtures__/**',
         'src/**/__test-utils__/**',
       ],
-      // Ratchet floor. Current: stmts 75.42 / branch 80.65 / fn 83.9 /
-      // lines 75.42. Floors are set ~1pt below current so CI fails when
+      // Ratchet floor. Floors are set ~1pt below current so CI fails when
       // coverage regresses. Raise (never lower) as real tests are added.
+      //
+      // History: re-baselined in the Vitest 2.1.9 -> 4.1.11 upgrade. v4's v8
+      // provider replaced v8-to-istanbul with AST-aware remapping, which
+      // changes what is counted (statements 126,968 -> 68,474; functions
+      // 7,339 -> 9,902), not what runs. Same tree, same 24,826 passing tests:
+      //   v2.1.9: stmts 88.40 / branch 86.48 / fn 91.38 / lines 88.40
+      //   v4.1.11: stmts 85.75 / branch 78.99 / fn 85.61 / lines 87.15
+      // Of 6,583 functions hit under v2, 6,582 are also hit under v4. Evidence
+      // is in the upgrade PR body.
       thresholds: {
-        statements: 74,
-        branches: 79,
-        functions: 82,
-        lines: 74,
+        statements: 84,
+        branches: 78,
+        functions: 84,
+        lines: 86,
       },
     },
   },

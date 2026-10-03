@@ -198,6 +198,24 @@ export interface ComposeExecutorContext {
     usage: import('../subagent/result.js').SubagentTrace['usage'],
     costUsd: number | undefined,
   ) => void;
+  /**
+   * Contract: the model that {@link ComposeExecutorContext.apiKey} was resolved
+   * FROM. Distinct from `defaultModel` when the session was launched with an
+   * explicit `--model` override: e.g. `AFK_MODEL=claude-opus-5-5` (Anthropic,
+   * credential source) + `--model gpt-6.1-sol` (OpenAI, session model). The
+   * per-call {@link SubagentManager} derives its `parentProvider` from
+   * `parentModel` — if that is `gpt-6.1-sol`, the provider resolves to
+   * `openai-compatible` and `sameCredentialFamily` returns true for OpenAI
+   * child nodes, causing the Anthropic `sk-ant-…` token to be forwarded (401).
+   *
+   * Setting `parentModel` to `credentialModel` instead keeps the provider gate
+   * aligned with the actual credential shape. Falls back to `defaultModel` when
+   * absent (back-compat: callers that do not supply this field are unaffected).
+   *
+   * Invariant: only the key's SOURCE model — never the session's routing model
+   * — must be used as `parentModel` for the compose SubagentManager.
+   */
+  credentialModel?: AgentModelInput;
 }
 
 const MAX_NODE_OUTPUT_CHARS = 8_000;
@@ -501,10 +519,9 @@ export class ComposeExecutor {
     manager = new SubagentManager({
       parentAbortSignal: call.signal,
       apiKey: this.ctx.apiKey,
-      // `this.ctx.apiKey` is the parent credential (resolved for
-      // `this.ctx.defaultModel`), so that model is the provider source of truth
-      // for the fork-time credential fallback (see SubagentManager.parentProvider).
-      parentModel: this.ctx.defaultModel,
+      // Use credentialModel (key's source model) not defaultModel (routing model)
+      // so parentProvider aligns with the credential shape — see field JSDoc.
+      parentModel: this.ctx.credentialModel ?? this.ctx.defaultModel,
       // Keep ambient rendering failures isolated from node execution. The
       // forwarding sink resolves the ambient sink per event, so sinks
       // installed after manager construction are still observed.
@@ -603,8 +620,7 @@ export class ComposeExecutor {
           defaultSubagentModel: this.ctx.defaultSubagentModel,
           defaultModel: this.ctx.defaultModel,
         });
-        const nodeProvider = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined);
-        const nodeIsOpenAI = nodeProvider === 'openai-compatible';
+        const nodeIsOpenAI = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined) === 'openai-compatible';
         // Invariant: resolve credentials fresh per-node at fork time, matching
         // the agent tool path (child-config.ts:302-308). ctx.apiKey is a fallback
         // only when fresh resolution returns empty (expired keychain token).

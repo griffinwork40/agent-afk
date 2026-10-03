@@ -49,7 +49,7 @@ describe('interactive bootstrap status line hooks', () => {
       })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
-      MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+      MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
       injectHotMemory: vi.fn((config: unknown) => config),
       injectGoalPrompt: vi.fn((config: unknown) => config),
       memoryToolSchemas: [],
@@ -80,7 +80,7 @@ describe('interactive bootstrap status line hooks', () => {
       activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./status-line.js', () => ({
-      StatusLine: vi.fn(() => statusLine),
+      StatusLine: vi.fn(function () { return statusLine; }),
     }));
     vi.doMock('./slash/index.js', () => ({ registerAll }));
     vi.doMock('./slash/writer.js', () => ({
@@ -206,7 +206,7 @@ function applyCommonMocks(): void {
     })),
   }));
   vi.doMock('../agent/memory/index.js', () => ({
-    MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+    MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
     injectHotMemory: vi.fn((config: unknown) => config),
     injectGoalPrompt: vi.fn((config: unknown) => config),
     memoryToolSchemas: [],
@@ -237,7 +237,7 @@ function applyCommonMocks(): void {
     activateDumpPrompt: vi.fn(),
   }));
   vi.doMock('./status-line.js', () => ({
-    StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
+    StatusLine: vi.fn(function () { return { start: vi.fn(), stop: vi.fn(), repaint: vi.fn() }; }),
   }));
   vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
   vi.doMock('./slash/writer.js', () => ({
@@ -1211,7 +1211,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       })),
     }));
     vi.doMock('../agent/memory/index.js', () => ({
-      MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+      MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
       injectHotMemory: vi.fn((config: unknown) => config),
       injectGoalPrompt: vi.fn((config: unknown) => config),
       memoryToolSchemas: [],
@@ -1266,7 +1266,7 @@ describe('interactive bootstrap — path-approval grant wiring for OpenAI-compat
       activateDumpPrompt: vi.fn(),
     }));
     vi.doMock('./status-line.js', () => ({
-      StatusLine: vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), repaint: vi.fn() })),
+      StatusLine: vi.fn(function () { return { start: vi.fn(), stop: vi.fn(), repaint: vi.fn() }; }),
     }));
     vi.doMock('./slash/index.js', () => ({ registerAll: vi.fn() }));
     vi.doMock('./slash/writer.js', () => ({
