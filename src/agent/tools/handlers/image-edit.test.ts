@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createImageEditHandler } from './image-edit.js';
+import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
+import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
 
 // Mock resolveOpenAIAuth so tests control auth resolution without touching disk.
 vi.mock('../../providers/openai-compatible/auth.js', () => ({
@@ -439,5 +442,59 @@ describe('image_edit handler', () => {
     const meta = JSON.parse(result.content);
     expect(meta.session_edits_used).toBe(1);
     expect(meta.session_edits_limit).toBe(10);
+  });
+
+  // ── Dangling symlink security (#2823) ────────────────────────────────────
+
+  it('refuses a dangling symlink output_path whose target is outside the write root', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-edit-outside-'));
+    const outsideFile = path.join(outsideDir, 'escaped.png');
+    const linkPath = path.join(tmpDir!, 'evil.png');
+    fsSync.symlinkSync(outsideFile, linkPath); // dangling: target parent exists, file doesn't
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'edit-symlink-escape', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside.*write roots|write roots/i);
+    await expect(fs.access(outsideFile)).rejects.toThrow();
+
+    await fs.rm(outsideDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+  });
+
+  it('refuses a dangling symlink output_path pointing at a denylisted path', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const homeDir = os.homedir();
+    const denyTarget = path.join(homeDir, '.ssh', 'injected.png');
+    const linkPath = path.join(tmpDir!, 'denylink.png');
+    fsSync.symlinkSync(denyTarget, linkPath);
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'edit-symlink-deny', resolveBase: tmpDir, writeRoots: [tmpDir!, homeDir] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/protected path|denylist/i);
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
   });
 });

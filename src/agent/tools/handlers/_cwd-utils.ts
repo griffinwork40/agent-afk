@@ -9,13 +9,14 @@
  */
 
 import path from 'path';
-import { realpathSync } from 'fs';
+import { lstatSync, realpathSync, readlinkSync } from 'fs';
 import type { ToolHandlerContext } from '../types.js';
 import {
   isReadDenied,
   READ_DENYLIST_ENTRY_MARKER,
   PROTECTED_CREDENTIAL_PATH_MARKER,
 } from './read-denylist.js';
+import { assertNotDenylisted } from './write-denylist.js';
 
 // Invariant: symlink containment must be resolved at the filesystem level, not
 // lexically. A symlink that lives INSIDE a granted root but points OUTSIDE it
@@ -315,4 +316,64 @@ export function extractCandidatePaths(command: string): string[] {
     out.push(token);
   }
   return out;
+}
+
+// Maximum symlink hops before giving up (mirrors ELOOP limit).
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * Resolve the final write target for `p`, following any symlink chain.
+ *
+ * `realpathSafe` (used inside `resolveAndContain`) handles dangling links by
+ * walking up to the nearest existing ancestor and reappending the tail — which
+ * returns the symlink's own path as if it were a regular file, passing the
+ * containment check. But `fs.writeFile(p, ...)` follows the link and writes to
+ * its target. This function resolves that target so callers can re-validate it.
+ *
+ * Returns `p` unchanged when `p` is not a symlink or does not exist.
+ */
+function resolveSymlinkTarget(p: string): string {
+  let current = p;
+  for (let hop = 0; hop < MAX_SYMLINK_HOPS; hop++) {
+    let isLink: boolean;
+    try {
+      isLink = lstatSync(current).isSymbolicLink();
+    } catch {
+      return current; // path does not exist or is not accessible
+    }
+    if (!isLink) return current;
+    const dest = readlinkSync(current);
+    current = path.isAbsolute(dest) ? dest : path.join(path.dirname(current), dest);
+  }
+  return current; // hit ELOOP ceiling
+}
+
+/**
+ * Re-validate the actual write target when `savePath` is a symlink.
+ *
+ * `resolveAndContain` and `assertNotDenylisted` see the symlink's own path
+ * (which is contained), but `fs.writeFile` follows the link and writes to the
+ * target. A dangling link inside a write root can point outside it or at a
+ * denylisted path, bypassing both checks.
+ *
+ * Call this AFTER the initial `resolveAndContain` + `assertNotDenylisted`
+ * guards and BEFORE any `fs.writeFile` / `mkdir` / `mkdirp`. When `savePath`
+ * is not a symlink the function is a no-op. Throws the same errors as
+ * `resolveAndContain` and `assertNotDenylisted`.
+ *
+ * @param savePath   - The already-resolved (contained) output path.
+ * @param context    - Handler context forwarded from the tool call.
+ * @param toolName   - Tool name used in error messages.
+ * @param cwd        - Session cwd used as the fallback resolve base.
+ */
+export function assertWriteTargetContained(
+  savePath: string,
+  context: ToolHandlerContext | undefined,
+  toolName: string,
+  cwd: string,
+): void {
+  const target = resolveSymlinkTarget(savePath);
+  if (target === savePath) return; // not a symlink — initial checks already cover it
+  resolveAndContain(target, context, 'write', cwd);
+  assertNotDenylisted(target, toolName);
 }
