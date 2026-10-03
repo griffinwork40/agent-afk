@@ -18,18 +18,6 @@ import type { BgJobResult } from './bg-job-log.js';
 import type { BgJobLogWriter } from './bg-job-log.js';
 
 /**
- * Extract the synthesized output text from a terminal SubagentResult.
- *
- * Mirrors `extractOutput()` in `src/cli/commands/interactive/bg-result-notifier.ts`
- * exactly. Kept here (agent layer) so `BackgroundAgentRegistry.markTerminal()`
- * can persist the body to `result.json` without importing from `cli/`.
- *
- * Returns `''` when the result carries no extractable content — callers
- * that read `result.json` treat an empty string as "no output" rather than
- * a missing file, which is the correct semantic for a job that produced no
- * assistant text.
- */
-/**
  * Persist the synthesized result body for completed/failed jobs.
  *
  * Called from `markTerminal()` via this helper so the call site in
@@ -52,6 +40,18 @@ export function persistResultBody(
   void writer.writeResult(jobResult);
 }
 
+/**
+ * Extract the synthesized output text from a terminal SubagentResult.
+ *
+ * Single source for both the persisted `result.json` body and the REPL
+ * auto-delivery path (`bg-result-notifier.ts` delegates here), so the two can
+ * never drift. Lives in the agent layer so `markTerminal()` need not import `cli/`.
+ *
+ * Returns `''` when the result carries no extractable content — callers
+ * that read `result.json` treat an empty string as "no output" rather than
+ * a missing file, which is the correct semantic for a job that produced no
+ * assistant text.
+ */
 export function extractOutputText(result: SubagentResult, status: BackgroundJobStatus): string {
   if (status === 'failed') {
     const errText = result.error

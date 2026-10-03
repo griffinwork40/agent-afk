@@ -34,6 +34,7 @@ import type { BgJobResult } from '../../../agent/bg-job-log.js';
 import { annotateIfIncomplete, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { formatDiskEvent } from '../../output-event-format.js';
+import { getBgJobResult } from '../../../paths.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 let registryRef: BackgroundAgentRegistry | undefined;
@@ -139,7 +140,10 @@ function printJobDetail(ctx: Parameters<SlashCommand['handler']>[0], job: Backgr
     const lines = text.split('\n').slice(0, 40);
     for (const line of lines) ctx.out.line(`  ${line}`);
     if (text.split('\n').length > 40) {
-      ctx.out.line(palette.dim('  … (truncated; full result available via /bgsub:join again)'));
+      // result.json exists only for completed/failed jobs (persistResultBody).
+      const where = job.status === 'completed' || job.status === 'failed'
+        ? `; full result in ${getBgJobResult(job.jobId)}` : '';
+      ctx.out.line(palette.dim(`  … (truncated${where})`));
     }
   }
   if (result?.error) {
@@ -271,7 +275,7 @@ export const bgsubJoinCmd: SlashCommand = {
         const lines = diskResult.outputText.split('\n').slice(0, 40);
         for (const line of lines) ctx.out.line(`  ${line}`);
         if (diskResult.outputText.split('\n').length > 40) {
-          ctx.out.line(palette.dim('  … (truncated; full result available via /bgsub:join again)'));
+          ctx.out.line(palette.dim(`  … (truncated; full result in ${getBgJobResult(id)})`));
         }
       } else {
         // Fallback to raw event-log replay (cancelled jobs, legacy logs).
