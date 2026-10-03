@@ -193,7 +193,7 @@ async function* dispatchAndAppend(
  * `warnState.lastWarnedThreshold`). A no-op when no cap is in effect or no
  * new threshold is crossed.
  */
-function injectRoundWarning(
+export function injectRoundWarning(
   priorTurns: import('../messages.js').OpenAIMessage[],
   round: number,
   maxIterations: number,
