@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, statSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFile, atomicWriteFileAsync } from './atomic-write.js';
@@ -89,6 +89,22 @@ describe('atomicWriteFileAsync (async)', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('an aborted signal never renames: dest keeps old content, temp removed', async () => {
+    const dest = join(dir, 'guarded.txt');
+    writeFileSync(dest, 'old');
+    const ac = new AbortController();
+    ac.abort('interrupted');
+    await expect(atomicWriteFileAsync(dest, 'new', { signal: ac.signal })).rejects.toBeDefined();
+    expect(readFileSync(dest, 'utf-8')).toBe('old');
+    expect(readdirSync(dir)).toEqual(['guarded.txt']);
+  });
+
+  it('a live signal does not change the happy path', async () => {
+    const dest = join(dir, 'live.txt');
+    await atomicWriteFileAsync(dest, 'ok', { signal: new AbortController().signal });
+    expect(readFileSync(dest, 'utf-8')).toBe('ok');
   });
 
   it('writes content to the destination file', async () => {

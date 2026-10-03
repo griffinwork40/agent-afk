@@ -40,7 +40,7 @@
  */
 
 import { mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
-import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rename, rm, chmod } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -76,6 +76,21 @@ export interface AtomicWriteOptions {
    * Defaults to `false`.
    */
   secure?: boolean;
+  /**
+   * Async variant only. Aborts the write: forwarded to the temp-file
+   * `writeFile`, and re-checked immediately before the `rename` commit point,
+   * so an abort at any moment leaves `dest` untouched (old content or absent)
+   * and the temp file removed. The abort reason is re-thrown.
+   */
+  signal?: AbortSignal;
+  /**
+   * Async variant only. When true, `chmod` the temp file to exactly `mode`
+   * before the rename. The `mode` given to file creation is masked by the
+   * process umask, so callers preserving an existing file's permission bits
+   * (e.g. an editor-style overwrite of a 0o775 script) need this to land the
+   * original mode verbatim. Defaults to `false`.
+   */
+  exactMode?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +179,10 @@ export async function atomicWriteFileAsync(
 
   const tmp = makeTmpPath(dest);
   try {
-    await writeFile(tmp, content, { mode, encoding, flag });
+    await writeFile(tmp, content, { mode, encoding, flag, ...(opts.signal ? { signal: opts.signal } : {}) });
+    if (opts.exactMode) await chmod(tmp, mode);
+    // Commit point: an abort that landed after the temp write must not rename.
+    opts.signal?.throwIfAborted();
     await rename(tmp, dest);
   } catch (err) {
     // Best-effort cleanup — suppress unlink errors.
