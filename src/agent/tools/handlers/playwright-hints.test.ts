@@ -138,7 +138,11 @@ describe('playwrightInstallCommand', () => {
   });
 
   it('resolves the BUNDLED playwright CLI, not a package-manager-relative command', () => {
-    const cmd = playwrightInstallCommand();
+    // Pin to 'linux' so the POSIX env-prefix regex matches on every host,
+    // including Windows where process.platform === 'win32' and the default
+    // command uses PowerShell $env: syntax (issue #2758).
+    // POSIX-guard convention: never skip on win32 — inject platform instead.
+    const cmd = playwrightInstallCommand('linux');
     expect(cmd).toMatch(/install chromium$/);
 
     // `playwright` is a real dependency of this repo, so resolution must
@@ -159,7 +163,10 @@ describe('playwrightInstallCommand', () => {
   it('prefixes the command with PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT (issue #1998)', () => {
     // Playwright's default download timeout is 30 s — too short for the ~200 MB
     // chromium binary on slow connections. The advertised command must override it.
-    const cmd = playwrightInstallCommand();
+    // Pin to 'linux' so the POSIX-form regex matches on all platforms (including
+    // win32, where the default uses PowerShell $env: syntax — issue #2758).
+    // POSIX-guard convention: never skip on win32 — inject platform instead.
+    const cmd = playwrightInstallCommand('linux');
     expect(cmd).toMatch(/^PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=\d+/);
     const ms = Number(/PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=(\d+)/.exec(cmd)?.[1]);
     expect(ms).toBeGreaterThanOrEqual(120_000);
