@@ -141,8 +141,10 @@ export function getErrorStatus(err: unknown): number | undefined {
  *      name) or any error whose cause chain carries a known socket/DNS `code`
  *      (ECONNRESET, ENOTFOUND, …). The SDK's default `shouldRetry` previously
  *      covered these silently; with `maxRetries: 0` they must be retried here.
- *      `APIConnectionTimeoutError` is deliberately excluded — AFK's TTFB
- *      watchdog owns that window.
+ *      `APIConnectionTimeoutError` is deliberately excluded HERE because this
+ *      predicate cannot see the request signal; `runConnectionPhase` retries
+ *      it separately when its stream signal is not aborted (the SDK's own
+ *      connect timeout, see shared `isConnectionTimeoutError`).
  *
  *   2. Status-bearing transients — the union of `RETRYABLE_STATUS_CODES`
  *      (429, 500, 502, 503, 529) and `CONNECTION_PHASE_RETRYABLE_STATUSES`

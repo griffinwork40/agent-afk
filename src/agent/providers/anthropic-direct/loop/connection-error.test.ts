@@ -4,13 +4,16 @@
 // or DNS blip on `messages.create` surfaced as a fatal
 // `APIConnectionError: Connection error.` and killed the turn. These tests pin
 // both the classifier and the retry behaviour in `createWithRetry`, including
-// status-bearing connection-phase errors (408/500/502/504) added in PR #2838.
+// status-bearing connection-phase errors (408/409/500/502/504) added in PR #2838
+// and the SDK connect timeout (`APIConnectionTimeoutError`) added after it.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   CONNECTION_ERROR_MAX_RETRIES,
   connectionErrorCode,
+  connectionRetryMetadata,
   isConnectionPhaseNetworkError,
+  isConnectionTimeoutError,
 } from './connection-error.js';
 import { createWithRetry, type ConnectionRetryInfo } from './round-request.js';
 import type { AnthropicMessagesCreateParams } from '../types.js';
@@ -56,14 +59,24 @@ describe('isConnectionPhaseNetworkError', () => {
   });
 
   it('matches a bare socket/DNS code anywhere on the cause chain', () => {
+    // Non-SDK shape (a raw fetch rejection). The SDK itself never surfaces a
+    // connect timeout this way: it maps any "timed out" rejection to a cause-less
+    // APIConnectionTimeoutError, covered by the createWithRetry timeout tests.
     for (const code of ['ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']) {
       const err = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code }) });
       expect(isConnectionPhaseNetworkError(err)).toBe(true);
     }
   });
 
-  it('does NOT match the SDK request timeout (TTFB watchdog owns that window)', () => {
+  it('does NOT match the SDK timeout (classified by isConnectionTimeoutError instead)', () => {
     expect(isConnectionPhaseNetworkError(new APIConnectionTimeoutError())).toBe(false);
+  });
+
+  it('isConnectionTimeoutError matches only the exact SDK timeout class', () => {
+    expect(isConnectionTimeoutError(new APIConnectionTimeoutError())).toBe(true);
+    expect(isConnectionTimeoutError(sdkConnectionError('ECONNRESET'))).toBe(false);
+    expect(isConnectionTimeoutError(new Error('Request timed out.'))).toBe(false);
+    expect(isConnectionTimeoutError(null)).toBe(false);
   });
 
   it('does NOT match errors carrying an HTTP status', () => {
@@ -133,10 +146,46 @@ describe('createWithRetry: connection-phase network failures', () => {
     expect(create).toHaveBeenCalledTimes(CONNECTION_ERROR_MAX_RETRIES + 1);
   });
 
-  it('does not retry an SDK request timeout', async () => {
+  it('retries an SDK connect timeout (cause-less APIConnectionTimeoutError) while the request signal is live', async () => {
+    // undici's 10s ConnectTimeoutError reaches us in exactly this shape; the
+    // TTFB watchdog (180s) has not fired, so before this fix the turn died.
     const { client, create } = clientFailing(1, () => new APIConnectionTimeoutError());
+    const retries: ConnectionRetryInfo[] = [];
+    const res = await run(client, (i) => retries.push(i));
+    expect(res.ok).toBe(true);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(retries).toHaveLength(1);
+  });
+
+  it('gives up on a persistent connect timeout after CONNECTION_ERROR_MAX_RETRIES', async () => {
+    const { client, create } = clientFailing(Infinity, () => new APIConnectionTimeoutError());
     const res = await run(client);
     expect(res.ok).toBe(false);
+    if (!res.ok) expect((res.e as Error).message).toBe('Request timed out.');
+    expect(create).toHaveBeenCalledTimes(CONNECTION_ERROR_MAX_RETRIES + 1);
+  });
+
+  it('does not retry a timeout once the request signal is aborted (TTFB watchdog owns it)', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const { client, create } = clientFailing(1, () => new APIConnectionTimeoutError());
+    const res = await run(client, undefined, ac.signal);
+    expect(res.ok).toBe(false);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('wakes from the connection-retry backoff when the turn is aborted mid-sleep', async () => {
+    vi.useFakeTimers();
+    const { client, create } = clientFailing(1, () => sdkConnectionError('ECONNRESET'));
+    const turn = new AbortController();
+    const p = createWithRetry(client, params, {}, turn.signal, turn.signal);
+    const settled = p.then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    await vi.advanceTimersByTimeAsync(100); // inside the >=1s backoff
+    turn.abort();
+    await vi.runAllTimersAsync();
+    const res = await settled;
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect((res.e as Error).message).toBe('aborted');
     expect(create).toHaveBeenCalledTimes(1);
   });
 
@@ -184,7 +233,7 @@ describe('createWithRetry: connection-phase status retries (408/500/502/504)', (
     return settled;
   }
 
-  for (const status of [500, 502, 408]) {
+  for (const status of [500, 502, 504, 408, 409]) {
     it(`retries a ${status} status error via connection budget and succeeds`, async () => {
       const { client, create } = clientFailing(1, () => new APIError(status, `http ${status}`));
       const retries: ConnectionRetryInfo[] = [];
@@ -223,5 +272,38 @@ describe('createWithRetry: connection-phase status retries (408/500/502/504)', (
     expect(res.ok).toBe(false);
     expect(create).toHaveBeenCalledTimes(4);
     if (!res.ok) expect((res.e as Error).message).toMatch(/overload/i);
+  });
+});
+
+describe('connectionRetryMetadata (connection_retry trace payload)', () => {
+  it('records attempt, maxRetries, code, and the error text', () => {
+    const md = connectionRetryMetadata({ attempt: 1, error: sdkConnectionError('ECONNRESET') });
+    expect(md).toEqual({
+      attempt: 1,
+      maxRetries: CONNECTION_ERROR_MAX_RETRIES,
+      error: 'Connection error.',
+      code: 'ECONNRESET',
+    });
+  });
+
+  it('includes status for a status-bearing retry and omits absent code', () => {
+    const md = connectionRetryMetadata({ attempt: 2, error: new APIError(502, 'Bad Gateway') });
+    expect(md['status']).toBe(502);
+    expect(md).not.toHaveProperty('code');
+  });
+
+  it('redacts secrets echoed in an error body before it reaches the trace', () => {
+    const key = `sk-ant-${'a'.repeat(40)}`;
+    const md = connectionRetryMetadata({
+      attempt: 1,
+      error: new APIError(502, `502 upstream said: Authorization: Bearer ${key}`),
+    });
+    expect(String(md['error'])).not.toContain(key);
+    expect(String(md['error'])).toContain('[REDACTED]');
+  });
+
+  it('truncates long error text to 200 characters before redaction', () => {
+    const md = connectionRetryMetadata({ attempt: 1, error: new APIError(500, 'x'.repeat(500)) });
+    expect(String(md['error']).length).toBeLessThanOrEqual(200);
   });
 });

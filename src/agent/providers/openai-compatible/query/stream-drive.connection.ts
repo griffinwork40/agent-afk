@@ -19,6 +19,7 @@ import {
   retryAfterDelayMs,
 } from './retry.js';
 import { emitAndSleepRetry } from './stream-drive.retry.js';
+import { isConnectionTimeoutError } from '../../shared/connection-error.js';
 
 /** Outcome returned by {@link runConnectionPhase}. */
 export type ConnectionOutcome<TEvent> =
@@ -52,7 +53,13 @@ export async function runConnectionPhase<TEvent>(
       // A watchdog abort during connection is NOT a user interrupt. Check the
       // USER signal explicitly so TTFB/stall timeouts are not swallowed.
       if (userSignal.aborted) return { ok: false, error: 'aborted' };
-      if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
+      // An `APIConnectionTimeoutError` while `streamSignal` is NOT aborted is the
+      // SDK's own connect timeout (an AFK watchdog abort surfaces as
+      // APIUserAbortError), so it is a transient blip, not the TTFB window.
+      // See isConnectionTimeoutError. Kept out of isRetryableConnectionError
+      // because that predicate has no signal to gate on.
+      const sdkTimeout = isConnectionTimeoutError(err) && !streamSignal.aborted;
+      if ((sdkTimeout || isRetryableConnectionError(err)) && attempt < MAX_CONNECTION_RETRIES) {
         const hinted = retryAfterDelayMs(err);
         const delay = hinted ?? computeBackoffDelay(attempt);
         // Item 2: sleep on streamSignal so the TTFB watchdog can abort a long

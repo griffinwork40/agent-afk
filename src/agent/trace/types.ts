@@ -923,12 +923,14 @@ export type SessionPhaseName =
   // retry budget ran out and usage is degraded). PURE OBSERVABILITY.
   | 'stream_accepted_after_drop'
   // Connection-phase network retry (anthropic-direct `createWithRetry`): the
-  // request was rejected before any response headers (SDK `APIConnectionError`
-  // or a socket/DNS code), so nothing was generated and the round re-sends.
-  // One event per retry; `durationMs` is the backoff about to be slept, and
-  // `metadata` carries `attempt`, `maxRetries`, `error`, and (when found)
-  // `code`. Exists because #2422 disabled the SDK's silent retries, which had
-  // been absorbing these blips. A lone event followed by success means the
+  // request failed before any stream body was consumed (SDK
+  // `APIConnectionError`, a socket/DNS code, an SDK connect timeout, or a
+  // 408/409/500/502/504 status), so nothing was generated and the round
+  // re-sends. One event per retry; `durationMs` is the backoff about to be
+  // slept, and `metadata` carries `attempt`, `maxRetries`, `error` (truncated,
+  // passed through redactSecrets) and, when present, `code` and `status`.
+  // Built by `connectionRetryMetadata`. Exists because #2422 disabled the
+  // SDK's silent retries, which had been absorbing these blips. A lone event followed by success means the
   // retry saved the turn; `attempt === maxRetries` then an error means it ran out.
   | 'connection_retry';
 
