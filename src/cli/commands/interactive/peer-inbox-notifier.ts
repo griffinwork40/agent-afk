@@ -45,6 +45,7 @@ import {
   setPresenceNameIfUnset,
   setPresencePeerInbox,
 } from '../../../agent/awareness/presence.peer.js';
+import { pruneDeliveredReceipts } from '../../../agent/peer/inbox-retention.js';
 
 /** Max envelopes buffered between drains; extras stay in `pending/`. */
 const MAX_PENDING_INJECTIONS = 50;
@@ -113,6 +114,8 @@ export class PeerInboxNotifier {
    * counter has advanced by the time it completes (A→B→A resume race).
    */
   private generation = 0;
+  /** Timestamp of the last delivered/ retention sweep. 0 = not yet run. */
+  private lastRetentionRunMs = 0;
 
   constructor(private readonly opts: PeerInboxNotifierOpts) {
     this.wakeBudget = createWakeBudget(opts.now !== undefined ? { now: opts.now } : {});
@@ -280,6 +283,16 @@ export class PeerInboxNotifier {
     const sessionId = this.opts.getSessionId();
     if (sessionId !== undefined && sessionId !== this.watchedId) await this.startWatching(sessionId);
     await this.scan();
+    if (this.disposed || sessionId === undefined) return;
+    // Throttled retention sweep: prune stale delivered/ receipts. Best-effort;
+    // pruneDeliveredReceipts never throws. Update the cursor only when the
+    // sweep actually ran (result.ran = true) so the interval stays accurate.
+    const retention = await pruneDeliveredReceipts({
+      sessionId,
+      lastRanMs: this.lastRetentionRunMs,
+      now: this.opts.now,
+    });
+    if (retention.ran) this.lastRetentionRunMs = retention.nowMs;
   }
 
   private stopWatcher(): void {

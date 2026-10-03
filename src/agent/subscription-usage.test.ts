@@ -60,10 +60,10 @@ describe('fetchSubscriptionUsage', () => {
   it('happy path: parses all four known windows', async () => {
     const fetchImpl = fetchReturning(
       jsonResponse(200, {
-        five_hour: { utilization: 0.62, resets_at: '2026-07-26T18:00:00Z' },
-        seven_day: { utilization: 0.31, resets_at: 1785110400 },
-        seven_day_sonnet: { utilization: 0.28 },
-        seven_day_opus: { utilization: 0.44 },
+        five_hour: { utilization: 62, resets_at: '2026-07-26T18:00:00Z' },
+        seven_day: { utilization: 31, resets_at: 1785110400 },
+        seven_day_sonnet: { utilization: 28 },
+        seven_day_opus: { utilization: 44 },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -79,7 +79,7 @@ describe('fetchSubscriptionUsage', () => {
   });
 
   it('sends the expected request headers and URL', async () => {
-    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
     await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
@@ -149,7 +149,7 @@ describe('fetchSubscriptionUsage', () => {
 
   it('parses resets_at as an ISO string', async () => {
     const fetchImpl = fetchReturning(
-      jsonResponse(200, { five_hour: { utilization: 0.5, resets_at: '2026-01-01T00:00:00Z' } }),
+      jsonResponse(200, { five_hour: { utilization: 50, resets_at: '2026-01-01T00:00:00Z' } }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     const ok = result as UsageSnapshot;
@@ -159,7 +159,7 @@ describe('fetchSubscriptionUsage', () => {
   it('parses resets_at as an epoch-seconds number', async () => {
     const epoch = 1_800_000_000;
     const fetchImpl = fetchReturning(
-      jsonResponse(200, { five_hour: { utilization: 0.5, resets_at: epoch } }),
+      jsonResponse(200, { five_hour: { utilization: 50, resets_at: epoch } }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     const ok = result as UsageSnapshot;
@@ -169,7 +169,7 @@ describe('fetchSubscriptionUsage', () => {
   it('drops resets_at when it is an out-of-range epoch number rather than producing Invalid Date', async () => {
     const fetchImpl = fetchReturning(
       jsonResponse(200, {
-        five_hour: { utilization: 0.5, resets_at: Number.MAX_SAFE_INTEGER },
+        five_hour: { utilization: 50, resets_at: Number.MAX_SAFE_INTEGER },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -181,8 +181,8 @@ describe('fetchSubscriptionUsage', () => {
   it('drops resets_at when it is non-finite (NaN/Infinity) or an unrecognized type', async () => {
     const fetchImpl = fetchReturning(
       jsonResponse(200, {
-        five_hour: { utilization: 0.5, resets_at: { nested: true } },
-        seven_day: { utilization: 0.2, resets_at: null },
+        five_hour: { utilization: 50, resets_at: { nested: true } },
+        seven_day: { utilization: 20, resets_at: null },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -195,12 +195,14 @@ describe('fetchSubscriptionUsage', () => {
     [42, 0.42],
     [100, 1],
     [150, 1],
-    [0.62, 0.62],
-    [-0.3, 0],
-    [1, 1],
+    [62, 0.62],
+    [-30, 0],
+    // Regression: a real 1% must not read as a full window.
+    [1, 0.01],
+    [0.5, 0.005],
     [0, 0],
   ])(
-    'normalizes utilization=%s (>1 treated as a percentage) to %s',
+    'normalizes utilization=%s (a 0..100 percentage) to %s',
     async (utilizationRaw, expected) => {
       const fetchImpl = fetchReturning(
         jsonResponse(200, { five_hour: { utilization: utilizationRaw } }),
@@ -217,7 +219,7 @@ describe('fetchSubscriptionUsage', () => {
         five_hour: { utilization: 'high' },
         seven_day: { utilization: Number.NaN },
         seven_day_sonnet: { utilization: Number.POSITIVE_INFINITY },
-        seven_day_opus: { utilization: 0.5 },
+        seven_day_opus: { utilization: 50 },
       }),
     );
     const result = await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
@@ -273,7 +275,7 @@ describe('fetchSubscriptionUsage', () => {
 
   it('uses CLAUDE_CODE_OAUTH_TOKEN from the environment when the keychain has no token', async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-supplied-oauth-token');
-    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
     await fetchSubscriptionUsage({ fetchImpl });
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
       string,
@@ -285,7 +287,7 @@ describe('fetchSubscriptionUsage', () => {
 
   it('prefers an explicit options.token over CLAUDE_CODE_OAUTH_TOKEN from the environment', async () => {
     vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'env-supplied-oauth-token');
-    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 0.1 } }));
+    const fetchImpl = fetchReturning(jsonResponse(200, { five_hour: { utilization: 10 } }));
     await fetchSubscriptionUsage({ fetchImpl, token: SECRET_TOKEN });
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
       string,

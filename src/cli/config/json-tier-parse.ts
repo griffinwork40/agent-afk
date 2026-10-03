@@ -96,7 +96,7 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     if (typeof json.autoRouting.interactive === 'boolean') ar.interactive = json.autoRouting.interactive;
     if (typeof json.autoRouting.chat === 'boolean') ar.chat = json.autoRouting.chat;
     if (typeof json.autoRouting.telegram === 'boolean') ar.telegram = json.autoRouting.telegram;
-    if (typeof json.autoRouting.daemon === 'boolean') ar.daemon = json.autoRouting.daemon;
+    // autoRouting.daemon removed (dead key); silently ignored for back-compat.
     config.autoRouting = ar;
   }
 

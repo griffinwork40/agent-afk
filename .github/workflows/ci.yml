@@ -155,8 +155,8 @@ jobs:
     # fail-fast: false so one OS failing never cancels another. Public repos
     # get unlimited free GitHub-hosted minutes on all runners.
     #
-    # Coverage policy: ubuntu runs `pnpm test:coverage` (enforces the stmts 74 /
-    # branch 79 floors). macOS also runs coverage. Windows gates on assertions
+    # Coverage policy: ubuntu runs `pnpm test:coverage` (enforces the stmts 84 /
+    # branch 78 floors). macOS also runs coverage. Windows gates on assertions
     # only (`pnpm test`, no coverage floor) because ~110 platform-gated tests
     # leave win32-skipped branches uncovered; requiring coverage floors on Windows
     # would mask assertion failures behind coverage noise. The ubuntu leg is the

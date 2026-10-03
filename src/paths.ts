@@ -601,6 +601,18 @@ export function getBgJobMeta(jobId: string): string {
   return join(getBgJobDir(jobId), 'meta.json');
 }
 
+/**
+ * JSON file holding the persisted final result body for a background job.
+ * Written by `markTerminal()` (via `BgJobLogWriter.writeResult()`) immediately
+ * when a job completes or fails so cross-session `/bgsub:join` calls can recover
+ * the synthesized output text even after the in-memory entry is TTL-evicted.
+ *
+ * @throws if `jobId` fails {@link assertSafeJobId}.
+ */
+export function getBgJobResult(jobId: string): string {
+  return join(getBgJobDir(jobId), 'result.json');
+}
+
 // ---------------------------------------------------------------------------
 // Subagent conversation logs — powers /tasks:view replay
 // ---------------------------------------------------------------------------
