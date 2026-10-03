@@ -41,6 +41,7 @@
 
 import { mkdirSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
 import { mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -92,6 +93,42 @@ function makeTmpPath(dest: string): string {
   const dir = dirname(dest);
   const hex = randomBytes(6).toString('hex');
   return join(dir, `.tmp-${hex}`);
+}
+
+/**
+ * Transient error codes emitted by Windows when a concurrent rename targets
+ * the same destination file.  On POSIX, `rename(2)` is guaranteed atomic and
+ * these codes never appear.
+ *
+ * - `EPERM`  (-4048): most common; destination briefly locked by the winner.
+ * - `EACCES` (-4092): alternative Windows access-denied code.
+ * - `EBUSY`  (-4082): file in use by another process during the rename window.
+ */
+const WIN_RENAME_TRANSIENT = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+/**
+ * Attempt `rename(tmp, dest)`, retrying up to `maxRetries` times on transient
+ * Windows errors (EPERM / EACCES / EBUSY).  Each retry waits an exponentially
+ * increasing delay (10 ms, 20 ms, 40 ms …) so callers converge quickly.
+ *
+ * On POSIX the rename succeeds on the first attempt; the retry path is never
+ * exercised.  On Windows the losing racer in a concurrent write typically
+ * succeeds on retry 1 once the winning rename has completed.
+ */
+async function renameWithRetry(tmp: string, dest: string, maxRetries = 5): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await rename(tmp, dest);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (!WIN_RENAME_TRANSIENT.has(code ?? '')) throw err;
+      lastErr = err;
+      await sleep(10 * 2 ** attempt);
+    }
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +202,7 @@ export async function atomicWriteFileAsync(
   const tmp = makeTmpPath(dest);
   try {
     await writeFile(tmp, content, { mode, encoding, flag });
-    await rename(tmp, dest);
+    await renameWithRetry(tmp, dest);
   } catch (err) {
     // Best-effort cleanup — suppress unlink errors.
     try { await rm(tmp, { force: true }); } catch { /* ignore */ }
