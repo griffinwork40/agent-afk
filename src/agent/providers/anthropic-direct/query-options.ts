@@ -108,11 +108,26 @@ export interface AnthropicDirectQueryOptions {
   /** Extended thinking configuration forwarded to `messages.create`. */
   thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
   /**
+   * Original unresolved thinking config from `AgentConfig.thinking`. When set,
+   * the `turnDriverContext()` getter re-resolves thinking per-turn against the
+   * CURRENT model so a mid-session `/model fable` switch picks up the Fable 5.1
+   * adaptive shape instead of replaying a Sonnet `{type:'enabled', budget_tokens}`
+   * that Fable rejects with HTTP 400.
+   */
+  rawThinkingConfig?: import('../../types/sdk-types.js').ThinkingConfig;
+  /**
    * Effort level forwarded as `output_config.effort` to `messages.create`.
    * When set, the per-request `anthropic-beta` header is extended with the
    * effort beta string via the `withEffort` flag on `buildRequestHeaders`.
    */
   effort?: import('../../types/sdk-types.js').EffortLevel;
+  /**
+   * Original unresolved caller effort from `AgentConfig.effort`. When set,
+   * the `turnDriverContext()` getter re-resolves effort per-turn against the
+   * CURRENT model so a mid-session `/model fable` switch gets Fable's `high`
+   * default instead of Sonnet's `max`.
+   */
+  rawEffort?: import('../../types/sdk-types.js').EffortLevel;
   /** Sampling temperature forwarded to `messages.create`. Omit for server default. */
   temperature?: number;
   /**

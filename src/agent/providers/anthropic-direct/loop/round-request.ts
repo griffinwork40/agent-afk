@@ -247,10 +247,12 @@ export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens'
     model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
     ...(input.system !== null ? { system: input.system } : {}),
     ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
-    ...(input.thinking !== undefined
-      ? { thinking: input.thinkingBlockBinding !== undefined
-          ? { ...input.thinking, block_binding: input.thinkingBlockBinding }
-          : input.thinking }
+    ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
+      ? {
+          thinking: input.thinkingBlockBinding !== undefined
+            ? { ...(input.thinking ?? { type: 'adaptive' as const }), block_binding: input.thinkingBlockBinding }
+            : input.thinking!,
+        }
       : {}),
     ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
     ...(input.temperature !== undefined && !isNonDefaultSamplingForbiddenModel(input.model) ? { temperature: input.temperature } : {}),

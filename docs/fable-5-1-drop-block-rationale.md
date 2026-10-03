@@ -65,7 +65,7 @@ account; AFK does not warn for them.
 
 ## Implementation
 
-- **`translate.ts`**: `warnOnDroppedThinkingBlocks()` — safe helper called at
+- **`input-transformations.ts`**: `warnOnDroppedThinkingBlocks()` — safe helper called at
   `message_start` and `message_delta`; logs drop count + reason category
   breakdown only. `path` values are never logged.
 - **`auth.ts`**: `THINKING_BINDING_CONTROLS_BETA_HEADER` constant; wired into
@@ -78,7 +78,7 @@ account; AFK does not warn for them.
 
 ## Tests
 
-- `translate.test.ts` — thirteen `input_transformations` cases: `prefix_binding_mismatch`,
+- `translate.test.ts` — fifteen `input_transformations` cases: `prefix_binding_mismatch`,
   `model_binding_mismatch`, `organization_binding_mismatch`, multi-drop mixed reasons,
   `thinking_mismatch_allowed` (no warn), unknown type (no warn), unknown reason (warn
   as `unknown_reason`), absent field, empty array, warn cap at 10 with cap note,
