@@ -151,6 +151,22 @@ export async function pollUntil(
     lastResult = result;
     attempts++;
 
+    // #2750: A result with data.blocked === true signals a PERMANENT failure
+    // (e.g. risk-classifier gate, SSRF block, path denylist). There is no point
+    // retrying — the command or URL will be blocked on every subsequent attempt
+    // exactly as it was this time. Return 'failed' immediately with the detail
+    // from the evaluator so the operator sees a clear error instead of burning
+    // the entire timeout and receiving a generic 'timed_out'.
+    if (!result.met && result.data?.['blocked'] === true) {
+      return {
+        status: 'failed',
+        elapsed_ms: Date.now() - (deadline - timeout_ms),
+        attempts,
+        result,
+        error: result.detail,
+      };
+    }
+
     if (result.met) {
       return {
         status: 'succeeded',
