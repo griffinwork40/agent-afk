@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { delimiter as pathDelimiter } from 'path';
 import { Command } from 'commander';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { checkNpmBinOnPath } from './commands/doctor-checks.js';
@@ -149,9 +150,10 @@ describe('afk doctor', () => {
   it('should exit with code 0 when all checks pass or warn', async () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'test-key-12345');
     // Contract: PATH must contain both /usr/local/bin (POSIX binDir) and /usr/local
-    // (Windows binDir, where npm config get prefix already points at the bin dir).
-    // This makes the npm-bin check pass regardless of process.platform on the CI host.
-    vi.stubEnv('PATH', '/usr/local/bin:/usr/local:/usr/bin:/bin');
+    // (Windows binDir, where npm config get prefix already points at the bin dir),
+    // AND must be joined with the HOST path delimiter — checkNpmBinOnPath splits on
+    // nodePath.delimiter (';' on Windows), so a ':'-joined stub never matches there.
+    vi.stubEnv('PATH', ['/usr/local/bin', '/usr/local', '/usr/bin', '/bin'].join(pathDelimiter));
     vi.mocked(execSync).mockReturnValue('/usr/local\n' as unknown as ReturnType<typeof execSync>);
     exitSpy.mockReset();
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
