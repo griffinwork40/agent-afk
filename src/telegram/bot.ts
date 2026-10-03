@@ -33,6 +33,7 @@ import { splitLongMessage } from './formatter.js';
 import { routeFromCtx, sendOptions, type TelegramRoute } from './route.js';
 import { escapeRegExp } from '../utils/regexp.js';
 import { errorMessage } from '../utils/errors.js';
+import { registerReactionHandler, ALLOWED_UPDATE_TYPES } from './bot.reaction-handler.js';
 
 /**
  * Bot configuration options
@@ -113,6 +114,10 @@ export class TelegramBot {
     this.watchManager = new SessionWatchManager(this.log.bind(this), this.bot, this.messageHandler);
 
     this.setupHandlers();
+    // Reaction handler wired after setupHandlers so handler-registration order
+    // matches: allowlist middleware → commands → text/photo/document → reactions.
+    // Requires 'message_reaction' in allowedUpdates (wired in start()).
+    registerReactionHandler(this.bot, this.log.bind(this));
   }
 
   /**
@@ -367,7 +372,10 @@ export class TelegramBot {
     await ensurePluginEntrypointsLoaded();
 
     this.log('Starting bot...');
-    await this.bot.launch();
+    // ALLOWED_UPDATE_TYPES includes everything Telegram delivers by default plus
+    // 'message_reaction' (and 'message_reaction_count') which must be requested
+    // explicitly; omitting them silences the reaction handler registered above.
+    await this.bot.launch({ allowedUpdates: [...ALLOWED_UPDATE_TYPES] });
 
     // Register commands with Telegram so they appear in the UI
     this.log('Registering bot commands...');
