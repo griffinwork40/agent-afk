@@ -117,6 +117,38 @@ function buildTurnResult(
 }
 
 /**
+ * Emit a bounded diagnostic when the server reports dropped thinking blocks
+ * via `input_transformations` (thinking-binding-controls beta, drop_block
+ * policy). Safe contract: logs ONLY structural metadata (block count, index
+ * positions). No thinking text, no signature bytes, no secret values cross
+ * this boundary — the server never includes them in the SSE frame.
+ *
+ * Wire shape (documented in the Anthropic preserved-thinking API reference):
+ *   message.input_transformations?: Array<{
+ *     type: 'thinking_block_removed';
+ *     thinking_block_index: number;
+ *   }>
+ */
+function warnOnDroppedThinkingBlocks(message: Record<string, unknown>): void {
+  const transformations = message?.['input_transformations'];
+  if (!Array.isArray(transformations) || transformations.length === 0) return;
+  const dropped = transformations.filter(
+    (t): t is { type: 'thinking_block_removed'; thinking_block_index: number } =>
+      typeof t === 'object' && t !== null && (t as Record<string, unknown>)['type'] === 'thinking_block_removed',
+  );
+  if (dropped.length === 0) return;
+  const indices = dropped.map((d) => d.thinking_block_index).join(', ');
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[afk] Fable 5.1 drop_block: server dropped ${dropped.length} thinking block(s) ` +
+      `at index position(s) [${indices}] due to prefix mismatch. ` +
+      `AFK mutates prefixes (tool-result injection, cache stamps) so explicit drop_block ` +
+      `compatibility was chosen over a full append-only rewrite. Reasoning is regenerated ` +
+      `fresh for the current context; no thinking content is lost from the response.`,
+  );
+}
+
+/**
  * Async generator that translates an Anthropic streaming response into
  * harness-shaped {@link TranslateOutput} items.
  *
@@ -156,10 +188,8 @@ export async function* translateMessageStream(
       if (traceEnabled) console.log('[translate] SDK evt:', evt.type);
       switch (evt.type) {
         case 'message_start': {
-          const startUsage = evt.message?.usage;
-          if (startUsage) {
-            usage = { ...startUsage };
-          }
+          if (evt.message?.usage) usage = { ...evt.message.usage };
+          warnOnDroppedThinkingBlocks(evt.message as unknown as Record<string, unknown>);
           break;
         }
 

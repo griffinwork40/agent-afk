@@ -9,7 +9,7 @@
  *  5. Usage carried through to turn-result.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import { translateMessageStream } from './translate.js';
 import type { TranslateOutput } from './types.js';
@@ -558,5 +558,172 @@ describe('anthropic-direct translateMessageStream', () => {
     }
     expect(last.result.stopReason).toBe('end_turn');
     expect(last.result.text).toBe('Complete answer');
+  });
+});
+
+// ── input_transformations: drop_block observable handling (Fable 5.1) ────
+
+describe('translateMessageStream: input_transformations (thinking drop_block)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('emits console.warn when message_start carries input_transformations with thinking_block_removed', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Wire shape from the Anthropic preserved-thinking API reference:
+    //   message.input_transformations: [{ type: 'thinking_block_removed', thinking_block_index: N }]
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_test_drop',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_block_removed', thinking_block_index: 0 },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'Regenerated answer'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    // Must mention structural metadata
+    expect(msg).toContain('drop_block');
+    expect(msg).toContain('1 thinking block');
+    expect(msg).toContain('index position(s) [0]');
+    // Must NOT contain thinking text or secrets (none in the frame anyway,
+    // but assert the message only carries count+index shape)
+    expect(msg).not.toContain('thinking_delta');
+    expect(msg).not.toContain('signature');
+  });
+
+  it('emits one warn per dropped block, listing all indices', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_test_multi',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_block_removed', thinking_block_index: 0 },
+            { type: 'thinking_block_removed', thinking_block_index: 2 },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('2 thinking block');
+    expect(msg).toContain('[0, 2]');
+  });
+
+  it('does NOT warn when input_transformations is absent (normal non-Fable stream)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Standard message_start without input_transformations
+    const events: RawMessageStreamEvent[] = [
+      messageStart(),
+      textBlockStart(0),
+      textDelta(0, 'Normal text'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT warn when input_transformations is an empty array', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_empty',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('still yields a valid turn-result after a drop_block warn (stream continues normally)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_drop_continue',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_block_removed', thinking_block_index: 0 },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'Regenerated after drop'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    const out = await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'turn-result') throw new Error('expected turn-result');
+    expect(last.result.text).toBe('Regenerated after drop');
+    expect(last.result.stopReason).toBe('end_turn');
   });
 });
