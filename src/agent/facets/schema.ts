@@ -67,6 +67,8 @@ export const StoredSessionInputSchema = z
     model: z.string(),
     startedAt: z.number(),
     savedAt: z.number(),
+    endedAt: z.number().optional(),
+    exitReason: z.enum(['sigint', 'sigterm', 'sighup', 'exit-command', 'eof']).optional(),
     totalTurns: z.number(),
     totalCostUsd: z.number().optional(),
     totalTokens: z.number().optional(),

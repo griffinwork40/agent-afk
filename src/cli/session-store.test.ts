@@ -583,4 +583,69 @@ describe('session-registry bridge — storedToHandle / bindingsForStored', () =>
     expect(reloaded.id).toBe('H');
     expect(reloaded.bindings).toEqual(h.bindings);
   });
+
+  // ---------------------------------------------------------------------------
+  // endedAt / exitReason (issue #2762)
+  // ---------------------------------------------------------------------------
+  describe('endedAt and exitReason (issue #2762)', () => {
+    it('saveSession omits endedAt when closeTime is not set', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'a', 'b', { sessionId: 'no-end' });
+      const p = saveSession(stats, 'no-end-test');
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>;
+      expect(raw['endedAt']).toBeUndefined();
+      expect(raw['exitReason']).toBeUndefined();
+    });
+
+    it('saveSession writes endedAt when closeTime is true', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'a', 'b', { sessionId: 'end-yes' });
+      const before = Date.now();
+      const p = saveSession(stats, 'end-yes-test', { closeTime: true });
+      const after = Date.now();
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>;
+      expect(typeof raw['endedAt']).toBe('number');
+      expect(raw['endedAt'] as number).toBeGreaterThanOrEqual(before);
+      expect(raw['endedAt'] as number).toBeLessThanOrEqual(after);
+    });
+
+    it('saveSession writes exitReason alongside endedAt when provided', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'a', 'b', { sessionId: 'exit-reason' });
+      const p = saveSession(stats, 'exit-reason-test', { closeTime: true, exitReason: 'sigterm' });
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>;
+      expect(raw['exitReason']).toBe('sigterm');
+      expect(raw['endedAt']).toBeDefined();
+    });
+
+    it('saveSession omits exitReason when closeTime is false even if exitReason is provided', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'a', 'b', { sessionId: 'no-ct' });
+      // closeTime=false — exitReason must not appear (no close event yet)
+      const p = saveSession(stats, 'no-ct-test', { closeTime: false, exitReason: 'sigint' });
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>;
+      expect(raw['exitReason']).toBeUndefined();
+      expect(raw['endedAt']).toBeUndefined();
+    });
+
+    it.each([
+      'sigint', 'sigterm', 'sighup', 'exit-command', 'eof',
+    ] as const)('saveSession accepts exitReason value %s', (reason) => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'u', 'a', { sessionId: `reason-${reason}` });
+      const p = saveSession(stats, `reason-${reason}-test`, { closeTime: true, exitReason: reason });
+      const raw = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>;
+      expect(raw['exitReason']).toBe(reason);
+    });
+
+    it('loadSession round-trips endedAt and exitReason', () => {
+      const stats = createSessionStats('sonnet');
+      recordTurn(stats, 'u', 'a', { sessionId: 'rt-end' });
+      const p = saveSession(stats, 'rt-end-test', { closeTime: true, exitReason: 'sighup' });
+      const loaded = loadSession(p);
+      expect(loaded).toBeDefined();
+      expect(loaded!.endedAt).toBeDefined();
+      expect(loaded!.exitReason).toBe('sighup');
+    });
+  });
 });
