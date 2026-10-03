@@ -43,7 +43,9 @@ import { readPluginManifest } from '../plugins/plugin-manifest.js';
 import type { HarnessHookEvent } from '../hooks.js';
 import { HOOK_HANDLER_TIMEOUT_MS } from '../hook-registry.js';
 import { errorMessage } from '../../utils/errors.js';
+import { parseDisabledPluginHooks, mergeDisabledPluginHooks } from './disabled-plugin-hooks.js';
 export { compileMatcher, CLAUDE_CODE_ALIASES } from './matcher.js';
+export { isPluginHookDisabled } from './disabled-plugin-hooks.js';
 
 // ---------------------------------------------------------------------------
 // Raw shapes (as they appear on disk)
@@ -138,6 +140,16 @@ export interface LoadedHooksConfig {
    * Empty object when not configured.
    */
   pluginHookEnv: Record<string, string[]>;
+  /**
+   * Per-plugin hook disable list from `afk.config.json → disabledPluginHooks`.
+   * Maps plugin name (the `name` field from `plugin.json`) → array of hook
+   * specifiers to suppress. Each specifier is either `"<Event>"` (suppresses
+   * all hooks for that event) or `"<Event>:<matcher>"` (suppresses only groups
+   * whose `matcher` field equals the given string). Only user-global files
+   * (layers 0 and 1) are consulted; entries are merged across layers.
+   * Empty object when not configured.
+   */
+  disabledPluginHooks: Record<string, string[]>;
   /** Absolute paths of every file that contributed to this config. */
   sources: string[];
   /** Non-fatal validation warnings the caller should surface. */
@@ -165,6 +177,7 @@ interface SingleFileResult {
   allowProjectHooks: boolean;
   enablePluginHooks: boolean;
   pluginHookEnv: Record<string, string[]>;
+  disabledPluginHooks: Record<string, string[]>;
   sources: string[];
   warnings: string[];
 }
@@ -209,9 +222,10 @@ export function loadHooksConfigFile(
   const hooks: ResolvedHooksConfig = {};
 
   const emptyPluginHookEnv: Record<string, string[]> = {};
+  const emptyDisabledPluginHooks: Record<string, string[]> = {};
 
   if (!existsSync(path)) {
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, disabledPluginHooks: emptyDisabledPluginHooks, sources, warnings };
   }
   sources.push(path);
 
@@ -221,12 +235,12 @@ export function loadHooksConfigFile(
   } catch (err) {
     const msg = errorMessage(err);
     warnings.push(`hooks config at ${path}: parse error — ${msg}`);
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, disabledPluginHooks: emptyDisabledPluginHooks, sources, warnings };
   }
 
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     warnings.push(`hooks config at ${path}: top-level must be an object`);
-    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, sources, warnings };
+    return { hooks, enableShellHooks: false, allowProjectHooks: false, enablePluginHooks: false, pluginHookEnv: emptyPluginHookEnv, disabledPluginHooks: emptyDisabledPluginHooks, sources, warnings };
   }
   const file = parsed as Record<string, unknown>;
 
@@ -265,14 +279,19 @@ export function loadHooksConfigFile(
     }
   }
 
+  // Parse disabledPluginHooks: Record<pluginName, string[]>. Only meaningful
+  // in user-global files (enforced by loadHooksConfig). Delegated to the
+  // sibling helper so the parse logic and the disable-check logic live together.
+  const disabledPluginHooks = parseDisabledPluginHooks(file, path, warnings);
+
   // Extract hooks block
   const rawHooks = file['hooks'];
   if (rawHooks === undefined || rawHooks === null) {
-    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, sources, warnings };
+    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, disabledPluginHooks, sources, warnings };
   }
   if (typeof rawHooks !== 'object' || Array.isArray(rawHooks)) {
     warnings.push(`hooks config at ${path}: "hooks" must be an object`);
-    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, sources, warnings };
+    return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, disabledPluginHooks, sources, warnings };
   }
 
   const rawHooksObj = rawHooks as Record<string, unknown>;
@@ -352,7 +371,7 @@ export function loadHooksConfigFile(
     }
   }
 
-  return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, sources, warnings };
+  return { hooks, enableShellHooks, allowProjectHooks, enablePluginHooks, pluginHookEnv, disabledPluginHooks, sources, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +449,9 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
   // Collected from user-global layers only. Later-layer entries overwrite
   // earlier ones for the same plugin name (last-writer-wins per key).
   const mergedPluginHookEnv: Record<string, string[]> = {};
+  // Collected from user-global layers only. Entries are merged: same plugin
+  // key across multiple layers unions the specifier lists (no duplicates).
+  const mergedDisabledPluginHooks: Record<string, string[]> = {};
 
   const allLayers: Array<{ path: string; tier: 'user-global' | 'project-local' }> = [
     { path: getJsonConfigPath(), tier: 'user-global' },
@@ -480,6 +502,8 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     for (const [pn, vars] of Object.entries(result.pluginHookEnv)) {
       mergedPluginHookEnv[pn] = vars;
     }
+    // Merge disabled plugin hook specifiers (union across layers, no duplicates).
+    mergeDisabledPluginHooks(mergedDisabledPluginHooks, result.disabledPluginHooks);
   }
 
   // Second pass: load all layers and concatenate hooks, filtering out
@@ -562,6 +586,7 @@ export function loadHooksConfig(opts: LoadHooksConfigOptions = {}): LoadedHooksC
     allowProjectHooks,
     pluginHooksEnabled,
     pluginHookEnv: mergedPluginHookEnv,
+    disabledPluginHooks: mergedDisabledPluginHooks,
     sources: allSources,
     warnings: allWarnings,
   };

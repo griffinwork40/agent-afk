@@ -42,8 +42,9 @@ import {
 import {
   CONNECTION_ERROR_BASE_DELAY_MS,
   CONNECTION_ERROR_MAX_RETRIES,
-  connectionErrorCode,
+  connectionRetryMetadata,
   isConnectionPhaseNetworkError,
+  isConnectionTimeoutError,
   isRetryableConnectionStatus,
 } from './connection-error.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
@@ -131,8 +132,14 @@ export async function createWithRetry(
         delay = jitterBackoff(OVERLOAD_BASE_DELAY_MS * Math.pow(2, overloadAttempts - 1));
         continue;
       }
+      // `requestSignal` is known NOT aborted here (checked above), so an
+      // `APIConnectionTimeoutError` is the SDK's own connect timeout, not the
+      // TTFB/stall watchdog (an AFK abort surfaces as APIUserAbortError). See
+      // isConnectionTimeoutError for why it must be retried.
       if (
-        (isConnectionPhaseNetworkError(e) || isRetryableConnectionStatus(e)) &&
+        (isConnectionPhaseNetworkError(e) ||
+          isConnectionTimeoutError(e) ||
+          isRetryableConnectionStatus(e)) &&
         connectionAttempts < CONNECTION_ERROR_MAX_RETRIES
       ) {
         connectionAttempts++;
@@ -155,19 +162,11 @@ export interface ConnectionRetryInfo {
 /** Trace callback for connection-phase network retries. Fire-and-forget. */
 function traceConnectionRetry(input: RunTurnInput): (info: ConnectionRetryInfo) => void {
   return (info) => {
-    const code = connectionErrorCode(info.error);
-    const status = (info.error as { status?: unknown }).status;
     void emitSessionPhase(input.traceWriter, {
       phase: 'connection_retry',
       durationMs: info.delayMs,
       resolvedModel: input.model,
-      metadata: {
-        attempt: info.attempt,
-        maxRetries: CONNECTION_ERROR_MAX_RETRIES,
-        error: info.error.message.slice(0, 200),
-        ...(code !== undefined ? { code } : {}),
-        ...(typeof status === 'number' ? { status } : {}),
-      },
+      metadata: connectionRetryMetadata(info),
     });
   };
 }

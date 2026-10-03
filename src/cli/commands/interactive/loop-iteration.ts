@@ -213,9 +213,12 @@ export async function runInputLoop(
     runText = ups.runText;
 
     // Execute the model turn.
+    // Contract: pass `text` (raw, pre-injection) as rawUserText so the presence
+    // activity.promptHead records what the operator typed, never peer message
+    // bodies or bg-subagent-result content that are prepended into `runText`.
     const capture = await runOneTurn(
       runText, attachments ?? [], ctx, turnState, footer,
-      transcript, surface, installSoftStop, maxTurnsNum, autosaveState,
+      transcript, surface, installSoftStop, maxTurnsNum, autosaveState, text,
     );
 
     // Post-turn Stop hook.

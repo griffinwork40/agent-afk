@@ -141,8 +141,10 @@ export function getErrorStatus(err: unknown): number | undefined {
  *      name) or any error whose cause chain carries a known socket/DNS `code`
  *      (ECONNRESET, ENOTFOUND, …). The SDK's default `shouldRetry` previously
  *      covered these silently; with `maxRetries: 0` they must be retried here.
- *      `APIConnectionTimeoutError` is deliberately excluded — AFK's TTFB
- *      watchdog owns that window.
+ *      `APIConnectionTimeoutError` is deliberately excluded HERE because this
+ *      predicate cannot see the request signal; `runConnectionPhase` retries
+ *      it separately when its stream signal is not aborted (the SDK's own
+ *      connect timeout, see shared `isConnectionTimeoutError`).
  *
  *   2. Status-bearing transients — the union of `RETRYABLE_STATUS_CODES`
  *      (429, 500, 502, 503, 529) and `CONNECTION_PHASE_RETRYABLE_STATUSES`
@@ -163,13 +165,89 @@ export function isRetryableConnectionError(err: unknown): boolean {
   return RETRYABLE_STATUS_CODES.has(status) || CONNECTION_PHASE_RETRYABLE_STATUSES.has(status);
 }
 
+/** Body/error `code` values that signal a transient server overload. */
+const OVERLOAD_CODES = new Set(['server_is_overloaded']);
+
+/** Body/error `type` values that signal a transient server overload. */
+const OVERLOAD_TYPES = new Set(['service_unavailable_error', 'overloaded_error']);
+
+/**
+ * Message text that signals a transient server overload. Requires the word
+ * "server" to appear near "overloaded" (within 40 chars), anchoring the match
+ * on known provider phrases like "Our servers are currently overloaded" while
+ * excluding unrelated messages where an unrelated subsystem is overloaded
+ * (e.g. "Model context window is overloaded", "worker pool overloaded").
+ * The lookahead/lookbehind window is intentionally wide (40 chars) to stay
+ * robust across provider-specific phrasing variations.
+ */
+const OVERLOAD_MESSAGE_RE = /server.{0,40}overloaded|overloaded.{0,40}server/i;
+
+/**
+ * True when a `{ code?, type?, message? }` record carries an overload marker.
+ * `checkMessage` is false for the error object itself: its `.message` may be a
+ * non-SDK throw or a JSON-stringified body, so free-text matching is limited to
+ * the parsed server body, where the SDK puts the server's own message.
+ */
+function hasOverloadMarker(
+  rec: { code?: unknown; type?: unknown; message?: unknown },
+  checkMessage: boolean,
+): boolean {
+  if (typeof rec.code === 'string' && OVERLOAD_CODES.has(rec.code)) return true;
+  if (typeof rec.type === 'string' && OVERLOAD_TYPES.has(rec.type)) return true;
+  return checkMessage && typeof rec.message === 'string' && OVERLOAD_MESSAGE_RE.test(rec.message);
+}
+
+/**
+ * Invariant: a server overload can arrive WITHOUT an HTTP status.
+ *
+ * When the server sends a mid-stream SSE payload carrying an `error` key, the
+ * openai SDK (`core/streaming` iterator) throws
+ * `new APIError(undefined, data.error, undefined, headers)`: `status` is
+ * `undefined`, the parsed body lives on `.error`, and `APIError`'s constructor
+ * copies the body's `code` / `type` / `param` onto the error itself. The
+ * status-keyed predicates below therefore never see it, and an "Our servers are
+ * currently overloaded" event would surface raw with no retry or pause.
+ *
+ * Contract: returns true ONLY when the shared `getErrorStatus` yields
+ * `undefined` AND an overload marker is present on the error itself or on its
+ * `.error` body (flat `{type,code,message}` or nested `{error:{...}}` shapes,
+ * mirroring anthropic-direct's `isOverloadedErrorEvent`). A status-bearing
+ * error is never matched here; the numeric-status paths already own it.
+ *
+ * Note on the top-level `hasOverloadMarker(e, false)` call: `checkMessage` is
+ * deliberately `false` here because `e.message` on the error object itself may
+ * be a non-SDK throw or a JSON-stringified body — free-text matching is
+ * restricted to the parsed server body (`.error`). The SDK's `APIError`
+ * constructor does copy `code` and `type` from the body onto the error itself,
+ * so those fields are available and safe to match here. For plain-object shapes
+ * (non-SDK throws that carry no `status`), this path serves as the primary
+ * guard; it is never reached when `getErrorStatus` returns a status (the
+ * early-return above ensures that), so the status-keyed paths remain exclusive.
+ */
+export function isOpenAIOverloadError(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false;
+  if (getErrorStatus(err) !== undefined) return false;
+  const e = err as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
+  // Match code/type on the error itself (SDK copies these from the body); skip
+  // .message here since it may be a non-SDK throw or a JSON-stringified body.
+  if (hasOverloadMarker(e, false)) return true;
+  const body = e.error;
+  if (body === null || typeof body !== 'object') return false;
+  const b = body as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
+  if (hasOverloadMarker(b, true)) return true;
+  const inner = b.error;
+  return inner !== null && typeof inner === 'object' && hasOverloadMarker(inner, true);
+}
+
 /**
  * Mid-stream retryability: the stream was established but the server sent an
  * error event mid-flight. OpenAI-compatible APIs surface this as an `APIError`
- * thrown from the async iterator. Same status-code set as connection-phase —
- * only retry on explicit transient codes, not on status-less errors.
+ * thrown from the async iterator. Same status-code set as connection-phase,
+ * plus status-less SDK overload throws ({@link isOpenAIOverloadError}). Other
+ * status-less errors are not retried here.
  */
 export function isRetryableStreamError(err: unknown): boolean {
+  if (isOpenAIOverloadError(err)) return true;
   const status = getErrorStatus(err);
   if (status === undefined) return false;
   return RETRYABLE_STATUS_CODES.has(status);

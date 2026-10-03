@@ -11,21 +11,30 @@
  * before v5.278.0 and 11 in the three days after.
  *
  * Invariant: this covers the CONNECTION phase only, meaning `messages.create`
- * rejected before any response headers arrived, so nothing was generated and
- * a retry costs no partial output. Mid-stream drops after headers are a
- * different class with their own LOW budget (see network-termination.ts and
- * STREAM_INCOMPLETE_MAX_RETRIES in retry-budget.ts).
+ * rejected before any stream body was consumed, so nothing was generated and a
+ * retry costs no partial output. Three shapes qualify: a transport failure
+ * with no response at all (`APIConnectionError` or a socket/DNS code), an SDK
+ * connect timeout (`APIConnectionTimeoutError`, retried only while the request
+ * signal is not aborted), and a status-bearing 408/409/500/502/504, where the
+ * server DID answer with headers but no model output was streamed. Mid-stream
+ * drops after streaming began are a different class with their own LOW budget
+ * (see network-termination.ts and STREAM_INCOMPLETE_MAX_RETRIES in
+ * retry-budget.ts).
  *
- * The two classifiers (`isConnectionPhaseNetworkError`, `isRetryableConnectionStatus`)
- * live in `../../shared/connection-error.ts` so the openai-compatible provider
- * can share them; the budget constants and `connectionErrorCode` are
- * anthropic-direct-specific and remain here.
+ * The classifiers (`isConnectionPhaseNetworkError`, `isConnectionTimeoutError`,
+ * `isRetryableConnectionStatus`) live in `../../shared/connection-error.ts` so
+ * the openai-compatible provider can share them; the budget constants,
+ * `connectionErrorCode` and `connectionRetryMetadata` are anthropic-direct
+ * specific and remain here.
  *
  * Pure: no SDK import (classified by constructor name and cause-chain `code`), no I/O.
  */
 
+import { redactSecrets } from '../../../redact-secrets.js';
+
 export {
   isConnectionPhaseNetworkError,
+  isConnectionTimeoutError,
   isRetryableConnectionStatus,
 } from '../../shared/connection-error.js';
 
@@ -51,4 +60,31 @@ export function connectionErrorCode(err: unknown): string | undefined {
     cur = cause;
   }
   return undefined;
+}
+
+/** Max characters of error text recorded in a `connection_retry` trace event. */
+const TRACE_ERROR_MAX_CHARS = 200;
+
+/**
+ * Contract: the `metadata` object of one `connection_retry` session_phase event.
+ * `error` is passed through `redactSecrets` first, then truncated — the same
+ * ordering `tool_call.completed.errorHead` uses (`compact-summarizer.ts:217`)
+ * so a secret straddling the 200-char boundary is never written as a fragment.
+ * The status-retry path (408/500/502/504) carries SDK `APIError` messages that
+ * embed the response body, so proxy or gateway text would otherwise land in the
+ * trace verbatim. `code` and `status` are included only when present.
+ */
+export function connectionRetryMetadata(
+  info: { attempt: number; error: Error },
+  maxRetries: number = CONNECTION_ERROR_MAX_RETRIES,
+): Record<string, string | number | boolean> {
+  const code = connectionErrorCode(info.error);
+  const status = (info.error as { status?: unknown }).status;
+  return {
+    attempt: info.attempt,
+    maxRetries,
+    error: redactSecrets(info.error.message).slice(0, TRACE_ERROR_MAX_CHARS),
+    ...(code !== undefined ? { code } : {}),
+    ...(typeof status === 'number' ? { status } : {}),
+  };
 }
