@@ -191,10 +191,12 @@ describe('presence heartbeat timer', () => {
       expect(timer).not.toBeNull();
       expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
       vi.advanceTimersByTime(PRESENCE_HEARTBEAT_INTERVAL_MS);
-      // The heartbeat write is async I/O; poll until it lands.
+      // The heartbeat write is async I/O (tmp + rename); poll on real time until
+      // it lands. setImmediate ticks were too short on Windows CI, where the
+      // atomic rename is slow. Only setInterval is faked, so setTimeout is real.
       let refreshed: string | undefined;
-      for (let i = 0; i < 50 && (refreshed === undefined || refreshed === stale); i++) {
-        await new Promise((r) => setImmediate(r));
+      for (let i = 0; i < 250 && (refreshed === undefined || refreshed === stale); i++) {
+        await new Promise((r) => setTimeout(r, 20));
         refreshed = (await readPresenceFiles()).find((r) => r.sessionId === 'hb')?.heartbeatAt;
       }
       expect(refreshed).toBeDefined();
