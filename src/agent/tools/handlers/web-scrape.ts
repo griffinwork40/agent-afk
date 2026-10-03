@@ -31,6 +31,7 @@
 
 import type { ToolHandler } from '../types.js';
 import { scrapeToMarkdown } from '../../../http-client/scrape.js';
+import { rateLimitMessage } from '../../../http-client/retryFetch.js';
 import { resolveSearchBackend, formatSearchResults } from '../../../http-client/search.js';
 import { checkEgressTarget, guardedFetch } from '../../../http-client/egress-guard.js';
 import type { EgressGuardOptions as GuardOpts } from '../../../http-client/egress-guard.js';
@@ -259,7 +260,8 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
         if (!res.ok) {
           return {
             content:
-              `web_scrape HTTP ${res.status} ${res.statusText || ''}`.trimEnd() + ` for ${parsed.url}`,
+              res.status === 429 ? rateLimitMessage(res, parsed.url!) :
+                `web_scrape HTTP ${res.status} ${res.statusText || ''}`.trimEnd() + ` for ${parsed.url}`,
             isError: true,
           };
         }
@@ -307,6 +309,7 @@ export function createWebScrapeHandler(opts: WebScrapeOptions = {}): ToolHandler
             return { content: `web_scrape blocked: ${blocked.message}`, isError: true };
           }
           const base = fetchFailedMessage(err);
+          if (base.startsWith('web_scrape HTTP 429')) return { content: base, isError: true };
           // A chromium-missing LAUNCH failure is already decorated by
           // BrowserLauncher, so `base` may carry the remediation. Only add it
           // here for the cases the launcher never sees — chiefly a missing

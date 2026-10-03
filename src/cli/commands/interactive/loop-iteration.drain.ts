@@ -7,8 +7,7 @@
  * @module cli/commands/interactive/loop-iteration.drain
  */
 
-import { truncateDisplayWidth } from '../../display.js';
-import { palette } from '../../palette.js';
+import { drainLoopNotifications as drainJobNotifications } from './loop-notifications.js';
 import type { InteractiveCtx } from './shared.js';
 import type { FooterSubsystems } from './footer-subsystems.js';
 
@@ -30,33 +29,7 @@ import type { FooterSubsystems } from './footer-subsystems.js';
 export function drainLoopNotifications(ctx: InteractiveCtx, footer: FooterSubsystems): void {
   const { shellPassthrough, bgResultNotifier, contextPane } = footer;
 
-  const shellNotifications = shellPassthrough.drainNotifications();
-  for (const { job, result } of shellNotifications) {
-    const glyph = result.errorReason === undefined ? '✓' : '✗';
-    const exitPart = result.errorReason === 'abort'
-      ? 'killed'
-      : result.errorReason === 'timeout'
-        ? 'timed out'
-        : result.errorReason === 'signal-killed'
-          ? 'killed by signal'
-          : `exit ${result.exitCode ?? 0}`;
-    const seconds = Math.max(0, Math.round(result.durationMs / 100) / 10);
-    ctx.replRenderer.writeLine(
-      palette.dim(`  ${glyph} [${job.id}] ${exitPart} · ${seconds}s · `) + job.command,
-    );
-  }
-
-  const bgAgentNotifications = bgResultNotifier.drainNotifications();
-  for (const { job } of bgAgentNotifications) {
-    const glyph = job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '⊘';
-    const seconds = job.endedAt !== undefined
-      ? Math.max(0, Math.round((job.endedAt - job.startedAt) / 100) / 10)
-      : 0;
-    const label = truncateDisplayWidth(job.label, 60);
-    ctx.replRenderer.writeLine(
-      palette.dim(`  ${glyph} [${job.jobId}] subagent ${job.status} · ${seconds}s · `) + label,
-    );
-  }
+  drainJobNotifications(ctx, shellPassthrough, bgResultNotifier);
 
   const paneLines = contextPane.renderIfChanged(ctx.stats.sessionId);
   if (paneLines.length > 0) {

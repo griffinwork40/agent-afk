@@ -22,6 +22,7 @@ import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
 import { dispatchUserPromptSubmit, dispatchStop } from './loop-iteration.hooks.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
+import { createVersionNotice } from './version-notice.js';
 
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
@@ -85,6 +86,7 @@ export async function runInputLoop(
   let pendingStopInjection: string | undefined;
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
 
+  const versionNotice = createVersionNotice();
   // Auto-resume: wake an idle prompt when bg results or peer messages land.
   let autoResumeCount = 0;
   const tryAutoResume = (): void => {
@@ -156,6 +158,11 @@ export async function runInputLoop(
       text = result.text.trim();
       attachments = result.attachments;
     }
+    // Invariant: await readLine first so idle upgrades are checked before
+    // dispatch. writeLine commits above the persistent compositor, never raw
+    // stdout while the input overlay owns the cursor. No timer can interrupt it.
+    const notice = versionNotice();
+    if (notice) ctx.replRenderer.writeLine(notice);
     if (!text && attachments.length === 0) continue;
 
     // Shell-passthrough branch — `!cmd` foreground / `!&cmd` background.

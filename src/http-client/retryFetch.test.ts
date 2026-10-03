@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { retryFetch } from './retryFetch.js';
+import { retryFetch, rateLimitMessage } from './retryFetch.js';
 import type { FetchFn } from './types.js';
 
 const noSleep = (): Promise<void> => Promise.resolve();
@@ -15,6 +15,64 @@ const noSleep = (): Promise<void> => Promise.resolve();
 function res(status: number, body = 'ok', headers?: Record<string, string>): Response {
   return new Response(body, { status, ...(headers ? { headers } : {}) });
 }
+
+describe('retryFetch rate limiting', () => {
+  it('uses a 5s floor plus jitter and only two default retries', async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fetchFn = vi.fn(async () => res(429));
+    const response = await retryFetch(fetchFn, 'https://x', {}, { sleep });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    for (const [ms] of sleep.mock.calls) {
+      expect(ms).toBeGreaterThanOrEqual(5000);
+      expect(ms).toBeLessThanOrEqual(6000);
+    }
+    expect(rateLimitMessage(response, 'https://x')).toContain('after 3 attempts');
+  });
+
+  it.each(['nonsense', '', '-1'])('falls back for unusable Retry-After %j', async (header) => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fetchFn = vi.fn().mockResolvedValueOnce(res(429, '', { 'retry-after': header }))
+      .mockResolvedValueOnce(res(200));
+    await retryFetch(fetchFn, 'https://x', {}, { sleep });
+    expect(sleep.mock.calls[0]?.[0]).toBeGreaterThanOrEqual(5000);
+  });
+
+  it('caps the 429 floor at the caller delay cap', async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fetchFn = vi.fn().mockResolvedValueOnce(res(429)).mockResolvedValueOnce(res(200));
+    await retryFetch(fetchFn, 'https://x', {}, { sleep, maxDelayMs: 100 });
+    expect(sleep).toHaveBeenCalledWith(100, undefined);
+  });
+
+  it.each([7000, 20000, -1000])('parses and caps HTTP-date Retry-After (%i ms)', async (offset) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-10-02T12:00:00Z'));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      const fetchFn = vi.fn().mockResolvedValueOnce(res(429, '', {
+        'retry-after': new Date(Date.now() + offset).toUTCString(),
+      })).mockResolvedValueOnce(res(200));
+      await retryFetch(fetchFn, 'https://x', {}, { sleep });
+      expect(sleep).toHaveBeenCalledWith(Math.max(0, Math.min(offset, 10000)), undefined);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('aborts during the default 429 sleep without another request', async () => {
+    vi.useFakeTimers();
+    try {
+      const ac = new AbortController();
+      const fetchFn = vi.fn(async () => res(429));
+      const pending = retryFetch(fetchFn, 'https://x', { signal: ac.signal });
+      const rejected = expect(pending).rejects.toThrow('timeout');
+      setTimeout(() => ac.abort(new Error('timeout')), 100);
+      await vi.advanceTimersByTimeAsync(100);
+      await rejected;
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+});
 
 describe('retryFetch', () => {
   it('returns immediately on success (one call, no retry)', async () => {

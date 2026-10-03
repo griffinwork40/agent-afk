@@ -302,6 +302,11 @@ export const imageEditTool: AnthropicToolDef = {
         enum: ['1024x1024', '1024x1536', '1536x1024', 'auto'],
         description: 'Output image dimensions. Default: 1024x1024.',
       },
+      quality: {
+        type: 'string',
+        enum: ['low', 'medium', 'high', 'auto'],
+        description: 'Generation quality. Higher quality costs more. Default: auto.',
+      },
       output_format: {
         type: 'string',
         enum: ['png', 'webp', 'jpeg'],

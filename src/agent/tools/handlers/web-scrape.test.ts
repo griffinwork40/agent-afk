@@ -69,6 +69,44 @@ function exaResponse(results: Array<{ title?: string | null; url?: string; highl
   } as unknown as Response;
 }
 
+describe('web_scrape rate limiting', () => {
+  it.each(['raw', 'markdown'])('reports cooldown guidance in %s without rendering', async (mode) => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = makeFetch(() => new Response('', { status: 429 }));
+      const renderFn = vi.fn();
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
+      const pending = handler({ mode, url: 'https://arxiv.org/search' }, signal());
+      await vi.advanceTimersByTimeAsync(12000);
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('web_scrape HTTP 429 (rate limited by arxiv.org) ' +
+        'for https://arxiv.org/search after 3 attempts; do not re-request this host in parallel; ' +
+        'wait before retrying or use a different source.');
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+      expect(renderFn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['raw', 'markdown'])('timeout interrupts the 429 sleep in %s', async (mode) => {
+    vi.useFakeTimers();
+    try {
+      const fetchFn = makeFetch(() => new Response('', { status: 429 }));
+      const renderFn = vi.fn();
+      const handler = createWebScrapeHandler({ fetchFn, env: {}, renderFn, lookupFn: publicLookup });
+      const pending = handler({ mode, url: 'https://arxiv.org/search', timeout_ms: 100 }, signal());
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await pending;
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('web_scrape timeout after 100ms');
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(renderFn).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
 describe('web_scrape handler — input validation', () => {
   const handler = createWebScrapeHandler({
     fetchFn: makeFetch(() => makeResponse({ body: 'unused' })),
