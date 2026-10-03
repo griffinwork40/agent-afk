@@ -3,7 +3,6 @@ import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { stripAnsi } from '../../display.js';
-import { ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
 import {
   formatAgentSummary,
   formatAgentHeader,
@@ -24,6 +23,7 @@ import {
   propagateChildFailure as propagateChildFailureIn,
 } from './tool-lane.ancestry.js';
 import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
+import { elapsedDisplayNeedsUpdate } from './tool-lane.elapsed-check.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -86,6 +86,17 @@ export class ToolLane {
    * `null` on non-TTY surfaces (no overlay to repaint) and in tests.
    */
   flash: ToolLaneFlash | null = null;
+
+  /**
+   * The most recent `capturePath` from any bash tool result with a captured
+   * output file. Updated in {@link addResult} when `chunk.capturePath` is
+   * present. Used by the Ctrl+G viewer to open the last capture without
+   * requiring the user to know the exact file path.
+   */
+  private lastCapturePath: string | undefined = undefined;
+
+  /** Return the most recent bash capture path, or `undefined` if none. */
+  getLastCapturePath(): string | undefined { return this.lastCapturePath; }
 
   /**
    * Optional AFK_SMOKE_TEXT whole-element fade for live rows. Set by
@@ -280,6 +291,8 @@ export class ToolLane {
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
+    // Track the most recent bash capture path for the Ctrl+G viewer (#1505).
+    if (chunk.capturePath !== undefined) this.lastCapturePath = chunk.capturePath;
     // Deliberately does NOT touch `activeTools`. The dispatcher is the only
     // observer of what is actually running and pushes a fresh snapshot on every
     // start and settle (see notifyToolActivity), so inferring the live set from
@@ -405,28 +418,7 @@ export class ToolLane {
    * nothing to repaint until the grace period expires.
    */
   checkElapsedDisplayNeedsUpdate(): boolean {
-    const now = Date.now();
-    let changed = false;
-    // Prune tracking entries for IDs that are no longer in-flight.
-    for (const id of this.lastElapsedSecond.keys()) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) {
-        this.lastElapsedSecond.delete(id);
-      }
-    }
-    for (const id of this.order) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) continue;
-      const elapsedMs = now - entry.startedAt;
-      if (elapsedMs < ELAPSED_GRACE_MS) continue; // within grace period — display is ''
-      const currentSec = Math.floor(elapsedMs / 1000);
-      const lastSec = this.lastElapsedSecond.get(id);
-      if (lastSec === undefined || currentSec !== lastSec) {
-        this.lastElapsedSecond.set(id, currentSec);
-        changed = true;
-      }
-    }
-    return changed;
+    return elapsedDisplayNeedsUpdate(this.entries, this.order, this.lastElapsedSecond);
   }
 
   hasPending(): boolean {

@@ -210,6 +210,45 @@ describe('coerceConfigValue', () => {
     it('rejects an array', () => {
       expect(coerceConfigValue(spec, ['glm-5.2']).ok).toBe(false);
     });
+
+    // JSON-string model-slot fix: write-path handling
+    it('accepts a JSON-encoded object string and stores it as an object (minimal)', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b"}');
+      expect(res).toEqual({ ok: true, value: { id: 'gpt-oss-120b' } });
+    });
+    it('accepts a JSON-encoded object string with name + provider', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b","name":"Cerebras GPT-OSS 120B","provider":"openai-compatible"}');
+      expect(res).toEqual({ ok: true, value: { id: 'gpt-oss-120b', name: 'Cerebras GPT-OSS 120B', provider: 'openai' } });
+    });
+    it('accepts the exact broken config shape from the observed bug', () => {
+      // The real config had: "small": "{\"id\":\"gpt-oss-120b\",\"name\":\"Cerebras GPT-OSS 120B\"}"
+      const jsonString = '{"id":"gpt-oss-120b","name":"Cerebras GPT-OSS 120B"}';
+      const res = coerceConfigValue(spec, jsonString);
+      expect(res).toEqual({ ok: true, value: { id: 'gpt-oss-120b', name: 'Cerebras GPT-OSS 120B' } });
+    });
+    it('rejects a JSON-encoded object string carrying baseUrl (human gate preserved)', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b","baseUrl":"https://attacker.example/v1"}');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/AFK_MODEL_.*BASE_URL/);
+    });
+    it('rejects a JSON-encoded object string carrying apiKey (human gate preserved)', () => {
+      const res = coerceConfigValue(spec, '{"id":"gpt-oss-120b","apiKey":"sk-secret"}');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/apiKey|api.*key/i);
+    });
+    it('rejects a JSON-encoded object string with missing id', () => {
+      const res = coerceConfigValue(spec, '{"provider":"openai"}');
+      expect(res.ok).toBe(false);
+    });
+    it('rejects a malformed {-prefixed string that is not valid JSON', () => {
+      const res = coerceConfigValue(spec, '{not valid json}');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toMatch(/JSON|parse/i);
+    });
+    it('still accepts bare id strings unchanged (regression guard)', () => {
+      expect(coerceConfigValue(spec, 'claude-haiku-4-5-20251001')).toEqual({ ok: true, value: 'claude-haiku-4-5-20251001' });
+      expect(coerceConfigValue(spec, 'llama3.2:3b')).toEqual({ ok: true, value: 'llama3.2:3b' });
+    });
   });
 });
 
@@ -246,6 +285,34 @@ describe('coerceConfigValue — string-array type', () => {
   it('returns an empty array for an empty comma-string', () => {
     const result = coerceConfigValue(spec, '');
     expect(result).toEqual({ ok: true, value: [] });
+  });
+});
+
+describe('coerceConfigValue — object type', () => {
+  const spec = getConfigKeySpec('pluginHookEnv')!;
+
+  it('accepts a plain object', () => {
+    const value = { 'my-plugin': ['SECRET_A', 'SECRET_B'] };
+    const result = coerceConfigValue(spec, value);
+    expect(result).toEqual({ ok: true, value });
+  });
+
+  it('rejects null (not an object)', () => {
+    const result = coerceConfigValue(spec, null);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects an array (not a plain object)', () => {
+    const result = coerceConfigValue(spec, ['foo', 'bar']);
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
+  });
+
+  it('rejects a string (not an object)', () => {
+    const result = coerceConfigValue(spec, 'my-plugin=SECRET_A');
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(/expects an object/);
   });
 });
 

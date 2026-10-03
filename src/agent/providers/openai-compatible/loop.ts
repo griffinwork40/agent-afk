@@ -96,29 +96,38 @@ export interface OpenAIAssistantToolCallMessage {
     type: 'function';
     function: { name: string; arguments: string };
   }>;
-  /** See `OpenAIMessage.reasoning_content` for the protocol detail. */
+  /**
+   * DeepSeek-R1 convention: echo reasoning under the same field it arrived in.
+   * See `OpenAIMessage.reasoning_content` for the DeepSeek protocol detail.
+   */
   reasoning_content?: string;
+  /**
+   * Cerebras convention: Cerebras streams reasoning as `delta.reasoning` and
+   * rejects `reasoning_content` in history (HTTP 400). Echo under `reasoning`
+   * when the stream delivered it via that field.
+   */
+  reasoning?: string;
 }
 
 /**
  * Build the assistant turn that wraps the model's tool_calls for the next
  * request's history.
  *
- * `reasoningText` is the accumulated `delta.reasoning` / `reasoning_content`
- * trace captured during the iteration (from `translate.ts:StreamState`). It's
- * echoed back on the assistant message because DeepSeek-R1 (and other
- * thinking-mode OpenAI-compatible providers like some Qwen variants on
- * OpenRouter) require it — calling their API without echoing the reasoning
- * trace from a thinking-mode response yields a 400 ("The `reasoning_content`
- * in the thinking mode must be passed back to the API"). Real OpenAI's
- * o-series doesn't expose its reasoning trace, so this field stays empty
- * for those calls and is omitted from the request body, leaving the wire
- * format unchanged for non-thinking providers.
+ * `reasoningText` is the accumulated reasoning trace from `translate.ts:StreamState`.
+ * `reasoningField` controls which wire key it is echoed under — must match the
+ * field the provider delivered it in:
+ *   - `'reasoning_content'` (default): DeepSeek-R1 and compatible providers.
+ *     Their API rejects subsequent requests with 400 unless echoed under this key.
+ *   - `'reasoning'`: Cerebras and providers that stream `delta.reasoning`.
+ *     Cerebras rejects `reasoning_content` with 400 ("property is unsupported").
+ * Real OpenAI o-series doesn't expose its reasoning trace, so `reasoningText`
+ * is empty and neither field is set, leaving the wire format unchanged.
  */
 export function assistantMessageWithToolCalls(
   accumulatedText: string,
   toolCalls: readonly AccumulatedToolCall[],
   reasoningText: string = '',
+  reasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content',
 ): OpenAIAssistantToolCallMessage {
   const msg: OpenAIAssistantToolCallMessage = {
     role: 'assistant',
@@ -130,7 +139,7 @@ export function assistantMessageWithToolCalls(
     })),
   };
   if (reasoningText.length > 0) {
-    msg.reasoning_content = reasoningText;
+    msg[reasoningField] = reasoningText;
   }
   return msg;
 }

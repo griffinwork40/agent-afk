@@ -44,6 +44,13 @@ export type ApiHost = InputModeHost & RenderHost & AutocompleteHost & KeyDispatc
   onRewindRequest?: () => void;
   onIdleEscape?: () => void;
   onOpenEditor?: () => void;
+  /**
+   * Fired at the top of every external `setInputMode` call that changes the
+   * mode, BEFORE the previous mode is read. Wired by the REPL via
+   * {@link setOnInputModeTransition} to close any open bash-output-viewer so
+   * it never holds `pickerController` across a turn boundary.
+   */
+  onInputModeTransition?: () => void;
 
   // setInputMode — needs to flush before delegating to InputMode.*
   flushPendingRepaint(): void;
@@ -72,6 +79,10 @@ export function setOnRewindRequest(self: ApiHost, handler: (() => void) | null):
 
 export function setOnIdleEscape(self: ApiHost, handler: (() => void) | null): void {
   self.onIdleEscape = handler ?? undefined;
+}
+
+export function setOnInputModeTransition(self: ApiHost, handler: (() => void) | null): void {
+  self.onInputModeTransition = handler ?? undefined;
 }
 
 export function setOnOpenEditor(self: ApiHost, handler: (() => void) | null): void {

@@ -23,6 +23,7 @@ import type { TranslateCtx, TranslateOutput, TurnResult } from './types.js';
 import { env } from '../../../config/env.js';
 import { incompleteStreamError, isStreamComplete } from './stream-completeness.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { isMidStreamNetworkTermination } from '../shared/network-termination.js';
 
 /**
  * Per-block accumulator. The block kind dictates which fields are populated
@@ -327,9 +328,11 @@ export async function* translateMessageStream(
     if (traceEnabled) console.log('[translate] SDK iteration ended naturally, stopped=', stopped);
   } catch (err) {
     if (traceEnabled) console.log('[translate] SDK iteration threw:', errorMessage(err));
-    const error = err instanceof Error ? err : new Error(String(err));
-    yield { kind: 'event', event: { type: 'error', error } };
-    return;
+    // (#2787) Drop after stop_reason = complete; drop before = surface error for re-drive.
+    if (!isMidStreamNetworkTermination(err) || stopReason === null) {
+      yield { kind: 'event', event: { type: 'error', error: err instanceof Error ? err : new Error(String(err)) } };
+      return;
+    }
   }
 
   // Incomplete stream (no message_stop AND no stop_reason): report, never
@@ -341,8 +344,5 @@ export async function* translateMessageStream(
   }
 
   if (traceEnabled) console.log('[translate] yielding turn-result');
-  yield {
-    kind: 'turn-result',
-    result: buildTurnResult(blocks, stopReason, usage),
-  };
+  yield { kind: 'turn-result', result: buildTurnResult(blocks, stopReason, usage) };
 }

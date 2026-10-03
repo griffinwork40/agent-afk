@@ -465,6 +465,11 @@ type SupportedImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image
  * Additional image blocks beyond the first are also represented as text
  * placeholders (multi-image tool results are uncommon; single-image forwarding
  * covers the practical cases).
+ *
+ * Resource `blob` blocks whose `mimeType` is a supported image type are treated
+ * identically to `image` blocks — blob payload forwarded via `ToolResult.image`.
+ * Resource link blocks (no `blob` field) are surface as URI placeholders only;
+ * payload bridging for non-image blob resources is a follow-up.
  */
 function normalizeCallToolResult(result: CallToolResult): ToolResult {
   const parts: string[] = [];
@@ -520,13 +525,40 @@ function normalizeCallToolResult(result: CallToolResult): ToolResult {
         }
       }
     } else if (block.type === 'resource') {
-      // Both embedded and link variants. Surface the URI so the model can
-      // at least cite it; payload bridging is a follow-up.
-      const uri =
+      // Embedded resource blocks carry either a `text` or a `blob` payload.
+      // Blob resources with a supported image mimeType are forwarded as
+      // multimodal content (same path as `image` blocks). All other resource
+      // variants surface as URI placeholders so the model can at least cite the
+      // source; full payload bridging for non-image blobs is a follow-up.
+      const resource =
         'resource' in block && typeof block.resource === 'object'
-          ? (block.resource as { uri?: string }).uri ?? '(unknown)'
-          : '(unknown)';
-      parts.push(`[resource block: ${uri}]`);
+          ? (block.resource as Record<string, unknown>)
+          : undefined;
+      const uri = typeof resource?.['uri'] === 'string' ? resource['uri'] : '(unknown)';
+      const blob = typeof resource?.['blob'] === 'string' ? resource['blob'] : undefined;
+      const blobMime =
+        typeof resource?.['mimeType'] === 'string' ? resource['mimeType'] : undefined;
+
+      if (blob !== undefined && blobMime !== undefined && SUPPORTED_IMAGE_MEDIA_TYPES.has(blobMime)) {
+        // Treat as an image block: apply the same size guard and forward via
+        // ToolResult.image so both provider adapters render it natively.
+        const estimatedBytes = Math.ceil((blob.length * 3) / 4);
+        if (estimatedBytes > MAX_MCP_IMAGE_BYTES) {
+          console.warn(
+            `[mcp] resource blob "${blobMime}" (${uri}) is ~${estimatedBytes} bytes decoded, ` +
+              `exceeds ${MAX_MCP_IMAGE_BYTES}-byte limit — using text placeholder`,
+          );
+          parts.push(`[resource block: ${uri} (image blob too large for model context)]`);
+        } else if (forwardedImage === undefined) {
+          const cleanBlob = blob.replace(/\s/g, '');
+          forwardedImage = { mediaType: blobMime as SupportedImageMediaType, data: cleanBlob };
+          parts.push(`[resource block: ${uri} (image: ${blobMime})]`);
+        } else {
+          parts.push(`[resource block: ${uri} (additional image blob not forwarded)]`);
+        }
+      } else {
+        parts.push(`[resource block: ${uri}]`);
+      }
     } else {
       // Forward-compat: unknown block types serialize as JSON so debugging
       // is possible without code changes.

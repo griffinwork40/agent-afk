@@ -18,6 +18,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from './model-limits.js';
 import { resolveEffectiveMaxOutputTokens } from './providers/openai-compatible/query/model-params.js';
 import { resolveMaxTokens } from './providers/anthropic-direct/resolve-params.js';
+import { guardContextOverflow } from './providers/shared/auto-compact.js';
 import type { AgentConfig } from './types/config-types.js';
 
 describe('autoCompactLimitFor', () => {
@@ -221,6 +222,43 @@ describe('maxOutputTokensFor — retired-but-Active Opus pin', () => {
     expect(autoCompactLimitFor('claude-opus-4-7')).toBe(200_000);
     expect(autoCompactLimitFor('claude-opus-4-6')).toBe(200_000);
     expect(autoCompactLimitFor('opus_1m')).toBe(1_000_000);
+  });
+});
+
+describe('Cerebras Shared Inference — conservative free-tier pins', () => {
+  // Source: inference-docs.cerebras.ai/models/overview (2026-10-02):
+  // gpt-oss-120b 65k free / 131k paid; qwen-3.8-27b 64k free / 128k paid.
+  // The window depends on the account tier, which contextLimitFor cannot see, so
+  // the table pins the FREE-tier value; paid users raise it per slot (#2793).
+  it('pins the free-tier window for gpt-oss-120b (not the 262k openai-compatible fallback)', () => {
+    expect(contextLimitFor('gpt-oss-120b')).toBe(65_536);
+  });
+
+  it('pins the free-tier window for qwen-3.8-27b (not the 200k Anthropic fallback)', () => {
+    expect(contextLimitFor('qwen-3.8-27b')).toBe(64_000);
+  });
+
+  it('caps output at 16k for both ids (AFK choice, sized to fit the free-tier window)', () => {
+    expect(maxOutputTokensFor('gpt-oss-120b')).toBe(16_384);
+    expect(maxOutputTokensFor('qwen-3.8-27b')).toBe(16_384);
+  });
+
+  it('a typical ~30k-token AFK turn passes the overflow guard (64k output default would not)', () => {
+    for (const id of ['gpt-oss-120b', 'qwen-3.8-27b']) {
+      expect(() =>
+        guardContextOverflow(30_000, maxOutputTokensFor(id), contextLimitFor(id), id),
+      ).not.toThrow();
+      // Regression guard for the pre-cap state: the 64k default output ceiling
+      // against a ~64k window fails the very next request.
+      expect(() => guardContextOverflow(30_000, 64_000, contextLimitFor(id), id)).toThrow(
+        /Context-window overflow/,
+      );
+    }
+  });
+
+  it('autoCompactLimitFor equals contextLimitFor for both ids (no reduced budget)', () => {
+    expect(autoCompactLimitFor('gpt-oss-120b')).toBe(contextLimitFor('gpt-oss-120b'));
+    expect(autoCompactLimitFor('qwen-3.8-27b')).toBe(contextLimitFor('qwen-3.8-27b'));
   });
 });
 

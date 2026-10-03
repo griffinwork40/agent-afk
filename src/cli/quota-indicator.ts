@@ -44,6 +44,7 @@
 
 import { palette } from './palette.js';
 import type { QuotaSnapshot } from '../agent/quota-cache.js';
+import { USAGE_STALE_AFTER_MS } from '../agent/usage/usage-record.js';
 
 /** One rolling window's state, as observed from the response headers. */
 export interface QuotaWindowState {
@@ -131,7 +132,7 @@ const CRITICAL_ABOVE = 0.8;
  * would keep the row alarmed for no reason, so it is marked rather than
  * silently trusted.
  */
-export const STALE_AFTER_MS = 10 * 60 * 1000;
+export const STALE_AFTER_MS = USAGE_STALE_AFTER_MS;
 
 /** Prefixes the reset countdown. Recessive tone: it is context for the number, not the signal. */
 const RESET_GLYPH = '⟳';

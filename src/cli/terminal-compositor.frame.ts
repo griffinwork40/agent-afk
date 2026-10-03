@@ -96,6 +96,8 @@ export interface FrameHost {
   /** content-hug: post-commit band length during an in-flight commit, else null. */
   pendingContentRows: number | null;
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
   hasCommitted: boolean;

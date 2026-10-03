@@ -22,6 +22,7 @@ import { createTurnTtfbState, emitPlainTtfbWaiting, ttfbRendererOptions } from '
 import { type PausedPickerRef } from './turn-handler.paused.js';
 import { processStreamEvent, type StreamEventState, type StreamEventContext } from './turn-handler.stream-events.js';
 import { handleTurnCompletion } from './turn-handler.completion.js';
+import { syncCapturePathRef } from './turn-handler.capture-sync.js';
 
 export { formatToolLine, formatToolResultLine, ToolLane } from './tool-lane.js';
 
@@ -279,6 +280,7 @@ export async function runTurn(
       presentError(classifyError(error));
     }
   } finally {
+    if (h.capturePathRef) syncCapturePathRef(h.capturePathRef, renderer); // must precede dispose (#1505)
     await disposeRendererOnce();
     // OSC 2 title: reset "· running" on EVERY exit path (clean, ESC, error).
     setTerminalTitleIfEnabled(process.stdout, formatTerminalTitle(process.cwd(), false));

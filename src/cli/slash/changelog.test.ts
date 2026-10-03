@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { rmSyncRetry } from '../../__test-utils__/rm-sync-retry.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -84,9 +85,7 @@ describe('/changelog', () => {
 
   afterEach(() => {
     process.chdir(origCwd);
-    // Retry ENOTEMPTY: background git tooling (fsmonitor, git-ai, indexers) can
-    // still be writing into .git when a test finishes.
-    rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    rmSyncRetry(tmpDir);
   });
 
   it('generates grouped entries from conventional commits', async () => {
