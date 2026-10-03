@@ -32,8 +32,28 @@ function firstIndex(lines: string[], needle: string): number {
   return lines.findIndex((l) => l.includes(needle));
 }
 
+/**
+ * Buffer with the sanctioned content-hug seam overlap counted once: drop the
+ * longest scrollback tail that equals the viewport's first rows (see
+ * PtyExpect.seamOverlap). Returns the buffer unchanged when there is none.
+ */
+function seamMergedLines(res: PtyRunResult): string[] {
+  const sb = res.scrollback;
+  const vp = res.viewport;
+  const norm = (l: string | undefined): string => (l ?? '').trimEnd();
+  for (let k = Math.min(sb.length, vp.length); k > 0; k--) {
+    let match = sb.slice(sb.length - k).some((l) => norm(l) !== '');
+    for (let j = 0; match && j < k; j++) match = norm(sb[sb.length - k + j]) === norm(vp[j]);
+    if (match) return [...sb.slice(0, sb.length - k), ...vp];
+  }
+  return [...sb, ...vp];
+}
+
 function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
   const dump = res.dump();
+  // exactlyOnce / absent / order read `all`; seamOverlap (content-hug only)
+  // discounts the re-shown archived rows, nothing else.
+  const all = exp.seamOverlap ? seamMergedLines(res) : res.lines;
 
   // The driver must have reached the sentinel (final frame fully rendered).
   expect(res.sawSentinel, `driver did not emit completion sentinel (exit=${res.exitCode}):\n${dump}`).toBe(true);
@@ -47,16 +67,16 @@ function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
     expect(hit, `"${needle}" expected in VIEWPORT:\n${dump}`).toBe(true);
   }
   for (const needle of exp.exactlyOnce ?? []) {
-    const n = countAll(res.lines, needle);
+    const n = countAll(all, needle);
     expect(n, `"${needle}" must appear exactly once across the whole buffer (found ${n}):\n${dump}`).toBe(1);
   }
   for (const needle of exp.absent ?? []) {
-    const n = countAll(res.lines, needle);
+    const n = countAll(all, needle);
     expect(n, `"${needle}" must NOT appear anywhere (found ${n}):\n${dump}`).toBe(0);
   }
   for (const [a, b] of exp.order ?? []) {
-    const ia = firstIndex(res.lines, a);
-    const ib = firstIndex(res.lines, b);
+    const ia = firstIndex(all, a);
+    const ib = firstIndex(all, b);
     expect(ia, `order anchor "${a}" not found:\n${dump}`).toBeGreaterThanOrEqual(0);
     expect(ib, `order anchor "${b}" not found:\n${dump}`).toBeGreaterThanOrEqual(0);
     expect(ia, `"${a}" must appear above "${b}" (idx ${ia} vs ${ib}):\n${dump}`).toBeLessThan(ib);
