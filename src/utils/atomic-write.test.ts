@@ -266,3 +266,31 @@ describe('renameWithRetry', () => {
     expect(callCount()).toBe(1);
   });
 });
+
+describe('atomicWriteFileAsync commitGuard', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'afk-atomic-guard-')); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it('commits and resolves true when the guard passes', async () => {
+    const dest = join(dir, 'f.json');
+    writeFileSync(dest, 'old');
+    expect(await atomicWriteFileAsync(dest, 'new', { commitGuard: () => true })).toBe(true);
+    expect(readFileSync(dest, 'utf8')).toBe('new');
+    expect(readdirSync(dir)).toEqual(['f.json']);
+  });
+
+  it('leaves dest untouched, removes the temp file, and resolves false when the guard fails', async () => {
+    const dest = join(dir, 'f.json');
+    writeFileSync(dest, 'old');
+    expect(await atomicWriteFileAsync(dest, 'new', { commitGuard: () => false })).toBe(false);
+    expect(readFileSync(dest, 'utf8')).toBe('old');
+    expect(readdirSync(dir)).toEqual(['f.json']);
+  });
+
+  it('a guard on existence never creates a missing dest', async () => {
+    const dest = join(dir, 'absent.json');
+    expect(await atomicWriteFileAsync(dest, 'x', { commitGuard: () => existsSync(dest) })).toBe(false);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});

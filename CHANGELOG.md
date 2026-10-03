@@ -14,6 +14,14 @@ auto-release workflow to deduplicate commits across successive runs.
 ### Changed
 - document SessionFacet v7 outcome semantics for public consumers (#2797)
 
+## [5.290.0] - 2026-10-03
+
+### Added
+- show peer session activity in list_sessions (#2850) (4e7e64d9)
+
+### Fixed
+- defeat pid reuse in presence liveness, refresh heartbeat, reap dead presence files (#2852) (e39708f8)
+
 ## [5.289.1] - 2026-10-03
 
 ### Fixed
