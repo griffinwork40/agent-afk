@@ -178,8 +178,14 @@ describe('BackgroundAgentRegistry', () => {
     const before = Date.now();
     registry.register({ handle, prompt: 'p', model: 'sonnet' });
     const after = Date.now();
-    // <50ms is generous — register() should be microsecond-scale
-    expect(after - before).toBeLessThan(50);
+    // 2000ms ceiling: register() must not await async terminal-state resolution.
+    // The loose bound tolerates the synchronous mkdirSync in BgJobLogWriter's
+    // constructor, which can take ~150-200ms on Windows CI (slow temp-dir I/O),
+    // while still catching any true blocking-on-terminal-state regression (which
+    // would require awaiting async operations and would take seconds).
+    // The behavioral invariant — that register() does not await termination — is
+    // captured by the status assertion below.
+    expect(after - before).toBeLessThan(2000);
     // No terminal state yet
     expect(registry.list()[0]?.status).toBe('running');
   });
