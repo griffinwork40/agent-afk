@@ -197,7 +197,8 @@ export function classifyStreamError(
     };
   }
 
-  // Branch 3: status-bearing retryable error (429 / 5xx).
+  // Branch 3: status-bearing retryable error (429 / 5xx), or a status-less
+  // SDK overload throw (isOpenAIOverloadError, via isRetryableStreamError).
   if (isRetryableStreamError(err) && streamRetries < MAX_STREAM_RETRIES) {
     const next = streamRetries + 1;
     const hinted = retryAfterDelayMs(err);
