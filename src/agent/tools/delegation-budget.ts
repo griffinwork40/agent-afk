@@ -244,6 +244,199 @@ export class DelegationBudget {
   }
 }
 
+// ─── Continuation budget ─────────────────────────────────────────────────────
+
+/**
+ * Coordinator-controlled continuation budget for multi-phase subagent chains.
+ *
+ * Purpose: when a subagent hits its tool-round cap before finishing, a
+ * coordinator may dispatch a continuation child to resume. Without a shared
+ * budget, repeated continuations can silently exceed the work the coordinator
+ * intended — the parent's own tool rounds do NOT measure children's work.
+ *
+ * Responsibilities:
+ *  1. **Aggregate round allowance**: a single total ceiling on rounds across
+ *     ALL continuation children in a chain (not per-child).
+ *  2. **Continuation count limit**: a ceiling on how many continuation
+ *     dispatches are allowed (distinct from the round ceiling).
+ *  3. **Atomic concurrent allocation**: for DAG/parallel continuations,
+ *     `allocate()` reserves rounds before a child is forked so two concurrent
+ *     forks can't both over-spend the remaining budget.
+ *
+ * Invariants:
+ *  - Fail-closed on unsupported paths: when `allocate` is called with more
+ *    rounds than remain, it returns `null` rather than allowing the dispatch.
+ *  - Idempotent release: `release()` from a given allocation handle is safe to
+ *    call twice; the second call is a no-op.
+ *  - This tracks GRANTED rounds, not actual consumption — a child that uses
+ *    fewer rounds than allocated should call `release(allocated - actualUsed)`
+ *    to return the unspent allowance for subsequent continuations.
+ *
+ * Conservative defaults (documented, not magic numbers):
+ *  - `maxChainRounds`: 200 (4× the 50-round default per child, covering ~4 full
+ *    continuation children before the coordinator must escalate or stop)
+ *  - `maxContinuations`: 3 (an empirical bound — repeating continuation more
+ *    than 3 times without coordinator-level progress strongly indicates a
+ *    decomposition problem, not a round-budget problem)
+ *
+ * @module agent/tools/delegation-budget (ContinuationBudget section)
+ */
+export interface ContinuationBudgetConfig {
+  /** Total rounds available across ALL continuation children in the chain. */
+  maxChainRounds: number;
+  /** Maximum number of continuation dispatches allowed (independent of rounds). */
+  maxContinuations: number;
+}
+
+/** Conservative, documented defaults for {@link ContinuationBudgetConfig}. */
+export const CONTINUATION_BUDGET_DEFAULTS: ContinuationBudgetConfig = {
+  maxChainRounds: 200,
+  maxContinuations: 3,
+};
+
+export interface ContinuationAllocation {
+  /** The number of rounds granted by this allocation. */
+  grantedRounds: number;
+  /**
+   * Return unspent rounds to the budget. Call with `actualRoundsUsed` after
+   * the continuation child finishes. If the child used fewer rounds than
+   * granted, the delta is returned to the pool for subsequent continuations.
+   * Idempotent: double-release is a no-op. Returns the amount released.
+   */
+  release(actualRoundsUsed: number): number;
+}
+
+export type ContinuationRefusalReason =
+  | 'max_chain_rounds_exhausted'
+  | 'max_continuations_reached'
+  | 'requested_rounds_exceed_remaining';
+
+export interface ContinuationCheckResult {
+  allowed: boolean;
+  reason?: ContinuationRefusalReason;
+  detail?: string;
+}
+
+export class ContinuationBudget {
+  private roundsGranted = 0;
+  private continuationsDispatched = 0;
+  private readonly config: ContinuationBudgetConfig;
+
+  constructor(config: Partial<ContinuationBudgetConfig> = {}) {
+    this.config = { ...CONTINUATION_BUDGET_DEFAULTS, ...config };
+  }
+
+  get remainingRounds(): number {
+    return Math.max(0, this.config.maxChainRounds - this.roundsGranted);
+  }
+
+  get remainingContinuations(): number {
+    return Math.max(0, this.config.maxContinuations - this.continuationsDispatched);
+  }
+
+  /**
+   * Check whether a continuation dispatch is allowed.
+   *
+   * Pure query — does not mutate counters. Call before `allocate`.
+   */
+  canContinue(requestedRounds: number): ContinuationCheckResult {
+    if (this.continuationsDispatched >= this.config.maxContinuations) {
+      return {
+        allowed: false,
+        reason: 'max_continuations_reached',
+        detail:
+          `${this.continuationsDispatched} continuations already dispatched ` +
+          `(max ${this.config.maxContinuations}).`,
+      };
+    }
+    if (this.roundsGranted >= this.config.maxChainRounds) {
+      return {
+        allowed: false,
+        reason: 'max_chain_rounds_exhausted',
+        detail:
+          `All ${this.config.maxChainRounds} chain rounds have been allocated.`,
+      };
+    }
+    if (requestedRounds > this.remainingRounds) {
+      return {
+        allowed: false,
+        reason: 'requested_rounds_exceed_remaining',
+        detail:
+          `Requested ${requestedRounds} rounds but only ${this.remainingRounds} remain ` +
+          `of ${this.config.maxChainRounds} total chain rounds.`,
+      };
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Atomically allocate `requestedRounds` for a continuation child.
+   *
+   * Returns a {@link ContinuationAllocation} on success, or `null` when the
+   * budget check fails (fail-closed). Call `canContinue` first if you need
+   * the refusal reason; `allocate` discards it for callers that only branch
+   * on null/non-null.
+   *
+   * Contract: call BEFORE forking the continuation child. On fork failure,
+   * call `allocation.release(0)` to return the full granted amount.
+   */
+  allocate(requestedRounds: number): ContinuationAllocation | null {
+    const check = this.canContinue(requestedRounds);
+    if (!check.allowed) return null;
+
+    this.roundsGranted += requestedRounds;
+    this.continuationsDispatched += 1;
+    let released = false;
+
+    return {
+      grantedRounds: requestedRounds,
+      release: (actualRoundsUsed: number): number => {
+        if (released) return 0;
+        released = true;
+        const unspent = Math.max(0, requestedRounds - actualRoundsUsed);
+        this.roundsGranted = Math.max(0, this.roundsGranted - unspent);
+        return unspent;
+      },
+    };
+  }
+
+  /** Read-only snapshot for telemetry / diagnostics. */
+  snapshot(): { roundsGranted: number; continuationsDispatched: number; config: ContinuationBudgetConfig } {
+    return {
+      roundsGranted: this.roundsGranted,
+      continuationsDispatched: this.continuationsDispatched,
+      config: { ...this.config },
+    };
+  }
+}
+
+/**
+ * Build a human-readable refusal message for a continuation budget check
+ * failure. Style mirrors {@link buildBudgetRefusalMessage}.
+ */
+export function buildContinuationRefusalMessage(check: ContinuationCheckResult): string {
+  if (check.allowed) return '';
+  switch (check.reason) {
+    case 'max_chain_rounds_exhausted':
+      return (
+        `Continuation budget exhausted: ${check.detail} ` +
+        'Decompose the remaining work into a new coordinator-level task instead.'
+      );
+    case 'max_continuations_reached':
+      return (
+        `Continuation budget exhausted: ${check.detail} ` +
+        'Further continuation indicates a decomposition problem — escalate to the coordinator.'
+      );
+    case 'requested_rounds_exceed_remaining':
+      return (
+        `Continuation budget insufficient: ${check.detail} ` +
+        'Reduce the requested rounds or escalate to the coordinator.'
+      );
+    default:
+      return 'Continuation budget exhausted. Escalate to the coordinator.';
+  }
+}
+
 // ─── Refusal message builder ────────────────────────────────────────────────
 
 /**

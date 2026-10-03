@@ -331,7 +331,7 @@ export async function* runTurn(
     // stopReason === 'tool_use' — dispatch the tools, commit the results, and
     // decide whether the turn keeps going. The whole history mutation contract
     // (assistant push, rollback on throw, tool_result commit) lives inside.
-    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs);
+    const round = yield* runToolRound(turnResult, input, turn, maxIterations, softDeadlineMs, turn);
     if (round === 'terminated') return;
     applyBeforeNextRound(input, input.beforeNextRound?.());
   }

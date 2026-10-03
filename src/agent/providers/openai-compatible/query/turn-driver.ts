@@ -25,6 +25,7 @@ import {
   formatRoundLabel,
   resolveMaxToolIterations,
   shouldWindDown,
+  pickRoundWarning,
 } from '../../shared/tool-loop-cap.js';
 import {
   SOFT_DEADLINE_WIND_DOWN,
@@ -184,6 +185,38 @@ async function* dispatchAndAppend(
 }
 
 /**
+ * Inject an advance remaining-round warning into the OpenAI-compatible message
+ * history when a {@link pickRoundWarning} threshold is crossed.
+ *
+ * Extracted from `runTurnInner` to keep that function under the 200-line
+ * function ceiling. Fires at most once per threshold per turn (idempotent via
+ * `warnState.lastWarnedThreshold`). A no-op when no cap is in effect or no
+ * new threshold is crossed.
+ */
+function injectRoundWarning(
+  priorTurns: import('../messages.js').OpenAIMessage[],
+  round: number,
+  maxIterations: number,
+  warnState: { lastWarnedThreshold: number | undefined },
+): void {
+  const [warnText, newThreshold] = pickRoundWarning(round, maxIterations, warnState.lastWarnedThreshold);
+  if (warnText === null) return;
+  warnState.lastWarnedThreshold = newThreshold;
+  const lastTurn = priorTurns[priorTurns.length - 1];
+  if (lastTurn !== undefined && lastTurn.role === 'tool') {
+    // OpenAI tool-result messages are not text-appendable; inject a follow-up user turn.
+    priorTurns.push({ role: 'user', content: warnText });
+  } else if (lastTurn !== undefined && lastTurn.role === 'user') {
+    const content = lastTurn.content;
+    if (typeof content === 'string') {
+      lastTurn.content = content + '\n\n' + warnText;
+    } else if (Array.isArray(content)) {
+      (content as Array<{ type: string; text: string }>).push({ type: 'text', text: warnText });
+    }
+  }
+}
+
+/**
  * Drive a single user turn through the model + tool loop.
  *
  * This is the body of `OpenAICompatibleQuery._runTurnInner`, extracted here so
@@ -236,6 +269,9 @@ export async function* runTurnInner(
   const softDeadlineMs = ctx.opts.config.softDeadlineMs ?? 0;
   let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
   let round = 0;
+  // Shared mutable state for advance remaining-round warnings (see pickRoundWarning).
+  // One object per turn so each threshold fires exactly once across all rounds.
+  const warnState: { lastWarnedThreshold: number | undefined } = { lastWarnedThreshold: undefined };
   let toolCallCount = 0;
   let droppedToolNames: string[] = [];
 
@@ -315,6 +351,8 @@ export async function* runTurnInner(
         sessionId: ctx.initSessionId,
       };
     }
+
+    injectRoundWarning(ctx.priorTurns, round, maxIterations, warnState);
 
     if (controller.signal.aborted) {
       ctx.abort.clear(controller);

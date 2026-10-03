@@ -41,6 +41,14 @@ import type { AgentConfig } from '../types/config-types.js';
  * partial research results (acceptable — summarize what you have) from
  * knowingly broken code (never acceptable — a partial code result should
  * compile and be coherent with the surrounding system).
+ *
+ * The handoff block instruction enables structured continuation (Scope 2/4):
+ * when the budget is nearly spent and work is incomplete, the model should
+ * emit a machine-readable HANDOFF block so a coordinator can dispatch a
+ * continuation child with accurate remaining-work context. The format is
+ * deliberately conservative — a missing or malformed block is treated as
+ * safely incomplete by the runtime; self-reported completion is never treated
+ * as verified completion by a coordinator.
  */
 export function renderBudgetPreamble(maxRounds: number): string {
   return [
@@ -57,6 +65,13 @@ export function renderBudgetPreamble(maxRounds: number): string {
     'If new evidence has stopped changing your conclusion, stop gathering and answer now.',
     'When writing code, a partial result should be an internally consistent checkpoint --',
     'not knowingly broken, unverified, or incoherent code returned merely to finish early.',
+    '',
+    'If you reach the budget before finishing and a coordinator may continue your work, include',
+    'a structured handoff block in your final answer so the continuation child can resume',
+    'accurately. Omit the block if your work is complete. Format (JSON inside HTML comment):',
+    '<!-- HANDOFF: {"completedWork":"brief summary of what you finished","remainingWork":"precise description of what is left","externalEffectsApplied":["list of writes/commits/API calls that must NOT be replayed"],"workspaceContext":{"cwd":"/path","gitBranch":"branch","headSha":"sha","dirtyCount":0},"roundsConsumed":0} -->',
+    'Fill only fields you can report accurately. A continuation child will revalidate workspace',
+    'state independently before proceeding — the handoff is advisory, not authoritative.',
   ].join('\n');
 }
 
