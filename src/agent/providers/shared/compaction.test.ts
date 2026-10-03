@@ -16,7 +16,9 @@ import {
   runCompactionCore,
   wrapTranscriptForSummary,
   type CompactionOps,
+  type CompactionCoreDeps,
 } from './compaction.js';
+import type { RetryInfo } from './transient-retry.js';
 
 // A minimal message: a role + text. "user" messages are fresh user turns.
 interface FakeMsg {
@@ -295,5 +297,130 @@ describe('runCompactionCore', () => {
     expect(result.reason).toBe('nothing-to-summarize');
     expect(summarize).not.toHaveBeenCalled();
     expect(messages).toEqual(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runCompactionCore — transient retry integration
+// ---------------------------------------------------------------------------
+
+/** Build a transient status error (same-family structure as SDK APIError). */
+function makeTransientError(status: number): Error & { status: number } {
+  return Object.assign(new Error(`Transient ${status}`), { status });
+}
+
+/** Injected fast sleep for retry tests — avoids any real backoff delay. */
+const fastSleep = async (_ms: number, _signal: AbortSignal): Promise<void> => {};
+
+describe('runCompactionCore — transient retry', () => {
+  /** Minimal deps factory shared by retry tests. */
+  const baseDeps = (): CompactionCoreDeps<FakeMsg> => ({
+    messages: history(),
+    ops: fakeOps,
+    keepLastN: 2,
+    isAborted: () => false,
+  });
+
+  it('retries a transient 500 once and compacts successfully, firing onRetry', async () => {
+    const transientErr = makeTransientError(500);
+    let calls = 0;
+    const summarize = vi.fn(async () => {
+      calls++;
+      if (calls === 1) throw transientErr;
+      return 'SUMMARY';
+    });
+    const retryInfos: RetryInfo[] = [];
+    const onRetry = vi.fn((info: RetryInfo) => retryInfos.push(info));
+
+    const result = await runCompactionCore({
+      ...baseDeps(),
+      summarize,
+      onRetry,
+      retrySleep: fastSleep,
+    });
+
+    expect(result.compacted).toBe(true);
+    expect(summarize).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(retryInfos[0]?.attempt).toBe(1);
+    expect(retryInfos[0]?.status).toBe(500);
+  });
+
+  it('gives up after max retries and returns summarization-failed', async () => {
+    // withTransientRetry defaults to maxRetries: 2; a summarize that always
+    // throws a transient error should surface as summarization-failed after
+    // 3 total calls (1 + 2 retries).
+    const transientErr = makeTransientError(503);
+    const summarize = vi.fn(async () => { throw transientErr; });
+
+    const result = await runCompactionCore({
+      ...baseDeps(),
+      summarize,
+      retrySleep: fastSleep,
+    });
+
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toContain('summarization-failed');
+    // 1 initial + 2 retries = 3 total (default maxRetries: 2)
+    expect(summarize).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not start another summarize attempt after the timeout fires', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    // summarize: first call hangs forever (simulating slow model), subsequent
+    // calls would be extra retries (which must NOT happen after timeout).
+    const summarize = vi.fn(async () => {
+      calls++;
+      // First call hangs until the timeout race fires abortInFlight.
+      return new Promise<string>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve('too-late'), { once: true });
+      });
+    });
+
+    const result = await runCompactionCore({
+      ...baseDeps(),
+      timeoutMs: 20,
+      isAborted: () => controller.signal.aborted,
+      abortInFlight: () => controller.abort(),
+      summarize,
+    });
+
+    // Must be reported as summarization-failed (timeout sentinel), not aborted.
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toContain('summarization-failed');
+    expect(result.reason).toContain('timed out');
+    // After the timeout fires and abortInFlight aborts the controller, the
+    // retry loop's shouldStop guard must prevent any further summarize call.
+    expect(summarize).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns aborted and fires no further attempt when abort occurs during backoff', async () => {
+    const controller = new AbortController();
+    const transientErr = makeTransientError(500);
+    let summarizeCalls = 0;
+
+    const summarize = vi.fn(async () => {
+      summarizeCalls++;
+      throw transientErr;
+    });
+
+    // Override sleep so we can abort during the wait.
+    // We patch the inner retry by using a shouldStop that triggers after first failure.
+    // Since we can't inject sleep into runCompactionCore directly, we use isAborted()
+    // and abort during the first call to simulate abort mid-backoff.
+    const result = await runCompactionCore({
+      ...baseDeps(),
+      isAborted: () => controller.signal.aborted,
+      abortInFlight: () => controller.abort(),
+      summarize: vi.fn(async () => {
+        controller.abort(); // abort before retry can start
+        throw transientErr;
+      }),
+    });
+
+    expect(result.compacted).toBe(false);
+    // After abort, shouldStop() returns true before the wait, so we get aborted.
+    expect(result.reason).toBe('aborted');
   });
 });

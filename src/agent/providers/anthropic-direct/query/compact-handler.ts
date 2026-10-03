@@ -56,6 +56,8 @@ import {
 } from '../../shared/auto-compact.js';
 import { autoCompactLimitFor } from '../../../model-limits.js';
 import { emitCompaction } from '../../../trace/emit.js';
+import { traceTransientRetry } from '../../shared/transient-retry.trace.js';
+import { DEFAULT_TRANSIENT_MAX_RETRIES } from '../../shared/transient-retry.js';
 import { resolveModelId } from '../../../session/model-resolution.js';
 import type { AnthropicClientLike } from '../types.js';
 import type { SessionState } from './session-state.js';
@@ -183,6 +185,7 @@ export async function compactHistory(
           tokensSavedEstimate: info.tokensSavedEstimate,
         });
       },
+      onRetry: traceTransientRetry(traceWriter, 'compaction', DEFAULT_TRANSIENT_MAX_RETRIES),
     });
   } finally {
     abort.clear(controller);
