@@ -251,7 +251,6 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
   { path: 'autoRouting.telegram', tier: 'agent', type: 'boolean', description: 'Auto-route model for Telegram.' },
-  { path: 'autoRouting.daemon', tier: 'agent', type: 'boolean', description: 'Auto-route model for the daemon.' },
   { path: 'telegram.notify.mode', tier: 'human', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },

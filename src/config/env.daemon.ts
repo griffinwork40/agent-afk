@@ -161,7 +161,7 @@ export const DAEMON_ENV_REGISTRY = [
   // ── Routing / behavior ────────────────────────────────────────────────────
   {
     name: 'AFK_AUTO_ROUTING',
-    description: 'Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces.',
+    description: 'Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces.',
     type: 'boolean',
     required: false,
     example: 'true',
