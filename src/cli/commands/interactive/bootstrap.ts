@@ -1,3 +1,4 @@
+import { resetResumedPeerContext } from './bootstrap.peer-reset.js';
 import { MemoryStore } from '../../../agent/memory/index.js';
 import { StateStore } from '../../../agent/state/state-store.js';
 import { getStateDatabasePath } from '../../../paths.js';
@@ -293,15 +294,7 @@ export async function bootstrapSession(
         // owned by repl-loop's closure; the setter is wired by runReplLoop
         // before /resume can fire. Optional — early /resume calls before
         // the ledger is wired are a no-op (safe).
-        ctx.clearVerdictLedger?.();
-        // Drop buffered bg-subagent results — a job that settled just before
-        // cancelAll may already sit in the buffer and inject into the next turn.
-        ctx.clearBgResultBuffer?.();
-        // Drop pending Stop-hook injection and re-install the peer boundary
-        // callback on the resumed session (also clears the admission queue so
-        // old-session peer entries are not injected into the new conversation).
-        ctx.clearPendingStopInjection?.();
-        ctx.reinstallPeerBoundary?.();
+        resetResumedPeerContext(ctx, pendingTraceWriter);
         // Re-point every long-lived holder of the outgoing (now sealed) writer
         // at the incoming session's live one. These are built once in
         // createBootstrapInfra and survive the swap, so without this the
