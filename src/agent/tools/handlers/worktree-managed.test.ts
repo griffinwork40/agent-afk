@@ -538,6 +538,10 @@ describe('#2749: concurrent worktree creates — real git repos in tmpdir', () =
     // Clone (the session's working directory).
     cloneDir = mkdtempSync(join(tmpdir(), 'afk-clone-'));
     await realGit(cloneDir, ['clone', upstreamDir, '.']);
+    // Set local git identity so `git commit` works on CI runners that have no
+    // global user.email / user.name configured (GitHub Actions bare runners).
+    await realGit(cloneDir, ['config', 'user.email', 'test@afk.test']);
+    await realGit(cloneDir, ['config', 'user.name', 'AFK Test']);
   });
 
   afterEach(() => {
