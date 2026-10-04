@@ -23,7 +23,6 @@ import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
-import { verbForToolName } from './input/work-derived-verb.js';
 import { CaretBlinkController, DEFAULT_CARET_BLINK_INTERVAL_MS } from './input/caret-blink.js';
 import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
@@ -381,10 +380,11 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;
   /**
-   * Name of the tool currently in flight, or `undefined` when idle. Written only
-   * by {@link setActiveToolName} and read only by the spinner's `workVerb`
-   * provider, so it carries no layout or geometry consequences — the spinner row
-   * already has a variable-width verb.
+   * Pre-resolved work verb for the current in-flight tool wave, or `undefined`
+   * when idle. Written only by {@link setActiveToolName} (which receives the
+   * verb already resolved by {@link InFlightToolTracker.currentVerb}) and read
+   * only by the spinner's `workVerb` provider, so it carries no layout or
+   * geometry consequences — the spinner row already has a variable-width verb.
    */
   private activeToolName: string | undefined;
   /**
@@ -667,10 +667,12 @@ export class TerminalCompositor {
       captureMode: opts.captureMode ?? false,
       goblin: opts.goblinSpinner ?? false,
       onTick: () => this.repaint(),
-      // Pull-based so the spinner reads the live tool during its existing 80ms
+      // Pull-based so the spinner reads the live verb during its existing 80ms
       // tick — no extra timer, no extra repaint path. Returns undefined when no
       // tool is in flight, which routes the spinner back to its flavour pool.
-      workVerb: () => verbForToolName(this.activeToolName),
+      // The verb is pre-resolved by InFlightToolTracker.currentVerb() so no
+      // per-frame tool-name lookup is needed here.
+      workVerb: () => this.activeToolName,
     });
     // Caret blink defaults OFF: enablement (incl. reduced-motion) is resolved
     // by the interactive caller and passed as `caretBlink`, mirroring how the

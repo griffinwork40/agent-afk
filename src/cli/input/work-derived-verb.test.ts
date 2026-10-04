@@ -124,6 +124,98 @@ describe('InFlightToolTracker', () => {
   });
 });
 
+describe('InFlightToolTracker.currentVerb', () => {
+  it('returns undefined while idle', () => {
+    expect(new InFlightToolTracker().currentVerb()).toBeUndefined();
+  });
+
+  it('returns the verb for a single in-flight tool', () => {
+    const t = new InFlightToolTracker();
+    t.start('t1', 'bash');
+    expect(t.currentVerb()).toBe('Running');
+  });
+
+  it('returns undefined once the only tool finishes', () => {
+    const t = new InFlightToolTracker();
+    t.start('t1', 'bash');
+    t.finish('t1');
+    expect(t.currentVerb()).toBeUndefined();
+  });
+
+  it('unanimous verb — all tools share the same verb', () => {
+    // `grep` and `glob` both resolve to "Searching"
+    const t = new InFlightToolTracker();
+    t.start('t1', 'grep');
+    t.start('t2', 'glob');
+    expect(t.currentVerb()).toBe('Searching');
+  });
+
+  it('unanimous verb — all tools share the same verb (different overrides with matching text)', () => {
+    // `read_file` and `list_schedules` both resolve to "Reading"
+    const t = new InFlightToolTracker();
+    t.start('t1', 'read_file');
+    t.start('t2', 'list_schedules');
+    expect(t.currentVerb()).toBe('Reading');
+  });
+
+  it('unanimous category but different verbs — shows category verb', () => {
+    // `bash` → "Running", `test_run` → "Testing", but both are in "shell" category
+    const t = new InFlightToolTracker();
+    t.start('t1', 'bash');
+    t.start('t2', 'test_run');
+    expect(t.currentVerb()).toBe('Running');
+  });
+
+  it('mixed categories — shows "Working" instead of privileging the last-started tool', () => {
+    // `agent` (subagent category) + `wait_for` (planning/other) — the bug case
+    const t = new InFlightToolTracker();
+    t.start('t1', 'agent');
+    t.start('t2', 'wait_for');
+    // Before the fix this returned 'wait_for' (last-started), giving "Waiting…"
+    expect(t.currentVerb()).toBe('Working');
+  });
+
+  it('mixed categories with many tools — still shows "Working"', () => {
+    const t = new InFlightToolTracker();
+    t.start('t1', 'agent');    // subagent
+    t.start('t2', 'read_file'); // read
+    t.start('t3', 'bash');     // shell
+    expect(t.currentVerb()).toBe('Working');
+  });
+
+  it('stays stable as siblings finish in a mixed-category wave', () => {
+    // While any tool remains, the verb must never blank.
+    const t = new InFlightToolTracker();
+    t.start('t1', 'agent');
+    t.start('t2', 'wait_for');
+    expect(t.currentVerb()).toBe('Working');
+    t.finish('t2');
+    // Now only `agent` remains — back to the specific verb.
+    expect(t.currentVerb()).toBe('Delegating');
+    t.finish('t1');
+    expect(t.currentVerb()).toBeUndefined();
+  });
+
+  it('reset() clears the verb', () => {
+    const t = new InFlightToolTracker();
+    t.start('t1', 'bash');
+    t.reset();
+    expect(t.currentVerb()).toBeUndefined();
+  });
+
+  it('never returns a trailing ellipsis', () => {
+    const t = new InFlightToolTracker();
+    for (const tool of ['bash', 'agent', 'read_file', 'wait_for', 'some_unknown_tool']) {
+      t.reset();
+      t.start('t1', tool);
+      const verb = t.currentVerb();
+      if (verb !== undefined) {
+        expect(verb).not.toMatch(/…$/);
+      }
+    }
+  });
+});
+
 describe('noteToolEvent', () => {
   const sinkSpy = () => {
     const seen: Array<string | undefined> = [];
@@ -144,7 +236,9 @@ describe('noteToolEvent', () => {
     expect(sink.seen).toEqual([]);
   });
 
-  it('pushes the tool name on a tool start', () => {
+  it('pushes the resolved verb (not the raw tool name) on a tool start', () => {
+    // The sink receives a pre-resolved verb so the compositor can use it
+    // directly without a second verbForToolName lookup.
     const t = new InFlightToolTracker();
     const sink = sinkSpy();
     const handled = noteToolEvent(
@@ -152,7 +246,18 @@ describe('noteToolEvent', () => {
       t, sink,
     );
     expect(handled).toBe(true);
-    expect(sink.seen).toEqual(['bash']);
+    expect(sink.seen).toEqual(['Running']);
+  });
+
+  it('pushes "Working" when a mixed-category wave is in flight', () => {
+    // The canonical bug case: agent + wait_for should say "Working", not "Waiting".
+    const t = new InFlightToolTracker();
+    const sink = sinkSpy();
+    noteToolEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'a', toolName: 'agent' } }, t, sink);
+    noteToolEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'b', toolName: 'wait_for' } }, t, sink);
+    // First event: only `agent` in flight → "Delegating"
+    // Second event: `agent` + `wait_for` → mixed categories → "Working"
+    expect(sink.seen).toEqual(['Delegating', 'Working']);
   });
 
   it('pushes undefined once the last tool completes', () => {
@@ -160,7 +265,7 @@ describe('noteToolEvent', () => {
     const sink = sinkSpy();
     noteToolEvent({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: 'a', toolName: 'bash' } }, t, sink);
     noteToolEvent({ type: 'chunk', chunk: { type: 'tool_result', toolUseId: 'a' } }, t, sink);
-    expect(sink.seen).toEqual(['bash', undefined]);
+    expect(sink.seen).toEqual(['Running', undefined]);
   });
 
   it('tolerates a sink that does not implement the setter', () => {
