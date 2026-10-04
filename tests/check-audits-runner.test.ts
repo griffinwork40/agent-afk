@@ -1,3 +1,5 @@
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -22,7 +24,6 @@ describe('scripts/check-audits runner', () => {
 
     const originalArgv = process.argv;
     const originalExit = process.exit;
-    const { fileURLToPath } = await import('node:url');
     const scriptPath = fileURLToPath(new URL('../scripts/check-audits.ts', import.meta.url));
     process.argv = [process.execPath, scriptPath];
     process.exit = exitMock as never;
@@ -60,8 +61,9 @@ describe('scripts/check-audits runner', () => {
     expect(result.exitCode).toBe(0);
     expect(spawnSyncMock).toHaveBeenCalled();
     for (const call of spawnSyncMock.mock.calls) {
+      const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
       expect(call[0]).toBe('pnpm');
-      expect(call[2]).toMatchObject({ cwd: expect.stringMatching(/agent-afk|pr2686-fix/), encoding: 'utf8' });
+      expect(call[2]).toMatchObject({ cwd: repoRoot, encoding: 'utf8' });
     }
   });
 
