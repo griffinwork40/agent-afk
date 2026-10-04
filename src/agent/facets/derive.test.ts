@@ -998,6 +998,100 @@ describe('deriveSessionFacet', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // #2795 gap 6: PRs opened by subagents propagate to the parent facet
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: subagent-opened PR detected via subagentBreakdown (#2795 gap 6)', () => {
+    // A /ship subagent runs gh pr create; the parent never touches `gh`.
+    // The subagent breakdown carries detected_pr_url; derive must promote it.
+    const prUrl = 'https://github.com/owner/repo/pull/500';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-subagent',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: '/ship', assistant: 'Done.', timestamp: 1 }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'ship-worker',
+          tool_calls: 5,
+          tool_errors: 0,
+          tool_counts: { bash: 5 },
+          detected_pr_url: prUrl,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: parent-opened PR takes precedence over subagent URL (#2795 gap 6)', () => {
+    // Both parent and subagent detect a PR; parent URL wins.
+    const parentUrl = 'https://github.com/owner/repo/pull/501';
+    const subUrl = 'https://github.com/owner/repo/pull/502';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-both',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{
+          user: '/ship',
+          assistant: 'Done.',
+          timestamp: 1,
+          toolEvents: [{
+            toolName: 'bash',
+            toolUseId: 'parent-pr',
+            input: JSON.stringify({ command: 'gh pr create --fill' }),
+            result: `${parentUrl}\n`,
+            isError: false,
+          }],
+        }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'sub-ship',
+          tool_calls: 3,
+          tool_errors: 0,
+          tool_counts: { bash: 3 },
+          detected_pr_url: subUrl,
+        }],
+      },
+    );
+    // Parent URL should win
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(parentUrl);
+  });
+
+  it('yield_tracking: no subagent PR when detected_pr_url absent from breakdown (#2795 gap 6)', () => {
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-sub-none',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: '/deploy', assistant: 'Done.', timestamp: 1 }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'deploy-worker',
+          tool_calls: 3,
+          tool_errors: 0,
+          tool_counts: { bash: 3 },
+          // no detected_pr_url
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
   // #2834: $() inside double-quoted spans and GH_PR_CREATE_WORD_RE anchoring
   // ---------------------------------------------------------------------------
 

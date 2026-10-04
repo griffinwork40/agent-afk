@@ -31,6 +31,8 @@ import type {
 } from '../types.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { Message } from '../types.js';
+import { dispatchTurnStop } from './turn-stream-runner.stop.js';
+import type { StopWiring } from '../types/session-types.js';
 
 /**
  * Context bag passed to {@link TurnStreamRunner} at construction.
@@ -69,6 +71,12 @@ export interface TurnRunnerDeps {
    * (`PlanTextTracker.observe`); must be synchronous and must not throw.
    */
   observeProviderEvent?: (event: ProviderEvent) => void;
+  /**
+   * The surface's CURRENT Stop wiring, read at every turn end (surfaces wire
+   * after construction). `undefined` means the surface has not opted in and
+   * Stop is not dispatched.
+   */
+  getStopWiring?: () => StopWiring | undefined;
 }
 
 /**
@@ -244,6 +252,21 @@ export class TurnStreamRunner {
             // A completed turn clears a prior error so the seal status
             // reflects the FINAL turn's outcome, not any earlier error.
             this.deps.accounting.clearProviderError();
+
+            // Contract: Stop fires exactly once per top-level turn, from the
+            // session layer, so every surface (REPL, Telegram, daemon/cron,
+            // chat) gets it. It runs BEFORE `done` is yielded, so a surface
+            // never finalizes a turn whose Stop hooks are still running; the
+            // wait is bounded by STOP_HOOK_HANDLER_TIMEOUT_MS. Forks and
+            // un-wired surfaces are no-ops inside dispatchTurnStop.
+            await dispatchTurnStop({
+              config: this.deps.getConfig(),
+              wiring: this.deps.getStopWiring?.(),
+              sessionId: this.deps.getSessionId(),
+              signal: this.deps.getAbortController().signal,
+              conversationHistory: this.deps.conversationHistory,
+              toolEvents: deps._turnToolEvents ?? [],
+            });
           } else if (output.type === 'error') {
             // Terminal-cause flag: a per-turn provider error must flip the
             // eventual clean close from `succeeded` to `failed`.
