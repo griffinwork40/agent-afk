@@ -87,18 +87,50 @@ function hasCorrectionLanguage(text: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * Legacy inline-bold pattern for the backfill path.
+ *
+ * Invariant: this is used ONLY as a fallback in parseSelfReport when
+ * parseTerminalState returns null. Historical transcripts (pre-heading-format
+ * prompt) used inline bold markers anywhere in the text (e.g. "Task complete.
+ * **Done**" or "**Blocked** — needs credentials."). The backfill path must
+ * recognize those transcripts; the live REPL/daemon path should not.
+ */
+const LEGACY_SELF_REPORT_PATTERN =
+  /\*\*(Done|Blocked|Asking|Interrupted)\*\*/i;
+
+/**
  * Parse the assistant's final text for a Done/Blocked/Asking/Interrupted
  * heading and return the matching SelfReport value, or 'none'.
  *
- * Delegates to `parseTerminalState` so that fenced-code-block skipping,
- * tail-anchoring, and heading-format tolerance are all shared with the
- * REPL/daemon verdict surface. The old standalone regex is removed to
- * prevent drift (the prior regex did not skip fenced code blocks).
+ * Strategy: try parseTerminalState first (gets fenced-code-block skipping,
+ * tail-anchoring, and heading-format tolerance). If that returns null, fall
+ * back to the legacy inline-bold pattern so historical transcripts in the
+ * backfill path are still recognized. The fallback is intentionally not
+ * added to parseTerminalState itself — that parser is conservative by design
+ * and must not change semantics for the live REPL/daemon verdict surface.
+ *
+ * History: parseSelfReport previously used only the legacy regex; #2799
+ * rebuilt it on parseTerminalState to prevent drift. The fallback preserves
+ * backward compatibility for the backfill path without reopening the drift
+ * risk for new sessions.
  */
 export function parseSelfReport(assistantText: string): SelfReport {
   const state = parseTerminalState(assistantText);
-  if (state === null) return 'none';
-  return state.kind;
+  if (state !== null) return state.kind;
+
+  // Backfill fallback: recognize legacy inline-bold markers from historical
+  // transcripts where the keyword was embedded in prose rather than on its
+  // own heading line.
+  const m = LEGACY_SELF_REPORT_PATTERN.exec(assistantText);
+  if (m) {
+    const kw = m[1]?.toLowerCase();
+    if (kw === 'done') return 'done';
+    if (kw === 'blocked') return 'blocked';
+    if (kw === 'asking') return 'asking';
+    if (kw === 'interrupted') return 'interrupted';
+  }
+
+  return 'none';
 }
 
 // ---------------------------------------------------------------------------
