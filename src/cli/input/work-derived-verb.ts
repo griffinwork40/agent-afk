@@ -1,45 +1,18 @@
 /**
  * Work-derived spinner verbs.
  *
- * The spinner's verb slot rotates every 3500ms via `Math.random()` over a static
- * pool (`SPINNER_VERBS` in ../constants.ts — "Stalking", "Shadowing", "Tailing").
- * That motion is uncorrelated with the work, so it teaches the operator nothing
- * and actively misleads: "Stalking" rotating to "Gnawing" implies a state change
- * that never happened. Since it is the fastest-moving text on screen during a
- * long turn, it is also the highest-leverage place to put a true signal.
+ * The vocabulary owner is cli/tool-category.ts: delegating to its
+ * `humanVerbForTool` keeps the spinner and tool lane from disagreeing about
+ * the same tool. Only the trailing ellipsis is removed here, since the spinner
+ * appends its own punctuation.
  *
- * This module maps the tool currently in flight to an honest present participle.
- * It returns `undefined` when nothing is running, which is the signal for the
- * caller to fall back to the flavour pool — idle time has no work to describe,
- * and that is where the noir/goblin character belongs.
+ * With no tool in flight this returns `undefined`, allowing the spinner to
+ * rotate noir/goblin flavour words while the model thinks or streams.
  *
  * @module cli/input/work-derived-verb
  */
 
-import { categorizeTool, type ToolCategory } from '../../agent/tool-category.js';
-
-/**
- * Category → verb. Exhaustive over `ToolCategory` (a `Record`, not a `Partial`),
- * so adding a category to the union is a compile error here rather than a silent
- * fall-through to a flavour verb that misdescribes real work.
- *
- * `other` maps to a deliberately vague "Working": it is the catch-all bucket, so
- * a specific claim would risk being wrong.
- */
-const CATEGORY_VERB: Record<ToolCategory, string> = {
-  read: 'Reading',
-  write: 'Editing',
-  shell: 'Running',
-  subagent: 'Delegating',
-  skill: 'Orchestrating',
-  dag: 'Orchestrating',
-  mcp: 'Calling',
-  web: 'Fetching',
-  browser: 'Browsing',
-  planning: 'Planning',
-  schedule: 'Scheduling',
-  other: 'Working',
-};
+import { humanVerbForTool } from '../tool-category.js';
 
 /**
  * The verb for a tool name, or `undefined` when there is no tool to describe.
@@ -50,7 +23,7 @@ const CATEGORY_VERB: Record<ToolCategory, string> = {
  */
 export function verbForToolName(toolName: string | undefined): string | undefined {
   if (!toolName || !toolName.trim()) return undefined;
-  return CATEGORY_VERB[categorizeTool(toolName)];
+  return humanVerbForTool(toolName).replace(/…$/, '');
 }
 
 /**

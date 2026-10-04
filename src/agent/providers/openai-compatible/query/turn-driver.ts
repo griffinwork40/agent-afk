@@ -34,6 +34,7 @@ import { summarizeToolInput } from '../../shared/tool-input-summary.js';
 import { supportsVision } from '../../../model-capabilities.js';
 import { usageFromState, finalizedToolCalls, type StreamState } from '../translate.js';
 import { checkContextOverflow } from './context-overflow.js';
+import { roundContextWindowTokens } from './turn-driver.context-window.js';
 import {
   runIteration,
   finishTurn,
@@ -240,6 +241,7 @@ export async function* runTurnInner(
   };
   let finalAssistantText = '';
   let finalReasoningText = '';
+  let finalReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content';
 
   const maxIterations = resolveMaxToolIterations(ctx.opts.config.maxToolUseIterations);
   const softDeadlineMs = ctx.opts.config.softDeadlineMs ?? 0;
@@ -267,13 +269,13 @@ export async function* runTurnInner(
     const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
     const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
     accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-    // Context-window footprint: OpenAI's prompt_tokens already includes cached
-    // tokens, so window = input + output (not cumulative across rounds).
-    accumulatedUsage.contextWindowTokens =
-      (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
+    // Context-window footprint for this round; carries the last known value
+    // forward (never 0) when the round had no usage. See the helper's Contract.
+    accumulatedUsage.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
     ctx.lastUsage = accumulatedUsage;
     if (result.text.length > 0) finalAssistantText = result.text;
     finalReasoningText = result.state.reasoningText;
+    finalReasoningField = result.state.reasoningField;
 
     if (!result.needsToolDispatch) {
       if (isTruncationStopReason(result.state.finishReason)) {
@@ -341,14 +343,16 @@ export async function* runTurnInner(
 
   ctx.abort.clear(controller);
 
-  // Push the final assistant turn to history.
+  // Push the final assistant turn to history. Echo reasoning under the same
+  // wire field it arrived in (Cerebras uses `reasoning`; DeepSeek uses
+  // `reasoning_content`) so the next request is not rejected with HTTP 400.
   if (finalAssistantText.length > 0) {
     const assistantTurn: OpenAIMessage = {
       role: 'assistant',
       content: finalAssistantText,
     };
     if (finalReasoningText.length > 0) {
-      assistantTurn.reasoning_content = finalReasoningText;
+      assistantTurn[finalReasoningField] = finalReasoningText;
     }
     ctx.priorTurns.push(assistantTurn);
   }

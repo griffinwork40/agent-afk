@@ -52,11 +52,8 @@ function groupedResultSuffix(
   }
 
   if (completed.length > 0) {
-    // Pass tailWidth so hidden-line and tail-preview budgets respect the actual
-    // terminal width rather than falling back to the maxPreview constant (60).
-    // Continuation lines are stripped by the replace below (grouped summaries
-    // are always single-line), but the budget still governs how each entry is
-    // formatted before the strip — matching the single-entry pushOutcomeRows path.
+    // tailWidth governs continuation-row budgets; continuation lines are then
+    // stripped below since grouped summaries are always single-line.
     const tailWidth = outcomeTailWidth(cols, '   ');
     const outcomes = completed.map((entry) =>
       formatOutcome(entry.result!, homeDir, 60, entry.toolName, tailWidth).replace(/\n[\s\S]*/u, '…'),

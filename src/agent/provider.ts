@@ -22,6 +22,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
+import type { UsageLimitProvider } from '../utils/errors.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -369,6 +370,26 @@ export type ProviderEvent =
        * (auto-resume → "no need to retype"; manual → "send the message again").
        */
       autoResume?: boolean;
+      /**
+       * Absolute wall-clock deadline by which this park will end (either by
+       * resuming or by surfacing the error). Present when the provider has
+       * bounded the park (e.g. the hot-swap wait loop capped at TWO_HOURS_MS).
+       * Absent for unbounded parks. The watchdog and pause-ceiling prefer this
+       * over `resetsAt` when present, because `resetsAt` may be days away (a
+       * far-reset park) while `waitDeadline` is always the actual exit time.
+       * MUST NOT be used by UI layers to show "resumes at X" copy — that role
+       * belongs to `resetsAt`. Use only for timeout arithmetic.
+       */
+      waitDeadline?: Date;
+      /**
+       * Which subscription hit its limit. `'anthropic'` = Claude, `'codex'` =
+       * the ChatGPT/Codex subscription backend. Absent means unknown (a
+       * generic OpenAI-compatible quota 429); UI layers treat absent as the
+       * legacy Claude copy for backward compatibility.
+       */
+      provider?: UsageLimitProvider;
+      /** Subscription plan label when the provider reports one (e.g. `plus`). */
+      plan?: string;
     }
   | {
       type: 'resumed';

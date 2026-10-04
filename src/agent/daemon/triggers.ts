@@ -29,7 +29,7 @@ export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 export type TaskExecutor = 'agent' | 'shell' | 'builtin';
 
 /** Known builtin task names that `executor: 'builtin'` can dispatch to. */
-export const KNOWN_BUILTINS = ['worktree-prune'] as const;
+export const KNOWN_BUILTINS = ['worktree-prune', 'tool-health'] as const;
 export type BuiltinTaskName = (typeof KNOWN_BUILTINS)[number];
 
 export interface ScheduledTask {

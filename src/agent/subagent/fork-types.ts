@@ -162,6 +162,19 @@ export interface ForkSubagentOptions<T = unknown> {
    * for the canonical allowlist.
    */
   phaseRole?: PhaseRole;
+  /**
+   * The nested-dispatch allowlist for the child this fork creates. Derived from
+   * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` and threaded here so
+   * `assembleChildConfig` can surface it in the identity preamble. When present,
+   * the preamble tells the child which `agent_type` values it may dispatch.
+   *
+   * Invariant: this value MUST equal what `SubagentExecutorContext.nestedAgentAllowlist`
+   * is set to for the child's executor (child-config.ts). Text and enforcement
+   * derive from one value. See identity-preamble.ts `SubagentIdentityFacts.nestedAgentAllowlist`.
+   *
+   * Undefined = unscoped (no restriction emitted). Empty array = deny-all.
+   */
+  nestedAgentAllowlist?: readonly string[];
 }
 
 export interface SubagentManagerOptions {

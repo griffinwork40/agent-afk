@@ -51,11 +51,6 @@ import { configureColor } from './color-config.js';
 import { env } from '../config/env.js';
 import { applyTheme, resolveTheme, parseThemeMode } from './theme.js';
 configureColor();
-// Emit a one-time deprecation notice when AFK_CAPTURE_SUBAGENT_PROMPTS or
-// AFK_CAPTURE_SUBAGENT_OUTPUT is still in the operator's environment.
-// These flags were retired in #2460 in favour of subagent journals.
-import { warnDeprecatedCaptureFlags } from '../config/deprecated-capture-flags.js';
-warnDeprecatedCaptureFlags();
 // Apply the color theme (dark | light | umber | auto) before any command registers
 // or renders. This sets the env/default baseline for EVERY surface (chat,
 // daemon, telegram banners); the interactive/chat bootstraps refine it with
@@ -65,6 +60,7 @@ applyTheme(resolveTheme(parseThemeMode(env.AFK_THEME)));
 import { registerChatCommand } from './commands/chat.js';
 import { registerInteractiveCommand } from './commands/interactive.js';
 import { registerStatusCommand } from './commands/status.js';
+import { registerUsageCommand } from './commands/usage.js';
 import { registerConfigCommand } from './commands/config-command.js';
 import { registerDaemonCommand } from './commands/daemon.js';
 import { registerWebCommand } from './commands/web.js';
@@ -139,6 +135,7 @@ registerLoginCommand(program);
 registerPluginCommand(program);
 registerMarketplaceCommand(program);
 registerStatusCommand(program);
+registerUsageCommand(program);
 registerDoctorCommand(program);
 registerMigrateCommand(program);
 registerProviderCommand(program);

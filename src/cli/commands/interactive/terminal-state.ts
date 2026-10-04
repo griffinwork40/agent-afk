@@ -1,13 +1,10 @@
 /**
  * Terminal-state parser — cli re-export shim.
  *
- * AFK's system prompt mandates that every assistant turn end in one of four
- * named terminal states — Done / Blocked / Asking / Interrupted — with a
- * structured set of bullets describing the outcome (per `system-prompt.md`,
- * §"End-of-turn"). The parser extracts that structure from the trailing
- * portion of the assistant's final text so the REPL can render it as a
- * first-class verdict surface instead of leaving it buried in the markdown
- * stream.
+ * The canonical implementation now lives at
+ * `src/agent/outcomes/terminal-state.ts` so `derive.ts` (which must not
+ * import `src/cli/`) can call the same parser. All existing importers of this
+ * path continue to work unchanged — the public API is byte-identical.
  *
  * The pure implementation lives in `src/agent/terminal-state.ts` so the
  * session layer and daemon can use it without importing from the cli layer

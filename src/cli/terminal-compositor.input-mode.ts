@@ -81,6 +81,15 @@ export interface InputModeHost {
 
   /** Submission handler — may be absent (legacy getBuffer() path). */
   readonly onSubmit?: (payload: SubmissionPayload) => void;
+
+  /**
+   * Fired at the top of every `setInputMode` call that changes the mode,
+   * before `prev` is read. Optional — set via the compositor's
+   * `setOnInputModeTransition` API. Used to close any open
+   * bash-output-viewer (whose `exitPickerMode` restores the saved mode)
+   * so `enterPickerMode` does not throw on the next overlay.
+   */
+  onInputModeTransition?: () => void;
 }
 
 /**
@@ -171,6 +180,13 @@ export function repaintPicker(self: InputModeHost): void {
  * queued message would be stranded until the user pressed Enter again.
  */
 export function setInputMode(self: InputModeHost, mode: CompositorInputMode): void {
+  // Invariant: the transition hook runs BEFORE `prev` is read. An open
+  // output viewer closes here via exitPickerMode(), which writes
+  // `inputMode = pickerSavedMode`; reading `prev` afterwards means the
+  // branches below see the logical pre-viewer mode (so idle → streaming
+  // still resets the once-only guards, and → idle still flushes the queue),
+  // and the `inputMode = mode` write below cannot be clobbered by it.
+  if (mode !== self.inputMode) self.onInputModeTransition?.();
   const prev = self.inputMode;
   self.inputMode = mode;
   // idle → streaming: clear the once-only canceled/backgrounded/softStopped

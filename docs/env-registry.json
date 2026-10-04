@@ -11,7 +11,7 @@
     },
     {
       "name": "AFK_AUTO_ROUTING",
-      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces.",
+      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces.",
       "type": "boolean",
       "required": false,
       "example": "true",
@@ -149,6 +149,24 @@
       "required": false,
       "example": "/Users/me/Projects/afk-companion/PRIMER.md",
       "category": "paths"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_GATE_DISABLED",
+      "description": "Set to 1 to disable the subscription-usage budget gate for daemon/cron agent tasks. When unset (default) the daemon checks Claude subscription utilization before starting each agent task and skips the run if any window is at or above AFK_DAEMON_BUDGET_SKIP_PCT. Shell and builtin tasks are never gated regardless of this setting.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_SKIP_PCT",
+      "description": "Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window's utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the gate entirely (no usage fetch is made and every task passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).",
+      "type": "number",
+      "required": false,
+      "default": "90",
+      "example": "80",
+      "category": "daemon"
     },
     {
       "name": "AFK_DAEMON_CWD",
@@ -707,6 +725,24 @@
       "category": "model"
     },
     {
+      "name": "AFK_PEER_INBOUND",
+      "description": "How this REPL session handles incoming peer messages. 'accept' (default) delivers messages to the model at the next idle turn. 'hold' writes them to held/ for /inbox review. 'off' ignores incoming messages. Invalid values fall back to 'accept' with a one-time warning emitted via debugLog (visible under AFK_DEBUG=1).",
+      "type": "string",
+      "required": false,
+      "default": "accept",
+      "example": "hold",
+      "category": "misc"
+    },
+    {
+      "name": "AFK_PEER_POLL_MS",
+      "description": "Polling interval in milliseconds for the peer inbox notifier when fs.watch is unavailable or unreliable. Default 1000.",
+      "type": "number",
+      "required": false,
+      "default": "1000",
+      "example": "2000",
+      "category": "misc"
+    },
+    {
       "name": "AFK_PLAIN_OUTPUT",
       "description": "Force the interactive REPL to fully behave like a non-TTY surface for rendering purposes, even when stdout/stdin ARE a TTY: append-only plain-stdout output instead of the TerminalCompositor live overlay (both the persistent between-turn compositor AND the per-turn StreamRenderer overlay), AND the input surface downgrades to the simple non-TTY line reader instead of the fancy compositor-backed input box. Same code path already used for non-TTY surfaces (pipes, CI). Full opt-out escape hatch for tmux/SSH/multiplexer sessions where cursor-up redraws and DECSTBM scroll regions misbehave — trades the live overlay and fancy input UX for reliability. Opt-in — default TTY behavior (live overlay + fancy input) is unchanged unless this var is set. Truthy values: 1, true (case-insensitive).",
       "type": "boolean",
@@ -824,6 +860,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SESSION_TMPDIR_DISABLE",
+      "description": "Disable per-session private temp dirs. By default every session and subagent gets its own directory under <os tmpdir>/afk-<uid>/ (removed on close) injected as TMPDIR/TMP/TEMP into bash and test_run child processes, so one session cleaning its temp files cannot delete a concurrent session's. Set to 1 to share the inherited TMPDIR instead.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "process"
+    },
+    {
       "name": "AFK_SESSIONSTART_COOLDOWN_MS",
       "description": "Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.",
       "type": "number",
@@ -901,6 +945,15 @@
       "default": "0",
       "example": "16",
       "category": "display"
+    },
+    {
+      "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
+      "description": "When set to 1/true, forked sub-agents that hit an OAuth usage-limit 429 will park and wait (up to 2 hours) for a keychain account hot-swap before surfacing the error — the same behaviour as top-level interactive sessions. When false (the default), forks fail fast so the parent session can decide how to recover. Ignored for daemon-surface sessions, because no human can switch accounts there. Callers may override per-fork via config.autoResumeOnUsageLimit; an explicit value always wins over this env var.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_SUBAGENT_IDLE_TIMEOUT_MS",
@@ -1113,6 +1166,13 @@
       "category": "model"
     },
     {
+      "name": "AFK_TOOL_HEALTH_DISABLE",
+      "description": "Disable the tool-health daemon builtin entirely. Set to \"1\" to skip registration.",
+      "type": "boolean",
+      "required": false,
+      "category": "daemon"
+    },
+    {
       "name": "AFK_TRACE_DISABLED",
       "description": "Disable the agent trace subsystem entirely. Set to 1 to skip trace file writes.",
       "type": "boolean",
@@ -1127,6 +1187,15 @@
       "required": false,
       "example": "0",
       "category": "misc"
+    },
+    {
+      "name": "AFK_USAGE_LEDGER_DISABLED",
+      "description": "Set to 1 to stop publishing/reading the cross-process usage ledger (namespace `usage` in state/kv/kv.db). Usage surfaces (`afk usage`, get_runtime_state, fan-out notice, daemon budget gate) then see only this process's in-memory quota cache. Default 0 (ledger active).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_USER_CARD_MAX_ROWS",
@@ -1608,10 +1677,18 @@
     },
     {
       "name": "TMUX",
-      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment; for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
+      "description": "OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env.",
       "type": "string",
       "required": false,
       "example": "/tmp/tmux-501/default,12345,0",
+      "category": "process"
+    },
+    {
+      "name": "TMUX_PANE",
+      "description": "tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label.",
+      "type": "string",
+      "required": false,
+      "example": "%0",
       "category": "process"
     },
     {

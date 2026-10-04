@@ -168,8 +168,8 @@ export class SpinnerController {
     // Two triggers for a re-pick: the flavour rotation window elapsing, and the
     // work-derived verb disagreeing with what is displayed. The second keeps the
     // verb honest without waiting out a rotation — and is self-throttling,
-    // because the provider reports a tool CATEGORY, so a burst of reads yields
-    // one stable "Reading" rather than a flicker of new words.
+    // because the provider resolves a tool verb, so tools sharing the same verb
+    // yield one stable label rather than a flicker of new words.
     const derived = (() => {
       try {
         return this.workVerb?.();

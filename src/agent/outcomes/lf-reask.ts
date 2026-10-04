@@ -93,7 +93,7 @@ export function promptFingerprint(text: string): string[] {
     .match(/[a-z0-9]+/g) ?? [];
   const seen = new Set<string>();
   for (const t of tokens) {
-    if (t.length >= 2 && !STOP_WORDS.has(t)) {
+    if (t.length >= 2 && !STOP_WORDS.has(t) && !seen.has(t)) {
       seen.add(t);
     }
   }

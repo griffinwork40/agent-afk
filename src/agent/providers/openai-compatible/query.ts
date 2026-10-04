@@ -519,5 +519,3 @@ export class OpenAICompatibleQuery implements ProviderQuery, TurnDriverContext, 
     debugLog(`🟢 ${PROVIDER_NAME}: closed`);
   }
 }
-
-

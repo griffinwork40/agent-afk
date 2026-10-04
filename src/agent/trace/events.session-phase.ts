@@ -77,6 +77,16 @@ export const SessionPhaseNameSchema = z.enum([
   // normally. `metadata` carries `cap` (the configured ceiling). See
   // SessionPhaseName JSDoc in types.ts.
   'stop_hook_cap_reached',
+  // Mid-stream transport drop accepted as clean completion (#2780).
+  // See SessionPhaseName JSDoc in types.ts for the full contract.
+  'stream_accepted_after_drop',
+  // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry',
+  'usage_notice',
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  'tool_degraded',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

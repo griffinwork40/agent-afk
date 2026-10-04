@@ -26,6 +26,8 @@ export interface RunTurnInput {
   effort?: import('../../types/sdk-types.js').EffortLevel;
   /** Sampling temperature forwarded to `messages.create`. Omit for server default. */
   temperature?: number;
+  /** Allows Fable 5.1 prefix-bound thinking blocks to be dropped instead of 400ing. */
+  thinkingBlockBinding?: { prefix_mismatch_behavior: 'drop_block' };
   /** Effective Fast decision captured once at turn start. */
   fastMode?: boolean;
   baseUrl?: string;
@@ -98,7 +100,8 @@ export interface AnthropicMessagesCreateParams {
   messages: MessageParam[];
   system?: ContentBlockParam[] | string;
   tools?: WireToolDef[];
-  thinking?: ThinkingConfigParam;
+  /** Thinking config, optionally augmented with the Fable 5.1 prefix-binding control. */
+  thinking?: ThinkingConfigParam & { block_binding?: { prefix_mismatch_behavior: 'drop_block' } };
   output_config?: { effort?: import('../../types/sdk-types.js').EffortLevel };
   temperature?: number;
   speed?: 'fast';

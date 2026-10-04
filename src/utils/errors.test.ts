@@ -6,6 +6,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   errorMessage,
+  isEgressBlocked,
+  extractEgressBlockedError,
+  fetchFailedMessage,
   AbortError,
   TimeoutError,
   IdleWatchdogError,
@@ -298,5 +301,53 @@ describe('UnsupportedProviderConfigError', () => {
   it('default message matches the documented format', () => {
     const err = new UnsupportedProviderConfigError('myProvider', 'myField');
     expect(err.message).toBe('myProvider provider does not support AgentConfig.myField.');
+  });
+});
+
+describe('egress-blocked unwrapping + fetchFailedMessage', () => {
+  function blockedError(): Error {
+    const e = new Error('refusing to connect to x (resolved)');
+    e.name = 'EgressBlockedError';
+    return e;
+  }
+
+  it('detects a top-level EgressBlockedError', () => {
+    const e = blockedError();
+    expect(isEgressBlocked(e)).toBe(true);
+    expect(extractEgressBlockedError(e)).toBe(e);
+  });
+
+  it('unwraps an EgressBlockedError wrapped as undici fetch-failed cause', () => {
+    const inner = blockedError();
+    const outer = new TypeError('fetch failed', { cause: inner });
+    expect(isEgressBlocked(outer)).toBe(true);
+    expect(extractEgressBlockedError(outer)).toBe(inner);
+  });
+
+  it('returns null / false for unrelated errors and non-errors', () => {
+    const outer = new TypeError('fetch failed', { cause: new Error('boom') });
+    expect(isEgressBlocked(outer)).toBe(false);
+    expect(extractEgressBlockedError(outer)).toBeNull();
+    expect(extractEgressBlockedError('nope')).toBeNull();
+  });
+
+  it('formats fetch failed with cause code and message', () => {
+    const cause = Object.assign(new Error('Invalid IP address: undefined'), {
+      code: 'ERR_INVALID_IP_ADDRESS',
+    });
+    const outer = new TypeError('fetch failed', { cause });
+    expect(fetchFailedMessage(outer)).toBe(
+      'fetch failed (ERR_INVALID_IP_ADDRESS: Invalid IP address: undefined)',
+    );
+  });
+
+  it('formats fetch failed with cause message when no code is present', () => {
+    const outer = new TypeError('fetch failed', { cause: new Error('socket hang up') });
+    expect(fetchFailedMessage(outer)).toBe('fetch failed (socket hang up)');
+  });
+
+  it('passes through other messages and non-errors', () => {
+    expect(fetchFailedMessage(new Error('HTTP 500'))).toBe('HTTP 500');
+    expect(fetchFailedMessage('raw')).toBe('raw');
   });
 });

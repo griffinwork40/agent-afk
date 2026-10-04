@@ -125,6 +125,15 @@ export class TerminalCompositor {
   /** Per-read single-Escape override for cancellable borrowed idle prompts. */
   onIdleEscape?: () => void;
   /**
+   * Fired at the top of every `setInputMode` call that changes the mode,
+   * before the previous mode is read. Installed via
+   * {@link setOnInputModeTransition}; used by the bash-output-viewer to close
+   * itself (restoring the saved mode) before the transition proceeds, so a
+   * subsequent `enterPickerMode` cannot throw.
+   * @internal Relaxed from `private` for the input-mode module (InputModeHost).
+   */
+  onInputModeTransition?: () => void;
+  /**
    * Timestamp (ms) of the last Escape at an empty idle prompt, for double-tap
    * detection in `handleEscape`. 0 = disarmed.
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
@@ -149,6 +158,13 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   onOpenEditor?: () => void;
+  /**
+   * Ctrl+G "open bash output viewer" handler — see
+   * {@link TerminalCompositorOptions.onOpenOutputViewer}. Installed once at
+   * REPL arm time; absent on surfaces without a ToolLane.
+   * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
+   */
+  onOpenOutputViewer?: () => void;
   /**
    * Resolved prompt accessor. Always a function — strings supplied at
    * construction are wrapped in a constant-returning closure so the
@@ -524,6 +540,12 @@ export class TerminalCompositor {
   // clearCommittedBand() and (transitively) resetState().
   /** @internal Relaxed from `private` for the committed-band module (CommittedBandHost). */
   committedBandPaintedRows = 0;
+  // Content-hug archive-and-retain: count of LEADING committedBand rows already
+  // in native scrollback (kept so a shrink can re-show them). Always 0 in
+  // bottom-pinned mode; 0 <= value <= committedBand.length. Reset with the band.
+  // Invariant + helpers: terminal-compositor.band-archived-prefix.ts.
+  /** @internal Relaxed from `private` for the committed-band + frame + lifecycle modules. */
+  committedBandArchivedPrefix = 0;
   // Memoization for terminal-compositor.band-reflow.ts's reflowCommittedBandToWidth:
   // records the (band-reference, paintedRows, width) triple the LAST reflow call
   // produced, so a steady-width repeat repaint (no commit, no resize since) skips
@@ -624,6 +646,7 @@ export class TerminalCompositor {
     this.onShiftTab = opts.onShiftTab;
     this.onTaskView = opts.onTaskView;
     this.onOpenEditor = opts.onOpenEditor;
+    this.onOpenOutputViewer = opts.onOpenOutputViewer;
     // Normalize promptText to a buffer-aware function: string → constant
     // closure; function → use as-is; falsy → dim-chevron fallback.
     const promptOpt = opts.promptText;
@@ -758,6 +781,13 @@ export class TerminalCompositor {
   setOnRewindRequest(handler: (() => void) | null): void { Api.setOnRewindRequest(this, handler); }
 
   setOnIdleEscape(handler: (() => void) | null): void { Api.setOnIdleEscape(this, handler); }
+
+  /**
+   * Install or clear the input-mode transition handler — see
+   * {@link onInputModeTransition}. Installed by the Ctrl+G output-viewer
+   * callback on each open, to close that viewer on the next mode change.
+   */
+  setOnInputModeTransition(handler: (() => void) | null): void { Api.setOnInputModeTransition(this, handler); }
 
   /**
    * Install or clear the Ctrl+O "open $EDITOR" handler — see

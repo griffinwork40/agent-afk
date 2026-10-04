@@ -1,9 +1,10 @@
+import { mergeAgentLabel } from './tool-lane.labels.js';
+import { formatSkillIdentity, type SkillIdentity } from '../../_lib/skill-identity-format.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
 import type { DiffPayload } from '../../../utils/diff.js';
 import { stripAnsi } from '../../display.js';
-import { ELAPSED_GRACE_MS } from '../../terminal-compositor.scrollback.js';
 import {
   formatAgentSummary,
   formatAgentHeader,
@@ -24,6 +25,7 @@ import {
   propagateChildFailure as propagateChildFailureIn,
 } from './tool-lane.ancestry.js';
 import { scrollbackSeparator } from './tool-lane.scrollback-separator.js';
+import { elapsedDisplayNeedsUpdate } from './tool-lane.elapsed-check.js';
 
 // Re-export types from render module for consumers
 export type { ToolEntry, TextEntry, Entry };
@@ -86,6 +88,17 @@ export class ToolLane {
    * `null` on non-TTY surfaces (no overlay to repaint) and in tests.
    */
   flash: ToolLaneFlash | null = null;
+
+  /**
+   * The most recent `capturePath` from any bash tool result with a captured
+   * output file. Updated in {@link addResult} when `chunk.capturePath` is
+   * present. Used by the Ctrl+G viewer to open the last capture without
+   * requiring the user to know the exact file path.
+   */
+  private lastCapturePath: string | undefined = undefined;
+
+  /** Return the most recent bash capture path, or `undefined` if none. */
+  getLastCapturePath(): string | undefined { return this.lastCapturePath; }
 
   /**
    * Optional AFK_SMOKE_TEXT whole-element fade for live rows. Set by
@@ -159,36 +172,19 @@ export class ToolLane {
     this.order.push(toolUseId);
   }
 
-  /**
-   * Mutate an existing `agent`/`Task` ToolEntry to display as `Agent(<label>)`.
-   * Returns `true` if the entry was found, is a tool entry, belongs to
-   * SUBAGENT_TOOLS, and has NOT already been merged (toolName !== 'Agent').
-   * Returns `false` otherwise. Callers use the return value as a merge-happened
-   * guard to decide whether to create a synthetic child entry.
-   *
-   * Invariants: toolUseId key, agentContext, and agentIdStack are all
-   * unchanged. Only toolName, toolInput, and prefix are mutated.
-   */
   mergeAgentLabel(parentToolUseId: string, label: string, maxWidth?: number): boolean {
-    const entry = this.entries.get(parentToolUseId);
-    if (entry?.kind !== 'tool') return false;
-    if (!SUBAGENT_TOOLS.has(entry.toolName)) return false;
-    if (entry.toolName === 'Agent') return false; // already merged — prevent grandchild overwrite
-    // Same rationale as addStart / addStartWithAgentContext: strip ANSI at
-    // storage time so LLM-emitted escapes in the subagent label can't reach
-    // palette.dim() on any downstream render surface (overlay or flush).
-    const safeLabel = stripAnsi(label);
-    const input = `(${safeLabel})`;
-    entry.toolName = 'Agent';
-    entry.toolInput = input;
-    entry.prefix = formatToolLine('Agent' + input, maxWidth);
-    return true;
+    return mergeAgentLabel(this.entries, parentToolUseId, label, maxWidth);
   }
 
-  /**
-   * Update an existing tool entry's `agentContext`. No-op if the entry
-   * doesn't exist or is a text entry.
-   */
+  /** Update display only; never mutate the actual tool invocation. */
+  setSkillIdentity(toolUseId: string, identity: SkillIdentity): void {
+    const entry = this.entries.get(toolUseId);
+    if (entry?.kind !== 'tool' || !SKILL_TOOLS.has(entry.toolName)) return;
+    entry.toolInput = `(${formatSkillIdentity(identity, 240)})`;
+    entry.prefix = formatToolLine(entry.toolName + entry.toolInput);
+  }
+
+  /** Update an existing entry's nesting, without changing its identity. */
   setAgentContext(toolUseId: string, agentContext: string | undefined): void {
     const entry = this.entries.get(toolUseId);
     if (entry?.kind === 'tool') {
@@ -280,6 +276,8 @@ export class ToolLane {
     if (this.agentIdStack.at(-1) === toolUseId) {
       this.agentIdStack.pop();
     }
+    // Track the most recent bash capture path for the Ctrl+G viewer (#1505).
+    if (chunk.capturePath !== undefined) this.lastCapturePath = chunk.capturePath;
     // Deliberately does NOT touch `activeTools`. The dispatcher is the only
     // observer of what is actually running and pushes a fresh snapshot on every
     // start and settle (see notifyToolActivity), so inferring the live set from
@@ -405,28 +403,7 @@ export class ToolLane {
    * nothing to repaint until the grace period expires.
    */
   checkElapsedDisplayNeedsUpdate(): boolean {
-    const now = Date.now();
-    let changed = false;
-    // Prune tracking entries for IDs that are no longer in-flight.
-    for (const id of this.lastElapsedSecond.keys()) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) {
-        this.lastElapsedSecond.delete(id);
-      }
-    }
-    for (const id of this.order) {
-      const entry = this.entries.get(id);
-      if (!entry || entry.kind !== 'tool' || entry.result !== undefined) continue;
-      const elapsedMs = now - entry.startedAt;
-      if (elapsedMs < ELAPSED_GRACE_MS) continue; // within grace period — display is ''
-      const currentSec = Math.floor(elapsedMs / 1000);
-      const lastSec = this.lastElapsedSecond.get(id);
-      if (lastSec === undefined || currentSec !== lastSec) {
-        this.lastElapsedSecond.set(id, currentSec);
-        changed = true;
-      }
-    }
-    return changed;
+    return elapsedDisplayNeedsUpdate(this.entries, this.order, this.lastElapsedSecond);
   }
 
   hasPending(): boolean {

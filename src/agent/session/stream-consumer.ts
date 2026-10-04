@@ -221,6 +221,19 @@ function buildToolOutputEvent(
   };
 }
 
+/** Map a provider `paused` event to the output-layer `paused` shape. */
+function mapPausedEvent(event: Extract<ProviderEvent, { type: 'paused' }>): Extract<OutputEvent, { type: 'paused' }> {
+  return {
+    type: 'paused', reason: event.reason,
+    ...(event.resetsAt !== undefined && { resetsAt: event.resetsAt }),
+    ...(event.accountId !== undefined && { accountId: event.accountId }),
+    ...(event.autoResume !== undefined && { autoResume: event.autoResume }),
+    ...(event.waitDeadline !== undefined && { waitDeadline: event.waitDeadline }),
+    ...(event.provider !== undefined && { provider: event.provider }),
+    ...(event.plan !== undefined && { plan: event.plan }),
+  };
+}
+
 /**
  * Transform a single `ProviderEvent` into an `OutputEvent` (or null for
  * events that don't produce user-visible output like `session.status`).
@@ -433,13 +446,7 @@ export function transformProviderEvent(
       return { type: 'error', error: event.error };
 
     case 'paused':
-      return {
-        type: 'paused',
-        reason: event.reason,
-        ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
-        ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
-        ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
-      };
+      return mapPausedEvent(event);
 
     case 'resumed':
       return {
