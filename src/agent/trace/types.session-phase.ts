@@ -206,7 +206,14 @@ export type SessionPhaseName =
   // (≥100%) usage. PURE OBSERVABILITY — no blocking, no routing change.
   // `metadata` carries `level` ('warn'|'over'), `pct` (0–100), `windowLabel`
   // ('5h window'|'7d window'), and optionally `resetsAtMs` (epoch ms).
-  | 'usage_notice';
+  | 'usage_notice'
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) pair per session when >= 90% of the last 10 calls to
+  // a given tool fail with the same error. PURE OBSERVABILITY — never alters
+  // dispatch or isError. A later daemon builtin (PR 3) counts these across
+  // sessions and pushes a Telegram alert.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  | 'tool_degraded';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

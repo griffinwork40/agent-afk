@@ -76,6 +76,14 @@ export const DAEMON_ENV_REGISTRY = [
     required: false,
     category: 'daemon',
   },
+  {
+    name: 'AFK_TOOL_HEALTH_DISABLE',
+    description:
+      'Disable the tool-health daemon builtin entirely. Set to "1" to skip registration.',
+    type: 'boolean',
+    required: false,
+    category: 'daemon',
+  },
 
   // ── Web UI (`afk web`) ────────────────────────────────────────────────────
   {
