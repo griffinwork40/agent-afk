@@ -11,6 +11,15 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.292.3] - 2026-10-04
+
+### Added
+- per-session and per-subagent private TMPDIR for spawned shells (#2747) (824f383d)
+
+### Fixed
+- settle post-detach deliver() on bounded timer when close never arrives (#2743) (7366139d)
+- newest explicit feedback vote wins (#2751) (00ccaa24)
+
 ## [5.292.2] - 2026-10-04
 
 ### Fixed
