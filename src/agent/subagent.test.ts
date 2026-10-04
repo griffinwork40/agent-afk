@@ -622,6 +622,111 @@ describe('SubagentManager', () => {
     });
   });
 
+  // #2844: parentCredential option — key + sourceModel paired atomically
+  describe('parentCredential option (#2844)', () => {
+    it('parentCredential: Anthropic key + Anthropic sourceModel flows to Anthropic child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        parentCredential: { key: 'sk-ant-oat01-PAIRED', sourceModel: 'claude-sonnet-4-5' },
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'paired-check',
+        agentType: 'paired-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-ant-oat01-PAIRED' }),
+      );
+    });
+
+    it('parentCredential: Anthropic key + Anthropic sourceModel does NOT flow to OpenAI child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        parentCredential: { key: 'sk-ant-oat01-PAIRED', sourceModel: 'claude-sonnet-4-5' },
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'paired-leak-check',
+        agentType: 'paired-leak-check',
+      });
+      const cfg = shared.lastConfig as Record<string, unknown>;
+      expect(cfg['apiKey']).toBeUndefined();
+      expect(cfg['apiKey']).not.toBe('sk-ant-oat01-PAIRED');
+    });
+
+    it('parentCredential: OpenAI key + OpenAI sourceModel flows to OpenAI child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        parentCredential: { key: 'sk-proj-PAIRED', sourceModel: 'gpt-5.5' },
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'gpt-5.5' },
+        idPrefix: 'paired-openai-check',
+        agentType: 'paired-openai-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-proj-PAIRED' }),
+      );
+    });
+
+    it('parentCredential: OpenAI key + OpenAI sourceModel does NOT flow to Anthropic child', async () => {
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        parentCredential: { key: 'sk-proj-PAIRED', sourceModel: 'gpt-5.5' },
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'paired-reverse-check',
+        agentType: 'paired-reverse-check',
+      });
+      const cfg = shared.lastConfig as Record<string, unknown>;
+      expect(cfg['apiKey']).toBeUndefined();
+    });
+
+    it('parentCredential takes precedence over legacy apiKey + parentModel when both supplied', async () => {
+      shared.lastConfig = null;
+      // Intentionally mismatched legacy options — parentCredential wins
+      const mgr = new SubagentManager({
+        parentCredential: { key: 'sk-ant-oat01-CRED', sourceModel: 'claude-sonnet-4-5' },
+        apiKey: 'sk-proj-LEGACY',
+        parentModel: 'gpt-5.5',
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'precedence-check',
+        agentType: 'precedence-check',
+      });
+      // parentCredential's Anthropic key reaches the Anthropic child
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-ant-oat01-CRED' }),
+      );
+    });
+
+    it('parentCredential getter form re-reads key at fork time', async () => {
+      shared.lastConfig = null;
+      let currentKey = 'sk-ant-oat01-INITIAL';
+      const mgr = new SubagentManager({
+        parentCredential: { key: () => currentKey, sourceModel: 'claude-sonnet-4-5' },
+      });
+      // Change the key before forking
+      currentKey = 'sk-ant-oat01-REFRESHED';
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'getter-check',
+        agentType: 'getter-check',
+      });
+      expect(shared.lastConfig).toEqual(
+        expect.objectContaining({ apiKey: 'sk-ant-oat01-REFRESHED' }),
+      );
+    });
+  });
+
   describe('cross-provider child model coercion (#652)', () => {
     // providerForModel reads AFK_PROVIDER transitively; scrub to a known
     // baseline per-test and restore the ambient value after.

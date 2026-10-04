@@ -355,12 +355,10 @@ async function handler(
   // is required and already satisfies child ⊇ parent (#544/#547) for ANY parent;
   // seeding roots from a CONFINED session (`afk -w`) would break discovery. The
   // store is exempt — ephemeral, no path semantics. See skills/index.ts.
+  // #2844: parentCredential pairs key + source model atomically when both are available.
+  const credentialOpt = apiKey !== undefined && ctx?.defaultModel !== undefined ? { parentCredential: { key: apiKey, sourceModel: ctx.defaultModel as string } } : apiKey !== undefined ? { apiKey } : {};
   const manager = new SubagentManager({
-    apiKey,
-    // `apiKey` is `ctx.apiKey` — resolved by the parent session for
-    // `ctx.defaultModel` — so that model is the provider source of truth for
-    // the fork-time credential fallback (see SubagentManager.parentProvider).
-    ...(ctx?.defaultModel !== undefined ? { parentModel: ctx.defaultModel } : {}),
+    ...credentialOpt,
     ...(ctx?.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}), ...(ctx?.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}), ...(ctx?.delegationBudget !== undefined ? { delegationBudget: ctx.delegationBudget } : {}),
   });
   // Invariant: the gate receives AFK snake_case runtime tool names (read_file,
