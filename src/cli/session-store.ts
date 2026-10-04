@@ -46,6 +46,20 @@ export interface StoredSession {
   model: AgentModelInput;
   startedAt: number;
   savedAt: number;
+  /** Wall-clock time the session ended (Ctrl+C, SIGTERM, /exit, or natural
+   *  turn-limit). Written on every close-time save — absent on legacy sidecars
+   *  saved before this field was introduced. Consumers that need a session
+   *  duration can fall back to `savedAt - startedAt`. */
+  endedAt?: number;
+  /** Why the session ended. Written alongside `endedAt` on every close-time
+   *  save. Absent on legacy sidecars. Values:
+   *  - 'sigint'  — user pressed Ctrl+C twice at the idle prompt
+   *  - 'sigterm' — process received SIGTERM (e.g. kill, OS shutdown)
+   *  - 'sighup'  — controlling terminal closed (e.g. SSH disconnect)
+   *  - 'exit-command' — user typed /exit or /quit
+   *  - 'eof'     — stdin received EOF (pipe closed, non-interactive end)
+   */
+  exitReason?: 'sigint' | 'sigterm' | 'sighup' | 'exit-command' | 'eof';
   totalTurns: number;
   totalCostUsd: number;
   /** Count of turns where cost data was unavailable. Optional for backward compat with legacy sidecars. */
@@ -153,12 +167,24 @@ function safeResolvePath(
 /**
  * Write the current session stats to disk. Uses the SDK sessionId when
  * present; otherwise falls back to a timestamped ID. Returns the path written.
+ *
+ * @param opts.closeTime - When true, writes `endedAt` = Date.now() so the
+ *   sidecar records when the session ended (Ctrl+C, SIGTERM, /exit, or natural
+ *   turn-limit). Omit for mid-session autosaves (/name, per-turn) where the
+ *   session has not yet closed.
+ * @param opts.exitReason - The reason the session ended. Written only when
+ *   `closeTime` is true. See {@link StoredSession.exitReason} for values.
  */
-export function saveSession(stats: SessionStats, overrideId?: string): string {
+export function saveSession(
+  stats: SessionStats,
+  overrideId?: string,
+  opts?: { closeTime?: boolean; exitReason?: StoredSession['exitReason'] },
+): string {
   const dir = sessionsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  const id = overrideId ?? stats.sessionId ?? `session-${Date.now()}`;
+  const now = Date.now();
+  const id = overrideId ?? stats.sessionId ?? `session-${now}`;
   const payload: StoredSession = {
     sessionId: stats.sessionId,
     ...(stats.name ? { name: stats.name } : {}),
@@ -168,7 +194,9 @@ export function saveSession(stats: SessionStats, overrideId?: string): string {
     ...(stats.cwd ? { cwd: stats.cwd } : {}),
     model: stats.model,
     startedAt: stats.sessionStartTime,
-    savedAt: Date.now(),
+    savedAt: now,
+    ...(opts?.closeTime ? { endedAt: now } : {}),
+    ...(opts?.closeTime && opts.exitReason ? { exitReason: opts.exitReason } : {}),
     totalTurns: stats.totalTurns,
     totalCostUsd: stats.totalCostUsd,
     unpricedTurns: stats.unpricedTurns,

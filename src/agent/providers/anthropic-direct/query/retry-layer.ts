@@ -175,7 +175,7 @@ export class RetryLayer {
    * the 1h-cache beta rather than reusing the original header map, so a replay
    * never asks for a TTL whose activating beta it dropped.
    */
-  private rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode'>): Record<string, string> {
+  private rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode' | 'thinkingBlockBinding'>): Record<string, string> {
     return buildRequestHeaders(
       this._authMode,
       this.initSessionId,
@@ -183,6 +183,7 @@ export class RetryLayer {
       runInput.effort !== undefined,
       isExtendedCacheTtlActive({ ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) }),
       runInput.fastMode === true,
+      runInput.thinkingBlockBinding !== undefined,
     );
   }
 

@@ -6,25 +6,30 @@
  *
  * # Classification
  *
- * OpenAI-compatible 429s carry a standard `retry-after` (seconds) or
- * `retry-after-ms` header. Unlike Anthropic's subscription-based quota,
- * which exposes a `|<unix-ts>` reset timestamp and `anthropic-ratelimit-*`
- * presence signals, generic OAI-compat endpoints give only `retry-after`.
- * We classify by MAGNITUDE (the same fallback the Anthropic path uses when
- * no authoritative headers are present, per usage-limit.ts step 4):
+ * Two signals mark a quota/usage limit:
  *
- *   retry-after ≤ QUOTA_TRANSIENT_THRESHOLD_MS (5 min) → transient rate-limit
- *     → existing retry path handles this (retry.ts / stream-drive.connection.ts)
+ *   1. The ChatGPT/Codex subscription backend's `usage_limit_reached` body
+ *      (see `chatgpt-usage-limit.ts`). Authoritative: it carries the real
+ *      reset time (`resets_at` / `resets_in_seconds`) and no `retry-after`.
+ *      It may arrive with or without an HTTP status (mid-stream SSE error).
  *
- *   retry-after > QUOTA_TRANSIENT_THRESHOLD_MS, or no retry-after on a 429 →
- *     quota/usage-limit → THIS module parks and waits out the reset.
+ *   2. Otherwise, MAGNITUDE of a standard `retry-after` / `retry-after-ms`
+ *      header on a 429 (the same fallback the Anthropic path uses when no
+ *      authoritative headers are present, per usage-limit.ts step 4):
+ *        retry-after ≤ QUOTA_TRANSIENT_THRESHOLD_MS (5 min) → transient
+ *          → the retry path handles it (retry.ts / stream-drive.connection.ts)
+ *        retry-after > QUOTA_TRANSIENT_THRESHOLD_MS → quota/usage-limit
+ *          → THIS module parks and waits out the reset.
+ *        no retry-after → transient (left to the bounded connection retry).
  *
  * # Behavior
  *
  *   autoResumeOnUsageLimit (default true):
  *     1. Yield `paused` with `reason: 'usage-limit'`, `autoResume: true`.
- *     2. Sleep `retry-after` ms (or QUOTA_FALLBACK_WAIT_MS when absent),
- *        bounded by TWO_HOURS_MS. The sleep is abort-signal-aware.
+ *     2. Sleep until the ChatGPT reset time, else `retry-after` ms (or
+ *        QUOTA_FALLBACK_WAIT_MS when absent), bounded by TWO_HOURS_MS. The
+ *        sleep is abort-signal-aware. A ChatGPT reset more than TWO_HOURS_MS
+ *        away is not waited on: `paused` is emitted, then the error surfaces.
  *     3. On wake: emit `resumed`, replay the iteration.
  *     4. If the limit is still in place (another quota 429 arrives): loop,
  *        staying in paused state, until abort or TWO_HOURS_MS total elapsed.
@@ -58,6 +63,9 @@ import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
 import { parseRetryAfterMs } from '../../shared/retry-after.js';
 import { getErrorStatus } from './retry.js';
 import type { IterationResult } from './stream-drive.js';
+import { classifyChatGptUsageLimit, isChatGptUsageLimitError } from './chatgpt-usage-limit.js';
+import type { ChatGptUsageLimitInfo } from './chatgpt-usage-limit.js';
+import { usageLimitErrorEvent } from '../../shared/usage-limit-error.js';
 
 /**
  * Same magnitude threshold as `anthropic-direct/usage-limit.ts`
@@ -116,28 +124,27 @@ function resolveQuotaFallbackWaitMs(): number {
 }
 
 /**
- * True when `event` is an `error` whose underlying 429 should be treated as a
- * quota/usage-limit (long wait) rather than a transient rate-limit (short retry).
+ * True when `event` is an `error` that should be treated as a quota /
+ * usage-limit (long wait) rather than a transient rate-limit (short retry).
  *
- * Classification by magnitude — only applies when `retry-after` is PRESENT and
- * LONG (> {@link QUOTA_TRANSIENT_THRESHOLD_MS}, 5 minutes):
+ *   ChatGPT `usage_limit_reached` body (any status, or none) → quota limit.
+ *   429 with retry-after present AND > 5 min → quota/billing limit → park.
+ *   429 with retry-after present AND ≤ 5 min → transient rate-limit → the
+ *     connection retry loop in `retry.ts` / `stream-drive.connection.ts`.
+ *   429 with no retry-after and no ChatGPT marker → transient with no hint →
+ *     exponential backoff by the connection-phase retry (unchanged).
  *
- *   retry-after present AND > 5 min → quota/billing limit → THIS module parks.
- *   retry-after present AND ≤ 5 min → transient rate-limit → connection retry
- *     loop in `retry.ts` / `stream-drive.connection.ts` handles it.
- *   retry-after absent → transient rate-limit with no hint → exponential backoff
- *     by the connection-phase retry (existing behavior, unchanged).
- *
- * Omitting the "absent → park" case mirrors the Anthropic provider's last-resort
- * fallback more conservatively: Anthropic has Subscription-vs-throttle context
- * (same 429 shape, only magnitude distinguishes them). OAI-compatible has no
- * subscription model, so a bare 429 with no retry-after is most likely just a
- * per-minute rate limit with no backoff hint — let the connection-phase retry
- * handle it (3 bounded attempts with exponential backoff) rather than blocking
- * an entire session for up to 2 hours on an ambiguous signal.
+ * The bare-429 case is not parked: a generic OpenAI-compatible endpoint (local
+ * shim, api.openai.com, OpenRouter) gives no subscription signal, so a 429 with
+ * no retry-after is most likely a per-minute throttle with no backoff hint.
+ * Blocking a session for up to 2 hours on that ambiguous signal would be worse
+ * than 3 bounded retries. The ChatGPT subscription backend is the exception: it
+ * names the limit explicitly in the body, so it is matched by type, not by
+ * magnitude.
  */
 export function isQuotaLimitErrorEvent(event: ProviderEvent): boolean {
   if (event.type !== 'error') return false;
+  if (isChatGptUsageLimitError(event.error)) return true;
   const status = getErrorStatus(event.error);
   if (status !== 429) return false;
   const retryAfterMs = parseRetryAfterMs(event.error);
@@ -145,6 +152,63 @@ export function isQuotaLimitErrorEvent(event: ProviderEvent): boolean {
   if (retryAfterMs === undefined) return false;
   // Long retry-after → quota/billing limit → park and wait.
   return retryAfterMs > resolveQuotaTransientThresholdMs();
+}
+
+/**
+ * How long to wait before re-probing, and whether the reset is too far away
+ * to wait for at all. The ChatGPT reset time wins over `retry-after`.
+ */
+function resolveQuotaWait(
+  error: Error,
+  codex: ChatGptUsageLimitInfo | null,
+  now: number,
+): { waitMs: number; retryAfterMs: number | undefined; farReset: boolean } {
+  const twoHours = resolveQuotaTwoHoursMs();
+  const retryAfterMs = parseRetryAfterMs(error);
+  if (codex?.resetsAt !== undefined) {
+    const untilReset = codex.resetsAt.getTime() - now;
+    // A non-positive distance (reset already passed, clock skew) falls back to
+    // the probe cadence rather than a zero-delay replay loop.
+    const waitMs = untilReset > 0 ? Math.min(untilReset, twoHours) : resolveQuotaFallbackWaitMs();
+    return { waitMs, retryAfterMs, farReset: untilReset > twoHours };
+  }
+  const waitMs = retryAfterMs !== undefined
+    ? Math.min(retryAfterMs, twoHours)
+    : resolveQuotaFallbackWaitMs();
+  return { waitMs, retryAfterMs, farReset: false };
+}
+
+/** Build the `paused` event for the first quota-limit 429 of a park. */
+function quotaPausedEvent(
+  codex: ChatGptUsageLimitInfo | null,
+  autoResume: boolean,
+): Extract<ProviderEvent, { type: 'paused' }> {
+  return {
+    type: 'paused',
+    reason: 'usage-limit',
+    ...(codex?.resetsAt !== undefined ? { resetsAt: codex.resetsAt } : {}),
+    autoResume,
+    ...(codex !== null ? { provider: 'codex' as const } : {}),
+    ...(codex?.plan !== undefined ? { plan: codex.plan } : {}),
+  };
+}
+
+/**
+ * The error event a park ends with. A ChatGPT limit is wrapped in the shared
+ * provider-labeled `UsageLimitError`; a generic quota 429 is surfaced raw,
+ * exactly as before (no provider to name).
+ */
+function terminalQuotaEvent(
+  event: Extract<ProviderEvent, { type: 'error' }>,
+  codex: ChatGptUsageLimitInfo | null,
+): ProviderEvent {
+  if (codex === null) return event;
+  return usageLimitErrorEvent(event, {
+    provider: 'codex',
+    kind: 'subscription',
+    ...(codex.resetsAt !== undefined ? { resetsAt: codex.resetsAt } : {}),
+    ...(codex.plan !== undefined ? { plan: codex.plan } : {}),
+  });
 }
 
 /** Context threaded through from `turn-driver.ts`. */
@@ -229,41 +293,40 @@ export async function* runIterationWithQuotaLimitPause(
     if (ctx.isClosed()) return null;
     if (ctx.signal.aborted) return null;
 
-    // ── Extract retry-after from the 429 error ───────────────────────────────
-    const retryAfterMs = parseRetryAfterMs(quotaEvent.error);
-    const waitMs = retryAfterMs !== undefined
-      ? Math.min(retryAfterMs, resolveQuotaTwoHoursMs())
-      : resolveQuotaFallbackWaitMs();
+    // ── Classify the limit: ChatGPT reset time, else retry-after ────────────
+    const codex = classifyChatGptUsageLimit(quotaEvent.error);
+    const { waitMs, retryAfterMs, farReset } = resolveQuotaWait(quotaEvent.error, codex, Date.now());
+    // A reset beyond the two-hour budget is never waited on, so the pause must
+    // not promise an auto-resume it will not deliver.
+    const willWait = ctx.autoResumeOnUsageLimit && !farReset;
 
     // ── Emit paused on the first quota 429 ───────────────────────────────────
     if (!pauseEmitted) {
-      yield {
-        type: 'paused',
-        reason: 'usage-limit',
-        autoResume: ctx.autoResumeOnUsageLimit,
-      };
+      yield quotaPausedEvent(codex, willWait);
       void emitSessionPhase(ctx.traceWriter, {
         phase: 'usage_limit_pause',
         metadata: {
           reason: 'usage-limit',
-          source: 'openai-compat-quota',
-          hasResetTimestamp: retryAfterMs !== undefined,
-          autoResume: ctx.autoResumeOnUsageLimit,
+          source: codex !== null ? 'openai-compat-chatgpt' : 'openai-compat-quota',
+          hasResetTimestamp: codex !== null ? codex.resetsAt !== undefined : retryAfterMs !== undefined,
+          autoResume: willWait,
           ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+          ...(codex?.resetsAt !== undefined ? { resetsAt: codex.resetsAt.toISOString() } : {}),
+          ...(farReset ? { farReset: true } : {}),
         },
       });
       pauseEmitted = true;
     }
 
-    // ── Fail-fast: autoResumeOnUsageLimit = false ────────────────────────────
-    if (!ctx.autoResumeOnUsageLimit) {
-      yield quotaEvent;
+    // ── Fail-fast: autoResumeOnUsageLimit = false, or reset beyond 2h ─────────
+    if (!willWait) {
+      yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
 
     // ── Two-hour cap: if total wait already exceeds budget, surface the error ─
     if (Date.now() - pausedAt > resolveQuotaTwoHoursMs()) {
-      yield quotaEvent;
+      yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
 
@@ -276,7 +339,7 @@ export async function* runIterationWithQuotaLimitPause(
 
     // Still within budget?
     if (Date.now() - pausedAt > resolveQuotaTwoHoursMs()) {
-      yield quotaEvent;
+      yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
 

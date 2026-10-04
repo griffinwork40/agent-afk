@@ -55,8 +55,9 @@ function fallbackText(block: { type: string }): { type: 'text'; text: string } {
   return { type: 'text', text: `[${type}] ${JSON.stringify(rest)}` };
 }
 
-function imageToJournal(block: ImageBlockParam): JournalBlock & { type: 'image' } {
+function imageToJournal(block: ImageBlockParam): JournalBlock & { type: 'image' } | { type: 'text'; text: string } {
   const s = block.source;
+  if (s.type === 'file') return { type: 'text', text: `[image file_id=${s.file_id}]` };
   const source: JournalBinary =
     s.type === 'base64' ? { kind: 'base64', mediaType: s.media_type, data: s.data } : { kind: 'url', url: s.url };
   return { type: 'image', source };
@@ -74,6 +75,7 @@ function documentToJournal(block: DocumentBlockParam): JournalResultPart {
       : s.content.map((c) => (c.type === 'text' ? c.text : '[image]')).join('\n');
     return { type: 'text', text: withTitle(text) };
   }
+  if (s.type === 'file') return { type: 'text', text: withTitle(`[document file_id=${s.file_id}]`) };
   const source: JournalBinary =
     s.type === 'base64' ? { kind: 'base64', mediaType: s.media_type, data: s.data } : { kind: 'url', url: s.url };
   return { type: 'document', source, ...(title ? { title } : {}) };
@@ -218,7 +220,11 @@ export const anthropicJournalAdapter: JournalAdapter<MessageParam> = {
     const content: JournalBlock[] = typeof message.content === 'string'
       ? [{ type: 'text', text: message.content }]
       : message.content.map(blockToJournal);
-    return { role: message.role, content };
+    // The SDK's MessageParam.role now includes 'system'; the journal schema
+    // only accepts 'user' | 'assistant'. Map system messages to 'user' — they
+    // carry instructional content that replays correctly in the user role.
+    const role: 'user' | 'assistant' = message.role === 'system' ? 'user' : message.role;
+    return { role, content };
   },
 
   fromJournalMessages(messages: readonly JournalMessage[]): MessageParam[] {

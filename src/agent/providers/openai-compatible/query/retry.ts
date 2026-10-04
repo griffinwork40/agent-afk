@@ -21,29 +21,33 @@
  * (`retry-layer.ts` `rate-limit-transient`), which likewise honors `retry-after`
  * with a 120s cap.
  *
- * **Why no `paused`/`resumed` here.** The harness's `paused`/`resumed`
- * `ProviderEvent`s model OAuth *subscription* exhaustion plus keychain
- * account hot-swap — an Anthropic-subscription concept with no analog on a
- * generic OpenAI-compatible endpoint. The Anthropic provider itself does NOT
- * emit those events for a transient rate-limit 429; it reserves them for the
- * `oauth-limit` classification and treats ordinary 429s with exactly this
- * `retry-after` backoff. An OpenAI-compatible 429 is either a transient
- * rate-limit (handled here) or a hard quota/billing error (correctly surfaced
- * as an `error`, not auto-resumable), so honoring `retry-after` IS the parity
- * with the Anthropic path — a pause/resume UI would model a state this surface
- * does not have. See issue #536.
+ * **Why no `paused`/`resumed` here.** This module owns only SHORT transient
+ * retries. Long waits live one tier up in `usage-limit-tier.ts`, which parks
+ * with `paused`/`resumed` on a long `retry-after` 429 or on the ChatGPT/Codex
+ * subscription backend's `usage_limit_reached` 429 (a real subscription window
+ * with a reset time, see `chatgpt-usage-limit.ts`). That marker is never retried
+ * here: retrying an exhausted subscription window only burns calls and delays
+ * the pause, and the official Codex CLI does not retry it either. See #536.
  *
  * @module agent/providers/openai-compatible/query/retry
  */
 
 import { parseRetryAfterMs } from '../../shared/retry-after.js';
 import { getErrorStatus as sharedGetErrorStatus } from '../../shared/error-status.js';
+import {
+  isConnectionPhaseNetworkError,
+  CONNECTION_PHASE_RETRYABLE_STATUSES,
+} from '../../shared/connection-error.js';
+import { isChatGptUsageLimitError } from './chatgpt-usage-limit.js';
 
 /**
- * HTTP status codes that warrant a retry with backoff. 429 (rate limit) and
- * 5xx server errors are transient by nature — the same request sent again
- * after a short wait is likely to succeed. 400/401/403/404 are deterministic
- * client errors and must NOT be retried (they would just burn quota).
+ * HTTP status codes that warrant a retry for a MID-STREAM error (the stream
+ * was established but the server sent an error event mid-flight). 429 (rate
+ * limit) and 5xx server errors are transient by nature — the same request sent
+ * again after a short wait is likely to succeed. 400/401/403/404 are
+ * deterministic client errors and must NOT be retried (they would just burn
+ * quota). Intentionally narrower than the connection-phase set — connection
+ * errors 408/409/504 are handled exclusively by `isRetryableConnectionError`.
  */
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
 
@@ -128,25 +132,124 @@ export function getErrorStatus(err: unknown): number | undefined {
 
 /**
  * Connection-phase retryability: the HTTP call itself failed before any
- * streaming began. Only retry on known transient status codes — errors with
- * no status (network drops, DNS failures, wrong baseURL) are deterministic
- * and must surface immediately to avoid wasting time on misconfigurations.
- * Mirrors the Anthropic provider's `isTransientServerError` which also
- * requires an explicit status.
+ * streaming began. Retries two classes of errors:
+ *
+ *   1. Statusless transport failures — `APIConnectionError` (SDK constructor
+ *      name) or any error whose cause chain carries a known socket/DNS `code`
+ *      (ECONNRESET, ENOTFOUND, …). The SDK's default `shouldRetry` previously
+ *      covered these silently; with `maxRetries: 0` they must be retried here.
+ *      `APIConnectionTimeoutError` is deliberately excluded HERE because this
+ *      predicate cannot see the request signal; `runConnectionPhase` retries
+ *      it separately when its stream signal is not aborted (the SDK's own
+ *      connect timeout, see shared `isConnectionTimeoutError`).
+ *
+ *   2. Status-bearing transients (except the ChatGPT `usage_limit_reached`
+ *      429, which the usage-limit tier parks on) — the union of `RETRYABLE_STATUS_CODES`
+ *      (429, 500, 502, 503, 529) and `CONNECTION_PHASE_RETRYABLE_STATUSES`
+ *      (408, 409, 500, 502, 504; see shared/connection-error.ts). Any of
+ *      them carrying a `retry-after` header waits per `retryAfterDelayMs`. Unlike
+ *      anthropic-direct, this provider has no separate overload tier, so
+ *      every retryable status shares the `MAX_CONNECTION_RETRIES` budget.
+ *
+ * The compaction-guard (`compaction-guard.ts`) uses this predicate to decide
+ * that a failed Responses-wire summarize was a transient blip rather than a
+ * proof of endpoint incapability — widening it to include statusless errors is
+ * correct there too (a DNS drop does not prove the endpoint is unsupported).
  */
 export function isRetryableConnectionError(err: unknown): boolean {
+  // A ChatGPT subscription window is exhausted: never retry, park instead.
+  if (isChatGptUsageLimitError(err)) return false;
+  if (isConnectionPhaseNetworkError(err)) return true;
   const status = getErrorStatus(err);
   if (status === undefined) return false;
-  return RETRYABLE_STATUS_CODES.has(status);
+  return RETRYABLE_STATUS_CODES.has(status) || CONNECTION_PHASE_RETRYABLE_STATUSES.has(status);
+}
+
+/** Body/error `code` values that signal a transient server overload. */
+const OVERLOAD_CODES = new Set(['server_is_overloaded']);
+
+/** Body/error `type` values that signal a transient server overload. */
+const OVERLOAD_TYPES = new Set(['service_unavailable_error', 'overloaded_error']);
+
+/**
+ * Message text that signals a transient server overload. Requires the word
+ * "server" to appear near "overloaded" (within 40 chars), anchoring the match
+ * on known provider phrases like "Our servers are currently overloaded" while
+ * excluding unrelated messages where an unrelated subsystem is overloaded
+ * (e.g. "Model context window is overloaded", "worker pool overloaded").
+ * The lookahead/lookbehind window is intentionally wide (40 chars) to stay
+ * robust across provider-specific phrasing variations.
+ */
+const OVERLOAD_MESSAGE_RE = /server.{0,40}overloaded|overloaded.{0,40}server/i;
+
+/**
+ * True when a `{ code?, type?, message? }` record carries an overload marker.
+ * `checkMessage` is false for the error object itself: its `.message` may be a
+ * non-SDK throw or a JSON-stringified body, so free-text matching is limited to
+ * the parsed server body, where the SDK puts the server's own message.
+ */
+function hasOverloadMarker(
+  rec: { code?: unknown; type?: unknown; message?: unknown },
+  checkMessage: boolean,
+): boolean {
+  if (typeof rec.code === 'string' && OVERLOAD_CODES.has(rec.code)) return true;
+  if (typeof rec.type === 'string' && OVERLOAD_TYPES.has(rec.type)) return true;
+  return checkMessage && typeof rec.message === 'string' && OVERLOAD_MESSAGE_RE.test(rec.message);
+}
+
+/**
+ * Invariant: a server overload can arrive WITHOUT an HTTP status.
+ *
+ * When the server sends a mid-stream SSE payload carrying an `error` key, the
+ * openai SDK (`core/streaming` iterator) throws
+ * `new APIError(undefined, data.error, undefined, headers)`: `status` is
+ * `undefined`, the parsed body lives on `.error`, and `APIError`'s constructor
+ * copies the body's `code` / `type` / `param` onto the error itself. The
+ * status-keyed predicates below therefore never see it, and an "Our servers are
+ * currently overloaded" event would surface raw with no retry or pause.
+ *
+ * Contract: returns true ONLY when the shared `getErrorStatus` yields
+ * `undefined` AND an overload marker is present on the error itself or on its
+ * `.error` body (flat `{type,code,message}` or nested `{error:{...}}` shapes,
+ * mirroring anthropic-direct's `isOverloadedErrorEvent`). A status-bearing
+ * error is never matched here; the numeric-status paths already own it.
+ *
+ * Note on the top-level `hasOverloadMarker(e, false)` call: `checkMessage` is
+ * deliberately `false` here because `e.message` on the error object itself may
+ * be a non-SDK throw or a JSON-stringified body — free-text matching is
+ * restricted to the parsed server body (`.error`). The SDK's `APIError`
+ * constructor does copy `code` and `type` from the body onto the error itself,
+ * so those fields are available and safe to match here. For plain-object shapes
+ * (non-SDK throws that carry no `status`), this path serves as the primary
+ * guard; it is never reached when `getErrorStatus` returns a status (the
+ * early-return above ensures that), so the status-keyed paths remain exclusive.
+ */
+export function isOpenAIOverloadError(err: unknown): boolean {
+  if (err === null || typeof err !== 'object') return false;
+  if (getErrorStatus(err) !== undefined) return false;
+  const e = err as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
+  // Match code/type on the error itself (SDK copies these from the body); skip
+  // .message here since it may be a non-SDK throw or a JSON-stringified body.
+  if (hasOverloadMarker(e, false)) return true;
+  const body = e.error;
+  if (body === null || typeof body !== 'object') return false;
+  const b = body as { code?: unknown; type?: unknown; message?: unknown; error?: unknown };
+  if (hasOverloadMarker(b, true)) return true;
+  const inner = b.error;
+  return inner !== null && typeof inner === 'object' && hasOverloadMarker(inner, true);
 }
 
 /**
  * Mid-stream retryability: the stream was established but the server sent an
  * error event mid-flight. OpenAI-compatible APIs surface this as an `APIError`
- * thrown from the async iterator. Same status-code set as connection-phase —
- * only retry on explicit transient codes, not on status-less errors.
+ * thrown from the async iterator. Same status-code set as connection-phase,
+ * plus status-less SDK overload throws ({@link isOpenAIOverloadError}). Other
+ * status-less errors, and the ChatGPT `usage_limit_reached` marker with or
+ * without a status, are not retried here.
  */
 export function isRetryableStreamError(err: unknown): boolean {
+  if (isChatGptUsageLimitError(err)) return false;
+  if (isOpenAIOverloadError(err)) return true;
   const status = getErrorStatus(err);
   if (status === undefined) return false;
   return RETRYABLE_STATUS_CODES.has(status);

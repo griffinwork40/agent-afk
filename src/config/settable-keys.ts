@@ -251,7 +251,6 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   { path: 'autoRouting.interactive', tier: 'agent', type: 'boolean', description: 'Auto-route model in the REPL.' },
   { path: 'autoRouting.chat', tier: 'agent', type: 'boolean', description: 'Auto-route model for chat.' },
   { path: 'autoRouting.telegram', tier: 'agent', type: 'boolean', description: 'Auto-route model for Telegram.' },
-  { path: 'autoRouting.daemon', tier: 'agent', type: 'boolean', description: 'Auto-route model for the daemon.' },
   { path: 'telegram.notify.mode', tier: 'human', type: 'enum', enumValues: ['primary', 'broadcast', 'custom'], description: 'Telegram notify routing mode (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.primaryChatId', tier: 'human', type: 'number', clamp: { min: -1e15, max: 1e15, integer: true }, description: 'Primary Telegram chat id (human-tier: notification-redirect vector).' },
   { path: 'telegram.notify.targets', tier: 'human', type: 'number-array', description: 'Custom Telegram target chat ids (human-tier: notification-redirect vector).' },
@@ -297,6 +296,12 @@ export const CONFIG_KEY_SPECS: readonly ConfigKeySpec[] = [
   // because that would let an agent expand its own hook subprocesses\' env access.
   // Value shape: Record<pluginName, string[]> — see issue #2459.
   { path: 'pluginHookEnv', tier: 'human', type: 'object', description: 'Per-plugin hook env allowlist: maps plugin name → array of env-var names forwarded to that plugin\'s hook subprocesses. Human-tier: only the user controls which secrets reach plugin hooks.' },
+  // Human-tier: disabling a plugin hook is an operator decision — mirroring
+  // pluginHookEnv which is also human-tier. The agent must not be able to
+  // silence third-party hooks on its own config.
+  // Value shape: Record<pluginName, string[]> where each string is
+  // "<Event>" or "<Event>:<matcher>" — see issue #2816.
+  { path: 'disabledPluginHooks', tier: 'human', type: 'object', description: 'Per-plugin hook disable list: maps plugin name (from plugin.json) → array of "<Event>" or "<Event>:<matcher>" specifiers to suppress. Human-tier: disabling a hook is an operator decision the agent must not reverse.' },
   // Human-tier: hiding a skill from the model is an operator decision the agent
   // must not be able to reverse on its own config. Accepts bare skill names
   // (e.g. "forge") and plugin-qualified names (e.g. "awa-dev:qualify"). Each
@@ -395,8 +400,28 @@ export function coerceConfigValue(spec: ConfigKeySpec, raw: unknown): ConfigCoer
     }
     case 'model-slot': {
       if (typeof raw === 'string') {
-        if (raw.trim().length === 0) return { ok: false, error: `${spec.path} must not be empty` };
-        return { ok: true, value: raw.trim() };
+        const trimmed = raw.trim();
+        if (trimmed.length === 0) return { ok: false, error: `${spec.path} must not be empty` };
+        // A string that looks like a JSON object (starts with '{') was likely
+        // produced by a caller that serialized the binding object to a string
+        // instead of passing it as an object. Parse it and validate through the
+        // same coerceSlotBindingInput path as a real object value — this ensures
+        // the human-gated baseUrl/apiKey restrictions still apply.
+        if (trimmed.startsWith('{')) {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(trimmed);
+          } catch {
+            return {
+              ok: false,
+              error: `${spec.path}: value looks like a JSON object but could not be parsed — pass a bare model id string or a real object, not a JSON-encoded string`,
+            };
+          }
+          const res = coerceSlotBindingInput(parsed);
+          if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };
+          return { ok: true, value: res.value };
+        }
+        return { ok: true, value: trimmed };
       }
       const res = coerceSlotBindingInput(raw);
       if (!res.ok) return { ok: false, error: `${spec.path}: ${res.error}` };

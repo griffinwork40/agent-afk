@@ -7,6 +7,61 @@ export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * True when `err` is an `EgressBlockedError` — either directly or as the
+ * `cause` of a wrapping `TypeError('fetch failed', { cause })`.
+ *
+ * Detects by `.name === 'EgressBlockedError'` rather than `instanceof` so
+ * this leaf utility does not import from `src/http-client/`, which would
+ * create an upward cycle. The name is stable — see egress-guard.ts.
+ */
+export function isEgressBlocked(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'EgressBlockedError') return true;
+  // undici wraps connect-time errors as TypeError('fetch failed', { cause })
+  const cause = (err as { cause?: unknown }).cause;
+  return cause instanceof Error && cause.name === 'EgressBlockedError';
+}
+
+/**
+ * Extract the underlying `EgressBlockedError` from a wrapping
+ * `TypeError('fetch failed', { cause: EgressBlockedError })`, or return
+ * `err` itself when it already IS the EgressBlockedError.
+ *
+ * Returns `null` when `err` is not egress-blocked.
+ */
+export function extractEgressBlockedError(err: unknown): Error | null {
+  if (!(err instanceof Error)) return null;
+  if (err.name === 'EgressBlockedError') return err;
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.name === 'EgressBlockedError') return cause;
+  return null;
+}
+
+/**
+ * Format a network-error message that surfaces undici's cause chain when
+ * available. When `err` is undici's `TypeError('fetch failed', { cause })`,
+ * the returned string is `"fetch failed (<cause.code>: <cause.message>)"`
+ * (code omitted when absent) — giving callers that format
+ * `web_scrape network error: <X>` an actionable message instead of the
+ * opaque `"fetch failed"`. Any other error returns its own message.
+ *
+ * Contract: existing message prefixes (`web_scrape network error:`,
+ * `web_scrape blocked:`, etc.) are NOT included here — the caller owns them.
+ * This function only formats the trailing error text.
+ */
+export function fetchFailedMessage(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && err.message === 'fetch failed') {
+    const code = (cause as { code?: string }).code;
+    return code != null
+      ? `fetch failed (${code}: ${cause.message})`
+      : `fetch failed (${cause.message})`;
+  }
+  return err.message;
+}
+
 export class AbortError extends Error {
   constructor(message?: string) {
     super(message);
@@ -166,3 +221,49 @@ export class UnsupportedProviderConfigError extends Error {
   }
 }
 
+
+/**
+ * Which subscription hit its usage limit: `'anthropic'` is Claude (OAuth
+ * subscription or API credit), `'codex'` is the ChatGPT/Codex subscription
+ * backend.
+ */
+export type UsageLimitProvider = 'anthropic' | 'codex';
+
+/** Provider-neutral facts about a usage limit, shared by every surface. */
+export interface UsageLimitInfo {
+  provider: UsageLimitProvider;
+  /** `'subscription'` = a rolling subscription window; `'credit'` = an empty API credit balance. */
+  kind: 'subscription' | 'credit';
+  /** When the limit resets, when the provider reported it. */
+  resetsAt?: Date;
+  /** Subscription plan label, when the provider reported it (e.g. `plus`). */
+  plan?: string;
+}
+
+/**
+ * Contract: the terminal error a provider surfaces when a usage limit ends a
+ * turn (fail-fast, a reset beyond the wait budget, or the wait budget spent).
+ * `message` is the friendly provider-labeled sentence from
+ * `describeUsageLimit` (agent/usage/usage-formatter.ts), so the REPL, Telegram
+ * and subagent-failure paths all show it without parsing the raw body.
+ *
+ * Compatibility with the raw SDK error it replaces: `status` stays 429 (400
+ * for an empty credit balance) so status-keyed classifiers still work, the
+ * original error is kept on `cause`, and `name` is `'UsageLimitError'` (the
+ * value `errorClass` telemetry records). No SDK import: this is a leaf module.
+ */
+export class UsageLimitError extends Error {
+  public readonly status: number;
+  public override readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    public readonly info: UsageLimitInfo,
+    options?: { cause?: unknown },
+  ) {
+    super(message);
+    this.name = "UsageLimitError";
+    this.status = info.kind === 'credit' ? 400 : 429;
+    if (options?.cause !== undefined) this.cause = options.cause;
+  }
+}

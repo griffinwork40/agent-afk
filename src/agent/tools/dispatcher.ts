@@ -35,6 +35,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
+import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
@@ -347,6 +348,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private readonly repeatFailureGuard = new RepeatFailureGuard();
 
+  /**
+   * Per-session sliding-window health monitor (#2774). Mirrors the
+   * repeatFailureGuard pattern: one instance per dispatcher (i.e. per session
+   * or forked child), never module-scope.
+   */
+  private readonly toolHealthMonitor = new ToolHealthMonitor();
+
 
 
   /**
@@ -601,12 +609,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    const available = this.subagentExecutor?.supportsBackgroundJobs?.()
+    const withBg = this.subagentExecutor?.supportsBackgroundJobs?.()
       ? this.schemas
       : this.schemas.filter(
           (schema) =>
             schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
         );
+    // Peer-messaging tools are top-level only: subagents (parentSessionId set)
+    // cannot use list_sessions or send_to_session.
+    const available = this.parentSessionId === undefined
+      ? withBg
+      : withBg.filter((s) => s.name !== 'list_sessions' && s.name !== 'send_to_session');
     const allowed = this.permissions?.allowedTools;
     if (!allowed) return available;
     const set = new Set(allowed);
@@ -691,6 +704,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,
+      tmpdirScope: this._env?.['TMPDIR'],
     };
   }
 
@@ -736,7 +750,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Reset-on-success: a completed (non-error) tool call is progress, so the
     // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
     if (coreResult.isError !== true) this.resetDenialBreaker();
-    return coreResult;
+
+    // Tool-health monitor: observe every settled result and, when degraded,
+    // append a model notice and emit one trace event per (tool, errorHead).
+    // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
+    // never alters isError. Shared helper used by both execute() and batch paths.
+    return applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -758,6 +777,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
       gateDeps: () => this.gateDeps(),
       traceWriter: this.traceWriter,
+      toolHealthMonitor: this.toolHealthMonitor,
     }, onActivity);
   }
 

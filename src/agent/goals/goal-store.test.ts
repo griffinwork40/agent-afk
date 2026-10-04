@@ -20,17 +20,20 @@ let dbPath: string;
 type GoalStoreModule = typeof import('./goal-store.js');
 let mod: GoalStoreModule;
 
+// Redirect getStateDatabasePath to our temp file so the singleton opens
+// there instead of the real ~/.afk/state/kv/kv.db. Declared at top level:
+// vi.mock is hoisted regardless, and Vitest warns on nested calls. The
+// factory reads `dbPath` lazily, so each test's fresh path still wins
+// after vi.resetModules().
+vi.mock('../../paths.js', () => ({
+  getStateDatabasePath: () => dbPath,
+}));
+
 beforeEach(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'goal-store-test-'));
   dbPath = join(tmpDir, 'test.db');
 
   vi.resetModules();
-
-  // Redirect getStateDatabasePath to our temp file so the singleton opens
-  // there instead of the real ~/.afk/state/kv/kv.db.
-  vi.mock('../../paths.js', () => ({
-    getStateDatabasePath: () => dbPath,
-  }));
 
   mod = await import('./goal-store.js');
 });

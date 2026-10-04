@@ -2,10 +2,12 @@ import type { CommittedBandHost } from './terminal-compositor.committed-band-com
 import type { CommitGeometry } from './terminal-compositor.commit-geometry.js';
 import type { CommitRoute } from './terminal-compositor.commit-route.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
+import { buildScrollbackArchiveEscape } from './terminal-compositor.scrollback.js';
 import {
-  scrollbackFlushLines,
-  buildScrollbackArchiveEscape,
-} from './terminal-compositor.scrollback.js';
+  archivedPrefix,
+  dropScrollingArchivedRows,
+  flushLinesSkippingArchived,
+} from './terminal-compositor.band-archived-prefix.js';
 
 /**
  * Phase 1 teardown: clear the live frame, emit the scrollback write (LFs or
@@ -98,7 +100,7 @@ export function commitPhase1Teardown(
   // follow (see the decrement after the finally). Scoped to fitsAboveFrame:
   // the overflow path archives the whole block to scrollback and floors
   // Phase 3 at the unchanged anchorFloor to avoid clobbering the banner.
-  const scrolledRows = fitsAboveFrame ? bandOverflow : 0;
+  let scrolledRows = fitsAboveFrame ? bandOverflow : 0;
 
   // #665 review: record the snap inputs/outputs too. `archiveCount === 0`
   // with `rawGenuineOverflow > 0` means the snap retained a straddling
@@ -115,6 +117,9 @@ export function commitPhase1Teardown(
     overflowRunLen: overflowRun.length,
   });
 
+  // Archived-prefix rows (content-hug; already in scrollback) are skipped by
+  // every archive below and dropped by repaint before any raw scroll.
+  const prefix = archivedPrefix(self);
   writeWithScrollGuard(self, () => {
     if (useBandHold) {
       // Band-hold Phase 1: scroll NOTHING for the rows the model keeps (they
@@ -138,7 +143,8 @@ export function commitPhase1Teardown(
       // (see the `overflowRun.slice(archiveCount)` assignments) so archived +
       // retained are disjoint + complete.
       if (archiveCount > 0) {
-        const archiveLines = scrollbackFlushLines(overflowRun, overflowRunMeta, archiveCount);
+        const runPrefix = overflowPriorContiguous ? prefix : 0;
+        const archiveLines = flushLinesSkippingArchived(overflowRun, overflowRunMeta, archiveCount, runPrefix);
         const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);
         if (escape.length > 0) self.stdout.write(escape);
       }
@@ -161,13 +167,17 @@ export function commitPhase1Teardown(
         // it here is safe because pending rows were never on screen.
         const priorBand = self.committedBand;
         const priorMeta = self.committedBandMeta;
-        const priorArchiveLines = scrollbackFlushLines(priorBand, priorMeta, priorBand.length);
+        const priorArchiveLines = flushLinesSkippingArchived(priorBand, priorMeta, priorBand.length, prefix);
         const priorEscape = buildScrollbackArchiveEscape(priorArchiveLines, anchorFloor, rows, cols);
         if (priorEscape.length > 0) self.stdout.write(priorEscape);
       }
     } else if (fitsAboveFrame) {
-      if (bandOverflow > 0) {
-        self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(bandOverflow)}`);
+      // Invariant (drop-by-repaint BEFORE the scroll): painted archived rows
+      // that this scroll would carry into history again are removed first.
+      const scroll = bandOverflow - dropScrollingArchivedRows(self, bandOverflow);
+      scrolledRows = scroll;
+      if (scroll > 0) {
+        self.stdout.write(`\x1b[${rows};1H${'\n'.repeat(scroll)}`);
       }
       // bandOverflow === 0: new line extends the band in-place; no LF
       // needed. Phase 3 repaints the whole band to include it. Skipping
@@ -176,6 +186,8 @@ export function commitPhase1Teardown(
     } else {
       // Per-line erase (\x1b[2K) stops a shorter line from splicing onto
       // un-erased remnants of longer prior content on the same row.
+      // Same drop-by-repaint-before-scroll rule; the whole screen scrolls here.
+      dropScrollingArchivedRows(self, rows);
       const eraseEachLine = textLines.map((l) => `\x1b[2K${l ?? ''}`).join('\n');
       self.stdout.write(
         `\x1b[${anchorFloor};1H${eraseEachLine}\x1b[${rows};1H${'\n'.repeat(lineCount)}`,
