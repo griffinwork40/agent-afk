@@ -70,6 +70,10 @@ function maybeTrigger() {
 // interval is short because the test only waits ~1s before timing out.
 const POLL_MS = 50;
 const poller = setInterval(maybeTrigger, POLL_MS);
+// unref() so this interval alone cannot keep the process alive — if the
+// parent dies and stdin closes the event loop will drain naturally.
+poller.unref();
+
 // Also watch the parent dir to react instantly on most platforms.
 try {
   const dir = triggerPath.substring(0, triggerPath.lastIndexOf('/')) || '.';
@@ -78,7 +82,10 @@ try {
   // Watch is best-effort — the polling loop covers all platforms.
 }
 
-process.on('exit', () => clearInterval(poller));
+// Exit when the parent goes away: stdin EOF means the stdio pipe is broken.
+// This is the primary liveness signal: the MCP host closed the connection.
+process.stdin.on('end', () => process.exit(0));
+process.stdin.on('close', () => process.exit(0));
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
