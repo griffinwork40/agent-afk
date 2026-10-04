@@ -1331,6 +1331,175 @@ describe('createSpineSessionEndHook — #2867 regressions', () => {
     expect(writeSpine).toHaveBeenCalled();
   });
 
+  // ── #2921: same-label stacks and reverse-order cross-label stacks ────────────
+
+  it('#2921: same-label stack — buried stale annotation is fully stripped before appending', async () => {
+    // Regression: `base (reinforced D1) (reinforced D2)` → only D2 was stripped,
+    // leaving D1 buried. The loop fix in applyAnnotation strips until stable.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    // Two stacked reinforced annotations — both must be gone after one more fire.
+    const base = 'Body text';
+    const stackedDesc = `${base} (reinforced 2026-10-01) (reinforced 2026-10-02)`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: stackedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-001',
+          existingDescription: stackedDesc,
+          description: 'Still confirmed',
+          rationale: 'See session log',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Both stale annotations must be gone; exactly one fresh one remains
+    expect(mockEntry.description).not.toContain('2026-10-01');
+    expect(mockEntry.description).not.toContain('2026-10-02');
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    const matches = mockEntry.description.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    // Body text must be intact
+    expect(mockEntry.description.startsWith(base)).toBe(true);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('#2921: reverse-order cross-label stack — buried reinforced annotation cleared when weakening', async () => {
+    // `base (reinforced D1) (partially weakened D2)` while applying 'weakens':
+    // the primary-label (weakened) pass strips D2, then otherLabel (reinforced)
+    // pass must strip D1 in a subsequent loop iteration.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const base = 'All env vars go through env.ts';
+    const crossDesc = `${base} (reinforced 2026-10-01) (partially weakened 2026-10-02)`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: crossDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'INV-001',
+          existingDescription: crossDesc,
+          description: 'Counter-evidence found',
+          rationale: 'See legacy.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Both stale annotations cleared
+    expect(mockEntry.description).not.toContain('2026-10-01');
+    expect(mockEntry.description).not.toContain('2026-10-02');
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
+    const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
+    // Body text must be intact
+    expect(mockEntry.description.startsWith(base)).toBe(true);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('#2921: body text is preserved through multi-annotation stripping', async () => {
+    // Verifies that the loop does not inadvertently eat body content — the body
+    // portion before the first annotation must equal the original body exactly.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const body = 'Important invariant: no side effects in pure functions.';
+    const stackedDesc = `${body} (reinforced 2026-09-28) (reinforced 2026-10-01)`;
+
+    const mockEntry = {
+      id: 'INV-002',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: stackedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-002',
+          existingDescription: stackedDesc,
+          description: 'Still holds',
+          rationale: 'Checked again',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Body must be byte-for-byte identical to the original
+    const desc = mockEntry.description;
+    const annotationStart = desc.lastIndexOf(' (reinforced ');
+    const bodyPart = annotationStart >= 0 ? desc.slice(0, annotationStart) : desc;
+    expect(bodyPart).toBe(body);
+    expect(desc).toContain(`(reinforced ${today})`);
+    const matches = desc.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
   it('#2867 Bug 2: dangling "(reinforced " fragment is cleaned up when weakening', async () => {
     // Mirror of the above: a truncated "(reinforced " fragment survives when
     // the label switches from strengthens to weakens.

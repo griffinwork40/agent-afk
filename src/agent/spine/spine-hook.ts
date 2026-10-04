@@ -271,35 +271,45 @@ function handleContradiction(
  * Strip all existing annotation fragments from `description`, then append
  * `suffix` (the new annotation) outside the `MAX_DESCRIPTION_LEN` body cap.
  *
- * Handles two bug classes (#2867):
+ * Handles two bug classes (#2867) and a third (#2921):
  * - Bug 1: the suffix is placed outside the body cap so it never eats body text.
  * - Bug 2: dangling `" (label "` fragments (label + trailing space, no date) left
  *   by the old 120-char truncation are removed via `stripAnnotationLabelPlusSpace`.
+ * - Bug 3 (#2921): same-label stacks (`base (reinforced D1) (reinforced D2)`) left
+ *   a buried stale annotation because a single primaryLabel pass only removed the
+ *   outermost entry. Fix: loop both passes until the description stops changing
+ *   (bounded to MAX_STRIP_ITERATIONS to prevent runaway on pathological input).
  *
- * Strip order (three passes):
- *   1. `stripTrailingAnnotation` for `primaryLabel` (same-label, removes complete
- *      or partially-truncated annotations that include ≥1 date digit).
- *   2. `stripTrailingAnnotation` for the other label (cross-label stacking).
- *   3. `stripAnnotationLabelPlusSpace` for both labels (catches the
- *      `" (label "` no-date form that DATE_TEMPLATE deliberately excludes).
+ * Invariant: the loop terminates in at most MAX_STRIP_ITERATIONS rounds because
+ * each iteration that makes progress removes at least one `" ("` token, and the
+ * description is finite.
  */
+// Contract: must be > the maximum realistic annotation depth (same-day re-fires,
+// cross-label transitions). 20 is far above any observed real-world depth.
+const MAX_STRIP_ITERATIONS = 20;
+
 function applyAnnotation(
   description: string,
   suffix: string,
   primaryLabel: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL,
 ): string {
   const otherLabel = primaryLabel === REINFORCED_LABEL ? WEAKENED_LABEL : REINFORCED_LABEL;
-  const base = stripAnnotationLabelPlusSpace(
-    stripAnnotationLabelPlusSpace(
-      stripTrailingAnnotation(
-        stripTrailingAnnotation(description, primaryLabel),
-        otherLabel,
+  let current = description;
+  for (let i = 0; i < MAX_STRIP_ITERATIONS; i++) {
+    const next = stripAnnotationLabelPlusSpace(
+      stripAnnotationLabelPlusSpace(
+        stripTrailingAnnotation(
+          stripTrailingAnnotation(current, primaryLabel),
+          otherLabel,
+        ),
+        primaryLabel,
       ),
-      primaryLabel,
-    ),
-    otherLabel,
-  ).slice(0, MAX_DESCRIPTION_LEN);
-  return base + suffix;
+      otherLabel,
+    );
+    if (next === current) break;
+    current = next;
+  }
+  return current.slice(0, MAX_DESCRIPTION_LEN) + suffix;
 }
 
 function getGitDiff(repoRoot: string): string {
