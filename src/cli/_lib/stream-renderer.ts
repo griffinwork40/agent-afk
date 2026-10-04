@@ -606,13 +606,13 @@ export class StreamRenderer {
     // Reset the preview-diff ref to a no-op so the disposed turn's toolLane
     // reference is released and the hook cannot write into a stale lane.
     if (this.addPreviewDiffRef) this.addPreviewDiffRef.current = () => {};
-    // Contract: clear softStopping on the class BEFORE building the DisposeCtx
-    // snapshot. The overlay's progress-banner slot reads this.softStopping via
-    // the getSoftStopping closure registered in arm(), not through the ref
-    // wrapper. If we only clear the ref inside disposeRenderer(), the closure
-    // still sees true and repaints a stale "stopping…" banner during the
-    // overlay flush. The write-back at the end is still needed for consistency.
+    // Clear turn-local flags on the class BEFORE building the DisposeCtx
+    // snapshot. The progress-banner and interrupt slots read these fields via
+    // closures registered in arm(), not through the ref wrappers. Clearing only
+    // refs inside disposeRenderer() would repaint stale stopping/interrupting
+    // affordances during the final overlay flush on a borrowed compositor.
     this.softStopping = false;
+    this.interrupting = false;
     this.skillIdentity.clear();
     const ctx: DisposeCtx = {
       out: this.out,

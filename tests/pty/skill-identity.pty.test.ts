@@ -272,10 +272,7 @@ describe('Skill identity real-PTY acceptance (skill-dispatch-preview-ui)', () =>
   // Every scenario runs in both placement modes: legacy bottom-pinned and content-hug.
   for (const contentHug of [false, true]) {
     for (const [name, scenario] of Object.entries(SKILL_IDENTITY_SCENARIOS)) {
-      // Do not hide the real Ctrl+C teardown defect behind the passing soft-stop
-      // case. Expected-failure flips red when fixed, requiring this gate removed.
-      const testCase = name === 'skill-identity-interrupt-regression' ? it.fails : it;
-      testCase(
+      it(
         `${contentHug ? '[content-hug] ' : ''}${name}: ${scenario.description}`,
         async () => {
           const res = await runSkillIdentityScenario({
