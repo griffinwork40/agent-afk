@@ -7,6 +7,7 @@
  * @module agent/providers/openai-compatible/query/client
  */
 
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
 import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseOpenAIRateLimitHeaders } from '../../shared/rate-limit-headers.js';
@@ -112,11 +113,18 @@ export function buildOpenAIAdmissionFetch(baseURL: string | undefined): typeof f
   return makeOpenAITracingFetch(globalThis.fetch, undefined, rateLimitObserver, gate);
 }
 
-function ledgerAccountForBaseUrl(baseURL: string | undefined): string {
+/**
+ * Derive a ledger/bucket key from a baseURL. Parseable URLs use the hostname
+ * (unchanged from before — persisted ledger data stays continuous). Unparseable
+ * URLs get a short SHA-256 hash prefix so each distinct endpoint gets its own
+ * rate-limit bucket and ledger row. The raw URL is never stored: it may contain
+ * credentials or query-string tokens.
+ */
+export function ledgerAccountForBaseUrl(baseURL: string | undefined): string {
   if (baseURL === undefined) return 'api.openai.com';
   try {
     return new URL(baseURL).hostname;
   } catch {
-    return 'custom';
+    return `custom-${createHash('sha256').update(baseURL).digest('hex').slice(0, 12)}`;
   }
 }
