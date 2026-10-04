@@ -124,7 +124,7 @@
   },
   "packageManager": "pnpm@11.28.2",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.74.0",
+    "@anthropic-ai/sdk": "^0.131.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@vscode/ripgrep": "^1.18.0",
