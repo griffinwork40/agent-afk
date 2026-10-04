@@ -24,7 +24,6 @@
     "src/improve/eval-run/contracts.ts": { "loc": 500, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/eval-run/runner.ts": { "loc": 362, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/improve/propose/template-engine.ts": { "loc": 461, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
-    "src/paths.ts": { "loc": 353, "reason": "paths.ts already exceeded 350 on main (840 lines); PR #2785 adds 14 lines for getToolHealthAlertStatePath" },
     "src/skills/audit-fit/index.ts": { "loc": 424, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/farm-callbacks.ts": { "loc": 392, "reason": "legacy: predates the ceiling gate; pending concern extraction" },
     "src/telegram/handlers/message.ts": { "loc": 514, "reason": "legacy: predates the ceiling gate; pending concern extraction" },

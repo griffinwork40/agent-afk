@@ -23,7 +23,7 @@ import { createInterface } from 'node:readline';
 
 import { listTraces } from '../trace/listing.js';
 import { atomicWriteFileAsync } from '../../utils/atomic-write.js';
-import { getToolHealthAlertStatePath } from '../../paths.js';
+import { getToolHealthAlertStatePath } from '../../paths.daemon.js';
 import { errorMessage } from '../../utils/errors.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
 
