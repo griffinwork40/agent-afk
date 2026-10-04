@@ -725,6 +725,27 @@ describe('SubagentManager', () => {
         expect.objectContaining({ apiKey: 'sk-ant-oat01-REFRESHED' }),
       );
     });
+
+    it('parentCredential getter returning undefined yields apiKey: undefined on child config', async () => {
+      // Regression guard: a getter form `key: () => undefined` must propagate
+      // as apiKey: undefined to the child config — not fall through to an
+      // unexpected env/keychain read. This verifies the undefined path in
+      // the same code branch as the string-getter-form test above.
+      shared.lastConfig = null;
+      const mgr = new SubagentManager({
+        parentCredential: { key: () => undefined, sourceModel: 'claude-sonnet-4-5' },
+      });
+      await mgr.forkSubagent({
+        parent: { sessionId: 'p' },
+        config: { model: 'sonnet' },
+        idPrefix: 'undefined-getter-check',
+        agentType: 'undefined-getter-check',
+      });
+      const cfg = shared.lastConfig as Record<string, unknown>;
+      // The getter returns undefined; no legacy apiKey is wired; the child must
+      // receive apiKey: undefined (the provider reads env/keychain independently).
+      expect(cfg['apiKey']).toBeUndefined();
+    });
   });
 
   describe('cross-provider child model coercion (#652)', () => {

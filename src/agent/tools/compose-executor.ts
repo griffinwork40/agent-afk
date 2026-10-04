@@ -390,7 +390,15 @@ export class ComposeExecutor {
     manager = new SubagentManager({
       parentAbortSignal: call.signal,
       // #2844: pair credential with its source model (credentialModel, not defaultModel) so provider can't mismatch.
-      ...(this.ctx.apiKey !== undefined ? { parentCredential: { key: this.ctx.apiKey, sourceModel: String(this.ctx.credentialModel ?? this.ctx.defaultModel) } } : {}),
+      // Only construct parentCredential when a real source model is known; undefined would coerce to the
+      // string "undefined" and cause providerForModel() to resolve ambiguously, defeating the cross-provider guard.
+      ...((): { parentCredential?: { key: string; sourceModel: string } } => {
+        const sourceModel = this.ctx.credentialModel ?? this.ctx.defaultModel;
+        if (this.ctx.apiKey !== undefined && sourceModel !== undefined) {
+          return { parentCredential: { key: this.ctx.apiKey, sourceModel: String(sourceModel) } };
+        }
+        return {};
+      })(),
       // Keep ambient rendering failures isolated from node execution. The
       // forwarding sink resolves the ambient sink per event, so sinks
       // installed after manager construction are still observed.
