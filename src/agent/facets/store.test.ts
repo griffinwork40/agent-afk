@@ -180,6 +180,20 @@ describe('getOrDeriveFacet yield_tracking carry-forward (#2777)', () => {
     expect(facet?.yield_tracking.produced_pr).toBeNull();
     expect(facet?.yield_tracking.pr_merged).toBeNull();
   });
+
+  it('keeps loose stale-cache reads tolerant of missing pr_url', () => {
+    writeSession('y-e', sampleSession('y-e'));
+    writeStaleV6Cache('y-e', { is_scheduled_session: false, produced_pr: true, pr_merged: true });
+
+    const cached = readCache('y-e') as { yield_tracking: Record<string, unknown> };
+    delete cached.yield_tracking['pr_url'];
+    writeFileSync(join(cacheDir, 'y-e.json'), JSON.stringify(cached), 'utf8');
+
+    const facet = getOrDeriveFacet('y-e', { sessionsDir, cacheDir });
+    expect(facet?.yield_tracking.produced_pr).toBe(true);
+    expect(facet?.yield_tracking.pr_merged).toBe(true);
+    expect(facet?.yield_tracking.pr_url).toBeNull();
+  });
 });
 
 describe('loadStoredSession', () => {

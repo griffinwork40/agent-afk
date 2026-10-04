@@ -75,7 +75,7 @@ describeMaybe('openai-compatible — live smoke (requires OPENAI_API_KEY)', () =
         expect(completed.usage.inputTokens).toBeGreaterThan(0);
       }
     },
-    { timeout: 30_000 },
+    30_000,
   );
 
   it(
@@ -135,7 +135,7 @@ describeMaybe('openai-compatible — live smoke (requires OPENAI_API_KEY)', () =
         expect(final.text).toMatch(/3\.14159/);
       }
     },
-    { timeout: 60_000 },
+    60_000,
   );
 });
 

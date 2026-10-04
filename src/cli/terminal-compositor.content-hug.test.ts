@@ -23,6 +23,7 @@ import { contentHugBandReserve } from './terminal-compositor.content-hug.js';
 import { PassThrough } from 'node:stream';
 import { Terminal as HeadlessTerminal } from '@xterm/headless';
 import { TerminalCompositor } from './terminal-compositor.js';
+import { mergeSeamBuffer, reshownArchivedRows } from './_lib/testing/scrollback-seam.js';
 
 type MockStdout = NodeJS.WriteStream & { isTTY: boolean; columns: number; rows: number };
 type MockStdin = NodeJS.ReadStream & {
@@ -107,6 +108,11 @@ async function makeRig(rows: number, opts: { anchorRow?: number; preamble?: stri
       return out;
     },
     viewportTop: () => term.buffer.active.baseY,
+    /** Buffer with the sanctioned seam overlap (re-shown archived rows) removed; see scrollback-seam.ts. */
+    async seamLines() {
+      const all = await this.lines();
+      return mergeSeamBuffer(all, term.buffer.active.baseY, reshownArchivedRows(c), dumpOf(all));
+    },
     dispose() {
       term.dispose();
       c.disarm();
@@ -179,7 +185,7 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     assertNoGaps(lines, committed, PROMPT);
     rig.dispose();
   });
@@ -212,12 +218,12 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     committed.push('AFTER-0000');
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     assertNoGaps(lines, committed, PROMPT);
     rig.dispose();
   });
 
-  it('full viewport: a tall overlay grows then collapses: covered rows go to scrollback (no history hole) and the prompt hugs the last committed row', async () => {
+  it('full viewport: a tall overlay grows then collapses: no history hole, and the prompt returns to the bottom (no gap, no bobbing)', async () => {
     const rig = await makeRig(ROWS);
     const committed = Array.from({ length: ROWS * 2 }, (_, i) => `FILL-${String(i).padStart(4, '0')}`);
     rig.c.commitAbove(`${committed.join('\n')}\n`);
@@ -230,18 +236,23 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.c.setSpinner({ enabled: false });
     rig.c.setOverlay('');
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     const frameIdx = assertNoGaps(lines, committed, PROMPT);
     const dump = dumpOf(lines);
     expect(lines.some((l) => l.includes('THINK-')), `ghost overlay rows:\n${dump}`).toBe(false);
-    // Since the 2026-10-02 no-history-hole change, rows the grown overlay
-    // covered were archived to scrollback (never hidden as pending), so they
-    // are NOT re-shown after the collapse. assertNoGaps above already proves
-    // they are present exactly once, in order, and that the prompt directly
-    // follows the last committed row. Under content-hug the unused rows lie
-    // BELOW the prompt: assert they are blank (no ghost frame rows).
+    // Rows the grown overlay covered went to scrollback immediately (no
+    // history hole) AND stay in the band as the archived prefix, so the
+    // collapse re-shows them and the screen refills (no blank gap below the
+    // prompt; repro: terminal-compositor.shrink-gap-ghost.repro.test.ts).
+    // assertNoGaps above (on the seam-merged buffer) proves every row is
+    // present exactly once, in order, with the prompt directly after the last
+    // committed row. Nothing committed or overlay-related may sit BELOW it.
     const below = lines.slice(frameIdx + 1).filter((l) => l.includes('FILL-') || l.includes('THINK-'));
     expect(below, `content below the prompt after collapse:\n${dump}`).toEqual([]);
+    // The prompt sits on the last compositor row (absoluteBottom = rows - 1):
+    // the re-shown archived rows refill the viewport. `lines` is seam-merged, so
+    // the viewport starts at lines.length - ROWS (xterm keeps ROWS viewport rows).
+    expect(frameIdx - (lines.length - ROWS), `prompt left the bottom after collapse:\n${dump}`).toBe(ROWS - 2);
     rig.dispose();
   });
 
@@ -257,7 +268,7 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.c.setOverlay('');
     rig.c.setSpinner({ enabled: false });
     rig.repaint();
-    const lines = await rig.lines();
+    const lines = await rig.seamLines();
     assertNoGaps(lines, [...banner, 'ECHO-0000', 'CARD-0001', 'CARD-0002'], PROMPT);
     rig.dispose();
   });

@@ -276,3 +276,35 @@ export async function getDefaultBranch(repo: string, opts: GitOptions = {}): Pro
     return 'main';
   }
 }
+
+/**
+ * Return repo-relative paths of TRACKED files that have local modifications
+ * (`git status --porcelain`, index+worktree). Untracked files (status `??`)
+ * are excluded — callers use this to warn before a `--force` checkout that
+ * discards tracked-file edits while leaving untracked files in place.
+ *
+ * Read-only: does not touch working tree, does not run hooks. Not hardened.
+ * Returns `[]` on any error so callers can proceed unconditionally.
+ */
+export async function trackedChanges(repo: string, opts: GitOptions = {}): Promise<string[]> {
+  const runner = opts.runner ?? defaultRunner;
+  try {
+    const { stdout } = await runner(
+      ['status', '--porcelain'],
+      repo,
+      opts.env,
+    );
+    const paths: string[] = [];
+    for (const line of stdout.split('\n')) {
+      if (line.length < 4) continue;
+      const xy = line.slice(0, 2);
+      // `??` = untracked, `!!` = ignored — skip both; everything else is tracked.
+      if (xy === '??' || xy === '!!') continue;
+      const file = line.slice(3).trim();
+      if (file) paths.push(file);
+    }
+    return paths;
+  } catch {
+    return [];
+  }
+}

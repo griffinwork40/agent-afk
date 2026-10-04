@@ -33,7 +33,7 @@ import { handleProgressEvent, makeSubagentSink } from './streaming.progress.js';
 
 // Backward-compat re-exports: extracted to sibling modules but callers still
 // import from this file. StreamTimeoutError is in its own module so
-// `instanceof` survives `vi.mock('./streaming.js')` in tests.
+// `instanceof` survives a `vi.mock` of './streaming.js' in tests.
 export { formatTelegramActivity, formatTelegramAgentLabel, renderSubagentFooter };
 export { replyWithFloodRetry } from './streaming.retry.js';
 export { renderProgressRegion, renderInterleavedPreview } from './streaming.preview.js';

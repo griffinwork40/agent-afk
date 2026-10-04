@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createImageEditHandler } from './image-edit.js';
+import { _resetWriteDenylistCacheForTests } from './write-denylist.js';
+import { _resetRootRealpathCacheForTests } from './_cwd-utils.js';
 
 // Mock resolveOpenAIAuth so tests control auth resolution without touching disk.
 vi.mock('../../providers/openai-compatible/auth.js', () => ({
@@ -439,5 +442,121 @@ describe('image_edit handler', () => {
     const meta = JSON.parse(result.content);
     expect(meta.session_edits_used).toBe(1);
     expect(meta.session_edits_limit).toBe(10);
+  });
+
+  // ── Dangling symlink security (#2823) ────────────────────────────────────
+
+  it('refuses a dangling symlink output_path whose target is outside the write root', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-edit-outside-'));
+    const outsideFile = path.join(outsideDir, 'escaped.png');
+    const linkPath = path.join(tmpDir!, 'evil.png');
+    fsSync.symlinkSync(outsideFile, linkPath); // dangling: target parent exists, file doesn't
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'edit-symlink-escape', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/outside.*write roots|write roots/i);
+    await expect(fs.access(outsideFile)).rejects.toThrow();
+
+    await fs.rm(outsideDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+  });
+
+  it('refuses a dangling symlink output_path pointing at a denylisted path', async () => {
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const homeDir = os.homedir();
+    const denyTarget = path.join(homeDir, '.ssh', 'injected.png');
+    const linkPath = path.join(tmpDir!, 'denylink.png');
+    fsSync.symlinkSync(denyTarget, linkPath);
+
+    const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+    const handler = createImageEditHandler(fetchFn);
+    const result = await handler(
+      { prompt: 'test', image_paths: [refImagePath], output_path: linkPath },
+      signal,
+      { cwd: tmpDir, sessionId: 'edit-symlink-deny', resolveBase: tmpDir, writeRoots: [tmpDir!, homeDir] },
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/protected path|denylist/i);
+    vi.unstubAllEnvs();
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+  });
+
+  // ── Intermediate symlinked-directory escape (#2836 Item 1) ───────────────
+
+  it('refuses output_path via intermediate symlinked dir whose relative target escapes root', async () => {
+    // Scenario:
+    //   root/subdir/         (real directory)
+    //   root/dirLink -> root/subdir/  (directory symlink)
+    //   root/subdir/hop.png -> ../../outside/escaped.png  (relative escape)
+    //   Access via: root/dirLink/hop.png
+    //
+    // The physical-parent fix resolves the relative symlink against the real
+    // parent (root/subdir), so ../../ correctly escapes root.
+    vi.stubEnv('AFK_IMAGE_API_KEY', 'test-key');
+    _resetRootRealpathCacheForTests();
+    _resetWriteDenylistCacheForTests();
+
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-edit-outside-'));
+    try {
+      // Create outside destination.
+      await fs.mkdir(path.join(outsideDir, 'outside'), { recursive: true });
+      const escapedFile = path.join(outsideDir, 'outside', 'escaped.png');
+      await fs.writeFile(escapedFile, 'sensitive');
+
+      // Create subdir inside root.
+      const subdir = path.join(tmpDir!, 'subdir');
+      await fs.mkdir(subdir);
+
+      // Create directory symlink: root/dirLink -> root/subdir.
+      const dirLink = path.join(tmpDir!, 'dirLink');
+      fsSync.symlinkSync(subdir, dirLink);
+
+      // Create relative escape symlink inside subdir.
+      const relEscape = path.join(
+        path.relative(subdir, path.dirname(outsideDir)),
+        'outside',
+        'escaped.png',
+      );
+      fsSync.symlinkSync(relEscape, path.join(subdir, 'hop.png'));
+
+      // Access via the directory symlink path.
+      const accessPath = path.join(dirLink, 'hop.png');
+
+      const fetchFn = vi.fn().mockResolvedValue(makeOkResponse(TINY_PNG_B64));
+      const handler = createImageEditHandler(fetchFn);
+      const result = await handler(
+        { prompt: 'test', image_paths: [refImagePath], output_path: accessPath },
+        signal,
+        { cwd: tmpDir, sessionId: 'edit-dirlink-escape', resolveBase: tmpDir, writeRoots: [tmpDir!] },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/outside.*write roots|write roots/i);
+      // Verify the outside file was not modified.
+      const stat = await fs.stat(escapedFile);
+      expect(stat.size).toBe('sensitive'.length);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+      _resetRootRealpathCacheForTests();
+      _resetWriteDenylistCacheForTests();
+    }
   });
 });

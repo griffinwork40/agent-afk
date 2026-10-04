@@ -112,17 +112,21 @@ export function projectedBandLength(
 }
 
 /**
- * Invariant (archive-on-cover, 2026-10-02): when a hugging frame grows upward
+ * Invariant (archive-and-retain, 2026-10-03): when a hugging frame grows upward
  * over the band (a full viewport), the covered rows are archived to scrollback
  * on that repaint, and rows committed while the overlay is tall are archived
- * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed).
- * History: they used to stay PENDING ("hide-on-growth") so a later shrink
- * could re-show them and the prompt would not jump up mid-screen. But a
- * pending row is on neither the screen nor in scrollback, which opened a hole
- * at the scrollback seam for the rest of the turn (operator report, tmux
- * copy-mode). The trade accepted: after a tall overlay collapses the prompt
- * may sit mid-screen with blank rows BELOW it; history is always contiguous.
- * Repro: terminal-compositor.history-hole.repro.test.ts.
+ * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed), so
+ * history never has a hole. They are ALSO retained in the band model as the
+ * archived prefix (terminal-compositor.band-archived-prefix.ts), hidden while
+ * covered and re-shown when the frame shrinks, so the screen refills instead
+ * of leaving a blank gap below the prompt. They are never written to
+ * scrollback twice; while re-shown they exist at the scrollback tail and on
+ * screen (the seam overlap, docs/scrollback.md).
+ * History: pre-#2804 they stayed PENDING only (a hole at the scrollback seam
+ * for the rest of the turn); #2804 archived and DROPPED them (a blank gap
+ * below the prompt after the collapse). Repros:
+ * terminal-compositor.history-hole.repro.test.ts and
+ * terminal-compositor.shrink-gap-ghost.repro.test.ts.
  *
  * Settled means the frame's room is a capacity worth archiving against. An
  * open autocomplete dropdown or picker is a brief, user-initiated input-region
