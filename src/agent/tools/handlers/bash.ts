@@ -28,7 +28,8 @@ import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
-import { scrubBashEnv } from './bash-env-scrub.js';
+import { buildChildEnv } from './bash-env-scrub.js';
+import { interruptedBashResult } from './bash-interrupted.js';
 import { applyBashDetach, execOnDetach } from '../detach-bash.js';
 import type { OnDetachParams } from '../detach-bash.js';
 
@@ -273,9 +274,8 @@ export function createBashHandler(
         // Always scrub episode-revealing vars (issue #2425) regardless of
         // whether context.env is set — both the inherit-process.env path
         // (context.env undefined) and the explicit merge path must be clean.
-        env: scrubBashEnv(
-          context?.env !== undefined ? { ...process.env, ...context.env } : undefined,
-        ),
+        // buildChildEnv also materializes the session's private TMPDIR.
+        env: buildChildEnv(context?.env),
       };
       const proc =
         shellResolution.shell === true
@@ -311,7 +311,7 @@ export function createBashHandler(
           killProcessGroup(proc.pid);
         }
         deregisterOnClose?.(); // Fix #2: free registry slot on timeout kill path
-        settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true, durationMs: Date.now() - startedAt });
+        settle(interruptedBashResult({ kind: 'timeout', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       }, timeout_ms);
   
       let stdout = '';
@@ -419,7 +419,7 @@ export function createBashHandler(
           killProcessGroup(proc.pid);
         }
         deregisterOnClose?.();
-        settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
+        settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       };
       signal.addEventListener('abort', abortHandler);
       // Close the TOCTOU window between the pre-flight `signal.aborted` check (top
@@ -478,7 +478,7 @@ export function createBashHandler(
         // ran (resolved=true) so this call is a no-op. Check anyway so the
         // branch is explicit: abort beats close.
         if (signal.aborted) {
-          settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
+          settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
           return;
         }
   

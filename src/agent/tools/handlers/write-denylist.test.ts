@@ -759,7 +759,9 @@ describe('write-denylist — tilde backslash expansion in AFK_WRITE_DENYLIST (PR
     const list = getWriteDenylist();
     const expanded = list.find((p) => p.endsWith('.mysecrets'));
     expect(expanded).toBeDefined();
-    expect(expanded?.startsWith(homedir())).toBe(true);
+    // getWriteDenylist() realpaths entries; homedir() is a temp dir under the
+    // test HOME redirect (#2905), which macOS aliases via /private.
+    expect(expanded?.startsWith(safeRealpath(homedir()))).toBe(true);
   });
 
   it('expands ~/ in AFK_WRITE_DENYLIST to an absolute path rooted at homedir', () => {
@@ -768,6 +770,8 @@ describe('write-denylist — tilde backslash expansion in AFK_WRITE_DENYLIST (PR
     const list = getWriteDenylist();
     const expanded = list.find((p) => p.endsWith('.mysecrets2'));
     expect(expanded).toBeDefined();
-    expect(expanded?.startsWith(homedir())).toBe(true);
+    // getWriteDenylist() realpaths entries; homedir() is a temp dir under the
+    // test HOME redirect (#2905), which macOS aliases via /private.
+    expect(expanded?.startsWith(safeRealpath(homedir()))).toBe(true);
   });
 });

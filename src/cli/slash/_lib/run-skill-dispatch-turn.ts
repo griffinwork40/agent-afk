@@ -104,6 +104,8 @@ export async function runSkillDispatchTurn(
 ): Promise<string> {
   const renderer = createSkillRenderer(ctx, {
     skillName: params.skillName,
+    // Effective args: plugin /review has already stripped --post here.
+    skillIdentity: { name: params.skillMeta.name, purpose: params.skillMeta.description, arguments: params.args },
     onCancel: () => {
       ctx.session.current.interrupt().catch(() => { /* best effort */ });
     },

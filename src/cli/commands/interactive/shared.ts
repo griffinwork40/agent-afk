@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import { statSync } from 'node:fs';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
@@ -360,6 +361,13 @@ export interface InteractiveCtx {
    */
   getInFlight?: () => boolean;
   /**
+   * Mutable ref written by any code path that calls `ctx.rl.close()` so the
+   * session sidecar records WHY the session ended (`exitReason` alongside
+   * `endedAt`). Set by `interactive.ts` before `installSignalHandlers` and
+   * written by signal handlers + the /exit slash command path.
+   */
+  exitReasonRef?: { current: StoredSession['exitReason'] };
+  /**
    * Atomically swap the active session for a stored one. Refuses while a
    * turn is in flight. Tears down the outgoing session, builds a new one,
    * mutates `session.current`, re-runs plugin passthrough registration,
@@ -387,6 +395,20 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+  /**
+   * Resets the peer-inbox notifier's in-session state (injection buffer,
+   * wake budget, and generation counter) so the resumed session starts clean.
+   * Mirrors `clearBgResultBuffer`: owned by `setupFooterSubsystems`'s
+   * closure, invoked from the swap's `onSwapped` callback in bootstrap.ts.
+   */
+  resetPeerNotifier?: () => void;
+  /**
+   * Witness trace writer for REPL-owned emitters that run outside a session
+   * turn (the peer inbox notifier's `peer_message` events). Optional: absent
+   * when tracing is disabled (`AFK_TRACE_DISABLED=1`).
+   */
+  traceWriter?: TraceSink;
+  /**
    * Clears the `pendingStopInjection` binding in `runInputLoop` so a
    * mid-session /resume swap cannot leak a Stop-hook `injectContext` from
    * the outgoing session into the resumed session's first turn. Mirrors
@@ -395,6 +417,14 @@ export interface InteractiveCtx {
    * from the swap's `onSwapped` callback in bootstrap.ts.
    */
   clearPendingStopInjection?: () => void;
+  /**
+   * Clears and re-installs the peer boundary callback on the new session
+   * after a /resume swap, so mid-turn peer delivery works on the resumed
+   * session and old-session admission-queue entries are not leaked.
+   * Owned by `runInputLoop`'s closure; invoked from the swap's `onSwapped`
+   * callback in bootstrap.ts. Optional — no-op before `runInputLoop` sets it.
+   */
+  reinstallPeerBoundary?: () => void;
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `
@@ -419,17 +449,6 @@ export interface InteractiveCtx {
    * Callers must check for null (non-TTY, daemon, tests).
    */
   inputSurfaceRef?: { current: import('../../input/input-surface.js').InputSurface | null };
-  /**
-   * Resolved API key used by the session's provider. Captured once at
-   * bootstrap from `getApiKey()` — identical to the token the AgentSession
-   * was constructed with. Threaded into the ghost-text suggest engine's
-   * `getContext()` closure so Tier-2 LLM suggestions authenticate with
-   * the same credential as the session (covers Anthropic key, OAuth/Claude
-   * subscription, and OpenAI API key — whichever `getApiKey()` resolved).
-   *
-   * Absent in test stubs that do not exercise the suggestion path.
-   */
-  suggestApiKey?: string;
   /**
    * Resolved base URL for the session's provider, sourced from
    * `loadConfig().baseUrl`. Passed to the suggest engine so Tier-2 LLM

@@ -63,6 +63,7 @@ import { AccountingAccumulator } from './accounting-accumulator.js';
 import { buildProviderLifecycle, ProviderInitializer } from './provider-lifecycle.js';
 import { TurnStreamRunner } from './turn-stream-runner.js';
 import { SessionShutdown } from './session-shutdown.js';
+import { withSessionTmpdir, cleanupSessionTmpdir } from './session-tmpdir.js';
 import { resetSession } from './session-reset.js';
 import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
@@ -186,7 +187,8 @@ export class AgentSession implements IAgentSession {
       actor: deriveActor(config.parentSessionId),
     });
 
-    this.config = this.journal.open(this.config);
+    // Private per-session TMPDIR (session-tmpdir.ts); a no-op for forks.
+    this.config = withSessionTmpdir(this.journal.open(this.config));
     this.initSdkLifecycle();
     this.journal.arm(this.config);
 
@@ -469,6 +471,7 @@ export class AgentSession implements IAgentSession {
     }
     await this.journal.close();
     await this.shutdown.dispatchOnce('close');
+    await cleanupSessionTmpdir(this.config.env); // after drain: children are done with it
   }
 
   /**

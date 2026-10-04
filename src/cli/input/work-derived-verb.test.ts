@@ -19,28 +19,33 @@ describe('verbForToolName', () => {
     expect(verbForToolName('   ')).toBeUndefined();
   });
 
-  it('describes read tools as Reading', () => {
-    expect(verbForToolName('read_file')).toBe('Reading');
-    expect(verbForToolName('grep')).toBe('Reading');
-  });
-
-  it('describes mutation tools as Editing', () => {
-    expect(verbForToolName('edit_file')).toBe('Editing');
-    expect(verbForToolName('write_file')).toBe('Editing');
-  });
-
-  it('describes shell tools as Running', () => {
-    expect(verbForToolName('bash')).toBe('Running');
-  });
-
-  it('describes dispatch tools by their dispatch class', () => {
-    expect(verbForToolName('agent')).toBe('Delegating');
-    expect(verbForToolName('skill')).toBe('Orchestrating');
-    expect(verbForToolName('compose')).toBe('Orchestrating');
-  });
-
-  it('describes MCP tools as Calling', () => {
-    expect(verbForToolName('mcp__server__do_thing')).toBe('Calling');
+  it.each([
+    ['read_file', 'Reading'],
+    ['edit_file', 'Writing'],
+    ['write_file', 'Writing'],
+    ['bash', 'Running'],
+    ['agent', 'Delegating'],
+    ['skill', 'Running skill'],
+    ['compose', 'Coordinating'],
+    ['mcp__server__do_thing', 'Calling plugin'],
+    ['wait_for', 'Waiting'],
+    ['test_run', 'Testing'],
+    ['send_telegram', 'Notifying'],
+    ['image_generate', 'Generating'],
+    ['image_edit', 'Generating'],
+    ['ask_question', 'Asking'],
+    ['grep', 'Searching'],
+    ['glob', 'Searching'],
+    ['memory_search', 'Recalling'],
+    ['memory_update', 'Remembering'],
+    ['patch_apply', 'Patching'],
+    ['config_set', 'Configuring'],
+    ['cancel_background_job', 'Cancelling'],
+    ['list_schedules', 'Reading'],
+    ['get_schedule_history', 'Reading'],
+    ['cancel_schedule', 'Cancelling'],
+  ])('describes %s as %s without a trailing ellipsis', (name, expected) => {
+    expect(verbForToolName(name)).toBe(expected);
   });
 
   it('falls back to a deliberately vague verb for uncategorized tools', () => {

@@ -17,6 +17,7 @@
 // @module cli/config/json-tier-parse
 
 import { readFileSync, existsSync } from 'fs';
+import { parseDaemonBlock } from './json-tier-parse.daemon.js';
 import { isValidModel } from '../../agent/session/model-resolution.js';
 import {
   parseModelsConfig,
@@ -96,32 +97,12 @@ export function parseJsonConfigFile(configPath: string): ParsedJsonConfigFile | 
     if (typeof json.autoRouting.interactive === 'boolean') ar.interactive = json.autoRouting.interactive;
     if (typeof json.autoRouting.chat === 'boolean') ar.chat = json.autoRouting.chat;
     if (typeof json.autoRouting.telegram === 'boolean') ar.telegram = json.autoRouting.telegram;
-    if (typeof json.autoRouting.daemon === 'boolean') ar.daemon = json.autoRouting.daemon;
+    // autoRouting.daemon removed (dead key); silently ignored for back-compat.
     config.autoRouting = ar;
   }
 
   if (json.daemon && typeof json.daemon === 'object') {
-    const daemon: NonNullable<CliConfig['daemon']> = {};
-    if (typeof json.daemon.task === 'string') {
-      daemon.task = json.daemon.task;
-    }
-    if (typeof json.daemon.taskId === 'string') {
-      daemon.taskId = json.daemon.taskId;
-    }
-    const wp = json.daemon.worktreePrune;
-    if (wp && typeof wp === 'object') {
-      daemon.worktreePrune = {
-        enabled: typeof wp.enabled === 'boolean' ? wp.enabled : true,
-        cron: typeof wp.cron === 'string' ? wp.cron : '0 4 * * *',
-        maxAgeDaysClean: typeof wp.maxAgeDaysClean === 'number' ? wp.maxAgeDaysClean : 14,
-        maxAgeDaysDirty: typeof wp.maxAgeDaysDirty === 'number' ? wp.maxAgeDaysDirty : 30,
-        scope: typeof wp.scope === 'string' ? wp.scope : 'all',
-      };
-    }
-    if (typeof json.daemon.verifyDone === 'boolean') {
-      daemon.verifyDone = json.daemon.verifyDone;
-    }
-    config.daemon = daemon;
+    config.daemon = parseDaemonBlock(json.daemon);
   }
 
   if (json.telegram && typeof json.telegram === 'object') {

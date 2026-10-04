@@ -11,11 +11,15 @@
  * - Injected exec for testability (no real child_process in unit tests).
  * - Reads and writes facets through the existing store helpers; never accesses
  *   the session sidecar directly.
+ * - Never downgrades produced_pr=true to false (#2777): derive.ts may detect
+ *   a PR from `gh pr create` output; the probe must not erase that signal.
+ * - When pr_url is present, determine pr_merged via `gh pr view <url> --json
+ *   state` instead of the cwd branch (#2777).
  *
  * @module agent/facets/yield-probe
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getFacetCacheDir, validateSessionId } from '../../paths.js';
 import { SessionFacetSchema, type SessionFacet } from './schema.js';
@@ -35,6 +39,11 @@ export type ExecFnYield = (
 // ---------------------------------------------------------------------------
 
 const EXEC_TIMEOUT_MS = 10_000;
+
+// Invariant: only a well-formed GitHub PR URL is passed to gh pr view.
+// A value starting with '-' would be mis-parsed as a flag; other malformed
+// values could produce surprising gh output. Validated before any exec call.
+const GITHUB_PR_URL_RE = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/;
 
 /**
  * Return the short branch name for the cwd, or null on failure.
@@ -98,6 +107,44 @@ export async function queryPrState(
   }
 }
 
+/**
+ * Return the PR state for a known PR URL via `gh pr view <url> --json state`.
+ * Returns `'merged'`, `'open'`, `'closed'`, or `'error'` on failure.
+ *
+ * Used when derive.ts detected a `gh pr create` URL — avoids the cwd branch
+ * lookup entirely, since the URL uniquely identifies the PR (#2777).
+ */
+export async function queryPrStateByUrl(
+  execFn: ExecFnYield,
+  prUrl: string,
+  cwd?: string,
+): Promise<'merged' | 'open' | 'closed' | 'error'> {
+  // Guard: reject malformed or flag-like values before passing to gh.
+  if (!GITHUB_PR_URL_RE.test(prUrl)) return 'error';
+  try {
+    const { stdout } = await execFn(
+      'gh',
+      ['pr', 'view', '--json', 'state', '--', prUrl],
+      { cwd, timeout: EXEC_TIMEOUT_MS },
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout.trim());
+    } catch {
+      return 'error';
+    }
+    if (!parsed || typeof parsed !== 'object') return 'error';
+    const obj = parsed as Record<string, unknown>;
+    const state = typeof obj['state'] === 'string' ? obj['state'].toLowerCase() : '';
+    if (state === 'merged') return 'merged';
+    if (state === 'closed') return 'closed';
+    if (state === 'open') return 'open';
+    return 'error';
+  } catch {
+    return 'error';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Facet patch: atomic rewrite of yield fields in the cached facet
 // ---------------------------------------------------------------------------
@@ -111,6 +158,11 @@ function cachePathFor(sessionId: string, cacheDir: string): string {
  * Read the cached facet for `sessionId`, patch its yield_tracking fields, and
  * atomically rewrite the cache file. No-op when the cache entry does not exist.
  *
+ * Contract (#2777):
+ * - Never downgrades produced_pr=true to false — if the cached facet already
+ *   has produced_pr=true (set by derive.ts from gh pr create output), leave it.
+ * - Carries forward pr_url from the cached facet when not supplying a new one.
+ *
  * This deliberately does NOT go through `getOrDeriveFacet` to avoid
  * re-deriving the facet (which would reset yield_tracking to null).
  */
@@ -119,6 +171,7 @@ export function patchYieldFields(
   produced_pr: boolean,
   pr_merged: boolean | null,
   cacheDir: string = getFacetCacheDir(),
+  pr_url?: string | null,
 ): void {
   const cachePath = cachePathFor(sessionId, cacheDir);
   if (!existsSync(cachePath)) return;
@@ -133,12 +186,21 @@ export function patchYieldFields(
   const parsed = SessionFacetSchema.safeParse(raw);
   if (!parsed.success) return;
 
+  const existing = parsed.data;
+  const existingYt = existing.yield_tracking;
+
+  // Never downgrade produced_pr=true to false (#2777).
+  const effectiveProducedPr = existingYt.produced_pr === true ? true : produced_pr;
+  // Keep existing pr_url if new one is not provided.
+  const effectivePrUrl = pr_url !== undefined ? pr_url : existingYt.pr_url;
+
   const facet: SessionFacet = {
-    ...parsed.data,
+    ...existing,
     yield_tracking: {
-      ...parsed.data.yield_tracking,
-      produced_pr,
-      pr_merged: produced_pr ? pr_merged : null,
+      ...existingYt,
+      produced_pr: effectiveProducedPr,
+      pr_merged: effectiveProducedPr ? pr_merged : null,
+      pr_url: effectivePrUrl,
     },
   };
 
@@ -154,18 +216,50 @@ export function patchYieldFields(
 
 /**
  * Run the yield probe for `sessionId`:
- *   1. Get the current git branch.
- *   2. Query gh for the PR state on that branch.
+ *   1. Check if the cached facet already has a pr_url (from gh pr create detection).
+ *      If so, query gh pr view <url> --json state directly.
+ *   2. Otherwise, get the current git branch and query gh pr list --head <branch>.
  *   3. Patch the cached facet with produced_pr / pr_merged.
  *
- * Never throws — all errors are swallowed. The facet is left with null
- * yield fields when the probe cannot run (no git, no gh, etc.).
+ * Contract (#2777):
+ * - Never throws — all errors are swallowed.
+ * - Never downgrades existing produced_pr=true to false.
+ * - When pr_url is present in the existing cached facet, uses gh pr view <url>
+ *   to determine pr_merged (avoids branch-name ambiguity).
  */
 export async function writeFacetYield(
   sessionId: string,
   execFn: ExecFnYield,
   cwd?: string,
 ): Promise<void> {
+  // Read the cached facet to check for a pre-detected pr_url
+  const cacheDir = getFacetCacheDir();
+  const cachePath = cachePathFor(sessionId, cacheDir);
+  let cachedPrUrl: string | null | undefined;
+  let cachedProducedPr: boolean | null = null;
+
+  if (existsSync(cachePath)) {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(cachePath, 'utf8'));
+      const parsed = SessionFacetSchema.safeParse(raw);
+      if (parsed.success) {
+        cachedPrUrl = parsed.data.yield_tracking.pr_url;
+        cachedProducedPr = parsed.data.yield_tracking.produced_pr;
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+
+  // Path 1: pr_url already detected by derive.ts — query by URL directly
+  if (typeof cachedPrUrl === 'string' && cachedPrUrl.length > 0) {
+    const prState = await queryPrStateByUrl(execFn, cachedPrUrl, cwd);
+    if (prState === 'error') return; // leave fields as-is, probe inconclusive
+    patchYieldFields(sessionId, true, prState === 'merged', cacheDir, cachedPrUrl);
+    return;
+  }
+
+  // Path 2: no detected pr_url — branch-based lookup
   const branch = await getCurrentBranch(execFn, cwd);
   if (!branch) return;
 
@@ -175,6 +269,9 @@ export async function writeFacetYield(
     return;
   }
   if (prState === 'none') {
+    // Never downgrade produced_pr=true to false — if derive already detected
+    // a PR URL, don't record false just because branch lookup found nothing.
+    if (cachedProducedPr === true) return;
     patchYieldFields(sessionId, false, null);
     return;
   }

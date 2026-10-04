@@ -21,6 +21,7 @@ import {
   RATE_LIMIT_TRANSIENT_MAX_RETRIES,
 } from './retry-constants.js';
 import { usageLimitNoTimestampPause, usageLimitResetPause } from './usage-limit-pause.js';
+import { anthropicCreditErrorEvent } from '../usage-limit.error.js';
 
 /**
  * Outer tier: intercept 429 usage-limit errors and (when enabled)
@@ -91,6 +92,12 @@ export async function* turnWithUsageLimitRetry(
           sawTransient = true;
           transientRetryAfterMs = c.retryAfterMs;
           break;
+        }
+        // An empty API credit balance is terminal (never parked): surface it
+        // with the shared provider-labeled message, status 400 preserved.
+        if (c && c.kind === 'credit-exhausted') {
+          yield anthropicCreditErrorEvent(event);
+          continue;
         }
       }
       yield event;

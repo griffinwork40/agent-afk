@@ -15,6 +15,7 @@
  */
 
 import type { EnvVarMeta } from './env.js';
+import { SESSION_TMPDIR_ENV_REGISTRY } from './env.session-tmpdir.js';
 
 export const SESSION_STORAGE_ENV_REGISTRY = [
   {
@@ -40,4 +41,7 @@ export const SESSION_STORAGE_ENV_REGISTRY = [
     example: '1',
     category: 'debug',
   },
+  // Per-session temp dirs (env.session-tmpdir.ts), spliced here so env.ts —
+  // grandfathered over the size ceiling — needs no new import.
+  ...SESSION_TMPDIR_ENV_REGISTRY,
 ] as const satisfies readonly EnvVarMeta[];

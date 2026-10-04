@@ -224,9 +224,11 @@ describe('CONFIG_ENV_SHADOWS integrity', () => {
     }
   });
 
-  it('maps all four autoRouting sub-keys, since AFK_AUTO_ROUTING sets them together', () => {
-    for (const sub of ['interactive', 'chat', 'telegram', 'daemon']) {
+  it('maps all three autoRouting sub-keys, since AFK_AUTO_ROUTING sets them together', () => {
+    for (const sub of ['interactive', 'chat', 'telegram']) {
       expect(CONFIG_ENV_SHADOWS[`autoRouting.${sub}`]).toEqual(['AFK_AUTO_ROUTING']);
     }
+    // autoRouting.daemon was removed — daemon path never calls assembleSystemPrompt
+    expect(CONFIG_ENV_SHADOWS['autoRouting.daemon']).toBeUndefined();
   });
 });
