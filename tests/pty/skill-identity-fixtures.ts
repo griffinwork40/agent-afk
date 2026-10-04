@@ -87,10 +87,11 @@ export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
     await settle(120);
     // No process(content), no dispose and no manual overlay injection.
   }, {
-    // Intro and live banner coexist. The combined row distinguishes the live
-    // banner from the separate purpose/args lines in the committed intro.
-    inViewport: ['/review · LIVE_PURPOSE_REVIEW'],
-    exactlyOnce: ['/review · LIVE_PURPOSE_REVIEW'], absent: ['LIVE_CONTENT'],
+    // Regression (duplicate preview): only the committed intro shows the
+    // identity. The combined `/name · purpose` row is the live-banner form and
+    // must never paint beneath the intro.
+    inViewport: ['LIVE_PURPOSE_REVIEW'],
+    exactlyOnce: ['LIVE_PURPOSE_REVIEW'], absent: ['LIVE_CONTENT', '/review · LIVE_PURPOSE_REVIEW'],
   }),
   'skill-identity-cancelled': scenario('soft-stop after arm retains intro once and removes live overlay', async ctx => {
     const c = await surface(ctx);

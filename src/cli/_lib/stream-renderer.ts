@@ -371,7 +371,6 @@ export class StreamRenderer {
       lastProgressByTask: this.lastProgressByTask,
       sources: this.sources,
       childActivity: this.childActivity,
-      getSkillIdentity: () => this.skillIdentity.current,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
     });
@@ -396,8 +395,13 @@ export class StreamRenderer {
     // owns its own resize subscription; this covers the rest of the overlay
     // surface. Debounced + coalesced upstream by ResizeBus.
     this.resizeUnsub = subscribeToResize(this.overlayComposer, false);
+    // Invariant: the skill identity (/name, purpose, args) renders exactly
+    // once, as this durable scrollback introduction. The live progress banner
+    // must not repeat it: #2895 also prefixed the banner with the identity,
+    // which painted the same preview twice on every slash-skill dispatch
+    // (full preview directly beneath the intro, then `/name` above the
+    // activity rows).
     await this.skillIdentity.introduce(this.coordinator, compositor, this.out);
-    if (this.skillIdentity.current) this.overlayComposer.flush();
   }
 
   /**
@@ -559,7 +563,6 @@ export class StreamRenderer {
       childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
       ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
-      ...(this.skillIdentity.current ? { skillIdentity: this.skillIdentity.current } : {}),
       ...(this.smoke ? { thoughtHold: this.smoke.thoughtHold } : {}),
     });
   }
