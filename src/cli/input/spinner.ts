@@ -34,6 +34,14 @@ export interface SpinnerControllerOptions {
    * current verb during that tick adds no timer and no new repaint path.
    */
   workVerb?: () => string | undefined;
+  /**
+   * Optional state-specific hint (e.g. the wait_for queue-to-stop hint). When it
+   * returns text, the tip row shows it with a `Hint:` label INSTEAD of the
+   * rotating tip, with no warmup and regardless of AFK_SPINNER_TIPS: that
+   * setting governs rotating tips only, and this hint describes what the user
+   * can do right now. Pulled on each render, so no extra timer.
+   */
+  contextTip?: () => string | undefined;
 }
 
 /**
@@ -56,12 +64,14 @@ export class SpinnerController {
   private readonly onTick: () => void;
   private readonly goblin: boolean;
   private readonly workVerb: (() => string | undefined) | undefined;
+  private readonly contextTip: (() => string | undefined) | undefined;
 
   constructor(opts: SpinnerControllerOptions) {
     this.captureMode = opts.captureMode;
     this.onTick = opts.onTick;
     this.goblin = opts.goblin ?? false;
     this.workVerb = opts.workVerb;
+    this.contextTip = opts.contextTip;
   }
 
   /**
@@ -156,7 +166,15 @@ export class SpinnerController {
    * stable across terminal resizes — `selectTip` is width-agnostic.
    */
   renderTipRow(cols: number): string | null {
-    return this.state?.currentTip
+    if (!this.state) return null;
+    let hint: string | undefined;
+    try {
+      hint = this.contextTip?.();
+    } catch {
+      hint = undefined; // a broken hint probe must never take down the render loop
+    }
+    if (hint) return formatTipRow(hint, cols, 'Hint');
+    return this.state.currentTip
       ? formatTipRow(this.state.currentTip.text, cols)
       : null;
   }
