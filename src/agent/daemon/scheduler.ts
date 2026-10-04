@@ -46,7 +46,8 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord } from './scheduler.overlap-guard.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord } from './scheduler.overlap-guard.js';
+import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
 
 
 export interface SchedulerOptions {
@@ -113,6 +114,12 @@ export interface SchedulerOptions {
   primaryChatId?: number;
   /** Optional topic thread ID for supergroup delivery. */
   primaryThreadId?: number;
+  /**
+   * Override the budget gate (tests). When absent, the real `evaluateBudgetGate`
+   * from `./budget-gate.ts` is used. Provide `async () => ({ skip: false })` to
+   * bypass the gate in tests that exercise other scheduler logic.
+   */
+  budgetGate?: () => Promise<import('./budget-gate.js').BudgetGateResult>;
 }
 
 export type TelemetryTrigger = 'cron' | 'sessionstart' | 'pull';
@@ -185,6 +192,8 @@ export class CronScheduler {
   private readonly queueDir: string;
   /** Per-task in-flight guard: IDs of tasks whose runOnce promise is still pending. Intra-process only — no cross-process coordination. */
   private readonly inFlightTaskIds = new Set<string>();
+  /** One Telegram alert per usage-budget episode (see BudgetAlertLatch). */
+  private readonly budgetAlerts = new BudgetAlertLatch();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -387,6 +396,27 @@ export class CronScheduler {
           { now: this.now, writeTelemetry: (r) => this.writeTelemetry(r, task) },
         );
       } finally { this.idleDetector.decrement(); }
+    }
+
+    // Budget gate: check subscription usage before spawning an agent session.
+    // Shell and builtin tasks are never gated (they don't consume model quota).
+    // Fail-open: if usage is unavailable the gate passes.
+    const budgetResult = await (this.options.budgetGate ?? (() => evaluateBudgetGate({
+      target: resolveDaemonUsageTarget(this.options.sessionConfig?.model, this.options.sessionConfig?.apiKey),
+    })))();
+    if (!budgetResult.skip) this.budgetAlerts.clear();
+    else {
+      const record = makeBudgetSkipRecord(task, trigger, this.now(), budgetResult);
+      // Alert once per budget episode (BudgetAlertLatch), overriding the
+      // task's notifyOn either way: 'always' for the first skip so the
+      // operator hears about it, 'never' for the rest so a full window does
+      // not page once per scheduled tick.
+      const alert = this.budgetAlerts.shouldAlert(budgetResult);
+      const notifyTask = { ...task, notifyOn: alert ? ('always' as const) : ('never' as const) };
+      this.writeTelemetry(record, notifyTask, {
+        responseText: formatBudgetSkipMessage(budgetResult, task.taskId, this.now()),
+      });
+      return record;
     }
 
     return await executeAgentTask(

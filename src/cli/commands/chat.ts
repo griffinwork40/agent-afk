@@ -762,7 +762,7 @@ export function registerChatCommand(program: Command): void {
         // Suppress on error — see encounteredError declaration above.
         if (shouldPersist && stats.totalTurns > 0 && !encounteredError) {
           try {
-            const savedPath = saveSession(stats, persistId);
+            const savedPath = saveSession(stats, persistId, { closeTime: true });
             // Derive the resume id from the saved path's basename.
             const savedId = path.basename(savedPath, '.json') || persistId || stats.sessionId || 'unknown';
             process.stderr.write(`Continue with: afk chat <msg> --resume ${savedId}\n`);

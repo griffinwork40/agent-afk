@@ -112,18 +112,21 @@ export function projectedBandLength(
 }
 
 /**
- * Invariant (hide-on-growth, not archive): when a hugging frame grows upward
- * over the band (a full viewport), the covered rows stay in the band model as
- * PENDING instead of being archived to scrollback — exactly like band-hold's
- * commit-time pending rows. Archiving would make them unrecoverable on screen,
- * so the next frame shrink would leave the band short and the prompt would jump
- * up mid-screen on every thinking-preview / tool-card cycle.
- * repositionCommittedBand re-pins the model bottom-aligned (newest rows hug the
- * grown frame, oldest hidden) and repaints them as the frame shrinks. The model
- * stays bounded: band-hold archives beyond maxBandModel on the next commit, the
- * collapse branch of preserveRowsBeforeFrameRender archives genuine overflow
- * once the frame is SETTLED (below), and disarm flushes any remainder
- * (flushPendingCommittedBand).
+ * Invariant (archive-and-retain, 2026-10-03): when a hugging frame grows upward
+ * over the band (a full viewport), the covered rows are archived to scrollback
+ * on that repaint, and rows committed while the overlay is tall are archived
+ * on the next one (preserveRowsBeforeFrameRender / pendingEvictionAllowed), so
+ * history never has a hole. They are ALSO retained in the band model as the
+ * archived prefix (terminal-compositor.band-archived-prefix.ts), hidden while
+ * covered and re-shown when the frame shrinks, so the screen refills instead
+ * of leaving a blank gap below the prompt. They are never written to
+ * scrollback twice; while re-shown they exist at the scrollback tail and on
+ * screen (the seam overlap, docs/scrollback.md).
+ * History: pre-#2804 they stayed PENDING only (a hole at the scrollback seam
+ * for the rest of the turn); #2804 archived and DROPPED them (a blank gap
+ * below the prompt after the collapse). Repros:
+ * terminal-compositor.history-hole.repro.test.ts and
+ * terminal-compositor.shrink-gap-ghost.repro.test.ts.
  *
  * Settled means the frame's room is a capacity worth archiving against. An
  * open autocomplete dropdown or picker is a brief, user-initiated input-region
@@ -133,8 +136,9 @@ export function projectedBandLength(
  * keeping rows pending for a whole turn hides them from BOTH screen and
  * scrollback (a hole in history — the PTY scenario multi-commit-gap caught
  * exactly this), which is worse than the prompt ending 1–2 rows short of the
- * bottom when the spinner stops. The overlay-empty half of the rule stays with
- * the caller. Returns true outside content-hug (no extra condition).
+ * bottom when the spinner stops. The overlay-empty half of the rule applies to
+ * bottom-pinned only and lives in the caller (frame-preserve.ts
+ * pendingEvictionAllowed). Returns true outside content-hug (no extra condition).
  */
 export function contentHugFrameSettled(self: {
   placementMode: FramePlacementMode;

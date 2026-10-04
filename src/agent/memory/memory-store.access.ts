@@ -16,8 +16,6 @@
 import type BetterSqlite3 from 'better-sqlite3';
 import type { AccessStats, Fact } from './types.js';
 
-export type { AccessStats };
-
 /**
  * Return non-superseded facts that have never been retrieved
  * (`access_count = 0`) and were created more than `minAgeDays` days ago.
@@ -38,7 +36,10 @@ export function queryUnaccessed(
   const cutoff = new Date(Date.now() - age * 24 * 60 * 60 * 1000).toISOString();
   return db
     .prepare(
-      `SELECT *
+      // Explicit column list instead of SELECT * so that future schema changes
+      // (new columns added to facts) do not silently change this query's shape.
+      `SELECT id, session_id, created_at, category, content, source_surface,
+              superseded_by, confidence, access_count, last_accessed, evidence
          FROM facts
         WHERE access_count = 0
           AND created_at < ?

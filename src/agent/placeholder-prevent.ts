@@ -51,8 +51,10 @@ import { debugLog } from '../utils/debug.js';
  * prevention gain — the Stop-hook correction provides the backstop.
  */
 const PREVENTION_INSTRUCTION =
-  '[placeholder-prevent] When including shell commands or code blocks in your ' +
-  'response, resolve placeholder values from available context (env, config, ' +
+  '[placeholder-prevent] Prefer running commands yourself with your tools; ' +
+  'this note applies only to commands you must hand to the user. When ' +
+  'including shell commands or code blocks in your response, resolve ' +
+  'placeholder values from available context (env, config, ' +
   'prior output) before presenting them. If a value is genuinely unknown, wrap ' +
   'it in a prominent callout — e.g. "⚠ Replace `<your-token>` with ..." — so ' +
   'the user cannot miss that substitution is required. Do not leave silent ' +

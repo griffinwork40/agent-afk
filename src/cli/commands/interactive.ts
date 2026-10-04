@@ -51,6 +51,7 @@ import {
   printExitSummary,
   snapshotGitStateForCancelAll,
   makeSessionSaver,
+  type ExitReasonRef,
 } from './interactive/interactive.cleanup.js';
 import { measurePreArmAnchorRow } from './interactive/interactive.pty-setup.js';
 
@@ -330,7 +331,7 @@ export function registerInteractiveCommand(program: Command): void {
       console.log(palette.dim(`  transcript: ${transcript.path()}`));
       registerCleanup(async () => { await transcript.appendEnded(); });
       ctx.setTranscriptPathGetter?.(() => transcript.path());
-      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx);
+      const { saveCurrentSession, isSaved } = makeSessionSaver(ctx, (ctx.exitReasonRef = { current: undefined } as ExitReasonRef));
       registerCleanup(async () => {
         if (isSaved()) return;
         try { saveCurrentSession(); } catch { /* session-sidecar best-effort */ }
@@ -339,7 +340,7 @@ export function registerInteractiveCommand(program: Command): void {
       const turnState: TurnState = { turnInFlight: false, lastSigintAt: 0 };
       ctx.getInFlight = () => turnState.turnInFlight;
 
-      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort });
+      const { handleSigint, removeListeners } = installSignalHandlers({ ctx, turnState, pickerAbort, exitReasonRef: ctx.exitReasonRef! });
       registerCleanup(async () => { removeListeners(); });
 
       // Screen clear then measure the pre-arm anchor row (newlines from

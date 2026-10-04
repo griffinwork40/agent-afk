@@ -187,6 +187,47 @@ Pass via `--ak key=value` (repeatable):
 | `effort` | (none) | Effort level: `low\|medium\|high\|xhigh\|max` |
 | `max_budget_usd` | (none) | Hard cost ceiling per trial, e.g. `"5.00"` |
 | `afk_version` | (latest) | npm version pin, e.g. `"5.278.2"` |
+| `context_window` | (unset) | Context-window override in tokens, e.g. `128000`. Writes `$AFK_HOME/config/afk.config.json` before `afk chat` runs. Requires **agent-afk ≥ 5.284.0** (the `contextWindow` slot binding, PR #2793). When unset, no config file is written and afk uses its built-in table (64 000 for `qwen-3.8-27b`). |
+
+> **`afk_version` and `context_window` interaction**: if you pin `afk_version` to a release
+> older than 5.284.0, the written config file is ignored (that version doesn't read
+> `contextWindow` from the slot binding). Either omit `afk_version` (gets latest) or pin
+> to ≥ 5.284.0 when using `context_window`.
+
+## Cerebras (paid tier: 128 k context window)
+
+Cerebras's `qwen-3.8-27b` provides 64 k context on the free tier and 128 k on paid.
+The adapter's built-in limit table defaults to the conservative 64 k; pass
+`--ak context_window=128000` to raise it.
+
+The adapter writes a `"local"` slot binding to `$AFK_HOME/config/afk.config.json`
+before each trial run. `contextWindowOverrideFor('qwen-3.8-27b')` in
+`src/agent/session/model-slots.ts:499` then returns 128 000, and
+`contextLimitFor` honours it for compaction / budget math.
+
+> **zsh verified smoke command** (reward 1.0 on `log-summary-date-ranges`):
+
+```zsh
+export CEREBRAS_API_KEY="$(sed -n 's/^AFK_MODEL_LOCAL_API_KEY=//p' ~/.afk/config/afk.env | tr -d "\"'")"
+M=cerebras/qwen-3.8-27b
+AFKENV=(
+  --ae AFK_PROVIDER=openai-compatible
+  --ae AFK_OPENAI_BASE_URL=https://api.cerebras.ai/v1
+  --ae OPENAI_API_KEY=$CEREBRAS_API_KEY
+)
+PYTHONPATH=. harbor run -a bench.harbor.afk_agent:AfkAgent --ak variant=full \
+  -d terminal-bench --n-tasks 1 -i log-summary-date-ranges --model $M --env docker --n-concurrent 1 \
+  "${AFKENV[@]}" -o bench/harbor/jobs --job-name qwen-smoke-afk \
+  --ak context_window=128000
+```
+
+Notes:
+- Harbor's agent kwargs flag is `--ak` (not `-ak`).
+- Use a zsh array for `AFKENV` — do not unquote the variable in bash, which would split on spaces.
+- `AFK_PROVIDER=openai-compatible` routes afk to the OpenAI-compatible provider stack;
+  `AFK_OPENAI_BASE_URL` points it at Cerebras; `OPENAI_API_KEY` carries the credential.
+- Requires **agent-afk ≥ 5.284.0**; the adapter installs latest by default (omit `--ak afk_version`
+  or pin to ≥ 5.284.0).
 
 ## Running tests
 

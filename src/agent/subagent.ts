@@ -440,7 +440,7 @@ export class SubagentManager {
         parentTraceWriter: this.parentTraceWriter,
         parentSurface: this.parentSurface,
         parentCanUseTool: this.parentCanUseTool,
-        workspaceStore: this.workspaceStore,
+        workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
 
       // Occupancy touch: subagents never write presence files (top-level-only
