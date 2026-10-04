@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StreamRenderer } from './stream-renderer.js';
 import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { Writer } from '../slash/types.js';
-import { stripAnsi } from '../display.js';
+import { displayWidth, stripAnsi } from '../display.js';
+import * as terminalSize from '../terminal-size.js';
 
 const identity = { name: 'review', purpose: 'Check changes', arguments: 'src/index.ts' };
 function writer() {
@@ -11,10 +12,10 @@ function writer() {
 }
 afterEach(() => vi.restoreAllMocks());
 describe('renderer skill identity', () => {
-  it('commits once per invocation without relying on capture deduplication', async () => {
+  it.each([false, true])('commits once per invocation (capture=%s)', async (captureMode) => {
     const out = writer();
     for (let i = 0; i < 2; i++) {
-      const renderer = new StreamRenderer({ out, skillIdentity: identity, forceNonTty: true, captureMode: false });
+      const renderer = new StreamRenderer({ out, skillIdentity: identity, forceNonTty: true, captureMode });
       await renderer.arm();
       await renderer.arm();
       renderer.process({ type: 'done' }, { subagentId: 'child' });
@@ -26,7 +27,8 @@ describe('renderer skill identity', () => {
     expect(intros[0]![0]).toContain('args: src/index.ts');
     expect(intros[0]![0]).not.toContain('\x1b');
   });
-  it('paints before arm resolves, survives immediate activity, and restores borrowed idle', async () => {
+  it.each([20, 40, 80])('paints identity and stopping feedback at %i columns', async (width) => {
+    vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(width);
     const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
     const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true });
@@ -41,6 +43,12 @@ describe('renderer skill identity', () => {
       renderer.notifyFirstContent();
       await Promise.resolve();
       expect(compositor.setOverlay.mock.lastCall?.[0]).toContain('/review');
+      renderer.setSoftStopping(true);
+      await Promise.resolve();
+      const frame = String(compositor.setOverlay.mock.lastCall?.[0]);
+      expect(stripAnsi(frame)).toContain('/review');
+      expect(stripAnsi(frame)).toContain('stopping…');
+      for (const row of frame.split('\n')) expect(displayWidth(row)).toBeLessThanOrEqual(width);
     } finally {
       await renderer.dispose();
       if (stdoutTty) Object.defineProperty(process.stdout, 'isTTY', stdoutTty); else Reflect.deleteProperty(process.stdout, 'isTTY');
