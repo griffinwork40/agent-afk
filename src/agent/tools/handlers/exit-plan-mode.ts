@@ -223,7 +223,7 @@ export function createExitPlanModeHandler(controls: PlanExitControls): ToolHandl
     // so the gate stays locked in plan mode for the remainder of this turn —
     // closing the mid-turn TOCTOU window where the model could issue write tools
     // in bypass mode before actually ending its turn.
-    const plansDir = getProjectPlansDir(context?.resolveBase ?? context?.cwd ?? process.cwd());
+    const plansDir = getProjectPlansDir(context?.resolveBase ?? process.cwd());
     controls.requestImplementSeed(buildPlanExitPrompt(plansDir), mode);
 
     return {
