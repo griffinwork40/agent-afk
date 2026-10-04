@@ -22,6 +22,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
+import type { UsageLimitProvider } from '../utils/errors.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -380,6 +381,15 @@ export type ProviderEvent =
        * belongs to `resetsAt`. Use only for timeout arithmetic.
        */
       waitDeadline?: Date;
+      /**
+       * Which subscription hit its limit. `'anthropic'` = Claude, `'codex'` =
+       * the ChatGPT/Codex subscription backend. Absent means unknown (a
+       * generic OpenAI-compatible quota 429); UI layers treat absent as the
+       * legacy Claude copy for backward compatibility.
+       */
+      provider?: UsageLimitProvider;
+      /** Subscription plan label when the provider reports one (e.g. `plus`). */
+      plan?: string;
     }
   | {
       type: 'resumed';

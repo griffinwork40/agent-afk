@@ -221,3 +221,10 @@ export class UnsupportedProviderConfigError extends Error {
   }
 }
 
+
+/**
+ * Which subscription hit its usage limit: `'anthropic'` is Claude (OAuth
+ * subscription or API credit), `'codex'` is the ChatGPT/Codex subscription
+ * backend.
+ */
+export type UsageLimitProvider = 'anthropic' | 'codex';
