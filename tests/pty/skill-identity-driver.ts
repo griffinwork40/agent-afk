@@ -8,7 +8,7 @@
  *     node --import tsx tests/pty/skill-identity-driver.ts <scenario-name>
  */
 
-import { SKILL_IDENTITY_SCENARIOS } from './skill-identity-fixtures.js';
+import { drivePipedIdentity, SKILL_IDENTITY_SCENARIOS } from './skill-identity-fixtures.js';
 import { PTY_DONE_SENTINEL } from './constants.js';
 
 async function main(): Promise<void> {
@@ -16,6 +16,10 @@ async function main(): Promise<void> {
   if (!name) {
     process.stderr.write('skill-identity-driver: missing scenario name (argv[2])\n');
     process.exit(64);
+  }
+  if (name === 'skill-identity-piped') {
+    await drivePipedIdentity(process.stdout);
+    return; // No ANSI sentinel in the raw pipe stream.
   }
   const scenario = SKILL_IDENTITY_SCENARIOS[name];
   if (!scenario) {

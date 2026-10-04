@@ -1,31 +1,9 @@
-/**
- * Real-PTY acceptance suite for skill identity rendering (skill-dispatch-preview-ui).
- *
- * Drives the REAL TerminalCompositor + SkillIdentityState pipeline through a
- * genuine pseudo-terminal (node-pty) and asserts on the xterm emulator's
- * SCROLLBACK and viewport buffers — the ground truth that in-process mock-stdout
- * tests cannot certify (docs/scrollback.md:9-13).
- *
- * Six deterministic scenarios (see skill-identity-fixtures.ts):
- *   1. IMMEDIATE  — identity committed at arm(); appears above content.
- *   2. DELAYED    — identity introduced post-content; coordinator drain order preserved.
- *   3. CANCELLED  — introduce() never called; zero residue in committed buffer.
- *   4. BACK-TO-BACK — two sequential identities; each once, strict ordering.
- *   5. NESTED     — outer + inner renderer identities; each once, outer above inner.
- *   6. PIPED      — non-TTY writer path (compositor=null); plain text, no ANSI.
- *
- * Each scenario runs in both placement modes (bottom-pinned + content-hug),
- * reusing the assertExpectations() harness from compositor-scrollback.pty.test.ts
- * verbatim. The custom driver (skill-identity-driver.ts) substitutes for the
- * main driver.ts so this suite does NOT touch scenarios.ts.
- *
- * Run with: pnpm test:pty
- */
-
+/** Real StreamRenderer PTY lifecycle acceptance plus raw non-TTY subprocess coverage. */
 import { describe, it, expect } from 'vitest';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { dirname } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import { SKILL_IDENTITY_SCENARIOS, type PtyExpect } from './skill-identity-fixtures.js';
 import { loadNodePty, nodePtyAvailable, maxBlankRun, type PtyRunResult } from './harness.js';
@@ -197,6 +175,7 @@ function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
   const dump = res.dump();
   const all = exp.seamOverlap ? seamMergedLines(res) : res.lines;
 
+  expect(res.exitCode, dump).toBe(0);
   expect(res.sawSentinel, `driver did not emit completion sentinel (exit=${res.exitCode}):\n${dump}`).toBe(true);
 
   for (const needle of exp.inScrollback ?? []) {
@@ -261,6 +240,20 @@ function assertExpectations(res: PtyRunResult, exp: PtyExpect): void {
 // ─────────────────────────────────────────────────────────────────────────────
 // Suite
 // ─────────────────────────────────────────────────────────────────────────────
+describe('Skill identity raw pipe acceptance', () => {
+  it('uses actual non-TTY detection and emits plain bytes without ANSI', async () => {
+    const { stdout, stderr } = await promisify(execFile)(process.execPath,
+      ['--import', 'tsx', SKILL_DRIVER_PATH, 'skill-identity-piped'],
+      { cwd: REPO_ROOT, timeout: 20_000, env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } });
+    expect(stderr).toBe('');
+    expect(stdout).not.toContain('\x1b');
+    expect(stdout.match(/PIPE_PURPOSE_DIAGNOSE/g)).toHaveLength(1);
+    expect(stdout).toContain('args: auth module');
+    expect(stdout).toContain('PIPE_CONTENT');
+    expect(stdout.indexOf('PIPE_PURPOSE_DIAGNOSE')).toBeLessThan(stdout.indexOf('PIPE_CONTENT'));
+  }, 30_000);
+});
+
 describe('Skill identity real-PTY acceptance (skill-dispatch-preview-ui)', () => {
   if (!avail.ok) {
     if (mustRun) {
@@ -279,7 +272,10 @@ describe('Skill identity real-PTY acceptance (skill-dispatch-preview-ui)', () =>
   // Every scenario runs in both placement modes: legacy bottom-pinned and content-hug.
   for (const contentHug of [false, true]) {
     for (const [name, scenario] of Object.entries(SKILL_IDENTITY_SCENARIOS)) {
-      it(
+      // Do not hide the real Ctrl+C teardown defect behind the passing soft-stop
+      // case. Expected-failure flips red when fixed, requiring this gate removed.
+      const testCase = name === 'skill-identity-interrupt-regression' ? it.fails : it;
+      testCase(
         `${contentHug ? '[content-hug] ' : ''}${name}: ${scenario.description}`,
         async () => {
           const res = await runSkillIdentityScenario({

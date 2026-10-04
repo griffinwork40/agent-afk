@@ -1,315 +1,161 @@
-/**
- * Skill-identity PTY scenario fixtures (issue: skill-dispatch-preview-ui).
- *
- * Each scenario drives the REAL TerminalCompositor and SkillIdentityState —
- * the actual production path that StreamRenderer.arm() exercises — inside a
- * real pseudo-terminal, then asserts against the xterm emulator's SCROLLBACK
- * and viewport buffers. The cases covered:
- *
- *   1. IMMEDIATE  — identity committed synchronously at arm(); appears above content.
- *   2. DELAYED    — identity introduced after pre-arm content; coordinator drain order
- *                   preserved.
- *   3. CANCELLED  — overlay-only identity, introduce() never called; zero residue.
- *   4. BACK-TO-BACK — two sequential identities on the same compositor; each once,
- *                     strict turn ordering.
- *   5. NESTED     — outer + inner renderer identities; each exactly once, outer above inner.
- *   6. PIPED      — non-TTY writer path (compositor=null); no ANSI sequences, plain text.
- *
- * Kept separate from scenarios.ts so this file can be iterated independently
- * and does not alter the existing compositor-scrollback suite.
- *
- * The `drive()` function runs INSIDE the pty child (via tsx). Its `expect`
- * block is evaluated by the parent against the parsed emulator buffer.
- * `drive()` deliberately does NOT `disarm()` — the parent snapshots the final
- * LIVE frame state.
+/** Real StreamRenderer lifecycle fixtures, with deterministic events and no model calls.
+ * The compositor is borrowed just as it is from the persistent input surface.
+ * Completed scenarios dispose the renderer but leave that surface armed.
+ * The live scenario deliberately stops BEFORE content/dispose: its captured final
+ * frame is the pre-content frame, not a reconstruction from committed text alone.
  */
-
 import { TerminalCompositor } from '../../src/cli/terminal-compositor.js';
-import { SkillIdentityState } from '../../src/cli/_lib/skill-identity-state.js';
-import { CommitCoordinator } from '../../src/cli/_lib/commit-coordinator.js';
+import { StreamRenderer } from '../../src/cli/_lib/stream-renderer.js';
 import type { Writer } from '../../src/cli/slash/types.js';
 import type { PtyDriveCtx, PtyScenario, PtyExpect } from './scenarios.js';
 
 const CONTENT_HUG = process.env['AFK_PTY_CONTENT_HUG'] === '1';
+const settle = (ms = 60): Promise<void> => new Promise(r => setTimeout(r, ms));
 
-/** Let async writes/flush settle. */
-const settle = (ms = 60): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Build a minimal status-region stub so the compositor gets a real scroll
- * region (required for commitAbove to use full-screen scroll semantics).
- */
-function minimalScrollRegion(stdout: NodeJS.WriteStream): {
-  withFullScrollRegion<T>(fn: () => T): T;
-  getExtraRows(): number;
-} {
+function minimalScrollRegion(stdout: NodeJS.WriteStream) {
   return {
     withFullScrollRegion<T>(fn: () => T): T {
-      stdout.write('\x1b[s');
-      stdout.write('\x1b[r');
-      stdout.write('\x1b[u');
-      try {
-        return fn();
-      } finally {
-        const rows = stdout.rows ?? 24;
-        stdout.write('\x1b[s');
-        stdout.write(`\x1b[1;${rows}r`);
-        stdout.write('\x1b[u');
+      stdout.write('\x1b[s\x1b[r\x1b[u');
+      try { return fn(); } finally {
+        stdout.write(`\x1b[s\x1b[1;${stdout.rows ?? 24}r\x1b[u`);
       }
     },
     getExtraRows(): number { return 0; },
   };
 }
-
-/**
- * Build a plain Writer whose output is written directly to stdout, line by
- * line, with no ANSI (piped path — compositor=null in SkillIdentityState).
- */
 function plainWriter(stdout: NodeJS.WriteStream): Writer {
   const line = (text: string): void => { stdout.write(`${text}\n`); };
   return { line, raw: line, info: line, warn: line, error: line, success: line };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Scenario 1 — IMMEDIATE
-// Identity introduced immediately at arm(); must appear in committed scrollback
-// strictly BEFORE any content rows.
-// ─────────────────────────────────────────────────────────────────────────────
-const immediateScenario: PtyScenario = {
-  description: 'skill identity committed immediately at arm(), appears once above content in scrollback',
-  cols: 80,
-  rows: 24,
-  ref: 'skill-identity-state.ts:introduce()',
-  async drive({ stdout, stdin }: PtyDriveCtx): Promise<void> {
-    const scrollRegion = minimalScrollRegion(stdout);
-    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
-    await c.arm();
-
-    const coordinator = new CommitCoordinator();
-    const identity = new SkillIdentityState({ name: 'review', purpose: 'IMMED_PURPOSE_REVIEW', arguments: 'src/foo.ts' });
-
-    // introduce() schedules a before-content commit and drains it — mirrors StreamRenderer.arm().
-    await identity.introduce(coordinator, c, plainWriter(stdout));
-
-    // Commit enough content to push identity into real scrollback.
-    // rows=24 frame + status region leaves ~22 visible rows. 30 commits forces
-    // the earliest rows (including the identity) into scrollback (baseY>0).
-    for (let i = 0; i < 30; i++) {
-      c.commitAbove(`IMMED_CONTENT_${String(i).padStart(2, '0')}\n`);
-    }
-    c.commitAbove('IMMED_DONE\n');
-    await settle();
-  },
-  expect: {
-    exactlyOnce: ['IMMED_PURPOSE_REVIEW', 'IMMED_DONE'],
-    order: [['IMMED_PURPOSE_REVIEW', 'IMMED_CONTENT_00'], ['IMMED_CONTENT_00', 'IMMED_DONE']],
-    inScrollback: ['IMMED_PURPOSE_REVIEW'],
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Scenario 2 — DELAYED
-// Some content committed BEFORE introduce() is called. The coordinator
-// drain ordering (before-content anchor fires first) must still place the
-// identity above the pre-introduce content in the buffer.
-// ─────────────────────────────────────────────────────────────────────────────
-const delayedScenario: PtyScenario = {
-  description: 'delayed introduce() still commits identity before content via coordinator drain order',
-  cols: 80,
-  rows: 24,
-  ref: 'skill-identity-state.ts:introduce() + CommitCoordinator before-content anchor',
-  async drive({ stdout, stdin }: PtyDriveCtx): Promise<void> {
-    const scrollRegion = minimalScrollRegion(stdout);
-    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
-    await c.arm();
-
-    const coordinator = new CommitCoordinator();
-
-    // Pre-arm content committed before introduce() is called — typical when a
-    // tool result arrives before the dispatcher can introduce the skill.
-    c.commitAbove('DELAY_PRE_CONTENT\n');
-    await settle(20);
-
-    const identity = new SkillIdentityState({ name: 'ship', purpose: 'DELAY_PURPOSE_SHIP' });
-    await identity.introduce(coordinator, c, plainWriter(stdout));
-
-    for (let i = 0; i < 14; i++) {
-      c.commitAbove(`DELAY_CONTENT_${String(i).padStart(2, '0')}\n`);
-    }
-    c.commitAbove('DELAY_DONE\n');
-    await settle();
-  },
-  expect: {
-    exactlyOnce: ['DELAY_PURPOSE_SHIP', 'DELAY_DONE'],
-    // Before-content commit fires before content rows (introduce schedules via
-    // coordinator.schedule({ anchor: 'before-content', ... }); flushAll drains
-    // before-content first). After flushAll the identity is the first committed row.
-    order: [['DELAY_PURPOSE_SHIP', 'DELAY_CONTENT_00'], ['DELAY_CONTENT_00', 'DELAY_DONE']],
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Scenario 3 — CANCELLED
-// Identity constructed but introduce() never called. The overlay DOES show the
-// banner (SkillIdentityState.current is used by the overlay slot), but nothing
-// is committed to scrollback — the final buffer must be clean of the identity.
-// ─────────────────────────────────────────────────────────────────────────────
-const cancelledScenario: PtyScenario = {
-  description: 'skill identity with introduce() never called leaves zero residue in committed scrollback',
-  cols: 80,
-  rows: 24,
-  ref: 'skill-identity-state.ts:cancel path (no introduce())',
-  async drive({ stdout, stdin }: PtyDriveCtx): Promise<void> {
-    const scrollRegion = minimalScrollRegion(stdout);
-    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
-    await c.arm();
-
-    // Construct identity state, set the overlay text manually (as the overlay
-    // slot renderer does), but deliberately do NOT call introduce().
-    const _identity = new SkillIdentityState({ name: 'diagnose', purpose: 'CANCEL_NEVER_COMMITTED' });
-    c.setOverlay('/diagnose · CANCEL_NEVER_COMMITTED'); // transient overlay only
-    await settle(30);
-    c.setOverlay(''); // collapse overlay without committing
-
-    for (let i = 0; i < 5; i++) {
-      c.commitAbove(`CANCEL_CONTENT_${String(i).padStart(2, '0')}\n`);
-    }
-    c.commitAbove('CANCEL_DONE\n');
-    await settle();
-  },
-  expect: {
-    // The purpose string was ONLY in the transient overlay — must not appear committed.
-    absent: ['CANCEL_NEVER_COMMITTED'],
-    exactlyOnce: ['CANCEL_DONE'],
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Scenario 4 — BACK-TO-BACK
-// Two sequential SkillIdentityState instances on the same compositor (simulating
-// two consecutive skill turns). Each identity must appear exactly once, in order.
-// ─────────────────────────────────────────────────────────────────────────────
-const backToBackScenario: PtyScenario = {
-  description: 'two sequential skill identities each committed exactly once, in order, no cross-contamination',
-  cols: 80,
-  rows: 24,
-  ref: 'skill-identity-state.ts:sequential reuse on same compositor',
-  async drive({ stdout, stdin }: PtyDriveCtx): Promise<void> {
-    const scrollRegion = minimalScrollRegion(stdout);
-    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
-    await c.arm();
-
-    // Turn 1 — first skill
-    const coordinator1 = new CommitCoordinator();
-    const identity1 = new SkillIdentityState({ name: 'mint', purpose: 'B2B_SKILL_ONE' });
-    await identity1.introduce(coordinator1, c, plainWriter(stdout));
-    c.commitAbove('B2B_CONTENT_ONE\n');
-    await settle(20);
-
-    // Turn 2 — second skill (clear() resets introduced flag so it can re-introduce)
-    identity1.clear();
-    const coordinator2 = new CommitCoordinator();
-    const identity2 = new SkillIdentityState({ name: 'ship', purpose: 'B2B_SKILL_TWO' });
-    await identity2.introduce(coordinator2, c, plainWriter(stdout));
-    c.commitAbove('B2B_CONTENT_TWO\n');
-    c.commitAbove('B2B_DONE\n');
-    await settle();
-  },
-  expect: {
-    exactlyOnce: ['B2B_SKILL_ONE', 'B2B_SKILL_TWO', 'B2B_DONE'],
-    order: [
-      ['B2B_SKILL_ONE', 'B2B_CONTENT_ONE'],
-      ['B2B_CONTENT_ONE', 'B2B_SKILL_TWO'],
-      ['B2B_SKILL_TWO', 'B2B_CONTENT_TWO'],
-      ['B2B_CONTENT_TWO', 'B2B_DONE'],
-    ],
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Scenario 5 — NESTED
-// Two SkillIdentityState instances representing an outer skill that dispatches
-// an inner skill. Both must appear in the buffer exactly once, outer above inner.
-// ─────────────────────────────────────────────────────────────────────────────
-const nestedScenario: PtyScenario = {
-  description: 'outer + inner skill identities both committed exactly once, outer above inner',
-  cols: 80,
-  rows: 24,
-  ref: 'skill-identity-state.ts:nested dispatch scenario',
-  async drive({ stdout, stdin }: PtyDriveCtx): Promise<void> {
-    const scrollRegion = minimalScrollRegion(stdout);
-    const c = new TerminalCompositor({ contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {}, scrollRegion, anchorRow: 1 });
-    await c.arm();
-
-    // Outer skill introduced first
-    const coordOuter = new CommitCoordinator();
-    const outer = new SkillIdentityState({ name: 'forge', purpose: 'NEST_OUTER_FORGE' });
-    await outer.introduce(coordOuter, c, plainWriter(stdout));
-    c.commitAbove('NEST_OUTER_CONTENT\n');
-    await settle(20);
-
-    // Inner skill introduced (nested dispatch)
-    const coordInner = new CommitCoordinator();
-    const inner = new SkillIdentityState({ name: 'qualify', purpose: 'NEST_INNER_QUALIFY' });
-    await inner.introduce(coordInner, c, plainWriter(stdout));
-    c.commitAbove('NEST_INNER_CONTENT\n');
-    c.commitAbove('NEST_DONE\n');
-    await settle();
-  },
-  expect: {
-    exactlyOnce: ['NEST_OUTER_FORGE', 'NEST_INNER_QUALIFY', 'NEST_DONE'],
-    order: [
-      ['NEST_OUTER_FORGE', 'NEST_OUTER_CONTENT'],
-      ['NEST_OUTER_CONTENT', 'NEST_INNER_QUALIFY'],
-      ['NEST_INNER_QUALIFY', 'NEST_INNER_CONTENT'],
-      ['NEST_INNER_CONTENT', 'NEST_DONE'],
-    ],
-  },
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Scenario 6 — PIPED (non-TTY writer fallback)
-// compositor = null path: introduce() emits plain text via Writer, no ANSI
-// sequences. Simulates daemon/Telegram surface where process.stdout.isTTY
-// is false, so StreamRenderer.arm() takes the non-TTY branch.
-// ─────────────────────────────────────────────────────────────────────────────
-const pipedScenario: PtyScenario = {
-  description: 'piped (compositor=null) path emits plain identity text with no ANSI sequences in output',
-  cols: 80,
-  rows: 24,
-  ref: 'skill-identity-state.ts:introduce() compositor=null branch',
-  async drive({ stdout }: PtyDriveCtx): Promise<void> {
-    // In the non-TTY branch the compositor is null and text goes through the Writer.
-    // We write directly to stdout (which IS a TTY inside the pty child, but we
-    // simulate the non-TTY code path by calling introduce() with compositor=null).
-    const coordinator = new CommitCoordinator();
-    const identity = new SkillIdentityState({ name: 'diagnose', purpose: 'PIPE_PURPOSE_DIAGNOSE', arguments: 'auth module' });
-    const writer = plainWriter(stdout);
-
-    // Non-TTY branch: compositor=null, writer receives the output.
-    await identity.introduce(coordinator, null, writer);
-
-    // Follow up with plain content lines (no compositor, so direct write).
-    stdout.write('PIPE_CONTENT\n');
-    stdout.write('PIPE_DONE\n');
-    await settle();
-  },
-  expect: {
-    exactlyOnce: ['PIPE_PURPOSE_DIAGNOSE', 'PIPE_DONE'],
-    order: [['PIPE_PURPOSE_DIAGNOSE', 'PIPE_CONTENT'], ['PIPE_CONTENT', 'PIPE_DONE']],
-    // args text must appear; no ANSI CSI sequences (no \x1b[ in committed rows)
-    // — verified by the absent check on raw ANSI escape starter.
-    absent: ['\x1b['],
-  },
-};
+async function surface({ stdout, stdin }: PtyDriveCtx): Promise<TerminalCompositor> {
+  const compositor = new TerminalCompositor({
+    contentHug: CONTENT_HUG, stdout, stdin, onCancel: () => {},
+    scrollRegion: minimalScrollRegion(stdout), anchorRow: 1,
+  });
+  await compositor.arm();
+  return compositor;
+}
+function renderer(stdout: NodeJS.WriteStream, compositor: TerminalCompositor | undefined,
+  name: string, purpose: string, args?: string, onCancel?: () => void): StreamRenderer {
+  return new StreamRenderer({
+    out: plainWriter(stdout), compositor, reducedMotion: true, captureMode: false,
+    thinkingMode: 'off', skillIdentity: { name, purpose, arguments: args }, onCancel,
+  });
+}
+function content(r: StreamRenderer, text: string): void {
+  r.process({ type: 'chunk', chunk: { type: 'content', content: `${text}\n\n` } });
+}
+async function finish(r: StreamRenderer): Promise<void> {
+  r.process({ type: 'done' });
+  await r.dispose();
+  await settle();
+}
+function scenario(description: string, drive: PtyScenario['drive'], expect: PtyExpect): PtyScenario {
+  return { description, cols: 80, rows: 24, ref: 'stream-renderer.ts:arm/process/dispose', drive, expect };
+}
 
 export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
-  'skill-identity-immediate': immediateScenario,
-  'skill-identity-delayed': delayedScenario,
-  'skill-identity-cancelled': cancelledScenario,
-  'skill-identity-back-to-back': backToBackScenario,
-  'skill-identity-nested': nestedScenario,
-  'skill-identity-piped': pipedScenario,
+  'skill-identity-immediate': scenario('actual renderer commits identity before immediate content', async ctx => {
+    const c = await surface(ctx);
+    const r = renderer(ctx.stdout, c, 'review', 'IMMED_PURPOSE_REVIEW', 'src/foo.ts');
+    await r.arm();
+    for (let i = 0; i < 30; i++) content(r, `IMMED_CONTENT_${String(i).padStart(2, '0')}`);
+    content(r, 'IMMED_DONE');
+    await finish(r);
+  }, {
+    exactlyOnce: ['IMMED_PURPOSE_REVIEW', 'args: src/foo.ts', 'IMMED_DONE'],
+    inScrollback: ['IMMED_PURPOSE_REVIEW'],
+    order: [['IMMED_PURPOSE_REVIEW', 'IMMED_CONTENT_00'], ['IMMED_CONTENT_00', 'IMMED_DONE']],
+  }),
+  'skill-identity-delayed': scenario('arm precedes delayed first content', async ctx => {
+    const c = await surface(ctx);
+    const r = renderer(ctx.stdout, c, 'ship', 'DELAY_PURPOSE_SHIP');
+    await r.arm();
+    await settle(120);
+    r.process({ type: 'progress', progress: { taskId: 'delay', description: 'DELAY_LIVE_ONLY', totalTokens: 0, toolUses: 0, durationMs: 120 } });
+    await settle();
+    content(r, 'DELAY_CONTENT');
+    await finish(r);
+  }, {
+    exactlyOnce: ['DELAY_PURPOSE_SHIP', 'DELAY_CONTENT'], absent: ['DELAY_LIVE_ONLY'],
+    order: [['DELAY_PURPOSE_SHIP', 'DELAY_CONTENT']],
+  }),
+  'skill-identity-live-before-content': scenario('snapshot actual armed pre-content overlay without dispose', async ctx => {
+    const c = await surface(ctx);
+    const r = renderer(ctx.stdout, c, 'review', 'LIVE_PURPOSE_REVIEW', 'live.ts');
+    await r.arm();
+    await settle(120);
+    // No process(content), no dispose and no manual overlay injection.
+  }, {
+    // Intro and live banner coexist. The combined row distinguishes the live
+    // banner from the separate purpose/args lines in the committed intro.
+    inViewport: ['/review · LIVE_PURPOSE_REVIEW'],
+    exactlyOnce: ['/review · LIVE_PURPOSE_REVIEW'], absent: ['LIVE_CONTENT'],
+  }),
+  'skill-identity-cancelled': scenario('soft-stop after arm retains intro once and removes live overlay', async ctx => {
+    const c = await surface(ctx);
+    const r = renderer(ctx.stdout, c, 'diagnose', 'SOFT_CANCEL_PURPOSE');
+    await r.arm();
+    r.setSoftStopping(true);
+    await settle();
+    await r.dispose();
+    await settle();
+  }, { exactlyOnce: ['SOFT_CANCEL_PURPOSE'], absent: ['stopping…', '/diagnose · SOFT_CANCEL_PURPOSE'] }),
+  // Known runtime defect, kept as an expected-failure regression in the suite:
+  // dispose clears softStopping, but not interrupting, before its final flush.
+  'skill-identity-interrupt-regression': scenario('Ctrl+C affordance should clear on dispose (known defect)', async ctx => {
+    const c = await surface(ctx);
+    let cancelled = false;
+    const r = renderer(ctx.stdout, c, 'diagnose', 'CANCEL_PURPOSE', undefined, () => {
+      cancelled = true;
+      r.setInterrupting(true);
+    });
+    await r.arm();
+    // Invoke the real borrowed-compositor callback; no model or session needed.
+    c.getOnCancel()?.();
+    if (!cancelled) throw new Error('renderer cancel callback was not installed');
+    await settle();
+    await r.dispose();
+    await settle();
+  }, { exactlyOnce: ['CANCEL_PURPOSE'], absent: ['interrupting', 'stopping…', '/diagnose · CANCEL_PURPOSE'] }),
+  'skill-identity-back-to-back': scenario('two actual renderer lifetimes share the persistent surface', async ctx => {
+    const c = await surface(ctx);
+    const first = renderer(ctx.stdout, c, 'mint', 'B2B_SKILL_ONE');
+    await first.arm();
+    content(first, 'B2B_CONTENT_ONE');
+    await finish(first);
+    const second = renderer(ctx.stdout, c, 'ship', 'B2B_SKILL_TWO');
+    await second.arm();
+    content(second, 'B2B_CONTENT_TWO');
+    await finish(second);
+  }, {
+    exactlyOnce: ['B2B_SKILL_ONE', 'B2B_SKILL_TWO', 'B2B_CONTENT_ONE', 'B2B_CONTENT_TWO'],
+    order: [['B2B_SKILL_ONE', 'B2B_CONTENT_ONE'], ['B2B_CONTENT_ONE', 'B2B_SKILL_TWO'], ['B2B_SKILL_TWO', 'B2B_CONTENT_TWO']],
+  }),
+  'skill-identity-nested': scenario('nested renderer lifetimes with outer resume and teardown', async ctx => {
+    const c = await surface(ctx);
+    const outer = renderer(ctx.stdout, c, 'forge', 'NEST_OUTER_FORGE');
+    await outer.arm();
+    content(outer, 'NEST_OUTER_CONTENT');
+    await settle();
+    const inner = renderer(ctx.stdout, c, 'qualify', 'NEST_INNER_QUALIFY');
+    await inner.arm();
+    content(inner, 'NEST_INNER_CONTENT');
+    await finish(inner);
+    content(outer, 'NEST_OUTER_RESUMED');
+    await finish(outer);
+  }, {
+    exactlyOnce: ['NEST_OUTER_FORGE', 'NEST_INNER_QUALIFY', 'NEST_OUTER_CONTENT', 'NEST_INNER_CONTENT', 'NEST_OUTER_RESUMED'],
+    order: [['NEST_OUTER_FORGE', 'NEST_OUTER_CONTENT'], ['NEST_OUTER_CONTENT', 'NEST_INNER_QUALIFY'], ['NEST_INNER_QUALIFY', 'NEST_INNER_CONTENT'], ['NEST_INNER_CONTENT', 'NEST_OUTER_RESUMED']],
+  }),
 };
 
+/** Run only with genuine stdio pipes: no forced TTY flag and no compositor. */
+export async function drivePipedIdentity(stdout: NodeJS.WriteStream): Promise<void> {
+  if (stdout.isTTY) throw new Error('piped fixture requires actual non-TTY stdout');
+  const r = renderer(stdout, undefined, 'diagnose', 'PIPE_PURPOSE_DIAGNOSE', 'auth module');
+  await r.arm();
+  content(r, 'PIPE_CONTENT');
+  await finish(r);
+}
 export type { PtyScenario, PtyExpect };
