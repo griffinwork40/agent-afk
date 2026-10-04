@@ -163,7 +163,7 @@ describe('claimPending', () => {
     expect(pendingAfter).toHaveLength(0);
 
     const deliveredDir = path.join(tmpDir, 'inbox', TARGET_ID, 'delivered');
-    const deliveredFiles = fs.readdirSync(deliveredDir);
+    const deliveredFiles = fs.readdirSync(deliveredDir).filter((f) => f !== 'acked');
     expect(deliveredFiles).toHaveLength(1);
   });
 
@@ -388,13 +388,18 @@ describe('sweepPeerInboxes', () => {
     // Backdate the directory mtime so it looks old (8 days ago).
     const inboxDir = path.join(tmpDir, 'inbox', deadId);
     const oldDate = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
-    // Backdate the pending dir and the file inside it.
+    // Backdate pending dir and its files.
     const pendingDir = path.join(inboxDir, 'pending');
     const files = fs.readdirSync(pendingDir);
     for (const f of files) {
       fs.utimesSync(path.join(pendingDir, f), oldDate, oldDate);
     }
     fs.utimesSync(pendingDir, oldDate, oldDate);
+    // Backdate delivered/ and its acked/ subdir (created by ensureInboxDirs).
+    const deliveredDir = path.join(inboxDir, 'delivered');
+    const ackedDir = path.join(deliveredDir, 'acked');
+    if (fs.existsSync(ackedDir)) fs.utimesSync(ackedDir, oldDate, oldDate);
+    if (fs.existsSync(deliveredDir)) fs.utimesSync(deliveredDir, oldDate, oldDate);
     fs.utimesSync(inboxDir, oldDate, oldDate);
 
     const removed = await sweepPeerInboxes({
@@ -531,7 +536,7 @@ describe('claimPending — fallback when link() is unsupported', () => {
     const claimed = await store.claimPending(TARGET_ID, file!);
     expect(claimed?.messageId).toBe(envelope.messageId);
     const base = path.join(tmpDir, 'inbox', TARGET_ID);
-    expect(fs.readdirSync(path.join(base, 'delivered'))).toEqual([file]);
+    expect(fs.readdirSync(path.join(base, 'delivered')).filter((f) => f !== 'acked')).toEqual([file]);
     expect(await store.listPending(TARGET_ID)).toEqual([]);
   });
 

@@ -146,7 +146,7 @@ export async function pruneDeliveredReceipts(
     const cutoff = nowMs - DELIVERED_RECEIPT_MAX_AGE_MS;
 
     for (const file of deliveredFiles) {
-      if (file.startsWith('.tmp-')) continue;
+      if (file.startsWith('.tmp-') || file === 'acked') continue;
 
       // Safety invariant: never prune a receipt while its pending source exists.
       if (pendingFiles.has(file)) {
