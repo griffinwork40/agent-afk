@@ -48,7 +48,8 @@ vi.mock('../dag-subagent.js', () => ({
 let lastTeardownAll: ReturnType<typeof vi.fn> | undefined;
 
 vi.mock('../subagent.js', () => ({
-  SubagentManager: vi.fn(() => {
+  // Must use a regular function (not an arrow) so `new SubagentManager(...)` works.
+  SubagentManager: vi.fn(function () {
     const teardownAll = vi.fn(async () => {});
     lastTeardownAll = teardownAll;
     return {
