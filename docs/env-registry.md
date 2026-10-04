@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**213 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**212 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -213,7 +213,6 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_MAX_CONCURRENT_SUBAGENT_CALLS` | number |  | `8` | `2` | Maximum subagent calls run simultaneously from one compose/DAG layer or skill wave. Default 8; accepted range 1-32; out-of-range or unparseable input falls back to the default. |
 | `AFK_SESSION_TMPDIR_DISABLE` | boolean |  |  | `1` | Disable per-session private temp dirs. By default every session and subagent gets its own directory under <os tmpdir>/afk-<uid>/ (removed on close) injected as TMPDIR/TMP/TEMP into bash and test_run child processes, so one session cleaning its temp files cannot delete a concurrent session's. Set to 1 to share the inherited TMPDIR instead. |
 | `AFK_SHELL_WRAPPER` | boolean |  |  | `1` | Set to 1 or true by the optional afk shell wrapper function (installed via `afk shell-init`). Signals that the parent shell has the wrapper active so the post-exit cd can fire. |
-| `AFK_STOP_HOOK_MAX_CONTINUATIONS` | number |  | `2` | `0` | Maximum same-turn continuation rounds that a blocking Stop hook may trigger per turn. When a Stop hook returns decision:block, its reason is appended as a user message and the model runs again in the same turn (CC-compatible behaviour). This cap is global across all hooks for that turn — two blocking hooks together consume from the same counter. 0 disables continuation entirely (block is logged only, same as pre-2714 behaviour). Default: 2. |
 | `AGENT_SURFACE` | string |  | `afk` | `afk` | Process-level surface identity propagated to subprocesses (e.g. Python plugin scripts) that cannot read the in-memory AgentConfig.surface field. The CLI entrypoint defaults it to 'afk' via ??=; no surface overrides it at runtime today, so the env var is effectively a static 'afk' constant. Per-surface discrimination ('cli', 'telegram', 'daemon') lives on AgentConfig.surface instead. The browser headless-routing check in src/browser/config.ts reads this as a secondary fallback after AFK_BROWSER_HEADLESS. |
 | `APPDATA` | string |  |  |  | Windows %APPDATA% (Roaming). Used for VS Code/Cursor settings discovery and credential denylist paths. |
 | `ASCIINEMA_REC` | boolean |  |  | `1` | Set to 1 by asciinema rec while a session is being recorded. Triggers capture-mode. |
