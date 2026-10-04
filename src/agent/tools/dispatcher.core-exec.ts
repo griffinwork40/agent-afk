@@ -24,6 +24,7 @@
  */
 
 import { debugLog } from '../../utils/debug.js';
+import { runInTmpdirScope } from '../session/session-tmpdir.js';
 import { dispatchPostToolUse, dispatchPostToolUseFailure } from '../subagent-hooks.js';
 import { headAndTail } from './handlers/_output-cap.js';
 import { emitPreToolUseBlock } from './dispatcher.pre-dispatch-gates.js';
@@ -103,6 +104,12 @@ export interface CoreExecDeps {
    * to build the "available tools" hint. Corresponds to `toolDefs` on the class.
    */
   toolDefs: readonly AnthropicToolDef[];
+  /**
+   * This session's private TMPDIR (session-tmpdir.ts). Every call runs inside
+   * it as the async scope so forks created by `agent`/`skill`/`compose` nest
+   * their own temp dir under this session's.
+   */
+  tmpdirScope?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +395,6 @@ export async function executeCoreInner(call: ToolCall, deps: CoreExecDeps): Prom
  * PostToolUse has already observed the full, uncapped content.
  */
 export async function executeCore(call: ToolCall, deps: CoreExecDeps): Promise<ToolResult> {
-  const result = await executeCoreInner(call, deps);
+  const result = await runInTmpdirScope(deps.tmpdirScope, () => executeCoreInner(call, deps));
   return applyOutputCap(result, deps);
 }

@@ -5,6 +5,7 @@ import { eraseAndPaintRow } from './terminal-compositor.scrollback.js';
 import { writeWithScrollGuard } from './terminal-compositor.commit-guard.js';
 import { clearCommittedBand } from './terminal-compositor.committed-band-commit.js';
 import { contentMargin } from './render/measure.js';
+import { retainedArchivedPrefix } from './terminal-compositor.band-archived-prefix.js';
 
 /**
  * Classic (non-band-hold) Phase 3 for newTopRow > 1: merge/cap/orphan-erase/paint
@@ -179,6 +180,7 @@ export function commitPhase3Band(
         self.stdout.write(out);
       });
     }
+    self.committedBandArchivedPrefix = retainedArchivedPrefix(self, contiguousPriorBand, run.length - capped.length);
     self.committedBand = capped;
     self.committedBandMeta = cappedMeta;
     self.committedBandBottomRow = newTopRow - 1;

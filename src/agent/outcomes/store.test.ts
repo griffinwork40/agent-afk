@@ -252,6 +252,75 @@ describe('upsertVotes – explicit_feedback override', () => {
 });
 
 // ---------------------------------------------------------------------------
+// upsertVotes — newest explicit_feedback vote wins (issue: stale first-match)
+// ---------------------------------------------------------------------------
+
+describe('upsertVotes – newest explicit_feedback vote wins', () => {
+  it('/good then /bad-with-note → label is failed (bad wins)', () => {
+    // /good with default evidence 'operator'
+    upsertVotes('sess-order-1', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    // /bad with a note — different evidence, so both survive dedup
+    upsertVotes('sess-order-1', [
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'wrong answer',
+        observed_at: '2024-01-01T10:01:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-order-1', tmpDir);
+    // Newest explicit_feedback is the /bad vote → must be failed, not succeeded
+    expect(rec?.label).toBe('failed');
+    expect(rec?.confidence).toBe(1.0);
+    expect(rec?.state).toBe('settled');
+    // Both votes are retained for audit
+    expect(rec?.votes.filter((v) => v.lf === 'explicit_feedback')).toHaveLength(2);
+  });
+
+  it('/bad-with-note then /good → label is succeeded (good wins)', () => {
+    // /bad with a note first
+    upsertVotes('sess-order-2', [
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'wrong answer',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    // /good with default evidence 'operator' — newer timestamp
+    upsertVotes('sess-order-2', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: '2024-01-01T10:01:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-order-2', tmpDir);
+    // Newest explicit_feedback is the /good vote → must be succeeded
+    expect(rec?.label).toBe('succeeded');
+    expect(rec?.confidence).toBe(1.0);
+    expect(rec?.state).toBe('settled');
+    // Both votes retained for audit
+    expect(rec?.votes.filter((v) => v.lf === 'explicit_feedback')).toHaveLength(2);
+  });
+
+  it('history records the label change when /bad follows /good', () => {
+    upsertVotes('sess-hist-flip', [
+      makeVote({ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator',
+        observed_at: '2024-01-01T10:00:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    upsertVotes('sess-hist-flip', [
+      makeVote({ lf: 'explicit_feedback', vote: -1, strength: 'strong', evidence: 'wrong answer',
+        observed_at: '2024-01-01T10:01:00.000Z' }),
+    ], undefined, { outcomesDir: tmpDir });
+
+    const rec = readRecord('sess-hist-flip', tmpDir);
+    expect(rec?.label).toBe('failed');
+    // History should have two entries: unknown→succeeded and succeeded→failed
+    const labels = rec?.history.map((h) => h.label) ?? [];
+    expect(labels).toContain('succeeded');
+    expect(labels).toContain('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Legacy first_prompt stripping (issue #2449)
 // ---------------------------------------------------------------------------
 

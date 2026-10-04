@@ -54,7 +54,7 @@ vi.mock('../agent/routing-telemetry.js', () => ({
 // the main mint.test.ts uses.
 vi.mock('../agent/subagent.js', () => {
   return {
-    SubagentManager: vi.fn(() => ({
+    SubagentManager: vi.fn(function () { return {
       forkSubagent: vi.fn(async (options) => {
         const idPrefix = options.idPrefix || 'subagent';
 
@@ -93,7 +93,7 @@ vi.mock('../agent/subagent.js', () => {
           teardown: vi.fn(async () => undefined),
         };
       }),
-    })),
+    }; }),
   };
 });
 

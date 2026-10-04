@@ -13,6 +13,8 @@ import type { TerminalCompositor } from '../terminal-compositor.js';
 import type { PreviewDiffRef } from '../../agent/tools/hooks/edit-preview-hook.js';
 
 export interface StreamRendererOptions {
+  /** Resolved display-only root slash identity. */
+  skillIdentity?: import('./skill-identity-format.js').SkillIdentity;
   /** Where line-based output goes (non-TTY fallback + always-emitted compact lines). */
   out: Writer;
   /**

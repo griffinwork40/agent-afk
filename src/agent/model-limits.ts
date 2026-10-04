@@ -15,7 +15,7 @@
  */
 
 import type { ClaudeModel } from './types.js';
-import { resolveModelInput } from './session/model-slots.js';
+import { resolveModelInput, contextWindowOverrideFor } from './session/model-slots.js';
 import { isOSeriesModel } from './model-capabilities.js';
 
 /**
@@ -74,6 +74,8 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'claude-haiku-4-5-20251001': 64_000,
   // Claude Fable 5 (Mythos-class, GA 2026-06-09): 128k max output.
   'claude-fable-5': 128_000,
+  // Claude Fable 5.1: 1M context / 128k output; successor to Fable 5.
+  'claude-fable-5-1': 128_000,
   // OpenAI GPT-5.6 family (GA 2026-07-09) + GPT-5.5. maxOutputTokensFor() is
   // provider-agnostic: the openai-compatible query path
   // (query/model-params.ts:resolveEffectiveMaxOutputTokens) calls it to bound
@@ -86,6 +88,14 @@ export const MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   'gpt-5.6-sol': 128_000,
   'gpt-5.6-terra': 128_000,
   'gpt-5.6-luna': 128_000,
+  // Cerebras Shared Inference. Invariant: AFK's choice, NOT a documented
+  // provider cap (Cerebras bounds completion length only by the context window).
+  // It must stay well below the free-tier window pinned in MODEL_CONTEXT_LIMITS:
+  // guardContextOverflow fails a request when input + this ceiling > window, so
+  // the 64k default against a ~64k window would fail every turn after the first.
+  // 16k output leaves ~48k for AFK's system prompt + tools + history.
+  'gpt-oss-120b': 16_384,
+  'qwen-3.8-27b': 16_384,
 } as const;
 
 const DEFAULT_MAX_OUTPUT = 64_000;
@@ -158,6 +168,7 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // wire id so lookups hit either side of the alias boundary.
   fable: 1_000_000,
   'claude-fable-5': 1_000_000,
+  'claude-fable-5-1': 1_000_000,
   'claude-sonnet-5': 1_000_000,
   // Claude Opus 5 (GA 2026-07-24): native 1M window. Base `opus` still
   // auto-compacts early via MODEL_AUTOCOMPACT_BUDGET (cost/latency policy).
@@ -227,6 +238,24 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'mlx-community/qwen3-30b-a3b-4bit': 128_000,
   'mlx-community/qwen3-32b-4bit': 128_000,
   'mlx-community/qwen2.5-coder-32b-instruct-4bit': 131_072,
+  // Invariant: Cerebras Shared Inference — FREE-tier context windows, on purpose.
+  // Source: inference-docs.cerebras.ai/models/overview (2026-10-02): gpt-oss-120b
+  // 65k free / 131k paid; qwen-3.8-27b 64k free / 128k paid. The window depends
+  // on the ACCOUNT tier, which contextLimitFor() cannot see (it keys on the
+  // model id only), so the table pins the conservative value: overestimating
+  // means a hard provider 400 on long sessions, underestimating only means
+  // compacting earlier. Paid-tier users raise it per slot with the
+  // `contextWindow` binding override (#2793), e.g.
+  //   "local": { "id": "qwen-3.8-27b", "provider": "openai", "contextWindow": 128000 }
+  // "65k" is read as 65_536 and "64k" as 64_000 (no more precise figure is
+  // published). Without these entries gpt-oss-120b falls to the 262k
+  // openai-compatible default and qwen-3.8-27b to the 200k Anthropic default.
+  // Routing/classification safety: gpt-oss-120b starts with `gpt-` so
+  // routesToOpenAICompatible returns true (correct). isReasoningModel only
+  // matches /^gpt-5/ and isOSeriesModel matches /^o[0-9]/ — neither fires on
+  // `gpt-oss-120b`, preserving standard chat-completions request shaping.
+  'gpt-oss-120b': 65_536,
+  'qwen-3.8-27b': 64_000,
   // xAI Grok — active wire ids only (docs.x.ai models/pricing, 2026-08).
   // Any other `grok-*` still routes and runs; unknown ids fall through to the
   // openai-compatible default via routesToOpenAICompatible (never invent
@@ -286,6 +315,13 @@ export function contextLimitFor(model: ClaudeModel | string): number {
   // fallback lets mixed-case HF-style ids (e.g.
   // "mlx-community/Qwen3-30B-A3B-4bit") still hit their entry.
   const id = resolveModelInput(model) ?? String(model);
+  // Check per-slot contextWindow override BEFORE the built-in table. This lets
+  // paid-tier users raise the window for providers whose limit depends on
+  // account tier (e.g. Cerebras free 64k vs paid 128k on qwen-3.8-27b).
+  // The override is keyed on the CONCRETE id so the lookup is effective on the
+  // real provider path (providers call contextLimitFor with the resolved wire id).
+  const slotOverride = contextWindowOverrideFor(id);
+  if (slotOverride !== undefined) return slotOverride;
   const known = MODEL_CONTEXT_LIMITS[id] ?? MODEL_CONTEXT_LIMITS[id.toLowerCase()];
   if (known !== undefined) return known;
   return routesToOpenAICompatible(id)

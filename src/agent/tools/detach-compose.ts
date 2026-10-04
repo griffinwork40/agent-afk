@@ -130,6 +130,7 @@ export function applyComposeDetach(
 import type { DAGRunResult } from '../dag.js';
 import type { ToolResult } from './types.js';
 import { errorMessage } from '../../utils/errors.js';
+import { debugLog } from '../../utils/debug.js';
 
 /**
  * Parameters for {@link raceComposeDetach}.
@@ -226,7 +227,7 @@ export async function raceComposeDetach(
         const msg = errorMessage(err);
         token.deliver(buildComposeDelivery(toolUseId, label, `Compose execution error: ${msg}`, true, startedAt));
       })
-      .finally(() => { void p.teardown(); });
+      .finally(() => { void p.teardown().catch((err: unknown) => { debugLog(`[compose-detach] teardown error: ${String(err)}`); }); });
     return { kind: 'detached', placeholder: winner.result };
   }
 

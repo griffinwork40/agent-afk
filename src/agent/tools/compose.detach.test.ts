@@ -43,14 +43,22 @@ vi.mock('../dag-subagent.js', () => ({
   runSubagentDAG: (...args: unknown[]) => mockRunSubagentDAG(...args),
 }));
 
+// Capture the teardownAll spy from the most recently constructed SubagentManager
+// so individual tests can assert call counts.
+let lastTeardownAll: ReturnType<typeof vi.fn> | undefined;
+
 vi.mock('../subagent.js', () => ({
-  SubagentManager: vi.fn(() => ({
-    forkSubagent: vi.fn(),
-    teardownAll: vi.fn(async () => {}),
-    kill: vi.fn(async () => true),
-    setOnSubagentSucceeded: vi.fn(),
-    getReadScopeInputs: vi.fn(),
-  })),
+  SubagentManager: vi.fn(() => {
+    const teardownAll = vi.fn(async () => {});
+    lastTeardownAll = teardownAll;
+    return {
+      forkSubagent: vi.fn(),
+      teardownAll,
+      kill: vi.fn(async () => true),
+      setOnSubagentSucceeded: vi.fn(),
+      getReadScopeInputs: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../routing-telemetry.js', () => ({
@@ -250,6 +258,7 @@ describe('ComposeExecutor detach contract (#2542)', () => {
     // Reset the controllable DAG promise on each test.
     resolveDAG = undefined;
     rejectDAG = undefined;
+    lastTeardownAll = undefined;
     mockRunSubagentDAG.mockImplementation(
       () =>
         new Promise<import('../dag.js').DAGRunResult>((resolve, reject) => {
@@ -361,6 +370,46 @@ describe('ComposeExecutor detach contract (#2542)', () => {
     expect(deliveredResults[0]!.status).toBe('completed');
     expect(deliveredResults[0]!.output).toContain('node-a');
     expect(deliveredResults[0]!.toolUseId).toBe('detach-2');
+
+    // Teardown contract: on the detach path, the `finally` clause in execute()
+    // skips teardownAll (detachedRef.value === true). The continuation's .finally
+    // owns it and must call it exactly once after the DAG settles.
+    // If this assertion fails, a regression flipped detachedRef.value to false,
+    // causing double-teardown (both the finally and the continuation fire it).
+    await drainMicrotasks();
+    expect(lastTeardownAll).toBeDefined();
+    expect(lastTeardownAll!.mock.calls).toHaveLength(1);
+  });
+
+  it('teardownAll is NOT called synchronously on the detach path (only after DAG settles)', async () => {
+    const call = makeCall('teardown-timing-1');
+    const { parentSession } = makeCtx();
+    const registry = new DetachableToolRegistry();
+    const executor = new ComposeExecutor({
+      parentSession,
+      defaultSubagentModel: 'claude-3-5-haiku-20241022',
+      apiKey: 'sk-ant-test',
+      systemPrompt: 'test',
+    });
+
+    const execPromise = executor.execute(call, registry);
+    await drainMicrotasks();
+
+    // Detach fires — the execute() finally clause must skip teardownAll here
+    // because detachedRef.value is true at that point.
+    registry.detachAll();
+    await execPromise;
+
+    // After execute() returns: teardownAll must NOT have been called yet.
+    // The continuation hasn't run because the DAG promise hasn't settled.
+    expect(lastTeardownAll).toBeDefined();
+    expect(lastTeardownAll!.mock.calls).toHaveLength(0);
+
+    // Now settle the DAG — the continuation's .finally() must call teardownAll.
+    resolveDAG?.(dagSuccess());
+    await drainMicrotasks();
+
+    expect(lastTeardownAll!.mock.calls).toHaveLength(1);
   });
 
   it('returns normal result when DAG completes before detachAll() fires (race)', async () => {

@@ -10,7 +10,8 @@ Usage:
 Kwargs (via --agent-kwarg / -ak):
     variant full|minimal (default: full); max_turns int (default: 100);
     effort low|medium|high|xhigh|max; max_budget_usd e.g. "5.00";
-    afk_version npm pin e.g. "5.278.2" (default: latest).
+    afk_version npm pin e.g. "5.278.2" (default: latest);
+    context_window int override e.g. 128000 (requires agent-afk >= 5.284.0).
 
 Stream-json done event (cost/token accounting):
     { "type": "done", "metadata": { "totalCostUsd": float|null,
@@ -43,9 +44,7 @@ Container safety vars (all verified in src/config/env.ts or env.paths.ts):
 from __future__ import annotations
 
 import json
-import os
 import shlex
-import tempfile
 from pathlib import Path
 from typing import Any, Literal, override
 
@@ -54,6 +53,11 @@ from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_templat
 from harbor.agents.installed.node_install import nvm_node_install_snippet
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+
+from bench.harbor.afk_config import (
+    build_config_write_command,
+    validate_context_window,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -102,6 +106,7 @@ class AfkAgent(BaseInstalledAgent):
         effort: str | None = None,
         max_budget_usd: str | None = None,
         afk_version: str | None = None,
+        context_window: int | None = None,
         **kwargs: Any,
     ) -> None:
         self._variant = variant
@@ -109,6 +114,7 @@ class AfkAgent(BaseInstalledAgent):
         self._effort = effort
         self._max_budget_usd = max_budget_usd
         self._afk_version = afk_version  # None → latest
+        self._context_window = validate_context_window(context_window)
         # Accumulated from stream-json for populate_context_post_run
         self._last_done_metadata: dict[str, Any] | None = None
         super().__init__(logs_dir, **kwargs)
@@ -174,6 +180,24 @@ class AfkAgent(BaseInstalledAgent):
         log_path = (self.environment_logs_dir / "afk-stream.txt").as_posix()
 
         cli_flags = self._build_cli_flags()
+
+        # When context_window is set, write $AFK_HOME/config/afk.config.json
+        # before running afk.  This injects a "local" slot binding carrying the
+        # contextWindow for the resolved model id.  contextWindowOverrideFor()
+        # (src/agent/session/model-slots.ts:499) scans all slot bindings and
+        # returns the override when binding.id === concreteId — the provider is
+        # not part of the match — so contextLimitFor() honours it.
+        # Search order: cwd/afk.config.json > $AFK_HOME/config/afk.config.json
+        # (src/cli/config/json-tier-paths.ts).  Task dirs are benchmark-
+        # controlled, so cwd typically has no afk.config.json, giving the user-
+        # tier file full effect.
+        if self._context_window is not None:
+            config_cmd = build_config_write_command(
+                afk_home=self.environment_logs_dir.as_posix(),
+                model_id=self._resolved_model_name() or "",
+                context_window=self._context_window,
+            )
+            await self.exec_as_agent(environment, command=config_cmd)
 
         # Instruction is passed via an env var then piped to stdin, matching
         # ClaudeCode's pattern to avoid shell-injection on special chars.

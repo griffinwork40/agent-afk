@@ -293,10 +293,11 @@ describe('waitForHandler — #1430 PID registry wiring', () => {
     expect(registryArg).toBeUndefined();
   });
 
-  it('registry-blocked result (met:false, blocked:true) still produces a non-error summary', async () => {
-    // The handler should NOT surface blocked:true as isError — it returns the
-    // poll summary (succeeded / timed_out). A registry rejection is a met:false
-    // on each poll, and the test lets it time out at timeout_ms:0.
+  it('#2750: registry-blocked result (met:false, blocked:true) fails fast as isError', async () => {
+    // #2750: A blocked:true result is a PERMANENT failure — the poll loop must
+    // NOT retry until timeout. It should return status:'failed' immediately,
+    // which the handler surfaces as isError:true, so the agent gets an
+    // actionable error instead of a generic timed_out after the full timeout.
     const { evaluateProcess } = await import('./wait-for-conditions.js');
     vi.mocked(evaluateProcess).mockReturnValue({
       met: false,
@@ -305,12 +306,13 @@ describe('waitForHandler — #1430 PID registry wiring', () => {
     });
 
     const result = await waitForHandler(
-      { type: 'process', pid: 12345, timeout_ms: 0 } as never,
+      { type: 'process', pid: 12345 } as never,
       neverSignal,
     );
-    // timeout_ms:0 → timed_out verdict, which is NOT an error
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('timed_out');
+    // blocked:true → failed verdict → isError:true (fast-fail, not timed_out)
+    expect(result.isError).toBe(true);
+    // The error message should surface the evaluator's detail string.
+    expect(result.content).toContain('not a session-owned process');
   });
 });
 
