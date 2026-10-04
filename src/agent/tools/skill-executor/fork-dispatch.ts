@@ -12,6 +12,8 @@
  * @module agent/tools/skill-executor/fork-dispatch
  */
 
+import { withSkillIdentity } from './fork-identity.js';
+import type { SkillIdentity } from '../../types/skill-identity.js';
 import { SubagentManager } from '../../subagent.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import { appendInjectContext } from '../subagent/inject-context.js';
@@ -68,6 +70,8 @@ function buildSkillForkManager(
     // the fork-time credential fallback (see SubagentManager.parentProvider).
     parentModel: string;
     parentAbortSignal: AbortSignal;
+    callId: string;
+    identity: SkillIdentity;
   },
 ): SubagentManager {
   const { ctx, currentCwd } = internals;
@@ -79,7 +83,7 @@ function buildSkillForkManager(
     ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
-    progressSink: getCurrentSink(),
+    progressSink: withSkillIdentity(getCurrentSink(), perPath.callId, perPath.identity),
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
@@ -90,6 +94,7 @@ export async function executeForkedRegistrySkill(
   internals: SkillExecutorInternals,
   skill: {
     name: string;
+    description?: string;
     context?: 'inline' | 'fork' | 'load';
     model?: string;
     readOnly?: boolean;
@@ -147,6 +152,8 @@ export async function executeForkedRegistrySkill(
   const manager = buildSkillForkManager(internals, {
     apiKey: skillChildApiKey,
     parentModel: skillChildModel,
+    callId: call.id,
+    identity: { name: skill.name, ...(skill.description ? { purpose: skill.description } : {}), ...(args ? { arguments: args } : {}) },
     parentAbortSignal: call.signal,
   });
 
@@ -248,6 +255,8 @@ export async function executePluginSkill(
   const manager = buildSkillForkManager(internals, {
     apiKey: pluginChildApiKey,
     parentModel: pluginChildModel,
+    callId: call.id,
+    identity: { name: skillName, ...(args ? { arguments: args } : {}) },
     parentAbortSignal: call.signal,
   });
 

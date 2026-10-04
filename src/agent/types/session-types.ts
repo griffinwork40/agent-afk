@@ -233,6 +233,8 @@ export interface ProgressEvent {
 
 /** Metadata for routing progress events to a subagent sink. */
 export interface SubagentProgressMeta {
+  /** Resolved display metadata for the skill tool entry keyed by parentId. */
+  skillIdentity?: import('./skill-identity.js').SkillIdentity;
   subagentId: string;
   parentId?: string;
   agentType?: string;

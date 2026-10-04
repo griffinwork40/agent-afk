@@ -1,3 +1,4 @@
+import { formatSkillIdentity, type SkillIdentity } from '../../_lib/skill-identity-format.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
 import { formatToolLine, formatToolResultLine } from './tool-lane-format.js';
@@ -200,6 +201,14 @@ export class ToolLane {
    * Update an existing tool entry's `agentContext`. No-op if the entry
    * doesn't exist or is a text entry.
    */
+  /** Update display only; never mutate the actual tool invocation. */
+  setSkillIdentity(toolUseId: string, identity: SkillIdentity): void {
+    const entry = this.entries.get(toolUseId);
+    if (entry?.kind !== 'tool' || !SKILL_TOOLS.has(entry.toolName)) return;
+    entry.toolInput = `(${formatSkillIdentity(identity, 240)})`;
+    entry.prefix = formatToolLine(entry.toolName + entry.toolInput);
+  }
+
   setAgentContext(toolUseId: string, agentContext: string | undefined): void {
     const entry = this.entries.get(toolUseId);
     if (entry?.kind === 'tool') {

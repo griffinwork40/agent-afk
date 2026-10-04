@@ -33,6 +33,8 @@ import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
 import { checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
 
+import { skillIdentityBanner, type SkillIdentity } from './skill-identity-format.js';
+
 const PAUSE_THRESHOLD_MS = 30_000;
 const WAITING_LABEL_PREFIX = ' · waiting ';
 const K = 375;
@@ -84,6 +86,7 @@ export function registerOverlaySlots(
      */
     sources?: ReadonlyMap<string, SourceState>;
     childActivity?: ChildActivityTracker;
+    getSkillIdentity?: () => SkillIdentity | undefined;
     /** Live interrupt state — true while a Ctrl+C interrupt is being processed. */
     getInterrupting: () => boolean;
     /**
@@ -214,7 +217,7 @@ export function registerOverlaySlots(
           ),
         );
       }
-      return bannerLines.length > 0 ? bannerLines.join('\n') : '';
+      return skillIdentityBanner(ctx.getSkillIdentity?.(), bannerLines, getTerminalWidth());
     },
   });
 
