@@ -35,6 +35,13 @@ import { buildSkillManifest, type PluginSkillBody } from './skill-bridge.js';
 import { RECON_ALLOWED_TOOLS } from './nesting.js';
 import { errorMessage } from '../../utils/errors.js';
 
+// Captured at module load, BEFORE any test installs a `vi.spyOn` on the
+// namespace export. Since Vitest 3, `vi.spyOn` on an already-spied export
+// returns that same spy, so reading `SubagentExecutorModule.SubagentExecutor`
+// inside a later test would capture the spy itself and the pass-through
+// `new OriginalSubagentExecutor(...)` would recurse forever.
+const RealSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+
 const abortSignal = new AbortController().signal;
 
 function makeCall(input: unknown) {
@@ -1954,9 +1961,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2006,9 +2013,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2063,9 +2070,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2116,9 +2123,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2161,9 +2168,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },
@@ -2208,9 +2215,9 @@ describe('SkillExecutor', () => {
       });
 
       const capturedCtorArgs: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>[] = [];
-      const OriginalSubagentExecutor = SubagentExecutorModule.SubagentExecutor;
+      const OriginalSubagentExecutor = RealSubagentExecutor;
       vi.spyOn(SubagentExecutorModule, 'SubagentExecutor').mockImplementation(
-        (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) => {
+        function (...args: ConstructorParameters<typeof SubagentExecutorModule.SubagentExecutor>) {
           capturedCtorArgs.push(args);
           return new OriginalSubagentExecutor(...args);
         },

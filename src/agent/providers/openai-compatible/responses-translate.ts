@@ -44,6 +44,10 @@ export interface ResponsesStreamEvent {
   output_index?: number;
   /** The output item's own id (not the call_id). */
   item_id?: string;
+  /** Complete argument string, carried by `response.function_call_arguments.done`. */
+  arguments?: string;
+  /** Function name, carried by `response.function_call_arguments.done`. */
+  name?: string;
   /** Carried by `response.output_item.added` / `.done`. */
   item?: {
     type?: string;
@@ -137,6 +141,27 @@ export function* translateResponsesEvent(
       return;
     }
 
+    // Terminal events for a function call. Each carries the COMPLETE argument
+    // string. The ChatGPT Codex backend (chatgpt-oauth wire) can omit the
+    // `.delta` stream entirely for parallel calls and deliver arguments only
+    // here, so ignoring these left every call in the batch with `{}` input
+    // ("file_path must be a string" storms). A non-empty `.done` value is
+    // authoritative and replaces any delta accumulation.
+    case 'response.function_call_arguments.done': {
+      if (typeof event.output_index === 'number') {
+        settleFunctionCall(state, event.output_index, { name: event.name, arguments: event.arguments });
+      }
+      return;
+    }
+
+    case 'response.output_item.done': {
+      const item = event.item;
+      if (item?.type === 'function_call' && typeof event.output_index === 'number') {
+        settleFunctionCall(state, event.output_index, item);
+      }
+      return;
+    }
+
     case 'response.completed': {
       applyResponsesUsage(state, event);
       // A turn that produced any function_call items is a tool-call stop;
@@ -160,10 +185,37 @@ export function* translateResponsesEvent(
 
     default:
       // Unhandled event types (audio, web_search, mcp, content_part framing,
-      // *.done duplicates, etc.) are intentionally ignored — they carry no
+      // text *.done duplicates, etc.) are intentionally ignored — they carry no
       // information the harness needs beyond what the deltas already conveyed.
       return;
   }
+}
+
+/**
+ * Apply a terminal function-call payload (`*.done`) to the accumulator.
+ * Contract: a non-empty `done.arguments` replaces the accumulated string (it
+ * is the complete value); an empty/absent one leaves accumulation intact.
+ * Missing id/name are seeded so a call whose `added` event was lost still
+ * dispatches under the right tool.
+ */
+function settleFunctionCall(
+  state: StreamState,
+  index: number,
+  done: { call_id?: string | undefined; name?: string | undefined; arguments?: string | undefined },
+): void {
+  const existing = state.toolCallsByIndex.get(index) ?? {
+    index,
+    id: '',
+    name: '',
+    argumentsRaw: '',
+    startEmitted: false,
+  };
+  if (!existing.id && done.call_id) existing.id = done.call_id;
+  if (!existing.name && done.name) existing.name = done.name;
+  if (typeof done.arguments === 'string' && done.arguments.length > 0) {
+    existing.argumentsRaw = done.arguments;
+  }
+  state.toolCallsByIndex.set(index, existing);
 }
 
 /**

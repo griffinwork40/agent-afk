@@ -238,7 +238,8 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
           '(SSH keys, cloud credentials, GPG, /etc/shadow, ...) is blocked by the path-approval ' +
           'policy — an interpreter can assemble a path the shell-substring check cannot see. Use ' +
           'the typed file tools (read_file, write_file, edit_file), which support per-call user ' +
-          'approval, or ask the user to run the script themselves. To lift this block — e.g. ' +
+          'approval. Only if those tools cannot do the job, ask the user to run the script ' +
+          'themselves. To lift this block — e.g. ' +
           'headless automation that legitimately reads such paths — set ' +
           'AFK_DISABLE_BASH_INTERPRETER_GUARD=1, or disable all of path-approval with ' +
           'AFK_DISABLE_PATH_APPROVAL=1.',

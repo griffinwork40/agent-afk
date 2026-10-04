@@ -35,6 +35,7 @@ import { inboundAttachmentRegistry } from '../content/attachment-registry.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { buildAgentMaxDepthRefusal } from './skill-depth-message.js';
 import { buildBudgetRefusalMessage, type SpawnReceipt } from './delegation-budget.js';
+import { evaluateDispatchUsageForModel, prependUsageNotice } from './usage-notice.js';
 import { collectPostRunWarnings } from './subagent-executor.write-intent.js';
 import { buildSubagentsLite } from './subagent-executor.lite-snapshot.js';
 import {
@@ -440,6 +441,9 @@ export class SubagentExecutor implements SubagentControl {
       budgetReceipt = this.ctx.delegationBudget.recordSpawn(this.ctx.parentSession.sessionId ?? '');
     }
 
+    // Usage notice: evaluate quota at dispatch start (observer-only, no blocking).
+    const usageNotice = await evaluateDispatchUsageForModel(this.ctx.parentModel, this.ctx.traceWriter);
+
     // Transitive read-scope propagation (see ../subagent-read-scope): compute
     // THIS child's inherited read roots from the manager that will fork it, so
     // the nested manager the child builds for its OWN grandchildren starts from
@@ -464,7 +468,7 @@ export class SubagentExecutor implements SubagentControl {
     // Build the child config + nested-dispatch wiring. All context this needs
     // is passed explicitly; the recursive child executor is injected as a
     // factory so child-config.ts never imports this class at runtime.
-    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree } = buildChildConfig({
+    const { childConfig, childParentSession, childManager, childWriteCapable, childSideEffectFree, nestedAgentAllowlist } = buildChildConfig({
       parsed,
       namedAgent,
       depth,
@@ -593,7 +597,7 @@ export class SubagentExecutor implements SubagentControl {
         // subagent.ts this makes every sub-agent uniformly non-interactive.
         // (Previously only background denied; foreground leaked elicitations to
         // the REPL/Telegram human via the process-wide elicitation router.)
-        denyElicitations: true, progressEvents: parsed.progress_events,
+        denyElicitations: true, progressEvents: parsed.progress_events, ...(nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist } : {}),
       });
       // Backfill: give the depth-1 child executor a real parentId (handle.id) and the
       // child's OWN journal, so depth-2 forks journal via its forSubagent (never ours).
@@ -780,6 +784,7 @@ export class SubagentExecutor implements SubagentControl {
     if (!promotionTookBudget.value) budgetRelease?.();
     const warn = collectPostRunWarnings(childConfig.model, parsed.attachments !== undefined, namedAgent?.name, parsed.prompt, childWriteCapable, supportsVision);
     if (warn && !result.isError) result.content = warn + result.content;
+    result.content = prependUsageNotice(usageNotice, result.content);
     // Wave manifest: update unit to 'done' or 'failed' after the foreground run.
     if (result.isError === true) {
       this.updateCurrentWaveUnit(call.id, 'failed', typeof result.content === 'string' ? result.content.slice(0, 500) : undefined);

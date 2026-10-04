@@ -233,6 +233,8 @@ export interface BandReflowHost {
   /** Per-physical-row logical provenance, index-aligned 1:1 with committedBand (#540). */
   committedBandMeta: BandRowMeta[];
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   bandReflowCache: BandReflowCache | null;
 }
 
@@ -269,16 +271,42 @@ export function reflowCommittedBandToWidth(self: BandReflowHost, width: number):
   ) {
     return; // already reflowed to this width from this exact band+boundary
   }
-  const { rows, paintedRows, meta } = reflowBandSplit(
-    self.committedBand,
-    self.committedBandPaintedRows,
-    width,
-    self.committedBandMeta,
-  );
+  const { rows, paintedRows, meta, archivedPrefix } = reflowBandWithArchivedPrefix(self, width);
   self.committedBand = rows;
   self.committedBandMeta = meta;
   self.committedBandPaintedRows = paintedRows;
+  self.committedBandArchivedPrefix = archivedPrefix;
   self.bandReflowCache = { band: rows, paintedRows, width };
+}
+
+/**
+ * Reflow the band keeping the archived-prefix boundary
+ * (terminal-compositor.band-archived-prefix.ts) aligned with the content it
+ * describes, exactly like the painted/pending boundary: the archived prefix and
+ * the rest are re-wrapped independently and the prefix's new row count becomes
+ * the new `committedBandArchivedPrefix`. A logical line straddling the boundary
+ * is re-wrapped per side (its fragments were already split in scrollback).
+ */
+function reflowBandWithArchivedPrefix(
+  self: BandReflowHost,
+  width: number,
+): BandReflowResult & { archivedPrefix: number } {
+  const band = self.committedBand;
+  const meta = self.committedBandMeta;
+  const p = Math.max(0, Math.min(self.committedBandArchivedPrefix, band.length));
+  if (p === 0) {
+    return { ...reflowBandSplit(band, self.committedBandPaintedRows, width, meta), archivedPrefix: 0 };
+  }
+  const painted = Math.max(0, Math.min(self.committedBandPaintedRows, band.length));
+  const restLen = band.length - p;
+  const head = reflowBandSplit(band.slice(0, p), Math.max(0, painted - restLen), width, meta.slice(0, p));
+  const rest = reflowBandSplit(band.slice(p), Math.min(painted, restLen), width, meta.slice(p));
+  return {
+    rows: [...head.rows, ...rest.rows],
+    paintedRows: head.paintedRows + rest.paintedRows,
+    meta: [...head.meta, ...rest.meta],
+    archivedPrefix: head.rows.length,
+  };
 }
 
 // DECAWM (autowrap) private-mode escapes.

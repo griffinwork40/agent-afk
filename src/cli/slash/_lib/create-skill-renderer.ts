@@ -26,6 +26,7 @@ import type { SlashContext, Writer } from '../types.js';
 export interface SkillRendererOpts {
   /** Skill name rendered in the visual badge when the model emits XML tags. */
   skillName: string;
+  skillIdentity?: import('../../_lib/skill-identity-format.js').SkillIdentity;
   /**
    * Override the Writer used for non-TTY / line-based output.
    * Defaults to `ctx.out`.
@@ -67,6 +68,7 @@ export function createSkillRenderer(ctx: SlashContext, opts: SkillRendererOpts):
     out,
     ...(thinkingMode !== undefined ? { thinkingMode } : {}),
     activeSkillName: opts.skillName,
+    ...(opts.skillIdentity ? { skillIdentity: opts.skillIdentity } : {}),
     onCancel: opts.onCancel ?? (() => { /* no-op */ }),
     ...(borrowedCompositor ? { compositor: borrowedCompositor } : {}),
     // Thread the REPL's LoopStageBar repaint callback so the footer stage

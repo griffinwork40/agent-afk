@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import type { SessionStats, SlashContext } from '../types.js';
 import { diffCmd } from './diff.js';
@@ -11,9 +12,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   delete process.env['AFK_DIFF_LINES'];
-  // Retry ENOTEMPTY: background git tooling (fsmonitor, git-ai, indexers) can
-  // still be writing into .git when a test finishes.
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  for (const dir of dirs.splice(0)) rmSyncRetry(dir);
 });
 
 function repo(): string {

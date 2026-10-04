@@ -130,6 +130,8 @@ export {
 // ── Orchestration (background jobs, patch-apply, witness) ─────────────────
 import { cancelBackgroundJobTool, patchApplyTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 import { readWitnessTool, searchWitnessTool } from './schemas.witness.js';
+import { listSessionsTool, sendToSessionTool } from './schemas.peer.js';
+export { listSessionsTool, sendToSessionTool, PEER_TOOL_NAMES } from './schemas.peer.js';
 
 // ── Other extracted tools (re-exports only) ────────────────────────────────
 export { waitForTool } from './schemas.wait-for.js';
@@ -187,6 +189,8 @@ export const builtinToolSchemas: readonly AnthropicToolDef[] = [
   jsonQueryTool,
   clipboardWriteTool,
   clipboardReadTool,
+  listSessionsTool,
+  sendToSessionTool,
 ];
 
 /** Tool names in the always-on built-in set. */

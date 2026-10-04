@@ -49,6 +49,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { VirtualScreen } from './_lib/testing/virtual-screen.js';
+import { dropSeamOverlap, reshownArchivedRows } from './_lib/testing/scrollback-seam.js';
 
 // ---------------------------------------------------------------------------
 // Shared test helpers
@@ -121,13 +122,15 @@ function assertNoVoid(
   vs: VirtualScreen,
   labels: string[],
   tag: string,
+  reshown = 0,
 ): void {
   const visible = vs.visibleLines();
-  const allLines = [...vs.scrollbackLines(), ...visible];
   const dump = [
     ...vs.scrollbackLines().map((l, i) => `[sb-${String(i).padStart(3)}] ${JSON.stringify(l)}`),
     ...visible.map((l, i) => `[vp-${String(i + 1).padStart(3)}] ${JSON.stringify(l)}`),
   ].join('\n');
+  // Discount only the re-shown archived rows (scrollback-seam.ts); default 0 = fully strict.
+  const allLines = [...dropSeamOverlap(vs.scrollbackLines(), visible, reshown, dump), ...visible];
 
   const FRAME_RE = /\u23af/;
   const frameVpIdx = visible.findIndex((l) => FRAME_RE.test(l));
@@ -300,7 +303,7 @@ describe('tall-overlay strand gap — compositor regression (issue #2369)', () =
       internals.repaint();
       internals.repaint();
 
-      assertNoVoid(vs, strandLabels, 'content-hug');
+      assertNoVoid(vs, strandLabels, 'content-hug', reshownArchivedRows(c));
       c.disarm();
     },
     15_000,

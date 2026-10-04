@@ -187,7 +187,7 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
   it('STILL auto-denies a forked-child write OUTSIDE its injected grants (confinement preserved)', async () => {
     const childMgr = makeMockGrantManager({ writeRoots: [BASE] });
     const { preToolUse } = createPathApprovalHook({
-      // Even a permissive parent ref must not widen the child. SIBLING] }),
+      // Even a permissive parent ref must not widen the child.
       getCwd: () => BASE,
       surface: 'repl',
     });

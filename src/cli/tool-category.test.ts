@@ -294,6 +294,23 @@ describe('humanVerbForTool', () => {
     expect(humanVerbForTool('cancel_schedule')).toBe('Cancelling…');
   });
 
+  it.each([
+    ['wait_for', 'Waiting…'],
+    ['test_run', 'Testing…'],
+    ['send_telegram', 'Notifying…'],
+    ['image_generate', 'Generating…'],
+    ['image_edit', 'Generating…'],
+    ['ask_question', 'Asking…'],
+    ['grep', 'Searching…'],
+    ['glob', 'Searching…'],
+    ['memory_search', 'Recalling…'],
+    ['memory_update', 'Remembering…'],
+    ['patch_apply', 'Patching…'],
+    ['config_set', 'Configuring…'],
+  ])('describes %s with the precise action %s', (name, expected) => {
+    expect(humanVerbForTool(name)).toBe(expected);
+  });
+
   it('falls through to category for unknown tools', () => {
     expect(humanVerbForTool('some_unknown_tool')).toBe(CATEGORY_HUMAN_VERB['other']);
   });

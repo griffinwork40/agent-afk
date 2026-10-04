@@ -58,6 +58,30 @@ interface NativeToolCall {
 const ERROR_PREFIX = '[error] ';
 /** Provider family stamped on thinking this adapter writes (it never has a signature). */
 export const OPENAI_COMPATIBLE_ORIGIN = 'openai-compatible';
+
+/**
+ * Encode the reasoning wire field into the thinking block's `origin` tag so
+ * `assistantFromJournal` can restore the correct echo key on resume.
+ *
+ * Format: `openai-compatible:<field>` where `<field>` is `reasoning_content`
+ * (DeepSeek) or `reasoning` (Cerebras). The tag is stable across provider
+ * versions and additive — journals written before this change have
+ * `origin: 'openai-compatible'` (no suffix) and are replayed under
+ * `reasoning_content` for backward compatibility.
+ */
+function encodeReasoningOrigin(field: 'reasoning_content' | 'reasoning'): string {
+  return `${OPENAI_COMPATIBLE_ORIGIN}:${field}`;
+}
+
+/**
+ * Decode the reasoning wire field from a thinking block's `origin`. Returns
+ * `'reasoning_content'` for legacy entries (origin = `'openai-compatible'` or
+ * undefined) so old journals resume cleanly against DeepSeek.
+ */
+function decodeReasoningField(origin: string | undefined): 'reasoning_content' | 'reasoning' {
+  if (origin === `${OPENAI_COMPATIBLE_ORIGIN}:reasoning`) return 'reasoning';
+  return 'reasoning_content';
+}
 const RAW_KEY = '_raw';
 
 function toolCallsOf(msg: OpenAIMessage): NativeToolCall[] | undefined {
@@ -107,8 +131,14 @@ function contentToBlocks(content: unknown): JournalBlock[] {
 
 function assistantToJournal(msg: OpenAIMessage): JournalMessage {
   const content: JournalBlock[] = [];
-  if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.length > 0) {
-    content.push({ type: 'thinking', thinking: msg.reasoning_content, origin: OPENAI_COMPATIBLE_ORIGIN });
+  // Persist the reasoning wire field in the thinking block's origin tag so
+  // assistantFromJournal can restore the correct echo key on resume. Cerebras
+  // uses `reasoning`; DeepSeek uses `reasoning_content`. Both are encoded as
+  // `openai-compatible:<field>` for easy lossless round-tripping.
+  if (typeof msg.reasoning === 'string' && msg.reasoning.length > 0) {
+    content.push({ type: 'thinking', thinking: msg.reasoning, origin: encodeReasoningOrigin('reasoning') });
+  } else if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.length > 0) {
+    content.push({ type: 'thinking', thinking: msg.reasoning_content, origin: encodeReasoningOrigin('reasoning_content') });
   }
   content.push(...contentToBlocks(msg.content));
   for (const tc of toolCallsOf(msg) ?? []) {
@@ -192,13 +222,20 @@ function userFromJournal(msg: JournalMessage, out: OpenAIMessage[]): void {
 
 function assistantFromJournal(msg: JournalMessage): OpenAIMessage {
   const texts: string[] = [];
-  const reasoning: string[] = [];
+  // reasoning blocks may arrive from different providers, each encoded with
+  // its origin field name (e.g. 'openai-compatible:reasoning' for Cerebras).
+  // Group by field so mixed journals are unlikely but safe.
+  const reasoningByField = new Map<'reasoning_content' | 'reasoning', string[]>();
   const toolCalls: NativeToolCall[] = [];
   for (const block of msg.content) {
     if (block.type === 'text') texts.push(block.text);
     else if (block.type === 'text_ref') texts.push(block.preview);
-    else if (block.type === 'thinking') reasoning.push(block.thinking);
-    else if (block.type === 'tool_use') {
+    else if (block.type === 'thinking') {
+      const field = decodeReasoningField(block.origin);
+      const bucket = reasoningByField.get(field) ?? [];
+      bucket.push(block.thinking);
+      reasoningByField.set(field, bucket);
+    } else if (block.type === 'tool_use') {
       toolCalls.push({ id: block.id, type: 'function', function: { name: block.name, arguments: stringifyArguments(block.input) } });
     }
     // redacted_thinking / images / documents: not replayable on this wire.
@@ -206,7 +243,11 @@ function assistantFromJournal(msg: JournalMessage): OpenAIMessage {
   const text = texts.join('\n');
   const out: Record<string, unknown> = { role: 'assistant', content: toolCalls.length > 0 && text.length === 0 ? null : text };
   if (toolCalls.length > 0) out['tool_calls'] = toolCalls;
-  if (reasoning.length > 0) out['reasoning_content'] = reasoning.join('\n');
+  // Echo each reasoning bucket under its original wire field to avoid HTTP 400
+  // from providers that reject foreign field names in history.
+  for (const [field, chunks] of reasoningByField) {
+    if (chunks.length > 0) out[field] = chunks.join('\n');
+  }
   return out as unknown as OpenAIMessage;
 }
 
