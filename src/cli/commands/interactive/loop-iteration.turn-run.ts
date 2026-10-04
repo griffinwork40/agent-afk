@@ -100,6 +100,9 @@ export async function runOneTurn(
     {
       setInFlight(v: boolean) { turnState.turnInFlight = v; },
       ...(ctx.subagentControl ? { subagentControl: ctx.subagentControl } : {}),
+      // #2542/#2735: Forward the detach registry so the Ctrl+B handler can
+      // free the model's turn while a bash process keeps running.
+      ...(ctx.detachRegistry ? { detachRegistry: ctx.detachRegistry } : {}),
       async onUserMessage(userInput) {
         await transcript.appendUser(userInput);
       },

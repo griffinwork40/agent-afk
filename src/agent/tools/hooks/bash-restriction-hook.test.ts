@@ -44,12 +44,27 @@ function mockGrants(): GrantManager {
   };
 }
 
-function ctx(command: unknown): PreToolUseContext {
+/**
+ * Build a PreToolUseContext for bash. Defaults to an interactive surface
+ * (mockGrants() injected). Pass explicit undefined or use headlessCtx()
+ * to simulate a headless surface (no grant manager).
+ */
+function ctx(command: unknown, grantManager: GrantManager | undefined = mockGrants()): PreToolUseContext {
+  return {
+    event: 'PreToolUse',
+    toolName: 'bash',
+    input: { command },
+    ...(grantManager !== undefined ? { grantManager } : {}),
+  };
+}
+
+/** Like ctx() but never injects a grantManager — simulates a headless surface. */
+function headlessCtx(command: unknown): PreToolUseContext {
   return { event: 'PreToolUse', toolName: 'bash', input: { command } };
 }
 
 describe('createBashRestrictionHook — interpreter denylist (scoped to credential-adjacent payloads)', () => {
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
 
   // --- BLOCKS: interpreter one-liners that reference a sensitive path ---
 
@@ -140,7 +155,6 @@ describe('createBashRestrictionHook — interpreter denylist (scoped to credenti
 describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_BASH_INTERPRETER_GUARD)', () => {
   it('skips the interpreter guard when disableInterpreterGuard is true', () => {
     const hook = createBashRestrictionHook({
-      getGrantManager: mockGrants,
       disableInterpreterGuard: true,
     });
     // Even credential-adjacent one-liners (which WOULD block by default, and
@@ -157,7 +171,6 @@ describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_B
     // The granular escape lifts ONLY the interpreter denylist — a bash command
     // that literally references a restricted path must still be blocked.
     const hook = createBashRestrictionHook({
-      getGrantManager: mockGrants,
       disableInterpreterGuard: true,
     });
     const decision = hook(ctx(`cat ${homedir()}/.ssh/id_rsa`));
@@ -166,7 +179,7 @@ describe('createBashRestrictionHook — interpreter guard opt-out (AFK_DISABLE_B
   });
 
   it('guard is active by default when the option is omitted', () => {
-    const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+    const hook = createBashRestrictionHook({});
     expect(hook(ctx('python -c "open(\'~/.ssh/id_rsa\').read()"')).decision).toBe('block');
   });
 });
@@ -184,62 +197,58 @@ describe('createBashRestrictionHook — interpreter guard interactivity gate (H2
   const cred = 'python -c "open(\'~/.ssh/id_rsa\').read()"';
 
   it('does NOT block a credential-adjacent eval on a headless surface (no grant manager wired)', () => {
-    const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
-    expect(hook(ctx(cred)).decision).not.toBe('block');
+    const hook = createBashRestrictionHook({});
+    expect(hook(headlessCtx(cred)).decision).not.toBe('block');
   });
 
   it('DOES block a credential-adjacent eval on an interactive surface (grant manager wired)', () => {
-    const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
-    expect(hook(ctx(cred)).decision).toBe('block');
+    const hook = createBashRestrictionHook({});
+    expect(hook(ctx(cred, mockGrants())).decision).toBe('block');
   });
 
   it('never blocks a pure-computation eval, interactive or headless', () => {
-    const interactive = createBashRestrictionHook({ getGrantManager: mockGrants });
-    const headless = createBashRestrictionHook({ getGrantManager: () => undefined });
-    expect(interactive(ctx('python -c "1+1"')).decision).not.toBe('block');
-    expect(headless(ctx('python -c "1+1"')).decision).not.toBe('block');
+    const interactive = createBashRestrictionHook({});
+    const headless = createBashRestrictionHook({});
+    expect(interactive(ctx('python -c "1+1"', mockGrants())).decision).not.toBe('block');
+    expect(headless(headlessCtx('python -c "1+1"')).decision).not.toBe('block');
   });
 
   it('forceInterpreterGuard re-enables the guard on headless surfaces', () => {
     const hook = createBashRestrictionHook({
-      getGrantManager: () => undefined,
       forceInterpreterGuard: true,
     });
-    const decision = hook(ctx(cred));
+    const decision = hook(headlessCtx(cred));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Interpreter');
   });
 
   it('forceInterpreterGuard still does NOT block pure computation on headless', () => {
     const hook = createBashRestrictionHook({
-      getGrantManager: () => undefined,
       forceInterpreterGuard: true,
     });
-    expect(hook(ctx('python -c "1+1"')).decision).not.toBe('block');
+    expect(hook(headlessCtx('python -c "1+1"')).decision).not.toBe('block');
   });
 
   it('disableInterpreterGuard wins over forceInterpreterGuard (explicit OFF beats opt-in ON)', () => {
     const hook = createBashRestrictionHook({
-      getGrantManager: mockGrants,
       disableInterpreterGuard: true,
       forceInterpreterGuard: true,
     });
-    expect(hook(ctx(cred)).decision).not.toBe('block');
+    expect(hook(ctx(cred, mockGrants())).decision).not.toBe('block');
   });
 
   it('forcing the guard on headless does not change the substring check (stays open)', () => {
     const hook = createBashRestrictionHook({
-      getGrantManager: () => undefined,
       forceInterpreterGuard: true,
     });
     // A plain restricted-path cat (no interpreter) stays open on headless —
     // forceInterpreterGuard only governs the interpreter guard.
-    expect(hook(ctx(`cat ${homedir()}/.ssh/id_rsa`)).decision).not.toBe('block');
+    expect(hook(headlessCtx(`cat ${homedir()}/.ssh/id_rsa`)).decision).not.toBe('block');
   });
 });
 
 describe('createBashRestrictionHook — restricted-root substring', () => {
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
   const home = homedir();
 
   it('blocks `cat ~/.ssh/...`', () => {
@@ -318,20 +327,18 @@ describe('createBashRestrictionHook — grant containment direction (F4 regressi
     // Regression: before the fix `path.relative(candidate, granted)` matched a
     // granted CHILD and dropped the whole parent candidate. Granting only the
     // Cursor config dir must leave the rest of Application Support restricted.
-    const hook = createBashRestrictionHook({
-      getGrantManager: () => grantsWith(`${appSupport}/Cursor/User`),
-    });
-    const decision = hook(ctx(`cat "${appSupport}/Firefox/Profiles/logins.json"`));
+    const hook = createBashRestrictionHook({});
+    // Grant only the narrow Cursor subdir via context.grantManager.
+    const decision = hook(ctx(`cat "${appSupport}/Firefox/Profiles/logins.json"`, grantsWith(`${appSupport}/Cursor/User`)));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toContain('Application Support');
   });
 
   it('granting the candidate itself (or an ancestor) DOES drop it from restriction', () => {
     // User granted ALL of Application Support → a path under it is not blocked.
-    const hook = createBashRestrictionHook({
-      getGrantManager: () => grantsWith(appSupport),
-    });
-    const decision = hook(ctx(`cat "${appSupport}/Cursor/User/settings.json"`));
+    const hook = createBashRestrictionHook({});
+    // Grant all of Application Support via context.grantManager.
+    const decision = hook(ctx(`cat "${appSupport}/Cursor/User/settings.json"`, grantsWith(appSupport)));
     expect(decision.decision).not.toBe('block');
   });
 });
@@ -363,47 +370,35 @@ describe('createBashRestrictionHook — context.grantManager precedence (#514)',
     };
   }
 
-  it('uses context.grantManager over opts.getGrantManager (the ref) for the restricted-root view (#514)', () => {
-    // Ref (opts.getGrantManager) grants ~/.ssh — permissive: if the hook fell
-    // back to the ref, `.ssh` would be dropped from restrictedSubstrings and
-    // the command would pass through unblocked.
-    const refMgr = grantsGranting(sshPath);
-    // Injected (context.grantManager) grants an UNRELATED root — `.ssh`
-    // remains restricted under its view.
-    const injectedMgr = grantsGranting('/some/other/granted-root');
-    const hook = createBashRestrictionHook({ getGrantManager: () => refMgr });
+  it('context.grantManager drives the restricted-root view (#514)', () => {
+    // Permissive manager grants ~/.ssh — a path under it is dropped from
+    // restrictedSubstrings, so the command passes through unblocked.
+    const permissiveMgr = grantsGranting(sshPath);
+    // Restrictive manager grants an UNRELATED root — `.ssh` remains restricted.
+    const restrictiveMgr = grantsGranting('/some/other/granted-root');
+    const hook = createBashRestrictionHook({});
 
-    // Sanity check: using the ref alone (no injected context), this same
-    // command is NOT blocked — confirms the ref really is the permissive one.
-    const refOnlyDecision = hook(ctx(`cat ${sshPath}/id_rsa`));
-    expect(refOnlyDecision.decision).not.toBe('block');
+    // With the PERMISSIVE manager injected, `.ssh` is granted → not blocked.
+    const permissiveDecision = hook(ctx(`cat ${sshPath}/id_rsa`, permissiveMgr));
+    expect(permissiveDecision.decision).not.toBe('block');
 
-    // Now fire with the INJECTED (restrictive) manager on the context. If it
-    // wins over the ref, `.ssh` is still restricted under its own grants and
-    // the command blocks — proving the injected manager, not the ref, drove
-    // the decision.
-    const decision = hook({
-      event: 'PreToolUse',
-      toolName: 'bash',
-      input: { command: `cat ${sshPath}/id_rsa` },
-      grantManager: injectedMgr,
-    });
-
-    expect(decision.decision).toBe('block');
-    expect(decision.reason).toMatch(/restricted path/);
+    // With the RESTRICTIVE manager injected, `.ssh` is still restricted → blocked.
+    const restrictiveDecision = hook(ctx(`cat ${sshPath}/id_rsa`, restrictiveMgr));
+    expect(restrictiveDecision.decision).toBe('block');
+    expect(restrictiveDecision.reason).toMatch(/restricted path/);
   });
 });
 
 describe('createBashRestrictionHook — wiring failsafes', () => {
   it('fails open when grant manager is undefined (bootstrap race)', () => {
-    const hook = createBashRestrictionHook({ getGrantManager: () => undefined });
-    const decision = hook(ctx(`cat ${homedir()}/.ssh/id_rsa`));
+    const hook = createBashRestrictionHook({});
+    const decision = hook(headlessCtx(`cat ${homedir()}/.ssh/id_rsa`));
     // Substring check is gated by grant manager — when unwired, fail open.
     expect(decision.decision).not.toBe('block');
   });
 
   it('does NOT block on non-bash tools', () => {
-    const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+    const hook = createBashRestrictionHook({});
     expect(hook({ event: 'PreToolUse', toolName: 'read_file', input: { file_path: '/etc/passwd' } }).decision).not.toBe('block');
   });
 });
@@ -574,7 +569,7 @@ describe('createBashRestrictionHook — credential parity with the typed read de
   // for bash too. Each path below was readable with `cat` while the typed tools
   // refused it, because the two lists were maintained separately;
   // builtinBashSensitiveRoots() now imports BUILTIN_READ_DENYLIST directly.
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
   const home = homedir();
 
   const newlyCovered: Array<[string, string]> = [
@@ -643,7 +638,7 @@ describe('createBashRestrictionHook — credential parity with the typed read de
 
 // Windows: genuinely POSIX-only — mcp.json carve-out tests use POSIX home path spellings ($HOME, ~/.afk) not valid on Windows
 describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parity (#728)', () => {
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
   const home = homedir();
   const mcp = `${home}/.afk/config/mcp.json`;
 
@@ -742,7 +737,7 @@ describe.skipIf(isWin32)('createBashRestrictionHook — mcp.json carve-out parit
 // test. Mirrors the mcp.json parity block above.
 // Windows: genuinely POSIX-only — ssh carve-out tests use POSIX home path spellings (~/.ssh/config, $HOME) not valid on Windows
 describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts carve-out parity (#579 O2)', () => {
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
   const home = homedir();
   const sshConfig = `${home}/.ssh/config`;
   const knownHosts = `${home}/.ssh/known_hosts`;
@@ -811,7 +806,7 @@ describe.skipIf(isWin32)('createBashRestrictionHook — ssh config / known_hosts
 
 // Windows: genuinely POSIX-only — relocated AFK_HOME tests use POSIX path spellings ($AFK_HOME, symlinks, ~/.afk) not valid on Windows
 describe.skipIf(isWin32)('createBashRestrictionHook — relocated AFK_HOME parity', () => {
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
   const relocated = join(tmpdir(), 'agent-afk-relocated-home');
 
   afterEach(() => {
@@ -988,8 +983,7 @@ describe.skipIf(isWin32)('createBashRestrictionHook — relocated AFK_HOME parit
   // The fix adds a third check in `referencesSensitivePath`: test `scanned`
   // against `relocatedAfkSensitiveRoots()` so the relocated tree is always covered.
   describe('SENSITIVE_PATH_SIGNAL gap on headless + forceInterpreterGuard + relocated AFK_HOME (#778)', () => {
-    const headlessForced = createBashRestrictionHook({
-      getGrantManager: () => undefined, // headless — no grant manager
+    const headlessForced = createBashRestrictionHook({ // headless — no grant manager
       forceInterpreterGuard: true, // AFK_FORCE_BASH_INTERPRETER_GUARD=1
     });
 
@@ -1039,7 +1033,7 @@ describe.skipIf(isWin32)('createBashRestrictionHook — relocated AFK_HOME parit
 });
 
 describe('createBashRestrictionHook — AFK_READ_DENYLIST extras reach the bash surface', () => {
-  const hook = createBashRestrictionHook({ getGrantManager: mockGrants });
+  const hook = createBashRestrictionHook({});
   const home = homedir();
 
   afterEach(() => {

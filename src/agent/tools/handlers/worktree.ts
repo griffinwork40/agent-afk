@@ -171,7 +171,7 @@ export function createWorktreeHandler(
       };
     }
 
-    const anchor = context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+    const anchor = context?.resolveBase ?? cwd ?? process.cwd();
     let ctx: RepoContext;
     try {
       ctx = await resolveRepoContext(execFile, anchor);

@@ -125,7 +125,7 @@ function parseInput(
       // Resolve relative paths against the session's working directory rather
       // than process.cwd() (which reflects the AFK daemon's CWD, not the
       // project root the model is operating in).
-      const base = context?.resolveBase ?? context?.cwd;
+      const base = context?.resolveBase;
       const resolvedPath =
         base !== undefined && !path.isAbsolute(input.path)
           ? path.resolve(base, input.path)
@@ -151,7 +151,7 @@ function parseInput(
       if (typeof input.command !== 'string' || input.command.trim() === '') {
         throw new Error('"command" is required for type "command"');
       }
-      const cwd = context?.resolveBase ?? context?.cwd;
+      const cwd = context?.resolveBase;
       const condition: WaitCondition = {
         type: 'command',
         command: input.command,
