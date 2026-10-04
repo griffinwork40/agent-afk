@@ -704,6 +704,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,
+      tmpdirScope: this._env?.['TMPDIR'],
     };
   }
 

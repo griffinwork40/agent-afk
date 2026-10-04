@@ -325,6 +325,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
           ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
           ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
+          ...(config.env !== undefined ? { env: config.env } : {}), // PLUGIN_ROOT, session TMPDIR
           // Fork-scoped central output cap (#661): forwarded from the child
           // config that forkSubagent stamped, arming maxOutputBytes for forks
           // only (top-level leaves it unset). Parity with anthropic-direct.
@@ -425,6 +426,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * to the child that provoked it. Undefined on a top-level session.
        */
       subagentId?: string;
+      /** `AgentConfig.env` — parity with anthropic-direct (bash/test_run child env). */
+      env?: Record<string, string>;
       /**
        * Explicit "this session is a forked subagent" signal carrying the
        * per-result output-cap budget (#661) — parity with
@@ -554,19 +557,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
-    if (this.providerOpts.skillExecutor !== undefined)
-      dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
-    if (this.providerOpts.composeExecutor !== undefined)
-      dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
+    if (this.providerOpts.skillExecutor !== undefined) dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
+    if (this.providerOpts.composeExecutor !== undefined) dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
     // In-process permission callback (Dim 8) — parity with anthropic-direct.
-    if (this.providerOpts.canUseTool !== undefined)
-      dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
+    if (this.providerOpts.canUseTool !== undefined) dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
     if (opts.cwd !== undefined) dispatcherOpts.cwd = opts.cwd;
     if (opts.readRoots !== undefined) dispatcherOpts.readRoots = opts.readRoots;
     if (opts.writeRoots !== undefined) dispatcherOpts.writeRoots = opts.writeRoots;
     if (opts.sessionId !== undefined) dispatcherOpts.sessionId = opts.sessionId;
     if (opts.parentSessionId !== undefined) dispatcherOpts.parentSessionId = opts.parentSessionId;
     if (opts.subagentId !== undefined) dispatcherOpts.subagentId = opts.subagentId;
+    if (opts.env !== undefined) dispatcherOpts.env = opts.env;
     // Central output-cap backstop (#661), FORK-SCOPED — parity with
     // AnthropicDirectProvider.buildDispatcher. Armed from the explicit
     // `subagentToolOutputCapBytes` signal that `SubagentManager.forkSubagent`
