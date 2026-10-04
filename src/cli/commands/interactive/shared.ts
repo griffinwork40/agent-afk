@@ -427,17 +427,6 @@ export interface InteractiveCtx {
    */
   inputSurfaceRef?: { current: import('../../input/input-surface.js').InputSurface | null };
   /**
-   * Resolved API key used by the session's provider. Captured once at
-   * bootstrap from `getApiKey()` — identical to the token the AgentSession
-   * was constructed with. Threaded into the ghost-text suggest engine's
-   * `getContext()` closure so Tier-2 LLM suggestions authenticate with
-   * the same credential as the session (covers Anthropic key, OAuth/Claude
-   * subscription, and OpenAI API key — whichever `getApiKey()` resolved).
-   *
-   * Absent in test stubs that do not exercise the suggestion path.
-   */
-  suggestApiKey?: string;
-  /**
    * Resolved base URL for the session's provider, sourced from
    * `loadConfig().baseUrl`. Passed to the suggest engine so Tier-2 LLM
    * suggestions are routed to the same endpoint the session uses (local

@@ -34,6 +34,7 @@ import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
 import { childTmpEnvPatch } from '../session/session-tmpdir.js';
+import { resolveChildAutoResume } from './usage-limit-park-policy.js';
 
 export interface AssembleChildConfigArgs<T> {
   options: ForkSubagentOptions<T>;
@@ -310,17 +311,15 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // too short to split. An explicit caller `softDeadlineMs` wins via `??`,
     // including `0` to opt out.
     softDeadlineMs: options.config.softDeadlineMs ?? resolveSoftDeadlineMs(effectiveTimeoutMs),
-    // External constraint (anti-hang, sibling of the cap above): a fork that
-    // hits an OAuth usage-limit 429 otherwise auto-pauses and silently polls
-    // for reset — up to two hours (retry-layer.ts) — with no subagent-level
-    // pause UI, so the parent just looks frozen. A fork has no human to wait
-    // for: fail fast with the classified usage-limit error (the provider
-    // still emits the `paused` event first, then surfaces the error), and
-    // let the PARENT decide whether to retry, reroute to another model, or
-    // surface the pause to its own operator. Callers may opt a child back
-    // into auto-resume with an explicit `autoResumeOnUsageLimit: true`
-    // (e.g. unattended daemon flows that prefer waiting over failing).
-    autoResumeOnUsageLimit: options.config.autoResumeOnUsageLimit ?? false,
+    // Opt-in park-and-wait on OAuth usage-limit 429 (see usage-limit-park-policy.ts
+    // for precedence rules). Precedence: explicit caller value > env var
+    // AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT (ignored on the daemon surface,
+    // where no human can switch accounts) > false. When false a fork fails fast
+    // so the parent can decide: retry, reroute, or surface the pause itself.
+    autoResumeOnUsageLimit: resolveChildAutoResume(
+      options.config.autoResumeOnUsageLimit,
+      options.config.surface ?? args.parentSurface,
+    ),
     ...inheritedParentFields(args),
     // Invariant (message journal): a fork resumes the PARENT's session id, so
     // a journal keyed by session id would write the parent's `journal.jsonl`.

@@ -49,6 +49,7 @@ import {
 } from './connection-error.js';
 import { awaitCreateWithThrottleSignals } from './throttle-signals.js';
 import { dumpThinkingDiagnostic } from './thinking-diagnostic.js';
+import { isNonDefaultSamplingForbiddenModel } from '../resolve-params.js';
 import { buildSignatureRetryMessages, isInvalidSignatureError } from './signature-retry.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 import { enforceManyImageLimit, MANY_IMAGE_THRESHOLD, MAX_DIMENSION_MANY_IMAGES } from './_many-image-guard.js';
@@ -294,14 +295,20 @@ export interface OpenRoundContext {
   stallTimeoutMs: number;
 }
 
-export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'fastMode'>): AnthropicMessagesCreateParams {
+export function buildRoundParams(input: Pick<RunTurnInput, 'model' | 'maxTokens' | 'messages' | 'system' | 'tools' | 'thinking' | 'effort' | 'temperature' | 'thinkingBlockBinding' | 'fastMode'>): AnthropicMessagesCreateParams {
   return {
     model: input.model, max_tokens: input.maxTokens, messages: input.messages, stream: true,
     ...(input.system !== null ? { system: input.system } : {}),
     ...(input.tools !== null && input.tools.length > 0 ? { tools: input.tools.map(toWireTool) } : {}),
-    ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
+    ...(input.thinking !== undefined || input.thinkingBlockBinding !== undefined
+      ? {
+          thinking: input.thinkingBlockBinding !== undefined
+            ? { ...(input.thinking ?? { type: 'adaptive' as const }), block_binding: input.thinkingBlockBinding }
+            : input.thinking!,
+        }
+      : {}),
     ...(input.effort !== undefined ? { output_config: { effort: input.effort } } : {}),
-    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.temperature !== undefined && !isNonDefaultSamplingForbiddenModel(input.model) ? { temperature: input.temperature } : {}),
     ...(input.fastMode === true ? { speed: 'fast' as const } : {}),
   };
 }

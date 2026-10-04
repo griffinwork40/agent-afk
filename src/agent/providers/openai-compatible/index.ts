@@ -53,7 +53,7 @@ import { selectBaseSchemas } from './base-schemas.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
+import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -666,9 +666,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
   /**
    * Single-shot completion (see {@link ModelProvider.complete}). Resolves auth
    * via {@link resolveOpenAIAuth} (the standard `OPENAI_API_KEY` →
-   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and honours the
-   * provider's construction-time `baseURL` so local MLX / llama.cpp / vLLM
-   * shims are reached transparently.
+   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and picks the wire from it
+   * (`./complete-wire`): ChatGPT-subscription OAuth goes to the ChatGPT
+   * backend over Responses, everything else over Chat Completions honouring
+   * the provider's construction-time `baseURL` (local MLX / llama.cpp / vLLM
+   * shims).
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
@@ -685,7 +687,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return oneShotChatCompletion(input);
+    return completeWithWire(input);
   }
 }
 

@@ -45,6 +45,9 @@ export const OAUTH_BETA_HEADER =
  */
 export const EFFORT_BETA_HEADER = 'effort-2025-11-24';
 
+/** Beta that makes dropped Fable 5.1 thinking blocks visible via input_transformations. */
+export const THINKING_BINDING_CONTROLS_BETA_HEADER = 'thinking-binding-controls-2026-08-01';
+
 /**
  * `User-Agent` value the CLI sends. The Anthropic API gates certain model
  * features (e.g. Claude Opus 5.5 on the Fast tier) behind a minimum Claude
@@ -135,14 +138,17 @@ export function buildRequestHeaders(
   withEffort?: boolean,
   extendedCacheTtl?: boolean,
   withFast?: boolean,
+  withThinkingBindingControls?: boolean,
 ): Record<string, string> {
   const betaHeader = composeBetaHeader({
     oauthEntries: mode === 'oauth' ? OAUTH_BETA_HEADER.split(',') : [],
     effort: mode === 'oauth' && withEffort === true,
     extendedCacheTtl,
     fast: withFast,
+    thinkingBindingControls: withThinkingBindingControls,
     effortEntry: EFFORT_BETA_HEADER,
     extendedCacheEntry: EXTENDED_CACHE_TTL_BETA,
+    thinkingBindingControlsEntry: THINKING_BINDING_CONTROLS_BETA_HEADER,
   });
   if (mode !== 'oauth') return betaHeader ? { 'anthropic-beta': betaHeader } : {};
   return {
