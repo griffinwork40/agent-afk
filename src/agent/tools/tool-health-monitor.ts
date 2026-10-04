@@ -159,7 +159,7 @@ export class ToolHealthMonitor {
     }
 
     // Append to sliding window (push, then trim front when over capacity).
-    window.records.push({ isError, errorHead: errorHead ?? undefined });
+    window.records.push({ isError, errorHead });
     if (window.records.length > HEALTH_WINDOW_SIZE) {
       window.records.shift();
     }

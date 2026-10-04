@@ -11,12 +11,19 @@ import type { SuggestContext } from './suggest.js';
 import type { ModelProvider } from '../../agent/provider.js';
 import { register as registerSlashCommand, resetRegistry as resetSlashRegistry } from '../slash/registry.js';
 
+// Hermeticity: real-provider-path tests (resolveProviderFn without completeFn)
+// now resolve a credential per suggestion model. Never let a unit test read a
+// real credential (env / macOS keychain); tests that care inject their own.
+vi.mock('../../agent/auth/credential-resolver.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../agent/auth/credential-resolver.js')>()),
+  resolveCredentialForModel: vi.fn(() => undefined),
+}));
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeCtx(overrides: Partial<SuggestContext> = {}): SuggestContext {
   return {
     model: 'claude-sonnet-4-5',
-    apiKey: undefined,
     baseUrl: undefined,
     cwd: '/home/user/my-project',
     getHistory: () => [],
@@ -1002,5 +1009,95 @@ describe('getGhost – Tier 2 cache key uses pickModel output (C-2)', () => {
     expect(second).toBe('hello world');
     // Same pickModel output + same buffer → cache hit; completeFn called only once.
     expect(completeFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Credential routing (never the session credential) ─────────────────────────
+
+describe('createSuggestEngine — credential is resolved per suggestion model', () => {
+  const prevSuggestModel = process.env['AFK_SUGGEST_MODEL'];
+  afterEach(() => {
+    if (prevSuggestModel === undefined) delete process.env['AFK_SUGGEST_MODEL'];
+    else process.env['AFK_SUGGEST_MODEL'] = prevSuggestModel;
+  });
+
+  function fakeProviderSetup(credentialFor: (model: string | undefined) => string | undefined) {
+    const complete = vi.fn(async (req: { user: string }) => req.user.split('input: ')[1] + 'tus');
+    const resolveProviderFn = vi.fn(
+      () => ({ name: 'fake', complete, close: vi.fn() }) as unknown as ModelProvider,
+    );
+    const resolveCredentialFn = vi.fn((model: string | undefined) => credentialFor(model));
+    const engine = createSuggestEngine({ resolveProviderFn, resolveCredentialFn, debounceMs: 0 });
+    return { engine, complete, resolveCredentialFn };
+  }
+
+  it('cross-provider: an Anthropic session with a gpt-* suggest model sends the OpenAI-side credential, never an Anthropic one', async () => {
+    process.env['AFK_SUGGEST_MODEL'] = 'gpt-5-mini';
+    const { engine, complete, resolveCredentialFn } = fakeProviderSetup((m) =>
+      m?.startsWith('gpt') ? 'sk-openai-side' : 'sk-ant-oat-SESSION',
+    );
+    const ctx = makeCtx({ model: 'claude-opus-4-5', llmEnabled: () => true });
+
+    await engine.getGhost('git sta', ctx);
+
+    expect(resolveCredentialFn).toHaveBeenCalledWith('gpt-5-mini', undefined);
+    expect(resolveCredentialFn).not.toHaveBeenCalledWith('claude-opus-4-5', expect.anything());
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]![0]).toMatchObject({ model: 'gpt-5-mini', apiKey: 'sk-openai-side' });
+    engine.dispose();
+  });
+
+  it('omits apiKey entirely when the suggestion provider has no credential of its own (lets it resolve e.g. ChatGPT OAuth)', async () => {
+    process.env['AFK_SUGGEST_MODEL'] = 'gpt-5-mini';
+    const { engine, complete } = fakeProviderSetup(() => undefined);
+    await engine.getGhost('git sta', makeCtx({ model: 'claude-opus-4-5', llmEnabled: () => true }));
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]![0]).not.toHaveProperty('apiKey');
+    engine.dispose();
+  });
+
+  it('stays correct across a /model swap: credential follows the suggestion model, not the live session model', async () => {
+    process.env['AFK_SUGGEST_MODEL'] = 'gpt-5-mini';
+    const { engine, complete, resolveCredentialFn } = fakeProviderSetup((m) =>
+      m?.startsWith('gpt') ? 'sk-openai-side' : 'sk-ant-oat-SESSION',
+    );
+    const ctx = makeCtx({ model: 'claude-opus-4-5', llmEnabled: () => true });
+    await engine.getGhost('git sta', ctx);
+    ctx.model = 'gpt-5.2'; // /model swap mid-session
+    await engine.getGhost('git sto', ctx);
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    for (const [req] of complete.mock.calls) expect(req).toMatchObject({ apiKey: 'sk-openai-side' });
+    // Memoized per provider kind: one lookup for two calls (no per-keystroke keychain reads).
+    expect(resolveCredentialFn).toHaveBeenCalledTimes(1);
+    engine.dispose();
+  });
+
+  it('the empty-prompt producer gets the same per-suggestion-model credential', async () => {
+    process.env['AFK_SUGGEST_MODEL'] = 'gpt-5-mini';
+    const complete = vi.fn(async () => 'run the tests');
+    const resolveProviderFn = vi.fn(
+      () => ({ name: 'fake', complete, close: vi.fn() }) as unknown as ModelProvider,
+    );
+    const engine = createSuggestEngine({
+      resolveProviderFn,
+      resolveCredentialFn: (m) => (m?.startsWith('gpt') ? 'sk-openai-side' : 'sk-ant-oat-SESSION'),
+      debounceMs: 0,
+    });
+    const ctx = makeCtx({
+      model: 'claude-opus-4-5',
+      llmEnabled: () => true,
+      promptSuggestEnabled: () => true,
+      getTranscriptTail: () => 'user: fix the parser\nassistant: fixed',
+    });
+
+    await engine.primePromptSuggestion(ctx);
+
+    expect(complete).toHaveBeenCalled();
+    for (const [req] of complete.mock.calls as unknown as [Record<string, unknown>][]) {
+      expect(req['apiKey']).toBe('sk-openai-side');
+    }
+    engine.dispose();
   });
 });

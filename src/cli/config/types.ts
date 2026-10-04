@@ -25,7 +25,6 @@ export interface AutoRoutingConfig {
   interactive?: boolean;
   chat?: boolean;
   telegram?: boolean;
-  daemon?: boolean;
 }
 
 export interface CliConfig {
@@ -362,7 +361,6 @@ export interface ConfigFileSchema {
     interactive?: boolean;
     chat?: boolean;
     telegram?: boolean;
-    daemon?: boolean;
   };
   daemon?: {
     task?: string;

@@ -369,6 +369,17 @@ export type ProviderEvent =
        * (auto-resume → "no need to retype"; manual → "send the message again").
        */
       autoResume?: boolean;
+      /**
+       * Absolute wall-clock deadline by which this park will end (either by
+       * resuming or by surfacing the error). Present when the provider has
+       * bounded the park (e.g. the hot-swap wait loop capped at TWO_HOURS_MS).
+       * Absent for unbounded parks. The watchdog and pause-ceiling prefer this
+       * over `resetsAt` when present, because `resetsAt` may be days away (a
+       * far-reset park) while `waitDeadline` is always the actual exit time.
+       * MUST NOT be used by UI layers to show "resumes at X" copy — that role
+       * belongs to `resetsAt`. Use only for timeout arithmetic.
+       */
+      waitDeadline?: Date;
     }
   | {
       type: 'resumed';

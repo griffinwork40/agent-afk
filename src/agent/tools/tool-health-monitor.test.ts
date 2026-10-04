@@ -3,7 +3,7 @@
  *
  * Covers:
  *   - threshold boundary: 7 vs 8 samples (min-sample gate)
- *   - threshold boundary: 89% vs 90% error rate
+ *   - threshold boundary: below vs at 90% error rate
  *   - mixed errorHeads below dominance threshold (80%)
  *   - cooldown/dedup: trace emitted at most once per (tool, errorHead)
  *   - model notice: appended on triggering call, suppressed until recovery
@@ -105,10 +105,10 @@ describe('min-sample gate (7 vs 8)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Error-rate boundary: 89% vs 90% (in a 10-call window)
+// Error-rate boundary: below vs at 90% (in a 10-call window)
 // ---------------------------------------------------------------------------
 
-describe('error-rate boundary (89% vs 90%)', () => {
+describe('error-rate boundary (below vs at 90%)', () => {
   it('does NOT trigger at exactly 89% error rate (8 errors + 1 success in 9 calls = 88.8%, then 9 errors + 1 success in 10 = 90%, so test 8/9)', () => {
     // 8 errors + 1 success = 8/9 ≈ 88.9% < 90% → should NOT trigger
     const mon = new ToolHealthMonitor();

@@ -99,3 +99,10 @@ export { compileChangeSpec } from './compile.js';
 // ---------------------------------------------------------------------------
 
 export { describeChange } from './operators/index.js';
+
+// ---------------------------------------------------------------------------
+// Question-fit classifier
+// ---------------------------------------------------------------------------
+
+export { classifyQuestionFit } from './question-fit.js';
+export type { QuestionFitLevel, QuestionFitResult } from './question-fit.js';

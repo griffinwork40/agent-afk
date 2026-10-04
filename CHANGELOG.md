@@ -11,6 +11,170 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+
+### Changed
+- document SessionFacet v7 outcome semantics for public consumers (#2797)
+
+## [5.290.4] - 2026-10-03
+
+### Fixed
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
+
+## [5.290.3] - 2026-10-03
+
+### Fixed
+- retry SDK connect timeouts; redact connection_retry trace text (#2856) (f4332787)
+
+## [5.290.2] - 2026-10-03
+
+### Fixed
+- refill the screen after a tall overlay collapses (content-hug blank gap) (#2857) (eed966f0)
+
+## [5.290.1] - 2026-10-03
+
+### Fixed
+- invariant comment + redactSecrets at Telegram delivery boundary (#2849) (#2858) (e17db879)
+- address advisory findings from #2805 atomic-write review (#2837) (9e1b9b10)
+
+## [5.290.0] - 2026-10-03
+
+### Added
+- show peer session activity in list_sessions (#2850) (4e7e64d9)
+
+### Fixed
+- defeat pid reuse in presence liveness, refresh heartbeat, reap dead presence files (#2852) (e39708f8)
+
+## [5.289.1] - 2026-10-03
+
+### Fixed
+- do not retry egress-blocked requests in retryFetch (#2832) (1c7d48ba)
+
+## [5.289.0] - 2026-10-03
+
+### Added
+- disabledPluginHooks config key; warn before marketplace update discards local edits (#2841) (f8c0c4fe)
+
+## [5.288.3] - 2026-10-03
+
+### Fixed
+- retry and pause on status-less mid-stream overload errors (#2845) (42457e6f)
+- per-file retention for inbox delivered/ receipts (#2840) (7cd2d35b)
+- never forward an Anthropic credential to OpenAI-routed compose nodes (#2846) (f831dffc)
+
+## [5.288.2] - 2026-10-03
+
+### Fixed
+- enforce CommonMark fence rules in fencedLines() so unbalanced fence-like lines no longer hide the end-of-turn heading (#2833) (16bb8711)
+- retry connection-phase network errors (regression from #2422) (#2838) (fe5c90aa)
+- make default provider stores lazy so importing a provider opens no SQLite files (#2842) (2096f82e)
+
+## [5.288.1] - 2026-10-03
+
+### Fixed
+- exclude subagent tool events from toolDurationsMs; document trace interleaving (#2831) (cd682695)
+- persist result bodies and fix mislabeled delivered witness events (#2830) (5afd055d)
+
+## [5.288.0] - 2026-10-03
+
+### Added
+- tell scoped children which agent_type values they may dispatch (#2829) (23633647)
+
+## [5.287.2] - 2026-10-03
+
+### Fixed
+- keep bash output on abort/timeout; make write_file atomic (#2814) (936a6f27)
+
+### Changed
+- remove dead autoRouting.daemon key (#2827) (b8a0b1e1)
+- upgrade vitest + @vitest/coverage-v8 2.1.9 -> 4.1.11 (#2828) (88914f3c)
+
+## [5.287.1] - 2026-10-03
+
+### Fixed
+- diagnostic detail on no readable content errors (#2808) (42a5be5e)
+
+## [5.287.0] - 2026-10-03
+
+### Added
+- cross-session peer messaging (list_sessions / send_to_session) (#2806) (dff4418f)
+
+## [5.286.2] - 2026-10-03
+
+### Fixed
+- retry rename on Windows EPERM/EACCES/EBUSY (#2805) (1d3ef5ca)
+- right-size /review budgets, fix compose guidance, trace the effective budget (#2815) (c90e1303)
+
+## [5.286.1] - 2026-10-03
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2745) (da8899f6)
+
+### Changed
+- unskip clipboard and tildifyHome tests on Windows (#2744) (f1c022f4)
+- exercise real undici + egress-guard fetch path (#2774) (#2783) (510a003c)
+
+## [5.286.0] - 2026-10-03
+
+### Added
+- warn when agent-afk was upgraded under a running session (#2809) (5e4eeea6)
+
+### Fixed
+- back off harder on HTTP 429 and guide retries (#2807) (b6e0a6ad)
+
+## [5.285.0] - 2026-10-03
+
+### Added
+- context_window kwarg for the Harbor afk adapter (#2802) (9e1a92af)
+- run it, don't relay it; stop handing safe commands to the user (#2803) (2efa268e)
+
+### Fixed
+- no history hole while a tall overlay covers committed rows (content-hug) (#2804) (f17c7e46)
+
+### Changed
+- harden 30-day boundary coverage for session-sidecar and session-dir sweep (#2800) (54d208c8)
+
+## [5.284.0] - 2026-10-02
+
+### Added
+- per-slot contextWindow override (#2793) (6ced67c5)
+
+## [5.283.0] - 2026-10-02
+
+### Added
+- add Cerebras gpt-oss-120b and qwen-3.8-27b context windows (#2789) (11a5e1b8)
+
+## [5.282.9] - 2026-10-02
+
+### Fixed
+- reject/recover JSON-string model-slot values instead of treating them as a model id (#2790) (ce285210)
+
+## [5.282.8] - 2026-10-02
+
+### Fixed
+- echo reasoning under its origin field (Cerebras 400) (#2788) (ae814b46)
+
+## [5.282.7] - 2026-10-02
+
+### Fixed
+- trustworthy outcome, primary_success, produced_pr, tool_errors_total (#2777) (#2781) (bd054244)
+
+## [5.282.6] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2780) (#2786) (677d09a5)
+
+## [5.282.5] - 2026-10-02
+
+### Fixed
+- clear disconnect timeout timer when disconnect succeeds (#2764) (e0749da6)
+
+## [5.282.4] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2776) (#2779) (28e4f60b)
+
 ## [5.282.3] - 2026-10-02
 
 ### Fixed

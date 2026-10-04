@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.282.3",
+  "version": "5.290.4",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -130,7 +130,7 @@
     "@vscode/ripgrep": "^1.18.0",
     "ansi-escapes": "^7.3.0",
     "better-sqlite3": "^13.0.0",
-    "chalk": "^5.3.0",
+    "chalk": "^6.0.1",
     "commander": "^12.1.0",
     "dotenv": "^16.4.7",
     "emphasize": "^7.0.0",
@@ -155,12 +155,12 @@
     "@types/node": "^22.19.10",
     "@types/node-cron": "^3.0.11",
     "@types/turndown": "^5.0.6",
-    "@vitest/coverage-v8": "^2.1.8",
+    "@vitest/coverage-v8": "^4.1.11",
     "@xterm/headless": "^6.0.0",
     "esbuild": "^0.28.0",
     "node-pty": "^1.1.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
   }
 }
