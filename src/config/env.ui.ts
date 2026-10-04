@@ -43,7 +43,7 @@ export const UI_ENV_REGISTRY = [
   },
   {
     name: 'AFK_SPINNER_TIPS',
-    description: 'Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off.',
+    description: 'Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. State-specific hints (e.g. the wait_for queue-to-stop hint) still show.',
     type: 'boolean',
     required: false,
     category: 'misc',

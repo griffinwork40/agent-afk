@@ -536,3 +536,90 @@ describe('reset() strips resume-context from config (/resume + /clear regression
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Session-layer Stop dispatch: the wiring must be read at turn end, not copied
+// at construction. Surfaces (REPL, Telegram, daemon, chat) all call
+// wireStopHook() AFTER constructing the session, so a construction-time copy
+// would silently disable Stop on every surface.
+// ---------------------------------------------------------------------------
+
+describe('AgentSession — session-layer Stop dispatch', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+  });
+
+  afterEach(() => {
+    __setAnthropicClientFactory(null);
+    vi.restoreAllMocks();
+  });
+
+  async function makeSession(handler: (ctx: unknown) => object) {
+    const { createHookRegistry } = await import('../hooks.js');
+    const registry = createHookRegistry();
+    const seen: Record<string, unknown>[] = [];
+    registry.register('Stop', async (ctx) => {
+      seen.push(ctx as unknown as Record<string, unknown>);
+      return handler(ctx);
+    });
+    const session = new AgentSession({
+      model: 'claude-haiku-4-5',
+      apiKey: 'sk-ant-oat01-test',
+      provider: new AnthropicDirectProvider(),
+      hookRegistry: registry,
+    });
+    return { session, seen };
+  }
+
+  it('fires Stop exactly once per turn when wireStopHook() is called after construction', async () => {
+    messagesCreateMock.mockImplementationOnce(() =>
+      fromArray(makeTextStream('Finished.\n\n**Done**\n- What was done: answered')),
+    );
+    const { session, seen } = await makeSession(() => ({}));
+    session.wireStopHook({ getHasNextTurn: () => true });
+    try {
+      await session.sendMessage('hello');
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({
+        event: 'Stop',
+        terminalState: 'done',
+        doneEvidenceClassification: 'no-code-changes',
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('does not fire Stop on a surface that never wires it', async () => {
+    messagesCreateMock.mockImplementationOnce(() => fromArray(makeTextStream('hi')));
+    const { session, seen } = await makeSession(() => ({}));
+    try {
+      await session.sendMessage('hello');
+      expect(seen).toHaveLength(0);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('uses the CURRENT wiring each turn, so re-wiring takes effect on the next turn', async () => {
+    messagesCreateMock
+      .mockImplementationOnce(() => fromArray(makeTextStream('one')))
+      .mockImplementationOnce(() => fromArray(makeTextStream('two')));
+    const { session, seen } = await makeSession(() => ({ injectContext: 'note' }));
+    const first = vi.fn();
+    const second = vi.fn();
+    session.wireStopHook({ getHasNextTurn: () => true, onStopInjectContext: first });
+    try {
+      await session.sendMessage('turn 1');
+      session.wireStopHook({ getHasNextTurn: () => true, onStopInjectContext: second });
+      await session.sendMessage('turn 2');
+      expect(seen).toHaveLength(2);
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).toHaveBeenCalledTimes(1);
+    } finally {
+      await session.close();
+    }
+  });
+});

@@ -28,11 +28,6 @@ export interface SkillRendererOpts {
   skillName: string;
   skillIdentity?: import('../../_lib/skill-identity-format.js').SkillIdentity;
   /**
-   * Whether to enable verbose/live thinking-mode output.
-   * Defaults to `env.AFK_SKILL_STREAM_VERBOSE === '1'`.
-   */
-  verbose?: boolean;
-  /**
    * Override the Writer used for non-TTY / line-based output.
    * Defaults to `ctx.out`.
    *
@@ -54,7 +49,7 @@ export interface SkillRendererOpts {
  * contexts fall back to the renderer's own-compositor path.
  */
 export function createSkillRenderer(ctx: SlashContext, opts: SkillRendererOpts): StreamRenderer {
-  const verbose = opts.verbose ?? env.AFK_SKILL_STREAM_VERBOSE === '1';
+  const thinkingMode = env.AFK_SKILL_STREAM_VERBOSE === '1' ? 'live' : undefined;
   const out = opts.out ?? ctx.out;
 
   // Stage 3e — borrow the REPL's persistent TerminalCompositor so the
@@ -71,7 +66,7 @@ export function createSkillRenderer(ctx: SlashContext, opts: SkillRendererOpts):
 
   return new StreamRenderer({
     out,
-    verbose,
+    ...(thinkingMode !== undefined ? { thinkingMode } : {}),
     activeSkillName: opts.skillName,
     ...(opts.skillIdentity ? { skillIdentity: opts.skillIdentity } : {}),
     onCancel: opts.onCancel ?? (() => { /* no-op */ }),
