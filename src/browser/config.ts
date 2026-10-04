@@ -97,7 +97,7 @@ function resolveHeadlessDefault(
 // Domain list parsing
 // ---------------------------------------------------------------------------
 
-function parseDomainList(raw: string | undefined): readonly string[] {
+export function parseDomainList(raw: string | undefined): readonly string[] {
   if (raw === undefined || raw.trim() === '') return [];
   return raw
     .split(',')

@@ -188,17 +188,35 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
   const fetchFn: FetchFn = opts.fetchFn ?? globalThis.fetch;
   const envSource: NodeJS.ProcessEnv = opts.env ?? process.env;
 
-  // Lazily resolve the domain policy enforcer so AFK_BROWSER_ALLOWED_DOMAINS /
-  // AFK_BROWSER_BLOCKED_DOMAINS apply to web_request without requiring the
-  // caller to thread BrowserConfig through createBuiltinHandlers.
-  // When opts.domainCheck is supplied (e.g. in tests), it takes precedence.
+  // Resolve domain policy from env vars directly (#2881 fix): parse only the
+  // two domain-list vars, independent of unrelated browser config fields
+  // (backend, profile, browser.json) that used to cause silent fail-open.
+  // If opts.domainCheck is supplied (tests), it takes precedence.
   async function resolveDomainCheck(): Promise<DomainCheckFn | undefined> {
     if (opts.domainCheck !== undefined) return opts.domainCheck;
     try {
-      const { loadBrowserConfig, enforceDomainPolicy } = await import('../../../browser/config.js');
-      const config = loadBrowserConfig();
-      return (url: string) => enforceDomainPolicy(url, config);
-    } catch {
+      const { parseDomainList, enforceDomainPolicy } = await import('../../../browser/config.js');
+      const allowedDomains = parseDomainList(envSource['AFK_BROWSER_ALLOWED_DOMAINS']);
+      const blockedDomains = parseDomainList(envSource['AFK_BROWSER_BLOCKED_DOMAINS']);
+      if (allowedDomains.length === 0 && blockedDomains.length === 0) return undefined;
+      const minimalConfig = {
+        allowedDomains,
+        blockedDomains,
+        headless: true,
+        domSnapshots: false,
+        backend: 'auto' as const,
+        configPath: null,
+        defaultProfile: 'default',
+      };
+      return (url: string) => enforceDomainPolicy(url, minimalConfig);
+    } catch (err) {
+      // Module-load failure (very unlikely). Warn so the operator is not
+      // silently misled, then fail open for this residual edge case only.
+      console.warn(
+        '[web_request] domain policy module failed to load; ' +
+          'AFK_BROWSER_ALLOWED_DOMAINS / AFK_BROWSER_BLOCKED_DOMAINS will NOT be enforced. Error:',
+        err,
+      );
       return undefined;
     }
   }

@@ -304,6 +304,47 @@ describe('web_request handler — domain policy', () => {
     expect(r.isError).toBe(true);
     expect(r.content).toMatch(/blocked/);
   });
+
+  // Regression test for #2881: domain policy must not be silently dropped when
+  // an unrelated browser config field (e.g. AFK_BROWSER_BACKEND) is invalid.
+  // Previously, loadBrowserConfig() threw on the bad backend and the catch
+  // block returned undefined, bypassing AFK_BROWSER_BLOCKED_DOMAINS entirely.
+  it('enforces AFK_BROWSER_BLOCKED_DOMAINS even when AFK_BROWSER_BACKEND is invalid (#2881)', async () => {
+    let fetchCalled = false;
+    const fetchFn = makeFetch(() => {
+      fetchCalled = true;
+      return makeResponse({ body: 'should not reach here' });
+    });
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: {
+        AFK_BROWSER_BLOCKED_DOMAINS: 'blocked.example.com',
+        AFK_BROWSER_BACKEND: 'bogus', // invalid — would make loadBrowserConfig() throw
+      },
+    });
+    const r = await handler({ url: 'https://blocked.example.com/', method: 'GET' }, signal());
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/blocked/);
+    expect(fetchCalled).toBe(false);
+  });
+
+  it('allows requests not in AFK_BROWSER_BLOCKED_DOMAINS when backend is invalid (#2881)', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: 'ok', contentType: 'text/plain' }));
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: {
+        AFK_BROWSER_BLOCKED_DOMAINS: 'blocked.example.com',
+        AFK_BROWSER_BACKEND: 'bogus',
+      },
+    });
+    // different domain — should pass the policy
+    const r = await handler({ url: 'https://allowed.example.com/', method: 'GET' }, signal());
+
+    expect(r.isError).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
