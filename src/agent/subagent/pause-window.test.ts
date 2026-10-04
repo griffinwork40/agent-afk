@@ -97,3 +97,45 @@ describe('describePauseEvent', () => {
     ).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// pauseWindowMs — waitDeadline preference
+// ---------------------------------------------------------------------------
+
+describe('pauseWindowMs — waitDeadline preference', () => {
+  const now = Date.parse('2026-07-31T02:00:00.000Z');
+
+  it('prefers waitDeadline over resetsAt when both present', () => {
+    // waitDeadline = now + 90min, resetsAt = now + 6.5 days
+    const waitDeadline = new Date(now + 90 * 60_000);
+    const resetsAt = new Date(now + 6.5 * 24 * 60 * 60_000);
+    const event: OutputEvent = {
+      type: 'paused',
+      reason: 'usage-limit',
+      resetsAt,
+      waitDeadline,
+    };
+    // Should use waitDeadline, not resetsAt
+    expect(pauseWindowMs(event, now)).toBe(90 * 60_000 + PAUSE_WINDOW_SLACK_MS);
+  });
+
+  it('uses resetsAt when waitDeadline is absent', () => {
+    const resetsAt = new Date(now + 60 * 60_000);
+    const event: OutputEvent = {
+      type: 'paused',
+      reason: 'usage-limit',
+      resetsAt,
+    };
+    expect(pauseWindowMs(event, now)).toBe(60 * 60_000 + PAUSE_WINDOW_SLACK_MS);
+  });
+
+  it('returns defined window when waitDeadline present but resetsAt absent (no-ts + far-reset parks)', () => {
+    const waitDeadline = new Date(now + 2 * 60 * 60_000);
+    const event: OutputEvent = {
+      type: 'paused',
+      reason: 'usage-limit',
+      waitDeadline,
+    };
+    expect(pauseWindowMs(event, now)).toBe(2 * 60 * 60_000 + PAUSE_WINDOW_SLACK_MS);
+  });
+});

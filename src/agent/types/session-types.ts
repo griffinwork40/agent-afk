@@ -163,6 +163,13 @@ export type OutputEvent =
        * "no need to retype" and "send the message again" copy.
        */
       autoResume?: boolean;
+      /**
+       * Mirror of {@link import('../provider.js').ProviderEvent.paused.waitDeadline}.
+       * Absolute wall-clock deadline by which this park will end (resume or
+       * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
+       * when present. Never shown to users as "resumes at X" copy.
+       */
+      waitDeadline?: Date;
     }
   | {
       type: 'resumed';

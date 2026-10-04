@@ -9,10 +9,11 @@
  *  5. Usage carried through to turn-result.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources';
 import { translateMessageStream } from './translate.js';
 import type { TranslateOutput } from './types.js';
+import { _resetWarnCountForTest } from './input-transformations.js';
 
 async function* fromArray<T>(arr: T[]): AsyncIterable<T> {
   for (const x of arr) yield x;
@@ -646,5 +647,570 @@ describe('anthropic-direct translateMessageStream', () => {
       throw new Error('expected error event for non-termination TypeError even after stop_reason');
     }
     expect(last.event.error.message).toBe('boom');
+  });
+});
+
+// ── input_transformations: drop_block observable handling (Fable 5.1) ────
+//
+// Real wire shape per https://platform.claude.com/docs/en/build-with-claude/preserved-thinking:
+//   input_transformations: Array<{
+//     type: 'thinking_dropped' | 'thinking_mismatch_allowed' | string;
+//     path: string;          // e.g. 'messages.1.content.0'
+//     reason: 'prefix_binding_mismatch' | 'model_binding_mismatch'
+//           | 'organization_binding_mismatch' | string;
+//   }>
+//
+// 'thinking_dropped'          → block was removed before the model saw it.
+// 'thinking_mismatch_allowed' → block failed prefix check but was NOT dropped
+//                               (older account, no enforcement). Must NOT warn.
+// Placement: message_start.message.input_transformations (all drops for this request).
+//            message_delta (final event, server-side fallback serving model entries).
+// Unknown type/reason values: ignored per spec.
+
+describe('translateMessageStream: input_transformations (thinking drop_block)', () => {
+  beforeEach(() => {
+    _resetWarnCountForTest();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('emits console.warn when message_start carries thinking_dropped with prefix_binding_mismatch', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Real wire shape: type:'thinking_dropped', path:'messages.1.content.0', reason:'prefix_binding_mismatch'
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_test_drop',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'Answer without prior reasoning'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    // Must mention drop_block and the count
+    expect(msg).toContain('drop_block');
+    expect(msg).toContain('1 thinking block');
+    // Must mention 'omitted' — accurate, avoids certainty about what happens next
+    expect(msg).toContain('omitted');
+    // Must mention reason
+    expect(msg).toContain('prefix_binding_mismatch');
+    // Must NOT claim drops are always prefix-related (reason is shown, not assumed)
+    // Must NOT claim reasoning is regenerated or not lost (unknown)
+    expect(msg).not.toContain('regenerated');
+    expect(msg).not.toContain('not lost');
+    expect(msg).not.toContain('cache stamp');
+    // Must NOT log path values (structural internal metadata, unvalidated)
+    expect(msg).not.toContain('messages.1.content.0');
+    // Must NOT contain thinking text or signature
+    expect(msg).not.toContain('thinking_delta');
+    expect(msg).not.toContain('signature');
+  });
+
+  it('warns for model_binding_mismatch (dropped due to model switch, not prefix)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_model_mismatch',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.3.content.0', reason: 'model_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('model_binding_mismatch');
+    // Must NOT claim "prefix" — this is a model-switch drop, not a prefix edit
+    expect(msg).not.toContain('prefix mismatch');
+  });
+
+  it('warns for organization_binding_mismatch (block from different account)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_org_mismatch',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.2.content.0', reason: 'organization_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('organization_binding_mismatch');
+  });
+
+  it('counts multiple dropped blocks with mixed known reasons in one warn', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_multi',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+            { type: 'thinking_dropped', path: 'messages.3.content.0', reason: 'model_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('2 thinking block');
+  });
+
+  it('does NOT warn for thinking_mismatch_allowed (block NOT dropped — older account, allowed through)', async () => {
+    // 'thinking_mismatch_allowed' means the block failed the prefix check but
+    // was NOT removed (older account, no enforcement). The model still read it.
+    // Per spec: this is NOT a drop and must not produce a warning.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_mismatch_allowed',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_mismatch_allowed', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT warn for unknown type values (forward-compat: ignore unrecognised types)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_unknown_type',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            // Hypothetical future type — must be silently ignored
+            { type: 'thinking_future_type', path: 'messages.1.content.0', reason: 'some_reason' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns for thinking_dropped even with an unknown reason (counted as unknown_reason)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_unknown_reason',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'future_unknown_reason' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    // A drop is a drop even with an unknown reason — must still warn
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('unknown_reason');
+    // Must NOT log the raw unknown reason string (unvalidated)
+    expect(msg).not.toContain('future_unknown_reason');
+  });
+
+  it('does NOT warn when input_transformations is absent (normal non-Fable stream)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      messageStart(),
+      textBlockStart(0),
+      textDelta(0, 'Normal text'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT warn when input_transformations is an empty array', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_empty',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('warn cap: stops warning after MAX_WARN_COUNT=10, final warn includes cap note', async () => {
+    // Reset is handled by beforeEach. Run 11 streams with dropped blocks;
+    // only 10 warns should fire — the 11th is silently suppressed.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const makeDropStream = () => [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_cap',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'x'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    for (let i = 0; i < 11; i++) {
+      await collect(translateMessageStream(fromArray(makeDropStream()), { sessionId: SESSION_ID }));
+    }
+
+    // Exactly 10 warns, not 11
+    expect(warnSpy).toHaveBeenCalledTimes(10);
+    // The 10th (last) warn should include the cap note
+    const lastMsg: string = warnSpy.mock.calls[9]![0] as string;
+    expect(lastMsg).toContain('further drops will not be logged');
+  });
+
+  it('also warns when message_delta carries input_transformations (server-side fallback path)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Server-side fallback: message_start has no drops; message_delta carries them.
+    const events: RawMessageStreamEvent[] = [
+      messageStart(),
+      textBlockStart(0),
+      textDelta(0, 'fallback response'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'model_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const msg: string = warnSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain('message_delta');
+    expect(msg).toContain('model_binding_mismatch');
+  });
+
+  it('still yields a valid turn-result after a drop_block warn (stream continues normally)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_drop_continue',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'Answer after drop'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    const out = await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    const last = out[out.length - 1];
+    if (!last || last.kind !== 'turn-result') throw new Error('expected turn-result');
+    expect(last.result.text).toBe('Answer after drop');
+    expect(last.result.stopReason).toBe('end_turn');
+  });
+
+  it('malformed entry (non-object, null, missing fields) is safely skipped without throwing', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_malformed',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          // Mix of malformed entries and a real drop
+          input_transformations: [
+            null,
+            'string entry',
+            42,
+            undefined,
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'ok'),
+      blockStop(0),
+      messageDelta('end_turn'),
+      messageStop(),
+    ];
+
+    // Must not throw; must warn once for the real drop
+    const out = await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const last = out[out.length - 1];
+    expect(last?.kind).toBe('turn-result');
+  });
+
+  // ── Finding 3: per-stream dedup (double-counting guard) ─────────────────
+  // Both message_start and message_delta may carry input_transformations for the
+  // same stream. Without the per-stream guard both would increment warnCount,
+  // exhausting the cap at 5 streams instead of 10. With the guard, each stream
+  // increments warnCount exactly ONCE regardless of which frame carries the drops.
+
+  it('counts only ONE warn per stream even when both message_start and message_delta carry drops', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: RawMessageStreamEvent[] = [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_both_frames',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'response'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        // Server echoes the same drop in message_delta — should NOT add a second warn
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    await collect(translateMessageStream(fromArray(events), { sessionId: SESSION_ID }));
+
+    // Must be exactly 1 warn, not 2
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('cap counts streams (not frames): 10 streams each with both frames fire 10 warns total', async () => {
+    // Without the per-stream dedup, 10 streams × 2 frames = 20 warnCount
+    // increments would exhaust the cap at 5 streams. With dedup, 10 streams
+    // × 1 increment = 10, exhausting exactly at 10.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const makeBothFramesStream = (): RawMessageStreamEvent[] => [
+      {
+        type: 'message_start',
+        message: {
+          id: 'msg_both',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-fable-5-1',
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { ...baseUsage() },
+          input_transformations: [
+            { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+          ],
+        },
+      } as unknown as RawMessageStreamEvent,
+      textBlockStart(0),
+      textDelta(0, 'x'),
+      blockStop(0),
+      {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 5, cache_creation_input_tokens: null, cache_read_input_tokens: null, input_tokens: null, server_tool_use: null },
+        input_transformations: [
+          { type: 'thinking_dropped', path: 'messages.1.content.0', reason: 'prefix_binding_mismatch' },
+        ],
+      } as unknown as RawMessageStreamEvent,
+      messageStop(),
+    ];
+
+    // Run exactly 10 streams — should produce 10 warns (cap hit on 10th)
+    for (let i = 0; i < 10; i++) {
+      await collect(translateMessageStream(fromArray(makeBothFramesStream()), { sessionId: SESSION_ID }));
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(10);
+
+    // An 11th stream should produce no warn (cap already exhausted)
+    await collect(translateMessageStream(fromArray(makeBothFramesStream()), { sessionId: SESSION_ID }));
+    expect(warnSpy).toHaveBeenCalledTimes(10);
   });
 });

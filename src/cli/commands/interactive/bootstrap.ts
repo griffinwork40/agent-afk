@@ -97,7 +97,7 @@ export async function bootstrapSession(
   const sharedStateStore = new StateStore(getStateDatabasePath());
 
   const {
-    trace, apiKey, backgroundRegistry, bgSummarizer,
+    trace, backgroundRegistry, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
@@ -234,13 +234,10 @@ export async function bootstrapSession(
     // misclassify the in-flight state.
     getInFlight: () => false,
     ...(mcpManager !== undefined ? { mcpManager } : {}),
-    // Thread the resolved auth credentials into ctx so the ghost-text
-    // suggest engine's getContext() closure uses the same token and
-    // endpoint the AgentSession was constructed with. Captured once here
-    // (session-stable values) to avoid per-keystroke loadConfig() I/O.
-    // `apiKey` was resolved above by getApiKey() (line 149); `cliConfig`
-    // was loaded above by loadConfig() (line 137).
-    suggestApiKey: apiKey,
+    // The session credential (`apiKey`) is deliberately NOT threaded to the
+    // ghost-text suggest engine: its model may belong to another provider, so
+    // it resolves its own credential per suggestion model
+    // (src/cli/input/suggest-credential.ts).
     // Mirror the main session's OpenAI-compatible endpoint: the suggest engine
     // forwards `suggestBaseUrl` as an `openaiBaseUrl` provider hint
     // (suggest.ts:355), and parseProvider above (line 352) wires the live
