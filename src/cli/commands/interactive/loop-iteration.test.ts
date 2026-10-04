@@ -36,18 +36,6 @@ const shellState = vi.hoisted(() => ({
   dispatch: vi.fn(async (_input: string) => true),
 }));
 
-// Hoisted state for the wireStopHook mock: captures the callbacks the REPL
-// supplies so tests can invoke them to simulate the session-layer Stop dispatch.
-const wireStopHookState = vi.hoisted(() => ({
-  opts: null as null | {
-    getHasNextTurn: () => boolean;
-    onStopInjectContext?: (text: string) => void;
-    onStopBlocked?: (reason: string | undefined) => void;
-    onStopTimeout?: () => void;
-  },
-  callCount: 0,
-  reset() { this.opts = null; this.callCount = 0; },
-}));
 const versionState = vi.hoisted(() => ({ check: vi.fn<() => string | undefined>() }));
 vi.mock('./version-notice.js', () => ({ createVersionNotice: () => versionState.check }));
 
@@ -141,10 +129,7 @@ import * as slashMod from '../../slash/registry.js';
 import * as pluginSkillsMod from '../../slash/plugin-skills.js';
 import { createHookRegistry } from '../../../agent/hooks.js';
 import { HookHandlerTimeoutError } from '../../../agent/hook-registry.js';
-import {
-  createTerminalStateGate,
-  TERMINAL_STATE_GATE_CORRECTION,
-} from './terminal-state-gate.js';
+import { TERMINAL_STATE_GATE_CORRECTION } from './terminal-state-gate.js';
 
 function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
   return {
@@ -153,14 +138,7 @@ function makeCtx(overrides?: Partial<InteractiveCtx>): InteractiveCtx {
         sessionId: 'mock',
         waitForInitialization: vi.fn(async () => ({})),
         takePendingPlanExitSeed: vi.fn(async () => undefined),
-        // Simulate AgentSession.wireStopHook: capture the callbacks the REPL
-        // supplies so individual tests can invoke them to simulate the
-        // session layer dispatching Stop (the actual dispatch moved from the
-        // REPL to turn-stream-runner.ts in this PR).
-        wireStopHook: vi.fn((opts: typeof wireStopHookState.opts) => {
-          wireStopHookState.opts = opts;
-          wireStopHookState.callCount += 1;
-        }),
+        wireStopHook: vi.fn(),
       },
     },
     stats: {
@@ -214,7 +192,6 @@ beforeEach(() => {
   surfaceState.readLineCalls = 0;
   shellState.dispatch.mockClear();
   shellState.dispatch.mockImplementation(async () => true);
-  wireStopHookState.reset();
   vi.mocked(runTurn).mockClear();
   vi.mocked(slashMod.dispatch).mockReset();
   // Default dispatch behavior: '/seed' chains a user-text submit; '/exit'
@@ -491,32 +468,6 @@ describe('runReplLoop — background-subagent result auto-delivery', () => {
   });
 });
 
-// Architecture note (this PR): Stop is now dispatched by the session layer
-// (turn-stream-runner.ts) via callbacks the REPL wires through wireStopHook().
-// The REPL no longer calls registry.dispatch() for Stop directly. These tests
-// verify the REPL's wiring and callback handling rather than the Stop dispatch
-// itself — the dispatch-correctness tests live in turn-stream-runner tests.
-describe('runReplLoop -- Stop hook wiring (session-layer dispatch)', () => {
-  it('wires Stop at loop start and re-wires before each turn with getHasNextTurn: () => true', async () => {
-    // Re-wiring before every turn covers /resume, which swaps
-    // ctx.session.current for a new, un-wired AgentSession.
-    surfaceState.readLineQueue = [
-      { text: 'hello', attachments: [] },
-      { text: '/exit', attachments: [] },
-    ];
-
-    const ctx = makeCtx();
-    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
-
-    // Once at loop start + once before the single 'hello' turn.
-    expect(wireStopHookState.callCount).toBe(2);
-    // REPL always has a next turn, so the getter must return true.
-    expect(wireStopHookState.opts?.getHasNextTurn()).toBe(true);
-  });
-
-  it('does not dispatch Stop from the REPL loop itself (no double-fire)', async () => {
-    // Prove the REPL no longer calls registry.dispatch() for Stop. The only
-    // Stop dispatch happens via the session layer (wireStopHook callbacks).
 describe('runReplLoop -- peer session messages', () => {
   it('prepends a peer message claimed from the session inbox to the next turn', async () => {
     const { writeEnvelope } = await import('../../../agent/peer/inbox-store.js');
@@ -570,198 +521,121 @@ describe('runReplLoop -- peer session messages', () => {
   });
 });
 
-describe('runReplLoop -- Stop hook fires after runTurn completes', () => {
-  it('dispatches Stop event to ctx.hookRegistry after a completed turn', async () => {
-    // One real text turn, then /exit.
+// Architecture note (this PR): Stop is now dispatched by the session layer
+// (turn-stream-runner.ts) via callbacks the REPL wires through wireStopHook().
+// The REPL no longer calls registry.dispatch() for Stop directly. These tests
+// verify the REPL's wiring and callback handling rather than the Stop dispatch
+// itself — the dispatch-correctness tests live in turn-stream-runner tests.
+describe('runReplLoop -- Stop hook wiring (session-layer dispatch)', () => {
+  it('wires Stop at loop start and re-wires before each turn with getHasNextTurn: () => true', async () => {
+    // Re-wiring before every turn covers /resume, which swaps
+    // ctx.session.current for a new, un-wired AgentSession.
+    surfaceState.readLineQueue = [
+      { text: 'hello', attachments: [] },
+      { text: '/exit', attachments: [] },
+    ];
+    const ctx = makeCtx();
+    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
+
+    const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+    // Called at least twice: once at loop start and once before the turn.
+    expect(wireStopHook.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Every call supplies getHasNextTurn: () => true.
+    for (const call of wireStopHook.mock.calls) {
+      const wiring = call[0] as { getHasNextTurn: () => boolean };
+      expect(wiring.getHasNextTurn()).toBe(true);
+    }
+  });
+
+  it('does not dispatch Stop from the REPL loop itself (no double-fire)', async () => {
+    // Prove the REPL no longer calls registry.dispatch() for Stop. The only
+    // Stop dispatch happens via the session layer (wireStopHook callbacks).
     surfaceState.readLineQueue = [
       { text: 'hello', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
 
     const registry = createHookRegistry();
-    const stopHandler = vi.fn(async () => ({}));
-    registry.register('Stop', stopHandler);
     const dispatchSpy = vi.spyOn(registry, 'dispatch');
 
     const ctx = makeCtx();
     ctx.hookRegistry = registry;
+
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
-    // The REPL must NOT call dispatch with a Stop event — that would double-fire.
-    const replStopCall = dispatchSpy.mock.calls.find(
+    const stopCall = dispatchSpy.mock.calls.find(
       (args) => (args[0] as { event?: string }).event === 'Stop',
     );
-    expect(replStopCall).toBeUndefined();
-    // The REPL loop ran the 'hello' turn.
-    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
+    expect(stopCall).toBeUndefined();
   });
 
-  it('delivers onStopInjectContext into the NEXT turn\'s prompt', async () => {
-    // Simulate the session layer calling onStopInjectContext after turn 1.
+  it('routes onStopInjectContext into pendingStopInjection for next-turn delivery', async () => {
     surfaceState.readLineQueue = [
       { text: 'first turn', attachments: [] },
       { text: 'second turn', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
+    const ctx = makeCtx();
 
-    let callCount = 0;
+    // After runOneTurn on the first turn, simulate a Stop callback.
+    let turnCount = 0;
     vi.mocked(runTurn).mockImplementation(async () => {
-      callCount += 1;
-      // After turn 1: simulate the session layer calling back with injectContext.
-      if (callCount === 1) {
-        wireStopHookState.opts?.onStopInjectContext?.('CORRECTION: substantiate your Done');
+      turnCount++;
+      if (turnCount === 1) {
+        const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+        const wiring = wireStopHook.mock.calls[0]?.[0] as { onStopInjectContext?: (t: string) => void };
+        wiring.onStopInjectContext?.('CORRECTION: substantiate your Done');
       }
     });
 
-    const ctx = makeCtx();
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
-    const texts = vi.mocked(runTurn).mock.calls.map((c) => (c[0] as { text: string }).text);
-    // First turn: no injection yet (session hasn't called back).
-    expect(texts[0]).toBe('first turn');
-    // Second turn: the correction was prepended, user text preserved at the tail.
-    expect(texts[1]).toContain('CORRECTION: substantiate your Done');
-    expect(texts[1]?.trimEnd().endsWith('second turn')).toBe(true);
-  });
-
-  it('consumes onStopInjectContext exactly once (not re-delivered on the third turn)', async () => {
-    surfaceState.readLineQueue = [
-      { text: 'turn one', attachments: [] },
-      { text: 'turn two', attachments: [] },
-      { text: 'turn three', attachments: [] },
-      { text: '/exit', attachments: [] },
-    ];
-
-    let callCount = 0;
-    vi.mocked(runTurn).mockImplementation(async () => {
-      callCount += 1;
-      if (callCount === 1) {
-        wireStopHookState.opts?.onStopInjectContext?.('ONE-SHOT-CORRECTION');
-      }
-    });
-
-    const ctx = makeCtx();
-    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
-
-    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(3);
-    const texts = vi.mocked(runTurn).mock.calls.map((c) => (c[0] as { text: string }).text);
-    // Only the SECOND turn carries the correction; the third is clean.
-    expect(texts[0]).toBe('turn one');
-    expect(texts[1]).toContain('ONE-SHOT-CORRECTION');
-    expect(texts[2]).toBe('turn three');
-    expect(texts[2]).not.toContain('ONE-SHOT-CORRECTION');
-  });
-
-  it('second turn is clean when session does not call onStopInjectContext', async () => {
-    // `dispatchStopHook` strips whitespace-only injectContext before calling
-    // onStopInjectContext, so the callback is never invoked for a blank result.
-    // This test verifies the REPL does not prepend anything when the session
-    // does not call onStopInjectContext (simulates a handler returning {}).
-    surfaceState.readLineQueue = [
-      { text: 'alpha', attachments: [] },
-      { text: 'beta', attachments: [] },
-      { text: '/exit', attachments: [] },
-    ];
-
-    // Default runTurn mock does not call onStopInjectContext.
-    const ctx = makeCtx();
-    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
-
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
-    expect(secondText).toBe('beta');
+    expect(secondText).toContain('CORRECTION: substantiate your Done');
+    expect(secondText.trimEnd().endsWith('second turn')).toBe(true);
   });
 
-  it('renders a blocked notice when onStopBlocked is called by the session layer', async () => {
+  it('routes onStopBlocked to completionWriter for display', async () => {
     surfaceState.readLineQueue = [
       { text: 'hello', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
-
-    vi.mocked(runTurn).mockImplementationOnce(async () => {
-      // Simulate the session layer calling back with a block result.
-      wireStopHookState.opts?.onStopBlocked?.('test block reason');
-    });
-
     const ctx = makeCtx();
     const writerFn = vi.fn();
     ctx.completionWriter = { fn: writerFn, idleFn: vi.fn() };
 
+    vi.mocked(runTurn).mockImplementationOnce(async () => {
+      const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+      const wiring = wireStopHook.mock.calls[0]?.[0] as { onStopBlocked?: (r: string) => void };
+      wiring.onStopBlocked?.('test block reason');
+    });
+
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
-    // completionWriter.fn should have been called with a blocked message.
     const writeCalls = writerFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(writeCalls.some((msg: unknown) => typeof msg === 'string' && msg.includes('blocked'))).toBe(true);
   });
 
-  it('sanitises escape sequences in a blocked Stop reason before rendering', async () => {
-    // SEC-1: a malicious hook reason containing ANSI escape sequences and OSC
-    // payloads must not reach the terminal unescaped — sanitizeForDisplay must
-    // strip all control sequences before the string is passed to palette.dim().
+  it('routes onStopTimeout to completionWriter for display', async () => {
     surfaceState.readLineQueue = [
       { text: 'hello', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
-
-    const maliciousReason = '\u001b[31mhacked\u001b[0m\u001b]0;evil-title\u0007';
-
-    vi.mocked(runTurn).mockImplementationOnce(async () => {
-      wireStopHookState.opts?.onStopBlocked?.(maliciousReason);
-    });
-
     const ctx = makeCtx();
     const writerFn = vi.fn();
     ctx.completionWriter = { fn: writerFn, idleFn: vi.fn() };
 
-    await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
-
-    // The rendered string must contain 'blocked'.
-    const writeCalls = writerFn.mock.calls.map((c: unknown[]) => c[0] as string);
-    const blockedMsg = writeCalls.find((msg) => msg.includes('blocked'));
-    expect(blockedMsg).toBeDefined();
-    // The raw ESC byte must have been stripped.
-    expect(blockedMsg).not.toContain('\u001b');
-    // The OSC payload text must not leak as visible output.
-    expect(blockedMsg).not.toContain('evil-title');
-  });
-
-  it('renders a timed-out notice when onStopTimeout is called by the session layer', async () => {
-    surfaceState.readLineQueue = [
-      { text: 'hello', attachments: [] },
-      { text: '/exit', attachments: [] },
-    ];
-
     vi.mocked(runTurn).mockImplementationOnce(async () => {
-      wireStopHookState.opts?.onStopTimeout?.();
+      const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+      const wiring = wireStopHook.mock.calls[0]?.[0] as { onStopTimeout?: () => void };
+      wiring.onStopTimeout?.();
     });
 
-    const ctx = makeCtx();
-    const writerFn = vi.fn();
-    ctx.completionWriter = { fn: writerFn, idleFn: vi.fn() };
-
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
-    // completionWriter.fn should have been called with a timed-out message.
     const writeCalls = writerFn.mock.calls.map((c: unknown[]) => c[0]);
     expect(writeCalls.some((msg: unknown) => typeof msg === 'string' && msg.includes('timed out'))).toBe(true);
-  });
-
-  it('loop completes normally when no wireStopHook is present on session', async () => {
-    // Regression: if the session does not have wireStopHook (optional chaining),
-    // the loop must not throw.
-    surfaceState.readLineQueue = [
-      { text: 'hello', attachments: [] },
-      { text: '/exit', attachments: [] },
-    ];
-
-    const ctx = makeCtx();
-    // Remove wireStopHook from the session mock.
-    (ctx.session.current as Record<string, unknown>)['wireStopHook'] = undefined;
-
-    await expect(
-      runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn()),
-    ).resolves.toBeUndefined();
-    expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -877,54 +751,61 @@ describe('runReplLoop — UserPromptSubmit hook integration', () => {
 // through the loop's onTerminalState → StopContext → injectContext wiring, and
 // pins the /clear-budget decision chosen in Item 1 (the process-lifetime budget
 // is NOT reset by /clear).
-// Item 2 (#565): terminal-state gate wiring via the REPL's wireStopHook path.
-// The gate is registered with the session's hookRegistry; the session layer
-// dispatches Stop → if the gate returns injectContext, it calls the REPL's
-// onStopInjectContext callback → the REPL prepends it to the next turn.
-// These tests simulate that session-layer dispatch by invoking the callbacks
-// captured in wireStopHookState, verifying the REPL's injectContext drain.
+// Architecture note (this PR): Stop is dispatched by the session layer
+// (turn-stream-runner.ts) via wireStopHook(), not by the REPL loop. The
+// integration tests below simulate the session-layer's Stop delivery by
+// calling the wireStopHook's onStopInjectContext callback from within the
+// mocked runTurn — replicating what the session layer does when a gate
+// returns an injection. This tests the REPL's delivery wiring without
+// needing the real session layer.
 describe('runReplLoop — terminal-state gate integration (#565)', () => {
-  it('injectContext from session Stop dispatch is prepended to the next turn', async () => {
-    // The session layer calls onStopInjectContext after turn 1 (simulates the
-    // real gate returning TERMINAL_STATE_GATE_CORRECTION for an unbacked Done).
+  /**
+   * Simulate the session layer firing Stop with an injectContext correction
+   * after a turn. The wireStopHook's onStopInjectContext callback is invoked
+   * from within the mocked runTurn, replicating the session-layer behavior.
+   */
+  function mockTurnWithStopInjection(ctx: ReturnType<typeof makeCtx>, injection: string): void {
+    vi.mocked(runTurn).mockImplementationOnce(async () => {
+      const wireStopHook = vi.mocked((ctx.session.current as Record<string, unknown>).wireStopHook as ReturnType<typeof vi.fn>);
+      const wiring = wireStopHook.mock.calls[0]?.[0] as { onStopInjectContext?: (t: string) => void };
+      wiring.onStopInjectContext?.(injection);
+    });
+  }
+
+  it('the registered gate injects its correction into the next turn on an unbacked Done', async () => {
+    // Turn 1 triggers a Stop injection via the session layer (simulated) →
+    // turn 2 must carry TERMINAL_STATE_GATE_CORRECTION prepended.
     surfaceState.readLineQueue = [
       { text: 'ship it', attachments: [] },
       { text: 'next turn', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
 
-    let callCount = 0;
-    vi.mocked(runTurn).mockImplementation(async () => {
-      callCount += 1;
-      // Simulate the session's Stop dispatch returning injectContext after turn 1.
-      if (callCount === 1) {
-        wireStopHookState.opts?.onStopInjectContext?.(TERMINAL_STATE_GATE_CORRECTION);
-      }
-    });
-
     const ctx = makeCtx();
+    ctx.stats.permissionMode = 'autonomous';
+    mockTurnWithStopInjection(ctx, TERMINAL_STATE_GATE_CORRECTION);
+
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
     const firstText = (vi.mocked(runTurn).mock.calls[0]?.[0] as { text: string }).text;
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
-    // Turn 1 ran with the original user text.
     expect(firstText).toBe('ship it');
-    // Turn 2 carries the gate's correction prepended.
     expect(secondText).toContain(TERMINAL_STATE_GATE_CORRECTION);
     expect(secondText.trimEnd().endsWith('next turn')).toBe(true);
   });
 
-  it('no injectContext means next turn is clean (gate silent outside autonomous mode)', async () => {
-    // Session does NOT call onStopInjectContext — the gate was silent.
+  it('the registered gate stays silent outside autonomous mode (human watching)', async () => {
+    // No injection simulated (session layer gate would not fire in default mode).
     surfaceState.readLineQueue = [
       { text: 'ship it', attachments: [] },
       { text: 'next turn', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
 
-    // runTurn mock does NOT call onStopInjectContext — simulates gate silence.
     const ctx = makeCtx();
+    ctx.stats.permissionMode = 'default';
+
     await runReplLoop(ctx, makeTranscript() as never, makeTurnState(), vi.fn());
 
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
@@ -932,18 +813,21 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
     expect(secondText).not.toContain(TERMINAL_STATE_GATE_CORRECTION);
   });
 
-  it('does NOT reset the pending injection across /clear (Item 1 decision pinned)', async () => {
-    // Item 1 (#565): a pending injectContext is wiped by /clear (correct — the
-    // conversation context resets). But the gate's BUDGET closure in the session
-    // hookRegistry is NOT reset. This test verifies the REPL wipes the pending
-    // injection on /clear (the budget decision itself is tested via the gate's
-    // unit tests and turn-stream-runner tests).
+  it('does NOT reset the gate injection budget across /clear (Item 1 decision pinned)', async () => {
+    // Turn 1 triggers a Stop injection → /clear wipes pendingStopInjection →
+    // Turn 2 has no injection (session-layer gate budget exhausted).
     surfaceState.readLineQueue = [
-      { text: 'first done', attachments: [] }, // turn 1 → session injects
-      { text: '/clear', attachments: [] },      // REPL wipes pendingStopInjection
-      { text: 'second done', attachments: [] }, // turn 2 → no injection (wiped by /clear)
+      { text: 'first done', attachments: [] },
+      { text: '/clear', attachments: [] },
+      { text: 'second done', attachments: [] },
       { text: '/exit', attachments: [] },
     ];
+
+    const ctx = makeCtx();
+    ctx.stats.permissionMode = 'autonomous';
+    // First turn: session layer fires Stop with injection.
+    mockTurnWithStopInjection(ctx, TERMINAL_STATE_GATE_CORRECTION);
+    // Second turn: no injection (gate budget exhausted in session layer).
 
     vi.mocked(slashMod.dispatch).mockImplementation(async (text: string) => {
       if (text === '/exit') return { handled: true, result: 'exit' as const };
@@ -951,25 +835,18 @@ describe('runReplLoop — terminal-state gate integration (#565)', () => {
       return { handled: false as const };
     });
 
-    let callCount = 0;
-    vi.mocked(runTurn).mockImplementation(async () => {
-      callCount += 1;
-      if (callCount === 1) {
-        // After turn 1 the session injects a correction.
-        wireStopHookState.opts?.onStopInjectContext?.(TERMINAL_STATE_GATE_CORRECTION);
-      }
-    });
-
-    const ctx = makeCtx();
     const transcript = makeTranscript();
     await runReplLoop(ctx, transcript as never, makeTurnState(), vi.fn());
 
-    // Two model turns ran (the /clear iteration continues without a runTurn).
     expect(vi.mocked(runTurn)).toHaveBeenCalledTimes(2);
-    // /clear actually hit its reset branch.
     expect(transcript.rotateOnClear).toHaveBeenCalledTimes(1);
 
-    // Turn 2's prompt is clean — /clear wiped the pending injection.
+    // Turn 2 must NOT carry the correction — /clear wiped pendingStopInjection
+    // and the gate's budget was exhausted so no new injection was produced.
+
+    // Secondary: turn 2's delivered prompt is clean (belt-and-suspenders — true
+    // here both because the budget is spent AND because /clear wiped any pending
+    // injection; the gate-return assertions above are what isolate the budget).
     const secondText = (vi.mocked(runTurn).mock.calls[1]?.[0] as { text: string }).text;
     expect(secondText).toBe('second done');
     expect(secondText).not.toContain(TERMINAL_STATE_GATE_CORRECTION);

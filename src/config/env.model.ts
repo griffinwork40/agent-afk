@@ -169,20 +169,6 @@ export const MODEL_ENV_REGISTRY = [
     category: 'process',
   },
   {
-    name: 'AFK_STOP_HOOK_MAX_CONTINUATIONS',
-    description:
-      'Maximum same-turn continuation rounds that a blocking Stop hook may trigger per turn. When a ' +
-      'Stop hook returns decision:block, its reason is appended as a user message and the model runs ' +
-      'again in the same turn (CC-compatible behaviour). This cap is global across all hooks for that ' +
-      'turn \u2014 two blocking hooks together consume from the same counter. 0 disables continuation ' +
-      'entirely (block is logged only, same as pre-2714 behaviour). Default: 2.',
-    type: 'number',
-    required: false,
-    default: '2',
-    example: '0',
-    category: 'process',
-  },
-  {
     name: 'AFK_MAX_NESTING_DEPTH',
     description:
       'Maximum sub-agent/skill nesting depth; 0 disables nested delegation entirely (the agent, ' +

@@ -140,11 +140,12 @@ export async function runOneTurn(
         markPresenceTurn(ctx.stats.sessionId, 'idle', rawUserText, ctx.stats.totalTurns);
       },
       rearmStatus: () => ctx.statusLine.rearm(),
-      onTerminalState: (state, meta) => {
+      onTerminalState: (state, _meta) => {
         verdictLedger?.push(state);
+        // Note: Stop dispatch is handled by the session layer (turn-stream-runner.ts)
+        // which computes its own enrichment from the per-turn tool events + last
+        // assistant text. Per-turn captures here are no longer forwarded to Stop.
         capture.kind = state.kind;
-        capture.doneHasEvidence = meta?.doneHasCorroboratingEvidence;
-        capture.doneClassification = meta?.doneEvidenceClassification;
       },
       setActiveCompositor: (c) => {
         turnState.activeCompositor = c;

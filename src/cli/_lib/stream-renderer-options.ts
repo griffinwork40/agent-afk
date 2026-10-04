@@ -26,11 +26,6 @@ export interface StreamRendererOptions {
    * Subagent thinking is always suppressed regardless of this flag.
    */
   thinkingMode?: 'off' | 'summary' | 'live' | 'digest';
-  /**
-   * @deprecated Use `thinkingMode: 'live'` instead. Kept as a back-compat alias:
-   * `verbose: true` maps to `thinkingMode: 'live'`, `false`/unset to `'summary'`.
-   */
-  verbose?: boolean;
   /** Optional cancel callback wired into TerminalCompositor (e.g., session.interrupt). */
   onCancel?: () => void;
   /** Optional background callback wired into TerminalCompositor (Ctrl+B). */

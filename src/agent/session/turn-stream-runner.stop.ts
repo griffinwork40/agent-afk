@@ -12,7 +12,7 @@ import type { AgentConfig } from '../types.js';
 import type { Message } from '../types.js';
 import type { StopWiring } from '../types/session-types.js';
 import { classifyDoneEvidence, doneHasCorroboratingEvidence, type ToolEventMin } from '../done-evidence.js';
-import { parseTerminalState } from '../terminal-state.js';
+import { parseTerminalState } from '../outcomes/terminal-state.js';
 import { dispatchStopHook } from './hooks-dispatch.js';
 
 export interface TurnStopParams {

@@ -62,8 +62,9 @@ export interface TurnDriverContext {
   /**
    * Provider-side stop-hook seam (issue #2714). Undefined when not wired.
    * Called before `turn.completed` on natural turn ends; see RunTurnInput.beforeTurnEnd.
+   *
    * Finding 3: optional second arg threads the just-finished assistant text so
-   * buildStopContext doesn't scan stale history.
+   * buildStopContext doesn't need to scan stale history.
    */
   readonly beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
   /**

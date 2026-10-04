@@ -28,7 +28,6 @@ const GATE_EXTRA = path.join(os.tmpdir(), 'test-extra-root');
 
 function ctx(overrides: Partial<ToolHandlerContext> = {}): ToolHandlerContext {
   return {
-    cwd: BASE,
     resolveBase: BASE,
     readRoots: [BASE],
     writeRoots: [BASE],
@@ -49,7 +48,6 @@ describe('resolveAndContain', () => {
   it('falls through to abs (no enforcement) when no resolveBase set', () => {
     expect(
       resolveAndContain(OUTSIDE, {
-        cwd: undefined,
         resolveBase: undefined,
         readRoots: undefined,
         writeRoots: undefined,
@@ -120,7 +118,6 @@ describe('wouldBeRestricted', () => {
 
   it('returns restricted=false when no resolveBase (enforcement disabled)', () => {
     const verdict = wouldBeRestricted(OUTSIDE, {
-      cwd: undefined,
       resolveBase: undefined,
       readRoots: undefined,
       writeRoots: undefined,
@@ -356,7 +353,6 @@ describe('extractCandidatePaths', () => {
 describe('fallbackBase — factory-cwd resolve tier (issue #434)', () => {
   // A context with NO resolveBase/cwd — the out-of-dispatcher invocation shape.
   const baseless = {
-    cwd: undefined,
     resolveBase: undefined,
     readRoots: undefined,
     writeRoots: undefined,
@@ -411,7 +407,6 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
   function mkCtx(overrides: Partial<ToolHandlerContext> = {}): ToolHandlerContext {
     return {
       resolveBase: root,
-      cwd: root,
       readRoots: [root],
       writeRoots: [root],
       allowAll: false,
@@ -486,7 +481,7 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
   });
 
   it('unconfined session (resolveBase undefined): both allow unconditionally', () => {
-    const ctx = mkCtx({ resolveBase: undefined, cwd: undefined });
+    const ctx = mkCtx({ resolveBase: undefined });
     assertAgree(OUTSIDE, ctx, 'read', 'unconfined-etc');
     assertAgree(path.join(os.tmpdir(), 'anywhere.ts'), ctx, 'write', 'unconfined-tmp');
   });
@@ -505,7 +500,7 @@ describe('Gate 1 / Gate 2 containment agreement (issue #528)', () => {
     const symLink = path.join(tmpDir, 'link');
     try {
       fs.symlinkSync('/etc', symLink);
-      const ctx = mkCtx({ resolveBase: tmpDir, cwd: tmpDir, readRoots: [tmpDir], writeRoots: [tmpDir] });
+      const ctx = mkCtx({ resolveBase: tmpDir, readRoots: [tmpDir], writeRoots: [tmpDir] });
       assertAgree(symLink, ctx, 'read', 'symlink-escape-read');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

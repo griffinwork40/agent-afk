@@ -33,7 +33,7 @@ import { emitSessionPhase } from '../../trace/emit.js';
 import type { HookRegistry, StopContext } from '../../hooks.js';
 import { dispatchStopHook } from '../../session/hooks-dispatch.js';
 import { classifyDoneEvidence, doneHasCorroboratingEvidence, type ToolEventMin } from '../../done-evidence.js';
-import { parseTerminalState } from '../../terminal-state.js';
+import { parseTerminalState } from '../../outcomes/terminal-state.js';
 import type { AgentConfig } from '../../types.js';
 import type { Message } from '../../types.js';
 

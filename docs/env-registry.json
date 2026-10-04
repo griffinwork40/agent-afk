@@ -916,7 +916,7 @@
     },
     {
       "name": "AFK_SPINNER_TIPS",
-      "description": "Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off.",
+      "description": "Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. State-specific hints (e.g. the wait_for queue-to-stop hint) still show.",
       "type": "boolean",
       "required": false,
       "category": "misc"
@@ -930,12 +930,12 @@
     },
     {
       "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
-      "description": "Maximum same-turn continuation rounds that a blocking Stop hook may trigger per turn. When a Stop hook returns decision:block, its reason is appended as a user message and the model runs again in the same turn (CC-compatible behaviour). This cap is global across all hooks for that turn — two blocking hooks together consume from the same counter. 0 disables continuation entirely (block is logged only, same as pre-2714 behaviour). Default: 2.",
+      "description": "Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2.",
       "type": "number",
       "required": false,
       "default": "2",
-      "example": "0",
-      "category": "process"
+      "example": "3",
+      "category": "misc"
     },
     {
       "name": "AFK_STREAM_BUFFER_MS",
