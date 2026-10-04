@@ -71,7 +71,7 @@ export async function runInputLoop(
 
   // Slash-command submit queue: pre-seeded from ctx.initialInput when the
   // session was launched with a first-message argument. See original docs.
-  let seedBuffer: { text: string; attachments: readonly ImageAttachment[] } | undefined =
+  let seedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent' } | undefined =
     ctx.initialInput !== undefined ? { text: ctx.initialInput, attachments: [] } : undefined;
 
   // Rewind reload-for-edit: `/rewind` returns a prefill payload; unlike
@@ -95,7 +95,7 @@ export async function runInputLoop(
     if (!bgResultNotifier.hasPendingInjections() && !peerNotifier.hasPendingInjections()) return;
     autoResumeCount++;
     ringBellIfEnabled(process.stdout);
-    seedBuffer = { text: autoResumeDirective(bgResultNotifier.hasPendingInjections()), attachments: [] };
+    seedBuffer = { text: autoResumeDirective(bgResultNotifier.hasPendingInjections()), attachments: [], echo: 'silent' };
     surface.abortPendingRead();
   };
   bgResultNotifier.onInjectable = tryAutoResume;
@@ -132,14 +132,16 @@ export async function runInputLoop(
     if (seedBuffer !== undefined) {
       const queued = seedBuffer;
       seedBuffer = undefined;
-      const prompt = buildPrompt(ctx.stats.permissionMode, queued.text);
-      const echo = formatSubmittedEcho({
-        buffer: queued.text,
-        promptText: prompt,
-        isTTY: Boolean(process.stdout.isTTY),
-        attachmentSummary: describeAttachmentSummary([...queued.attachments]),
-      });
-      ctx.replRenderer.writeLine(echo);
+      if (queued.echo !== 'silent') {
+        const prompt = buildPrompt(ctx.stats.permissionMode, queued.text);
+        const echo = formatSubmittedEcho({
+          buffer: queued.text,
+          promptText: prompt,
+          isTTY: Boolean(process.stdout.isTTY),
+          attachmentSummary: describeAttachmentSummary([...queued.attachments]),
+        });
+        ctx.replRenderer.writeLine(echo);
+      }
       text = queued.text.trim();
       attachments = queued.attachments as ReadWithAutocompleteResult['attachments'];
     } else {
