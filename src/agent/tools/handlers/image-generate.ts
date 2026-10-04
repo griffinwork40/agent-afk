@@ -345,7 +345,7 @@ export function createImageGenerateHandler(
     // 7. Save to disk
     const imageId = crypto.randomUUID().slice(0, 8);
     const ext = parsed.output_format;
-    const cwd = context?.cwd ?? process.cwd();
+    const cwd = context?.resolveBase ?? process.cwd();
     const savePathResult = await resolveGenSavePath(parsed.output_path, context, cwd, imageId, ext);
     if ('error' in savePathResult) {
       decrementSessionCount(sessionId);

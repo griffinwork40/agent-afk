@@ -251,8 +251,10 @@ export interface SessionToolDispatcherOptions {
    * Detach registry for the Ctrl+B backgrounding contract (#2542).
    *
    * When present, `callHandlerContext` injects it into the context of every
-   * tool in {@link DETACHABLE_TOOLS} (currently `bash` only) so those
+   * handler-backed tool in {@link DETACHABLE_TOOLS} (currently `bash`) so those
    * handlers can register their in-flight calls and respond to detachment.
+   * `compose` is also in `DETACHABLE_TOOLS` but bypasses `callHandlerContext` —
+   * it receives the registry directly via `coreExecDeps().detachRegistry`.
    * Absent for headless surfaces, subagent children, and one-shot CLI runs
    * that have no REPL to inject the result into.
    */
@@ -436,7 +438,6 @@ export class SessionToolDispatcher implements ToolDispatcher {
    */
   private get handlerContext(): ToolHandlerContext {
     return {
-      cwd: this.resolveBase,
       resolveBase: this.resolveBase,
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),
@@ -470,9 +471,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
       ...(this.userAttention !== undefined && isYieldableTool(call.name)
         ? { userAttention: this.userAttention }
         : {}),
-      // Detach contract (#2542): inject the registry into detachable tools
-      // (currently bash only) so Ctrl+B can free the model's turn while the
-      // underlying operation keeps running.
+      // Detach contract (#2542): inject the registry into handler-backed detachable
+      // tools (bash) so Ctrl+B can free the model's turn while the underlying
+      // operation keeps running. `compose` is detachable but bypasses this path —
+      // it receives detachRegistry via coreExecDeps() → executeCompose() instead.
       ...(this.detachRegistry !== undefined && isDetachableTool(call.name)
         ? { detachRegistry: this.detachRegistry }
         : {}),
@@ -701,6 +703,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
       subagentExecutor: this.subagentExecutor,
       skillExecutor: this.skillExecutor,
       composeExecutor: this.composeExecutor,
+      // Detach registry (#2542): forwarded to executeCompose so the compose
+      // executor can register its DAG and respond to Ctrl+B detachment.
+      // Mirrors the `callHandlerContext` injection path for bash.
+      ...(this.detachRegistry !== undefined ? { detachRegistry: this.detachRegistry } : {}),
       callHandlerContext: (call) => this.callHandlerContext(call),
       gateDeps: () => this.gateDeps(),
       toolDefs: this.toolDefs,

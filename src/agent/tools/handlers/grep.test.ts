@@ -646,7 +646,7 @@ describe('createGrepHandler — cwd parameter', () => {
   });
 
 
-  it('without cwd: defaults to process.cwd() when input omits path', async () => {
+  it('without resolveBase: defaults to process.cwd() when input omits path', async () => {
     // Use tempDir as the factory cwd so grep has a bounded search root
     // instead of scanning the full repo (which hits node_modules and
     // times out). The needle is written to target.txt in beforeEach, but
@@ -664,7 +664,7 @@ describe('createGrepHandler — cwd parameter', () => {
     }
   });
 
-  it('with cwd: defaults to the configured directory when input omits path', async () => {
+  it('with factory cwd: defaults to the configured directory when input omits path', async () => {
     const handler = createGrepHandler(tempDir);
     const result = await handler({ pattern: needle }, createSignal());
     expect(result.isError).toBeFalsy();
@@ -711,12 +711,12 @@ describe('grepHandler cwd containment', () => {
     return new AbortController().signal;
   }
 
-  it('rejects absolute path outside context.cwd', async () => {
+  it('rejects absolute path outside context.resolveBase', async () => {
     // Use a sibling temp dir that is guaranteed to be outside tempDir on all
     // platforms — avoids a POSIX-only path like `/etc` (#703).
     const outsideDir = mkdtempSync(join(tmpdir(), 'grep-outside-'));
     try {
-      const context: ToolHandlerContext = { cwd: tempDir };
+      const context: ToolHandlerContext = { resolveBase: tempDir };
       // parseGrepInput throws for containment violations — grepHandler propagates the throw
       await expect(
         grepHandler({ pattern: 'root', path: resolve(outsideDir) }, createSignal(), context),
@@ -726,8 +726,8 @@ describe('grepHandler cwd containment', () => {
     }
   });
 
-  it('resolves relative path against context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('resolves relative path against context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await grepHandler(
       { pattern: 'hello', path: '.' },
       createSignal(),
@@ -737,8 +737,8 @@ describe('grepHandler cwd containment', () => {
     expect(result.content).toContain('hello');
   });
 
-  it('allows absolute path within context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('allows absolute path within context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await grepHandler(
       { pattern: 'hello', path: tempDir },
       createSignal(),
@@ -748,7 +748,7 @@ describe('grepHandler cwd containment', () => {
     expect(result.content).toContain('hello');
   });
 
-  it('falls back to process.cwd() resolution when no cwd in context', async () => {
+  it('falls back to process.cwd() resolution when no resolveBase in context', async () => {
     const context: ToolHandlerContext = {};
     const result = await grepHandler(
       { pattern: 'hello', path: tempDir },
@@ -759,8 +759,8 @@ describe('grepHandler cwd containment', () => {
     expect(result.content).toContain('hello');
   });
 
-  it('defaults path to context.cwd when path input is omitted', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('defaults path to context.resolveBase when path input is omitted', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await grepHandler(
       { pattern: 'hello' },
       createSignal(),

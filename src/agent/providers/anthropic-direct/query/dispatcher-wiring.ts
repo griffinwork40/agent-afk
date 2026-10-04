@@ -197,6 +197,11 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.bashOutputTailReporter !== undefined
           ? { bashOutputTailReporter: config.bashOutputTailReporter }
           : {}),
+        // #2542/#2735: Detach registry forwarded from AgentConfig so REPL
+        // Ctrl+B handler and this dispatcher share the same instance.
+        ...(config.detachRegistry !== undefined
+          ? { detachRegistry: config.detachRegistry }
+          : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
