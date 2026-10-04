@@ -48,6 +48,35 @@ export interface AgentConfigForBridge {
 }
 
 /**
+ * Warn about non-plugin hooks skipped because `enableShellHooks` is unset.
+ * Extracted as a named helper (explicit params, no closure) to keep
+ * `loadAndRegisterConfigHooks` under the 200-line function ceiling.
+ */
+function warnSkippedShellHooks(
+  hookConfig: LoadedHooksConfig,
+  validEvents: readonly HarnessHookEvent[],
+): void {
+  const skipped: string[] = [];
+  for (const event of validEvents) {
+    const groups = hookConfig.hooks[event];
+    if (groups === undefined) continue;
+    for (const group of groups) {
+      if (group.tier === 'plugin') continue;
+      for (const hook of group.hooks) {
+        skipped.push(`${event}: ${hook.command}`);
+      }
+    }
+  }
+  if (skipped.length > 0) {
+    console.warn(
+      `[hooks] shell hooks are disabled (enableShellHooks not set in user-global config).\n` +
+        `Skipped ${skipped.length} hook(s):\n` +
+        skipped.map((s) => `  - ${s}`).join('\n'),
+    );
+  }
+}
+
+/**
  * Register all config-driven shell hooks with `registry`.
  *
  * Two independent trust tiers:
@@ -110,24 +139,7 @@ export function loadAndRegisterConfigHooks(
   // Plugin hooks (tier 'plugin') still register below and are never "skipped"
   // here — they cleared their own enablePluginHooks gate in the loader.
   if (!userGlobalEnabled) {
-    const skipped: string[] = [];
-    for (const event of validEvents) {
-      const groups = hookConfig.hooks[event];
-      if (groups === undefined) continue;
-      for (const group of groups) {
-        if (group.tier === 'plugin') continue;
-        for (const hook of group.hooks) {
-          skipped.push(`${event}: ${hook.command}`);
-        }
-      }
-    }
-    if (skipped.length > 0) {
-      console.warn(
-        `[hooks] shell hooks are disabled (enableShellHooks not set in user-global config).\n` +
-          `Skipped ${skipped.length} hook(s):\n` +
-          skipped.map((s) => `  - ${s}`).join('\n'),
-      );
-    }
+    warnSkippedShellHooks(hookConfig, validEvents);
   }
 
   // In episode mode (without opt-in), skip the context-injecting events only
