@@ -17,7 +17,8 @@ import { writeEnvelope } from '../../../agent/peer/inbox-store.js';
 import { writePresenceFile } from '../../../agent/awareness/presence.js';
 import { renderPeerMessageBlock, type PeerEnvelope } from '../../../agent/peer/envelope.js';
 
-import { stripAnsi } from '../../display.js';
+import { displayWidth, stripAnsi } from '../../display.js';
+import { contentMargin } from '../../render/measure.js';
 
 // ── path isolation ──────────────────────────────────────────────────────────
 let tmpHome: string;
@@ -145,10 +146,10 @@ describe('PeerInboxNotifier — accept path', () => {
     const { notifier, lines } = makeNotifier(sessionId);
     await notifier.scan();
 
-    expect(lines.some((l) => l.includes('peer message from') && l.includes('alice'))).toBe(true);
+    expect(lines.some((l) => l.includes('peer message from alice') && l.includes('"hello world"'))).toBe(true);
   });
 
-  it.each([undefined, 40, 200])('shows sender identity and byte count at columns=%s without changing drained envelopes', async (columns) => {
+  it.each([undefined, 40, 200])('bounds previews at columns=%s without changing drained envelopes', async (columns) => {
     const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
     vi.stubEnv('AFK_CENTER_CONTENT', '1');
     vi.stubEnv('AFK_TEXT_MEASURE', '100');
@@ -162,11 +163,11 @@ describe('PeerInboxNotifier — accept path', () => {
       await writeEnvelope(e);
       const { notifier, lines } = makeNotifier(sessionId);
       await notifier.scan();
-      // Format: ↘ peer message from <name> (<shortId>) · <N KB>
-      const plain = stripAnsi(lines[0]!);
-      expect(plain).toContain('peer message from');
-      expect(plain).toContain('alice');
-      // Drained envelope unchanged — body never mutated by display path.
+      const line = stripAnsi(lines[0]!);
+      expect(line).toContain('peer message from alice');
+      expect(line).toContain('"');
+      expect(line).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+      expect(displayWidth(line) + contentMargin().length).toBeLessThanOrEqual(columns ?? 80);
       expect(notifier.drainInjections()).toBe(renderPeerMessageBlock(e) + '\n\n');
       expect(notifier.drainInjections()).toBe('');
     } finally {
@@ -178,7 +179,7 @@ describe('PeerInboxNotifier — accept path', () => {
 
   it('held path writes a "held" line and does not buffer the envelope', async () => {
     const sessionId = randomUUID();
-    await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'sender-id', name: 'alice' } }));
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'sender-id', name: '\x1b[31malice\nname' } }));
 
     const { notifier, lines } = makeNotifier(sessionId, {
       mode: () => 'hold',
@@ -187,7 +188,8 @@ describe('PeerInboxNotifier — accept path', () => {
 
     expect(notifier.hasPendingInjections()).toBe(false);
     expect(notifier.drainInjections()).toBe('');
-    expect(lines.some((l) => l.includes('held'))).toBe(true);
+    expect(stripAnsi(lines[0]!)).toContain('alice name held (AFK_PEER_INBOUND=hold) · /inbox to review');
+    expect(stripAnsi(lines[0]!)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
 
   it('two notifiers on the same inbox deliver each message exactly once total', async () => {

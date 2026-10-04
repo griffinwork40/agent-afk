@@ -36,6 +36,9 @@ import { renderPeerMessageBlock, type PeerEnvelope } from '../../../agent/peer/e
 import { emitPeerMessage } from '../../../agent/trace/emit.js';
 import type { TraceSink } from '../../../agent/trace/index.js';
 import { palette } from '../../palette.js';
+import { getTerminalWidth } from '../../terminal-size.js';
+import { capToMeasure, contentMargin } from '../../render/measure.js';
+import { formatPeerArrival, safePeerSender } from './peer-arrival-format.js';
 import { env } from '../../../config/env.js';
 import { scanPeerInbox, type HeldReason } from './peer-inbox-scan.js';
 import type { InteractiveCtx } from './shared.js';
@@ -75,15 +78,6 @@ function resolvePollMs(override: number | undefined): number {
   if (override !== undefined && override > 0) return override;
   const n = parseInt(env.AFK_PEER_POLL_MS ?? '', 10);
   return Number.isFinite(n) && n > 0 ? n : 1000;
-}
-
-function senderLabel(e: PeerEnvelope): string {
-  const short = e.from.id.slice(0, 8);
-  return e.from.name !== undefined ? `${e.from.name} (${short})` : short;
-}
-
-function sizeLabel(bytes: number): string {
-  return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
 }
 
 /** Buffered claimed envelope with enough context to reclaim it on dispose/resume. */
@@ -345,7 +339,9 @@ export class PeerInboxNotifier {
     const sid = sessionId ?? '';
     const bytes = Buffer.byteLength(e.body, 'utf8');
     this.buffer.push({ envelope: e, sessionId: sid });
-    this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} · ${sizeLabel(bytes)}`));
+    // Display sanitization/truncation never touches the serialized envelope.
+    const cols = getTerminalWidth();
+    this.opts.writeLine(formatPeerArrival(e, capToMeasure(cols - contentMargin(cols).length)));
     // Emit 'claimed': the envelope has been moved to delivered/ on disk. The
     // 'injected' event fires separately in consumeEnvelopes() when the text
     // actually reaches a model turn. These are distinct: a crash between claim
@@ -357,7 +353,7 @@ export class PeerInboxNotifier {
   private noteHeld(e: PeerEnvelope, reason: HeldReason): void {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     const why = reason === 'wake-budget' ? 'wake budget reached' : 'AFK_PEER_INBOUND=hold';
-    this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} held (${why}) · /inbox to review`));
+    this.opts.writeLine(palette.dim(`↘ peer message from ${safePeerSender(e.from)} held (${why}) · /inbox to review`));
     // resolveTraceWriter() reads live so mid-session resume is reflected.
     void emitPeerMessage(this.resolveTraceWriter(), { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
   }
