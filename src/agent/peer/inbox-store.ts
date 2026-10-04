@@ -490,6 +490,19 @@ export async function recoverUnackedDelivered(sessionId: string): Promise<string
     // Ensure pending/ exists, then move receipt back.
     try {
       await mkdir(pendingDir, { recursive: true, mode: 0o700 });
+      // Before rename: if pending/<file> already exists, the process crashed
+      // between link and unlink during claim, leaving both copies. The pending
+      // copy is already queued for redelivery — just remove the duplicate
+      // delivered receipt instead of overwriting the pending entry.
+      try {
+        await stat(join(pendingDir, file));
+        // pending copy exists — remove the delivered duplicate
+        await unlink(join(deliveredDir, file)).catch(() => {});
+        recovered.push(file);
+        continue;
+      } catch {
+        // pending doesn't exist — proceed with rename
+      }
       await rename(join(deliveredDir, file), join(pendingDir, file));
       recovered.push(file);
     } catch (err: unknown) {

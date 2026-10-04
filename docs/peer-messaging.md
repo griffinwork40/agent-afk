@@ -221,9 +221,9 @@ Envelopes are recovered after a process crash that occurs between claim and inje
 - `injected` — ack marker written to `delivered/acked/<file>` after turn injection.
 - `processed` — model has replied to the injected message (not tracked at the mailbox layer).
 
-**Ack marker**: after an envelope is successfully injected into a model turn, the receiver calls `writeInjectionAck(sessionId, file)` which atomically writes `delivered/acked/<file>` containing the owning sessionId. This is a best-effort write; a failure leaves no ack, which causes the envelope to be recovered on next restart (at-least-once).
+**Ack marker**: after an envelope is successfully injected into a model turn, the receiver calls `writeInjectionAck(sessionId, file)` which atomically writes `delivered/acked/<file>` containing the owning sessionId. This is a best-effort write; a failure leaves no ack, which causes the envelope to be recovered on next restart (at-least-once). Call site: `PeerInboxNotifier.consumeEnvelopes()` in `src/cli/commands/interactive/peer-inbox-notifier.ts` — one ack per consumed envelope, fire-and-forget.
 
-**Recovery on restart**: `recoverUnackedDelivered(sessionId)` is called at receiver startup. It scans `delivered/` for receipts with no ack marker and moves them back to `pending/` so they are re-delivered on the next poll.
+**Recovery on restart**: `recoverUnackedDelivered(sessionId)` is called at receiver startup. It scans `delivered/` for receipts with no ack marker and moves them back to `pending/` so they are re-delivered on the next poll. Call site: `PeerInboxNotifier.startWatching()` in `src/cli/commands/interactive/peer-inbox-notifier.ts` — called once when the sessionId first becomes known (first tick that sees a non-undefined sessionId).
 
 **Cross-session safety**: recovery only reclaims envelopes whose `to` field matches the calling sessionId. Envelopes belonging to another session are never reclaimed into an unrelated conversation.
 

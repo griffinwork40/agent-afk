@@ -9,6 +9,7 @@
  *   - Concurrent / duplicate recovery: idempotent.
  *   - writeInjectionAck is a no-op on error (does not throw).
  *   - recoverUnackedDelivered returns [] when no delivered/ dir exists.
+ *   - Rename collision: pending copy already exists when recover runs (Finding 4).
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -339,5 +340,85 @@ describe('recoverUnackedDelivered -- edge cases', () => {
     expect(result).toEqual([]);
     // Corrupt file is left in place.
     expect(fs.existsSync(path.join(deliveredDir, '2026-10-01T00-00-00-001Z-bad.json'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 4: rename collision — pending copy already exists
+// ---------------------------------------------------------------------------
+
+describe('recoverUnackedDelivered -- rename collision (Finding 4)', () => {
+  it('handles crash that left both a pending and delivered copy: removes delivered duplicate', async () => {
+    const {
+      writeEnvelope,
+      listPending,
+      claimPending,
+      recoverUnackedDelivered,
+    } = await getInboxStore();
+
+    const env = makeEnvelope();
+    await writeEnvelope(env);
+    const [file] = await listPending(TARGET_ID);
+    expect(file).toBeDefined();
+
+    // Normal claim: moves pending → delivered, removes pending.
+    await claimPending(TARGET_ID, file!);
+    expect(await listPending(TARGET_ID)).toHaveLength(0);
+
+    // Simulate crash: manually restore the pending copy so both exist
+    // (mimics a process death between link and unlink during claimPending).
+    const base = path.join(tmpDir, 'inbox', TARGET_ID);
+    const deliveredCopy = path.join(base, 'delivered', file!);
+    const pendingCopy = path.join(base, 'pending', file!);
+    fs.mkdirSync(path.join(base, 'pending'), { recursive: true });
+    fs.copyFileSync(deliveredCopy, pendingCopy);
+
+    // Both copies now exist.
+    expect(fs.existsSync(pendingCopy)).toBe(true);
+    expect(fs.existsSync(deliveredCopy)).toBe(true);
+
+    // Recover: should detect the existing pending copy, remove the delivered
+    // duplicate, and report the file as recovered (pending is already there).
+    const recovered = await recoverUnackedDelivered(TARGET_ID);
+    expect(recovered).toEqual([file]);
+
+    // Pending copy is preserved for redelivery.
+    expect(fs.existsSync(pendingCopy)).toBe(true);
+    // Delivered duplicate is removed.
+    expect(fs.existsSync(deliveredCopy)).toBe(false);
+
+    // The envelope can be claimed again from pending.
+    const pendingAfter = await listPending(TARGET_ID);
+    expect(pendingAfter).toHaveLength(1);
+    expect(pendingAfter[0]).toBe(file);
+  });
+
+  it('second recover call after collision is idempotent (pending exists, no delivered)', async () => {
+    const {
+      writeEnvelope,
+      listPending,
+      claimPending,
+      recoverUnackedDelivered,
+    } = await getInboxStore();
+
+    const env = makeEnvelope();
+    await writeEnvelope(env);
+    const [file] = await listPending(TARGET_ID);
+    await claimPending(TARGET_ID, file!);
+
+    // Restore pending to simulate crash state.
+    const base = path.join(tmpDir, 'inbox', TARGET_ID);
+    const deliveredCopy = path.join(base, 'delivered', file!);
+    const pendingCopy = path.join(base, 'pending', file!);
+    fs.mkdirSync(path.join(base, 'pending'), { recursive: true });
+    fs.copyFileSync(deliveredCopy, pendingCopy);
+
+    // First recovery removes delivered duplicate.
+    const first = await recoverUnackedDelivered(TARGET_ID);
+    expect(first).toEqual([file]);
+
+    // Second recovery: no delivered copy, no action needed.
+    const second = await recoverUnackedDelivered(TARGET_ID);
+    expect(second).toEqual([]);
   });
 });
