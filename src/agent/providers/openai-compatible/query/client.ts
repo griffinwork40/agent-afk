@@ -7,9 +7,11 @@
  * @module agent/providers/openai-compatible/query/client
  */
 
+import { createHash } from 'node:crypto';
 import OpenAI from 'openai';
-import { globalRateLimitBucket } from '../../shared/rate-limit-bucket.js';
+import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseOpenAIRateLimitHeaders } from '../../shared/rate-limit-headers.js';
+import { perMinuteFromRateLimit, publishingGate, publishUsage } from '../../../usage/usage-ledger.js';
 import { makeOpenAITracingFetch } from '../tracing-fetch.js';
 
 /**
@@ -94,9 +96,35 @@ function isLocalEndpoint(baseURL: string | undefined): boolean {
  */
 export function buildOpenAIAdmissionFetch(baseURL: string | undefined): typeof fetch | undefined {
   if (isLocalEndpoint(baseURL)) return undefined;
+  // Usage-ledger account: the endpoint host, so distinct OpenAI-compatible
+  // backends never merge. The ChatGPT/Codex subscription backend emits no
+  // x-ratelimit-* headers, so it never produces a record (usage unknown).
+  const account = ledgerAccountForBaseUrl(baseURL);
+  // Admission bucket keyed the same way, so each backend gates on its own
+  // headers and adopts peer processes' freezes for that backend only.
+  const bucket = getRateLimitBucket('openai', account);
   const rateLimitObserver = (headers: Headers): void => {
     const snapshot = parseOpenAIRateLimitHeaders(headers);
-    if (snapshot !== undefined) globalRateLimitBucket.update(snapshot);
+    if (snapshot === undefined) return;
+    bucket.update(snapshot);
+    publishUsage({ v: 1, provider: 'openai', account, perMinute: perMinuteFromRateLimit(snapshot, Date.now()) });
   };
-  return makeOpenAITracingFetch(globalThis.fetch, undefined, rateLimitObserver, globalRateLimitBucket);
+  const gate = publishingGate(bucket, 'openai', account);
+  return makeOpenAITracingFetch(globalThis.fetch, undefined, rateLimitObserver, gate);
+}
+
+/**
+ * Derive a ledger/bucket key from a baseURL. Parseable URLs use the hostname
+ * (unchanged from before — persisted ledger data stays continuous). Unparseable
+ * URLs get a short SHA-256 hash prefix so each distinct endpoint gets its own
+ * rate-limit bucket and ledger row. The raw URL is never stored: it may contain
+ * credentials or query-string tokens.
+ */
+export function ledgerAccountForBaseUrl(baseURL: string | undefined): string {
+  if (baseURL === undefined) return 'api.openai.com';
+  try {
+    return new URL(baseURL).hostname;
+  } catch {
+    return `custom-${createHash('sha256').update(baseURL).digest('hex').slice(0, 12)}`;
+  }
 }

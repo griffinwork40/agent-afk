@@ -54,6 +54,7 @@ import {
   createClipboardWriteHandler,
   createClipboardReadHandler,
 } from './clipboard.js';
+import { listSessionsHandler, sendToSessionHandler } from './peer.js';
 
 /**
  * Build the built-in tool handler map for a session.
@@ -134,6 +135,8 @@ export function createBuiltinHandlers(
     ['json_query', jsonQuery],
     ['clipboard_write', clipboardWriteHandler],
     ['clipboard_read', clipboardReadHandler],
+    ['list_sessions', listSessionsHandler],
+    ['send_to_session', sendToSessionHandler],
   ]);
 }
 
@@ -179,4 +182,6 @@ export {
   clipboardReadHandler,
   createClipboardWriteHandler,
   createClipboardReadHandler,
+  listSessionsHandler,
+  sendToSessionHandler,
 };

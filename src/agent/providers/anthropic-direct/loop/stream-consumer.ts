@@ -21,7 +21,6 @@
 import type { ProviderEvent } from '../../../provider.js';
 import type { RunTurnInput, TurnResult } from '../types.js';
 import { translateMessageStream } from '../translate.js';
-import { StreamIncompleteError } from '../../../../utils/errors.js';
 import { abortableStream } from '../../shared/abortable-stream.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import { env } from '../../../../config/env.js';
@@ -32,6 +31,7 @@ import {
   stallTimeoutError,
 } from '../../shared/stream-stall-timeout.js';
 import { isOverloadedErrorEvent } from './retry-budget.js';
+import { isMidStreamCut } from './network-termination.js';
 import type { RoundRetryBudget } from './retry-budget.js';
 import type { RoundOutcome } from './outcomes.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
@@ -244,18 +244,18 @@ export async function* consumeRoundStream({
           if (input.signal.aborted) {
             break;
           }
-          // Mid-stream CLEAN close (StreamIncompleteError): the stream ended
-          // with no message_stop and no stop_reason AFTER content streamed — an
-          // intermediary dropped the connection mid-generation. translate.ts
-          // surfaces it as this in-band error event (it is constructed and
-          // yielded, never thrown, so it cannot reach the catch below). Neither
-          // the TTFB branch (a first byte was seen) nor the overload branch (not
-          // an overloaded_error) matches it, so without this it would fall
-          // through to the fatal path. Re-drive like overload: input.messages is
-          // unmutated for the round, so the retry re-sends identical history
-          // (already-streamed text may re-emit — reset via stream.retry).
+          // Mid-stream CUT (isMidStreamCut, network-termination.ts): a CLEAN
+          // close with no message_stop/stop_reason after content streamed
+          // (StreamIncompleteError), or a transport termination thrown mid-read
+          // (#2776: undici `TypeError: terminated`, ECONNRESET). translate.ts
+          // delivers both as this in-band event. The TTFB / stall / abort
+          // branches above claim cuts they caused, so ordering is load-bearing.
+          // Re-drive like overload: input.messages is unmutated for the round,
+          // so the retry re-sends identical history (already-streamed text may
+          // re-emit — reset via stream.retry). On exhaustion the ORIGINAL error
+          // is yielded below, so traces keep the transport diagnosis.
           if (
-            out.event.error instanceof StreamIncompleteError &&
+            isMidStreamCut(out.event.error) &&
             retry.canRetryStreamIncomplete() &&
             !input.signal.aborted
           ) {

@@ -12,6 +12,7 @@ import { sweepSessionSidecars } from './session-sidecar-sweep.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+// Mirrors the 30-day default (DEFAULT_MAX_AGE_DAYS in session-sidecar-sweep.ts).
 const MAX_AGE_MS = 30 * DAY_MS;
 let root: string;
 
@@ -49,15 +50,34 @@ const sweep = (extra: { activeSessionId?: string } = {}): Promise<number> =>
 
 describe('sweepSessionDirs', () => {
   it('removes a dir whose newest content is older than the max age', async () => {
+    // 40 days — beyond the 30-day MAX_AGE_MS used by the default sweep.
     const old = makeSessionDir('old-session', Date.now() - 40 * DAY_MS);
     expect(await sweep()).toBe(1);
     expect(existsSync(old)).toBe(false);
   });
 
-  it('keeps a fresh dir', async () => {
-    const fresh = makeSessionDir('fresh-session', Date.now() - 2 * DAY_MS);
+  it('keeps a dir whose newest content is within the 30-day window', async () => {
+    // 20 days is inside the 30-day window; must survive.
+    const fresh = makeSessionDir('fresh-session', Date.now() - 20 * DAY_MS);
     expect(await sweep()).toBe(0);
     expect(existsSync(fresh)).toBe(true);
+  });
+
+  it('keeps a dir just inside the 30-day window (29 days old)', async () => {
+    // 29 days is safely below the 30-day MAX_AGE_MS; the dir must survive.
+    // (An exact 30-day fixture is timing-sensitive because sweep() calls Date.now()
+    // independently from backdate(), so we use 29 days for a stable test.)
+    const boundary = makeSessionDir('just-inside-session', Date.now() - 29 * DAY_MS);
+    expect(await sweep()).toBe(0);
+    expect(existsSync(boundary)).toBe(true);
+  });
+
+  it('removes a dir at 31 days (just past the 30-day boundary)', async () => {
+    const past = makeSessionDir('just-past', Date.now() - 31 * DAY_MS);
+    const within = makeSessionDir('within-window', Date.now() - 29 * DAY_MS);
+    expect(await sweep()).toBe(1);
+    expect(existsSync(past)).toBe(false);
+    expect(existsSync(within)).toBe(true);
   });
 
   it('keeps a dir touched inside the grace window even when max age is tiny', async () => {
@@ -68,7 +88,7 @@ describe('sweepSessionDirs', () => {
   });
 
   it('keeps the active session dir by identity, however old', async () => {
-    const active = makeSessionDir('active-session', Date.now() - 90 * DAY_MS);
+    const active = makeSessionDir('active-session', Date.now() - 40 * DAY_MS);
     expect(await sweep({ activeSessionId: 'active-session' })).toBe(0);
     expect(existsSync(active)).toBe(true);
   });
@@ -104,7 +124,7 @@ describe('sweepSessionDirs', () => {
   });
 
   it('protects the ACTIVE fork child\'s stale parent chain but never removes the active dir', async () => {
-    const grandparent = makeSessionDir('gp-session', Date.now() - 60 * DAY_MS);
+    const grandparent = makeSessionDir('gp-session', Date.now() - 50 * DAY_MS);
     const parent = makeSessionDir('parent-session', Date.now() - 40 * DAY_MS, {
       v: 1, kind: 'meta', sessionId: 'parent-session', forkedFrom: { sessionId: 'gp-session', length: 1 },
     });
@@ -149,7 +169,7 @@ describe('sweepSessionDirs', () => {
 });
 
 describe('sweepSessionSidecars — directory pass wiring', () => {
-  it('removes old session dirs, honours activeSessionId, and reports evictedDirs', async () => {
+  it('removes old session dirs (40 days > 30-day default), honours activeSessionId, and reports evictedDirs', async () => {
     const old = makeSessionDir('old-session', Date.now() - 40 * DAY_MS);
     const active = makeSessionDir('active-session', Date.now() - 40 * DAY_MS);
     const result = await sweepSessionSidecars({ root, force: true, activeSessionId: 'active-session' });
@@ -158,12 +178,38 @@ describe('sweepSessionSidecars — directory pass wiring', () => {
     expect(existsSync(active)).toBe(true);
   });
 
-  it('uses AFK_SESSION_MAX_AGE_DAYS for directories', async () => {
+  it('evicts a 40-day-old session dir under the 30-day default', async () => {
+    // 40 days exceeds the 30-day default; must be evicted.
+    const dir = makeSessionDir('forty-day-session', Date.now() - 40 * DAY_MS);
+    const result = await sweepSessionSidecars({ root, force: true });
+    expect(result.evictedDirs).toBe(1);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it('explicit 60-day override preserves a 40-day journal dir that the 30-day default evicts', async () => {
+    // Confirms the env override is honoured and differs from the 30-day default.
     process.env['AFK_SESSION_MAX_AGE_DAYS'] = '60';
     const dir = makeSessionDir('forty-day-session', Date.now() - 40 * DAY_MS);
     const result = await sweepSessionSidecars({ root, force: true });
     expect(result.evictedDirs).toBe(0);
     expect(existsSync(dir)).toBe(true);
+  });
+
+  it('keeps a journal dir at 29 days (just inside the 30-day window)', async () => {
+    // 29 days is safely below the default 30-day threshold; must survive.
+    // (An exact 30-day fixture is timing-sensitive because sweepSessionSidecars
+    // calls Date.now() independently from backdate(); 29 days gives a stable margin.)
+    const dir = makeSessionDir('just-inside-session', Date.now() - 29 * DAY_MS);
+    const result = await sweepSessionSidecars({ root, force: true });
+    expect(result.evictedDirs).toBe(0);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  it('removes a journal dir at 31 days (just past the 30-day boundary)', async () => {
+    const dir = makeSessionDir('just-past-session', Date.now() - 31 * DAY_MS);
+    const result = await sweepSessionSidecars({ root, force: true });
+    expect(result.evictedDirs).toBe(1);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('skips the directory pass when the stamp is fresh', async () => {

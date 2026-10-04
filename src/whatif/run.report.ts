@@ -11,6 +11,7 @@ import type { DroppedProbe } from './probe-grounding.js';
 import type { CorpusExclusions } from './episodes.js';
 import type { StructuralImpact } from './types.js';
 import type { JudgeResults } from './run.verify.scoring.js';
+import type { QuestionFitLevel } from './question-fit.js';
 import { standardLimits, buildHeadline } from './report.js';
 import { verifyShortfallLimits, hookIsolationLimits } from './run.limits.js';
 import { persistRun } from './run.persist.js';
@@ -19,6 +20,7 @@ export interface VerifiedReportArgs {
   spec: ChangeSpec;
   structural: StructuralImpact;
   predictions: Prediction[];
+  questionFit: QuestionFitLevel;
   verifyResult: VerifyResult;
   droppedProbes: DroppedProbe[];
   corpusExclusions: CorpusExclusions;
@@ -35,7 +37,7 @@ export interface VerifiedReportArgs {
 
 /** Build the verified WhatifReport, persist it, and return it. */
 export async function buildAndPersistVerifiedReport(args: VerifiedReportArgs): Promise<WhatifReport> {
-  const { spec, structural, predictions, verifyResult, droppedProbes, corpusExclusions,
+  const { spec, structural, predictions, questionFit, verifyResult, droppedProbes, corpusExclusions,
     verifyTraces, analystCostUsd, runDir, resolvedJudge, autoKeepContextHooks,
     judgeResults, baselineSamplePerPrediction } = args;
   const episodesCostUsd = verifyTraces.reduce((s, t) => s + t.costUsd, 0);
@@ -50,7 +52,7 @@ export async function buildAndPersistVerifiedReport(args: VerifiedReportArgs): P
     ? { ...verifyResult, baselineSample: baselineSamplePerPrediction }
     : verifyResult;
   const partialReport: Omit<WhatifReport, 'headline'> = {
-    spec, structural, predictions, verify: verifyWithSample, costUsd: totalCostUsd, runDir, limits,
+    spec, structural, predictions, questionFit, verify: verifyWithSample, costUsd: totalCostUsd, runDir, limits,
     ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
     corpusExclusions,
   };

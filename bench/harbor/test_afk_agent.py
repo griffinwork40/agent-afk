@@ -49,6 +49,7 @@ def _make_agent(
     effort: str | None = None,
     max_budget_usd: str | None = None,
     afk_version: str | None = None,
+    context_window: int | None = None,
     model_name: str | None = None,
     api_key: str | None = "test-key",
     logs_dir: Path | None = None,
@@ -73,11 +74,13 @@ def _make_agent(
 
     agent = AfkAgent.__new__(AfkAgent)
     # Manually set required attributes that BaseInstalledAgent.__init__ would set
+    from bench.harbor.afk_config import validate_context_window
     agent._variant = variant
     agent._max_turns = int(max_turns)
     agent._effort = effort
     agent._max_budget_usd = max_budget_usd
     agent._afk_version = afk_version
+    agent._context_window = validate_context_window(context_window)
     agent._last_done_metadata = None
     agent.logs_dir = logs_dir
     agent.environment_logs_dir = Path("/logs/agent")
@@ -401,3 +404,170 @@ class TestKwargsParsing:
     def test_variant_minimal(self):
         agent = _make_agent(variant="minimal")
         assert agent._variant == "minimal"
+
+
+# ---------------------------------------------------------------------------
+# Tests: context_window kwarg — validate_context_window
+# ---------------------------------------------------------------------------
+
+class TestValidateContextWindow:
+    def _validate(self, value):
+        from bench.harbor.afk_config import validate_context_window
+        return validate_context_window(value)
+
+    def test_none_returns_none(self):
+        assert self._validate(None) is None
+
+    def test_valid_int(self):
+        assert self._validate(128000) == 128000
+
+    def test_string_coercion(self):
+        # Harbor CLI passes all kwargs as strings
+        assert self._validate("128000") == 128000
+
+    def test_zero_raises(self):
+        with pytest.raises(ValueError, match="> 0"):
+            self._validate(0)
+
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="> 0"):
+            self._validate(-1)
+
+    def test_over_max_raises(self):
+        with pytest.raises(ValueError, match="MAX_CONTEXT_WINDOW_OVERRIDE"):
+            self._validate(10_000_001)
+
+    def test_exactly_max_accepted(self):
+        assert self._validate(10_000_000) == 10_000_000
+
+    def test_non_numeric_string_raises(self):
+        with pytest.raises(ValueError, match="positive integer"):
+            self._validate("not-a-number")
+
+    def test_float_string_raises(self):
+        # "128000.5" is not a valid integer
+        with pytest.raises(ValueError, match="positive integer"):
+            self._validate("128000.5")
+
+    def test_agent_stores_validated_value(self):
+        agent = _make_agent(context_window=128000)
+        assert agent._context_window == 128000
+
+    def test_agent_none_when_unset(self):
+        agent = _make_agent(context_window=None)
+        assert agent._context_window is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: build_config_write_command — JSON content, path, quoting safety
+# ---------------------------------------------------------------------------
+
+class TestBuildConfigWriteCommand:
+    def _cmd(self, afk_home="/logs/agent", model_id="qwen-3.8-27b", cw=128000):
+        from bench.harbor.afk_config import build_config_write_command
+        return build_config_write_command(
+            afk_home=afk_home,
+            model_id=model_id,
+            context_window=cw,
+        )
+
+    def test_correct_config_path(self):
+        cmd = self._cmd(afk_home="/logs/agent")
+        assert "/logs/agent/config/afk.config.json" in cmd
+
+    def test_mkdir_p_present(self):
+        cmd = self._cmd()
+        assert "mkdir -p" in cmd
+
+    def test_json_contains_model_id(self):
+        cmd = self._cmd(model_id="qwen-3.8-27b")
+        assert "qwen-3.8-27b" in cmd
+
+    def test_json_contains_context_window(self):
+        cmd = self._cmd(cw=128000)
+        assert "128000" in cmd
+
+    def test_json_slot_is_local(self):
+        cmd = self._cmd()
+        assert '"local"' in cmd
+
+    def test_json_provider_is_openai(self):
+        cmd = self._cmd()
+        assert '"openai"' in cmd
+
+    def test_json_parses_correctly(self):
+        """The JSON embedded in the command must be valid and structurally correct."""
+        import re
+        cmd = self._cmd(model_id="qwen-3.8-27b", cw=128000)
+        # Extract the single-quoted JSON blob after printf '%s'
+        # Command form: printf '%s' '<json>' > '<path>'
+        match = re.search(r"printf '%s' '(.+)' >", cmd)
+        assert match, f"Could not find JSON in command: {cmd!r}"
+        cfg = json.loads(match.group(1))
+        assert cfg["models"]["local"]["id"] == "qwen-3.8-27b"
+        assert cfg["models"]["local"]["contextWindow"] == 128000
+        assert cfg["models"]["local"]["provider"] == "openai"
+
+    def test_prefix_stripped_cerebras(self):
+        """cerebras/qwen-3.8-27b → qwen-3.8-27b (prefix-strip happens upstream)."""
+        # The adapter strips the prefix via _resolved_model_name before calling
+        # build_config_write_command, so here we test the stripped id directly.
+        import re
+        cmd = self._cmd(model_id="qwen-3.8-27b")
+        match = re.search(r"printf '%s' '(.+)' >", cmd)
+        assert match
+        cfg = json.loads(match.group(1))
+        assert cfg["models"]["local"]["id"] == "qwen-3.8-27b"
+        assert "/" not in cfg["models"]["local"]["id"]
+
+    def test_hostile_model_id_quoted_safely(self):
+        """A model id with shell metacharacters is safe because the entire JSON
+        blob is passed to the shell inside a shlex.quote'd single-quoted string.
+        The model id is embedded inside JSON via json.dumps (which escapes it),
+        and the resulting JSON string is then single-quoted by shlex.quote, so
+        no unquoted metacharacters reach the shell interpreter.
+        """
+        import re
+        hostile_id = '$(rm -rf /); evil`whoami`'
+        cmd = self._cmd(model_id=hostile_id)
+        # The command must use printf '%s' '<single-quoted-json>' to avoid
+        # shell expansion — verify the JSON blob is single-quoted.
+        # shlex.quote produces '...' or "..." depending on content; for JSON
+        # with no single-quotes it always produces '...'.
+        assert "printf '%s'" in cmd, "command must use printf '%s' form"
+        # The JSON blob (single-quoted) must be present and parseable
+        match = re.search(r"printf '%s' '(.+)' >", cmd)
+        assert match, f"Could not extract quoted JSON from: {cmd!r}"
+        cfg = json.loads(match.group(1))
+        assert cfg["models"]["local"]["id"] == hostile_id
+        # Confirm the raw $(...) is not unquoted (i.e., it lives inside single quotes)
+        # Split on the single-quoted section to check nothing dangerous is outside it
+        parts = cmd.split("'")
+        # parts: [prefix, json-blob, suffix] (odd indices are inside quotes)
+        # No unquoted part should contain bare $( or backtick
+        for i, part in enumerate(parts):
+            if i % 2 == 0:  # outside single quotes
+                assert "$(" not in part, f"Unquoted $( in part {i}: {part!r}"
+                assert "`" not in part, f"Unquoted backtick in part {i}: {part!r}"
+
+    def test_agent_prefix_strip_then_config(self):
+        """End-to-end: agent strips cerebras/ prefix; config uses bare id."""
+        agent = _make_agent(
+            model_name="cerebras/qwen-3.8-27b",
+            context_window=128000,
+        )
+        resolved = agent._resolved_model_name()
+        assert resolved == "qwen-3.8-27b"
+        # The config command would use the resolved id
+        from bench.harbor.afk_config import build_config_write_command
+        cmd = build_config_write_command(
+            afk_home="/logs/agent",
+            model_id=resolved,
+            context_window=128000,
+        )
+        import re
+        match = re.search(r"printf '%s' '(.+)' >", cmd)
+        assert match
+        cfg = json.loads(match.group(1))
+        assert cfg["models"]["local"]["id"] == "qwen-3.8-27b"
+        assert cfg["models"]["local"]["contextWindow"] == 128000

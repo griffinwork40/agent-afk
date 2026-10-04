@@ -47,14 +47,13 @@ import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSe
 import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
-
-import { getStateDatabasePath } from '../../../paths.js';
+import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
+import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -142,9 +141,9 @@ export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
   private readonly providerOpts: OpenAICompatibleProviderOptions;
-  private readonly memoryStore: MemoryStore;
+  private _memoryStore: MemoryStore | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
-  private readonly stateStore: StateStore;
+  private _stateStore: StateStore | undefined;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -191,9 +190,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     this.providerOpts = opts;
     this._defaultHeaders = opts.defaultHeaders;
-    this.memoryStore = opts.memoryStore ?? new MemoryStore();
+    this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
-    this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
+    this._stateStore = opts.stateStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
     // Executor-supplied `agent` def advertises named agent types when a
@@ -472,7 +471,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
-    const memoryHandlers = guardChildHotWrites(createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
+    const memoryHandlers = guardChildHotWrites(createMemoryHandlers((this._memoryStore ??= makeDefaultMemoryStore()), undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;
       handlers.set(name, handler);
@@ -484,7 +483,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
     // Read-only sessions get only state_get and state_query.
-    for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
+    for (const [name, handler] of createStateHandlers((this._stateStore ??= makeDefaultStateStore()), opts.sessionId)) {
       if (isStateRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
@@ -658,17 +657,19 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   close(): void {
-    this.memoryStore.close();
+    this._memoryStore?.close();
     this.workspaceStore?.close();
-    this.stateStore.close();
+    this._stateStore?.close();
   }
 
   /**
    * Single-shot completion (see {@link ModelProvider.complete}). Resolves auth
    * via {@link resolveOpenAIAuth} (the standard `OPENAI_API_KEY` →
-   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and honours the
-   * provider's construction-time `baseURL` so local MLX / llama.cpp / vLLM
-   * shims are reached transparently.
+   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and picks the wire from it
+   * (`./complete-wire`): ChatGPT-subscription OAuth goes to the ChatGPT
+   * backend over Responses, everything else over Chat Completions honouring
+   * the provider's construction-time `baseURL` (local MLX / llama.cpp / vLLM
+   * shims).
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
@@ -685,7 +686,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return oneShotChatCompletion(input);
+    return completeWithWire(input);
   }
 }
 

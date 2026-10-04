@@ -26,6 +26,7 @@ import type { SlashContext, Writer } from '../types.js';
 export interface SkillRendererOpts {
   /** Skill name rendered in the visual badge when the model emits XML tags. */
   skillName: string;
+  skillIdentity?: import('../../_lib/skill-identity-format.js').SkillIdentity;
   /**
    * Whether to enable verbose/live thinking-mode output.
    * Defaults to `env.AFK_SKILL_STREAM_VERBOSE === '1'`.
@@ -72,6 +73,7 @@ export function createSkillRenderer(ctx: SlashContext, opts: SkillRendererOpts):
     out,
     verbose,
     activeSkillName: opts.skillName,
+    ...(opts.skillIdentity ? { skillIdentity: opts.skillIdentity } : {}),
     onCancel: opts.onCancel ?? (() => { /* no-op */ }),
     ...(borrowedCompositor ? { compositor: borrowedCompositor } : {}),
     // Thread the REPL's LoopStageBar repaint callback so the footer stage

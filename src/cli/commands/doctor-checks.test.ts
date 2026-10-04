@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { checkImportAvailable, checkAnthropicKey, checkNpmBinOnPath } from './doctor-checks.js';
+import { checkImportAvailable, checkAnthropicKey, checkCodexKey, checkNpmBinOnPath } from './doctor-checks.js';
 import type { DetectedSource } from '../../config/import-sources.js';
+import type { OpenAIAuthResolution } from '../../agent/providers/openai-compatible/auth.js';
 
 /** Minimal fixture for a present source with zero assets. */
 function makeSource(
@@ -31,6 +32,10 @@ vi.mock('child_process', async (importOriginal) => {
 
 import { execSync as _execSync } from 'child_process';
 
+vi.mock('../../agent/providers/openai-compatible/auth.js', () => ({
+  resolveOpenAIAuth: vi.fn(),
+}));
+
 describe('checkAnthropicKey', () => {
   it('calls preloadClaudeKeychainOAuth before checking the key', async () => {
     const { preloadClaudeKeychainOAuth } = await import(
@@ -38,6 +43,80 @@ describe('checkAnthropicKey', () => {
     );
     await checkAnthropicKey();
     expect(preloadClaudeKeychainOAuth).toHaveBeenCalledWith('anthropic-direct');
+  });
+});
+
+describe('checkCodexKey — uses full resolveOpenAIAuth chain', () => {
+  async function mockResolve(resolution: OpenAIAuthResolution) {
+    const { resolveOpenAIAuth } = await import(
+      '../../agent/providers/openai-compatible/auth.js'
+    );
+    vi.mocked(resolveOpenAIAuth).mockReturnValue(resolution);
+  }
+
+  it('passes when OPENAI_API_KEY env var is present', async () => {
+    await mockResolve({ apiKey: 'sk-openai-test1234', source: 'env', last4: '1234', envVar: 'OPENAI_API_KEY' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('OPENAI_API_KEY');
+    expect(result.detail).toContain('1234');
+  });
+
+  it('passes when CODEX_API_KEY env var is present', async () => {
+    await mockResolve({ apiKey: 'sk-codex-test5678', source: 'env', last4: '5678', envVar: 'CODEX_API_KEY' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('CODEX_API_KEY');
+  });
+
+  it('passes when ~/.codex/auth.json has an API key (codex-cli source)', async () => {
+    await mockResolve({ apiKey: 'sk-codex-file-9012', source: 'codex-cli', last4: '9012' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('Codex CLI auth');
+    expect(result.detail).toContain('9012');
+  });
+
+  it('passes when ChatGPT-subscription OAuth is active (#2757 regression)', async () => {
+    await mockResolve({
+      apiKey: 'eyJ-chatgpt-oauth-token',
+      source: 'chatgpt-oauth',
+      last4: 'oken',
+      accountId: 'user-acct-abcd',
+    });
+    const result = await checkCodexKey();
+    // Must be pass — not a warn — so no false alarm for OAuth users
+    expect(result.state).toBe('pass');
+    expect(result.detail).toContain('ChatGPT subscription OAuth');
+    // Never logs raw token material
+    expect(result.detail).not.toContain('eyJ-chatgpt-oauth-token');
+  });
+
+  it('warns when ChatGPT-subscription OAuth token is expired', async () => {
+    await mockResolve({
+      apiKey: null,
+      source: 'chatgpt-oauth-expired',
+      expiresAt: Math.floor(Date.now() / 1000) - 3600,
+    });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('warn');
+    expect(result.detail).toContain('expired');
+    expect(result.fix).toContain('codex');
+  });
+
+  it('warns (with opt-in hint) when ChatGPT OAuth is present but AFK_OPENAI_CHATGPT_OAUTH is not set', async () => {
+    await mockResolve({ apiKey: null, source: 'no-usable-auth-codex-oauth' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('warn');
+    expect(result.detail).toContain('ChatGPT');
+    expect(result.fix).toContain('AFK_OPENAI_CHATGPT_OAUTH=1');
+  });
+
+  it('warns when no OpenAI auth is available at all', async () => {
+    await mockResolve({ apiKey: null, source: 'no-usable-auth' });
+    const result = await checkCodexKey();
+    expect(result.state).toBe('warn');
+    expect(result.fix).toContain('OPENAI_API_KEY');
   });
 });
 

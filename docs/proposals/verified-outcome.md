@@ -10,10 +10,12 @@ Every downstream use of session data (routing, skill evolution, evals, any
 future training) needs to know whether a session actually worked. Today it
 cannot:
 
-- `outcome` is `fully_achieved` whenever the last assistant reply is non-empty
-  (`src/agent/facets/derive.ts:237-240`). 4,444 of 4,497 facets say
-  `fully_achieved`. The label never abstains, so it carries almost no
-  information.
+- `outcome` was `fully_achieved` whenever the last assistant reply was non-empty
+  (pre-v7). As of v7 (#2777), sessions without a recognizable terminal-state
+  heading now get `outcome='unknown'` rather than `'fully_achieved'`. This is a
+  step toward the verified outcome goal — the label now abstains instead of
+  fabricating success — but the `verified_outcome` LF system below is still the
+  right long-term answer for evidence-backed labels.
 - `yield_tracking.produced_pr / pr_merged` exists but is probed once, at
   teardown, by branch name (`src/agent/facets/yield-probe.ts`). In the newest
   1,500 facets it is `null/null` for 1,439, and `pr_merged` is read before most
@@ -25,10 +27,13 @@ from the agent grading its own transcript, (2) allowed to say "unknown", and
 
 ## Design principles
 
-1. **Additive.** `outcome` and `primary_success` stay byte-identical. They have
-   string-level consumers: `fragility-audit`, `omission-audit`,
-   `scope-debt-collector`, `error-locality`, the `get_facet` tool, and three
-   pinned tests in `derive.test.ts:107-160`.
+1. **Additive.** `outcome` and `primary_success` remain stable for existing
+   consumers. Note: as of #2777, `outcome` gained the `unknown` value (sessions
+   without a recognizable terminal-state heading, previously `fully_achieved`),
+   and `primary_success` for Done sessions now comes from the Done block's
+   "What was done" bullet rather than the raw last-assistant text. Existing
+   consumers: `fragility-audit`, `omission-audit`, `scope-debt-collector`,
+   `error-locality`, the `get_facet` tool, and tests in `derive.test.ts`.
 2. **Self-report is never sufficient.** A `**Done**` block is recorded as
    evidence but cannot by itself produce `succeeded`. This is the Goodhart
    guard: the label must not reward the agent for claiming success.
