@@ -55,6 +55,12 @@ export class InFlightToolTracker {
     this.inFlight.delete(toolUseId);
   }
 
+  /** True when at least one in-flight call is for `toolName`. */
+  has(toolName: string): boolean {
+    for (const name of this.inFlight.values()) if (name === toolName) return true;
+    return false;
+  }
+
   /** The most recently started still-running tool name, or `undefined` if idle. */
   current(): string | undefined {
     let last: string | undefined;
@@ -121,9 +127,35 @@ export class InFlightToolTracker {
   }
 }
 
+/**
+ * The tool whose in-flight state drives the queue-to-stop hint. Literal (not an
+ * import from the agent layer) to keep this module a CLI leaf; the yield set it
+ * mirrors is `YIELDABLE_TOOLS` in `agent/tools/user-yield.ts`.
+ */
+export const WAIT_HINT_TOOL = 'wait_for';
+
+/**
+ * Copy for the spinner's context hint while the ROOT session's `wait_for` is
+ * running, or `undefined` when no hint applies.
+ *
+ * Contract: only meaningful for a root-session wait. A subagent's `wait_for` has
+ * no user-attention probe and never yields, so callers must not set `waiting`
+ * for it (see `stream-renderer-process.ts`). The copy promises the WAIT stops,
+ * not that the message is read immediately: after a yield the model still has to
+ * end its turn before the queued message is delivered.
+ */
+export function waitHintText(state: { waiting: boolean; queued: boolean }): string | undefined {
+  if (!state.waiting) return undefined;
+  return state.queued
+    ? 'message queued, the wait will stop within ~1s'
+    : 'type a message + Enter to stop waiting';
+}
+
 /** The slice of the compositor this adapter needs. Structural, so mocks satisfy it. */
 export interface ActiveToolNameSink {
   setActiveToolName?(toolName: string | undefined): void;
+  /** Root-session `wait_for` in flight (drives the queue-to-stop hint). */
+  setRootWaitActive?(active: boolean): void;
 }
 
 /** Minimal event shape — avoids importing the full OutputEvent union here. */
@@ -161,5 +193,24 @@ export function noteToolEvent(
     return false;
   }
   sink?.setActiveToolName?.(tracker.currentVerb());
+  return true;
+}
+
+/**
+ * Mirror one ROOT-session stream event into `tracker` and push whether a root
+ * `wait_for` is still in flight to `sink`. Returns true on a tool transition.
+ *
+ * Contract: callers MUST pass only orchestrator (root) events. A subagent's
+ * `wait_for` cannot yield to a queued message, so feeding it here would make the
+ * hint lie. The tracker is separate from the session-wide verb tracker for the
+ * same reason: that one deliberately spans subagents.
+ */
+export function noteRootWaitEvent(
+  event: MaybeToolEvent,
+  tracker: InFlightToolTracker,
+  sink: ActiveToolNameSink | null | undefined,
+): boolean {
+  if (!noteToolEvent(event, tracker, null)) return false;
+  sink?.setRootWaitActive?.(tracker.has(WAIT_HINT_TOOL));
   return true;
 }

@@ -157,6 +157,8 @@ export class StreamRenderer {
    * source, so a single tracker is correct here.
    */
   private inFlightTools = new InFlightToolTracker();
+  /** Root-session-only tools; drives the wait_for hint (subagent waits never yield). */
+  private rootTools = new InFlightToolTracker();
 
   private disposed = false;
   /** Flash tracker for 150ms glyph pulses on tool completion. Null until arm(). */
@@ -580,6 +582,7 @@ export class StreamRenderer {
       coordinator: this.coordinator,
       childActivity: this.childActivity,
       inFlightTools: this.inFlightTools,
+      rootTools: this.rootTools,
       sources: this.sources,
       subagentMarkdown: this.subagentMarkdown,
       lastProgressByTask: this.lastProgressByTask,
@@ -612,6 +615,10 @@ export class StreamRenderer {
     this.softStopping = false;
     this.interrupting = false;
     this.skillIdentity.clear();
+    // Clear the wait hint so an aborted/resumed turn cannot leave it stale on a
+    // borrowed compositor.
+    this.rootTools.reset();
+    this.compositor?.setRootWaitActive?.(false);
     const ctx: DisposeCtx = {
       out: this.out,
       isTTY: this.isTTY,

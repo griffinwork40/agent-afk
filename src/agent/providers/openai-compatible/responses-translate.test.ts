@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createStreamState, usageFromState, finalizedToolCalls, isToolCallStop } from './translate.js';
 import { translateResponsesEvent, type ResponsesStreamEvent } from './responses-translate.js';
+import { isOpenAIOverloadError } from './query/retry.js';
 import type { ProviderEvent } from '../../provider.js';
 
 const SESSION_ID = 'sess-responses';
@@ -178,5 +179,113 @@ describe('translateResponsesEvent — usage', () => {
       { type: 'response.incomplete', response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } } },
     ]);
     expect(incomplete.state.finishReason).toBe('max_output_tokens');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2843 — overload shapes that bypass inline retry/pause
+// ---------------------------------------------------------------------------
+
+describe('translateResponsesEvent — overload bypass shapes (#2843)', () => {
+  /**
+   * Helper: run translateResponsesEvent for a single event and return either
+   * the thrown error or the list of emitted ProviderEvents.
+   */
+  function runEvent(event: { type: string; [k: string]: unknown }):
+    | { threw: Error; events: undefined }
+    | { threw: undefined; events: ProviderEvent[] } {
+    const state = createStreamState();
+    const out: ProviderEvent[] = [];
+    try {
+      for (const ev of translateResponsesEvent(
+        event as import('./responses-translate.js').ResponsesStreamEvent,
+        state,
+        SESSION_ID,
+      )) {
+        out.push(ev);
+      }
+      return { threw: undefined, events: out };
+    } catch (e) {
+      return { threw: e as Error, events: undefined };
+    }
+  }
+
+  // ── Shape 1: top-level { type:'error', code:'server_is_overloaded', message }
+  it('shape 1: throws for overload code so isOpenAIOverloadError matches', () => {
+    const { threw } = runEvent({
+      type: 'error',
+      code: 'server_is_overloaded',
+      message: 'Our servers are currently overloaded',
+    });
+    expect(threw).toBeDefined();
+    // The thrown error must have no status (so isOpenAIOverloadError passes the
+    // getErrorStatus guard) and carry code:'server_is_overloaded'.
+    const err = threw as Error & { code?: string; status?: number };
+    expect(err.status).toBeUndefined();
+    expect(err.code).toBe('server_is_overloaded');
+    expect(err.message).toBe('Our servers are currently overloaded');
+    // Confirm the thrown error is recognised by isOpenAIOverloadError.
+    expect(isOpenAIOverloadError(threw)).toBe(true);
+  });
+
+  it('shape 1: also throws for a non-overload error code (surfaces as fatal stream error)', () => {
+    const { threw } = runEvent({
+      type: 'error',
+      code: 'invalid_prompt',
+      message: 'Prompt contained disallowed content',
+    });
+    expect(threw).toBeDefined();
+    expect(threw!.message).toBe('Prompt contained disallowed content');
+    // Non-overload code must NOT be flagged as an overload.
+    expect(isOpenAIOverloadError(threw)).toBe(false);
+  });
+
+  it('shape 1: throws with a fallback message when event.message is absent', () => {
+    const { threw } = runEvent({ type: 'error', code: 'server_is_overloaded' });
+    expect(threw).toBeDefined();
+    expect(threw!.message).toContain('server_is_overloaded');
+  });
+
+  // ── Shape 2: response.failed carrying an overload-indicating error
+  it('shape 2: throws for response.failed + overload message so isOpenAIOverloadError matches', () => {
+    const { threw, events } = runEvent({
+      type: 'response.failed',
+      response: {
+        status: 'failed',
+        error: { code: 'server_error', message: 'Our servers are currently overloaded with requests' },
+      },
+    });
+    expect(threw).toBeDefined();
+    expect(events).toBeUndefined();
+    // Must carry the server's error body so isOpenAIOverloadError can inspect it.
+    const err = threw as Error & { error?: { code?: string; message?: string } };
+    expect(err.error?.message).toContain('overloaded');
+    expect(isOpenAIOverloadError(threw)).toBe(true);
+  });
+
+  it('shape 2: does NOT throw for response.failed with a non-overload error — finishReason stays "failed"', () => {
+    const state = createStreamState();
+    const gen = translateResponsesEvent(
+      {
+        type: 'response.failed',
+        response: { status: 'failed', error: { code: 'invalid_prompt', message: 'Prompt was invalid' } },
+      },
+      state,
+      SESSION_ID,
+    );
+    // Must not throw; finishReason must remain 'failed'.
+    expect(() => { for (const _ of gen) { /* drain */ } }).not.toThrow();
+    expect(state.finishReason).toBe('failed');
+  });
+
+  it('shape 2: does NOT throw for response.failed with no error body — non-overload path unchanged', () => {
+    const state = createStreamState();
+    const gen = translateResponsesEvent(
+      { type: 'response.failed', response: { status: 'failed' } },
+      state,
+      SESSION_ID,
+    );
+    expect(() => { for (const _ of gen) { /* drain */ } }).not.toThrow();
+    expect(state.finishReason).toBe('failed');
   });
 });

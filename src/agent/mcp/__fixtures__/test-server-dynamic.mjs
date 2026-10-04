@@ -80,5 +80,11 @@ try {
 
 process.on('exit', () => clearInterval(poller));
 
+// Exit as soon as the client closes our stdin. Without this the poller keeps
+// the process alive past the client's 1s disconnect budget, orphaning the
+// fixture and holding vitest's teardown open for its full 10s timeout.
+process.stdin.on('end', () => process.exit(0));
+process.stdin.on('close', () => process.exit(0));
+
 const transport = new StdioServerTransport();
 await server.connect(transport);

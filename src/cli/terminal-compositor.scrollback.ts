@@ -313,8 +313,10 @@ export function buildScrollbackArchiveEscape(
  * columns (not JS chars) so wide glyphs (CJK, emoji) in a tip body cannot
  * overflow the row — char-count truncation would under-truncate them 2:1.
  */
-export function formatTipRow(text: string, cols: number): string {
-  const prefix = '  Tip: ';
+export function formatTipRow(text: string, cols: number, label = 'Tip'): string {
+  // `label` distinguishes a state-specific hint ('Hint') from a rotating tip,
+  // so a user with AFK_SPINNER_TIPS=0 never mistakes it for a leaked tip.
+  const prefix = `  ${label}: `;
   // Reserve the prefix chrome and 1 col for the truncation marker so the
   // rendered line always fits in `cols` regardless of body length.
   const bodyBudget = Math.max(8, cols - displayWidth(prefix) - 1);

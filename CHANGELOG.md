@@ -11,6 +11,24 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.295.0] - 2026-10-04
+
+### Added
+- fire Stop on every top-level surface from the session layer (#2713) (ab6a3bc7)
+
+## [5.294.0] - 2026-10-04
+
+### Added
+- hint that a queued message stops a running wait_for (#2926) (58d369d6)
+
+### Fixed
+- add subagent PR detection (gap 6) and refactor detection to shared module (#2925) (634be66d)
+- surface Responses-API overload shapes as retryable errors (#2923) (aa724051)
+- tell the model its timeout limit and when a value was clamped (#2927) (d8c08dc1)
+
+### Changed
+- make the dynamic MCP fixture exit on stdin EOF (removes 10s vitest teardown stall) (#2930) (9c899d20)
+
 ## [5.293.1] - 2026-10-04
 
 ### Added
