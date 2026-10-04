@@ -28,7 +28,7 @@ import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
-import { scrubBashEnv } from './bash-env-scrub.js';
+import { buildChildEnv } from './bash-env-scrub.js';
 import { interruptedBashResult } from './bash-interrupted.js';
 import { applyBashDetach, execOnDetach } from '../detach-bash.js';
 import type { OnDetachParams } from '../detach-bash.js';
@@ -274,9 +274,8 @@ export function createBashHandler(
         // Always scrub episode-revealing vars (issue #2425) regardless of
         // whether context.env is set — both the inherit-process.env path
         // (context.env undefined) and the explicit merge path must be clean.
-        env: scrubBashEnv(
-          context?.env !== undefined ? { ...process.env, ...context.env } : undefined,
-        ),
+        // buildChildEnv also materializes the session's private TMPDIR.
+        env: buildChildEnv(context?.env),
       };
       const proc =
         shellResolution.shell === true

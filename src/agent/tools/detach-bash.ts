@@ -28,6 +28,24 @@
 import type { DetachableToolRegistry, DetachToken, DetachedToolResult } from './detach-registry.js';
 
 /**
+ * Milliseconds to wait for `proc.once('close')` after a kill before
+ * destroying stdio streams and force-delivering (Fix #2742).
+ *
+ * On Windows, `taskkill /F /T` may not reach MSYS2 (Git Bash) grandchildren
+ * that inherited the stdout/stderr pipes. Those orphans keep the pipe open so
+ * Node never sees `close`. Destroying the streams releases the libuv file
+ * descriptor, which unblocks the close event (or we deliver immediately and
+ * let the orphan die on its own). 5 s is conservative; on POSIX `process.kill
+ * (-pid, SIGKILL)` is atomic and close arrives in < 50 ms in practice.
+ *
+ * NOTE (unverified): on real Windows + Git Bash this path has not been
+ * exercised end-to-end. If orphans outlive pipe destroy(), a Windows Job
+ * Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE would be the correct fix.
+ * Tracked as a follow-up in issue #2742.
+ */
+export const SETTLE_AFTER_KILL_MS = 5_000;
+
+/**
  * Maximum characters of the command to include in the detach label shown to
  * the user. Keep short — it appears inline in the notification line.
  */
@@ -160,13 +178,48 @@ export function execOnDetach(
   // deregisterOnClose?.() is a no-op. token.deliver() handles map removal.
   p.deregisterOnCloseRef.value = undefined;
   p.clearTail?.();
-  p.proc.once('close', (closeCode: number | null, closeSignal: string | null) => {
+
+  // Fix #2742: idempotent deliver — at most one of close-event or fallback timer wins.
+  let deliverSettled = false;
+  let fallbackHandle: ReturnType<typeof setTimeout> | undefined;
+
+  function deliverOnce(closeCode: number | null, closeSignal: string | null): void {
+    if (deliverSettled) return;
+    deliverSettled = true;
+    clearTimeout(fallbackHandle);
     // Fix #1: process exited — clean up the re-registered abort listener.
     p.signal.removeEventListener('abort', p.abortHandler);
     const output = p.getOutput();
     // Fix #3: pass closeSignal so SIGKILL → 'failed'.
     token.deliver(buildBashDelivery(toolUseId, label, output, closeCode, closeSignal, p.startedAt));
-  });
+  }
+
+  p.proc.once('close', deliverOnce);
+
+  // Fix #2742: after a kill (session-abort), settle on a bounded timer if
+  // `close` has not arrived. On Windows, `taskkill /F /T` may leave MSYS2
+  // grandchildren alive; they hold the inherited stdio pipe so Node never sees
+  // `close`. Destroying the streams releases the libuv fd and unblocks it, or
+  // we deliver immediately and let the orphan die on its own.
+  function startSettleFallback(): void {
+    if (deliverSettled) return; // proc already closed before abort fired
+    fallbackHandle = setTimeout(() => {
+      // Destroy stdio to release the pipe held by surviving grandchildren.
+      try { p.proc.stdout?.destroy(); } catch { /* best-effort */ }
+      try { p.proc.stderr?.destroy(); } catch { /* best-effort */ }
+      deliverOnce(null, 'SIGKILL'); // synthesize as killed → status 'failed'
+    }, SETTLE_AFTER_KILL_MS);
+  }
+
+  // Start the fallback when the session abort signal fires (which triggers the
+  // re-registered abortHandler → killProcessGroup). If the signal is already
+  // aborted (edge case: abort raced ahead of execOnDetach), start immediately.
+  if (p.signal.aborted) {
+    startSettleFallback();
+  } else {
+    p.signal.addEventListener('abort', startSettleFallback, { once: true });
+  }
+
   p.resolve(token.detachResult(label));
 }
 

@@ -11,6 +11,24 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.292.3] - 2026-10-04
+
+### Added
+- per-session and per-subagent private TMPDIR for spawned shells (#2747) (824f383d)
+
+### Fixed
+- settle post-detach deliver() on bounded timer when close never arrives (#2743) (7366139d)
+- newest explicit feedback vote wins (#2751) (00ccaa24)
+
+## [5.292.2] - 2026-10-04
+
+### Fixed
+- fix npm bin PATH check for Windows (delimiter and /bin suffix) (#2768) (d08d77c6)
+- silence Ajv unknown-format warnings for gRPC integer formats (#2767) (2696e63a)
+
+### Changed
+- bump the prod-minor-patch group across 1 directory with 7 updates (#2890) (46c634f0)
+
 ## [5.292.1] - 2026-10-04
 
 ### Fixed
