@@ -15,10 +15,10 @@
 
 import { loadClaudeCodeOauthToken } from './auth/keychain.js';
 import { env } from '../config/env.js';
+import { DEFAULT_USAGE_TIMEOUT_MS, fetchUsageJson } from './usage/usage-http.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const OAUTH_BETA_HEADER = 'oauth-2025-04-20';
-const DEFAULT_TIMEOUT_MS = 10_000;
 
 /** One usage window (e.g. the rolling 5-hour or 7-day allowance). */
 export interface UsageWindow {
@@ -76,7 +76,7 @@ export async function fetchSubscriptionUsage(
   options?: FetchSubscriptionUsageOptions,
 ): Promise<UsageResult> {
   const fetchImpl = options?.fetchImpl ?? fetch;
-  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_USAGE_TIMEOUT_MS;
   const token = options?.token ?? (env.CLAUDE_CODE_OAUTH_TOKEN || loadClaudeCodeOauthToken());
 
   if (!token) {
@@ -88,60 +88,13 @@ export async function fetchSubscriptionUsage(
     };
   }
 
-  let response: Response;
-  try {
-    response = await fetchImpl(USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'anthropic-beta': OAUTH_BETA_HEADER,
-      },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (err) {
-    if (isAbortOrTimeoutError(err)) {
-      return {
-        kind: 'unavailable',
-        reason: 'timeout',
-        detail: 'Request to the usage endpoint timed out.',
-      };
-    }
-    return {
-      kind: 'unavailable',
-      reason: 'network-error',
-      detail: 'Network error while contacting the usage endpoint.',
-    };
-  }
-
-  if (!response.ok) {
-    // Contract: never surface response body text here — it may carry
-    // credentials or PII from an error page. Status code + generic phrase only.
-    return {
-      kind: 'unavailable',
-      reason: 'http-error',
-      detail: `Usage endpoint returned HTTP ${response.status}.`,
-    };
-  }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return {
-      kind: 'unavailable',
-      reason: 'malformed-response',
-      detail: 'Usage endpoint returned a response that was not valid JSON.',
-    };
-  }
-
-  if (typeof body !== 'object' || body === null) {
-    return {
-      kind: 'unavailable',
-      reason: 'malformed-response',
-      detail: 'Usage endpoint returned an unexpected response shape.',
-    };
-  }
-
-  const record = body as Record<string, unknown>;
+  const res = await fetchUsageJson(
+    USAGE_URL,
+    { Authorization: `Bearer ${token}`, 'anthropic-beta': OAUTH_BETA_HEADER },
+    { fetchImpl, timeoutMs },
+  );
+  if (res.kind !== 'json') return res;
+  const record = res.body;
   const fiveHour = parseWindow(record['five_hour']);
   const sevenDay = parseWindow(record['seven_day']);
   const sevenDaySonnet = parseWindow(record['seven_day_sonnet']);
@@ -162,10 +115,6 @@ export async function fetchSubscriptionUsage(
     ...(sevenDaySonnet !== undefined ? { sevenDaySonnet } : {}),
     ...(sevenDayOpus !== undefined ? { sevenDayOpus } : {}),
   };
-}
-
-function isAbortOrTimeoutError(err: unknown): boolean {
-  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
 }
 
 /** Reject epoch-seconds values outside a sane [1970, 2100) range. */
@@ -195,12 +144,12 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   const record = value as Record<string, unknown>;
   const utilizationRaw = record['utilization'];
   if (typeof utilizationRaw !== 'number' || !Number.isFinite(utilizationRaw)) return undefined;
-  // Contract: the endpoint's utilization unit is unverified — it may be a
-  // 0..1 fraction or a 0..100 percentage. Values >1 are interpreted as a
-  // percentage and divided by 100: a fraction can only exceed 1 by a small
-  // overage (upstream jitter), whereas a percentage routinely does, so this
-  // is the safer reading of the ambiguity. Result is then clamped to [0, 1].
-  const normalized = utilizationRaw > 1 ? utilizationRaw / 100 : utilizationRaw;
+  // Contract: the endpoint reports utilization as a 0..100 PERCENTAGE
+  // (verified live 2026-10-03: five_hour 27, seven_day 5). Always divide by
+  // 100. History: the parser used to guess the unit (values <=1 read as a
+  // 0..1 fraction), so a real 1% came back as 100% (a phantom full window
+  // that the daemon budget gate would act on). Result clamped to [0, 1].
+  const normalized = utilizationRaw / 100;
   const utilization = Math.min(1, Math.max(0, normalized));
   const resetsAt = parseResetsAt(record['resets_at']);
   return {
@@ -209,7 +158,11 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   };
 }
 
-/** Surface-neutral plain text. No chalk, no HTML, no markdown. */
+/**
+ * Surface-neutral plain text. No chalk, no HTML, no markdown.
+ * Test-only: no production importers (usage-formatter.ts handles all surfaces).
+ * @internal
+ */
 export function formatUsagePlain(result: UsageResult): string {
   if (result.kind === 'unavailable') {
     return `Usage unavailable (${result.reason}): ${result.detail}`;

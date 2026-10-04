@@ -3,11 +3,11 @@ import type { Message } from 'telegraf/types';
 import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
 import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatMicrocompact, formatQueued, escapeHtml } from '../formatter.js';
-import { isRateLimitError, isNetworkError, isTelegramTransportError } from '../error-utils.js';
+import { isRateLimitError, isNetworkError, isTelegramTransportError, formatRateLimitReply } from '../error-utils.js';
 import { streamResponse } from '../streaming.js';
 import { withTypingIndicator } from '../typing-indicator.js';
 // Import StreamTimeoutError from its own module, NOT '../streaming.js': many
-// handler tests vi.mock('../streaming.js'), which would make the class resolve
+// handler tests `vi.mock` '../streaming.js', which would make the class resolve
 // to undefined and turn `instanceof StreamTimeoutError` into a TypeError.
 import { StreamTimeoutError } from '../stream-timeout-error.js';
 import { registerChatCommands } from './registration.js';
@@ -392,7 +392,7 @@ export class MessageHandler {
         // Telegram limit, not a Claude one. Attribute it honestly.
         await ctx.reply('❌ Couldn\'t reach Telegram to fetch that image. Please try resending.');
       } else if (isRateLimitError(error)) {
-        await ctx.reply('⏳ Rate limit reached. Please wait a moment and try again.');
+        await ctx.reply(formatRateLimitReply(error));
       } else if (isNetworkError(error)) {
         await ctx.reply('❌ Couldn\'t download the image. Please try resending.');
       } else {
@@ -620,7 +620,7 @@ export class MessageHandler {
         // Telegram-side delivery failure — not a Claude rate limit / network
         // error. Already logged; stay silent rather than misattribute it.
       } else if (isRateLimitError(error)) {
-        await ctx.reply('⏳ Rate limit reached. Please wait a moment and try again.');
+        await ctx.reply(formatRateLimitReply(error));
       } else if (isNetworkError(error)) {
         await ctx.reply('🌐 Network error. Please check your connection and try again.');
       } else {
@@ -901,7 +901,7 @@ export class MessageHandler {
         // Already logged above; stay silent (a further reply would likely hit
         // the same Telegram limit), and let the queue drain normally.
       } else if (isRateLimitError(error)) {
-        await ctx.reply('⏳ Rate limit reached. Please wait a moment and try again.');
+        await ctx.reply(formatRateLimitReply(error));
       } else if (isNetworkError(error)) {
         await ctx.reply('🌐 Network error. Please check your connection and try again.');
       } else {

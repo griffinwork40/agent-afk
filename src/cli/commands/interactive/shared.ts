@@ -1,4 +1,5 @@
 import * as readline from 'node:readline';
+import type { TraceSink } from '../../../agent/trace/index.js';
 import { statSync } from 'node:fs';
 import { getQuotaSnapshot } from '../../../agent/quota-cache.js';
 import type { HookRegistry } from '../../../agent/hooks.js';
@@ -10,6 +11,7 @@ import type { AgentModelInput } from '../../../agent/types.js';
 import type { BackgroundAgentRegistry } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import type { SubagentControl } from '../../../agent/tools/subagent-executor.js';
+import type { DetachableToolRegistry } from '../../../agent/tools/detach-registry.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { SlashContext, SessionStats, ResumeSwapResult, ThinkingUiMode } from '../../slash/types.js';
 import type { StoredSession } from '../../session-store.js';
@@ -282,6 +284,12 @@ export interface InteractiveCtx {
    * session-scoped AgentConfig reaches the per-turn ToolLane. Issue #1506.
    */
   bashTailSetter: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
+  /**
+   * Mutable ref for the most recent bash capture path (issue #1505). Written
+   * by the turn handler's finally path so Ctrl+G can open the viewer after
+   * any turn that produced a large bash output.
+   */
+  capturePathRef: { current: string | undefined };
   mcpManager?: import('../../../agent/mcp/index.js').McpManager;
   /**
    * Registry of background subagent jobs spawned by the `agent` tool with
@@ -308,6 +316,13 @@ export interface InteractiveCtx {
    * interface, never on `SubagentExecutor` internals or `SubagentHandle`.
    */
   subagentControl?: SubagentControl;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Shared between the REPL Ctrl+B handler (turn handles) and
+   * the per-query dispatcher so Ctrl+B can free the model's turn while a bash
+   * process keeps running. The teardown path calls cancelAll() (Invariant:D3).
+   */
+  detachRegistry?: DetachableToolRegistry;
   /**
    * Optional background summarizer. Constructed only when `bgSummaries: true`
    * in afk.config.json. The teardown path calls `stop()` before
@@ -346,6 +361,13 @@ export interface InteractiveCtx {
    */
   getInFlight?: () => boolean;
   /**
+   * Mutable ref written by any code path that calls `ctx.rl.close()` so the
+   * session sidecar records WHY the session ended (`exitReason` alongside
+   * `endedAt`). Set by `interactive.ts` before `installSignalHandlers` and
+   * written by signal handlers + the /exit slash command path.
+   */
+  exitReasonRef?: { current: StoredSession['exitReason'] };
+  /**
    * Atomically swap the active session for a stored one. Refuses while a
    * turn is in flight. Tears down the outgoing session, builds a new one,
    * mutates `session.current`, re-runs plugin passthrough registration,
@@ -373,6 +395,20 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+  /**
+   * Resets the peer-inbox notifier's in-session state (injection buffer,
+   * wake budget, and generation counter) so the resumed session starts clean.
+   * Mirrors `clearBgResultBuffer`: owned by `setupFooterSubsystems`'s
+   * closure, invoked from the swap's `onSwapped` callback in bootstrap.ts.
+   */
+  resetPeerNotifier?: () => void;
+  /**
+   * Witness trace writer for REPL-owned emitters that run outside a session
+   * turn (the peer inbox notifier's `peer_message` events). Optional: absent
+   * when tracing is disabled (`AFK_TRACE_DISABLED=1`).
+   */
+  traceWriter?: TraceSink;
+  /**
    * Clears the `pendingStopInjection` binding in `runInputLoop` so a
    * mid-session /resume swap cannot leak a Stop-hook `injectContext` from
    * the outgoing session into the resumed session's first turn. Mirrors
@@ -381,6 +417,14 @@ export interface InteractiveCtx {
    * from the swap's `onSwapped` callback in bootstrap.ts.
    */
   clearPendingStopInjection?: () => void;
+  /**
+   * Clears and re-installs the peer boundary callback on the new session
+   * after a /resume swap, so mid-turn peer delivery works on the resumed
+   * session and old-session admission-queue entries are not leaked.
+   * Owned by `runInputLoop`'s closure; invoked from the swap's `onSwapped`
+   * callback in bootstrap.ts. Optional — no-op before `runInputLoop` sets it.
+   */
+  reinstallPeerBoundary?: () => void;
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `
@@ -405,17 +449,6 @@ export interface InteractiveCtx {
    * Callers must check for null (non-TTY, daemon, tests).
    */
   inputSurfaceRef?: { current: import('../../input/input-surface.js').InputSurface | null };
-  /**
-   * Resolved API key used by the session's provider. Captured once at
-   * bootstrap from `getApiKey()` — identical to the token the AgentSession
-   * was constructed with. Threaded into the ghost-text suggest engine's
-   * `getContext()` closure so Tier-2 LLM suggestions authenticate with
-   * the same credential as the session (covers Anthropic key, OAuth/Claude
-   * subscription, and OpenAI API key — whichever `getApiKey()` resolved).
-   *
-   * Absent in test stubs that do not exercise the suggestion path.
-   */
-  suggestApiKey?: string;
   /**
    * Resolved base URL for the session's provider, sourced from
    * `loadConfig().baseUrl`. Passed to the suggest engine so Tier-2 LLM
@@ -654,6 +687,18 @@ export interface TurnHandles {
    */
   subagentControl?: SubagentControl;
   /**
+   * Detach registry for the Ctrl+B bash-detach contract (#2542).
+   *
+   * When present, `makeHandleBackgroundKey` checks this registry AFTER
+   * attempting subagent promotion and BEFORE falling through to whole-turn
+   * backgrounding. If detachable tool calls are in flight, `detachAll()` is
+   * called to free the model's turn while the processes keep running.
+   *
+   * Forwarded from the session dispatcher at `runTurn` call site. Absent on
+   * non-REPL callers, where Ctrl+B does nothing for tool calls.
+   */
+  detachRegistry?: DetachableToolRegistry;
+  /**
    * Install/clear a per-turn ESC soft-stop handler on the surface's
    * persistent compositor. Used by the turn handler to flip
    * `softStopRequested` when the user presses ESC mid-stream, and to
@@ -730,6 +775,14 @@ export interface TurnHandles {
    * per-turn ToolLane.
    */
   bashTailSetter?: { current: ((toolUseId: string, tail: string | undefined) => void) | undefined };
+  /**
+   * Mutable ref for the most recent bash capture path across all turns
+   * (issue #1505). The turn handler writes the last capturePath from the
+   * finishing StreamRenderer into this ref immediately before dispose, so
+   * Ctrl+G can open the viewer at any time between or after turns.
+   * Best-effort — absent on non-interactive callers and non-TTY surfaces.
+   */
+  capturePathRef?: { current: string | undefined };
   /**
    * Fired on each streaming text-content chunk with the character length of
    * the chunk. Wired by the REPL to the MomentumTicker so it can compute a

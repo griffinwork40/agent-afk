@@ -20,7 +20,7 @@ import type { SdkPluginConfig } from './types/sdk-types.js';
 import { findPluginDirs, pluginManifestPath } from '../config/plugin-discovery.js';
 import type { SourceEnabledMap } from '../config/import-sources.js';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
-import { join, resolve as resolvePath } from 'path';
+import { join, resolve as resolvePath, sep } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
 
@@ -298,11 +298,20 @@ export function indexKeyForPath(
   // never produces a false null when one side was realpath-resolved and the
   // other was not. Fall back to raw strings when resolution fails (dangling
   // symlink, missing path).
+  //
+  // Separate try/catch blocks so that a successful realpathSync(root) is kept
+  // even when realpathSync(leaf) throws (dangling leaf symlink). A single
+  // combined try/catch would discard the resolved root on a leaf failure,
+  // defeating the symlink-aliasing Contract above.
   let resolvedRoot = root;
   let resolvedLeaf = leaf;
-  try { resolvedRoot = realpathSync(root); } catch { /* keep raw */ }
-  try { resolvedLeaf = realpathSync(leaf); } catch { /* keep raw */ }
-  if (!resolvedLeaf.startsWith(resolvedRoot)) return null;
+  try {
+    resolvedRoot = realpathSync(root);
+  } catch { /* keep raw root string when the path cannot be resolved */ }
+  try {
+    resolvedLeaf = realpathSync(leaf);
+  } catch { /* keep raw leaf string when the path cannot be resolved */ }
+  if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
   const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
   const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);

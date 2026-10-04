@@ -413,6 +413,17 @@ export interface WhatifReport {
   /** Plain-English caveats that always accompany the report. */
   limits: string[];
   headline: string;
+  /**
+   * Question-fit level assessed before the verify phase.
+   *
+   * Captures whether the experiment's predictions are measurable by the
+   * decision-only runner (`'supported'`), only partially measurable
+   * (`'partially-supported'`), or not measurable at all (`'unsupported'`).
+   *
+   * Absent when the question-fit preflight did not run (e.g. when predictions
+   * is empty and the preflight short-circuits before classification).
+   */
+  questionFit?: import('./question-fit.js').QuestionFitLevel;
   /** Probes dropped by probe-grounding because they reference non-existent paths. */
   droppedProbes?: import('./probe-grounding.js').DroppedProbe[];
   /**

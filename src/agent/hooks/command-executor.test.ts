@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { executeCommand } from './command-executor.js';
 import type { HookContext } from '../hooks.js';
 
-// Hooks execute user-authored #!/bin/sh scripts — POSIX-only (#703)
+// Windows: genuinely POSIX-only — hooks execute user-authored #!/bin/sh scripts; no Windows shell equivalent (#703)
 describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', () => {
   let tmp: string;
 
@@ -93,6 +93,56 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
         ),
       );
       expect(result.decision.injectContext).toBe('injected context');
+    });
+
+    // -------------------------------------------------------------------------
+    // updatedInput (#2371)
+    // -------------------------------------------------------------------------
+
+    it('hookSpecificOutput.updatedInput plain object → updatedInput on decision', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":{"model":"claude-haiku-4-5","prompt":"rewritten"}}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toEqual({ model: 'claude-haiku-4-5', prompt: 'rewritten' });
+    });
+
+    it('hookSpecificOutput.updatedInput array → ignored (updatedInput absent)', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":["not","an","object"]}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toBeUndefined();
+    });
+
+    it('hookSpecificOutput.updatedInput primitive string → ignored', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":"nope"}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toBeUndefined();
+    });
+
+    it('hookSpecificOutput.updatedInput null → ignored', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":null}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toBeUndefined();
+    });
+
+    it('hookSpecificOutput.additionalContext and updatedInput can coexist', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"additionalContext":"ctx","updatedInput":{"k":"v"}}}\'',
+        ),
+      );
+      expect(result.decision.injectContext).toBe('ctx');
+      expect(result.decision.updatedInput).toEqual({ k: 'v' });
     });
 
     it('decision: "approve" is parsed correctly', async () => {

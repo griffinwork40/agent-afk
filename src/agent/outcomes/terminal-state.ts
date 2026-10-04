@@ -1,15 +1,35 @@
 /**
- * Terminal-state parser — agent-layer home.
+ * Terminal-state parser — shared implementation for facet derivation and
+ * the REPL/daemon surfaces.
  *
- * Pure functions extracted from `src/cli/commands/interactive/terminal-state.ts`
- * so the session layer and daemon can parse terminal states without importing
- * from the cli layer (layering invariant: `src/agent/` must not import from
- * `src/cli/`).
+ * This module owns the PURE parsing logic: no I/O, no globals, no layer
+ * imports. The CLI path (`src/cli/commands/interactive/terminal-state.ts`)
+ * re-exports everything from here so all existing importers are unaffected.
  *
- * The originals in `src/cli/commands/interactive/terminal-state.ts` re-export
- * everything from here so all existing importers remain unaffected.
+ * History: the parser originally lived only in the CLI path; #2777 moved it
+ * here so `derive.ts` (which lives under `src/agent/` and must not import
+ * `src/cli/`) can call the same logic instead of maintaining a divergent
+ * inline regex that has different semantics.
  *
- * @module agent/terminal-state
+ * Design rules (inherited from the original):
+ *
+ *   - **Conservative.** If we cannot find a clean terminal-state heading at
+ *     the tail of the message, return `null`. Better to emit nothing than to
+ *     misclassify a chatty turn as terminal.
+ *
+ *   - **Tail-anchored.** The prompt requires the terminal state to be the
+ *     last thing in the turn. We scan the last ~40 lines for the heading;
+ *     anything earlier is ignored on purpose.
+ *
+ *   - **Format-tolerant.** Models drift on bold styling, heading levels,
+ *     trailing punctuation, and bullet markers. We accept `**Done**`,
+ *     `### Done`, `## Done.`, plain `Done`, and so on, as long as the line is
+ *     short and matches the keyword.
+ *
+ *   - **No invented fields.** We extract only what's literally present.
+ *     Missing bullets stay missing — the renderer decides how to handle that.
+ *
+ * @module agent/outcomes/terminal-state
  */
 
 /** The four terminal states named in the AFK system prompt. */
@@ -54,7 +74,7 @@ export interface TerminalState {
   rawBody: string;
 }
 
-const TAIL_LINES = 40;
+export const TAIL_LINES = 40;
 
 /**
  * Find the character offset in `text` where the terminal-state heading
@@ -67,15 +87,22 @@ const TAIL_LINES = 40;
  *
  * The search is tail-anchored like `parseTerminalState` — it scans the
  * last `TAIL_LINES` lines and walks backward for the heading.
+ *
+ * Invariant: this must skip fenced lines exactly as `parseTerminalState`
+ * does (both use `fencedLines`). The REPL strips the buffer at this offset
+ * and renders the card from `parseTerminalState`; if the two disagreed, a
+ * fenced `done` would strip a code block's tail with no card to replace it.
  */
 export function findTerminalStateHeadingOffset(text: string): number {
   if (!text) return -1;
 
   const lines = text.split('\n');
+  const isFenced = fencedLines(lines);
   const tailStart = Math.max(0, lines.length - TAIL_LINES);
   const tail = lines.slice(tailStart);
 
   for (let i = tail.length - 1; i >= 0; i--) {
+    if (isFenced[tailStart + i]) continue;
     const line = tail[i] ?? '';
     if (lineToKind(line)) {
       // Compute the character offset in the original text. Sum lengths of
@@ -89,6 +116,68 @@ export function findTerminalStateHeadingOffset(text: string): number {
     }
   }
   return -1;
+}
+
+/**
+ * Mark which lines sit inside a fenced code block (``` or ~~~), delimiter
+ * lines included. A forward pass over the WHOLE text, so a fence opened
+ * before the tail window is still tracked. A fence closes only on its own
+ * marker (CommonMark); an unclosed fence runs to the end of the text.
+ *
+ * CommonMark rules enforced (#2794):
+ *   - Opener: indented 0–3 spaces, followed by a run of 3+ backticks (with no
+ *     backtick in the info string) OR 3+ tildes. A line indented 4+ spaces is
+ *     a literal indented code block in CommonMark and is NOT a fence opener.
+ *   - Closer: same character family as the opener, run length ≥ opener's run,
+ *     and bare (no info string — only optional trailing spaces).
+ *   - The two character families (backtick, tilde) are independent; a ~~~
+ *     line never closes a ``` fence and vice versa.
+ */
+function fencedLines(lines: string[]): boolean[] {
+  const isFenced: boolean[] = new Array(lines.length).fill(false);
+  // When inside a fence: the character (`` ` `` or `~`) and minimum run
+  // length required to close it.
+  let fenceChar = '';
+  let fenceLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const indent = line.length - line.trimStart().length;
+    const rest = line.trimStart();
+
+    if (!fenceChar) {
+      // CommonMark §4.5: opener must be indented 0–3 spaces.
+      if (indent > 3) continue;
+
+      const ch = rest[0];
+      if (ch !== '`' && ch !== '~') continue;
+
+      // Count the run of the opening character.
+      let run = 0;
+      while (rest[run] === ch) run++;
+      if (run < 3) continue;
+
+      // For backtick fences the info string must not contain a backtick.
+      // (Tilde fences have no such restriction.)
+      const info = rest.slice(run);
+      if (ch === '`' && info.includes('`')) continue;
+
+      fenceChar = ch;
+      fenceLen = run;
+      isFenced[i] = true;
+    } else {
+      isFenced[i] = true;
+      // Closer: same char, run ≥ opener, bare (only trailing spaces/tabs).
+      if (indent <= 3 && rest[0] === fenceChar) {
+        let run = 0;
+        while (rest[run] === fenceChar) run++;
+        if (run >= fenceLen && rest.slice(run).trim() === '') {
+          fenceChar = '';
+          fenceLen = 0;
+        }
+      }
+    }
+  }
+  return isFenced;
 }
 
 /**
@@ -109,14 +198,20 @@ export function parseTerminalState(text: string): TerminalState | null {
   if (!text) return null;
 
   const lines = text.split('\n');
+  const isFenced = fencedLines(lines);
+
   const tail = lines.slice(Math.max(0, lines.length - TAIL_LINES));
+  const tailOffset = Math.max(0, lines.length - TAIL_LINES);
 
   // Walk backward looking for the most recent heading-like line that resolves
   // to a terminal kind. The model's own structure puts it last.
+  // Skip lines inside fenced code blocks — a bare `done` in a shell for-loop
+  // must not be treated as the Done heading.
   let headingIdx = -1;
   let kind: TerminalKind | null = null;
 
   for (let i = tail.length - 1; i >= 0; i--) {
+    if (isFenced[tailOffset + i]) continue;
     const line = tail[i] ?? '';
     const k = lineToKind(line);
     if (k) {
@@ -291,6 +386,14 @@ function mapBulletsToFields(
       if (whatBlocks !== undefined) out.whatBlocks = whatBlocks;
       const unblockCondition = find('unblock', 'must change', 'to unblock', 'condition');
       if (unblockCondition !== undefined) out.unblockCondition = unblockCondition;
+      // Needles must cover the literal directive bullet `What has already
+      // been done` (Blocked, line 4) as well as common paraphrases. The
+      // original `'already done'` and `'what has been done'` both fail
+      // String.includes against the directive label — `'already'` sits
+      // between `'what has'` and `'been done'`, breaking continuity for
+      // both — so `'has already'` and `'been done'` are the ones that
+      // actually catch the directive form. The shorter needles are kept
+      // for paraphrased model output.
       const alreadyDone = find(
         'has already',
         'been done',
@@ -307,7 +410,8 @@ function mapBulletsToFields(
       if (question !== undefined) out.question = question;
       const assumption = find('assumption', 'resolves');
       if (assumption !== undefined) out.assumption = assumption;
-      const followup = find('once answered', 'follow-up', 'next', 'will do', 'after');
+      const followup =
+        find('once answered', 'follow-up', 'next', 'will do', 'after');
       if (followup !== undefined) out.followup = followup;
       return out;
     }

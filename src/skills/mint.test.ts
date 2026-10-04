@@ -51,7 +51,7 @@ function mintStatePath(sessionId: string): string {
 // etc.) keep the legacy generic message-only response with `output: undefined`.
 vi.mock('../agent/subagent.js', () => {
   return {
-    SubagentManager: vi.fn(() => ({
+    SubagentManager: vi.fn(function () { return {
       forkSubagent: vi.fn(async (options) => {
         sharedMintMock.forkOptions.push(options as Record<string, unknown>);
         const idPrefix = options.idPrefix || 'subagent';
@@ -96,7 +96,7 @@ vi.mock('../agent/subagent.js', () => {
         };
       }),
       teardownAll: vi.fn(async () => undefined),
-    })),
+    }; }),
   };
 });
 

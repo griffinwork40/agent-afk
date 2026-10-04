@@ -341,6 +341,39 @@ export class StateStore {
   }
 
   /**
+   * Create a document only when none exists (an expired row counts as absent).
+   * Returns `{created: false}` without writing when a live row is present, so
+   * two racing first-writers cannot clobber each other the way two `put`s can.
+   * Pair with `get` + `cas` for a lossless read-modify-write loop.
+   */
+  insertIfAbsent(namespace: string, key: string, value: unknown, opts?: PutOpts): PutResult {
+    validateNamespaceOrKey(namespace, 'namespace');
+    validateNamespaceOrKey(key, 'key');
+    validateJson(value);
+
+    const txn = this.db.transaction((): PutResult => {
+      const now = Date.now();
+      this.db
+        .prepare(`DELETE FROM state_documents WHERE namespace = ? AND key = ?
+          AND expires_at IS NOT NULL AND expires_at < ?`)
+        .run(namespace, key, now);
+      const expires_at = opts?.ttl_ms !== undefined ? now + opts.ttl_ms : null;
+      const metadata = opts?.metadata !== undefined ? JSON.stringify(opts.metadata) : null;
+      const res = this.db
+        .prepare(`
+          INSERT INTO state_documents
+            (namespace, key, value, version, created_at, updated_at, expires_at, producer, metadata)
+          VALUES (?, ?, ?, 1, ?, ?, ?, NULL, ?)
+          ON CONFLICT(namespace, key) DO NOTHING
+        `)
+        .run(namespace, key, JSON.stringify(value), now, now, expires_at, metadata);
+      return { version: 1, created: res.changes > 0 };
+    });
+
+    return txn.immediate();
+  }
+
+  /**
    * Delete a document. Returns {deleted: true} if found and removed.
    */
   del(namespace: string, key: string): DelResult {

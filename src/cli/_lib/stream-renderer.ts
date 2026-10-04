@@ -55,6 +55,7 @@ import { makeOrchestratorCtx } from './stream-renderer-contexts.js';
 import { armSmokeEffects, THOUGHT_SUMMARY_SLOT, type SmokeEffects } from './stream-renderer-smoke.js';
 import { processEvent, type ProcessCtx } from './stream-renderer-process.js';
 import { disposeRenderer, type DisposeCtx } from './stream-renderer-dispose.js';
+import { SkillIdentityState } from './skill-identity-state.js';
 import { applyFirstContent } from './stream-renderer-ttfb.js';
 
 export type { StreamRendererOptions } from './stream-renderer-options.js';
@@ -66,6 +67,7 @@ import type { StreamRendererOptions } from './stream-renderer-options.js';
  */
 export class StreamRenderer {
   private readonly out: Writer;
+  private readonly skillIdentity: SkillIdentityState;
   private readonly thinkingMode: 'off' | 'summary' | 'live' | 'digest';
   private readonly isTTY: boolean;
   private readonly captureMode: boolean;
@@ -184,6 +186,7 @@ export class StreamRenderer {
     // Resolve capture-mode first: it can force-downgrade `thinkingMode: 'live'`
     // → `'summary'` because per-thinking-chunk overlay repaints would flood
     // a captured stream with redundant frames. See `_lib/capture-mode.ts`.
+    this.skillIdentity = new SkillIdentityState(opts.skillIdentity);
     this.captureMode = opts.captureMode ?? detectCaptureMode();
     // Resolve reduced-motion: a user preference to suppress the spinner ticker.
     // Independent of capture-mode (motion sensitivity vs. artifact preservation).
@@ -203,13 +206,11 @@ export class StreamRenderer {
     // trailing suppressed run is summarized in the artifact rather than
     // silently dropped. See `dispose()`.
     this.out = this.captureMode ? makeDedupingLineWriter(opts.out, 2) : opts.out;
-    // Resolve thinking mode: explicit option wins; otherwise the deprecated
-    // `verbose` boolean maps to 'live' (true) or 'summary' (false/unset).
+    // Resolve thinking mode: explicit option wins; default is 'summary'.
     // In capture-mode, 'live' is downgraded to 'summary' so the captured
     // artifact records one collapsed summary per turn rather than N
     // overlay-paint frames mid-turn.
-    const requestedThinkingMode =
-      opts.thinkingMode ?? (opts.verbose === true ? 'live' : 'summary');
+    const requestedThinkingMode = opts.thinkingMode ?? 'summary';
     this.thinkingMode = this.captureMode && requestedThinkingMode === 'live'
       ? 'summary'
       : requestedThinkingMode;
@@ -262,7 +263,8 @@ export class StreamRenderer {
    * non-TTY surfaces (Telegram, daemon, tests).
    */
   async arm(): Promise<void> {
-    if (this.disposed || !this.isTTY || this.compositor) return;
+    if (this.disposed || this.compositor) return;
+    if (!this.isTTY) { await this.skillIdentity.introduce(this.coordinator, null, this.out); return; }
     let compositor: TerminalCompositor;
     if (this.borrowedCompositor) {
       // Persistent-compositor path (Stage 3b+). The InputSurface armed
@@ -343,6 +345,9 @@ export class StreamRenderer {
     // Note: 'stage-rail' has been removed from this overlay. The stage rail is
     // now a reserved footer row managed by LoopStageBar (same DECSTBM pattern as
     // BackgroundStatusBar) and painted independently of the compositor frame.
+    // Note: 'subagent-status' has been removed from this overlay (#2661). The
+    // status stack was redundant with the tool-lane Agent rows, which already
+    // surface every running subagent with elapsed time, nesting, and labels.
     this.overlayComposer = new OverlayComposer(compositor, [
       THOUGHT_SUMMARY_SLOT, // held `◆ thought for Xs` while it fades (smoke only); above the next phase
       'thinking-live',
@@ -364,6 +369,7 @@ export class StreamRenderer {
       lastProgressByTask: this.lastProgressByTask,
       sources: this.sources,
       childActivity: this.childActivity,
+      getSkillIdentity: () => this.skillIdentity.current,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
     });
@@ -388,6 +394,8 @@ export class StreamRenderer {
     // owns its own resize subscription; this covers the rest of the overlay
     // surface. Debounced + coalesced upstream by ResizeBus.
     this.resizeUnsub = subscribeToResize(this.overlayComposer, false);
+    await this.skillIdentity.introduce(this.coordinator, compositor, this.out);
+    if (this.skillIdentity.current) this.overlayComposer.flush();
   }
 
   /**
@@ -483,6 +491,16 @@ export class StreamRenderer {
    * Delegate to this turn's ToolLane for live bash output tail. Issue #1506.
    * Safe to call after dispose (no-op).
    */
+  /**
+   * Return the most recent bash capture path seen across all turns on this
+   * renderer, or `undefined` when no capture has been recorded yet. Used by
+   * the Ctrl+G viewer to open the last large output without requiring the user
+   * to know the path. Safe to call at any time (including after dispose).
+   */
+  getLastCapturePath(): string | undefined {
+    return this.toolLane.getLastCapturePath();
+  }
+
   setBashOutputTail(toolUseId: string, tail: string | undefined): void {
     if (this.disposed) return;
     this.toolLane.setBashOutputTail(toolUseId, tail);
@@ -539,6 +557,7 @@ export class StreamRenderer {
       childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
       ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
+      ...(this.skillIdentity.current ? { skillIdentity: this.skillIdentity.current } : {}),
       ...(this.smoke ? { thoughtHold: this.smoke.thoughtHold } : {}),
     });
   }
@@ -585,13 +604,14 @@ export class StreamRenderer {
     // Reset the preview-diff ref to a no-op so the disposed turn's toolLane
     // reference is released and the hook cannot write into a stale lane.
     if (this.addPreviewDiffRef) this.addPreviewDiffRef.current = () => {};
-    // Contract: clear softStopping on the class BEFORE building the DisposeCtx
-    // snapshot. The overlay's progress-banner slot reads this.softStopping via
-    // the getSoftStopping closure registered in arm(), not through the ref
-    // wrapper. If we only clear the ref inside disposeRenderer(), the closure
-    // still sees true and repaints a stale "stopping…" banner during the
-    // overlay flush. The write-back at the end is still needed for consistency.
+    // Clear turn-local flags on the class BEFORE building the DisposeCtx
+    // snapshot. The progress-banner and interrupt slots read these fields via
+    // closures registered in arm(), not through the ref wrappers. Clearing only
+    // refs inside disposeRenderer() would repaint stale stopping/interrupting
+    // affordances during the final overlay flush on a borrowed compositor.
     this.softStopping = false;
+    this.interrupting = false;
+    this.skillIdentity.clear();
     const ctx: DisposeCtx = {
       out: this.out,
       isTTY: this.isTTY,

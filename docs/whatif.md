@@ -22,7 +22,22 @@ engine:
    strengthened / weakened), each with a confidence rating and a yes/no test
    question. **Always labelled a guess.**
 
-3. **Verifies empirically (optional, `--verify`)**: real or synthetic episodes
+3. **Checks question fit** (free, no model calls): immediately after predictions
+   are generated, the engine classifies how well the runner's decision-only
+   episode model can answer your implied question — **before `--verify` spends
+   any money**. Three support levels:
+
+   | Level | Meaning |
+   |-------|---------|
+   | **supported** | All predictions are decision-observable; the runner can confirm or refute each one. |
+   | **partially-supported** | Some predictions require a completed action (`downstream`); those will be marked 🔭 Unobservable and excluded from accuracy. |
+   | **unsupported** | Every prediction is downstream; verification cannot confirm any of them. Rephrase your question as a decision before running `--verify`. |
+
+   This notice appears on both predict-only runs and verify runs. It is
+   informational only — the engine does not block you from running `--verify`
+   on a partially-supported or unsupported question.
+
+4. **Verifies empirically (optional, `--verify`)**: real or synthetic episodes
    run in isolated sandboxes for both the baseline and candidate environments.
    Rates are measured (P(yes) per prediction), each prediction is marked
    Confirmed / Refuted / Unclear, and unpredicted differences are proposed.
@@ -43,7 +58,7 @@ engine:
    based on what happened in the episodes (for example, which tools were
    intercepted).
 
-4. **Records calibration**: every prediction + verified outcome is appended to
+5. **Records calibration**: every prediction + verified outcome is appended to
    `~/.afk/state/whatif/ledger.jsonl` to improve future predictions.
 
 ---
@@ -71,12 +86,13 @@ afk whatif --spec my-change.json
 
 ---
 
-## The four levels
+## The pipeline levels
 
 | Level | What happens | Cost |
 |-------|-------------|------|
 | 0 Structural | Diff of the system prompts captured from each env's one-turn snapshot request, tool list diff, token/cost delta | Free |
 | 1 Predict | Analyst model produces labelled behaviour predictions | ~$0.01 |
+| 1b Question fit | Deterministic classifier reports whether the experiment can answer your question (supported / partially-supported / unsupported) — shown before `--verify` spends money | Free |
 | 2 Verify | Episodes in sandboxes; rates measured; predictions tested | ~$0.50–$5 |
 | 3 Calibrate | Predictions + outcomes written to calibration ledger | Free |
 
@@ -521,3 +537,16 @@ Every report includes standard caveats:
 - Statistical rates have uncertainty (Wilson 95% CI shown in the report).
 - Failed episodes are excluded from every rate; the Limits section names the count.
   When failures are arm-imbalanced, a warning flags the potential verdict bias.
+
+### Question-fit limitations (#2401)
+
+The question-fit classifier works at the prediction level: it checks whether
+each predicted behavior is a *decision* (observable) or *downstream* (not
+observable).  Questions that cannot be rephrased as a decision — "did the
+implementation quality improve?", "did the total task cost decrease?", "did
+the agent stop at the right step?" — will always be classified `unsupported`
+until the runner gains the ability to execute and measure completed actions.
+
+The classifier is deterministic and never blocks; it reports what the
+experiment can and cannot answer so you can decide whether to proceed or
+rephrase your question before spending money on `--verify`.

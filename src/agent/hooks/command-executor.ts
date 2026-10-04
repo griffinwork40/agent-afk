@@ -331,6 +331,13 @@ export async function executeCommand(
  * `childEnv`. Each listed var is resolved from `process.env` first, then
  * `afk.env`. AFK's own credentials are silently refused with a console.warn.
  *
+ * Asymmetry: the deny-list only covers `AFK_*` vars that match
+ * `PLUGIN_ENV_DENIED_SUFFIX` (plus the explicit `PLUGIN_ENV_DENIED_NAMES` set).
+ * A non-AFK credential (e.g. `OPENROUTER_API_KEY`) that the user explicitly
+ * lists in `pluginHookEnv` **will** be forwarded — this is intentional: the
+ * user opted in via their config, which is human-tier gated. The asymmetry is
+ * by design; only AFK's own internal secrets are unconditionally refused.
+ *
  * Extracted from {@link executeCommand} to keep that function within the 200-
  * line ceiling (pnpm audit:funcsize:check).
  */
@@ -409,11 +416,17 @@ function parseStdoutDecision(stdout: string): HookDecision {
   }
 
   // `hookSpecificOutput.additionalContext` → injectContext
+  // `hookSpecificOutput.updatedInput`       → updatedInput (PreToolUse only)
   const hso = obj['hookSpecificOutput'];
   if (hso !== null && typeof hso === 'object' && !Array.isArray(hso)) {
     const hsoObj = hso as Record<string, unknown>;
     if (typeof hsoObj['additionalContext'] === 'string') {
       decision.injectContext = hsoObj['additionalContext'];
+    }
+    // Accept only a plain object; ignore arrays, primitives, null.
+    const ui = hsoObj['updatedInput'];
+    if (ui !== null && typeof ui === 'object' && !Array.isArray(ui)) {
+      decision.updatedInput = ui as Record<string, unknown>;
     }
   }
 

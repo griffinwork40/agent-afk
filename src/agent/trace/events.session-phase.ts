@@ -65,8 +65,18 @@ export const SessionPhaseNameSchema = z.enum([
   // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
   // types.ts — metadata carries degradedCount, threshold, maxDimension.
   'many_image_degraded',
+  // Mid-stream transport drop accepted as clean completion (#2780).
+  // See SessionPhaseName JSDoc in types.ts for the full contract.
+  'stream_accepted_after_drop',
+  // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry',
+  'usage_notice',
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  'tool_degraded',
   // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
-  // See SessionPhaseName JSDoc in types.ts for the full rationale.
+  // See SessionPhaseName JSDoc in types.session-phase.ts for the full rationale.
   'stop_inject_dropped',
 ]);
 

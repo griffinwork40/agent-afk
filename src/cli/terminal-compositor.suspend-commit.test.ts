@@ -27,6 +27,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { TerminalCompositor } from './terminal-compositor.js';
 import { VirtualScreen } from './_lib/testing/virtual-screen.js';
+import { dropSeamOverlap, reshownArchivedRows } from './_lib/testing/scrollback-seam.js';
 
 type MockStdout = NodeJS.WriteStream & { isTTY: boolean; columns: number; rows: number };
 type MockStdin = NodeJS.ReadStream & {
@@ -121,6 +122,8 @@ async function makeRig(s: Scenario): Promise<Rig> {
       // rows the hugging frame sits above the floor (absoluteBottom = ROWS-1).
       // 1-based viewport row of the live frame's top (spinner row included).
       frameTop: () => raw.lastMeasuredFrameTop,
+      // Archived-prefix rows painted on screen (the sanctioned seam overlap).
+      reshown: () => reshownArchivedRows(c),
       hugSlackProbe: () =>
         raw.placementMode === 'content-hug' ? Math.max(0, ROWS - 1 - raw.lastMeasuredFrameBottom) : 0,
     },
@@ -134,11 +137,18 @@ function dumpScreen(vs: VirtualScreen): string {
   ].join('\n');
 }
 
-function assertCommittedOnce(vs: VirtualScreen, frameTopRow: number, labels: string[], tag: string): void {
-  const scrollback = vs.scrollbackLines();
+function assertCommittedOnce(
+  vs: VirtualScreen,
+  frameTopRow: number,
+  labels: string[],
+  tag: string,
+  reshown = 0,
+): void {
   const visible = vs.visibleLines();
-  const all = [...scrollback, ...visible];
   const dump = dumpScreen(vs);
+  // Discount only the re-shown archived rows (scrollback-seam.ts); default 0 = fully strict.
+  const scrollback = dropSeamOverlap(vs.scrollbackLines(), visible, reshown, dump);
+  const all = [...scrollback, ...visible];
 
   // The frame's top row is the measured frame top (the spinner row when the
   // spinner is live); the input rule must be at or below it.
@@ -350,7 +360,7 @@ describe('commitAbove during suspendInput (issue #2382)', () => {
       c.setSpinner({ enabled: false });
       internals.repaint();
 
-      assertCommittedOnce(vs, internals.frameTop(), labels, s.name);
+      assertCommittedOnce(vs, internals.frameTop(), labels, s.name, internals.reshown());
       c.disarm();
     });
 

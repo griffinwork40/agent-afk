@@ -76,14 +76,11 @@ const STOPWORDS = new Set([
 function stem(token: string): string {
   // Guard: only strip a suffix when at least 3 characters remain after removal.
   // `-ings` removes 4 chars → guard is length > 7 (≥8 chars keeps ≥4 after strip).
-  // Prevents "strings" (7 chars) from stemming via -ings to "str" instead of
-  // reaching the -s rule → "string".
-  // `-ing` removes 3 chars → guard is length > 6 (≥7 chars keeps ≥4 after strip).
-  // Prevents "running" (7 chars) from stemming to "runn" — but a minimum
-  // remainder of 4 chars means 7-letter tokens ending in -ing stem correctly:
-  // "running" → "runn" still happens at length > 6. We need > 7 to require ≥5
-  // chars, so "running" (run+ning) → guarded away → falls through to no-op,
-  // which is acceptable for this conservative stemmer.
+  //   Prevents "strings" (7 chars) from stemming via -ings to "str".
+  //   Note: 8-char words like "settings" (stems to "sett") are still affected.
+  // `-ing` removes 3 chars → guard is length > 7 to require ≥5 chars remaining,
+  //   so "running" (7 chars) falls through to no-op, which is acceptable for
+  //   this conservative stemmer.
   if (token.length > 7 && token.endsWith('ings')) return token.slice(0, -4);
   if (token.length > 7 && token.endsWith('ing')) return token.slice(0, -3);
   if (token.length > 5 && token.endsWith('ied')) return token.slice(0, -3) + 'y';

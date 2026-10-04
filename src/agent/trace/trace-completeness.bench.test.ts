@@ -208,6 +208,7 @@ const results: BenchResult[] = [];
 // Benchmark scenarios
 // ---------------------------------------------------------------------------
 
+// Windows: genuinely POSIX-only — sends SIGKILL to a child process to test trace durability; Windows has no SIGKILL
 describe.skipIf(process.platform === 'win32')(
   'trace completeness under kill -9 (POSIX only)',
   () => {

@@ -83,4 +83,43 @@ describe('sanitizeFtsQuery', () => {
   it('wraps a slash-containing token', () => {
     expect(sanitizeFtsQuery('src/config')).toBe('"src/config"');
   });
+
+  // ── Plus, caret, parentheses (extended FTS5_BAREWORD_SPECIAL) ──
+  it('wraps a C++ token (double-plus)', () => {
+    expect(sanitizeFtsQuery('C++')).toBe('"C++"');
+  });
+
+  it('wraps a token containing parentheses', () => {
+    expect(sanitizeFtsQuery('foo(bar)')).toBe('"foo(bar)"');
+  });
+
+  it('wraps a token containing a caret', () => {
+    expect(sanitizeFtsQuery('foo^2')).toBe('"foo^2"');
+  });
+
+  it('wraps a token containing a lone plus', () => {
+    expect(sanitizeFtsQuery('a+b')).toBe('"a+b"');
+  });
+
+  // ── Parentheses: boundary delimiters vs. embedded mid-word ───
+  // Regression for the `(foo OR bar) AND C++` precedence-change bug:
+  // before the fix, `(foo` and `bar)` were quoted to `"(foo"` and `"bar)"`,
+  // silently changing the grouping semantics of the query.
+  it('preserves boundary parens as FTS5 group delimiters — does not quote them', () => {
+    // `(foo OR bar) AND C++` — only `C++` needs quoting; parens must stay un-quoted.
+    expect(sanitizeFtsQuery('(foo OR bar) AND C++')).toBe('(foo OR bar) AND "C++"');
+  });
+
+  it('quotes a token with parens embedded mid-word (not at boundary)', () => {
+    // `foo(bar)` — the paren is inside the word, not a group delimiter.
+    expect(sanitizeFtsQuery('foo(bar)')).toBe('"foo(bar)"');
+  });
+
+  it('preserves a leading-only paren as a group-open delimiter', () => {
+    expect(sanitizeFtsQuery('(foo')).toBe('(foo');
+  });
+
+  it('preserves a trailing-only paren as a group-close delimiter', () => {
+    expect(sanitizeFtsQuery('bar)')).toBe('bar)');
+  });
 });

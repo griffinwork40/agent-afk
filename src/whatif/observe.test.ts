@@ -388,6 +388,27 @@ describe('featureIndicators', () => {
 // ---------------------------------------------------------------------------
 // meanNumeric helpers
 // ---------------------------------------------------------------------------
+
+describe('meanToolCalls / meanResponseChars', () => {
+  it('returns 0 for empty array', () => {
+    expect(meanToolCalls([])).toBe(0);
+    expect(meanResponseChars([])).toBe(0);
+  });
+
+  it('computes mean correctly', () => {
+    const traces = [makeTrace({ tools: [{ tool: 'x', input: {}, verdict: 'executed' }] }), makeTrace({ tools: [] })];
+    const features = traces.map(extractFeatures);
+    expect(meanToolCalls(features)).toBe(0.5);
+  });
+
+  it('responseChars mean', () => {
+    const traces = [makeTrace({ text: 'ab' }), makeTrace({ text: 'abcd' })];
+    const features = traces.map(extractFeatures);
+    expect(meanResponseChars(features)).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // textContainsQuestion (module-scoped helper, directly testable)
 // ---------------------------------------------------------------------------
 
@@ -421,26 +442,5 @@ describe('textContainsQuestion', () => {
 
   it('false: empty string', () => {
     expect(textContainsQuestion('')).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-
-describe('meanToolCalls / meanResponseChars', () => {
-  it('returns 0 for empty array', () => {
-    expect(meanToolCalls([])).toBe(0);
-    expect(meanResponseChars([])).toBe(0);
-  });
-
-  it('computes mean correctly', () => {
-    const traces = [makeTrace({ tools: [{ tool: 'x', input: {}, verdict: 'executed' }] }), makeTrace({ tools: [] })];
-    const features = traces.map(extractFeatures);
-    expect(meanToolCalls(features)).toBe(0.5);
-  });
-
-  it('responseChars mean', () => {
-    const traces = [makeTrace({ text: 'ab' }), makeTrace({ text: 'abcd' })];
-    const features = traces.map(extractFeatures);
-    expect(meanResponseChars(features)).toBe(3);
   });
 });

@@ -114,6 +114,27 @@ export interface HookDecision {
    * Ignored for all other hook events (PostToolUse, PostToolUseFailure, SubagentStart, PreCompact).
    */
   injectContext?: string;
+  /**
+   * **(PreToolUse only)** Plain-object replacement for the tool's input. When
+   * present and the event is `PreToolUse`, the dispatcher replaces `call.input`
+   * with this value BEFORE the tool handler runs. The rewritten input goes
+   * through the same permission gates and tool-schema validation that follow, so
+   * a hook can narrow a call but cannot widen it past policy.
+   *
+   * Semantics mirror Claude Code's `hookSpecificOutput.updatedInput`:
+   * - **Replace** (not shallow-merge): the hook returns the full desired input.
+   * - **Multiple hooks** (registration order): the hook registry dispatches all
+   *   handlers against the original context; each handler's `updatedInput` is
+   *   last-writer-wins — the final non-blocking hook's value is used. Hooks do
+   *   NOT see each other's rewrites during dispatch; only the winning value is
+   *   applied after all hooks have run.
+   * - A `block` decision from ANY hook short-circuits before the rewrite applies.
+   * - Non-`PreToolUse` hooks set this field — it is silently ignored.
+   *
+   * Parsed from `hookSpecificOutput.updatedInput` in the command-executor
+   * stdout JSON. Non-plain-object values (arrays, primitives) are ignored.
+   */
+  updatedInput?: Record<string, unknown>;
 }
 
 /** Status vocabulary mirrored from {@link SubagentStatus} without a runtime import. */
