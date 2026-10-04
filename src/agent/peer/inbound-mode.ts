@@ -5,7 +5,8 @@
  * by this session's receiver loop:
  *
  *   - `accept` (default) — messages are delivered to the model immediately
- *     when the REPL is idle, or at the next turn boundary when busy.
+ *     when the REPL is idle, or mid-turn at the next boundary between tool
+ *     rounds when busy (next turn if no tool round remains).
  *   - `hold` — messages are written to the `held/` subdirectory and listed
  *     via `/inbox`; the model is NOT woken until the operator releases them.
  *   - `off` — the receiver loop ignores incoming messages entirely; senders

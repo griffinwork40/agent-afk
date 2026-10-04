@@ -159,7 +159,7 @@ export function createBashHandler(
    */
   function scanPathsBestEffort(command: string, context: ToolHandlerContext): void {
     if (_pathEscapeWarned) return; // one-time per handler instance
-    const fallbackBase = context.resolveBase ?? context.cwd ?? cwd;
+    const fallbackBase = context.resolveBase ?? cwd;
     const escaping: string[] = [];
     for (const expanded of scanCandidatePaths(command, os.homedir())) {
       const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
@@ -265,11 +265,10 @@ export function createBashHandler(
         stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
         // Effective cwd priority:
         // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-        // 2. context?.cwd — per-call override (back-compat)
-        // 3. factory-level cwd — session worktree isolation (from createBashHandler)
-        // Falls back to process.cwd() implicitly when all three are undefined.
-        ...((context?.resolveBase ?? context?.cwd ?? cwd) !== undefined
-          ? { cwd: context?.resolveBase ?? context?.cwd ?? cwd }
+        // 2. factory-level cwd — session worktree isolation (from createBashHandler)
+        // Falls back to process.cwd() implicitly when both are undefined.
+        ...((context?.resolveBase ?? cwd) !== undefined
+          ? { cwd: context?.resolveBase ?? cwd }
           : {}),
         // Always scrub episode-revealing vars (issue #2425) regardless of
         // whether context.env is set — both the inherit-process.env path
@@ -541,7 +540,7 @@ export function createBashHandler(
         // When no explicit cwd was passed, spawn inherited the process cwd;
         // process.cwd() itself throws when that directory has been deleted,
         // which is the same masquerade — report it as such.
-        const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+        const effectiveCwd = context?.resolveBase ?? cwd;
         let message: string;
         if (effectiveCwd === undefined && isSpawnEnoent(err)) {
           try {

@@ -28,6 +28,7 @@
 
 import type { ProviderEvent } from '../../provider.js';
 import type { StreamState } from './translate.js';
+import { isOpenAIOverloadError } from './query/retry.js';
 
 /**
  * Structural subset of the OpenAI Responses streaming event union we consume.
@@ -66,7 +67,20 @@ export interface ResponsesStreamEvent {
       input_tokens_details?: { cached_tokens?: number };
     };
     incomplete_details?: { reason?: string };
+    /** Carried by `response.failed`; contains the server's error code + message. */
+    error?: { code?: string; message?: string } | null;
   };
+  /**
+   * Error code carried by the top-level `{type:'error'}` SSE event
+   * (`ResponseErrorEvent`). The SDK yields this as a normal event (no `error`
+   * key), so the openai iterator never throws for it — we must handle it here.
+   */
+  code?: string | null;
+  /**
+   * Error message carried by the top-level `{type:'error'}` SSE event.
+   * Also used by `response.failed` when the response body carries a message.
+   */
+  message?: string;
 }
 
 /**
@@ -84,6 +98,27 @@ export function* translateResponsesEvent(
   sessionId: string,
 ): Generator<ProviderEvent> {
   switch (event.type) {
+    // ── Top-level SSE error event (`ResponseErrorEvent`) ───────────────────────
+    // Shape: { type:'error', code:'server_is_overloaded', message, param, … }
+    // The OpenAI SDK does NOT throw for this shape (it has no `error` key), so it
+    // arrives here as a normal event. Throw an Error that `isOpenAIOverloadError`
+    // recognises when the code/message indicate a transient overload; throw a
+    // plain Error for all other codes so the stream error reaches the caller as a
+    // fatal event (non-overload errors must still surface).
+    case 'error': {
+      const err = Object.assign(
+        new Error(
+          typeof event.message === 'string' && event.message.length > 0
+            ? event.message
+            : `Responses stream error${typeof event.code === 'string' ? `: ${event.code}` : ''}`,
+        ),
+        // Carry code so isOpenAIOverloadError's OVERLOAD_CODES check matches
+        // 'server_is_overloaded' directly on the thrown error object.
+        typeof event.code === 'string' ? { code: event.code } : {},
+      );
+      throw err;
+    }
+
     case 'response.output_text.delta': {
       if (typeof event.delta === 'string' && event.delta.length > 0) {
         state.assistantText += event.delta;
@@ -179,6 +214,19 @@ export function* translateResponsesEvent(
 
     case 'response.failed': {
       applyResponsesUsage(state, event);
+      // If the failure carries an overload indicator, surface it as a thrown
+      // overload error so the inline retry and overload-pause tier can react.
+      // Construct a wrapper whose `.error` body carries the server's code +
+      // message, matching the shape `isOpenAIOverloadError` checks on `.error`.
+      // Non-overload `response.failed` reasons continue to set finishReason so
+      // they surface as they did before this fix.
+      const respErr = event.response?.error;
+      if (respErr != null) {
+        const candidate = Object.assign(new Error(respErr.message ?? 'response.failed'), {
+          error: respErr,
+        });
+        if (isOpenAIOverloadError(candidate)) throw candidate;
+      }
       state.finishReason = 'failed';
       return;
     }

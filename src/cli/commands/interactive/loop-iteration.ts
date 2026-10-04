@@ -20,7 +20,8 @@ import { prependTurnInjections, autoResumeDirective } from './loop-iteration.inj
 import { drainLoopNotifications } from './loop-iteration.drain.js';
 import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
-import { dispatchUserPromptSubmit, dispatchStop } from './loop-iteration.hooks.js';
+import { dispatchUserPromptSubmit } from './loop-iteration.hooks.js';
+import { wireReplStopHook } from './loop-iteration.stop-wiring.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
 import { setupPeerBoundary, drainAdmissionQueueFallback } from './loop-iteration.boundary.js';
@@ -86,6 +87,12 @@ export async function runInputLoop(
   // Post-turn Stop-hook correction stashed for next-turn delivery.
   let pendingStopInjection: string | undefined;
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
+
+  // Wire session-layer Stop dispatch — see loop-iteration.stop-wiring.ts.
+  // Re-applied before EVERY turn (below) so /resume session swaps are covered.
+  const stopWiring = wireReplStopHook(
+    ctx, (text) => { pendingStopInjection = text; },
+  );
 
   // Peer inter-round boundary delivery — see loop-iteration.boundary.ts.
   const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier);
@@ -215,6 +222,8 @@ export async function runInputLoop(
       runText = pendingStopInjection + '\n\n' + runText;
       pendingStopInjection = undefined;
     }
+    // Idempotent: covers a session swapped in since the last turn.
+    ctx.session.current.wireStopHook?.(stopWiring);
 
     // Pre-turn UserPromptSubmit hook.
     const ups = await dispatchUserPromptSubmit(runText, ctx);
@@ -225,15 +234,13 @@ export async function runInputLoop(
     // Contract: pass `text` (raw, pre-injection) as rawUserText so the presence
     // activity.promptHead records what the operator typed, never peer message
     // bodies or bg-subagent-result content that are prepended into `runText`.
-    const capture = await runOneTurn(
+    await runOneTurn(
       runText, attachments ?? [], ctx, turnState, footer,
       transcript, surface, installSoftStop, maxTurnsNum, autosaveState, text,
     );
 
-    // Post-turn Stop hook.
-    const stopInjection = await dispatchStop(
-      ctx, capture.kind, capture.doneHasEvidence, capture.doneClassification,
-    );
-    if (stopInjection !== undefined) pendingStopInjection = stopInjection;
+    // Stop is dispatched by the session layer (turn-stream-runner.ts) via
+    // wireStopHook(). The REPL no longer dispatches Stop itself. injectContext
+    // is routed into pendingStopInjection by the stopWiring callbacks above.
   }
 }

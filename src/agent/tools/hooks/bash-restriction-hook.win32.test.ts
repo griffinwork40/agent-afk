@@ -65,8 +65,13 @@ function winGrants(extraReadRoot?: string): GrantManager {
   };
 }
 
-function ctx(command: string): PreToolUseContext {
-  return { event: 'PreToolUse', toolName: 'bash', input: { command } };
+function ctx(command: string, grantManager?: GrantManager): PreToolUseContext {
+  return {
+    event: 'PreToolUse',
+    toolName: 'bash',
+    input: { command },
+    ...(grantManager !== undefined ? { grantManager } : {}),
+  };
 }
 
 /**
@@ -90,12 +95,14 @@ afterEach(() => {
 
 describe('bash-restriction hook under win32 semantics — credential floor holds (#703)', () => {
   let hook: ReturnType<HookModule['createBashRestrictionHook']>;
+  let mgr: GrantManager;
 
   beforeEach(async () => {
     const mod = await loadHook('C:\\Users\\alice');
+    mgr = winGrants();
     // Interpreter guard OFF so every decision below is check 2 (the substring
     // floor) alone — the check that was failing open.
-    hook = mod.createBashRestrictionHook({ getGrantManager: () => winGrants(), disableInterpreterGuard: true });
+    hook = mod.createBashRestrictionHook({ disableInterpreterGuard: true });
   });
 
   it.each([
@@ -111,47 +118,45 @@ describe('bash-restriction hook under win32 semantics — credential floor holds
     ['git credential store', 'cat /c/Users/alice/.git-credentials'],
     ['kube config', 'cat $HOME/.kube/config'],
   ])('blocks the %s spelling', (_label, command) => {
-    const decision = hook(ctx(command));
+    const decision = hook(ctx(command, mgr));
     expect(decision.decision).toBe('block');
     expect(decision.reason).toMatch(/restricted path/);
   });
 
   it('does NOT block ordinary commands or non-credential home paths', () => {
-    expect(hook(ctx('ls')).decision).not.toBe('block');
-    expect(hook(ctx('git status')).decision).not.toBe('block');
-    expect(hook(ctx('cat ~/project/README.md')).decision).not.toBe('block');
-    expect(hook(ctx('cat /c/Users/alice/.afk/state/todos/x.json')).decision).not.toBe('block');
+    expect(hook(ctx('ls', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('git status', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/project/README.md', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat /c/Users/alice/.afk/state/todos/x.json', mgr)).decision).not.toBe('block');
   });
 
   it('keeps the exact-file carve-outs readable in every win32 spelling', () => {
-    expect(hook(ctx('cat ~/.ssh/config')).decision).not.toBe('block');
-    expect(hook(ctx('cat $HOME/.ssh/known_hosts')).decision).not.toBe('block');
-    expect(hook(ctx('cat C:\\Users\\alice\\.ssh\\config')).decision).not.toBe('block');
-    expect(hook(ctx('cat /c/Users/alice/.afk/config/mcp.json')).decision).not.toBe('block');
+    expect(hook(ctx('cat ~/.ssh/config', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat $HOME/.ssh/known_hosts', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat C:\\Users\\alice\\.ssh\\config', mgr)).decision).not.toBe('block');
+    expect(hook(ctx('cat /c/Users/alice/.afk/config/mcp.json', mgr)).decision).not.toBe('block');
   });
 
   it('keeps the carve-outs EXACT-file: siblings and backups stay blocked', () => {
-    expect(hook(ctx('cat ~/.ssh/config.bak')).decision).toBe('block');
-    expect(hook(ctx('cat /c/Users/alice/.ssh/config"/../id_rsa"')).decision).toBe('block');
-    expect(hook(ctx('cat C:\\Users\\alice\\.afk\\config\\mcp.json.bak')).decision).toBe('block');
+    expect(hook(ctx('cat ~/.ssh/config.bak', mgr)).decision).toBe('block');
+    expect(hook(ctx('cat /c/Users/alice/.ssh/config"/../id_rsa"', mgr)).decision).toBe('block');
+    expect(hook(ctx('cat C:\\Users\\alice\\.afk\\config\\mcp.json.bak', mgr)).decision).toBe('block');
   });
 
   it('interpreter guard still catches a native-path one-liner when enabled', async () => {
     const mod = await import('./bash-restriction-hook.js');
-    const guarded = mod.createBashRestrictionHook({ getGrantManager: () => winGrants() });
+    const guarded = mod.createBashRestrictionHook({});
     expect(
-      guarded(ctx('python -c "open(r\'C:\\Users\\alice\\.ssh\\id_rsa\').read()"')).decision,
+      guarded(ctx('python -c "open(r\'C:\\Users\\alice\\.ssh\\id_rsa\').read()"', winGrants())).decision,
     ).toBe('block');
   });
 
   it('an explicit grant of the credential root still lifts it (grant filter unchanged)', async () => {
     const mod = await import('./bash-restriction-hook.js');
-    const granted = mod.createBashRestrictionHook({
-      getGrantManager: () => winGrants('C:\\Users\\alice\\.ssh'),
-      disableInterpreterGuard: true,
-    });
-    expect(granted(ctx('cat ~/.ssh/id_rsa')).decision).not.toBe('block');
-    expect(granted(ctx('cat ~/.aws/credentials')).decision).toBe('block');
+    const granted = mod.createBashRestrictionHook({ disableInterpreterGuard: true });
+    const grantedMgr = winGrants('C:\\Users\\alice\\.ssh');
+    expect(granted(ctx('cat ~/.ssh/id_rsa', grantedMgr)).decision).not.toBe('block');
+    expect(granted(ctx('cat ~/.aws/credentials', grantedMgr)).decision).toBe('block');
   });
 });
 
@@ -160,10 +165,12 @@ describe('bash-restriction hook under win32 semantics — 8.3 short-name home (#
   // are substituted with that raw spelling, while read-denylist.ts keys its
   // roots to the realpath'd long spelling — both must be matched.
   let hook: ReturnType<HookModule['createBashRestrictionHook']>;
+  let mgr: GrantManager;
 
   beforeEach(async () => {
     const mod = await loadHook('C:\\Users\\ALICE~1', [['C:\\Users\\ALICE~1', 'C:\\Users\\alice.long']]);
-    hook = mod.createBashRestrictionHook({ getGrantManager: () => winGrants(), disableInterpreterGuard: true });
+    mgr = winGrants();
+    hook = mod.createBashRestrictionHook({ disableInterpreterGuard: true });
   });
 
   it.each([
@@ -173,29 +180,25 @@ describe('bash-restriction hook under win32 semantics — 8.3 short-name home (#
     'cat /c/Users/alice.long/.npmrc',
     'cat /c/Users/ALICE~1/.afk/config/afk.env',
   ])('blocks %s', (command) => {
-    expect(hook(ctx(command)).decision).toBe('block');
+    expect(hook(ctx(command, mgr)).decision).toBe('block');
   });
 
   it('a grant spelled with the short-name home lifts the realpath-keyed root', async () => {
     // Same directory, two spellings: the read denylist keys .ssh to the long
     // form while `/allow-dir ~/.ssh` resolves through the raw short home.
     const mod = await import('./bash-restriction-hook.js');
-    const granted = mod.createBashRestrictionHook({
-      getGrantManager: () => winGrants('C:\\Users\\ALICE~1\\.ssh'),
-      disableInterpreterGuard: true,
-    });
-    expect(granted(ctx('cat ~/.ssh/id_rsa')).decision).not.toBe('block');
-    expect(granted(ctx('cat C:\\Users\\alice.long\\.ssh\\id_rsa')).decision).not.toBe('block');
-    expect(granted(ctx('cat ~/.aws/credentials')).decision).toBe('block');
+    const granted = mod.createBashRestrictionHook({ disableInterpreterGuard: true });
+    const grantedMgr = winGrants('C:\\Users\\ALICE~1\\.ssh');
+    expect(granted(ctx('cat ~/.ssh/id_rsa', grantedMgr)).decision).not.toBe('block');
+    expect(granted(ctx('cat C:\\Users\\alice.long\\.ssh\\id_rsa', grantedMgr)).decision).not.toBe('block');
+    expect(granted(ctx('cat ~/.aws/credentials', grantedMgr)).decision).toBe('block');
   });
 
   it('a grant on an unrelated MSYS-looking dir cannot lift the floor', async () => {
     const mod = await import('./bash-restriction-hook.js');
-    const granted = mod.createBashRestrictionHook({
-      getGrantManager: () => winGrants('C:\\c'),
-      disableInterpreterGuard: true,
-    });
-    expect(granted(ctx('cat /c/Users/alice.long/.ssh/id_rsa')).decision).toBe('block');
+    const granted = mod.createBashRestrictionHook({ disableInterpreterGuard: true });
+    const grantedMgr = winGrants('C:\\c');
+    expect(granted(ctx('cat /c/Users/alice.long/.ssh/id_rsa', grantedMgr)).decision).toBe('block');
   });
 
   // Carve-out readability under an 8.3 home is deliberately NOT asserted here:
