@@ -228,9 +228,13 @@ describe('socket path length budget (fixes listen EINVAL on macOS)', () => {
     }
   });
 
-  it('top-level allocated dir path fits SESSION_DIR_MAX', () => {
+  it('top-level allocated leaf is a short fixed-width segment directly under the root', () => {
+    // The test root is a long mkdtemp path (93 chars on macOS CI runners), so
+    // the absolute length is asserted against the REAL root in the tests above;
+    // here we pin only the leaf the allocator appends: one 8-hex segment.
     const env = topLevel();
-    expect(env['TMPDIR']!.length).toBeLessThanOrEqual(SESSION_DIR_MAX);
+    const leaf = path.relative(root, env['TMPDIR']!);
+    expect(leaf).toMatch(/^[0-9a-f]{8}$/);
   });
 });
 
