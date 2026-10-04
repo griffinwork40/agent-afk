@@ -290,6 +290,7 @@ describe('bashToolShellGuidance', () => {
 
 describe('findGitBashOnWindows — WSL bash filtering', () => {
   const originalPlatform = process.platform;
+  const originalPath = process.env['PATH'];
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -297,7 +298,7 @@ describe('findGitBashOnWindows — WSL bash filtering', () => {
     delete process.env['MSYSTEM'];
     delete process.env['SystemRoot'];
     delete process.env['LOCALAPPDATA'];
-    process.env['PATH'] = process.env['PATH'] ?? '';
+    process.env['PATH'] = originalPath;
   });
 
   it('skips C:\\Windows\\System32\\bash.exe (WSL shim) in MSYSTEM PATH scan', () => {
@@ -366,6 +367,23 @@ describe('findGitBashOnWindows — WSL bash filtering', () => {
     const result = resolveShell();
     expect(result.shell).toBe('powershell.exe');
   });
+
+  it('does NOT skip bash.exe in a sibling directory like System32Git (boundary regression)', () => {
+    // Regression: isWslBash must NOT fire on C:\Windows\System32Git\bash.exe.
+    // The prefix boundary check ensures the separator follows the prefix.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'C:\\Users\\User\\AppData\\Local';
+    process.env['PATH'] = 'C:\\Windows\\System32Git';
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === 'C:\\Windows\\System32Git\\bash.exe',
+    );
+    const result = resolveShell();
+    // System32Git is NOT the WSL directory — must be accepted as Git Bash.
+    expect(result.shell).toBe('C:\\Windows\\System32Git\\bash.exe');
+    expect(result.args).toEqual(['-c']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -374,6 +392,7 @@ describe('findGitBashOnWindows — WSL bash filtering', () => {
 
 describe('findGitBashOnWindows — git.exe-derived discovery', () => {
   const originalPlatform = process.platform;
+  const originalPath = process.env['PATH'];
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -381,7 +400,7 @@ describe('findGitBashOnWindows — git.exe-derived discovery', () => {
     delete process.env['MSYSTEM'];
     delete process.env['SystemRoot'];
     delete process.env['LOCALAPPDATA'];
-    process.env['PATH'] = process.env['PATH'] ?? '';
+    process.env['PATH'] = originalPath;
   });
 
   it('finds Git Bash via git.exe when installed under %LOCALAPPDATA%', () => {

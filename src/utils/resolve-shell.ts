@@ -59,10 +59,15 @@ function wslPrefixes(): readonly string[] {
 /**
  * Return true when `candidate` is a WSL-owned bash.exe that should be skipped.
  * Matching is prefix-based and case-insensitive.
+ *
+ * Invariant: each prefix is compared with a trailing backslash so that a
+ * sibling directory sharing the same base (e.g. System32Git) is NOT
+ * misclassified.  The trailing separator is appended inside this function so
+ * callers never need to think about it.
  */
 function isWslBash(candidate: string): boolean {
   const lower = candidate.toLowerCase();
-  return wslPrefixes().some((prefix) => lower.startsWith(prefix));
+  return wslPrefixes().some((prefix) => lower.startsWith(prefix + '\\'));
 }
 
 /**
@@ -83,7 +88,7 @@ function findGitBashViaGitExe(): string | undefined {
     // Git for Windows layout: <root>\cmd\git.exe  →  <root>\bin\bash.exe
     const gitRoot = win32.dirname(win32.dirname(gitExe));
     const candidate = win32.join(gitRoot, 'bin', 'bash.exe');
-    if (existsSync(candidate) && !isWslBash(candidate)) return candidate;
+    if (!isWslBash(candidate) && existsSync(candidate)) return candidate;
   }
   return undefined;
 }
