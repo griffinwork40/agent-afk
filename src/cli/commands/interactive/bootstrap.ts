@@ -97,7 +97,7 @@ export async function bootstrapSession(
   const sharedStateStore = new StateStore(getStateDatabasePath());
 
   const {
-    trace, backgroundRegistry, bgSummarizer,
+    trace, backgroundRegistry, detachRegistry, bgSummarizer,
     rootManager, subagentExecutor, skillExecutor, composeExecutor,
   } = createBootstrapInfra({
     sessionRef, options, cliConfig, sessionModel, basePrompt, effectiveCwd, resumeTarget, bootWarnings,
@@ -156,6 +156,9 @@ export async function bootstrapSession(
     maxOutputTokens, maxToolUseIterations, cliConfig, providerFactory, hookRegistry,
     traceWriter: trace?.writer, effectiveCwd, maxTurns: options.maxTurns, initialPermissionMode,
     bashOutputTailReporter,
+    // #2542/#2735: Detach registry shared between REPL Ctrl+B handler and
+    // every per-query dispatcher for this session.
+    detachRegistry,
     // Cascade-abort and drain in-flight children before the writer seals,
     // so a wave still running when this session ends emits real `cancelled`
     // rows instead of vanishing (#733).
@@ -226,6 +229,9 @@ export async function bootstrapSession(
     // make Ctrl+B background a running foreground subagent. The executor
     // implements `SubagentControl`; the keyboard layer sees only that interface.
     subagentControl: subagentExecutor,
+    // #2542/#2735: Detach registry shared with every per-query dispatcher so
+    // Ctrl+B can free the model's turn while a bash process keeps running.
+    detachRegistry,
     ...(bgSummarizer !== undefined ? { bgSummarizer } : {}),
     requestResume,
     // Default to false so any code path that reads getInFlight before

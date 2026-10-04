@@ -113,7 +113,7 @@ Sends a message to another session.
 
 **Idle + empty buffer**: when the REPL is awaiting input with nothing typed, `PeerInboxNotifier` fires `onInjectable` → `tryAutoResume` → `surface.abortPendingRead()`. The message is prepended to the next turn via `prependTurnInjections`. The model sees an `[auto-resume]` directive saying a peer message arrived; it should use `send_to_session` if a reply is needed.
 
-**Busy (mid-turn)**: the envelope sits in `pending/` until the current turn completes. At the top of the next turn, `prependTurnInjections` drains the buffer. The running turn is **never interrupted**.
+**Busy (mid-turn)**: the envelope is injected into the running turn at the next boundary between tool rounds (after the current tool batch, before the next model request), via the `setBeforeNextRound` callback installed by `loop-iteration.boundary.ts`. A message to a busy session therefore lands inside the task it is working on now. Input the user typed always goes first (see [Admission queue and human-priority barrier](#admission-queue-and-human-priority-barrier)). If the turn has no further tool round, the envelope falls back to the top-of-next-turn drain — the same `prependTurnInjections` path used for [idle delivery](#delivery-semantics) above. No tool call or model request is ever cut short.
 
 **Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:92-100`).
 
@@ -236,11 +236,26 @@ Envelopes are recovered after a process crash that occurs between claim and inje
 ## Observability
 
 A `peer_message` trace event is emitted for every state transition (`src/agent/trace/emit.ts:105`):
-- `action`: `sent | delivered | held | refused | dropped`
+- `action`: emitted values are `sent` and `refused` (sender side, `src/agent/tools/handlers/peer.ts`), and `claimed`, `held`, and `injected` (receiver side, `peer-inbox-notifier.ts`). A delivered message shows `sent` → `claimed` → `injected`.
+- The type (`src/agent/trace/types.ts`) also lists `delivered`, `dropped`, and `reclaimed`. `delivered` is the pre-#2810 receiver action; traces from older builds show `sent` → `delivered` instead (see #2901). `dropped` and `reclaimed` are emitted by `PeerInboxNotifier.reclaim()` during session swaps (e.g. `/resume`): `reclaimed` when an envelope is successfully moved back to `pending/`, `dropped` when that move returns false (`peer-inbox-notifier.ts:222-227`).
 - `messageId`, `peer` (the other session's id), `bytes` (UTF-8 byte count)
 - `reason` (for `refused`/`held`)
 
 **Body text is never written to the trace.** Only identifiers and byte counts are persisted.
+
+---
+
+## Sending guidelines
+
+The `send_to_session` tool description carries these rules so every sender sees them; this section is the rationale.
+
+- **Look before sending.** Call `list_sessions` and read the target's `turnState`, `activity.promptHead`, `cwd`, `branch`, and `pendingMessages`; use `read_witness` for detail. Busy receivers get messages mid-turn, so an unrelated message lands inside someone else's task.
+- **Busy:** send only when the message bears on the target's current task or is urgent. **Blocked:** don't send; the session is waiting on a human, so tell the user instead. **Pending messages:** consolidate rather than add another.
+- **Shared repo or branch:** name the files or branch at risk of collision.
+- **Self-contained body:** paths, branch, commit SHA, and the exact ask. Large content goes in a file; secrets never go in a body (bodies sit on disk in the receiver's inbox).
+- **State the expected reply.** "No reply needed" prevents acknowledgement loops, which the receiver-side no-ack rule alone did not stop in practice.
+- **No authority relay.** Never write "relaying with the user's approval" or similar. The receiver cannot verify it and treats peer content as carrying no user authority. A structured, harness-set signal of what started the sender's turn is tracked in #2906 (per-turn origin).
+- **Target by sessionId** and check `resolvedTo`; names can be reused when tmux windows are renamed.
 
 ---
 

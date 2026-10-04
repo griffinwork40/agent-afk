@@ -172,4 +172,30 @@ describe('summarizeSubagentJournal', () => {
     expect(summary.tool_errors).toBe(0);
     expect(summary.tool_counts).toEqual({});
   });
+
+  // #2795 gap 6: PRs opened by subagents
+  it('detects gh pr create in subagent journal and populates detected_pr_url (#2795 gap 6)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/55';
+    const records: JournalRecord[] = [
+      appendRecord(0, [toolUseBlock('b1', 'bash', { command: 'gh pr create --fill' })]),
+      {
+        v: V, ts: TS, kind: 'append', index: 1,
+        message: { role: 'user', content: [toolResultBlock('b1', `${prUrl}\n`)] },
+      },
+    ];
+    const summary = summarizeSubagentJournal('sub-ship', records);
+    expect(summary.detected_pr_url).toBe(prUrl);
+  });
+
+  it('no detected_pr_url when subagent has no gh pr create (#2795 gap 6)', () => {
+    const records: JournalRecord[] = [
+      appendRecord(0, [toolUseBlock('b2', 'bash', { command: 'git push -u origin HEAD' })]),
+      {
+        v: V, ts: TS, kind: 'append', index: 1,
+        message: { role: 'user', content: [toolResultBlock('b2', 'Branch pushed.')] },
+      },
+    ];
+    const summary = summarizeSubagentJournal('sub-push', records);
+    expect(summary.detected_pr_url).toBeUndefined();
+  });
 });

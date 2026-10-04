@@ -52,9 +52,9 @@ interface GrepInput {
 
 /**
  * Validate and parse grep tool input.
- * `sessionCwd` is the effective working directory (context.resolveBase,
- * context.cwd, or factory cwd — in priority order); used as the default
- * search path when the model omits one.
+ * `sessionCwd` is the effective working directory (context.resolveBase
+ * or factory cwd — in priority order); used as the default search path
+ * when the model omits one.
  *
  * @throws if `pattern` is not a string or if path is outside allowed roots
  */
@@ -79,12 +79,11 @@ function parseGrepInput(
 
   // Effective cwd priority:
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-  // 2. context?.cwd — per-call back-compat
-  // 3. sessionCwd — factory-level worktree isolation
-  // 4. process.cwd() fallback
+  // 2. sessionCwd — factory-level worktree isolation
+  // 3. process.cwd() fallback
   const rawPath = typeof grepInput.path === 'string'
     ? grepInput.path
-    : (context?.resolveBase ?? context?.cwd ?? sessionCwd ?? process.cwd());
+    : (context?.resolveBase ?? sessionCwd ?? process.cwd());
 
   // Apply containment — throws if path escapes allowed read roots
   const resolvedPath = resolveAndContain(rawPath, context, 'read');
@@ -208,13 +207,12 @@ export function createGrepHandler(cwd?: string, options?: GrepHandlerOptions): T
     // Effective cwd priority (parity with the bash handler, #441):
     //   1. context?.resolveBase — permission anchor (updated in place on an
     //      in-flight setResolveBase re-anchor)
-    //   2. context?.cwd — per-call override (back-compat)
-    //   3. factory-level `cwd` — session worktree isolation (createGrepHandler)
+    //   2. factory-level `cwd` — session worktree isolation (createGrepHandler)
     // Computed ONCE so the spawn cwd and the ENOENT diagnosis below cannot
     // disagree: a stale factory `cwd` would otherwise make the diagnosis stat a
     // different dir than spawn used, reverting to a raw `spawn <rgPath> ENOENT`
     // (Codex P2 on #471). spawn treats `cwd: undefined` as inherit process.cwd().
-    const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+    const effectiveCwd = context?.resolveBase ?? cwd;
     const proc = spawn(rgPath, args, effectiveCwd !== undefined ? { cwd: effectiveCwd } : {});
 
     // Invariant: the model never receives more than MODEL_CAP_BYTES, so there
