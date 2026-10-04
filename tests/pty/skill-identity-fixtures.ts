@@ -101,9 +101,8 @@ export const SKILL_IDENTITY_SCENARIOS: Record<string, PtyScenario> = {
     await r.dispose();
     await settle();
   }, { exactlyOnce: ['SOFT_CANCEL_PURPOSE'], absent: ['stopping…', '/diagnose · SOFT_CANCEL_PURPOSE'] }),
-  // Known runtime defect, kept as an expected-failure regression in the suite:
-  // dispose clears softStopping, but not interrupting, before its final flush.
-  'skill-identity-interrupt-regression': scenario('Ctrl+C affordance should clear on dispose (known defect)', async ctx => {
+  // Regression: dispose must clear both stopping flags before its final flush.
+  'skill-identity-interrupt-regression': scenario('Ctrl+C affordance clears on dispose', async ctx => {
     const c = await surface(ctx);
     let cancelled = false;
     const r = renderer(ctx.stdout, c, 'diagnose', 'CANCEL_PURPOSE', undefined, () => {
