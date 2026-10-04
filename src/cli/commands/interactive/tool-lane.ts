@@ -1,3 +1,4 @@
+import { mergeAgentLabel } from './tool-lane.labels.js';
 import { formatSkillIdentity, type SkillIdentity } from '../../_lib/skill-identity-format.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import { SUBAGENT_TOOLS, NESTING_TOOLS, SKILL_TOOLS } from '../../tool-category.js';
@@ -171,36 +172,10 @@ export class ToolLane {
     this.order.push(toolUseId);
   }
 
-  /**
-   * Mutate an existing `agent`/`Task` ToolEntry to display as `Agent(<label>)`.
-   * Returns `true` if the entry was found, is a tool entry, belongs to
-   * SUBAGENT_TOOLS, and has NOT already been merged (toolName !== 'Agent').
-   * Returns `false` otherwise. Callers use the return value as a merge-happened
-   * guard to decide whether to create a synthetic child entry.
-   *
-   * Invariants: toolUseId key, agentContext, and agentIdStack are all
-   * unchanged. Only toolName, toolInput, and prefix are mutated.
-   */
   mergeAgentLabel(parentToolUseId: string, label: string, maxWidth?: number): boolean {
-    const entry = this.entries.get(parentToolUseId);
-    if (entry?.kind !== 'tool') return false;
-    if (!SUBAGENT_TOOLS.has(entry.toolName)) return false;
-    if (entry.toolName === 'Agent') return false; // already merged — prevent grandchild overwrite
-    // Same rationale as addStart / addStartWithAgentContext: strip ANSI at
-    // storage time so LLM-emitted escapes in the subagent label can't reach
-    // palette.dim() on any downstream render surface (overlay or flush).
-    const safeLabel = stripAnsi(label);
-    const input = `(${safeLabel})`;
-    entry.toolName = 'Agent';
-    entry.toolInput = input;
-    entry.prefix = formatToolLine('Agent' + input, maxWidth);
-    return true;
+    return mergeAgentLabel(this.entries, parentToolUseId, label, maxWidth);
   }
 
-  /**
-   * Update an existing tool entry's `agentContext`. No-op if the entry
-   * doesn't exist or is a text entry.
-   */
   /** Update display only; never mutate the actual tool invocation. */
   setSkillIdentity(toolUseId: string, identity: SkillIdentity): void {
     const entry = this.entries.get(toolUseId);
@@ -209,6 +184,7 @@ export class ToolLane {
     entry.prefix = formatToolLine(entry.toolName + entry.toolInput);
   }
 
+  /** Update an existing entry's nesting, without changing its identity. */
   setAgentContext(toolUseId: string, agentContext: string | undefined): void {
     const entry = this.entries.get(toolUseId);
     if (entry?.kind === 'tool') {

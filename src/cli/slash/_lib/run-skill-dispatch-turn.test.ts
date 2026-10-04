@@ -596,3 +596,26 @@ describe('runSkillDispatchTurn — loop-stage rail wiring', () => {
     expect(onStageChange).toHaveBeenLastCalledWith('observing');
   });
 });
+
+
+describe('dispatch identity preparation', () => {
+  it('introduces resolved identity before a paused preflight without changing arguments', async () => {
+    const session = fakeSession([fakeDone()]);
+    const { ctx, lines } = makeCtx(session);
+    let release!: () => void;
+    let entered!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const run = runSkillDispatchTurn(ctx, {
+      skillName: 'mint', skillMeta: makeSkill(), args: 'the effective args',
+      preflight: async () => { entered(); await gate; return undefined; },
+    });
+    await ready;
+    expect(lines.join('\n')).toContain('/mint · mint skill · args: the effective args');
+    expect(session.sendMessageStream).not.toHaveBeenCalled();
+    release();
+    await run;
+    expect(lines.filter(line => line.includes('mint skill'))).toHaveLength(1);
+    expect(JSON.stringify(session.sendMessageStream.mock.calls[0])).toContain('the effective args');
+  });
+});

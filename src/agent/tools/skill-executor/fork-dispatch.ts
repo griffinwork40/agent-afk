@@ -220,6 +220,7 @@ export async function executePluginSkill(
   // Per-skill model override from the SKILL.md `model:` frontmatter field.
   // Threaded from `pluginSkill.model` at the call site (skill-executor.ts).
   model?: string,
+  description?: string,
 ): Promise<ToolResult> {
   const { ctx } = internals;
   if (call.signal.aborted) {
@@ -256,7 +257,7 @@ export async function executePluginSkill(
     apiKey: pluginChildApiKey,
     parentModel: pluginChildModel,
     callId: call.id,
-    identity: { name: skillName, ...(args ? { arguments: args } : {}) },
+    identity: { name: skillName, ...(description ? { purpose: description } : {}), ...(args ? { arguments: args } : {}) },
     parentAbortSignal: call.signal,
   });
 
