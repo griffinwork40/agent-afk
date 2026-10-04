@@ -23,7 +23,7 @@ import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
-import { verbForToolName } from './input/work-derived-verb.js';
+import { verbForToolName, waitHintText } from './input/work-derived-verb.js';
 import { CaretBlinkController, DEFAULT_CARET_BLINK_INTERVAL_MS } from './input/caret-blink.js';
 import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
@@ -387,6 +387,8 @@ export class TerminalCompositor {
    * already has a variable-width verb.
    */
   private activeToolName: string | undefined;
+  /** Root-session wait_for in flight; read only by the spinner's contextTip. */
+  private rootWaitActive = false;
   /**
    * Owns the input caret's blink phase + timer. Started in arm() / resumeInput(),
    * stopped in disarm() / suspendInput(), reset-to-solid on each non-paste
@@ -671,6 +673,7 @@ export class TerminalCompositor {
       // tick — no extra timer, no extra repaint path. Returns undefined when no
       // tool is in flight, which routes the spinner back to its flavour pool.
       workVerb: () => verbForToolName(this.activeToolName),
+      contextTip: () => waitHintText({ waiting: this.rootWaitActive, queued: this.hasPendingSubmission() }),
     });
     // Caret blink defaults OFF: enablement (incl. reduced-motion) is resolved
     // by the interactive caller and passed as `caretBlink`, mirroring how the
@@ -945,6 +948,11 @@ export class TerminalCompositor {
    */
   setActiveToolName(toolName: string | undefined): void {
     this.activeToolName = toolName;
+  }
+
+  /** Root wait_for in-flight flag for the queue-to-stop hint. No repaint (same rationale as above). */
+  setRootWaitActive(active: boolean): void {
+    this.rootWaitActive = active;
   }
 
   // Committed-band lifecycle extracted to terminal-compositor.committed-band.ts

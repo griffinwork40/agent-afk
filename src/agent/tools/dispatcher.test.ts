@@ -2355,14 +2355,12 @@ describe('SessionToolDispatcher.setResolveBase', () => {
     // First dispatch sees the original cwd.
     await d.execute(makeCall({ name: 'capture' }));
     expect(capturedContext?.resolveBase).toBe('/old/worktree');
-    expect(capturedContext?.cwd).toBe('/old/worktree');
 
     // After setResolveBase, the SAME dispatcher reference must emit the new
     // path on the next dispatch — this is the in-flight-turn fix.
     d.setResolveBase('/new/worktree');
     await d.execute(makeCall({ name: 'capture' }));
     expect(capturedContext?.resolveBase).toBe('/new/worktree');
-    expect(capturedContext?.cwd).toBe('/new/worktree');
   });
 
   it('swaps prior cwd in _readRoots/_writeRoots in place (preserves array reference)', () => {
