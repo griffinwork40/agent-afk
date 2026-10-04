@@ -16,6 +16,7 @@ import { emitSessionPhase } from '../../../trace/emit.js';
 import type { AnthropicClientLike, RunTurnInput } from '../types.js';
 import type { RetryTierContext, TierGenerator } from './retry-context.js';
 import { NO_TS_RETRY_INTERVAL_MS, TWO_HOURS_MS } from './retry-constants.js';
+import { anthropicLimitErrorEvent } from '../usage-limit.error.js';
 
 /**
  * Shared hot-swap wait loop for both the no-timestamp and far-reset parks.
@@ -82,11 +83,13 @@ async function* runHotSwapParkLoop(
     // re-hit a usage limit we are still limited — stay paused and wait
     // again. Otherwise the limit lifted: emit `resumed` once, then stream.
     let reLimited: ProviderEvent | null = null;
+    let reLimitedResetsAt: Date | undefined;
     for await (const event of next(ctx, runInput, isClosed)) {
       if (!resumeEmitted && event.type === 'error') {
         const c = classifyUsageLimitError(event.error);
         if (c && (c.kind === 'oauth-limit' || c.kind === 'oauth-limit-no-ts')) {
           reLimited = event;
+          reLimitedResetsAt = c.kind === 'oauth-limit' ? c.resetsAt : undefined;
           break;
         }
       }
@@ -108,7 +111,7 @@ async function* runHotSwapParkLoop(
     if (Date.now() - startedAt > TWO_HOURS_MS) {
       // Limit never lifted within the cap — stop polling and surface it.
       ctx.markCredentialSnapshotStale();
-      yield reLimited;
+      yield anthropicLimitErrorEvent(reLimited, reLimitedResetsAt);
       return;
     }
     // Still limited — loop and wait again (we remain in the paused state).
@@ -150,6 +153,7 @@ export async function* usageLimitNoTimestampPause(
       : undefined,
     autoResume: ctx.autoResumeOnUsageLimit,
     ...(ctx.autoResumeOnUsageLimit ? { waitDeadline: new Date(startedAt + TWO_HOURS_MS) } : {}),
+    provider: 'anthropic',
   };
   // Witness layer: a usage-limit park is otherwise invisible in the trace —
   // the turn simply stops emitting for up to two hours. Record it so the
@@ -172,7 +176,7 @@ export async function* usageLimitNoTimestampPause(
     // account — needs the NEXT turn to pick up the new credential
     // without a manual `/reauth`. See `credentialSnapshotStale`.
     ctx.markCredentialSnapshotStale();
-    yield pendingErrorEvent;
+    yield anthropicLimitErrorEvent(pendingErrorEvent);
     return;
   }
 
@@ -217,7 +221,7 @@ export async function* usageLimitResetPause(
       // mark the snapshot stale (see `credentialSnapshotStale`) — same
       // reasoning as the no-ts fail-fast.
       ctx.markCredentialSnapshotStale();
-      yield pendingErrorEvent;
+      yield anthropicLimitErrorEvent(pendingErrorEvent, resetsAt);
       return;
     }
 
@@ -235,6 +239,7 @@ export async function* usageLimitResetPause(
       accountId,
       autoResume: true,
       waitDeadline,
+      provider: 'anthropic',
       // resetsAt intentionally omitted: displaying the real distant timestamp
       // would mislead the user (we give up after 2h, not at the far reset).
     };
@@ -268,6 +273,7 @@ export async function* usageLimitResetPause(
     resetsAt,
     accountId,
     autoResume: ctx.autoResumeOnUsageLimit,
+    provider: 'anthropic',
   };
   // Witness layer: bracket the park so `afk trace show` explains the stall
   // (see the no-ts pause above). Carries the reset deadline for context.
@@ -287,7 +293,7 @@ export async function* usageLimitResetPause(
     // above: no replay follows, so the next turn must force a credential
     // re-resolve instead of waiting on `/reauth`.
     ctx.markCredentialSnapshotStale();
-    yield pendingErrorEvent;
+    yield anthropicLimitErrorEvent(pendingErrorEvent, resetsAt);
     return;
   }
 

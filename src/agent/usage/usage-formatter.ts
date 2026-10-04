@@ -6,7 +6,9 @@
  *   - compact per-provider entries for `get_runtime_state`
  *     ({@link compactUsageEntries});
  *   - one-line sentences for the fan-out notice and the daemon skip notice
- *     ({@link describeBindingWindow}).
+ *     ({@link describeBindingWindow});
+ *   - the provider-labeled usage-limit sentence every surface shows
+ *     ({@link describeUsageLimit}).
  *
  * Pure module: no I/O, no module state, no colour (the CLI layers colour on top).
  *
@@ -16,6 +18,7 @@
 import { formatResetCountdown } from '../../cli/quota-indicator.js';
 import { WINDOW_KEYS, WINDOW_LABELS, type UsageRecord, type WindowKey } from './usage-record.js';
 import { isStale, levelFor, type BindingWindow } from './usage-budget.js';
+import type { UsageLimitInfo, UsageLimitProvider } from '../../utils/errors.js';
 
 // ─── Output types ────────────────────────────────────────────────────────────
 
@@ -191,6 +194,39 @@ export function describeBindingWindow(provider: string, binding: BindingWindow, 
   const msLeft = binding.resetsAt !== undefined ? binding.resetsAt - now : 0;
   const reset = msLeft > 0 ? `, resets in ${formatResetCountdown(msLeft)}` : '';
   return `${providerDisplayName(provider)} ${binding.label} window at ${binding.pct}%${reset}`;
+}
+
+/** Display name for a usage-limit provider, e.g. `Codex`. Absent = Claude (legacy copy). */
+export function usageLimitProviderName(provider: UsageLimitProvider | undefined): string {
+  return providerDisplayName(provider ?? 'anthropic');
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Wall-clock reset phrase: `3:42 PM (in ~2h10m)`. A reset a day or more away
+ * names the weekday; a reset already passed drops the countdown.
+ */
+export function describeResetTime(resetsAt: Date, now: number = Date.now()): string {
+  const msLeft = resetsAt.getTime() - now;
+  const time = resetsAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+  const day = msLeft >= DAY_MS ? `${resetsAt.toLocaleDateString(undefined, { weekday: 'short' })} ` : '';
+  return msLeft > 0 ? `${day}${time} (in ~${formatResetCountdown(msLeft)})` : `${day}${time}`;
+}
+
+/**
+ * The one provider-labeled usage-limit sentence, used as the
+ * `UsageLimitError` message and by the pause surfaces:
+ * `Codex usage limit reached (plus plan), resets at 3:42 PM (in ~2h10m)`.
+ */
+export function describeUsageLimit(info: UsageLimitInfo, now: number = Date.now()): string {
+  const name = usageLimitProviderName(info.provider);
+  if (info.kind === 'credit') {
+    return info.provider === 'anthropic' ? 'Anthropic API credit balance is empty' : `${name} credit balance is empty`;
+  }
+  const plan = info.plan !== undefined ? ` (${info.plan} plan)` : '';
+  const reset = info.resetsAt !== undefined ? `, resets at ${describeResetTime(info.resetsAt, now)}` : '';
+  return `${name} usage limit reached${plan}${reset}`;
 }
 
 // ─── Text formatter ──────────────────────────────────────────────────────────

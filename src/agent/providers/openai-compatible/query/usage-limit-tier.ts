@@ -65,6 +65,7 @@ import { getErrorStatus } from './retry.js';
 import type { IterationResult } from './stream-drive.js';
 import { classifyChatGptUsageLimit, isChatGptUsageLimitError } from './chatgpt-usage-limit.js';
 import type { ChatGptUsageLimitInfo } from './chatgpt-usage-limit.js';
+import { usageLimitErrorEvent } from '../../shared/usage-limit-error.js';
 
 /**
  * Same magnitude threshold as `anthropic-direct/usage-limit.ts`
@@ -192,6 +193,24 @@ function quotaPausedEvent(
   };
 }
 
+/**
+ * The error event a park ends with. A ChatGPT limit is wrapped in the shared
+ * provider-labeled `UsageLimitError`; a generic quota 429 is surfaced raw,
+ * exactly as before (no provider to name).
+ */
+function terminalQuotaEvent(
+  event: Extract<ProviderEvent, { type: 'error' }>,
+  codex: ChatGptUsageLimitInfo | null,
+): ProviderEvent {
+  if (codex === null) return event;
+  return usageLimitErrorEvent(event, {
+    provider: 'codex',
+    kind: 'subscription',
+    ...(codex.resetsAt !== undefined ? { resetsAt: codex.resetsAt } : {}),
+    ...(codex.plan !== undefined ? { plan: codex.plan } : {}),
+  });
+}
+
 /** Context threaded through from `turn-driver.ts`. */
 export interface QuotaLimitTierContext {
   /** From `config.autoResumeOnUsageLimit ?? true`. */
@@ -301,13 +320,13 @@ export async function* runIterationWithQuotaLimitPause(
 
     // ── Fail-fast: autoResumeOnUsageLimit = false, or reset beyond 2h ─────────
     if (!willWait) {
-      yield quotaEvent;
+      yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
 
     // ── Two-hour cap: if total wait already exceeds budget, surface the error ─
     if (Date.now() - pausedAt > resolveQuotaTwoHoursMs()) {
-      yield quotaEvent;
+      yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
 
@@ -320,7 +339,7 @@ export async function* runIterationWithQuotaLimitPause(
 
     // Still within budget?
     if (Date.now() - pausedAt > resolveQuotaTwoHoursMs()) {
-      yield quotaEvent;
+      yield terminalQuotaEvent(quotaEvent, codex);
       return null;
     }
 

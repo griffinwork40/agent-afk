@@ -238,6 +238,8 @@ function mapPausedEvent(event: Extract<ProviderEvent, { type: 'paused' }>): Extr
     ...(event.accountId !== undefined && { accountId: event.accountId }),
     ...(event.autoResume !== undefined && { autoResume: event.autoResume }),
     ...(event.waitDeadline !== undefined && { waitDeadline: event.waitDeadline }),
+    ...(event.provider !== undefined && { provider: event.provider }),
+    ...(event.plan !== undefined && { plan: event.plan }),
   };
 }
 

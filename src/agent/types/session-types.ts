@@ -33,6 +33,7 @@ import type {
 import type { HookRegistry } from '../hooks.js';
 import type { MessageJournal } from '../journal/types.js';
 import type { ZodType } from 'zod';
+import type { UsageLimitProvider } from '../../utils/errors.js';
 
 /** Agent session state */
 export type SessionState = 'idle' | 'processing' | 'streaming' | 'compacting' | 'closed';
@@ -169,7 +170,13 @@ export type OutputEvent =
        * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
        * when present. Never shown to users as "resumes at X" copy.
        */
-      waitDeadline?: Date;
+      waitDeadline?: Date;      /**
+       * Mirror of {@link import('../provider.js').ProviderEvent.paused.provider}.
+       * Absent = unknown; UI layers render the legacy Claude copy for it.
+       */
+      provider?: UsageLimitProvider;
+      /** Mirror of {@link import('../provider.js').ProviderEvent.paused.plan}. */
+      plan?: string;
     }
   | {
       type: 'resumed';
