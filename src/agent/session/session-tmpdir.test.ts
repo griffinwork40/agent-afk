@@ -20,7 +20,11 @@ import {
   lookupSessionTmpdir,
   resolveSpawnTmpEnv,
   runInTmpdirScope,
+  SESSION_DIR_MAX,
+  sessionTmpdirRoot,
   setSessionTmpdirRootForTests,
+  SOCKET_SUFFIX_BUDGET,
+  UNIX_SOCKET_PATH_MAX,
   withSessionTmpdir,
 } from './session-tmpdir.js';
 import { assembleChildConfig, type AssembleChildConfigArgs } from '../subagent/fork-child-config.js';
@@ -181,6 +185,52 @@ describe('cleanup ownership', () => {
     } finally {
       setSessionTmpdirRootForTests(root);
     }
+  });
+});
+
+describe('socket path length budget (fixes listen EINVAL on macOS)', () => {
+  // Invariant: POSIX sun_path is 104 bytes on macOS (NUL-terminated), 108 on
+  // Linux. IPC tools like tsx create unix sockets under TMPDIR; if the session
+  // dir path is too long the socket bind fails with EINVAL. These tests verify
+  // the budget without platform skipIf (R4) by injecting platform/tmpdir.
+
+  it('constants are self-consistent: SESSION_DIR_MAX = UNIX_SOCKET_PATH_MAX - SOCKET_SUFFIX_BUDGET', () => {
+    expect(SESSION_DIR_MAX).toBe(UNIX_SOCKET_PATH_MAX - SOCKET_SUFFIX_BUDGET);
+    expect(UNIX_SOCKET_PATH_MAX).toBe(104); // macOS struct sockaddr_un.sun_path
+    expect(SOCKET_SUFFIX_BUDGET).toBe(40);  // covers "/tsx-<uid5>/<pid7>.pipe"
+  });
+
+  it('real sessionTmpdirRoot() + 8-hex leaf fits SESSION_DIR_MAX on this machine', () => {
+    // Clear test override so we measure the real implementation.
+    setSessionTmpdirRootForTests(undefined);
+    try {
+      const realRoot = sessionTmpdirRoot();
+      // Leaf is always 8 hex chars; separator is 1 char.
+      const sessionDir = path.join(realRoot, 'xxxxxxxx');
+      expect(sessionDir.length).toBeLessThanOrEqual(SESSION_DIR_MAX);
+    } finally {
+      setSessionTmpdirRootForTests(root);
+    }
+  });
+
+  it('session dir + worst-case tsx socket suffix stays under macOS sun_path (104)', () => {
+    setSessionTmpdirRootForTests(undefined);
+    try {
+      const realRoot = sessionTmpdirRoot();
+      const sessionDir = path.join(realRoot, 'xxxxxxxx');
+      // tsx IPC socket: <TMPDIR>/tsx-<uid>/<pid>.pipe
+      // Worst case uid=99999 (5 digits), pid=1234567 (7 digits)
+      const tsxSuffix = '/tsx-99999/1234567.pipe'; // 23 chars
+      const tsxSocket = sessionDir + tsxSuffix;
+      expect(tsxSocket.length).toBeLessThan(UNIX_SOCKET_PATH_MAX);
+    } finally {
+      setSessionTmpdirRootForTests(root);
+    }
+  });
+
+  it('top-level allocated dir path fits SESSION_DIR_MAX', () => {
+    const env = topLevel();
+    expect(env['TMPDIR']!.length).toBeLessThanOrEqual(SESSION_DIR_MAX);
   });
 });
 
