@@ -11,7 +11,7 @@
     },
     {
       "name": "AFK_AUTO_ROUTING",
-      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, telegram, and daemon surfaces.",
+      "description": "Auto-route bare slash inputs to matching skills. Applies to interactive, chat, and telegram surfaces.",
       "type": "boolean",
       "required": false,
       "example": "true",
@@ -149,6 +149,24 @@
       "required": false,
       "example": "/Users/me/Projects/afk-companion/PRIMER.md",
       "category": "paths"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_GATE_DISABLED",
+      "description": "Set to 1 to disable the subscription-usage budget gate for daemon/cron agent tasks. When unset (default) the daemon checks Claude subscription utilization before starting each agent task and skips the run if any window is at or above AFK_DAEMON_BUDGET_SKIP_PCT. Shell and builtin tasks are never gated regardless of this setting.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "daemon"
+    },
+    {
+      "name": "AFK_DAEMON_BUDGET_SKIP_PCT",
+      "description": "Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window's utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the gate entirely (no usage fetch is made and every task passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).",
+      "type": "number",
+      "required": false,
+      "default": "90",
+      "example": "80",
+      "category": "daemon"
     },
     {
       "name": "AFK_DAEMON_CWD",
@@ -708,7 +726,7 @@
     },
     {
       "name": "AFK_PEER_INBOUND",
-      "description": "How this REPL session handles incoming peer messages. 'accept' (default) delivers messages to the model at the next idle turn. 'hold' writes them to held/ for /inbox review. 'off' ignores incoming messages. Invalid values silently fall back to 'accept'.",
+      "description": "How this REPL session handles incoming peer messages. 'accept' (default) delivers messages to the model at the next idle turn. 'hold' writes them to held/ for /inbox review. 'off' ignores incoming messages. Invalid values fall back to 'accept' with a one-time warning emitted via debugLog (visible under AFK_DEBUG=1).",
       "type": "string",
       "required": false,
       "default": "accept",
@@ -910,6 +928,15 @@
       "default": "0",
       "example": "16",
       "category": "display"
+    },
+    {
+      "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
+      "description": "When set to 1/true, forked sub-agents that hit an OAuth usage-limit 429 will park and wait (up to 2 hours) for a keychain account hot-swap before surfacing the error — the same behaviour as top-level interactive sessions. When false (the default), forks fail fast so the parent session can decide how to recover. Ignored for daemon-surface sessions, because no human can switch accounts there. Callers may override per-fork via config.autoResumeOnUsageLimit; an explicit value always wins over this env var.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_SUBAGENT_IDLE_TIMEOUT_MS",
@@ -1136,6 +1163,15 @@
       "required": false,
       "example": "0",
       "category": "misc"
+    },
+    {
+      "name": "AFK_USAGE_LEDGER_DISABLED",
+      "description": "Set to 1 to stop publishing/reading the cross-process usage ledger (namespace `usage` in state/kv/kv.db). Usage surfaces (`afk usage`, get_runtime_state, fan-out notice, daemon budget gate) then see only this process's in-memory quota cache. Default 0 (ledger active).",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_USER_CARD_MAX_ROWS",

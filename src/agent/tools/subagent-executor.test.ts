@@ -1196,11 +1196,11 @@ describe('SubagentExecutor', () => {
       // Spy on SubagentManager.prototype.teardownAll to verify it's called
       const teardownSpy = vi.fn().mockResolvedValue(undefined);
       const origSubagentManager = await import('../subagent.js');
-      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((() => ({
+      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((function () { return {
         teardownAll: teardownSpy,
         list: () => [],
         killAll: vi.fn(),
-      })) as any);
+      }; }) as any);
 
       try {
         await nestingExec.execute(makeCall());
@@ -1215,11 +1215,11 @@ describe('SubagentExecutor', () => {
       const factory = vi.fn().mockReturnValue(mockProvider());
       const teardownSpy = vi.fn().mockResolvedValue(undefined);
       const origSubagentManager = await import('../subagent.js');
-      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((() => ({
+      const ctorSpy = vi.spyOn(origSubagentManager, 'SubagentManager').mockImplementation((function () { return {
         teardownAll: teardownSpy,
         list: () => [],
         killAll: vi.fn(),
-      })) as any);
+      }; }) as any);
 
       const nestingExec = new SubagentExecutor({
         subagentManager: manager as any,

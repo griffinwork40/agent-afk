@@ -12,6 +12,15 @@
  * time its prompt becomes receptive (`onAwaitingInput`), so any buffered
  * envelope would wake the session anyway and the budget would be a no-op.
  *
+ * Invariant: orphan detection precedes ALL budget and hold decisions.
+ * A pending file with a valid delivered receipt is a crash residue: it is
+ * removed silently without spending a wake-budget slot and without creating a
+ * held/ entry. A corrupt receipt leaves the pending file intact.
+ *
+ * Invariant: a wake-budget slot is spent ONLY when claimPending returns a
+ * non-null envelope. A null return (lost race or vanished source) or a thrown
+ * claim triggers an immediate refund via `wakeBudget.refund()`.
+ *
  * @module cli/commands/interactive/peer-inbox-scan
  */
 
@@ -20,6 +29,7 @@ import {
   peekPending,
   claimPending,
   holdPending,
+  checkOrphanPending,
 } from '../../../agent/peer/inbox-store.js';
 import type { PeerInboundMode } from '../../../agent/peer/inbound-mode.js';
 import type { WakeBudget } from '../../../agent/peer/guards.js';
@@ -58,6 +68,12 @@ async function processPendingFile(
   result: PeerScanResult,
 ): Promise<void> {
   try {
+    // Orphan check: if a delivered receipt already exists, this pending file
+    // is crash residue. Remove it (if the receipt is valid) without spending
+    // budget or creating a held/ entry.
+    const orphan = await checkOrphanPending(args.sessionId, file);
+    if (orphan === 'valid' || orphan === 'corrupt') return;
+
     const peeked = await peekPending(args.sessionId, file);
     if (peeked === null) return; // vanished (another claimer) or unparseable
     let reason: HeldReason | undefined;
@@ -67,7 +83,15 @@ async function processPendingFile(
       if (await holdPending(args.sessionId, file)) result.held.push({ envelope: peeked, reason });
       return;
     }
-    const claimed = await claimPending(args.sessionId, file);
+    // Invariant: refund on BOTH a null claim (lost race / vanished source) and
+    // a thrown claim; otherwise a persistently failing file re-spends a slot
+    // on every poll and starves the sender's budget.
+    let claimed: PeerEnvelope | null = null;
+    try {
+      claimed = await claimPending(args.sessionId, file);
+    } finally {
+      if (claimed === null) args.wakeBudget.refund(peeked.from.id);
+    }
     if (claimed !== null) result.claimed.push(claimed);
   } catch {
     // Best-effort per file: one bad entry must not stall the rest of the inbox.

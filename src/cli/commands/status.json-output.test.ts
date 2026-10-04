@@ -14,9 +14,9 @@ import { Command } from 'commander';
 // --- mocks declared before the module under test is imported ---
 
 vi.mock('../../agent/session.js', () => ({
-  AgentSession: vi.fn(() => ({
+  AgentSession: vi.fn(function () { return {
     close: vi.fn(() => Promise.resolve()),
-  })),
+  }; }),
 }));
 
 vi.mock('../../agent/providers/index.js', () => ({

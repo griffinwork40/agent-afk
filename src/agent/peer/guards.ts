@@ -51,6 +51,13 @@ const RATE_WINDOW_MS = 60_000;
 /** Duplicate-drop window: same sender+target+body hash within 60 seconds. */
 const DEDUP_WINDOW_MS = 60_000;
 
+/**
+ * Duration of the wake-budget window. Exported so `inbox-retention.ts` can
+ * derive the delivered-receipt retention threshold from the same constant
+ * rather than hardcoding a separate magic number.
+ */
+export const PEER_WAKE_BUDGET_WINDOW_MS = 3_600_000; // 1 hour
+
 // ---------------------------------------------------------------------------
 // Sender-side: rate limit and duplicate detection via inbox scan
 // ---------------------------------------------------------------------------
@@ -80,8 +87,8 @@ function tsFromFilename(filename: string): number {
 }
 
 /**
- * Read all envelope files from a single inbox sub-directory (pending or
- * delivered) for the target, filtering by sender and time window.
+ * Read all envelope files from a single inbox sub-directory (pending,
+ * delivered, or held) for the target, filtering by sender and time window.
  * Returns matching parsed envelopes. Best-effort: any unreadable file is
  * skipped silently.
  */
@@ -91,7 +98,7 @@ async function scanInboxDir(
   senderId: string,
   windowMs: number,
   now: () => number,
-): Promise<{ ts: number; bodyHash: string }[]> {
+): Promise<{ messageId: string; ts: number; bodyHash: string }[]> {
   const dir = join(getPeerInboxDir(targetId), subdir);
   let files: string[];
   try {
@@ -100,7 +107,7 @@ async function scanInboxDir(
     return [];
   }
   const cutoff = now() - windowMs;
-  const results: { ts: number; bodyHash: string }[] = [];
+  const results: { messageId: string; ts: number; bodyHash: string }[] = [];
   for (const file of files) {
     if (file.startsWith('.tmp-')) continue;
     const ts = tsFromFilename(file);
@@ -109,7 +116,7 @@ async function scanInboxDir(
       const raw = await readFile(join(dir, file), 'utf8');
       const env = parseEnvelope(raw);
       if (env && env.from.id === senderId) {
-        results.push({ ts, bodyHash: bodyHash(env.body) });
+        results.push({ messageId: env.messageId, ts, bodyHash: bodyHash(env.body) });
       }
     } catch {
       // Skip unreadable / partially-written files silently.
@@ -133,10 +140,8 @@ export interface CheckSendGuardsOpts {
  * Returns `null` if all checks pass, or the {@link PeerRefusal} code that
  * fired first.
  *
- * Scanning the target's `pending/` + `delivered/` + `held/` directories is
- * the chosen approach (cross-process correct; no sender-side state file
- * needed). `held/` is included so rate/dup guards are not bypassed when the
- * receiver is in hold mode.
+ * Scanning the target's `pending/`, `delivered/`, and `held/` directories is the chosen
+ * approach (cross-process correct; no sender-side state file needed).
  */
 export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRefusal | null> {
   const { senderId, targetId, body, hop, now: getNow = Date.now } = opts;
@@ -145,14 +150,14 @@ export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRe
   if (hop > PEER_MAX_HOPS) return 'hop-limit';
 
   // Scan pending, delivered, AND held to build history for rate/dedup checks.
-  // Including held/ prevents bypass when the receiver is in hold mode: a
-  // sender that hits hold-mode gets a valid receipt in held/, so subsequent
-  // sends still count against the rate limit and dedup window.
-  const windowMs = Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS);
+  // Held envelopes (inbound-mode=hold or wake-budget exhausted) must be
+  // counted to prevent a sender from bypassing rate limiting or duplicate
+  // detection by inducing enough held messages to obscure their send history.
+  const window = Math.max(RATE_WINDOW_MS, DEDUP_WINDOW_MS);
   const [pendingHistory, deliveredHistory, heldHistory] = await Promise.all([
-    scanInboxDir(targetId, 'pending', senderId, windowMs, getNow),
-    scanInboxDir(targetId, 'delivered', senderId, windowMs, getNow),
-    scanInboxDir(targetId, 'held', senderId, windowMs, getNow),
+    scanInboxDir(targetId, 'pending', senderId, window, getNow),
+    scanInboxDir(targetId, 'delivered', senderId, window, getNow),
+    scanInboxDir(targetId, 'held', senderId, window, getNow),
   ]);
   const history = [...pendingHistory, ...deliveredHistory, ...heldHistory];
 
@@ -162,7 +167,11 @@ export async function checkSendGuards(opts: CheckSendGuardsOpts): Promise<PeerRe
   const bHash = bodyHash(body);
 
   let rateCount = 0;
+  const seen = new Set<string>();
   for (const entry of history) {
+    // A receipt and crash-leftover source represent one envelope, not two sends.
+    if (seen.has(entry.messageId)) continue;
+    seen.add(entry.messageId);
     if (entry.ts >= rateCutoff) rateCount++;
     if (entry.ts >= dedupCutoff && entry.bodyHash === bHash) return 'duplicate';
   }
@@ -189,8 +198,20 @@ export interface WakeBudget {
    * Attempt to consume one wake credit for `senderId`. Returns `true` when the
    * budget has remaining capacity, `false` when the limit has been reached.
    * Expired entries (> 1 hour old) are pruned before checking.
+   *
+   * Callers must call `refund(senderId)` if the consuming action ultimately
+   * did not succeed (e.g. the claim returned null due to a lost race). This
+   * keeps the budget accurate: only actions that actually wake the session
+   * consume a permanent slot.
    */
   tryConsume(senderId: string): boolean;
+  /**
+   * Return the most recently recorded wake credit for `senderId`. Call when
+   * `tryConsume` returned `true` but the subsequent action did not complete
+   * (e.g. `claimPending` returned `null`). Safe to call after `tryConsume`
+   * returned `false` — it is a no-op in that case.
+   */
+  refund(senderId: string): void;
 }
 
 /**
@@ -203,7 +224,6 @@ export interface WakeBudget {
 export function createWakeBudget(opts?: WakeBudgetOpts): WakeBudget {
   const limit = opts?.perSenderPerHour ?? 20;
   const getNow = opts?.now ?? Date.now;
-  const HOUR_MS = 3_600_000;
 
   // Map<senderId, timestamps[]> — each entry is the time a wake was granted.
   const slots = new Map<string, number[]>();
@@ -211,7 +231,7 @@ export function createWakeBudget(opts?: WakeBudgetOpts): WakeBudget {
   return {
     tryConsume(senderId: string): boolean {
       const nowMs = getNow();
-      const cutoff = nowMs - HOUR_MS;
+      const cutoff = nowMs - PEER_WAKE_BUDGET_WINDOW_MS;
       const prev = (slots.get(senderId) ?? []).filter((t) => t >= cutoff);
       if (prev.length >= limit) {
         slots.set(senderId, prev);
@@ -220,6 +240,13 @@ export function createWakeBudget(opts?: WakeBudgetOpts): WakeBudget {
       prev.push(nowMs);
       slots.set(senderId, prev);
       return true;
+    },
+    refund(senderId: string): void {
+      const existing = slots.get(senderId);
+      if (!existing || existing.length === 0) return;
+      // Remove the most recently added timestamp for this sender.
+      existing.pop();
+      slots.set(senderId, existing);
     },
   };
 }

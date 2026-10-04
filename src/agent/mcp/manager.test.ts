@@ -75,7 +75,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content).toContain('hello world');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -95,7 +95,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toMatch(/boom/);
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -115,7 +115,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(result.isError).toBeFalsy();
       expect(result.content.trim()).toBe('42');
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -147,7 +147,7 @@ describe('McpManager (integration: stdio fixture)', () => {
         'mcp__good__echo',
       ]);
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -169,7 +169,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect((caught as Error).message).toMatch(/alwaysLoad/);
       // manager is undefined here; afterEach is a no-op.
     },
-    { timeout: 10_000 },
+    10_000,
   );
 
   it(
@@ -208,7 +208,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(disconnectSpy).toHaveBeenCalled();
       disconnectSpy.mockRestore();
     },
-    { timeout: 10_000 },
+    10_000,
   );
 
   it(
@@ -227,7 +227,7 @@ describe('McpManager (integration: stdio fixture)', () => {
       expect(manager.getMcpTools()).toEqual([]);
       expect(manager.getMcpHandlers().size).toBe(0);
     },
-    { timeout: 5_000 },
+    5_000,
   );
 
   it(
@@ -314,7 +314,7 @@ describe('McpManager (integration: stdio fixture)', () => {
         manager = undefined;
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -352,6 +352,6 @@ describe('McpManager (integration: stdio fixture)', () => {
         warnSpy.mockRestore();
       }
     },
-    { timeout: 10_000 },
+    10_000,
   );
 });

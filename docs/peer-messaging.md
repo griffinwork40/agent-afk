@@ -38,7 +38,10 @@ Peer-relevant fields added to the presence schema (`src/agent/awareness/presence
 | `name` | `string?` | Human-readable label, max 64 chars (`src/agent/awareness/presence.peer.ts:23`) |
 | `turnState` | `'idle'|'busy'|'blocked'` | Current REPL state |
 | `turnStateSince` | ISO string | When `turnState` last changed |
-| `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox |
+| `peerInbox` | `boolean?` | `true` once the session's notifier is watching its inbox; `send_to_session` refuses targets without it |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn starts); see `list_sessions` field table below |
+
+**Liveness**: `list_sessions` (and every other display reader of `readLivePresenceFiles`) hides a record when its pid is gone, when the OS-reported start time of the pid differs from the record's `pidStartedAt` by more than 5 s (the pid was recycled by an unrelated process; probed with one batched `ps -o pid= -o etime=` on macOS, `/proc/<pid>/stat` on Linux), or when a legacy record without `pidStartedAt` has a heartbeat at least 6 h old. On Linux the record also carries `pidStartTicks` (raw `/proc/self/stat` starttime), compared exactly in preference to the epoch because `btime` shifts when the wall clock is stepped. Probe results are cached per `(pid, recorded identity)` for 30 s. An unprobeable start time never hides a session. Each process refreshes `heartbeatAt` every 60 s with an atomic write that never recreates a removed file, and REPL startup reaps presence files whose pid fails `kill(pid, 0)` with `ESRCH` only, re-reading each file right before unlink so a resumed session's rewrite survives (`src/agent/awareness/presence.liveness.ts`, `presence.reaper.ts`). This filter is display/routing only: the peer-inbox sweep, like the worktree sweep, protects every raw record whose pid is not proven dead.
 
 **Auto-naming**: on startup (when `$TMUX` is set) the notifier runs `tmux display-message -p '#S:#I'` to derive a `session:window` label (e.g. `research:5`), applied via `setPresenceNameIfUnset` so `/name` always wins (`src/agent/awareness/presence.peer.ts:76`).
 
@@ -56,10 +59,28 @@ Returns an array of live peer sessions excluding self. Each entry:
 
 ```
 { sessionId, name, surface, cwd, branch, turnState, turnStateSince,
-  heartbeatAgeMs, pendingMessages, blocked }
+  heartbeatAgeMs, pendingMessages, blocked, acceptsMessages, activity? }
 ```
 
-`pendingMessages` is the count already queued in the target's inbox. `turnState` lets the sender decide whether to send now (idle) or expect queued delivery (busy).
+| Field | Type | Description |
+|---|---|---|
+| `sessionId` | `string` | Unique session identifier |
+| `name` | `string?` | Human-readable label (from `/name` or auto-detected tmux `session:window`) |
+| `surface` | `string` | Session surface (`cli`, `telegram`, etc.) |
+| `cwd` | `string` | Current working directory |
+| `branch` | `string?` | Current git branch |
+| `turnState` | `string` | `idle` (ready to be woken), `busy` (running a turn), or `blocked` (waiting on a human prompt) |
+| `turnStateSince` | `string?` | ISO timestamp of the last `turnState` change |
+| `heartbeatAgeMs` | `number?` | Milliseconds since the last presence heartbeat |
+| `pendingMessages` | `number` | Count of unread messages already queued in the session's inbox |
+| `blocked` | `boolean` | Whether the session is currently waiting on a human elicitation |
+| `acceptsMessages` | `boolean` | `true` when the session has a peer-inbox receiver (REPL sessions only in v1); `false` means `send_to_session` will refuse with `no-receiver` |
+| `activity` | `object?` | What the session is working on (absent until the first REPL turn ends) |
+| `activity.promptHead` | `string?` | First ≤120 chars of the raw user-typed text, whitespace-collapsed and redacted of secrets; set at turn start so a busy session shows the current prompt. Absent only if the session id was not yet minted when the first turn started and no raw text was available at turn end. |
+| `activity.turns` | `number` | Total completed turns for this session (seeded from `stats.totalTurns`, so it survives resume and reflects the true historical count) |
+| `activity.lastTurnEndedAt` | `string?` | ISO timestamp of when the most recent turn completed |
+
+For deeper per-turn detail — tool calls, subagents, session phases — call `read_witness` with the peer's `sessionId`. Note: `read_witness` may return empty results for a very new session that has not yet written its witness trace.
 
 ### `send_to_session({ to, message, reply_to? })`
 
@@ -94,7 +115,7 @@ Sends a message to another session.
 
 **Busy (mid-turn)**: the envelope sits in `pending/` until the current turn completes. At the top of the next turn, `prependTurnInjections` drains the buffer. The running turn is **never interrupted**.
 
-**Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:185-199`).
+**Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:92-100`).
 
 **Multi-line body**: stays as one envelope, arrives in one turn as one `<peer-session-message>` block.
 
@@ -112,7 +133,9 @@ $AFK_STATE_DIR/inbox/<sessionId>/
 Directories: mode `0700`. Files: mode `0600`.
 
 **Write**: sender writes `.tmp-<id>` then renames to final name (atomic).
-**Claim**: receiver renames `pending/<file>` → `delivered/<file>`; exactly one claimer wins; others get `ENOENT` and return `null`.
+**Claim**: receiver attempts to hardlink `pending/<file>` to `delivered/<file>` (exclusive receipt creation), then unlinks the pending name. On filesystems without hardlink support (exFAT/FAT, SMB, some FUSE), falls back to `copyFile(COPYFILE_EXCL)` for the same exclusive-create guarantee. Existing receipts are never overwritten: `EEXIST` or `ENOENT` returns `null`. A crash after receipt creation can leave a pending source; its delivered receipt prevents redelivery. If the receipt is corrupt (e.g. partial copy on crash), the pending source is left intact. A claimed message not yet injected into a turn can still be lost on process exit.
+
+**Hold contention**: hold still moves pending to held by rename. A concurrent hold can win before the claim link (claim returns `null`), or leave a held copy after receipt creation. Releasing that copy cannot redeliver it because the receipt exists. This is not a transaction across all three directories; a stale held/orphan pending entry may remain for operator review.
 
 The envelope JSON schema (`src/agent/peer/envelope.ts`):
 
@@ -183,13 +206,15 @@ Peer messages carry **no user authority**. The model system prompt (`system-prom
 - It inherits no permission or configuration authority.
 - The model should verify before taking any risky action a peer requests.
 
+**Sender identity is not authenticated.** The envelope `from.id` field is set by the sender and is not cryptographically verified. Trust rests entirely on same-user filesystem access (inbox directories are mode `0700`, files `0600`): any process running as the same uid can write an envelope with any sender id, which grants nothing beyond what that process can already do directly. The `send_to_session` tool always stamps the caller's own session id, but a rogue process on the same uid is outside the threat model.
+
 **Accepted risk** (operator decision 2026-10-02): `autonomous`/`bypass` receivers accept peer messages by default (`AFK_PEER_INBOUND=accept`). The 64KB body cap, hop cap, wake budget, and XML escaping mitigate the worst prompt-injection paths. The `/inbox` hold path is available for sensitive deployments.
 
 ---
 
 ## Crash window
 
-An envelope renamed into `delivered/` but not yet drained into a turn is lost if the process dies. The file stays in `delivered/` for forensics; it is never retried. This window is intentionally small (the rename and turn-start are close in wall time) and is documented as a known limitation.
+An envelope claimed by an exclusive hard-link receipt in `delivered/` but not yet drained into a turn is lost if the process dies. The receipt stays in `delivered/` for forensics; it is never retried, even if a crash leaves its source in `pending/` or `held/`. Rate history counts these copies once by message identity. This window is intentionally small (the claim and turn-start are close in wall time) and is documented as a known limitation.
 
 ---
 
@@ -201,6 +226,22 @@ A `peer_message` trace event is emitted for every state transition (`src/agent/t
 - `reason` (for `refused`/`held`)
 
 **Body text is never written to the trace.** Only identifiers and byte counts are persisted.
+
+---
+
+## delivered/ retention
+
+Individual files in `delivered/` are pruned by a throttled sweep that runs from the notifier tick (`src/agent/peer/inbox-retention.ts`).
+
+| Property | Value |
+|---|---|
+| Retention threshold | wake-budget window (1 h) + dedup window (60 s) + 60 s safety margin ≈ **62 minutes** |
+| Throttle | at most once per **5 minutes** per receiver session |
+| Invariant | a receipt is **never removed** while its `pending/` source still exists (receipt-as-claim-authority) |
+
+The threshold is derived from `PEER_WAKE_BUDGET_WINDOW_MS` (`src/agent/peer/guards.ts`) rather than hardcoded separately. `checkSendGuards` reads only files within the 60 s rate/dedup window, so receipts outside that window are not needed by the guard path; `findDeliveredEnvelope` (reply-hop lookup) needs receipts within roughly the wake-budget window; the extra margin covers edge cases where a reply arrives shortly after the wake budget resets.
+
+`sweepPeerInboxes` in `inbox-store.ts` still handles whole-directory cleanup for dead sessions (after 7 days).
 
 ---
 
@@ -235,7 +276,7 @@ Peer messages that arrive while a tool batch is running are not injected immedia
 
 A typed bounded `AdmissionQueue` (`src/agent/peer/admission-queue.ts`) aggregates both human queued-user-messages and peer messages for each boundary invocation:
 
-- **Human priority**: human entries (typed + Enter while a turn runs) are always admitted before peer entries. If any human entry is present, the snapshot returns ONLY human entries — peer messages wait for the next boundary. This is a FIFO-per-source barrier, not just prompt ordering.
+- **Human priority**: human entries (typed + Enter while a turn runs) are always admitted before peer entries. If any human entry is present, the snapshot returns ONLY human entries -- peer messages wait for the next boundary. This is a FIFO-per-source barrier, not just prompt ordering.
 - **Bounds**: max 50 entries, 256 KiB total bytes, 10 per sender.
 - **Consume-once**: the boundary callback drains its snapshot exactly once. The next-turn fallback (`drainAdmissionQueueFallback`) consumes any remainder for sessions with no tool rounds.
 - **Human compositor drain**: human queued-user-messages are peeked from the terminal compositor (`peekQueuedText`), admitted into the queue, and then dropped from the compositor (`dropQueued`) so they are not delivered a second time by the next-turn idle drain.
@@ -243,7 +284,7 @@ A typed bounded `AdmissionQueue` (`src/agent/peer/admission-queue.ts`) aggregate
 
 ### Barriers (attachments / slash / shell)
 
-Payloads with attachments in the compositor queue are not peeked by `peekQueuedText` (the compositor returns `undefined` on any attachment payload). These remain in the compositor for normal next-turn delivery with their images intact. Slash commands and shell pass-through (`!cmd`) sit in the REPL's `prependTurnInjections` path and are not visible to the boundary callback — peer messages cannot jump ahead of them.
+Payloads with attachments in the compositor queue are not peeked by `peekQueuedText` (the compositor returns `undefined` on any attachment payload). These remain in the compositor for normal next-turn delivery with their images intact. Slash commands and shell pass-through (`!cmd`) sit in the REPL's `prependTurnInjections` path and are not visible to the boundary callback -- peer messages cannot jump ahead of them.
 
 ### Deferred
 

@@ -6,15 +6,28 @@
  * Within each test we override AFK_HOME to an isolated mkdtemp so parallel
  * tests in the same file cannot share inbox directories.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile, copyFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { scanPeerInbox } from './peer-inbox-scan.js';
-import { writeEnvelope } from '../../../agent/peer/inbox-store.js';
+import { writeEnvelope, listPending } from '../../../agent/peer/inbox-store.js';
 import { createWakeBudget } from '../../../agent/peer/guards.js';
 import type { PeerEnvelope } from '../../../agent/peer/envelope.js';
+
+// Per-test override for claimPending; undefined = real implementation.
+const claimOverride = vi.hoisted(() => ({
+  fn: undefined as undefined | (() => Promise<PeerEnvelope | null>),
+}));
+vi.mock('../../../agent/peer/inbox-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../agent/peer/inbox-store.js')>();
+  return {
+    ...actual,
+    claimPending: (...args: Parameters<typeof actual.claimPending>) =>
+      claimOverride.fn ? claimOverride.fn() : actual.claimPending(...args),
+  };
+});
 
 // ── path isolation ──────────────────────────────────────────────────────────
 let tmpHome: string;
@@ -197,5 +210,97 @@ describe('scanPeerInbox — mode=accept', () => {
     expect(result.claimed).toHaveLength(1);
     expect(result.claimed[0]?.messageId).toBe(good.messageId);
     expect(result.held).toHaveLength(0);
+  });
+});
+
+// ── Orphan detection regression (item 4a) ───────────────────────────────────
+
+describe('scanPeerInbox — orphan detection', () => {
+  it('orphan with valid receipt: not claimed, not held, no budget spent, pending removed', async () => {
+    const sessionId = randomUUID();
+    const senderId = randomUUID();
+    const env = makeEnvelope(sessionId, { from: { id: senderId } });
+    await writeEnvelope(env);
+
+    // Simulate crash-after-link: create the delivered receipt manually.
+    const { getPeerInboxDir } = await import('../../../paths.js');
+    const base = getPeerInboxDir(sessionId);
+    const files = await listPending(sessionId);
+    const file = files[0]!;
+    await mkdir(join(base, 'delivered'), { recursive: true, mode: 0o700 });
+    await copyFile(join(base, 'pending', file), join(base, 'delivered', file));
+
+    // Budget with a limit of 1 so we can detect if a slot was consumed.
+    const budget = createWakeBudget({ perSenderPerHour: 1 });
+
+    const result = await scanPeerInbox({
+      sessionId,
+      mode: 'accept',
+      wakeBudget: budget,
+      capacity: 10,
+    });
+
+    // Orphan is silently discarded — no claim, no hold.
+    expect(result.claimed).toHaveLength(0);
+    expect(result.held).toHaveLength(0);
+
+    // Budget must NOT have been consumed.
+    // If it had been consumed, the next tryConsume (limit=1) would return false.
+    expect(budget.tryConsume(senderId)).toBe(true);
+  });
+
+  it('orphan with corrupt receipt: not claimed, not held, pending preserved', async () => {
+    const sessionId = randomUUID();
+    const env = makeEnvelope(sessionId);
+    await writeEnvelope(env);
+
+    const { getPeerInboxDir } = await import('../../../paths.js');
+    const base = getPeerInboxDir(sessionId);
+    const files = await listPending(sessionId);
+    const file = files[0]!;
+    // Create a corrupt delivered receipt.
+    await mkdir(join(base, 'delivered'), { recursive: true, mode: 0o700 });
+    await writeFile(join(base, 'delivered', file), 'CORRUPT DATA', { mode: 0o600 });
+
+    const result = await scanPeerInbox({
+      sessionId,
+      mode: 'accept',
+      wakeBudget: unlimitedBudget(),
+      capacity: 10,
+    });
+
+    expect(result.claimed).toHaveLength(0);
+    expect(result.held).toHaveLength(0);
+
+    // Pending source must still exist (corrupt receipt must not destroy content).
+    const pendingAfter = await listPending(sessionId);
+    expect(pendingAfter).toHaveLength(1);
+  });
+});
+
+// ── Failed-claim budget refund regression (item 4b) ─────────────────────────
+
+describe('scanPeerInbox — a failed claim does not consume budget', () => {
+  afterEach(() => { claimOverride.fn = undefined; });
+
+  async function scanWithFailingClaim(fail: () => Promise<PeerEnvelope | null>): Promise<boolean> {
+    const sessionId = randomUUID();
+    const senderId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: senderId } }));
+    const budget = createWakeBudget({ perSenderPerHour: 1 });
+    claimOverride.fn = fail;
+    const result = await scanPeerInbox({ sessionId, mode: 'accept', wakeBudget: budget, capacity: 10 });
+    expect(result.claimed).toHaveLength(0);
+    expect(result.held).toHaveLength(0);
+    // limit=1: a leaked slot would make this return false.
+    return budget.tryConsume(senderId);
+  }
+
+  it('refunds the slot when claimPending returns null (lost race)', async () => {
+    expect(await scanWithFailingClaim(async () => null)).toBe(true);
+  });
+
+  it('refunds the slot when claimPending throws', async () => {
+    expect(await scanWithFailingClaim(async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); })).toBe(true);
   });
 });

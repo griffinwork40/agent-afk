@@ -11,6 +11,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
+import { InMemoryTraceWriter } from '../../../agent/trace/writer.js';
 import { PeerInboxNotifier } from './peer-inbox-notifier.js';
 import { writeEnvelope } from '../../../agent/peer/inbox-store.js';
 import { writePresenceFile } from '../../../agent/awareness/presence.js';
@@ -168,19 +169,14 @@ describe('PeerInboxNotifier — accept path', () => {
 
     await Promise.all([n1.scan(), n2.scan()]);
 
-    const total = n1.drainInjections().length + n2.drainInjections().length;
-    // Exactly one of them got it (the other gets '')
-    const claimed1 = total > 0 ? 1 : 0;
-    // Actually verify: exactly one notifier has content
-    const d1 = n1.hasPendingInjections();
-    const d2 = n2.hasPendingInjections();
-    // Re-run scan so buffer is correct
-    // Both already scanned; at most one wins the rename-claim
-    const got1 = (await (async () => { const { notifier: na } = makeNotifier(sessionId); await na.scan(); return na.drainInjections(); })()).length;
-    // After both scanned, the file is gone — a fresh scan gets nothing
-    expect(got1).toBe(0);
-    // One of the two should have gotten the message
-    expect(d1 !== d2 || (!d1 && !d2)).toBe(true); // at most one can be true
+    const drains = [n1.drainInjections(), n2.drainInjections()];
+    expect(drains.filter((text) => text !== '')).toHaveLength(1);
+    expect((drains.join('').match(/<peer-session-message /g) ?? [])).toHaveLength(1);
+    expect(n1.drainInjections()).toBe('');
+    expect(n2.drainInjections()).toBe('');
+    const { notifier: fresh } = makeNotifier(sessionId);
+    await fresh.scan();
+    expect(fresh.drainInjections()).toBe('');
   });
 
   it('forceAccept("all") moves held envelopes into the buffer bypassing budget', async () => {
@@ -208,63 +204,6 @@ describe('PeerInboxNotifier — accept path', () => {
 });
 
 // ── re-key on sessionId change ───────────────────────────────────────────────
-
-describe('PeerInboxNotifier — rekey isolation', () => {
-  it('clears buffered messages from old session when session id changes (via tick)', async () => {
-    const oldId = randomUUID();
-    const newId = randomUUID();
-    let currentId: string | undefined = oldId;
-
-    // Write a message for the old session.
-    const e1 = makeEnvelope(oldId);
-    await writeEnvelope(e1);
-
-    // Use a dynamic getter that updates mid-test.
-    const dynamic = new PeerInboxNotifier({
-      getSessionId: () => currentId,
-      writeLine: () => undefined,
-      mode: () => 'accept' as const,
-    });
-
-    // Scan while id = oldId: claims message into buffer.
-    await dynamic.scan();
-    expect(dynamic.hasPendingInjections()).toBe(true);
-
-    // Switch id: the rekey path in tick() clears the buffer.
-    currentId = newId;
-    // Access the private tick via a cast to simulate what poll does.
-    await (dynamic as unknown as { tick(): Promise<void> }).tick();
-
-    // Old session's message must NOT be injected into the new session's context.
-    expect(dynamic.hasPendingInjections()).toBe(false);
-    dynamic.dispose();
-  });
-
-  it('live getTraceWriter is called per-emit rather than captured at construction', async () => {
-    const sessionId = randomUUID();
-    let writerVersion = 0;
-    const calls: number[] = [];
-    const notifier = new PeerInboxNotifier({
-      getSessionId: () => sessionId,
-      writeLine: () => undefined,
-      mode: () => 'accept' as const,
-      getTraceWriter: () => {
-        calls.push(writerVersion);
-        return undefined; // no-op writer for this test
-      },
-    });
-
-    const e1 = makeEnvelope(sessionId);
-    await writeEnvelope(e1);
-    await notifier.scan();
-    // First emit: writerVersion = 0
-    writerVersion = 99;
-    // drainInjections just reads the buffer; the emitPeerMessage call already
-    // fired inside accept(). Verify the version recorded was 0 (at scan time).
-    expect(calls[0]).toBe(0);
-    notifier.dispose();
-  });
-});
 
 describe('PeerInboxNotifier — re-key', () => {
   it('changing getSessionId value makes the next tick watch/scan the new inbox', async () => {
@@ -358,6 +297,77 @@ describe('PeerInboxNotifier — start/dispose lifecycle', () => {
   });
 });
 
+describe('PeerInboxNotifier — resetForNewSession (resume swap)', () => {
+  it('resetForNewSession clears the buffer synchronously', async () => {
+    const sessionId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId));
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan();
+    expect(notifier.hasPendingInjections()).toBe(true);
+
+    notifier.resetForNewSession();
+    expect(notifier.hasPendingInjections()).toBe(false);
+    expect(notifier.drainInjections()).toBe('');
+  });
+
+  it('reset clears exhausted sender wake credit without advancing the clock', async () => {
+    const sessionId = randomUUID();
+    const { notifier } = makeNotifier(sessionId, { now: () => 0 });
+    for (let i = 0; i < 21; i++) {
+      await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'same-sender' } }));
+      await notifier.scan();
+      const delivered = notifier.drainInjections();
+      expect(delivered.length > 0).toBe(i < 20);
+    }
+    notifier.resetForNewSession();
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'same-sender' } }));
+    await notifier.scan();
+    expect(notifier.drainInjections()).toContain('same-sender');
+  });
+});
+
+describe('PeerInboxNotifier — live trace writer', () => {
+  it('routes delivered AND held events after switching writers; getter beats static sink', async () => {
+    const sessionId = randomUUID();
+    const oldWriter = new InMemoryTraceWriter();
+    const newWriter = new InMemoryTraceWriter();
+    let currentWriter = oldWriter;
+    let mode: 'accept' | 'hold' = 'accept';
+    const notifier = new PeerInboxNotifier({
+      getSessionId: () => sessionId, writeLine: () => undefined,
+      mode: () => mode, traceWriter: oldWriter,
+      getTraceWriter: () => currentWriter,
+    });
+    await writeEnvelope(makeEnvelope(sessionId));
+    await notifier.scan();
+    expect(oldWriter.events).toHaveLength(1);
+    currentWriter = newWriter;
+    const delivered = makeEnvelope(sessionId);
+    await writeEnvelope(delivered);
+    await notifier.scan();
+    mode = 'hold';
+    const held = makeEnvelope(sessionId);
+    await writeEnvelope(held);
+    await notifier.scan();
+    expect(oldWriter.events).toHaveLength(1);
+    expect(newWriter.events).toEqual([
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'delivered', messageId: delivered.messageId }) }),
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'held', messageId: held.messageId }) }),
+    ]);
+  });
+
+  it('retains static traceWriter support without a getter', async () => {
+    const sessionId = randomUUID();
+    const writer = new InMemoryTraceWriter();
+    const notifier = new PeerInboxNotifier({ getSessionId: () => sessionId, writeLine: () => undefined, mode: () => 'accept', traceWriter: writer });
+    await writeEnvelope(makeEnvelope(sessionId));
+    await notifier.scan();
+    expect(writer.events).toHaveLength(1);
+    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'delivered' } });
+  });
+});
+
 describe('PeerInboxNotifier — dispose race (regression)', () => {
   it('a tick in flight at dispose() never resurrects a watcher that claims later messages', async () => {
     const sessionId = randomUUID();
@@ -445,7 +455,6 @@ describe('PeerInboxNotifier — reclaim()', () => {
 describe('PeerInboxNotifier — stale scan rejection', () => {
   it('envelopes claimed by a scan that races a session-id change are reclaimed, not buffered', async () => {
     const oldId = randomUUID();
-    const newId = randomUUID();
     let currentId = oldId;
 
     const e = makeEnvelope(oldId);
@@ -454,21 +463,11 @@ describe('PeerInboxNotifier — stale scan rejection', () => {
     const { notifier } = makeNotifier(oldId, {
       mode: () => 'accept' as const,
     });
-    // Override getSessionId so it returns newId after the first tick inside scanOnce.
-    // We achieve this by mutating the captured id via the factory's closure.
-    // Simulate: scan starts with oldId, then we change id, then scan finishes.
-    // Since scanPeerInbox is async, we can't inject a race in unit tests,
-    // but we can test the guard by calling scanOnce(oldId) via the public scan()
-    // after changing the internal id pointer.
 
     // Claim the envelope manually under oldId (as if a scan did it).
     const { claimPending, listPending, reclaimDelivered } = await import('../../../agent/peer/inbox-store.js');
     const files = await listPending(oldId);
     expect(files).toHaveLength(1);
-    // The notifier will scan with oldId = getSessionId() at the time of scan call.
-    // But we change currentId right before the scan's post-scan check.
-    // We test the guard indirectly: create a notifier whose getSessionId changes mid-scan.
-    // Direct approach: verify that envelopes claimed for oldId can be reclaimed.
     const claimed = await claimPending(oldId, files[0]!);
     expect(claimed).not.toBeNull();
     // Now manually reclaim (simulating what the stale-scan guard does).

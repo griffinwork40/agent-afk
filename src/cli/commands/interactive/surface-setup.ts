@@ -80,10 +80,11 @@ export async function setupSurface(
   // captures the mutable refs (not snapshot values) so mid-session /model
   // swaps are reflected automatically.
   //
-  // Tier-2 (LLM fallback) is gated by `AFK_SUGGEST_ENABLED` and `apiKey`.
-  // When neither is set, `llmEnabled()` returns false and the engine runs
-  // Tier-1 only (synchronous history/dropdown prefix match) — zero extra
-  // latency, zero API traffic.
+  // Tier-2 (LLM fallback) is gated by `AFK_SUGGEST_ENABLED`. When disabled,
+  // `llmEnabled()` returns false and the engine runs Tier-1 only (synchronous
+  // history/dropdown prefix match) — zero extra latency, zero API traffic.
+  // The engine resolves its own credential per suggestion model; the session
+  // credential is deliberately never handed to it (see suggest-credential.ts).
   const suggestEngine = createSuggestEngine({
     // Surface Tier-2 failures (auth, network, 404 model, unreachable shim)
     // under AFK_DEBUG=1; a no-op otherwise so normal sessions stay silent and
@@ -165,7 +166,6 @@ export async function setupSurface(
       engine: suggestEngine,
       surface,
       stats: ctx.stats,
-      apiKey: ctx.suggestApiKey,
       baseUrl: ctx.suggestBaseUrl,
       historyTracker,
     }),

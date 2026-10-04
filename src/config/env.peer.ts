@@ -30,7 +30,8 @@ export const PEER_ENV_REGISTRY = [
       "How this REPL session handles incoming peer messages. " +
       "'accept' (default) delivers messages to the model at the next idle turn. " +
       "'hold' writes them to held/ for /inbox review. " +
-      "'off' ignores incoming messages. Invalid values silently fall back to 'accept'.",
+      "'off' ignores incoming messages. Invalid values fall back to 'accept' " +
+      "with a one-time warning emitted via debugLog (visible under AFK_DEBUG=1).",
     type: 'string',
     required: false,
     default: 'accept',

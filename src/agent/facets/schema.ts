@@ -26,10 +26,13 @@ import { z } from 'zod';
 /**
  * Bump when the facet shape or derivation changes — invalidates caches.
  *
- * v7 (#2777): added `outcome_source`, `tool_errors_total`, `yield_tracking.pr_url`;
- * added `'unknown'` to FacetOutcomeSchema; replaced inline TERMINAL_STATE_RE in
- * derive.ts with the shared parseTerminalState() parser; yield_tracking carry-
- * forward on re-derive in store.ts.
+ * v7 (#2777): added `outcome_source`, `tool_errors_total`, and required
+ * nullable `yield_tracking.pr_url`; added `'unknown'` to FacetOutcomeSchema;
+ * replaced inline TERMINAL_STATE_RE in derive.ts with the shared
+ * parseTerminalState() parser; yield_tracking carry-forward on re-derive in
+ * store.ts. Public consumers should filter on `facet_version >= 7` and inspect
+ * `outcome_source`; headingless sessions now derive `outcome: 'unknown'`, and
+ * single-line `**Done** — text` is no longer a terminal-state heading.
  */
 export const FACET_VERSION = 7;
 
@@ -67,6 +70,8 @@ export const StoredSessionInputSchema = z
     model: z.string(),
     startedAt: z.number(),
     savedAt: z.number(),
+    endedAt: z.number().optional(),
+    exitReason: z.enum(['sigint', 'sigterm', 'sighup', 'exit-command', 'eof']).optional(),
     totalTurns: z.number(),
     totalCostUsd: z.number().optional(),
     totalTokens: z.number().optional(),
@@ -244,7 +249,7 @@ export const YieldTrackingSchema = z.object({
    * a `gh pr create` bash result. Null when URL not available.
    * Added v7 (#2777).
    */
-  pr_url: z.string().nullable().optional(),
+  pr_url: z.string().nullable().default(null),
 });
 export type YieldTracking = z.infer<typeof YieldTrackingSchema>;
 

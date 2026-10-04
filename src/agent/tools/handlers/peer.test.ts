@@ -14,6 +14,14 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { InMemoryTraceWriter } from '../../trace/writer.js';
+import { closeStore } from '../../goals/goal-store.js';
+// Invariant: import the handler graph statically, BEFORE beforeEach redirects
+// AFK_HOME. Evaluating ask-question/clipboard/send-telegram opens a cached
+// SQLite handle on kv/kv.db; a dynamic import inside a test opened it under
+// that test's tmpDir, and Windows then refused to delete the dir (EBUSY).
+import { SessionToolDispatcher } from '../dispatcher.js';
+import { builtinToolSchemas } from '../schemas.js';
+import { createBuiltinHandlers } from './index.js';
 
 // ---------------------------------------------------------------------------
 // Env isolation
@@ -32,6 +40,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Defensively close the goal-store singleton before Windows temp cleanup
+  // (a no-op when unused). It does not cover the kv.db handle opened by
+  // handler-graph import, which is why those imports are static (see top).
+  closeStore();
   fs.rmSync(tmpDir, { recursive: true, force: true });
   if (origAfkHome === undefined) delete process.env['AFK_HOME'];
   else process.env['AFK_HOME'] = origAfkHome;
@@ -318,9 +330,6 @@ describe('sendToSessionHandler', () => {
 
 describe('dispatcher gating — peer tools', () => {
   it('list_sessions and send_to_session present for top-level (no parentSessionId)', async () => {
-    const { SessionToolDispatcher } = await import('../dispatcher.js');
-    const { builtinToolSchemas } = await import('../schemas.js');
-    const { createBuiltinHandlers } = await import('./index.js');
 
     const dispatcher = new SessionToolDispatcher({
       handlers: createBuiltinHandlers(),
@@ -335,9 +344,6 @@ describe('dispatcher gating — peer tools', () => {
   });
 
   it('list_sessions and send_to_session absent when parentSessionId is set', async () => {
-    const { SessionToolDispatcher } = await import('../dispatcher.js');
-    const { builtinToolSchemas } = await import('../schemas.js');
-    const { createBuiltinHandlers } = await import('./index.js');
 
     const dispatcher = new SessionToolDispatcher({
       handlers: createBuiltinHandlers(),

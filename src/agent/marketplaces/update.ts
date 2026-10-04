@@ -153,6 +153,17 @@ export async function updateMarketplace(
   // remote, not a user workspace. Discard any tracked-file drift so a dirty
   // cache (partial prior update, stray edit) can't wedge the checkout. Untracked
   // files survive --force, so locally-added content is preserved.
+  //
+  // Warn before the force so the user knows which local edits will be reset.
+  // `trackedChanges` returns [] on error, so a probe failure never blocks the
+  // checkout. Untracked files are excluded — they survive --force intact.
+  const dirty = await git.trackedChanges(dir, gitOpts);
+  if (dirty.length > 0) {
+    console.warn(
+      `[marketplace] updating "${name}": the following locally-edited tracked file(s) will be reset to the upstream version:\n` +
+        dirty.map((f) => `  ${f}`).join('\n'),
+    );
+  }
   await git.checkout(dir, isBranch ? remoteRef : pickedSemverTag ? `refs/tags/${targetRef}` : targetRef, { ...gitOpts, force: true });
   const commit = await git.getCommitSha(dir, gitOpts);
   const ts = now().toISOString();

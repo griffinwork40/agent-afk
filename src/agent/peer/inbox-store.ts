@@ -1,5 +1,5 @@
 /**
- * Filesystem mailbox operations for peer messaging.
+ * Contract: filesystem mailbox operations for peer messaging.
  *
  * Each session's inbox lives at:
  *   `$AFK_STATE_DIR/inbox/<sessionId>/{pending,delivered,held}/`
@@ -8,10 +8,18 @@
  * atomically renamed to `<ts-sortable>-<messageId>.json`. This guarantees
  * that a reader never sees a partially-written message.
  *
- * Claim protocol (rename-wins): exactly one claimer wins the
- * `pending/ → delivered/` rename. A concurrent claim that loses gets ENOENT
- * from the rename and returns null — the caller treats null as "someone else
- * delivered it".
+ * Claim protocol (exclusive receipt): first try link `pending/F` to
+ * `delivered/F`; on filesystems without hard-link support (exFAT/FAT, SMB,
+ * some FUSE), fall back to `copyFile(COPYFILE_EXCL)` for the same exclusive-
+ * create semantics. EEXIST and ENOENT return null. After a successful receipt
+ * creation, unlink the pending source. A crash after receipt creation leaves a
+ * delivered receipt that prevents orphaned pending sources from being claimed
+ * again.
+ *
+ * Orphan detection: before spending wake budget or holding, callers should
+ * call `checkOrphanPending`. If a valid delivered receipt already exists for
+ * a pending file, the pending file is an orphan (crash residue) and should be
+ * removed without consuming budget.
  *
  * File modes:
  *   - Directories: 0o700 (only the owning user can list/enter)
@@ -28,6 +36,9 @@ import {
   readFile,
   unlink,
   stat,
+  link,
+  copyFile,
+  constants as fsConstants,
 } from 'fs/promises';
 import { join } from 'path';
 import { getPeerInboxDir } from '../../paths.js';
@@ -124,11 +135,26 @@ export async function listPending(sessionId: string): Promise<string[]> {
   }
 }
 
+// Contract: error codes where hard links are structurally unsupported.
+// EPERM covers Linux/macOS no-hardlink-across-fs; ENOTSUP, EOPNOTSUPP, ENOSYS
+// cover exFAT/FAT/FUSE/SMB. EXDEV covers cross-device link attempts.
+// EACCES is intentionally excluded — permission errors should propagate.
+const HARDLINK_UNSUPPORTED_CODES = new Set([
+  'EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV',
+]);
+
 /**
- * Atomically claim a pending envelope by renaming it to `delivered/`.
+ * Create an exclusive delivered receipt, then remove the pending name.
+ * Returns the claimed envelope, or null when another claimer won (EEXIST)
+ * or the source disappeared (ENOENT).
  *
- * Returns the parsed envelope on success; `null` when the rename fails
- * with ENOENT (another claimer won the race). Any other error is propagated.
+ * Receipt creation uses `link()` for atomic exclusive-create on POSIX
+ * filesystems. When hardlinks are not supported (exFAT/FAT, SMB, FUSE),
+ * falls back to `copyFile(COPYFILE_EXCL)` which provides the same
+ * exclusive-create guarantee. Both approaches ensure exactly one claimer
+ * wins; the fallback requires that the pending and delivered directories
+ * are on the same volume (they always are — both are under the same
+ * `$AFK_STATE_DIR/inbox/<id>/` tree).
  */
 export async function claimPending(
   sessionId: string,
@@ -138,20 +164,63 @@ export async function claimPending(
   const src = join(base, 'pending', file);
   const dst = join(base, 'delivered', file);
   try {
-    await rename(src, dst);
+    await link(src, dst);
   } catch (err: unknown) {
     const e = err as NodeJS.ErrnoException;
-    if (e.code === 'ENOENT') return null;
-    throw err;
+    if (e.code === 'EEXIST' || e.code === 'ENOENT') return null;
+    if (!HARDLINK_UNSUPPORTED_CODES.has(e.code ?? '')) throw err;
+    // Fallback: copyFile with exclusive-create flag.
+    try {
+      await copyFile(src, dst, fsConstants.COPYFILE_EXCL);
+    } catch (copyErr: unknown) {
+      const ce = copyErr as NodeJS.ErrnoException;
+      if (ce.code === 'EEXIST' || ce.code === 'ENOENT') return null;
+      throw copyErr;
+    }
   }
+  // Keep the receipt even if cleanup fails; it is the claim authority.
+  await unlink(src).catch(() => undefined);
   try {
-    const raw = await readFile(dst, 'utf8');
-    return parseEnvelope(raw);
+    return parseEnvelope(await readFile(dst, 'utf8'));
   } catch {
-    // If the read fails after a successful rename we still "won" the claim;
-    // return null to indicate a corrupt/unreadable message.
-    return null;
+    return null; // corrupt/unreadable receipt is still claimed
   }
+}
+
+/**
+ * Check whether `file` in `pending/` is an orphan from a prior crash.
+ *
+ * An orphan is a pending entry whose delivered receipt already exists —
+ * produced when a process dies after `link/copyFile` but before `unlink`.
+ *
+ * Returns:
+ *   - `'valid'`   — receipt exists AND parses as a valid envelope; the pending
+ *                   source was removed (callers must NOT spend wake budget).
+ *   - `'corrupt'` — receipt exists but is unparseable (partial copy on crash);
+ *                   pending source is left untouched (content must never be
+ *                   destroyed on a bad receipt).
+ *   - `'none'`    — no receipt; not an orphan, process normally.
+ *
+ * Never throws.
+ */
+export async function checkOrphanPending(
+  sessionId: string,
+  file: string,
+): Promise<'valid' | 'corrupt' | 'none'> {
+  const base = getPeerInboxDir(sessionId);
+  const dst = join(base, 'delivered', file);
+  let raw: string;
+  try {
+    raw = await readFile(dst, 'utf8');
+  } catch {
+    return 'none'; // receipt absent — not an orphan
+  }
+  // Receipt exists. Try to parse it.
+  const env = parseEnvelope(raw);
+  if (env === null) return 'corrupt'; // do NOT delete pending — bad receipt
+  // Valid receipt: remove the orphaned pending source, ignore failures.
+  await unlink(join(base, 'pending', file)).catch(() => undefined);
+  return 'valid';
 }
 
 /**
@@ -265,7 +334,7 @@ export async function countPending(sessionId: string): Promise<number> {
 /**
  * Move a delivered envelope back to `pending/` so it can be re-delivered by
  * the next receiver poll. This is the reclaim path for envelopes that were
- * claimed (renamed into `delivered/`) but not yet injected into any model
+ * claimed (linked into `delivered/`) but not yet injected into any model
  * turn — for example, when the session is swapped out via `/resume` before
  * the buffered envelope could be drained.
  *
@@ -307,7 +376,7 @@ export async function findDeliveredEnvelope(
     return null;
   }
   for (const file of files) {
-    if (!file.includes(messageId)) continue;
+    if (!file.endsWith(`-${messageId}.json`)) continue;
     try {
       const raw = await readFile(join(dir, file), 'utf8');
       const env = parseEnvelope(raw);

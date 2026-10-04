@@ -139,9 +139,47 @@ describe('bashHandler', () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe('Command aborted');
+      expect(result.content).toMatch(/^Command aborted after \d+\.\ds; no output was captured/);
       expect(result.content).not.toMatch(/exited with code/);
     });
+
+    // Mid-run kills (abort / timeout) keep the output produced before the kill
+    // so the model can tell how far a non-rolled-back command got.
+    // See bash-interrupted.ts.
+    it('abort mid-run returns the output produced before the kill', async () => {
+      const signal = createAbortableSignal(1500);
+      const result = await bashHandler(
+        { command: "printf 'step-1-done\\n'; sleep 60" },
+        signal,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(
+        /^Command aborted after \d+\.\ds; the process was killed\. Output before the kill:\n/,
+      );
+      expect(result.content).toContain('step-1-done');
+    }, 15_000);
+
+    it('timeout returns the output produced before the kill', async () => {
+      const result = await bashHandler(
+        { command: "printf 'before-timeout\\n'; sleep 60", timeout_ms: 1500 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/^Command timed out after 1500ms; the process was killed\./);
+      expect(result.content).toContain('before-timeout');
+    }, 15_000);
+
+    it('timeout with no output keeps the bare historical message', async () => {
+      const result = await bashHandler(
+        { command: 'sleep 60', timeout_ms: 300 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('Command timed out after 300ms');
+    }, 15_000);
   });
 
   describe('input validation', () => {
@@ -271,7 +309,7 @@ describe('bashHandler', () => {
       const elapsed = Date.now() - start;
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe('Command aborted');
+      expect(result.content).toMatch(/^Command aborted/);
       // The fix kills the child immediately; without it, the result would only
       // arrive after `sleep 5` exits on its own (~5s) via the close handler.
       expect(elapsed).toBeLessThan(3000);
@@ -791,7 +829,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     // Must complete quickly — SIGKILL terminates the process immediately;
     // SIGTERM would leave it running for up to 60s.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it('[abort path] terminates a SIGTERM-immune process when AbortSignal fires', async () => {
     const controller = new AbortController();
@@ -809,7 +847,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     expect(result.content).toContain('aborted');
     // Same reasoning: SIGKILL terminates promptly; SIGTERM would not.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it(
     '[process-group kill] reaps descendant processes, not just the direct child',

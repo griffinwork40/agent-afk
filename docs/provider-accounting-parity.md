@@ -36,7 +36,7 @@ Anthropic's extended thinking tokens appear in `output_tokens` — no separate b
 ### 1b. OpenAI-compatible: cached-input pricing (`openai-compatible/pricing.ts`)
 
 **What it does:**  
-`deriveCallCostUsd` (pricing.ts:144) receives `inputTokens` (the full `prompt_tokens`), `outputTokens` (`completion_tokens`), and `cachedInputTokens` (from `prompt_tokens_details.cached_tokens`). The plain-rate portion is `inputTokens - cachedInputTokens` (pricing.ts:160), and the cached portion uses `cachedInputPerMTok` (or falls back to the base rate). This correctly avoids double-billing.
+`deriveCallCostUsd` receives `inputTokens` (the full `prompt_tokens`), `outputTokens` (`completion_tokens`), and `cachedInputTokens` (from `prompt_tokens_details.cached_tokens`). The plain-rate portion is computed as `plainInput = inputTokens - cachedInputTokens`, and the cached portion uses `cachedInputPerMTok` (or falls back to the base rate). This correctly avoids double-billing.
 
 **Key divergence from Anthropic (documented in code):**  
 OpenAI's `prompt_tokens` INCLUDES cached tokens (they are a subset), so the formula subtracts before applying the base rate. Anthropic's `input_tokens` EXCLUDES cache. Both formulas compute the same economic result — they differ in what the wire count means, not in correctness.
@@ -49,7 +49,7 @@ o-series models report `completion_tokens_details.reasoning_tokens` as a sub-fie
 **Display gap (follow-up):** `completion_tokens_details.reasoning_tokens` is not broken out in `ProviderUsage`, so the `/tokens` command cannot separately show "reasoning tokens" for o-series models. This is a display gap, not a cost gap.
 
 **Cache-write fees (OpenAI):**  
-OpenAI charges separately for cache writes (1.25× input rate), but this is NOT currently modeled in `openai-compatible/pricing.ts`. The module docstring (pricing.ts:51-57) acknowledges this explicitly: the per-call context required to distinguish a cache-prime vs cache-hit request is not available in the usage block. Disposition: **follow-up**, known limitation documented in source.
+OpenAI charges separately for cache writes (1.25× input rate), but this is NOT currently modeled in `openai-compatible/pricing.ts`. The module docstring acknowledges this explicitly (see the Contract note near the top of `deriveCallCostUsd`): the per-call context required to distinguish a cache-prime vs cache-hit request is not available in the usage block. Disposition: **follow-up**, known limitation documented in source.
 
 **Verdict:** ✅ Correct (billing). ⚠️ Display gap for reasoning tokens sub-breakdown (follow-up).
 
@@ -151,7 +151,7 @@ Same structural difference; same non-impact for today's OpenAI model set.
 
 ---
 
-## Fixes Applied in This PR
+## Fixes Applied in This Document's PR
 
 None. All divergences audited above are either:
 - Intentional and documented in the source code (cache semantics between providers),

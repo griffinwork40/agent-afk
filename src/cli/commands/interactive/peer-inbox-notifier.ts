@@ -18,7 +18,7 @@
  *     the first turn mints it, and changes on `/resume`; the poll re-keys the
  *     watcher whenever the id changes.
  *   - Body text is never written to the trace; only ids and byte counts.
- *   - Crash window: an envelope claimed (renamed into `delivered/`) but not yet
+ *   - Crash window: an envelope claimed (linked into `delivered/`) but not yet
  *     drained into a turn is lost from the conversation if the process dies.
  *     The file stays in `delivered/` for forensics.
  *   - Scans are serialized; overlapping triggers coalesce into one rescan.
@@ -45,6 +45,7 @@ import {
   setPresenceNameIfUnset,
   setPresencePeerInbox,
 } from '../../../agent/awareness/presence.peer.js';
+import { pruneDeliveredReceipts } from '../../../agent/peer/inbox-retention.js';
 
 /** Max envelopes buffered between drains; extras stay in `pending/`. */
 const MAX_PENDING_INJECTIONS = 50;
@@ -97,7 +98,7 @@ export class PeerInboxNotifier {
   onInjectable: (() => void) | null = null;
 
   private readonly buffer: BufferedClaim[] = [];
-  private readonly wakeBudget: WakeBudget;
+  private wakeBudget: WakeBudget;
   private readonly pollMs: number;
   private readonly getMode: () => PeerInboundMode;
   private readonly resolveTraceWriter: () => TraceSink | undefined;
@@ -115,6 +116,14 @@ export class PeerInboxNotifier {
   private disposed = false;
   /** Operator `/name` choice; survives until the presence file exists. */
   private desiredName: string | undefined;
+  /**
+   * Generation counter incremented on each `onSwapped()` reset. Every async
+   * scan captures the generation at start and discards its results if the
+   * counter has advanced by the time it completes (A→B→A resume race).
+   */
+  private generation = 0;
+  /** Timestamp of the last delivered/ retention sweep. 0 = not yet run. */
+  private lastRetentionRunMs = 0;
 
   constructor(private readonly opts: PeerInboxNotifierOpts) {
     this.wakeBudget = createWakeBudget(opts.now !== undefined ? { now: opts.now } : {});
@@ -123,6 +132,29 @@ export class PeerInboxNotifier {
     // Prefer live getter so a mid-session resume that swaps the trace writer is
     // automatically picked up. Fall back to the static value for backwards compat.
     this.resolveTraceWriter = opts.getTraceWriter ?? (() => opts.traceWriter);
+  }
+
+  /**
+   * Invariant: reset per-session state synchronously at the resume-swap commit point
+   * (call from `onSwapped` in bootstrap.ts before the drain cycle runs).
+   *
+   * - Clears the injection buffer so outgoing-session messages cannot leak
+   *   into the resumed session's first turn.
+   * - Resets the wake budget so resumed-session senders start from a clean
+   *   credit pool.
+   * - Advances the generation counter so any async scan that is still in
+   *   flight (forceAccept, watcher-triggered scan, rescan loop) sees a stale
+   *   generation and discards its results instead of injecting them.
+   * - Stops the current watcher (watchedId is cleared) so the next tick
+   *   re-establishes a watcher for the new session's inbox directory.
+   */
+  resetForNewSession(): void {
+    // Reclaim buffered-but-uninjected envelopes back to pending/ so the next
+    // poll can re-deliver them. Best-effort; fire-and-forget.
+    void this.reclaim();
+    this.generation++;
+    this.wakeBudget = createWakeBudget(this.opts.now !== undefined ? { now: this.opts.now } : {});
+    this.stopWatcher(); // clears watchedId → next tick re-keys to new sessionId
   }
 
   hasPendingInjections(): boolean {
@@ -228,20 +260,31 @@ export class PeerInboxNotifier {
    * Operator override (`/inbox accept`): move the named held envelopes back
    * through pending into the buffer, bypassing the wake budget. Returns how
    * many were injected.
+   *
+   * Generation-checked: if a resume swap fires while the async listHeld +
+   * releaseHeld + claimPending chain is in flight, results from the outgoing
+   * session are discarded (generation mismatch) rather than injected into the
+   * resumed session's first turn.
    */
   async forceAccept(messageIds: ReadonlySet<string> | 'all'): Promise<number> {
     const sessionId = this.opts.getSessionId();
-    if (sessionId === undefined) return 0;
+    if (sessionId === undefined || this.disposed) return 0;
+    const gen = this.generation;
     const wasEmpty = this.buffer.length === 0;
     let injected = 0;
     for (const { file, envelope } of await listHeld(sessionId)) {
+      if (!this.isCurrent(sessionId, gen)) return 0; // swap fired mid-flight; discard
       if (messageIds !== 'all' && !messageIds.has(envelope.messageId)) continue;
-      if (!(await releaseHeld(sessionId, file))) continue;
+      const released = await releaseHeld(sessionId, file);
+      if (!this.isCurrent(sessionId, gen)) return 0; // swap fired between release and claim
+      if (!released) continue;
       const claimed = await claimPending(sessionId, file).catch(() => null);
+      if (!this.isCurrent(sessionId, gen)) return 0; // swap fired after claim; discard
       if (claimed === null) continue;
       this.accept(claimed, sessionId);
       injected++;
     }
+    if (!this.isCurrent(sessionId, gen)) return 0;
     if (wasEmpty && injected > 0) this.fireInjectable();
     return injected;
   }
@@ -262,10 +305,14 @@ export class PeerInboxNotifier {
     if (sessionId === undefined || this.disposed) return;
     if (this.scanning) { this.rescan = true; return; }
     this.scanning = true;
+    const gen = this.generation;
     try {
       do {
         this.rescan = false;
-        await this.scanOnce(sessionId);
+        // Re-read sessionId each iteration: a swap may have changed it.
+        const currentId = this.opts.getSessionId();
+        if (currentId === undefined || !this.isCurrent(sessionId, gen)) break;
+        await this.scanOnce(currentId, gen);
       } while (this.rescan);
     } catch {
       // Best-effort: the REPL must never crash on inbox I/O.
@@ -274,9 +321,12 @@ export class PeerInboxNotifier {
     }
   }
 
-  private async scanOnce(sessionId: string): Promise<void> {
-    if (this.disposed) return;
-    this.lastScanId = sessionId;
+  private isCurrent(sessionId: string, gen: number): boolean {
+    return !this.disposed && this.generation === gen && this.opts.getSessionId() === sessionId;
+  }
+
+  private async scanOnce(sessionId: string, gen: number): Promise<void> {
+    if (!this.isCurrent(sessionId, gen)) return;
     const wasEmpty = this.buffer.length === 0;
     const { claimed, held } = await scanPeerInbox({
       sessionId,
@@ -284,31 +334,20 @@ export class PeerInboxNotifier {
       wakeBudget: this.wakeBudget,
       capacity: MAX_PENDING_INJECTIONS - this.buffer.length,
     });
-    // Reject stale scan: if the session id changed while this scan was in
-    // flight (await above), the envelopes were claimed from the old session's
-    // inbox. They are NOT accessible under the new session id, so reclaim them
-    // back to the old inbox rather than injecting them into the wrong session.
-    if (this.disposed || this.opts.getSessionId() !== sessionId) {
-      for (const e of claimed) {
-        const file = envelopeFilename(e);
-        void reclaimDelivered(sessionId, file);
-        const bytes = Buffer.byteLength(e.body, 'utf8');
-        void emitPeerMessage(this.resolveTraceWriter(), { action: 'reclaimed', messageId: e.messageId, peer: e.from.id, bytes });
-      }
-      return;
-    }
+    // Drop results if a swap fired while the async scan was in flight.
+    if (!this.isCurrent(sessionId, gen)) return;
     for (const h of held) this.noteHeld(h.envelope, h.reason);
     for (const e of claimed) this.accept(e, sessionId);
     if (wasEmpty && claimed.length > 0) this.fireInjectable();
   }
 
   private accept(e: PeerEnvelope, sessionId?: string): void {
-    const sid = sessionId ?? this.lastScanId ?? '';
+    const sid = sessionId ?? '';
     const bytes = Buffer.byteLength(e.body, 'utf8');
     this.buffer.push({ envelope: e, sessionId: sid });
     this.opts.writeLine(palette.dim(`↘ peer message from ${senderLabel(e)} · ${sizeLabel(bytes)}`));
     // Emit 'claimed': the envelope has been moved to delivered/ on disk. The
-    // 'injected' event fires separately in drainInjections() when the text
+    // 'injected' event fires separately in consumeEnvelopes() when the text
     // actually reaches a model turn. These are distinct: a crash between claim
     // and inject leaves 'claimed' with no matching 'injected'; a reclaim on
     // resume emits 'reclaimed'. resolveTraceWriter() reads live.
@@ -327,34 +366,21 @@ export class PeerInboxNotifier {
     try { this.onInjectable?.(); } catch { /* best-effort */ }
   }
 
-  /**
-   * The id that was active during the last scan (via `scan()` or `tick()`).
-   * Tracked separately from `watchedId` so the rekey buffer-clear fires even
-   * when the first `tick()` sees a different id than the first `scan()` did.
-   * `watchedId` tracks the fs-watcher only; `lastScanId` tracks the session
-   * the buffer contents belong to.
-   */
-  private lastScanId: string | undefined;
-
   private async tick(): Promise<void> {
     if (this.disposed) return;
     const sessionId = this.opts.getSessionId();
-    if (sessionId !== undefined && sessionId !== this.watchedId) {
-      // Session id changed (resume/rekey). Clear any messages buffered for
-      // the OLD session: they belong to that session's conversation, not the
-      // newly-resumed one. The files already moved to delivered/ stay there
-      // for forensics; they are just no longer injected into the new session.
-      // Guard: only reclaim when the buffer actually holds messages from a
-      // DIFFERENT session id (not just from an initial undefined watchedId
-      // where no scan has run yet). reclaim() moves claimed-but-uninjected
-      // envelopes back to pending/ so the next poll can re-deliver them; this
-      // is the correct path for ordinary /resume (not just crash forensics).
-      if (this.lastScanId !== undefined && this.lastScanId !== sessionId && this.buffer.length > 0) {
-        void this.reclaim(); // best-effort; splices buffer internally
-      }
-      await this.startWatching(sessionId);
-    }
+    if (sessionId !== undefined && sessionId !== this.watchedId) await this.startWatching(sessionId);
     await this.scan();
+    if (this.disposed || sessionId === undefined) return;
+    // Throttled retention sweep: prune stale delivered/ receipts. Best-effort;
+    // pruneDeliveredReceipts never throws. Update the cursor only when the
+    // sweep actually ran (result.ran = true) so the interval stays accurate.
+    const retention = await pruneDeliveredReceipts({
+      sessionId,
+      lastRanMs: this.lastRetentionRunMs,
+      now: this.opts.now,
+    });
+    if (retention.ran) this.lastRetentionRunMs = retention.nowMs;
   }
 
   private stopWatcher(): void {
@@ -364,16 +390,19 @@ export class PeerInboxNotifier {
   }
 
   /** Mark presence as a reader and apply the `/name` or tmux label. Best-effort. */
-  private async advertise(sessionId: string): Promise<void> {
+  private async advertise(sessionId: string, gen: number): Promise<void> {
+    if (!this.isCurrent(sessionId, gen)) return;
     await setPresencePeerInbox(sessionId, true);
+    if (!this.isCurrent(sessionId, gen)) return;
     if (this.desiredName !== undefined) return setPresenceName(sessionId, this.desiredName);
     const label = await resolveTmuxLabel();
-    if (label !== undefined) await setPresenceNameIfUnset(sessionId, label);
+    if (this.isCurrent(sessionId, gen) && label !== undefined) await setPresenceNameIfUnset(sessionId, label);
   }
 
   private async startWatching(sessionId: string): Promise<void> {
     this.stopWatcher();
     this.watchedId = sessionId;
+    const startGen = this.generation;
     const base = getPeerInboxDir(sessionId);
     try {
       for (const sub of ['pending', 'delivered', 'held']) {
@@ -382,13 +411,18 @@ export class PeerInboxNotifier {
     } catch {
       return; // the poll keeps retrying scans; nothing to watch yet
     }
-    if (this.disposed || this.watchedId !== sessionId) return; // disposed or re-keyed mid-setup
-    void this.advertise(sessionId);
+    // Guard: disposed, re-keyed, OR a swap fired between the awaited mkdir and now.
+    if (this.disposed || this.watchedId !== sessionId || !this.isCurrent(sessionId, startGen)) return;
+    void this.advertise(sessionId, startGen);
     const ac = new AbortController();
     this.watchAc = ac;
+    const watchGen = this.generation;
     void (async () => {
       try {
-        for await (const _event of watch(join(base, 'pending'), { signal: ac.signal })) void this.scan();
+        for await (const _event of watch(join(base, 'pending'), { signal: ac.signal })) {
+          // Ignore watcher events from a prior session's generation.
+          if (this.isCurrent(sessionId, watchGen)) void this.scan();
+        }
       } catch {
         // AbortError on dispose/re-key, or a dead watcher: the poll is the safety net.
       }
@@ -410,9 +444,6 @@ export function createReplPeerNotifier(ctx: InteractiveCtx): PeerInboxNotifier {
   return new PeerInboxNotifier({
     getSessionId: () => ctx.stats.sessionId,
     writeLine: (text) => ctx.replRenderer.writeLine(text),
-    // Live getter: ctx.traceWriter is reassigned on mid-session resume, so a
-    // static capture at construction time would emit to the WRONG writer after
-    // a /resume. The getter always reads the current value.
     getTraceWriter: () => ctx.traceWriter,
   });
 }
