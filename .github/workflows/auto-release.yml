@@ -111,11 +111,16 @@ jobs:
           if [ -n "$LAST_TAG" ]; then RANGE="${LAST_TAG}..HEAD"; else RANGE="HEAD"; fi
           LOG=$(git log --format='%s%n%b' "$RANGE")
 
-          # Conventional Commits → SemVer. `!:` suffix or a "BREAKING CHANGE"
-          # footer ⇒ major; `feat:` ⇒ minor; `fix|perf|refactor:` ⇒ patch.
+          # Conventional Commits → SemVer. `!:` suffix or a breaking-change
+          # footer (a line starting with `BREAKING CHANGE:` or
+          # `BREAKING-CHANGE:`) ⇒ major; `feat:` ⇒ minor;
+          # `fix|perf|refactor:` ⇒ patch.
           # Anything else (docs/chore/test/ci/style only) ⇒ no release.
+          #
+          # NOTE: the breaking-change check is anchored to line-start (^) so
+          # that prose mentions mid-line do not trip the major gate.
           BUMP=none
-          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -q 'BREAKING CHANGE' <<<"$LOG"; then
+          if grep -qE '^[a-z]+(\([^)]*\))?!:' <<<"$LOG" || grep -qE '^BREAKING[ -]CHANGE: ' <<<"$LOG"; then
             BUMP=major
           elif grep -qE '^feat(\([^)]*\))?:' <<<"$LOG"; then
             BUMP=minor
@@ -150,7 +155,7 @@ jobs:
             echo "::error::$MSG"
             echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
             echo "Matching commits:" >> "$GITHUB_STEP_SUMMARY"
-            git log --format='- %h %s' "$RANGE" --grep='BREAKING CHANGE' >> "$GITHUB_STEP_SUMMARY" || true
+            git log --format='- %h %s' "$RANGE" -E --grep='^BREAKING[ -]CHANGE: ' >> "$GITHUB_STEP_SUMMARY" || true
             git log --format='- %h %s' "$RANGE" -E --grep='^[a-z]+(\([^)]*\))?!:' >> "$GITHUB_STEP_SUMMARY" || true
             exit 1
           fi
