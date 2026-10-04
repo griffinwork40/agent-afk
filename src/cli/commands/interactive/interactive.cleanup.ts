@@ -21,7 +21,7 @@ import { formatDuration } from '../../format-utils.js';
 import { costTokenParts } from '../../render/session-summary.js';
 import { runCleanupFunctions } from '../../../utils/cleanupRegistry.js';
 import { palette } from '../../palette.js';
-import { saveSession } from '../../session-store.js';
+import { saveSession, type StoredSession } from '../../session-store.js';
 import { formatResumeCommand } from '../../resume-command.js';
 import { launchInterruptPicker } from './interrupt-picker.js';
 import type { InteractiveCtx } from './shared.js';
@@ -36,6 +36,8 @@ export interface SignalHandlerDeps {
   ctx: InteractiveCtx;
   turnState: TurnState;
   pickerAbort: AbortController;
+  /** Written before rl.close() so the session saver can record exitReason. */
+  exitReasonRef: ExitReasonRef;
 }
 
 export interface SignalHandlerDisposers {
@@ -53,7 +55,7 @@ export interface SignalHandlerDisposers {
  *   3. Idle → double-Ctrl+C within SIGINT_EXIT_WINDOW_MS exits.
  */
 function makeSigintHandler(deps: SignalHandlerDeps): () => void {
-  const { ctx, turnState } = deps;
+  const { ctx, turnState, exitReasonRef } = deps;
   const SIGINT_EXIT_WINDOW_MS = 1500;
   return () => {
     const now = Date.now();
@@ -110,6 +112,7 @@ function makeSigintHandler(deps: SignalHandlerDeps): () => void {
       // Pre-abort before rl.close() so deriveClosureReason sees 'sigint'
       // (a non-'closed' reason) and returns 'abort' instead of 'model_end_turn'.
       ctx.session.current?.abort('sigint');
+      exitReasonRef.current = 'sigint';
       ctx.rl.close();
       return;
     }
@@ -126,7 +129,7 @@ function makeTermHupHandler(
   deps: SignalHandlerDeps,
   signal: 'sigterm' | 'sighup',
 ): () => void {
-  const { ctx, pickerAbort } = deps;
+  const { ctx, pickerAbort, exitReasonRef } = deps;
   let inFlight = false;
   const GRACE_MS = 2000;
   return (): void => {
@@ -135,6 +138,8 @@ function makeTermHupHandler(
     // Pre-abort before rl.close() so deriveClosureReason sees the signal
     // name (a non-'closed' reason) and returns 'abort' rather than 'model_end_turn'.
     ctx.session.current?.abort(signal);
+    // Record the exit reason BEFORE rl.close() so the session saver captures it.
+    exitReasonRef.current = signal;
     // Ordering constraint: cancel the quit-time picker BEFORE closing
     // readline, so it releases raw stdin and settles its promise while the
     // terminal is still intact. Reversing this strands the awaited
@@ -144,6 +149,11 @@ function makeTermHupHandler(
     // Belt-and-suspenders: if rl.on('close') doesn't reach the exit
     // path within a short window (e.g. when the REPL loop is awaiting
     // a long-running turn), run cleanups directly and exit.
+    // .unref()'d so this timer does not by itself keep the event loop
+    // alive — if rl.close() drains and nothing else holds the loop, the
+    // process exits naturally before the timer fires. When something DOES
+    // keep the loop alive (e.g. an in-flight MCP disconnect promise), the
+    // timer fires after GRACE_MS and forces exit regardless.
     setTimeout(() => {
       runCleanupFunctions().finally(() => process.exit(0));
     }, GRACE_MS).unref();
@@ -320,21 +330,36 @@ export async function snapshotGitStateForCancelAll(cwd: string): Promise<void> {
 // saveCurrentSession factory
 // ---------------------------------------------------------------------------
 
+/** Mutable ref that signal handlers write before calling rl.close(), so the
+ *  session saver captures the reason. Typed to the `exitReason` union so
+ *  callers get a type error if they pass an unrecognised string. */
+export type ExitReasonRef = { current: StoredSession['exitReason'] };
+
 /**
  * Build the `saveCurrentSession` helper and its `sessionSavedOnExit` interlock.
  *
+ * `exitReasonRef` — mutable ref whose `.current` value is written by the
+ * signal/exit path that calls rl.close(), so the sidecar records WHY the
+ * session ended alongside `endedAt`.
+ *
  * Returns:
  *   - `saveCurrentSession()` — saves the session sidecar; guards on totalTurns > 0.
- *   - `registerCleanupGuard(fn)` — register a cleanup that skips when already saved.
+ *   - `isSaved()` — true if the sidecar has already been written this exit.
  */
-export function makeSessionSaver(ctx: InteractiveCtx): {
+export function makeSessionSaver(
+  ctx: InteractiveCtx,
+  exitReasonRef?: ExitReasonRef,
+): {
   saveCurrentSession: () => string | undefined;
   isSaved: () => boolean;
 } {
   let sessionSavedOnExit = false;
   const saveCurrentSession = (): string | undefined => {
     if (ctx.stats.totalTurns === 0) return undefined;
-    const savedPath = saveSession(ctx.stats);
+    const savedPath = saveSession(ctx.stats, undefined, {
+      closeTime: true,
+      exitReason: exitReasonRef?.current,
+    });
     sessionSavedOnExit = true;
     return savedPath;
   };

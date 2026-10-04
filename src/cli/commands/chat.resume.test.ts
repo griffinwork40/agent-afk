@@ -418,6 +418,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
     expect(mockSaveSession).toHaveBeenCalledWith(
       expect.objectContaining({ totalTurns: expect.any(Number) }),
       'my-session',
+      expect.objectContaining({ closeTime: true }),
     );
   });
 
@@ -447,6 +448,7 @@ describe('afk chat — --resume / --continue / --session-id', () => {
     expect(mockSaveSession).toHaveBeenCalledWith(
       expect.objectContaining({}),
       newId,
+      expect.objectContaining({ closeTime: true }),
     );
   });
 

@@ -158,7 +158,11 @@ function parseWindow(value: unknown): UsageWindow | undefined {
   };
 }
 
-/** Surface-neutral plain text. No chalk, no HTML, no markdown. */
+/**
+ * Surface-neutral plain text. No chalk, no HTML, no markdown.
+ * Test-only: no production importers (usage-formatter.ts handles all surfaces).
+ * @internal
+ */
 export function formatUsagePlain(result: UsageResult): string {
   if (result.kind === 'unavailable') {
     return `Usage unavailable (${result.reason}): ${result.detail}`;
