@@ -17,7 +17,7 @@ import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
 import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
-import { cleanupComposeSpills } from './tools/compose-executor.js';
+import { cleanupComposeSpills } from './tools/compose-executor.format.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
 import { createPreexistingLedgerHook } from './preexisting-ledger/session-end-hook.js';

@@ -5,6 +5,7 @@ import { handleCommandError } from '../errors/index.js';
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';
 import { AgentSession } from '../../agent/session.js';
+import { wireOneShotChatSession } from './chat.session-wiring.js';
 import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
 import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
 import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
@@ -615,19 +616,8 @@ export function registerChatCommand(program: Command): void {
         // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
         runNonInteractiveReconcile(boundSession?.sessionId ?? '');
 
-        // Subagent-success rollup: wire both the root manager and the compose
-        // executor so all subagent token/cost data (including compose DAG nodes)
-        // accumulates into this session's session_sealed telemetry. Late-bound
-        // here because the session is constructed after the executors.
-        // Use a local const to give the TypeScript narrowing a stable reference
-        // (the outer `session` variable is `AgentSession | null`).
-        const wiredSession = session;
-        rootManager.setOnSubagentSucceeded((usage, costUsd) => {
-          wiredSession.recordSubagentCompletion(usage, costUsd);
-        });
-        composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
-          wiredSession.recordSubagentCompletion(usage, costUsd);
-        });
+        // Stop wiring + subagent-success rollup (see chat.session-wiring.ts).
+        wireOneShotChatSession(session, [rootManager, composeExecutor]);
 
         spinner.text = 'Sending message...';
 

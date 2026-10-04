@@ -228,11 +228,23 @@ export function execOnDetach(
  * Literal names (not imported constants) keep this a dependency-free leaf;
  * tests pin them against real tool-name constants.
  *
- * Invariant: tools listed here MUST call `applyBashDetach` (or equivalent)
- * and implement the full token lifecycle. A tool that registers but never
- * delivers leaks the registry slot until session end / cancelAll().
+ * Invariant: tools listed here MUST call `applyBashDetach` / `applyComposeDetach`
+ * (or equivalent) and implement the full token lifecycle. A tool that registers
+ * but never delivers leaks the registry slot until session end / cancelAll().
+ *
+ * Both 'bash' and 'compose' are detachable. The dispatcher injects
+ * `detachRegistry` into bash via `callHandlerContext`; compose receives it
+ * directly through `CoreExecDeps.detachRegistry` → `executeCompose()`.
+ *
+ * Note: `isDetachableTool` (and thus this set's membership check) is only
+ * evaluated inside `callHandlerContext`, which is only reached by handler-backed
+ * tools. Compose bypasses `callHandlerContext` entirely, so including 'compose'
+ * here does not cause it to be injected via that path — compose's detach wiring
+ * lives in `coreExecDeps()` unconditionally when `detachRegistry` is set.
+ * The set documents the full detachable surface; `isDetachableTool` governs the
+ * handler-backed injection path only.
  */
-export const DETACHABLE_TOOLS: ReadonlySet<string> = new Set(['bash']);
+export const DETACHABLE_TOOLS: ReadonlySet<string> = new Set(['bash', 'compose']);
 
 export function isDetachableTool(name: string): boolean {
   return DETACHABLE_TOOLS.has(name);
