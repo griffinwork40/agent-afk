@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { displayWidth } from '../display.js';
-import { formatSkillIdentity, sanitizeSkillIdentity } from './skill-identity-format.js';
+import { displayWidth, stripAnsi } from '../display.js';
+import { formatProgressBanner } from '../commands/interactive/progress-banner.js';
+import { formatSkillIdentity, sanitizeSkillIdentity, skillIdentityBanner } from './skill-identity-format.js';
 
 describe('skill display identity', () => {
   it('keeps absent fields absent and never changes the input', () => {
@@ -28,6 +29,30 @@ describe('skill display identity', () => {
   });
   it('prioritizes name then activity over optional context', () => {
     expect(formatSkillIdentity({ name: 'review', purpose: 'purpose', arguments: 'args' }, 40, 'reading files')).toBe('/review · reading files');
+  });
+  it.each([20, 40, 80])('preserves real progress activity and details at %i columns', width => {
+    const lines = formatProgressBanner({
+      taskId: 'task', description: 'Investigating a very long task description '.repeat(10),
+      summary: 'old summary', totalTokens: 1200, toolUses: 2, durationMs: 1000,
+    }, width, 'reading files');
+    const banner = skillIdentityBanner({ name: 'review', purpose: 'optional purpose', arguments: 'optional args' }, lines, width);
+    expect(stripAnsi(banner)).toContain('reading files');
+    expect(banner.split('\n').slice(1)).toEqual(lines);
+    expect(banner.split('\n')[0]).toBe('/review');
+    for (const row of banner.split('\n')) expect(displayWidth(row)).toBeLessThanOrEqual(width);
+  });
+  it.each([20, 40, 80])('preserves stopping feedback with a bounded long identity at %i columns', width => {
+    const lines = formatProgressBanner({
+      taskId: 'task', description: 'Investigating a very long task description '.repeat(10),
+      totalTokens: 1200, toolUses: 2, durationMs: 1000,
+    }, width, 'reading files', true);
+    const name = '日本👩‍💻é'.repeat(12);
+    const banner = skillIdentityBanner({ name, purpose: 'optional purpose' }, lines, width);
+    expect(stripAnsi(banner)).toContain('stopping…');
+    expect(banner).not.toContain('esc to interrupt');
+    expect(banner.split('\n').slice(1)).toEqual(lines);
+    expect(banner.split('\n')[0]).toBe(formatSkillIdentity({ name }, width));
+    for (const row of banner.split('\n')) expect(displayWidth(row)).toBeLessThanOrEqual(width);
   });
   it('redacts before truncation and bounds each optional field', () => {
     const safe = sanitizeSkillIdentity({ name: 'n '.repeat(60), purpose: 'p '.repeat(100), arguments: 'arg '.repeat(100) });

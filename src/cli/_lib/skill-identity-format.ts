@@ -29,5 +29,8 @@ export function formatSkillIdentity(input: SkillIdentity, width: number, activit
 /** Same progress-slot composition for OverlayComposer and direct fallback. */
 export function skillIdentityBanner(identity: SkillIdentity | undefined, lines: string[], width: number): string {
   if (!identity) return lines.join('\n');
-  return formatSkillIdentity(identity, width, lines.length ? lines.join(' · ').trim() : undefined);
+  if (!lines.length) return formatSkillIdentity(identity, width);
+  // Progress rows are already width-clamped; keep activity/stopping and stats
+  // intact instead of truncating them behind the description and invocation.
+  return [formatSkillIdentity({ name: identity.name }, width), ...lines].join('\n');
 }
