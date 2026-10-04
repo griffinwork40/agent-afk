@@ -208,13 +208,11 @@ export class StreamRenderer {
     // trailing suppressed run is summarized in the artifact rather than
     // silently dropped. See `dispose()`.
     this.out = this.captureMode ? makeDedupingLineWriter(opts.out, 2) : opts.out;
-    // Resolve thinking mode: explicit option wins; otherwise the deprecated
-    // `verbose` boolean maps to 'live' (true) or 'summary' (false/unset).
+    // Resolve thinking mode: explicit option wins; default is 'summary'.
     // In capture-mode, 'live' is downgraded to 'summary' so the captured
     // artifact records one collapsed summary per turn rather than N
     // overlay-paint frames mid-turn.
-    const requestedThinkingMode =
-      opts.thinkingMode ?? (opts.verbose === true ? 'live' : 'summary');
+    const requestedThinkingMode = opts.thinkingMode ?? 'summary';
     this.thinkingMode = this.captureMode && requestedThinkingMode === 'live'
       ? 'summary'
       : requestedThinkingMode;

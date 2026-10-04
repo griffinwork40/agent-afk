@@ -22,14 +22,6 @@ import { contentMargin } from './render/measure.js';
 
 export const ELAPSED_GRACE_MS = 2_000;
 export const ELAPSED_AMBER_SEC = 10;
-/**
- * @deprecated Renamed to ELAPSED_AMBER_MAX_SEC. The second threshold now stays
- * amber (warning) rather than switching to red — red is reserved for actual error
- * conditions (failures, blocked states), not informational elapsed time. Kept as
- * a re-export so existing test imports don't break; remove in a future cleanup.
- * @see ELAPSED_AMBER_MAX_SEC
- */
-export const ELAPSED_RED_SEC = 60;
 export const ELAPSED_AMBER_MAX_SEC = 60;
 
 /**

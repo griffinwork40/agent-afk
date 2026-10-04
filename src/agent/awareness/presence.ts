@@ -150,8 +150,9 @@ export interface PresenceFileInfo {
    * Values:
    *   - `'idle'` — REPL is waiting for user input; an incoming peer message
    *     will be delivered by the next idle-wake cycle.
-   *   - `'busy'` — a model turn is in progress; the peer message is queued
-   *     and will be delivered at the next turn boundary.
+   *   - `'busy'` — a model turn is in progress; the peer message is injected
+   *     at the next boundary between tool rounds (mid-turn), or at the next
+   *     turn if no tool round remains.
    *   - `'blocked'` — the session is waiting on a human elicitation prompt.
    */
   turnState?: 'idle' | 'busy' | 'blocked';

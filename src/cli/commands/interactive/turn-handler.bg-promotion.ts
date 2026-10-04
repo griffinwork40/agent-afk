@@ -4,8 +4,8 @@
  * Ctrl+B dispatch order (#2542):
  *   1. Subagent (existing) — if a promotable foreground subagent is running,
  *      detach it into a /bgsub job. The main turn keeps streaming.
- *   2. Detachable tool (new) — if no subagent is promotable but a bash call
- *      (or future compose call) has registered with the DetachableToolRegistry,
+ *   2. Detachable tool (new) — if no subagent is promotable but a bash or
+ *      compose call has registered with the DetachableToolRegistry,
  *      fire `detachAll()` to free the model's turn while the process continues.
  *   3. No-op — if neither is available, Ctrl+B does nothing.
  *
@@ -55,11 +55,11 @@ export function makeHandleBackgroundKey(ctx: SubagentPromotionContext): () => vo
       return;
     }
 
-    // Step 2: Detachable tool call (new — #2542, bash only; compose is follow-up).
+    // Step 2: Detachable tool call (new — #2542, bash + compose).
     const detachReg = h.detachRegistry;
     if (detachReg?.hasDetachable()) {
       detachReg.detachAll();
-      write(palette.dim('  → bash detached; result will be delivered with the next user message'));
+      write(palette.dim('  → tool detached; result will be delivered with the next user message'));
       return;
     }
 

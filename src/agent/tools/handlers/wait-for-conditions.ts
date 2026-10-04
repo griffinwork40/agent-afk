@@ -136,7 +136,7 @@ export async function evaluateFile(cond: FileCondition, signal?: AbortSignal): P
     // floor (always). When workspaceRoot is absent the session is unconfined and
     // only the denylist floor fires, matching read_file's unconfined behaviour.
     const ctx = cond.workspaceRoot
-      ? { resolveBase: cond.workspaceRoot, cwd: cond.workspaceRoot }
+      ? { resolveBase: cond.workspaceRoot }
       : undefined;
     safePath = resolveAndContain(cond.path, ctx, 'read');
   } catch (err) {
