@@ -100,6 +100,7 @@ export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: Subagen
   // the orchestrator and every subagent, so neither handler needs its own
   // call site. Pure bookkeeping plus one setter; fires no repaint of its own.
   noteToolEvent(event, ctx.inFlightTools, ctx.compositor);
+  if (meta?.parentId && meta.skillIdentity) ctx.toolLane.setSkillIdentity(meta.parentId, meta.skillIdentity);
   const sourceId = meta?.subagentId ?? ORCHESTRATOR_SOURCE_KEY;
   const isOrchestrator = sourceId === ORCHESTRATOR_SOURCE_KEY;
   let source = ctx.sources.get(sourceId);

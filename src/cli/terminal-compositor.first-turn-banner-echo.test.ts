@@ -405,6 +405,7 @@ describe('content-hug guard in banner-path eviction (contentHugFrameSettled)', (
     const internals = c as unknown as {
       repaint(): void;
       committedBandPaintedRows: number;
+      committedBandArchivedPrefix: number;
       committedBand: string[];
       committedBandMeta: Array<{ logicalText: string; isHead: boolean }>;
       committedBandTopRow: number;
@@ -484,13 +485,16 @@ describe('content-hug guard in banner-path eviction (contentHugFrameSettled)', (
     internals.repaint();
     internals.repaint();
 
-    // After eviction, archiveBandPrefixAndRepaintSurvivors trims the band to
-    // `survivors` rows and sets committedBandPaintedRows = survivors.length,
-    // so painted === length (no pending rows remain).
+    // After eviction every row the frame cannot show is in scrollback: under
+    // content-hug those rows stay in the band as the hidden ARCHIVED prefix
+    // (re-shown if the frame shrinks; terminal-compositor.band-archived-prefix.ts),
+    // so the invariant is "no pending row that is NOT already archived".
+    const nonArchivedPending =
+      internals.committedBand.length - internals.committedBandPaintedRows - internals.committedBandArchivedPrefix;
     expect(
-      internals.committedBandPaintedRows,
-      'dropdown closed: eviction must have fired — no pending rows should remain',
-    ).toBe(internals.committedBand.length);
+      Math.max(0, nonArchivedPending),
+      'dropdown closed: eviction must have fired — no non-archived pending rows should remain',
+    ).toBe(0);
 
     // Feed full output into headless xterm to verify all content rows survive.
     const term = new HeadlessTerminal({

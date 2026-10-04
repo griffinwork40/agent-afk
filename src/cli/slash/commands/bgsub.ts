@@ -30,9 +30,11 @@ import type { SlashCommand } from '../types.js';
 import type { BackgroundAgentRegistry, BackgroundJob } from '../../../agent/background-registry.js';
 import type { BackgroundSummarizer } from '../../../agent/background-summarizer.js';
 import { BgJobLogReader } from '../../../agent/bg-job-log.js';
+import type { BgJobResult } from '../../../agent/bg-job-log.js';
 import { annotateIfIncomplete, isIncompleteStopReason } from '../../../agent/subagent/result.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { formatDiskEvent } from '../../output-event-format.js';
+import { getBgJobResult } from '../../../paths.js';
 import { errorMessage } from '../../../utils/errors.js';
 
 let registryRef: BackgroundAgentRegistry | undefined;
@@ -138,7 +140,10 @@ function printJobDetail(ctx: Parameters<SlashCommand['handler']>[0], job: Backgr
     const lines = text.split('\n').slice(0, 40);
     for (const line of lines) ctx.out.line(`  ${line}`);
     if (text.split('\n').length > 40) {
-      ctx.out.line(palette.dim('  … (truncated; full result available via /bgsub:join again)'));
+      // result.json exists only for completed/failed jobs (persistResultBody).
+      const where = job.status === 'completed' || job.status === 'failed'
+        ? `; full result in ${getBgJobResult(job.jobId)}` : '';
+      ctx.out.line(palette.dim(`  … (truncated${where})`));
     }
   }
   if (result?.error) {
@@ -246,28 +251,55 @@ export const bgsubJoinCmd: SlashCommand = {
     const diskMeta = await BgJobLogReader.readMeta(id);
     if (diskMeta) {
       ctx.out.info('Job evicted from memory — replaying from log.');
-      // A job persisted to disk can still be a capped/stream-truncated
-      // partial (see `isIncompleteStopReason`); surface the same
-      // `[⚠ PARTIAL RESULT…]` marker the in-memory replay applies above
-      // (printJobDetail) from the persisted `stopReason`, so joining the
-      // same job before vs. after TTL eviction labels it identically.
-      // `annotateIfIncomplete` is a no-op for a clean completion or an
-      // absent stopReason — the latter covers legacy meta written before
-      // `BgJobMeta.stopReason` existed, so no crash and no spurious banner.
-      if (isIncompleteStopReason(diskMeta.stopReason)) {
-        ctx.out.line(`  ${annotateIfIncomplete('', diskMeta.stopReason).trimEnd()}`);
+      // Fast path: use the persisted result body when available. This file is
+      // written by `markTerminal()` for completed/failed jobs — it contains the
+      // same synthesized output text the model would have received on
+      // auto-delivery, so the cross-session join is byte-identical to an
+      // in-session join. Fall back to raw event replay for cancelled jobs or
+      // jobs from before result persistence was introduced.
+      //
+      // Contract: `outputText` produced by `extractOutputText` already embeds
+      // the `[⚠ PARTIAL RESULT…]` banner via `annotateIfIncomplete`, so the
+      // banner must NOT be re-emitted here — only emit it on the event-log
+      // fallback path where no pre-annotated `outputText` is available.
+      const diskResult: BgJobResult | null = await BgJobLogReader.readResult(id);
+      if (diskResult !== null) {
         ctx.out.line('');
-      }
-      let lineCount = 0;
-      for await (const event of BgJobLogReader.readEvents(id)) {
-        const text = formatDiskEvent(event);
-        if (text !== null) {
-          ctx.out.line(text);
-          lineCount++;
+        if (diskResult.outputText === '') {
+          ctx.out.info('  (no output)');
+        } else {
+          const outputLines = diskResult.outputText.split('\n');
+          const truncated = outputLines.length > 40;
+          for (const line of outputLines.slice(0, 40)) ctx.out.line(`  ${line}`);
+          if (truncated) {
+            // Invariant: getBgJobResult(id) cannot throw here — readResult(id)
+            // above already validated `id` via assertSafeJobId internally, so
+            // the same id is guaranteed safe on this second call.
+            ctx.out.line(palette.dim(`  … (truncated; full result in ${getBgJobResult(id)})`));
+          }
         }
-      }
-      if (lineCount === 0) {
-        ctx.out.info(`  (no events recorded for job ${id})`);
+      } else {
+        // Fallback to raw event-log replay (cancelled jobs, legacy logs).
+        // The persisted `stopReason` banner is emitted here because the
+        // event-log replay path produces raw content without the annotation
+        // — so joining before vs. after TTL eviction labels identically.
+        // `annotateIfIncomplete` is a no-op for a clean completion or an
+        // absent stopReason (legacy meta written before the field existed).
+        if (isIncompleteStopReason(diskMeta.stopReason)) {
+          ctx.out.line(`  ${annotateIfIncomplete('', diskMeta.stopReason).trimEnd()}`);
+          ctx.out.line('');
+        }
+        let lineCount = 0;
+        for await (const event of BgJobLogReader.readEvents(id)) {
+          const text = formatDiskEvent(event);
+          if (text !== null) {
+            ctx.out.line(text);
+            lineCount++;
+          }
+        }
+        if (lineCount === 0) {
+          ctx.out.info(`  (no events recorded for job ${id})`);
+        }
       }
       ctx.out.line('');
       ctx.out.line(

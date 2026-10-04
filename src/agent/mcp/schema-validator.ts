@@ -58,8 +58,9 @@ export function buildMcpSchemaValidator(): AjvJsonSchemaValidator {
   });
 
   // Apply the same standard formats the SDK's default instance uses.
-  // ajv-formats is a CJS module — with NodeNext resolution its default
-  // export lands on `.default` when accessed via `import *`.
+  // ajv-formats is a CJS module that ships one callable export; under NodeNext `import *`
+  // the callable lands on `.default`, but under bundlers/CommonJS interop it IS the namespace.
+  // The `?? ajvFormats` fallback + `as unknown as` double-cast handles both shapes safely.
   const applyFormats = (ajvFormats.default ?? ajvFormats) as unknown as (ajv: InstanceType<typeof Ajv>) => void;
   applyFormats(ajv);
 

@@ -26,11 +26,11 @@ const PR_URL_PATTERN = /https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/(\d+)/g
 
 // A result that is nothing but a PR URL (optionally after one gh warning line):
 // the stdout shape of `gh pr create`.
-const BARE_PR_URL_RESULT =
+export const BARE_PR_URL_RESULT =
   /^\s*(?:Warning:[^\n]*\n)?\s*https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+\s*$/;
 
 // Read-only gh queries that can also print a bare PR URL.
-const PR_QUERY_INPUT = /gh\s+(?:pr|api|search)\s+(?:view|list|status|prs)|--json|\s-q\s|--jq/;
+export const PR_QUERY_INPUT = /gh\s+(?:pr|api|search)\s+(?:view|list|status|prs)|--json|\s-q\s|--jq/;
 
 // ---------------------------------------------------------------------------
 // ToolEvent input shape (minimal — not importing the whole facet schema)

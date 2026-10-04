@@ -191,16 +191,29 @@ export async function* driveStream<TEvent>(
         if (ctx.controller.signal.aborted) return null;
 
         const { action, newStreamRetries } = classifyStreamError(
-          err, contentYieldedThisAttempt, streamRetries, stallMs,
+          err,
+          contentYieldedThisAttempt,
+          streamRetries,
+          stallMs,
+          timeouts.stall.timedOut(),
+          timeouts.ttfb.timedOut(),
+          state.finishReason,
+          state.usage !== null,
         );
         streamRetries = newStreamRetries;
 
         if (action.kind === 'retry') {
           yield { type: 'stream.retry', sessionId: ctx.initSessionId };
+          const retryMeta: Record<string, string | number | boolean> = {
+            source: action.source,
+            reason: action.reason,
+            attempt: action.attempt,
+          };
+          if (action.errorCode !== undefined) retryMeta['errorCode'] = action.errorCode;
           const userAborted = await emitAndSleepRetry(
             ctx.traceWriter, ctx.currentModel, action.delay,
             ctx.controller.signal, ctx.controller.signal,
-            { source: action.source, reason: action.reason, attempt: action.attempt },
+            retryMeta,
           );
           if (userAborted) return null;
           continue;
@@ -209,8 +222,25 @@ export async function* driveStream<TEvent>(
           yield { type: 'error', error: action.error };
           return null;
         }
-        // fall-through: treat as a surfaced stream error below
-        streamError = action.error;
+        if (action.kind === 'accept') {
+          // P2: terminal finish_reason arrived before the transport dropped.
+          // The response is complete — fall through from the catch block into
+          // the post-loop path (streamError stays null, so the error guard below
+          // is a no-op) and return the accumulated state as a clean completion.
+          // The stream-incomplete guard is also a no-op because state.finishReason
+          // is non-null (that is the exact condition that produced AcceptAction).
+          //
+          // Emit an observability event so an accepted-after-drop turn is
+          // distinguishable from a clean finish in traces (#2780).
+          void emitSessionPhase(ctx.traceWriter, {
+            phase: 'stream_accepted_after_drop',
+            resolvedModel: ctx.currentModel,
+            metadata: { usageReceived: state.usage !== null },
+          });
+        } else {
+          // fall-through: treat as a surfaced stream error below
+          streamError = action.error;
+        }
       }
 
       if (streamError !== null) {

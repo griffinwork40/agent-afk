@@ -11,6 +11,244 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.292.0] - 2026-10-04
+
+### Added
+- integrate skill previews with live dispatch activity (#2895) (0d2b4bc8)
+- improve peer-arrival UX — sanitized identity, silent auto-resume echo (#2896) (f68305fd)
+
+### Fixed
+- consistent, provider-labeled usage-limit errors for Claude and Codex (#2883) (5d3c2cb5)
+
+### Changed
+- redirect HOME in every test worker so tests can never hit the real home (#2905) (4f0d82d0)
+
+## [5.291.1] - 2026-10-04
+
+### Fixed
+- read tool arguments from Responses *.done events (#2904) (45a3a0fc)
+
+### Changed
+- bump openai from 6.38.0 to 7.25.0 (#2893) (ff5379c3)
+- bump shiki (#2898) (077d20f3)
+- bump vitest from 3.2.7 to 5.0.3 in /dashboard (#2889) (fcfe9576)
+- bump @vitejs/plugin-react in /dashboard (#2888) (524c13df)
+- bump @types/node from 26.6.2 to 26.6.3 in /website (#2885) (de8d70f5)
+- bump jsdom and @types/jsdom (#2892) (ddd4991e)
+- bump @types/node from 22.19.11 to 26.6.3 (#2897) (fdd13ba7)
+- bump the fumadocs group across 1 directory with 3 updates (#2884) (df8022ff)
+
+## [5.291.0] - 2026-10-04
+
+### Fixed
+- keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+
+### Changed
+- document SessionFacet v7 outcome semantics for public consumers (#2797)
+
+### Added
+- cooperative mid-turn boundary delivery for both providers (#2810) (fa17faaa)
+- tool-health builtin alerts on cross-session tool degradation (#2774 3/3) (#2785) (14c7fc9f)
+- per-session ToolHealthMonitor + tool_degraded trace event (#2774 2/3) (#2784) (fd77b367)
+- Claude Fable 5.1 support with drop_block prefix-binding observable (#2854) (b9dddee3)
+- one traced retry layer for compaction and one-shot calls (#2851) (baad7c6a)
+- opt-in usage-limit park for subagents so an account switch rescues in-flight children (#2826) (464fdac3)
+- cross-process usage awareness (per-provider buckets, afk usage, daemon budget gate) (#2853) (b90e9112)
+
+### Fixed
+- unify spinner verbs onto humanVerbForTool and prune flavour pools (#2878) (17b30f66)
+- key unparseable baseURLs distinctly in rate-limit/ledger (#2872) (#2879) (f0d82a2b)
+- add endedAt + exitReason to session sidecar on all exit paths (#2771) (aafff031)
+- prefer remote default branch over mutable local HEAD in resolveAnchorBaseRef (#2770) (e08b023c)
+- polish v7 public schema notes (#2863) (8f447b64)
+- fix gh pr create detection gaps (quoted separators, $(), flattened multi-line) (#2834) (71aceb7f)
+- resolve ghost-text credential per suggest model; route ChatGPT OAuth over Responses (#2864) (884a2da4)
+- accept completed response when transport drops after stop_reason (#2835) (68f14880)
+- advisory follow-ups from #2845 review (#2855) (#2860) (93b90799)
+- address allowlist wiring test and fork-site audit (#2848) (#2859) (a60783f9)
+- treat raised engines.node floor as major in auto-release (#2839) (c4db34e1)
+
+### Changed
+- remove @types/jest, refresh lockfile to clear prod advisories (#2825) (afd64a82)
+- bump the dashboard-minor-patch group (#2886) (6b1d592e)
+- bump chalk from 5.6.2 to 6.0.1 (#2894) (297013ea)
+- bump the dev-minor-patch group with 2 updates (#2891) (a305976e)
+- bump next from 16.3.6 to 16.3.8 in /website (#2887) (260f51f5)
+- point Dependabot at the root package and dashboard (#2824) (77cf1bd7)
+- remove stale autoRouting daemon refs (#2862) (03469197)
+- regression tests for redactSecrets at Telegram push boundary (#2849) (#2866) (e25238dd)
+
+## [5.290.4] - 2026-10-03
+
+### Fixed
+- refuse dangling symlinks in image_generate and image_edit output paths (#2836) (a6e67f59)
+
+## [5.290.3] - 2026-10-03
+
+### Fixed
+- retry SDK connect timeouts; redact connection_retry trace text (#2856) (f4332787)
+
+## [5.290.2] - 2026-10-03
+
+### Fixed
+- refill the screen after a tall overlay collapses (content-hug blank gap) (#2857) (eed966f0)
+
+## [5.290.1] - 2026-10-03
+
+### Fixed
+- invariant comment + redactSecrets at Telegram delivery boundary (#2849) (#2858) (e17db879)
+- address advisory findings from #2805 atomic-write review (#2837) (9e1b9b10)
+
+## [5.290.0] - 2026-10-03
+
+### Added
+- show peer session activity in list_sessions (#2850) (4e7e64d9)
+
+### Fixed
+- defeat pid reuse in presence liveness, refresh heartbeat, reap dead presence files (#2852) (e39708f8)
+
+## [5.289.1] - 2026-10-03
+
+### Fixed
+- do not retry egress-blocked requests in retryFetch (#2832) (1c7d48ba)
+
+## [5.289.0] - 2026-10-03
+
+### Added
+- disabledPluginHooks config key; warn before marketplace update discards local edits (#2841) (f8c0c4fe)
+
+## [5.288.3] - 2026-10-03
+
+### Fixed
+- retry and pause on status-less mid-stream overload errors (#2845) (42457e6f)
+- per-file retention for inbox delivered/ receipts (#2840) (7cd2d35b)
+- never forward an Anthropic credential to OpenAI-routed compose nodes (#2846) (f831dffc)
+
+## [5.288.2] - 2026-10-03
+
+### Fixed
+- enforce CommonMark fence rules in fencedLines() so unbalanced fence-like lines no longer hide the end-of-turn heading (#2833) (16bb8711)
+- retry connection-phase network errors (regression from #2422) (#2838) (fe5c90aa)
+- make default provider stores lazy so importing a provider opens no SQLite files (#2842) (2096f82e)
+
+## [5.288.1] - 2026-10-03
+
+### Fixed
+- exclude subagent tool events from toolDurationsMs; document trace interleaving (#2831) (cd682695)
+- persist result bodies and fix mislabeled delivered witness events (#2830) (5afd055d)
+
+## [5.288.0] - 2026-10-03
+
+### Added
+- tell scoped children which agent_type values they may dispatch (#2829) (23633647)
+
+## [5.287.2] - 2026-10-03
+
+### Fixed
+- keep bash output on abort/timeout; make write_file atomic (#2814) (936a6f27)
+
+### Changed
+- remove dead autoRouting.daemon key (#2827) (b8a0b1e1)
+- upgrade vitest + @vitest/coverage-v8 2.1.9 -> 4.1.11 (#2828) (88914f3c)
+
+## [5.287.1] - 2026-10-03
+
+### Fixed
+- diagnostic detail on no readable content errors (#2808) (42a5be5e)
+
+## [5.287.0] - 2026-10-03
+
+### Added
+- cross-session peer messaging (list_sessions / send_to_session) (#2806) (dff4418f)
+
+## [5.286.2] - 2026-10-03
+
+### Fixed
+- retry rename on Windows EPERM/EACCES/EBUSY (#2805) (1d3ef5ca)
+- right-size /review budgets, fix compose guidance, trace the effective budget (#2815) (c90e1303)
+
+## [5.286.1] - 2026-10-03
+
+### Fixed
+- address advisory findings from 2026-09-30 pr-triage (#2745) (da8899f6)
+
+### Changed
+- unskip clipboard and tildifyHome tests on Windows (#2744) (f1c022f4)
+- exercise real undici + egress-guard fetch path (#2774) (#2783) (510a003c)
+
+## [5.286.0] - 2026-10-03
+
+### Added
+- warn when agent-afk was upgraded under a running session (#2809) (5e4eeea6)
+
+### Fixed
+- back off harder on HTTP 429 and guide retries (#2807) (b6e0a6ad)
+
+## [5.285.0] - 2026-10-03
+
+### Added
+- context_window kwarg for the Harbor afk adapter (#2802) (9e1a92af)
+- run it, don't relay it; stop handing safe commands to the user (#2803) (2efa268e)
+
+### Fixed
+- no history hole while a tall overlay covers committed rows (content-hug) (#2804) (f17c7e46)
+
+### Changed
+- harden 30-day boundary coverage for session-sidecar and session-dir sweep (#2800) (54d208c8)
+
+## [5.284.0] - 2026-10-02
+
+### Added
+- per-slot contextWindow override (#2793) (6ced67c5)
+
+## [5.283.0] - 2026-10-02
+
+### Added
+- add Cerebras gpt-oss-120b and qwen-3.8-27b context windows (#2789) (11a5e1b8)
+
+## [5.282.9] - 2026-10-02
+
+### Fixed
+- reject/recover JSON-string model-slot values instead of treating them as a model id (#2790) (ce285210)
+
+## [5.282.8] - 2026-10-02
+
+### Fixed
+- echo reasoning under its origin field (Cerebras 400) (#2788) (ae814b46)
+
+## [5.282.7] - 2026-10-02
+
+### Fixed
+- trustworthy outcome, primary_success, produced_pr, tool_errors_total (#2777) (#2781) (bd054244)
+
+## [5.282.6] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2780) (#2786) (677d09a5)
+
+## [5.282.5] - 2026-10-02
+
+### Fixed
+- clear disconnect timeout timer when disconnect succeeds (#2764) (e0749da6)
+
+## [5.282.4] - 2026-10-02
+
+### Fixed
+- re-drive mid-stream network termination (TypeError: terminated) (#2776) (#2779) (28e4f60b)
+
+## [5.282.3] - 2026-10-02
+
+### Fixed
+- read Claude Code OAuth credentials on Windows (#2755) (9a4b20b8)
+
+### Changed
+- use --ak for Harbor agent kwargs (#2775) (dd1fbcbf)
+
+## [5.282.2] - 2026-10-02
+
+### Fixed
+- honor undici lookup all:true contract in egress guard (web_scrape fetch failed) (#2754) (86f77d75)
+
 ## [5.282.1] - 2026-10-01
 
 ### Fixed

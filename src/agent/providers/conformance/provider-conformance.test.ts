@@ -638,6 +638,61 @@ describe('Conformance: S8b — long Retry-After 429 (quota/usage limit) emits pa
   });
 });
 
+// S8c: ChatGPT/Codex subscription 429 (`usage_limit_reached` body, NO
+// retry-after). Must not be retried; parks with the body's reset time and is
+// labelled provider 'codex'.
+describe('Conformance: S8c — ChatGPT usage_limit_reached 429 (no retry-after)', () => {
+  afterEach(() => {
+    if (vi.isFakeTimers()) vi.useRealTimers();
+    __setOpenAIClientFactory(null);
+    __setRetryBaseDelay(null);
+  });
+
+  function chatGptLimitError(): Error {
+    const body = {
+      type: 'usage_limit_reached',
+      message: 'The usage limit has been reached',
+      plan_type: 'plus',
+      resets_at: Math.floor(Date.now() / 1000) + 600,
+      resets_in_seconds: 600,
+    };
+    // Same shape openai-node's APIError.generate builds for a 429 body.
+    return Object.assign(new Error('429 The usage limit has been reached'), {
+      status: 429,
+      error: body,
+      type: 'usage_limit_reached',
+      headers: new Headers(),
+    });
+  }
+
+  it('openai-compatible: exactly 1 call, paused carries resetsAt + provider codex, fail-fast surfaces the error', async () => {
+    __setRetryBaseDelay(0);
+    let callCount = 0;
+    installOAIFactory(async () => {
+      callCount++;
+      throw chatGptLimitError();
+    });
+    const query = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-conf-test', source: 'config', last4: 'test' },
+      model: 'gpt-4o-mini',
+      synthesizedSessionId: 'conf-sid',
+      promptStream: singlePrompt('hi'),
+      config: { ...oaiConfig(), autoResumeOnUsageLimit: false },
+      toolDispatcher: { execute: async () => ({ content: 'ok' }) },
+    });
+    const events = await drain(query);
+
+    expect(callCount).toBe(1);
+    const paused = pick(events, 'paused');
+    expect(paused).toHaveLength(1);
+    expect(paused[0]?.provider).toBe('codex');
+    expect(paused[0]?.plan).toBe('plus');
+    expect(paused[0]?.resetsAt).toBeInstanceOf(Date);
+    expect(paused[0]?.autoResume).toBe(false);
+    expect(pick(events, 'error')).toHaveLength(1);
+  });
+});
+
 // ============================================================================
 // SCENARIO 9 — AFK retry count is bounded and predictable (documents #2422)
 //

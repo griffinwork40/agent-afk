@@ -359,10 +359,12 @@ async function summarizeViaChatGptOAuth(
   signal?: AbortSignal,
 ): Promise<string> {
   const headers = buildChatGptOAuthHeaders(accountId);
+  // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
   const client = new OpenAI({
     apiKey,
     baseURL: CHATGPT_BACKEND_BASE_URL,
     defaultHeaders: headers,
+    maxRetries: 0,
   });
   return oneShotResponses({
     client,

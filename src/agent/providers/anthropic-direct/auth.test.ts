@@ -18,6 +18,7 @@ import {
   EFFORT_BETA_HEADER,
   CLI_USER_AGENT,
   BILLING_HEADER_TEXT,
+  THINKING_BINDING_CONTROLS_BETA_HEADER,
 } from './auth.js';
 
 describe('anthropic-direct auth', () => {
@@ -129,5 +130,43 @@ describe('anthropic-direct auth', () => {
 
   it('buildSystemPrefix("api-key") returns null', () => {
     expect(buildSystemPrefix('api-key')).toBeNull();
+  });
+});
+
+// ── thinking-binding-controls beta (drop_block policy, Fable 5.1) ─────────
+
+describe('buildRequestHeaders: thinkingBindingControls (drop_block, Fable 5.1)', () => {
+  it('oauth + withThinkingBindingControls=true appends THINKING_BINDING_CONTROLS_BETA_HEADER', () => {
+    const h = buildRequestHeaders('oauth', 'sid', 'rid', false, false, false, true);
+    expect(h['anthropic-beta']).toContain(THINKING_BINDING_CONTROLS_BETA_HEADER);
+    // Must keep all pre-existing oauth betas (regression guard)
+    expect(h['anthropic-beta']).toContain(OAUTH_BETA_HEADER.split(',')[0]);
+  });
+
+  it('api-key + withThinkingBindingControls=true appends THINKING_BINDING_CONTROLS_BETA_HEADER', () => {
+    // api-key mode normally returns an empty object; when drop_block is
+    // requested the beta must be forwarded so the server surfaces
+    // input_transformations instead of returning HTTP 400.
+    const h = buildRequestHeaders('api-key', 'sid', 'rid', false, false, false, true);
+    expect(h['anthropic-beta']).toBe(THINKING_BINDING_CONTROLS_BETA_HEADER);
+  });
+
+  it('oauth + withThinkingBindingControls=false omits THINKING_BINDING_CONTROLS_BETA_HEADER', () => {
+    const h = buildRequestHeaders('oauth', 'sid', 'rid', false, false, false, false);
+    expect(h['anthropic-beta']).not.toContain(THINKING_BINDING_CONTROLS_BETA_HEADER);
+  });
+
+  it('api-key + withThinkingBindingControls=false omits the beta (empty object for non-Fable)', () => {
+    // Non-Fable api-key requests never send thinkingBindingControls; result
+    // must be an empty object so no stray beta header corrupts unrelated calls.
+    const h = buildRequestHeaders('api-key', 'sid', 'rid', false, false, false, false);
+    expect(h['anthropic-beta']).toBeUndefined();
+    expect(Object.keys(h)).toHaveLength(0);
+  });
+
+  it('oauth + withThinkingBindingControls=true + withEffort=true includes both betas', () => {
+    const h = buildRequestHeaders('oauth', 'sid', 'rid', true, false, false, true);
+    expect(h['anthropic-beta']).toContain(EFFORT_BETA_HEADER);
+    expect(h['anthropic-beta']).toContain(THINKING_BINDING_CONTROLS_BETA_HEADER);
   });
 });

@@ -16,6 +16,7 @@ import { redactInlineSecrets } from '../session/prompt-dump.js';
 import type { ScheduledTask } from './triggers.js';
 import type { GateDecision } from './gates.js';
 import type { TelemetryRecord, TelemetryTrigger } from './scheduler.js';
+import { describeBudgetSkip, type BudgetGateSkip } from './budget-gate.js';
 
 /**
  * Build a `status: 'skipped', skipReason: 'overlap'` telemetry record for a
@@ -36,6 +37,29 @@ export function makeOverlapSkipRecord(
     durationMs: 0,
     status: 'skipped',
     skipReason: 'overlap',
+  };
+}
+
+/**
+ * Build a `status: 'skipped', skipReason: 'budget-over'` telemetry record for
+ * an agent task skipped because subscription usage is over the configured threshold.
+ */
+export function makeBudgetSkipRecord(
+  task: ScheduledTask,
+  trigger: TelemetryTrigger,
+  nowMs: number,
+  skip: BudgetGateSkip,
+): TelemetryRecord {
+  return {
+    taskId: task.taskId,
+    command: redactInlineSecrets(task.command),
+    trigger,
+    ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+    triggeredAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    status: 'skipped',
+    skipReason: 'budget-over',
+    errorMessage: describeBudgetSkip(skip, nowMs),
   };
 }
 

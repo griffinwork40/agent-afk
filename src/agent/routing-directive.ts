@@ -115,7 +115,7 @@ Every turn must end in one externally identifiable terminal state. AFK users nee
 
 **Blocked**
 - What blocks: <the blocker>
-- What must change to unblock: <the unblock condition>
+- What must change to unblock: <the unblock condition; never a command your own tools could have run, since you should have run it>
 - What has already been done: <progress so far>
 
 **Asking**
