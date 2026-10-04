@@ -3,8 +3,9 @@
 # Tracked at scripts/git-hooks/pre-push; installed into .git/hooks by
 # scripts/install-pre-push-hook.mjs (runs on pnpm install via prepare).
 #
-# Fail-open: if the environment looks broken (node_modules missing or pnpm
-# not on PATH) this hook exits 0 so developers are never hard-blocked.
+# Fail-open: if the environment looks broken (node_modules missing, node/pnpm
+# unavailable, or this checkout lacks a check:audits script) this hook exits 0
+# so developers are never hard-blocked.
 #
 # Bypass: git push --no-verify
 
@@ -18,6 +19,18 @@ if [ ! -d node_modules ]; then
   exit 0
 fi
 
+# Fail-open: node not on PATH. The package-script probe below needs node.
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-push: node not found on PATH — skipping audit gates" >&2
+  exit 0
+fi
+
+# Fail-open: this package/branch does not define check:audits.
+if ! node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));process.exit(p.scripts&&p.scripts['check:audits']?0:1)" >/dev/null 2>&1; then
+  echo "pre-push: package.json lacks scripts.check:audits — skipping audit gates" >&2
+  exit 0
+fi
+
 # Fail-open: pnpm not on PATH.
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "pre-push: pnpm not found on PATH — skipping audit gates" >&2
@@ -25,11 +38,10 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 # If every pushed ref is a deletion (local sha is all zeros), skip.
-# A deletion line has the form: <zeros> <remote-ref> <zeros> <remote-ref>
-# but git gives us: <local-sha> <local-ref> <remote-sha> <remote-ref>
+# Git pre-push stdin fields are: <local-ref> <local-sha> <remote-ref> <remote-sha>.
 all_deletions=1
 found_any=0
-while IFS=' ' read -r local_sha local_ref remote_sha remote_ref; do
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
   found_any=1
   case "$local_sha" in
     0000000000000000000000000000000000000000) ;;

@@ -32,9 +32,8 @@ function deriveCIGates(ciYmlText: string): string[] {
 
   // Find the lint-build job block. We look for lines starting with `  lint-build:`
   // and collect until the next top-level job definition.
-  const lines = ciYmlText.split('\n');
+  const lines = ciYmlText.split(/\r?\n/);
   let inLintBuild = false;
-  let jobIndent = -1;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
@@ -42,7 +41,6 @@ function deriveCIGates(ciYmlText: string): string[] {
     // Detect the start of the lint-build job.
     if (/^\s{2}lint-build:/.test(line)) {
       inLintBuild = true;
-      jobIndent = 2;
       continue;
     }
 
@@ -53,18 +51,15 @@ function deriveCIGates(ciYmlText: string): string[] {
 
     if (!inLintBuild) continue;
 
-    // Match `run: pnpm <script>` lines (with optional leading spaces).
-    // The script may have arguments after it.
-    const m = /^\s+run:\s+pnpm\s+(\S+)(.*)$/.exec(line);
-    if (!m) continue;
-
-    const script = m[1]?.trim() ?? '';
-    // Keep only audit/scan/fix check gates.
-    if (!isAuditCheckGate(script)) continue;
-    // Exclude audit:deps (network).
-    if (script === 'audit:deps') continue;
-
-    gates.push(script);
+    const run = collectRunCommand(lines, i);
+    if (!run) continue;
+    for (const script of pnpmScripts(run.command)) {
+      if (!isAuditCheckGate(script)) continue;
+      // Exclude audit:deps (network).
+      if (script === 'audit:deps') continue;
+      gates.push(script);
+    }
+    i = run.endIndex;
   }
 
   // Deduplicate while preserving first-occurrence order.
@@ -83,7 +78,57 @@ function isAuditCheckGate(script: string): boolean {
   return script.endsWith(':check');
 }
 
+function collectRunCommand(lines: string[], start: number): { command: string; endIndex: number } | undefined {
+  const first = lines[start] ?? '';
+  const inline = /^\s+run:\s+(.+?)\s*$/.exec(first);
+  if (!inline) return undefined;
+  const marker = inline[1]?.trim() ?? '';
+  if (!['|', '|-', '|+', '>', '>-', '>+'].includes(marker)) return { command: marker, endIndex: start };
+
+  const runIndent = first.search(/\S/);
+  const parts: string[] = [];
+  let endIndex = start;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (line.trim() === '') {
+      parts.push('');
+      endIndex = i;
+      continue;
+    }
+    const indent = line.search(/\S/);
+    if (indent <= runIndent) break;
+    parts.push(line.trim());
+    endIndex = i;
+  }
+  return { command: parts.join(' && '), endIndex };
+}
+
+function pnpmScripts(command: string): string[] {
+  return command
+    .split(/\s*(?:&&|;)\s*/)
+    .map((part) => /^pnpm\s+(\S+)/.exec(part.trim())?.[1])
+    .filter((script): script is string => script !== undefined);
+}
+
 describe('check:audits drift test', () => {
+  it('parses multiline run blocks, blank lines, chomping markers, dynamic indentation, and compound gates', () => {
+    const gates = deriveCIGates(`
+jobs:
+  lint-build:
+    steps:
+      - name: grouped
+        run: |-
+          pnpm audit:env:check && pnpm scan:env:check
+
+          pnpm audit:deps
+          pnpm audit:chalk:check --changed-vs origin/main; pnpm fix:pins:check
+  other:
+    steps: []
+`);
+
+    expect(gates).toEqual(['audit:env:check', 'scan:env:check', 'audit:chalk:check', 'fix:pins:check']);
+  });
+
   it('ci.yml lint-build audit gates equal AUDIT_GATES in check-audits.ts', () => {
     const ciText = fs.readFileSync(ciYml, 'utf8');
     const ciGates = deriveCIGates(ciText);

@@ -30,6 +30,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── Gate list ─────────────────────────────────────────────────────────────────
 // SINGLE SOURCE OF TRUTH consumed by the drift test.
@@ -56,17 +58,21 @@ interface GateResult {
   output: string;
 }
 
+function repoRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..');
+}
+
 function runGate(gate: string): GateResult {
   const start = Date.now();
   const result = spawnSync('pnpm', [gate], {
+    cwd: repoRoot(),
     encoding: 'utf8',
-    // Inherit stdio so streaming output is visible while the gate runs.
-    // Capture output for the summary by using pipe instead.
+    // Pipe stdio so each gate's output can be shown under its summary line.
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const durationMs = Date.now() - start;
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
-  const passed = (result.status ?? 1) === 0;
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}${result.error ? `\n${result.error.message}` : ''}`.trim();
+  const passed = result.error ? false : (result.status ?? 1) === 0;
   return { gate, passed, durationMs, output };
 }
 
@@ -125,7 +131,6 @@ function main(): void {
 // Only run when executed directly (not when imported by tests).
 // import.meta.url is the canonical URL of this module; process.argv[1] is the
 // entry-point path. When tsx runs this file directly they resolve to the same file.
-import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
 
 function isMain(): boolean {

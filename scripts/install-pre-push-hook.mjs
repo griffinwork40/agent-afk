@@ -9,6 +9,7 @@
  * Contract:
  *  - Skips when CI env var is set (any truthy value).
  *  - Skips when not inside a git work tree.
+ *  - Skips when core.hooksPath is configured; custom hook routing is left alone.
  *  - Never overwrites an existing pre-push hook that lacks our marker.
  *  - Idempotent: re-running updates the launcher content but only when our
  *    marker is present (i.e. we own the file).
@@ -22,9 +23,10 @@
  * branches/worktrees without the script are unaffected (the launcher exits 0).
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join, normalize, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 // ── Marker embedded in the launcher ──────────────────────────────────────────
 // The installer checks for this string before overwriting.
@@ -62,6 +64,36 @@ function insideGitWorkTree() {
  */
 function gitCommonDir() {
   return git(['rev-parse', '--git-common-dir']);
+}
+
+/** @returns {string} */
+function gitTopLevel() {
+  return git(['rev-parse', '--show-toplevel']);
+}
+
+/** @returns {string} */
+function configuredHooksPath() {
+  try {
+    return git(['config', '--get', 'core.hooksPath']);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * True only when this installer is running from the checkout it is about to
+ * modify. This prevents a nested consumer package or copied script from writing
+ * hooks into an ancestor repository that does not own this package.
+ * @param {string} dir
+ */
+function installerBelongsToTopLevel(dir) {
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  const packageRoot = dirname(scriptDir);
+  try {
+    return normalize(realpathSync(packageRoot)) === normalize(realpathSync(resolve(dir)));
+  } catch {
+    return normalize(resolve(packageRoot)) === normalize(resolve(dir));
+  }
 }
 
 // ── Launcher content ──────────────────────────────────────────────────────────
@@ -103,10 +135,23 @@ function main() {
   }
 
   let commonDir;
+  let topLevel;
   try {
     commonDir = gitCommonDir();
+    topLevel = gitTopLevel();
   } catch {
-    // Cannot determine git common dir — skip silently.
+    // Cannot determine git dirs — skip silently.
+    return;
+  }
+
+  if (!installerBelongsToTopLevel(topLevel)) {
+    console.warn('[agent-afk] install-pre-push-hook: package is nested under a different git toplevel; skipping hook install');
+    return;
+  }
+
+  const hooksPath = configuredHooksPath();
+  if (hooksPath) {
+    console.warn(`[agent-afk] core.hooksPath is configured (${hooksPath}); skipping pre-push hook install`);
     return;
   }
 
