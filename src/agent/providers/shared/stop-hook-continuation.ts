@@ -72,6 +72,13 @@ export interface BeforeTurnEndContext {
   readonly signal: AbortSignal;
   /** Full conversation history including the just-pushed assistant turn. */
   readonly messages: readonly Message[];
+  /**
+   * The just-finished assistant turn's text, passed directly from the provider.
+   * When set, `buildStopContext` uses this instead of scanning `messages` for
+   * the last assistant entry — avoids the stale-history bug where the provider
+   * seam fires before the session conversation history is updated (Finding 3).
+   */
+  readonly assistantText?: string;
   /** This turn's tool events (for Done evidence classification). */
   readonly toolEvents: readonly ToolEventMin[];
   /** Surface name for trace metadata. */
@@ -127,7 +134,11 @@ function lastAssistantText(messages: readonly Message[]): string {
 }
 
 function buildStopContext(ctx: BeforeTurnEndContext): StopContext {
-  const terminalKind = parseTerminalState(lastAssistantText(ctx.messages))?.kind;
+  // Finding 3: prefer the directly-passed assistantText over scanning history,
+  // because the provider seam may fire before the session conversation history
+  // is updated with the just-finished assistant turn.
+  const text = ctx.assistantText ?? lastAssistantText(ctx.messages);
+  const terminalKind = parseTerminalState(text)?.kind;
   const isDone = terminalKind === 'done';
   return {
     event: 'Stop' as const,

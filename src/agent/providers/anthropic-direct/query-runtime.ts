@@ -167,7 +167,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   /** Inter-round steering callback; set via setBeforeNextRound() from the subagent layer. */
   private beforeNextRound?: () => string | undefined;
   /** Provider-side stop-hook seam; set via setBeforeTurnEnd() from AgentSession. */
-  private beforeTurnEnd?: (continuation: number) => Promise<{ continueWith?: string } | undefined>;
+  private beforeTurnEnd?: (continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>;
 
   constructor(opts: AnthropicDirectQueryOptions) {
     this.initSessionId = opts.sessionId ?? randomUUID();
@@ -300,7 +300,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
   }
 
   /** Wire the provider-side stop-hook seam (issue #2714). Called from AgentSession.wireStopHook(). */
-  setBeforeTurnEnd(cb: ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
     this.beforeTurnEnd = cb;
   }
 

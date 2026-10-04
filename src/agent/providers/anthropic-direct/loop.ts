@@ -113,7 +113,10 @@ async function* applyStopHookSeam(
   if (safeBlocks.length > 0) {
     input.messages.push({ role: 'assistant', content: safeBlocks });
   }
-  const seamResult = await input.beforeTurnEnd(stopHookContinuation);
+  // Finding 3: extract the assistant text directly from the turn result so
+  // buildStopContext receives fresh data without scanning history.
+  const assistantTextForSeam = turnResult.text.length > 0 ? turnResult.text : undefined;
+  const seamResult = await input.beforeTurnEnd(stopHookContinuation, assistantTextForSeam);
   if (seamResult?.continueWith) {
     input.messages.push({ role: 'user', content: seamResult.continueWith });
     input.journalSync?.sync(input.messages);

@@ -255,3 +255,81 @@ describe('runBeforeTurnEnd — abort propagation', () => {
     await expect(runBeforeTurnEnd(ctx)).rejects.toBeInstanceOf(AbortError);
   });
 });
+
+// ---------------------------------------------------------------------------
+// runBeforeTurnEnd — Finding 3: assistantText takes precedence over messages
+// ---------------------------------------------------------------------------
+
+describe('runBeforeTurnEnd — assistantText overrides stale history (Finding 3)', () => {
+  beforeEach(() => { vi.stubEnv('AFK_STOP_HOOK_MAX_CONTINUATIONS', '2'); });
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('uses assistantText when provided instead of scanning messages', async () => {
+    // Set up: messages have stale assistant content (does NOT parse as Done);
+    // assistantText has the real just-finished turn (DOES parse as Done).
+    // Verify the StopContext passed to dispatch has terminalState:'done', which
+    // means buildStopContext read assistantText, not the stale history.
+    const dispatch = vi.fn().mockResolvedValue({ decision: 'approve' });
+    const staleMessages = [
+      { role: 'assistant', content: 'still working...', timestamp: new Date() },
+    ] as const;
+    // A text that parseTerminalState recognises as done:
+    const freshAssistantText = 'All done.\n\n**Done**\n- What was done: task finished';
+
+    const ctx = makeCtx({
+      config: makeConfig(makeRegistry({ dispatch })),
+      messages: staleMessages as unknown as BeforeTurnEndContext['messages'],
+      assistantText: freshAssistantText,
+      continuation: 0,
+    });
+    await runBeforeTurnEnd(ctx);
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    const calledCtx = (dispatch.mock.calls[0] as [unknown, ...unknown[]])[0];
+    // buildStopContext uses assistantText → terminalState is 'done'
+    expect((calledCtx as Record<string, unknown>).terminalState).toBe('done');
+  });
+
+  it('falls back to lastAssistantText(messages) when assistantText is not provided', async () => {
+    // assistantText absent → buildStopContext scans messages for last assistant text.
+    // Messages contain a Done turn → dispatch sees terminalState:'done'.
+    const dispatch = vi.fn().mockResolvedValue({ decision: 'approve' });
+    const messagesWithDone = [
+      { role: 'assistant', content: 'Done.\n\n**Done**\n- task: finished', timestamp: new Date() },
+    ] as const;
+    const ctx = makeCtx({
+      config: makeConfig(makeRegistry({ dispatch })),
+      messages: messagesWithDone as unknown as BeforeTurnEndContext['messages'],
+      // no assistantText field
+      continuation: 0,
+    });
+    await runBeforeTurnEnd(ctx);
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    const calledCtx = (dispatch.mock.calls[0] as [unknown, ...unknown[]])[0];
+    expect((calledCtx as Record<string, unknown>).terminalState).toBe('done');
+  });
+
+  it('stale messages with non-Done text are overridden by Done assistantText', async () => {
+    // Without Finding 3 fix, this test would fail: the stale 'working...' text
+    // in messages would cause terminalState to be absent (not 'done'), but the
+    // freshAssistantText IS done.
+    const dispatch = vi.fn().mockResolvedValue({ decision: 'approve' });
+    const staleMessages = [
+      { role: 'assistant', content: 'working...', timestamp: new Date() },
+    ] as const;
+    const freshAssistantText = 'Finished.\n\n**Done**\n- What was done: it is done';
+
+    const ctx = makeCtx({
+      config: makeConfig(makeRegistry({ dispatch })),
+      messages: staleMessages as unknown as BeforeTurnEndContext['messages'],
+      assistantText: freshAssistantText,
+      continuation: 0,
+    });
+    await runBeforeTurnEnd(ctx);
+
+    const calledCtx = (dispatch.mock.calls[0] as [unknown, ...unknown[]])[0];
+    // Must be 'done' (from fresh text), not absent (from stale messages)
+    expect((calledCtx as Record<string, unknown>).terminalState).toBe('done');
+  });
+});

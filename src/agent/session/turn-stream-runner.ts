@@ -261,6 +261,11 @@ export class TurnStreamRunner {
     // seam can read _turnToolEvents (stop-hook-continuation rule, issue #2714).
     this._activeDeps = deps;
 
+    // Finding 2: reset the per-turn runtime flag so the guard below
+    // correctly distinguishes "seam fired this turn" from a prior turn.
+    const wiring = this.deps.getStopWiring?.();
+    if (wiring) wiring.stopDispatchedBySeam = false;
+
     try {
       while (true) {
         const result = await this.deps.getProviderIterator().next();
@@ -282,14 +287,28 @@ export class TurnStreamRunner {
             // never finalizes a turn whose Stop hooks are still running; the
             // wait is bounded by STOP_HOOK_HANDLER_TIMEOUT_MS. Forks and
             // un-wired surfaces are no-ops inside dispatchTurnStop.
-            await dispatchTurnStop({
-              config: this.deps.getConfig(),
-              wiring: this.deps.getStopWiring?.(),
-              sessionId: this.deps.getSessionId(),
-              signal: this.deps.getAbortController().signal,
-              conversationHistory: this.deps.conversationHistory,
-              toolEvents: deps._turnToolEvents ?? [],
-            });
+            //
+            // Finding 2: when the provider exposes setBeforeTurnEnd AND stop
+            // wiring is active, the provider seam (stop-hook-continuation.ts)
+            // already dispatched Stop BEFORE turn.completed was yielded —
+            // dispatching it again here would fire Stop twice per turn.
+            // Skip dispatchTurnStop in that case.
+            // Finding 2: use the runtime flag set by buildBeforeTurnEnd
+            // when the seam actually fired this turn. The old static check
+            // (`setBeforeTurnEnd !== undefined`) wrongly suppressed dispatch
+            // when the provider exposed the seam but it never ran.
+            const seamAlreadyDispatched =
+              this.deps.getStopWiring?.()?.stopDispatchedBySeam === true;
+            if (!seamAlreadyDispatched) {
+              await dispatchTurnStop({
+                config: this.deps.getConfig(),
+                wiring: this.deps.getStopWiring?.(),
+                sessionId: this.deps.getSessionId(),
+                signal: this.deps.getAbortController().signal,
+                conversationHistory: this.deps.conversationHistory,
+                toolEvents: deps._turnToolEvents ?? [],
+              });
+            }
           } else if (output.type === 'error') {
             // Terminal-cause flag: a per-turn provider error must flip the
             // eventual clean close from `succeeded` to `failed`.

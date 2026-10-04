@@ -51,7 +51,7 @@ export interface RunTurnInput {
    * to messages first; then this callback runs; if it returns `continueWith`, the
    * caller pushes the framework user message and re-enters the model loop.
    */
-  beforeTurnEnd?: (continuation: number) => Promise<{ continueWith?: string } | undefined>;
+  beforeTurnEnd?: (continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>;
   /** Journal differ; `sync(messages)` at each commit point (docs/message-journal.md). */
   journalSync?: import('../../journal/index.js').JournalSync<MessageParam>;
   /**

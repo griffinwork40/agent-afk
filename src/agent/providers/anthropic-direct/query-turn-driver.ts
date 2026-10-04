@@ -62,8 +62,10 @@ export interface TurnDriverContext {
   /**
    * Provider-side stop-hook seam (issue #2714). Undefined when not wired.
    * Called before `turn.completed` on natural turn ends; see RunTurnInput.beforeTurnEnd.
+   * Finding 3: optional second arg threads the just-finished assistant text so
+   * buildStopContext doesn't scan stale history.
    */
-  readonly beforeTurnEnd: ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined;
+  readonly beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
   /**
    * The session's configured working directory — `config.cwd || process.cwd()`.
    * Used instead of bare `process.cwd()` so daemon tasks whose `cwd` differs

@@ -537,7 +537,7 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * Wired by `AgentSession.wireStopHook()` via the session layer, so the same
    * mechanism that delivers Stop on every surface also enables continuation.
    */
-  setBeforeTurnEnd?(cb: ((continuation: number) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
+  setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
   /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).

@@ -51,19 +51,22 @@ export interface StopHookWiringDeps {
  */
 export function buildBeforeTurnEnd(
   deps: StopHookWiringDeps,
-): (continuation: number) => Promise<{ continueWith?: string } | undefined> {
-  return async (continuation: number): Promise<{ continueWith?: string } | undefined> => {
+): (continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined> {
+  return async (continuation: number, assistantText?: string): Promise<{ continueWith?: string } | undefined> => {
     const cfg = deps.getConfig();
     const sessionId = deps.getSessionId() ?? '';
     const signal = deps.getSignal();
     const messages = deps.getConversationHistory();
     const toolEvents = deps.getActiveTurnToolEvents();
     const currentWiring = deps.getStopWiring();
-    return runBeforeTurnEnd({
+    const result = await runBeforeTurnEnd({
       config: cfg,
       sessionId,
       signal,
       messages,
+      // Finding 3: thread the provider's just-finished assistant text directly
+      // into the seam context so buildStopContext sees fresh data.
+      ...(assistantText !== undefined ? { assistantText } : {}),
       toolEvents,
       surface: typeof cfg.surface === 'string' ? cfg.surface : undefined,
       hasNextTurn: currentWiring?.getHasNextTurn() ?? false,
@@ -74,6 +77,10 @@ export function buildBeforeTurnEnd(
       } : undefined,
       continuation,
     });
+    // Finding 2: signal that the provider seam dispatched Stop this turn,
+    // so turn-stream-runner.ts skips the duplicate dispatchTurnStop.
+    if (currentWiring) currentWiring.stopDispatchedBySeam = true;
+    return result;
   };
 }
 
