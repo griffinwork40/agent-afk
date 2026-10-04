@@ -138,7 +138,7 @@
     "log-update": "^8.0.0",
     "marked": "^17.0.5",
     "node-cron": "^4.2.1",
-    "openai": "^6.38.0",
+    "openai": "^7.25.0",
     "ora": "^8.1.1",
     "playwright": "^1.49.0",
     "string-width": "^8.2.0",
