@@ -43,7 +43,7 @@ export const sendToSessionTool: AnthropicToolDef = {
     'Input the user typed always goes ahead of peer messages. ' +
     'Before sending: call list_sessions and read the target\'s turnState, activity.promptHead, cwd, branch, and pendingMessages (read_witness with its sessionId gives more detail). ' +
     'Send to a busy session only when the message bears on its current task or is urgent. ' +
-    'Do not message a blocked session (it is waiting on a human); tell the user instead. ' +
+    'Do not message a blocked session (turnState === "blocked" or blocked === true in list_sessions — it is waiting on a human); tell the user instead. ' +
     'If pendingMessages is above zero, consolidate instead of adding another message. ' +
     'If you share a repo or branch with the target, name the files or branch at risk of collision. ' +
     'Writing the message: make it self-contained (paths, branch, commit SHA, the exact ask), because the receiver shares none of your context. ' +

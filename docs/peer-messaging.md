@@ -113,7 +113,7 @@ Sends a message to another session.
 
 **Idle + empty buffer**: when the REPL is awaiting input with nothing typed, `PeerInboxNotifier` fires `onInjectable` → `tryAutoResume` → `surface.abortPendingRead()`. The message is prepended to the next turn via `prependTurnInjections`. The model sees an `[auto-resume]` directive saying a peer message arrived; it should use `send_to_session` if a reply is needed.
 
-**Busy (mid-turn)**: the envelope is injected into the running turn at the next boundary between tool rounds (after the current tool batch, before the next model request), via the `setBeforeNextRound` callback installed by `loop-iteration.boundary.ts`. A message to a busy session therefore lands inside the task it is working on now. Input the user typed always goes first (see [Admission queue and human-priority barrier](#admission-queue-and-human-priority-barrier)). If the turn has no further tool round, the next-turn fallback (`prependTurnInjections`) delivers it at the top of the next turn. No tool call or model request is ever cut short.
+**Busy (mid-turn)**: the envelope is injected into the running turn at the next boundary between tool rounds (after the current tool batch, before the next model request), via the `setBeforeNextRound` callback installed by `loop-iteration.boundary.ts`. A message to a busy session therefore lands inside the task it is working on now. Input the user typed always goes first (see [Admission queue and human-priority barrier](#admission-queue-and-human-priority-barrier)). If the turn has no further tool round, the envelope falls back to the top-of-next-turn drain — the same `prependTurnInjections` path used for [idle delivery](#delivery-semantics) above. No tool call or model request is ever cut short.
 
 **Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:92-100`).
 
@@ -222,7 +222,7 @@ An envelope claimed by an exclusive hard-link receipt in `delivered/` but not ye
 
 A `peer_message` trace event is emitted for every state transition (`src/agent/trace/emit.ts:105`):
 - `action`: emitted values are `sent` and `refused` (sender side, `src/agent/tools/handlers/peer.ts`), and `claimed`, `held`, and `injected` (receiver side, `peer-inbox-notifier.ts`). A delivered message shows `sent` → `claimed` → `injected`.
-- The type (`src/agent/trace/types.ts`) also lists `delivered`, `dropped`, and `reclaimed`, which nothing currently emits. `delivered` is the pre-#2810 receiver action; traces from older builds show `sent` → `delivered` instead (see #2901).
+- The type (`src/agent/trace/types.ts`) also lists `delivered`, `dropped`, and `reclaimed`. `delivered` is the pre-#2810 receiver action; traces from older builds show `sent` → `delivered` instead (see #2901). `dropped` and `reclaimed` are emitted by `PeerInboxNotifier.reclaim()` during session swaps (e.g. `/resume`): `reclaimed` when an envelope is successfully moved back to `pending/`, `dropped` when that move returns false (`peer-inbox-notifier.ts:222-227`).
 - `messageId`, `peer` (the other session's id), `bytes` (UTF-8 byte count)
 - `reason` (for `refused`/`held`)
 
