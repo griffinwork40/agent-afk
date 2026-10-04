@@ -27,6 +27,7 @@ import {
 } from './lf-delayed.js';
 import { combine, computeConfidence } from './combine.js';
 import { parseVerificationSummary } from './verification-patterns.js';
+import { parseTerminalState } from './terminal-state.js';
 import type { Vote } from './schema.js';
 import type { Turn } from './artifacts.js';
 import type { ClosureInfo } from './lf-immediate.js';
@@ -223,12 +224,63 @@ describe('recoverArtifacts', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseSelfReport', () => {
-  it('parses Done', () => expect(parseSelfReport('**Done** — all tests pass')).toBe('done'));
-  it('parses Blocked', () => expect(parseSelfReport('**Blocked** on missing token')).toBe('blocked'));
-  it('parses Asking', () => expect(parseSelfReport('**Asking** — which approach?')).toBe('asking'));
+  // The implementation now delegates to parseTerminalState, which requires the
+  // terminal-state keyword to be on its own short line (tail-anchored). Inputs
+  // where the keyword appears inline mid-sentence correctly return 'none'.
+  it('parses Done', () => expect(parseSelfReport('I ran the tests.\n\n**Done**\n- What was done: all tests pass')).toBe('done'));
+  it('parses Blocked', () => expect(parseSelfReport('I tried the API.\n\n**Blocked**\n- What blocks: missing token')).toBe('blocked'));
+  it('parses Asking', () => expect(parseSelfReport('I need a decision.\n\n**Asking**\n- Question: which approach?')).toBe('asking'));
   it('parses Interrupted', () => expect(parseSelfReport('**Interrupted**')).toBe('interrupted'));
   it('returns none when absent', () => expect(parseSelfReport('All good, nothing to say.')).toBe('none'));
   it('is case-insensitive', () => expect(parseSelfReport('**done**')).toBe('done'));
+});
+
+// ---------------------------------------------------------------------------
+// parseSelfReport / parseTerminalState parity
+//
+// Both parsers must agree on the kind for the same input. These fixtures run
+// through both and assert they produce matching results (or both return
+// 'none'/null for non-terminal text).
+// ---------------------------------------------------------------------------
+
+describe('parseSelfReport / parseTerminalState parity', () => {
+  // Shared fixtures: [label, assistantText, expected kind]
+  const fixtures: Array<[string, string, 'done' | 'blocked' | 'asking' | 'interrupted' | 'none']> = [
+    ['bold **Done**', 'prose\n\n**Done**\n- What was done: fixed it', 'done'],
+    ['markdown ### Blocked', 'prose\n\n### Blocked\n- What blocks: no token', 'blocked'],
+    ['plain Asking', 'prose\n\nAsking\n- Question: which branch?', 'asking'],
+    ['Interrupted with trailing dot', 'prose\n\nInterrupted.\n- In progress: indexing', 'interrupted'],
+    ['no terminal state', 'I read the file and it looks fine.', 'none'],
+    [
+      'fenced-code-block — done inside block must not match',
+      // A shell loop that contains the word "done" should NOT be treated as a
+      // terminal-state heading. The shared parseTerminalState skips fenced
+      // lines; parseSelfReport must now agree.
+      'Here is a script:\n\n```bash\nfor f in *.ts; do\n  echo $f\ndone\n```\n\nI ran it and everything compiled.',
+      'none',
+    ],
+    [
+      'done after fenced block is still detected',
+      'Here is the output:\n\n```bash\ndone\n```\n\n**Done**\n- What was done: all tests pass',
+      'done',
+    ],
+  ];
+
+  for (const [label, text, expected] of fixtures) {
+    it(label, () => {
+      // parseSelfReport result
+      const srResult = parseSelfReport(text);
+      expect(srResult, `parseSelfReport("${label}")`).toBe(expected);
+
+      // parseTerminalState result must agree
+      const tsResult = parseTerminalState(text);
+      if (expected === 'none') {
+        expect(tsResult, `parseTerminalState("${label}")`).toBeNull();
+      } else {
+        expect(tsResult?.kind, `parseTerminalState("${label}").kind`).toBe(expected);
+      }
+    });
+  }
 });
 
 describe('lfErrorTail', () => {
@@ -504,8 +556,8 @@ describe('lfSelfReport', () => {
 
   it('picks the last non-none self-report', () => {
     const turns: Turn[] = [
-      { assistant: '**Asking** — how do you want this?' },
-      { assistant: '**Done** — implemented.' },
+      { assistant: 'I need a decision.\n\n**Asking**\n- Question: how do you want this?' },
+      { assistant: 'I shipped the feature.\n\n**Done**\n- What was done: implemented.' },
     ];
     const { selfReport } = lfSelfReport(turns, now);
     expect(selfReport).toBe('done');

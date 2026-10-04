@@ -18,6 +18,7 @@ import {
   isVerificationCommand,
   parseVerificationSummary,
 } from './verification-patterns.js';
+import { parseTerminalState } from './terminal-state.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,18 +86,19 @@ function hasCorrectionLanguage(text: string): boolean {
 // Self-report parser
 // ---------------------------------------------------------------------------
 
-const SELF_REPORT_PATTERN =
-  /\*\*(Done|Blocked|Asking|Interrupted)\*\*/i;
-
+/**
+ * Parse the assistant's final text for a Done/Blocked/Asking/Interrupted
+ * heading and return the matching SelfReport value, or 'none'.
+ *
+ * Delegates to `parseTerminalState` so that fenced-code-block skipping,
+ * tail-anchoring, and heading-format tolerance are all shared with the
+ * REPL/daemon verdict surface. The old standalone regex is removed to
+ * prevent drift (the prior regex did not skip fenced code blocks).
+ */
 export function parseSelfReport(assistantText: string): SelfReport {
-  const m = SELF_REPORT_PATTERN.exec(assistantText);
-  if (m === null || m[1] === undefined) return 'none';
-  const word = m[1].toLowerCase();
-  if (word === 'done') return 'done';
-  if (word === 'blocked') return 'blocked';
-  if (word === 'asking') return 'asking';
-  if (word === 'interrupted') return 'interrupted';
-  return 'none';
+  const state = parseTerminalState(assistantText);
+  if (state === null) return 'none';
+  return state.kind;
 }
 
 // ---------------------------------------------------------------------------
