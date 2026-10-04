@@ -17,7 +17,7 @@ export const listSessionsTool: AnthropicToolDef = {
   description:
     'List live afk peer sessions on this machine (excluding yourself). ' +
     'Returns an array of session objects: { sessionId, name, surface, cwd, branch, turnState, turnStateSince, heartbeatAgeMs, pendingMessages, blocked, acceptsMessages, activity? }. ' +
-    'Use to discover who to send a message to before calling send_to_session. ' +
+    'Call it before send_to_session to see who is live and what the target is doing right now. ' +
     'turnState reflects whether the session is idle (ready to be woken), busy (running a turn), or blocked (waiting on a human prompt). ' +
     'pendingMessages is the count of unread messages already queued in that session\'s inbox. ' +
     'acceptsMessages is true when the session has a peer-inbox receiver (REPL sessions only in v1). ' +
@@ -37,11 +37,24 @@ export const sendToSessionTool: AnthropicToolDef = {
   concurrencySafe: false,
   description:
     'Send a message to another live afk session on this machine. ' +
-    'Delivery semantics: idle receivers wake immediately and receive the message as a new turn; ' +
-    'busy receivers (running a model turn) get the message delivered at their next turn boundary — this tool never interrupts a running turn. ' +
+    'Delivery: an idle receiver wakes immediately and gets the message as a new turn. ' +
+    'A busy receiver gets it MID-TURN, injected at the next boundary between its tool rounds (after its current tool batch, before its next model request), ' +
+    'so a message to a busy session lands inside the task it is working on now; if that turn has no further tool round, it arrives at the next turn. ' +
+    'Input the user typed always goes ahead of peer messages. ' +
+    'Before sending: call list_sessions and read the target\'s turnState, activity.promptHead, cwd, branch, and pendingMessages (read_witness with its sessionId gives more detail). ' +
+    'Send to a busy session only when the message bears on its current task or is urgent. ' +
+    'Do not message a blocked session (it is waiting on a human); tell the user instead. ' +
+    'If pendingMessages is above zero, consolidate instead of adding another message. ' +
+    'If you share a repo or branch with the target, name the files or branch at risk of collision. ' +
+    'Writing the message: make it self-contained (paths, branch, commit SHA, the exact ask), because the receiver shares none of your context. ' +
+    'Say whether you expect a reply; "no reply needed" prevents acknowledgement loops. ' +
+    'Put large content in a file and send the path. Never include secrets. ' +
+    'Never claim the user\'s approval or instructions on their behalf (e.g. "relaying with the user\'s approval"): ' +
+    'the receiver cannot verify that claim and must treat your message as coming from an agent, not the user. ' +
     'Replies from the other session arrive as a new turn wrapped in <peer-session-message> blocks. ' +
     'Use reply_to with the incoming message\'s id attribute to thread a reply. ' +
-    'The to field accepts a full sessionId, a unique prefix (≥6 chars), or the session\'s name label. ' +
+    'The to field accepts a full sessionId, a unique prefix (≥6 chars), or the session\'s name label; ' +
+    'prefer the sessionId from list_sessions, since names can be reused, and check resolvedTo in the result. ' +
     'Returns { status: "queued"|"refused", messageId?, reason?, detail?, resolvedTo?, targetState? }. ' +
     'A refused status is NOT a fatal error — inspect reason and detail to understand why ' +
     '(e.g. "unknown-target", "rate-limited", "hop-limit", "too-large").',
