@@ -42,8 +42,9 @@ export function _resetKeychainReadCache(): void {
  *
  * Sources, by platform:
  *   - macOS  → macOS Keychain entry `Claude Code-credentials`
- *   - linux  → `~/.claude/.credentials.json`
- *   - win32  → not supported; returns `undefined`
+ *   - linux / win32 / other → `~/.claude/.credentials.json`
+ *     (Claude Code stores credentials in this plaintext file on every
+ *     platform except macOS; on Windows `homedir()` is `%USERPROFILE%`)
  *
  * Returns `undefined` when the entry is missing, malformed, or the access
  * token is past its `expiresAt`. This sync variant does not attempt a refresh;
@@ -85,7 +86,7 @@ export function loadClaudeCodeOauthToken(): string | undefined {
  * if expired or near-expiry, uses the stored `refreshToken` to obtain a
  * new access token from `platform.claude.com`. On success, writes the
  * updated credentials back to the same store Claude Code uses (keychain on
- * macOS, credentials file on Linux) — preserving all non-OAuth fields
+ * macOS, credentials file everywhere else) — preserving all non-OAuth fields
  * (e.g. `mcpOAuth`).
  *
  * Returns `undefined` when refresh is impossible or fails, and never throws
@@ -173,16 +174,27 @@ function readCredentialsBlob(): string | undefined {
       return undefined;
     }
   }
-  if (process.platform === 'linux') {
-    const path = join(homedir(), '.claude', '.credentials.json');
-    if (!existsSync(path)) return undefined;
-    try {
-      return readFileSync(path, 'utf-8');
-    } catch {
-      return undefined;
-    }
+  // Every non-macOS platform (linux, win32, ...) uses the plaintext file.
+  // History: this branch was linux-only, so win32 silently returned
+  // `undefined` and `afk login` asked Windows users for an API key even
+  // after a successful `claude login`.
+  const path = claudeCodeCredentialsPath();
+  if (!existsSync(path)) return undefined;
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return undefined;
   }
-  return undefined;
+}
+
+/**
+ * Path of Claude Code's plaintext credential file, used on every platform
+ * except macOS (which uses the Keychain).
+ *
+ * @internal Exported for tests.
+ */
+export function claudeCodeCredentialsPath(): string {
+  return join(homedir(), '.claude', '.credentials.json');
 }
 
 function parseCredentials(blob: string): ParsedCredentials | undefined {
@@ -292,8 +304,8 @@ function writeCredentialsBlob(blob: string): void {
       ],
       { stdio: ['ignore', 'ignore', 'ignore'] },
     );
-  } else if (process.platform === 'linux') {
-    const path = join(homedir(), '.claude', '.credentials.json');
+  } else {
+    const path = claudeCodeCredentialsPath();
     // S3 fix: write with mode 0o600 so only the owner can read credentials.
     // Constraint: POSIX file-mode semantics — mode must be set at creation time
     // because a subsequent chmod would TOCTOU-race. Pass mode in the options

@@ -14,7 +14,7 @@ import { guardedFetch } from '../../../http-client/egress-guard.js';
 import { classifyRisk } from '../../risk-classifier.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import type { SpawnedPidRegistry } from './pid-registry.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { errorMessage, extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
 
 /** Union of all condition shapes. */
 export type WaitCondition =
@@ -77,11 +77,19 @@ export async function evaluateUrl(
   try {
     response = await guardedFetch(globalThis.fetch, cond.url, { method, signal });
   } catch (err) {
-    const msg = errorMessage(err);
     // EgressBlockedError surfaces as "SSRF blocked:" to preserve the existing
-    // detail prefix callers may match on.
-    const detail = msg.startsWith('refusing to') ? `SSRF blocked: ${msg}` : `fetch error: ${msg}`;
-    return { met: false, detail, data: msg.startsWith('refusing to') ? { blocked: true } : undefined };
+    // detail prefix callers may match on. Also handles the connect-time case
+    // where undici wraps EgressBlockedError as TypeError('fetch failed', {cause}).
+    const blocked = extractEgressBlockedError(err);
+    if (blocked !== null) {
+      return {
+        met: false,
+        detail: `SSRF blocked: ${blocked.message}`,
+        data: { blocked: true },
+      };
+    }
+    const msg = fetchFailedMessage(err);
+    return { met: false, detail: `fetch error: ${msg}` };
   }
 
   const { status } = response;

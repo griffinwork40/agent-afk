@@ -363,13 +363,15 @@ describe('plugin-discovery: per-entry realpathSync isolation', () => {
 describe('codexHome: CODEX_HOME validation', () => {
   it('uses an absolute CODEX_HOME override', () => {
     const codex = join(home, 'my-codex');
-    mkdirSync(codex, { recursive: true });
+    // Write a plugin under the override root so the test confirms the override
+    // root is used directly, not just inferred via an absent mcpConfigPath.
+    writePlugin(join(codex, 'plugins'), 'override-plugin');
     vi.stubEnv('CODEX_HOME', codex);
     const sources = detectSources(home);
     const detected = sources.find((s) => s.binary === 'codex')!;
-    // present is false since we have nothing under codex, but the source map
-    // used codex as root — confirmed by the mcpConfigPath check below
-    expect(detected.mcpConfigPath).toBeNull(); // nothing there — correct root used
+    expect(detected.plugins.map((p) => p.name)).toContain('override-plugin');
+    // Also confirm no fallback to ~/.codex by ensuring the source map used codex as root.
+    expect(detected.mcpConfigPath).toBeNull(); // nothing at codex/mcp* — correct root
   });
 
   it('ignores a relative CODEX_HOME override and falls back to ~/.codex', () => {

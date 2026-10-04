@@ -101,6 +101,51 @@ describe('translateResponsesEvent — tool calls', () => {
     // because output_item.added carries empty arguments and we prefer the existing accumulation.
     expect(calls[0]).toMatchObject({ id: 'late', name: 'fn', argumentsRaw: '{"a":1}' });
   });
+
+  // Regression: session ef121fd7 (gpt-6-astra via chatgpt-oauth) — the Codex
+  // backend sent parallel function calls with NO argument deltas, only the
+  // complete arguments on the *.done events. Ignoring them dispatched every
+  // call with `{}` ("file_path must be a string").
+  it('recovers parallel-call arguments delivered only on output_item.done', () => {
+    const { state } = collect([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c0', name: 'read_file', arguments: '' } },
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'c1', name: 'glob', arguments: '' } },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'c0', name: 'read_file', arguments: '{"file_path":"/a"}' } },
+      { type: 'response.output_item.done', output_index: 1, item: { type: 'function_call', call_id: 'c1', name: 'glob', arguments: '{"pattern":"*.py"}' } },
+      { type: 'response.completed', response: { status: 'completed' } },
+    ]);
+    expect(finalizedToolCalls(state).map((c) => [c.id, c.name, c.argumentsRaw])).toEqual([
+      ['c0', 'read_file', '{"file_path":"/a"}'],
+      ['c1', 'glob', '{"pattern":"*.py"}'],
+    ]);
+    expect(isToolCallStop(state)).toBe(true);
+  });
+
+  it('recovers arguments delivered only on function_call_arguments.done', () => {
+    const { state } = collect([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c0', name: 'bash', arguments: '' } },
+      { type: 'response.function_call_arguments.done', output_index: 0, arguments: '{"command":"pwd"}' },
+    ]);
+    expect(finalizedToolCalls(state)[0]).toMatchObject({ id: 'c0', name: 'bash', argumentsRaw: '{"command":"pwd"}' });
+  });
+
+  it('seeds the tool name from function_call_arguments.done when no item event arrived', () => {
+    const { state } = collect([
+      { type: 'response.function_call_arguments.done', output_index: 0, name: 'bash', arguments: '{"command":"ls"}' },
+    ]);
+    expect(finalizedToolCalls(state)[0]).toMatchObject({ name: 'bash', argumentsRaw: '{"command":"ls"}' });
+  });
+
+  it('does not double-count when deltas AND done both arrive; empty done keeps deltas', () => {
+    const { state } = collect([
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'c0', name: 'fn', arguments: '' } },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"x":' },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '1}' },
+      { type: 'response.function_call_arguments.done', output_index: 0, arguments: '{"x":1}' },
+      { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'c0', name: 'fn', arguments: '' } },
+    ]);
+    expect(finalizedToolCalls(state)[0]).toMatchObject({ argumentsRaw: '{"x":1}' });
+  });
 });
 
 describe('translateResponsesEvent — usage', () => {

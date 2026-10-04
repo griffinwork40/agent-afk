@@ -123,8 +123,11 @@ export interface HookDecision {
    *
    * Semantics mirror Claude Code's `hookSpecificOutput.updatedInput`:
    * - **Replace** (not shallow-merge): the hook returns the full desired input.
-   * - **Multiple hooks** (registration order): each hook sees the previous
-   *   hook's rewrite in `tool_input`; the last non-blocking hook's value wins.
+   * - **Multiple hooks** (registration order): the hook registry dispatches all
+   *   handlers against the original context; each handler's `updatedInput` is
+   *   last-writer-wins — the final non-blocking hook's value is used. Hooks do
+   *   NOT see each other's rewrites during dispatch; only the winning value is
+   *   applied after all hooks have run.
    * - A `block` decision from ANY hook short-circuits before the rewrite applies.
    * - Non-`PreToolUse` hooks set this field — it is silently ignored.
    *

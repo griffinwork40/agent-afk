@@ -270,6 +270,7 @@ describe('durability and concurrency', () => {
     expect(siblings.filter((f) => f.endsWith('.lock'))).toEqual([]);
   });
 
+  // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; mode 0o600 assertion doesn't apply
   it.skipIf(process.platform === 'win32')(
     'writes the registry 0o600 — it lists every repo the user works in',
     async () => {

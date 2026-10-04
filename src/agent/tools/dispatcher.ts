@@ -35,6 +35,7 @@ import { defaultConcurrencyClassifier } from './dispatch-batching.js';
 
 import type { SuspectedLoopWindow } from './suspected-loop-detector.js';
 import { RepeatFailureGuard } from './repeat-failure-guard.js';
+import { ToolHealthMonitor, applyToolHealth } from './tool-health-monitor.js';
 import { executeBatchImpl } from './dispatcher.execute-batch.js';
 import {
   runPreDispatchGates as _runPreDispatchGates,
@@ -52,6 +53,7 @@ import {
 } from './dispatcher.core-exec.js';
 import type { CoreExecDeps } from './dispatcher.core-exec.js';
 import { isYieldableTool, type UserAttention } from './user-yield.js';
+import { isDetachableTool, type DetachableToolRegistry } from './detach-bash.js';
 
 // Re-exported for backward compatibility: external importers (dispatcher.test.ts,
 // schema-classification.test.ts) historically import this from './dispatcher.js'.
@@ -245,6 +247,16 @@ export interface SessionToolDispatcherOptions {
    * Optional: when absent, bash behaves as before (no live tail).
    */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Detach registry for the Ctrl+B backgrounding contract (#2542).
+   *
+   * When present, `callHandlerContext` injects it into the context of every
+   * tool in {@link DETACHABLE_TOOLS} (currently `bash` only) so those
+   * handlers can register their in-flight calls and respond to detachment.
+   * Absent for headless surfaces, subagent children, and one-shot CLI runs
+   * that have no REPL to inject the result into.
+   */
+  detachRegistry?: DetachableToolRegistry;
 }
 
 export class SessionToolDispatcher implements ToolDispatcher {
@@ -307,6 +319,8 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private readonly spawnedPidRegistry: SpawnedPidRegistry | undefined;
   /** Yield-contract probe; handed only to `YIELDABLE_TOOLS` handlers. */
   private readonly userAttention: UserAttention | undefined;
+  /** Detach registry for Ctrl+B backgrounding (#2542); handed to `DETACHABLE_TOOLS`. */
+  private readonly detachRegistry: DetachableToolRegistry | undefined;
   /** Live bash output tail reporter factory (issue #1506). */
   private readonly bashOutputTailReporter:
     | ((toolUseId: string) => (tail: string | undefined) => void)
@@ -333,6 +347,13 @@ export class SessionToolDispatcher implements ToolDispatcher {
    * refuses execution after consecutive FAILURES of the same normalized call.
    */
   private readonly repeatFailureGuard = new RepeatFailureGuard();
+
+  /**
+   * Per-session sliding-window health monitor (#2774). Mirrors the
+   * repeatFailureGuard pattern: one instance per dispatcher (i.e. per session
+   * or forked child), never module-scope.
+   */
+  private readonly toolHealthMonitor = new ToolHealthMonitor();
 
 
 
@@ -381,6 +402,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
     this._allowAll = opts.allowAll === true;
     this.spawnedPidRegistry = opts.spawnedPidRegistry;
     this.userAttention = opts.userAttention;
+    this.detachRegistry = opts.detachRegistry;
     this.bashOutputTailReporter = opts.bashOutputTailReporter;
 
     // When caller passes arrays by reference (provider sharing pattern), use
@@ -447,6 +469,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
       // so a non-yieldable tool (bash) can never be told to stop early.
       ...(this.userAttention !== undefined && isYieldableTool(call.name)
         ? { userAttention: this.userAttention }
+        : {}),
+      // Detach contract (#2542): inject the registry into detachable tools
+      // (currently bash only) so Ctrl+B can free the model's turn while the
+      // underlying operation keeps running.
+      ...(this.detachRegistry !== undefined && isDetachableTool(call.name)
+        ? { detachRegistry: this.detachRegistry }
         : {}),
     };
   }
@@ -581,12 +609,17 @@ export class SessionToolDispatcher implements ToolDispatcher {
   // with live MCP wire-names before reaching the dispatcher (see
   // permissions.ts:withMcpToolsAllowed).
   get toolDefs(): readonly AnthropicToolDef[] {
-    const available = this.subagentExecutor?.supportsBackgroundJobs?.()
+    const withBg = this.subagentExecutor?.supportsBackgroundJobs?.()
       ? this.schemas
       : this.schemas.filter(
           (schema) =>
             schema.name !== 'cancel_background_job' && schema.name !== 'send_message_to_agent' && schema.name !== 'get_background_job_health',
         );
+    // Peer-messaging tools are top-level only: subagents (parentSessionId set)
+    // cannot use list_sessions or send_to_session.
+    const available = this.parentSessionId === undefined
+      ? withBg
+      : withBg.filter((s) => s.name !== 'list_sessions' && s.name !== 'send_to_session');
     const allowed = this.permissions?.allowedTools;
     if (!allowed) return available;
     const set = new Set(allowed);
@@ -716,7 +749,12 @@ export class SessionToolDispatcher implements ToolDispatcher {
     // Reset-on-success: a completed (non-error) tool call is progress, so the
     // denial breaker's consecutive-denial count restarts. See recordForkReadDenial.
     if (coreResult.isError !== true) this.resetDenialBreaker();
-    return coreResult;
+
+    // Tool-health monitor: observe every settled result and, when degraded,
+    // append a model notice and emit one trace event per (tool, errorHead).
+    // Fire-and-forget: applyToolHealth → emitToolDegraded swallows errors;
+    // never alters isError. Shared helper used by both execute() and batch paths.
+    return applyToolHealth(this.toolHealthMonitor, this.traceWriter, call, coreResult);
   }
 
   // History: executeBatch's Phase 1 gate loop, Phase 2 batch-partition loop, and
@@ -738,6 +776,7 @@ export class SessionToolDispatcher implements ToolDispatcher {
       maxConcurrentSafeCalls: this.maxConcurrentSafeCalls,
       gateDeps: () => this.gateDeps(),
       traceWriter: this.traceWriter,
+      toolHealthMonitor: this.toolHealthMonitor,
     }, onActivity);
   }
 

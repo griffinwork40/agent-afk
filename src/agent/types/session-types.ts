@@ -33,6 +33,7 @@ import type {
 import type { HookRegistry } from '../hooks.js';
 import type { MessageJournal } from '../journal/types.js';
 import type { ZodType } from 'zod';
+import type { UsageLimitProvider } from '../../utils/errors.js';
 
 /** Agent session state */
 export type SessionState = 'idle' | 'processing' | 'streaming' | 'compacting' | 'closed';
@@ -163,6 +164,19 @@ export type OutputEvent =
        * "no need to retype" and "send the message again" copy.
        */
       autoResume?: boolean;
+      /**
+       * Mirror of {@link import('../provider.js').ProviderEvent.paused.waitDeadline}.
+       * Absolute wall-clock deadline by which this park will end (resume or
+       * surface error). Watchdog/ceiling arithmetic prefers this over `resetsAt`
+       * when present. Never shown to users as "resumes at X" copy.
+       */
+      waitDeadline?: Date;      /**
+       * Mirror of {@link import('../provider.js').ProviderEvent.paused.provider}.
+       * Absent = unknown; UI layers render the legacy Claude copy for it.
+       */
+      provider?: UsageLimitProvider;
+      /** Mirror of {@link import('../provider.js').ProviderEvent.paused.plan}. */
+      plan?: string;
     }
   | {
       type: 'resumed';
@@ -226,6 +240,8 @@ export interface ProgressEvent {
 
 /** Metadata for routing progress events to a subagent sink. */
 export interface SubagentProgressMeta {
+  /** Resolved display metadata for the skill tool entry keyed by parentId. */
+  skillIdentity?: import('./skill-identity.js').SkillIdentity;
   subagentId: string;
   parentId?: string;
   agentType?: string;

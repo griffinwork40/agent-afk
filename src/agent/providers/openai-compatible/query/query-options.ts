@@ -49,6 +49,15 @@ export interface OpenAICompatibleQueryOptions {
    * block after a cwd re-anchor (#876).
    */
   onCwdChange?: (cwd: string) => void;
+  /**
+   * Factory for rebuilding the full assembled system prompt after a
+   * `setSystemPrompt()` call (hot-swap used by `/afk-md`). When present,
+   * `setSystemPrompt()` calls this with the new base prompt and stores the
+   * result in `opts.config.systemPrompt`, which `buildMessages()` picks up on
+   * the next iteration. When absent, `setSystemPrompt()` directly assigns
+   * `basePrompt` to `opts.config.systemPrompt` and returns `false`.
+   */
+  systemPromptRebuildFactory?: (basePrompt: string | undefined) => string;
   /** Optional MCP manager — populates `session.init` and `mcpServerStatus()`. */
   mcpManager?: import('../../../mcp/index.js').McpManager;
   /**

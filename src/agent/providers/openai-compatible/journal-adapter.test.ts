@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { JournalMessage } from '../../journal/index.js';
 import type { OpenAIMessage } from './messages.js';
-import { INTERRUPTED_TOOL_RESULT, openAIJournalAdapter as adapter } from './journal-adapter.js';
+import { INTERRUPTED_TOOL_RESULT, OPENAI_COMPATIBLE_ORIGIN, openAIJournalAdapter as adapter } from './journal-adapter.js';
 
 const asMsg = (m: Record<string, unknown>): OpenAIMessage => m as unknown as OpenAIMessage;
 
@@ -19,7 +19,7 @@ describe('openAIJournalAdapter.toJournal', () => {
     expect(j).toEqual({
       role: 'assistant',
       content: [
-        { type: 'thinking', thinking: 'think', origin: 'openai-compatible' },
+        { type: 'thinking', thinking: 'think', origin: 'openai-compatible:reasoning_content' },
         { type: 'tool_use', id: 'c1', name: 'echo', input: { msg: 'hi' } },
         { type: 'tool_use', id: 'c2', name: 'bad', input: { _raw: '{not json' } },
       ],
@@ -155,6 +155,68 @@ describe('openAIJournalAdapter.fromJournalMessages — unanswered tool calls', (
     const out = adapter.fromJournalMessages(journal);
     expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
     expect(out.some((m) => m.content === INTERRUPTED_TOOL_RESULT)).toBe(false);
+  });
+});
+
+describe('openAIJournalAdapter — reasoning field round-trip (Cerebras vs DeepSeek)', () => {
+  it('encodes reasoning_content field in thinking block origin (DeepSeek)', () => {
+    const j = adapter.toJournal(asMsg({ role: 'assistant', content: 'reply', reasoning_content: 'deep think' }));
+    const block = j?.content.find((b) => b.type === 'thinking');
+    expect(block).toBeDefined();
+    if (block?.type === 'thinking') {
+      expect(block.origin).toBe(`${OPENAI_COMPATIBLE_ORIGIN}:reasoning_content`);
+    }
+  });
+
+  it('encodes reasoning field in thinking block origin (Cerebras)', () => {
+    const j = adapter.toJournal(asMsg({ role: 'assistant', content: 'reply', reasoning: 'cerebras thought' }));
+    const block = j?.content.find((b) => b.type === 'thinking');
+    expect(block).toBeDefined();
+    if (block?.type === 'thinking') {
+      expect(block.origin).toBe(`${OPENAI_COMPATIBLE_ORIGIN}:reasoning`);
+    }
+  });
+
+  it('round-trips reasoning_content field (DeepSeek regression guard)', () => {
+    const native = asMsg({ role: 'assistant', content: 'reply', reasoning_content: 'my thoughts' });
+    const journal = adapter.toJournal(native);
+    const [restored] = adapter.fromJournalMessages([journal!]);
+    expect((restored as Record<string, unknown>)['reasoning_content']).toBe('my thoughts');
+    expect((restored as Record<string, unknown>)['reasoning']).toBeUndefined();
+  });
+
+  it('round-trips reasoning field (Cerebras — does not echo reasoning_content)', () => {
+    const native = asMsg({ role: 'assistant', content: 'reply', reasoning: 'cerebras deep thought' });
+    const journal = adapter.toJournal(native);
+    const [restored] = adapter.fromJournalMessages([journal!]);
+    expect((restored as Record<string, unknown>)['reasoning']).toBe('cerebras deep thought');
+    expect((restored as Record<string, unknown>)['reasoning_content']).toBeUndefined();
+  });
+
+  it('defaults legacy thinking blocks (no origin or bare openai-compatible) to reasoning_content', () => {
+    const legacyJournal: JournalMessage[] = [{
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'old journal entry' },
+        { type: 'text', text: 'answer' },
+      ],
+    }];
+    const [restored] = adapter.fromJournalMessages(legacyJournal);
+    expect((restored as Record<string, unknown>)['reasoning_content']).toBe('old journal entry');
+    expect((restored as Record<string, unknown>)['reasoning']).toBeUndefined();
+  });
+
+  it('defaults bare openai-compatible origin (pre-fix journal) to reasoning_content', () => {
+    const legacyJournal: JournalMessage[] = [{
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'old entry', origin: OPENAI_COMPATIBLE_ORIGIN },
+        { type: 'text', text: 'answer' },
+      ],
+    }];
+    const [restored] = adapter.fromJournalMessages(legacyJournal);
+    expect((restored as Record<string, unknown>)['reasoning_content']).toBe('old entry');
+    expect((restored as Record<string, unknown>)['reasoning']).toBeUndefined();
   });
 });
 

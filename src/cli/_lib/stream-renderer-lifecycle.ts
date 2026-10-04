@@ -33,6 +33,8 @@ import type { Writer } from '../slash/types.js';
 import type { ProgressEvent } from '../../agent/types.js';
 import { checkTtfbAnnotation, type TtfbTickCtx } from './stream-renderer-ttfb.js';
 
+import { skillIdentityBanner, type SkillIdentity } from './skill-identity-format.js';
+
 const PAUSE_THRESHOLD_MS = 30_000;
 const WAITING_LABEL_PREFIX = ' · waiting ';
 const K = 375;
@@ -84,6 +86,7 @@ export function registerOverlaySlots(
      */
     sources?: ReadonlyMap<string, SourceState>;
     childActivity?: ChildActivityTracker;
+    getSkillIdentity?: () => SkillIdentity | undefined;
     /** Live interrupt state — true while a Ctrl+C interrupt is being processed. */
     getInterrupting: () => boolean;
     /**
@@ -214,7 +217,7 @@ export function registerOverlaySlots(
           ),
         );
       }
-      return bannerLines.length > 0 ? bannerLines.join('\n') : '';
+      return skillIdentityBanner(ctx.getSkillIdentity?.(), bannerLines, getTerminalWidth());
     },
   });
 
@@ -344,11 +347,13 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   // geometry and produce phantom blank rows in scrollback). Does NOT call
   // flush() itself; the block below owns the single flush. Mutates
   // ctx.lastTtfbAnnotation in place when the displayed second advances.
-  const ttfbDirtied = checkTtfbAnnotation(ctx, now);
+  checkTtfbAnnotation(ctx, now);
 
-  if ((changed || ttfbDirtied) && ctx.isTTY && ctx.overlayComposer) {
+  if (ctx.isTTY && ctx.overlayComposer) {
     if (changed) ctx.overlayComposer.markDirty('tool-lane');
-    // progress-banner already marked dirty by checkTtfbAnnotation when ttfbDirtied.
+    // The progress banner is already marked dirty by checkTtfbAnnotation.
+    // Also drain resize invalidations on quiet preparation frames. flush()
+    // is a no-op when clean, retaining a single composed repaint per tick.
     ctx.overlayComposer.flush();
   }
 

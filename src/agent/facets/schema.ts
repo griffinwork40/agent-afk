@@ -14,16 +14,27 @@
  *   - SessionFacetSchema — the derived, validated output object.
  *
  * Field tiers (see derive.ts): MECHANICAL fields (tool_counts, tool_errors,
- * durations, world_changes) are computed exactly from the session; SEMANTIC
- * fields (goal_categories, brief_summary, outcome, primary_success) are
- * heuristic in v1 and enrichable later by an LLM digest pass — kept honest,
- * never fabricated.
+ * tool_errors_total, durations, world_changes) are computed exactly from the
+ * session; SEMANTIC fields (goal_categories, brief_summary, outcome,
+ * outcome_source, primary_success) are heuristic and enrichable later — kept
+ * honest, never fabricated. `outcome` now uses the shared parseTerminalState()
+ * parser from `src/agent/outcomes/terminal-state.ts` (v7, #2777).
  */
 
 import { z } from 'zod';
 
-/** Bump when the facet shape or derivation changes — invalidates caches. */
-export const FACET_VERSION = 6;
+/**
+ * Bump when the facet shape or derivation changes — invalidates caches.
+ *
+ * v7 (#2777): added `outcome_source`, `tool_errors_total`, and required
+ * nullable `yield_tracking.pr_url`; added `'unknown'` to FacetOutcomeSchema;
+ * replaced inline TERMINAL_STATE_RE in derive.ts with the shared
+ * parseTerminalState() parser; yield_tracking carry-forward on re-derive in
+ * store.ts. Public consumers should filter on `facet_version >= 7` and inspect
+ * `outcome_source`; headingless sessions now derive `outcome: 'unknown'`, and
+ * single-line `**Done** — text` is no longer a terminal-state heading.
+ */
+export const FACET_VERSION = 7;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -59,6 +70,8 @@ export const StoredSessionInputSchema = z
     model: z.string(),
     startedAt: z.number(),
     savedAt: z.number(),
+    endedAt: z.number().optional(),
+    exitReason: z.enum(['sigint', 'sigterm', 'sighup', 'exit-command', 'eof']).optional(),
     totalTurns: z.number(),
     totalCostUsd: z.number().optional(),
     totalTokens: z.number().optional(),
@@ -81,8 +94,29 @@ export const FacetOutcomeSchema = z.enum([
   'partially_achieved',
   'not_achieved',
   'aborted',
+  /**
+   * 'unknown': the last assistant message is non-empty but carries no
+   * recognizable terminal-state heading. Added in v7 (#2777) — replaces the
+   * prior implicit fall-through to 'fully_achieved' for headingless sessions.
+   */
+  'unknown',
 ]);
 export type FacetOutcome = z.infer<typeof FacetOutcomeSchema>;
+
+/**
+ * How the facet's `outcome` field was determined.
+ *
+ * - `'terminal_state'`: outcome was read from a Done/Blocked/Asking/Interrupted
+ *   heading found in the last non-empty assistant message.
+ * - `'structural'`: outcome was determined by structural rules — zero turns
+ *   (aborted) or empty last assistant message (partially_achieved).
+ * - `'none'`: the last assistant message was non-empty but carried no
+ *   recognizable terminal-state heading (outcome = 'unknown').
+ *
+ * Added in v7 (#2777).
+ */
+export const FacetOutcomeSourceSchema = z.enum(['terminal_state', 'structural', 'none']);
+export type FacetOutcomeSource = z.infer<typeof FacetOutcomeSourceSchema>;
 
 /**
  * Whether the transcripts of any subagents this session spawned are separately
@@ -177,24 +211,32 @@ export type ParallelDispatchStats = z.infer<typeof ParallelDispatchStatsSchema>;
  *   - `is_scheduled_session`: true when the session was launched by the daemon
  *     (source === 'daemon'). Scheduled sessions are excluded from the yield
  *     denominator; only human-initiated implementation sessions count.
- *   - `produced_pr`: true when the session's working branch had an associated
- *     PR at teardown time; false when none was found; null when the check could
- *     not run (gh unavailable, not a git repo, etc.).
+ *   - `produced_pr`: true when the session produced a PR (detected either
+ *     mechanically from `gh pr create` bash output in derive.ts, or by the
+ *     async yield probe at teardown); false when none was found; null when
+ *     the check could not run (gh unavailable, not a git repo, etc.).
+ *     Note: derive.ts only ever sets produced_pr=true (never false); the
+ *     yield probe fills in false when no PR is found on the branch.
  *   - `pr_merged`: true when the associated PR's state is MERGED; false when
  *     open or closed-unmerged; null when produced_pr is false or the check
  *     could not run.
+ *   - `pr_url`: the GitHub PR URL when `produced_pr` is true and the URL was
+ *     found in the `gh pr create` output. Null when not available. Added v7.
  *
  * Derivation: populated by `createFacetSessionEndHook` after session teardown.
  * Pure-derive callers (no I/O) receive null for produced_pr and pr_merged;
  * the hook overwrites the cached facet with real values once the async gh
- * probe completes.
+ * probe completes. When derive.ts detects a `gh pr create` result URL, it
+ * sets produced_pr=true and pr_url in the initial derivation.
  */
 export const YieldTrackingSchema = z.object({
   /** True when the session was launched by the daemon scheduler. */
   is_scheduled_session: z.boolean(),
   /**
-   * True when the session's branch had a GitHub PR at teardown.
+   * True when the session produced a GitHub PR (mechanical or probe-confirmed).
    * Null when the gh probe could not run (no gh CLI, not a git repo, etc.).
+   * derive.ts only sets this true when a `gh pr create` URL is detected;
+   * the yield probe fills false when no PR is found on the branch.
    */
   produced_pr: z.boolean().nullable(),
   /**
@@ -202,6 +244,12 @@ export const YieldTrackingSchema = z.object({
    * Null when produced_pr is false or the probe could not run.
    */
   pr_merged: z.boolean().nullable(),
+  /**
+   * The GitHub PR URL when produced_pr is true and the URL was detected from
+   * a `gh pr create` bash result. Null when URL not available.
+   * Added v7 (#2777).
+   */
+  pr_url: z.string().nullable().default(null),
 });
 export type YieldTracking = z.infer<typeof YieldTrackingSchema>;
 
@@ -255,12 +303,31 @@ export const SessionFacetSchema = z
 
     // errors / friction
     tool_errors: z.number().int(),
+    /**
+     * Total tool errors across the parent session AND all subagents.
+     * = tool_errors + sum(subagent_breakdown[].tool_errors).
+     * Added v7 (#2777).
+     */
+    tool_errors_total: z.number().int(),
     tool_error_categories: z.record(z.string(), z.number()),
     friction_counts: z.record(z.string(), z.number()),
     friction_detail: z.string(),
 
     // outcome / world changes
     outcome: FacetOutcomeSchema,
+    /**
+     * How the `outcome` field was determined.
+     *
+     * - `'terminal_state'`: from a Done/Blocked/Asking/Interrupted heading in
+     *   the last non-empty assistant message.
+     * - `'structural'`: from structural rules — zero turns (aborted) or empty
+     *   last assistant message (partially_achieved).
+     * - `'none'`: non-empty last assistant with no recognizable heading
+     *   (outcome = 'unknown').
+     *
+     * Added v7 (#2777).
+     */
+    outcome_source: FacetOutcomeSourceSchema,
     primary_success: z.string(),
     world_changes: WorldChangesSchema,
 

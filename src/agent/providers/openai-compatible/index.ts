@@ -47,25 +47,22 @@ import { MemoryStore, createMemoryHandlers, guardChildHotWrites, isForkedChildSe
 import { WorkspaceStore, createWorkspaceHandlers, workspacePublishTool, workspaceQueryTool } from '../../workspace/index.js';
 import { StateStore } from '../../state/state-store.js';
 import { createStateHandlers } from '../../state/state-tools.js';
-
-import { getStateDatabasePath } from '../../../paths.js';
-import { resolveToolSystemPrompt, resolveMemorySystemPrompt, resolveWorkspaceSystemPrompt } from '../../tools/system-prompt.js';
-import { buildSkillManifest } from '../../tools/skill-bridge.js';
+import { makeDefaultMemoryStore, makeDefaultStateStore } from '../shared/provider-stores.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 import { selectBaseSchemas } from './base-schemas.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
+import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
   wrapDispatcherWithRuntimeState,
   buildRuntimeStateSource,
-  formatEnvironmentFragment,
   type RuntimeStateSource,
 } from '../../awareness/index.js';
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
+import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
 
 const PROVIDER_NAME = 'openai-compatible';
@@ -144,9 +141,9 @@ export interface OpenAICompatibleProviderOptions extends ChildSessionOptions {
 export class OpenAICompatibleProvider implements ModelProvider {
   readonly name = PROVIDER_NAME;
   private readonly providerOpts: OpenAICompatibleProviderOptions;
-  private readonly memoryStore: MemoryStore;
+  private _memoryStore: MemoryStore | undefined;
   private readonly workspaceStore: WorkspaceStore | undefined;
-  private readonly stateStore: StateStore;
+  private _stateStore: StateStore | undefined;
   private readonly schemas: AnthropicToolDef[];
   /**
    * Mutable per-session endpoint headers (xAI CLI proxy). Construction-time
@@ -193,9 +190,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
   constructor(opts: OpenAICompatibleProviderOptions = {}) {
     this.providerOpts = opts;
     this._defaultHeaders = opts.defaultHeaders;
-    this.memoryStore = opts.memoryStore ?? new MemoryStore();
+    this._memoryStore = opts.memoryStore;
     this.workspaceStore = opts.workspaceStore;
-    this.stateStore = opts.stateStore ?? new StateStore(getStateDatabasePath());
+    this._stateStore = opts.stateStore;
 
     const schemas: AnthropicToolDef[] = [...builtinToolSchemas];
     // Executor-supplied `agent` def advertises named agent types when a
@@ -374,99 +371,36 @@ export class OpenAICompatibleProvider implements ModelProvider {
       currentPresenceSessionId: this._presenceSessionId,
     });
 
-    // Invariant: assemble the full provider-side system prompt so non-Anthropic
-    // sessions (this provider backs the REPL when the model is gpt-*/o*/local
-    // org/model) receive the SAME fragments as anthropic-direct — tool
-    // conventions, the interactive slash-command / bash-passthrough /
-    // background-subagent guidance, the memory prompt, and the skill manifest.
-    // Previously this provider sent only `userSystem + env`, so on a
-    // non-Anthropic REPL the model was never told what the
-    // `<background-subagent-result>` (and slash/bash) envelopes mean. The
-    // tool/memory fragments are resolved via the shared helpers in
-    // tools/system-prompt.ts so the set cannot drift from anthropic-direct.
-    // Ordering mirrors AnthropicDirectProvider.query(): [toolBase, userSystem?,
-    // memoryPrompt, hotMemory?, env, manifest?]. The `# Agent AFK` doctrine +
-    // operator overlay (`existingSys`) is placed EARLY — right after the tool
-    // conventions and before the cross-session memory (instructions +
-    // hot-memory project context) and the skill manifest. Hot memory rides
-    // `config.hotMemory` (a dedicated field), not prepended into systemPrompt,
-    // so it can sit after the memory instructions rather than ahead of the
-    // doctrine. `envFragment` is the ONLY cwd-dependent piece — see
-    // `assembleSystemPrompt`/`rebuildEnvironmentBlock` below (#876) for why the
-    // rest are computed once and treated as stable across a cwd re-anchor.
-    const toolBase = resolveToolSystemPrompt(config.isSkillDispatch);
-    const memoryPrompt = resolveMemorySystemPrompt(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState);
-    // Invariant: kept in lockstep with anthropic-direct's call site.
-    // `excludeName` omits the executing skill's own entry for a skill-dispatch
-    // fork (AgentConfig.skillDispatchName); `cwd` is forwarded so project skills
-    // resolve against the session's dir, not the host process's (#876).
-    const manifest = this.providerOpts.skillExecutor
-      ? buildSkillManifest(undefined, {
-          ...(typeof config.cwd === 'string' && config.cwd.length > 0
-            ? { cwd: config.cwd }
-            : {}),
-          ...(typeof config.skillDispatchName === 'string' &&
-          config.skillDispatchName.length > 0
-            ? { excludeName: config.skillDispatchName }
-            : {}),
-        })
-      : '';
-    const hotMemory = typeof config.hotMemory === 'string' ? config.hotMemory : '';
-    const goalPrompt = typeof config.goalPrompt === 'string' ? config.goalPrompt : '';
-    const existingSys = typeof config.systemPrompt === 'string' ? config.systemPrompt : undefined;
+    // System-prompt assembly: fragment collection, environment-block builder, and
+    // cwd-/base-rebuild factories (#876, #2420). Extracted to system-prompt-wiring.ts
+    // (#2711/#2721 ratchet fix) so query() stays within the function-size ceiling.
+    // Ordering: [toolBase, userSystem?, memoryPrompt, workspace?, hotMemory?,
+    // goalPrompt?, envFragment, manifest?] — mirrors AnthropicDirectProvider.query().
+    const spw = buildSystemPromptWiring({
+      config,
+      hasSkillExecutor: this.providerOpts.skillExecutor !== undefined,
+      hasWorkspaceStore: this.workspaceStore !== undefined,
+      readOnlyMemory: this.providerOpts.readOnlyMemory,
+      readOnlyState: this.providerOpts.readOnlyState,
+      resolvedSessionId: resolvedSession.id,
+      surface: this.providerOpts.surface ?? 'cli',
+      getCurrentCwd: () => _currentCwd,
+      runtimeStateSource,
+    });
 
-    // Contract: given the cwd-dependent `# Environment` fragment, return the
-    // full joined system prompt over the STABLE fragments captured above.
-    // Used both for the initial build and for every #876 rebuild, so the two
-    // can never drift out of ordering sync with each other.
-    const assembleSystemPrompt = (envFragment: string): string => {
-      const parts = [toolBase];
-      if (existingSys !== undefined && existingSys.length > 0) parts.push(existingSys);
-      parts.push(memoryPrompt);
-      const workspacePrompt = resolveWorkspaceSystemPrompt(this.workspaceStore !== undefined);
-      if (workspacePrompt) parts.push(workspacePrompt);
-      for (const frag of [hotMemory, goalPrompt]) { if (frag.length > 0) parts.push(frag); }
-      parts.push(envFragment);
-      if (manifest.length > 0) parts.push(manifest);
-      return parts.join('\n\n');
-    };
+    const patchedConfig: typeof config = { ...config, systemPrompt: spw.initialSystemPrompt };
 
-    // Phase 2 — the `# Environment` block. Uses `resolvedSession.id` (not
-    // `config.sessionId`) so the block shows the resolved id (#2353).
-    const buildEnvFragment = (): string =>
-      formatEnvironmentFragment({
-        cwd: _currentCwd,
-        ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
-        surface: this.providerOpts.surface ?? 'cli',
-        ...(config.depth !== undefined ? { depth: config.depth } : {}),
-        ...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
-        workspace: runtimeStateSource.getWorkspace(),
-      });
-
-    const patchedConfig: typeof config = {
-      ...config,
-      systemPrompt: assembleSystemPrompt(buildEnvFragment()),
-    };
-
-    // Invariant (#876): `setCwd()` (query.ts) invokes this so a mid-session
-    // cwd re-anchor refreshes BOTH the `get_runtime_state` tool (already live
-    // via the `getCwd` cell) and the system prompt's `# Environment` block —
-    // previously only the dispatcher's resolve base moved, leaving the model
-    // reading a stale directory for the rest of the session. Ordering is
-    // load-bearing: `_currentCwd` is updated FIRST, then `buildEnvFragment()`
-    // re-reads `getWorkspace()` — which itself resolves through the same
-    // cell — so updating after the read would compute the workspace snapshot
-    // for the OLD directory (mirrors anthropic-direct's cwd-dependents.ts
-    // ordering invariant). `patchedConfig.systemPrompt` is reassigned IN
-    // PLACE (the same object `OpenAICompatibleQuery` holds as `this.opts.config`
-    // by reference), so the next turn's `buildMessages` call picks up the new
-    // string with no further plumbing.
-    const rebuildEnvironmentBlock = (newCwd: string): void => {
+    // Invariant (#876 + #2420): `_currentCwd` MUST be updated BEFORE calling
+    // `spw.rebuildAfterCwdChange()` so `getCurrentCwd()` returns the new dir
+    // when the `# Environment` block is re-derived. `patchedConfig.systemPrompt`
+    // is reassigned IN PLACE (the same object `OpenAICompatibleQuery` holds as
+    // `this.opts.config` by reference) so the next turn picks up the new string.
+    buildOpts.onCwdChange = (newCwd: string): void => {
       _currentCwd = newCwd;
       this._sharedCurrentCwd = newCwd; // Option A: migrate the non-revocable anchor with the cwd.
-      patchedConfig.systemPrompt = assembleSystemPrompt(buildEnvFragment());
+      patchedConfig.systemPrompt = spw.rebuildAfterCwdChange();
     };
-    buildOpts.onCwdChange = rebuildEnvironmentBlock;
+    buildOpts.systemPromptRebuildFactory = spw.systemPromptRebuildFactory;
 
     return buildQueryFromConfig(patchedConfig, args.prompt, buildOpts);
   }
@@ -537,7 +471,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     },
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
-    const memoryHandlers = guardChildHotWrites(createMemoryHandlers(this.memoryStore, undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
+    const memoryHandlers = guardChildHotWrites(createMemoryHandlers((this._memoryStore ??= makeDefaultMemoryStore()), undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
     for (const [name, handler] of memoryHandlers) {
       if (this.providerOpts.readOnlyMemory === true && name !== 'memory_search') continue;
       handlers.set(name, handler);
@@ -549,7 +483,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     }
     // State store tools: state_get, state_put, state_cas, state_delete, state_query.
     // Read-only sessions get only state_get and state_query.
-    for (const [name, handler] of createStateHandlers(this.stateStore, opts.sessionId)) {
+    for (const [name, handler] of createStateHandlers((this._stateStore ??= makeDefaultStateStore()), opts.sessionId)) {
       if (isStateRestricted(this.providerOpts.readOnlyMemory, this.providerOpts.readOnlyState) && name !== 'state_get' && name !== 'state_query') continue;
       handlers.set(name, handler);
     }
@@ -723,17 +657,19 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   close(): void {
-    this.memoryStore.close();
+    this._memoryStore?.close();
     this.workspaceStore?.close();
-    this.stateStore.close();
+    this._stateStore?.close();
   }
 
   /**
    * Single-shot completion (see {@link ModelProvider.complete}). Resolves auth
    * via {@link resolveOpenAIAuth} (the standard `OPENAI_API_KEY` →
-   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and honours the
-   * provider's construction-time `baseURL` so local MLX / llama.cpp / vLLM
-   * shims are reached transparently.
+   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and picks the wire from it
+   * (`./complete-wire`): ChatGPT-subscription OAuth goes to the ChatGPT
+   * backend over Responses, everything else over Chat Completions honouring
+   * the provider's construction-time `baseURL` (local MLX / llama.cpp / vLLM
+   * shims).
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
@@ -750,7 +686,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return oneShotChatCompletion(input);
+    return completeWithWire(input);
   }
 }
 
