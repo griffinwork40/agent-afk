@@ -122,9 +122,9 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
   ) => {
     // Determine the resolve base: context takes priority, then factory cwd.
     // Intentionally omit the `process.cwd()` fallback that was here before —
-    // a handler invoked without any cwd anchor (no context.resolveBase, no
-    // context.cwd, no factory cwd) should behave as UNCONFINED (matching
-    // write_file / edit_file), not as anchored to the process launch dir.
+    // a handler invoked without any cwd anchor (no context.resolveBase,
+    // no factory cwd) should behave as UNCONFINED (matching write_file /
+    // edit_file), not as anchored to the process launch dir.
     //
     // The old `?? resolve(process.cwd())` fallback silently produced a
     // non-undefined resolveBase even for unconfined sessions, which then hit
@@ -135,7 +135,7 @@ export function createPatchApplyHandler(cwd?: string): ToolHandler {
     // the `resolveBase === undefined` unconfined early-return.  The fix aligns
     // patch_apply with that behavior: undefined resolveBase → unconfined.
     const resolveBase =
-      context?.resolveBase ?? context?.cwd ?? cwd;
+      context?.resolveBase ?? cwd;
 
     // Parse input.
     let parsed: ReturnType<typeof parsePatchApplyInput>;

@@ -269,7 +269,7 @@ export const testRunHandler: ToolHandler = async (
   }
 
   const input = parseInput(rawInput);
-  const effectiveCwd = context?.resolveBase ?? context?.cwd;
+  const effectiveCwd = context?.resolveBase;
 
   // 1. Discover
   const discovered = discoverTestCommand(effectiveCwd ?? process.cwd());
