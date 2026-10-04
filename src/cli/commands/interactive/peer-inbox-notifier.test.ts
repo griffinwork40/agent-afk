@@ -352,7 +352,7 @@ describe('PeerInboxNotifier — live trace writer', () => {
     await notifier.scan();
     expect(oldWriter.events).toHaveLength(1);
     expect(newWriter.events).toEqual([
-      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'delivered', messageId: delivered.messageId }) }),
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'claimed', messageId: delivered.messageId }) }),
       expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'held', messageId: held.messageId }) }),
     ]);
   });
@@ -364,7 +364,7 @@ describe('PeerInboxNotifier — live trace writer', () => {
     await writeEnvelope(makeEnvelope(sessionId));
     await notifier.scan();
     expect(writer.events).toHaveLength(1);
-    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'delivered' } });
+    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'claimed' } });
   });
 });
 
