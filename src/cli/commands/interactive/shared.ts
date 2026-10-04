@@ -388,6 +388,7 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+  /**
    * Resets the peer-inbox notifier's in-session state (injection buffer,
    * wake budget, and generation counter) so the resumed session starts clean.
    * Mirrors `clearBgResultBuffer`: owned by `setupFooterSubsystems`'s
@@ -409,6 +410,14 @@ export interface InteractiveCtx {
    * from the swap's `onSwapped` callback in bootstrap.ts.
    */
   clearPendingStopInjection?: () => void;
+  /**
+   * Clears and re-installs the peer boundary callback on the new session
+   * after a /resume swap, so mid-turn peer delivery works on the resumed
+   * session and old-session admission-queue entries are not leaked.
+   * Owned by `runInputLoop`'s closure; invoked from the swap's `onSwapped`
+   * callback in bootstrap.ts. Optional — no-op before `runInputLoop` sets it.
+   */
+  reinstallPeerBoundary?: () => void;
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `

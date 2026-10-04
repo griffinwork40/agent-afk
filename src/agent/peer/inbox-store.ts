@@ -84,6 +84,18 @@ function sortableTs(isoString: string): string {
   return isoString.replace(/[:.]/g, '-');
 }
 
+/**
+ * Reconstruct the canonical filename for an envelope. Matches the format used
+ * by {@link writeEnvelope}: `<ts-sortable>-<messageId>.json`.
+ *
+ * Useful when a caller holds a {@link PeerEnvelope} and needs to locate its
+ * file in `pending/`, `delivered/`, or `held/` without having stored the
+ * filename separately.
+ */
+export function envelopeFilename(env: Pick<PeerEnvelope, 'ts' | 'messageId'>): string {
+  return `${sortableTs(env.ts)}-${env.messageId}.json`;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -317,6 +329,34 @@ export async function dropHeld(sessionId: string, file: string): Promise<boolean
 export async function countPending(sessionId: string): Promise<number> {
   const files = await listPending(sessionId);
   return files.length;
+}
+
+/**
+ * Move a delivered envelope back to `pending/` so it can be re-delivered by
+ * the next receiver poll. This is the reclaim path for envelopes that were
+ * claimed (linked into `delivered/`) but not yet injected into any model
+ * turn — for example, when the session is swapped out via `/resume` before
+ * the buffered envelope could be drained.
+ *
+ * The filename is preserved exactly (same `<ts-sortable>-<messageId>.json`)
+ * so lexical ordering and dedup checks remain consistent.
+ *
+ * Returns `true` on success; `false` when the file is not found in
+ * `delivered/` (already consumed or double-reclaimed).
+ */
+export async function reclaimDelivered(sessionId: string, file: string): Promise<boolean> {
+  const base = getPeerInboxDir(sessionId);
+  const src = join(base, 'delivered', file);
+  const dst = join(base, 'pending', file);
+  try {
+    await mkdir(join(base, 'pending'), { recursive: true, mode: 0o700 });
+    await rename(src, dst);
+    return true;
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return false;
+    throw err;
+  }
 }
 
 /**

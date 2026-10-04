@@ -612,3 +612,74 @@ describe('file modes', () => {
     expect(() => fs.readFileSync(filePath, 'utf8')).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// reclaimDelivered + envelopeFilename
+// ---------------------------------------------------------------------------
+
+describe('reclaimDelivered + envelopeFilename', () => {
+  it('reclaimDelivered moves a delivered envelope back to pending/', async () => {
+    const { writeEnvelope, claimPending, listPending, reclaimDelivered, listHeld } = await getInboxStore();
+    const env = makeEnvelope();
+    await writeEnvelope(env);
+    const files = await listPending(TARGET_ID);
+    const file = files[0]!;
+    await claimPending(TARGET_ID, file);
+    // Verify it is NOT in pending after claim.
+    expect(await listPending(TARGET_ID)).toHaveLength(0);
+    // Reclaim it.
+    const ok = await reclaimDelivered(TARGET_ID, file);
+    expect(ok).toBe(true);
+    // Should be back in pending.
+    const pendingAfter = await listPending(TARGET_ID);
+    expect(pendingAfter).toHaveLength(1);
+    expect(pendingAfter[0]).toBe(file);
+    // Held directory unaffected.
+    const held = await listHeld(TARGET_ID);
+    expect(held).toHaveLength(0);
+  });
+
+  it('reclaimDelivered returns false for a file not in delivered/', async () => {
+    const { reclaimDelivered } = await getInboxStore();
+    const ok = await reclaimDelivered(TARGET_ID, 'nonexistent-file.json');
+    expect(ok).toBe(false);
+  });
+
+  it('reclaimDelivered is idempotent — second call returns false', async () => {
+    const { writeEnvelope, claimPending, listPending, reclaimDelivered } = await getInboxStore();
+    const env = makeEnvelope();
+    await writeEnvelope(env);
+    const files = await listPending(TARGET_ID);
+    const file = files[0]!;
+    await claimPending(TARGET_ID, file);
+    expect(await reclaimDelivered(TARGET_ID, file)).toBe(true);
+    expect(await reclaimDelivered(TARGET_ID, file)).toBe(false); // already gone
+  });
+
+  it('envelopeFilename reconstructs the same filename as writeEnvelope uses', async () => {
+    const { writeEnvelope, listPending, envelopeFilename } = await getInboxStore();
+    const env = makeEnvelope({ ts: '2026-10-02T12:30:45.123Z', messageId: 'my-msg-id' });
+    await writeEnvelope(env);
+    const files = await listPending(TARGET_ID);
+    const reconstructed = envelopeFilename({ ts: env.ts, messageId: env.messageId });
+    expect(files[0]).toBe(reconstructed);
+    expect(reconstructed).toBe('2026-10-02T12-30-45-123Z-my-msg-id.json');
+  });
+
+  it('reclaim + re-claim round-trip: reclaimed envelope can be claimed again', async () => {
+    const { writeEnvelope, claimPending, listPending, reclaimDelivered } = await getInboxStore();
+    const env = makeEnvelope();
+    await writeEnvelope(env);
+    const files = await listPending(TARGET_ID);
+    const file = files[0]!;
+    // Claim.
+    const claimed1 = await claimPending(TARGET_ID, file);
+    expect(claimed1).not.toBeNull();
+    // Reclaim.
+    expect(await reclaimDelivered(TARGET_ID, file)).toBe(true);
+    // Claim again.
+    const claimed2 = await claimPending(TARGET_ID, file);
+    expect(claimed2).not.toBeNull();
+    expect(claimed2?.messageId).toBe(env.messageId);
+  });
+});

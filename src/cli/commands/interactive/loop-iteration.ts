@@ -23,6 +23,7 @@ import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-b
 import { dispatchUserPromptSubmit, dispatchStop } from './loop-iteration.hooks.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
+import { setupPeerBoundary, drainAdmissionQueueFallback } from './loop-iteration.boundary.js';
 
 /**
  * Per-turn cap on autonomous auto-resumes — an idle REPL woken by a settled
@@ -85,6 +86,10 @@ export async function runInputLoop(
   // Post-turn Stop-hook correction stashed for next-turn delivery.
   let pendingStopInjection: string | undefined;
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
+
+  // Peer inter-round boundary delivery — see loop-iteration.boundary.ts.
+  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier);
+  ctx.reinstallPeerBoundary = reinstallBoundary; // wired to onSwapped in bootstrap.ts
 
   const versionNotice = createVersionNotice();
   // Auto-resume: wake an idle prompt when bg results or peer messages land.
@@ -204,6 +209,8 @@ export async function runInputLoop(
 
     // Prepend shell/bg/peer injections, then any pending Stop correction.
     runText = prependTurnInjections(runText, [footer.shellPassthrough, bgResultNotifier, peerNotifier]);
+    // Drain any admission-queue remainder not consumed by the boundary callback.
+    runText = drainAdmissionQueueFallback(runText, admissionQueue);
     if (pendingStopInjection !== undefined) {
       runText = pendingStopInjection + '\n\n' + runText;
       pendingStopInjection = undefined;

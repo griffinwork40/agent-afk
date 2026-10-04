@@ -73,7 +73,8 @@ describe('production resume trace wiring', () => {
     expect(notifier.drainInjections()).toContain('post-resume message');
     expect(oldWriter.events.map((event) => event.kind)).toEqual(['session_sealed']);
     if (incomingWriter) expect(incomingWriter.events).toEqual([
-      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'delivered' }) }),
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'claimed' }) }),
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'injected' }) }),
     ]);
     notifier.dispose();
   });
