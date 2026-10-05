@@ -126,6 +126,16 @@ export async function runCompactHistory(
     return { compacted: false, reason: 'no-usable-auth', messagesBefore, messagesAfter: messagesBefore };
   }
   if (ctx.wireMode === 'responses' && ctx.responsesCompactionUnavailable) {
+    // Invariant: the latch disables the SUMMARIZE TRANSPORT only — never the
+    // deterministic fallback. A prior responses-wire summarize proved the
+    // backend refuses the throwaway summarize turn, so re-issuing a doomed
+    // request every turn boundary is pure waste. But microcompaction is
+    // no-LLM and no-network: it clears large/old tool_result CONTENT in place,
+    // so it still works when the backend refuses everything. Skipping it here
+    // would leave the session unable to reclaim context by ANY mechanism,
+    // which overshoots "no-op cheaply" into "guarantee an eventual overflow".
+    // Mirrors the fallback `compactOpenAIHistory` runs on its own no-op
+    // reasons (compact.ts) — same options source, same result shape.
     const micro = ctx.journal.microcompactFallback(ctx.priorTurns);
     if (micro) return micro;
     return {
@@ -157,6 +167,14 @@ export async function runCompactHistory(
     summarize,
     isClosed: ctx.closed, // boolean snapshot — inherited from pre-split behaviour; compactOpenAIHistory accepts boolean, not a function
     isIdle: ctx.abort.isIdle(),
+    // Invariant: compaction opens a real abort scope through the same
+    // coordinator the turn loop uses, so `interrupt()` cancels an
+    // in-flight summarize. Note `begin()` also DRAINS a reason parked
+    // between turns — an ESC that lands at the turn boundary now
+    // pre-aborts the auto-compaction that fires there (and consumes the
+    // reason) instead of letting it run. This matches
+    // anthropic-direct/query/compact-handler.ts; the previous
+    // openai-only behaviour installed a controller without draining.
     beginAbort: () => ctx.abort.begin(),
     clearAbort: (controller) => ctx.abort.clear(controller),
     trigger,

@@ -112,6 +112,18 @@ export interface ToolResultChunk {
   content: string;
   isError?: boolean;
   /**
+   * `true` when this result carries a subagent's capped or wind-down partial
+   * answer. Plumbed from `ToolResult.incomplete` → `tool.output.incomplete`.
+   * Absent for clean completions. Present alongside `incompleteReason`.
+   */
+  incomplete?: boolean;
+  /**
+   * Why `incomplete: true` was set: the subagent `stopReason` for a single
+   * fork, or a synthetic reason code such as `'compose_partial_nodes'` for a
+   * compose run with at least one partial node.
+   */
+  incompleteReason?: string;
+  /**
    * `true` when the originating tool handler reported its byte cap was hit
    * (e.g. bash/grep 100KB overflow). Plumbed from `ToolResult.truncated`
    * through `tool.output.truncated`. Distinct from the cosmetic 80-char

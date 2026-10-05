@@ -41,6 +41,7 @@ function harness(opts: { peer?: boolean; bg?: boolean; typed?: string; initial?:
   let awaiting = false, buffer = opts.typed ?? '', reads = 0;
   let resolveRead: ((value: { text: string; attachments: [] }) => void) | undefined;
   const surface = {
+    getCompositor: () => null,
     onAwaitingInput: undefined as (() => void) | undefined,
     isAwaitingInput: () => awaiting, bufferIsEmpty: () => buffer === '',
     abortPendingRead: vi.fn(() => { awaiting = false; resolveRead?.({ text: '', attachments: [] }); }),

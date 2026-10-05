@@ -144,6 +144,8 @@ export interface ReadWithAutocompleteOpts {
 }
 
 export interface ReadWithAutocompleteResult {
+  /** Submission drained from the compositor FIFO, not a fresh idle Enter. */
+  queuedSubmission?: boolean;
   text: string;
   attachments: ImageAttachment[];
 }

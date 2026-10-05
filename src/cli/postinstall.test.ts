@@ -1,7 +1,8 @@
-// Windows: .mjs dynamic import of scripts/postinstall.mjs fails on Windows (#703)
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const isWin32 = process.platform === 'win32';
+const _testDir = dirname(fileURLToPath(import.meta.url));
 
 // Invariant (no real service side effects): restartLaunchdServices'
 // DEFAULT restartFn runs `node <repo>/dist/cli.mjs service restart <name>`,
@@ -52,14 +53,17 @@ let restartLaunchdServices: RestartLaunchdServicesFn;
 
 beforeAll(async () => {
   // Dynamic import avoids TypeScript transform issues with plain .mjs files.
-  const mod = await import('../../scripts/postinstall.mjs');
+  // pathToFileURL converts the absolute path to a file:// URL so Windows ESM
+  // loaders accept it (bare absolute paths like C:\... are rejected by the loader).
+  const url = pathToFileURL(resolve(_testDir, '..', '..', 'scripts', 'postinstall.mjs')).href;
+  const mod = await import(url);
   detectPathGap = mod.detectPathGap as DetectPathGapFn;
   restartLaunchdServices = mod.restartLaunchdServices as RestartLaunchdServicesFn;
 });
 
 // detectPathGap is a pure function (string → string) with zero platform calls.
-// The .mjs import guard (skipIf isWin32) protects restartLaunchdServices below,
-// but detectPathGap is platform-independent and runs everywhere.
+// Both detectPathGap and restartLaunchdServices are platform-portable: they
+// inject all platform calls via fn parameters so they run everywhere.
 describe('detectPathGap', () => {
   it('returns onPath: true when binDir is already on PATH', () => {
     const result = detectPathGap('/usr/local', '/usr/local/bin:/usr/bin:/bin');
@@ -114,7 +118,7 @@ describe('detectPathGap', () => {
 // existsFn controls both plist presence AND cli.mjs presence, so we can
 // exercise the two branches (CLI-path taken, CLI-path skipped) without
 // touching the filesystem or invoking launchctl.
-describe.skipIf(isWin32)('restartLaunchdServices — CLI-path branch (F-6)', () => {
+describe('restartLaunchdServices — CLI-path branch (F-6)', () => {
   it('uses restartFn (CLI path) when existsFn reports both plist and cli.mjs present', () => {
     const calls: Array<{ node: string; cli: string; name: string }> = [];
     const restarted = restartLaunchdServices({
