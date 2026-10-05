@@ -176,30 +176,33 @@ describe('BackgroundAgentRegistry', () => {
   it('returns immediately — does NOT block on terminal state', async () => {
     const handle = createStubHandle('sub-1');
 
-    // Ordering probe: register() must return before the job's terminal-state
-    // settles. We verify this deterministically — without any wall-clock
-    // budget — by racing the join() promise against an already-resolved
-    // sentinel. If register() blocked until terminal state the join() would
-    // resolve first; but because register() is synchronous and terminal state
-    // has not yet been fired, join() is still pending and the sentinel wins.
     const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
 
     // Job must be in running state immediately after register() returns.
     expect(registry.list()[0]?.status).toBe('running');
 
-    // Race: an already-resolved promise vs. join() which is pending because no
-    // terminal event has fired yet. The sentinel MUST win — if join() settled
-    // first it would mean register() had already driven the job to a terminal
-    // state, contradicting the non-blocking contract.
+    // Ordering probe: join() must be pending (terminal state not yet fired) when
+    // register() returns. We verify this with a macrotask sentinel: setImmediate
+    // fires in the event-loop's check phase, AFTER all microtasks — including any
+    // resolved-Promise .then() callbacks. If register() had driven the job to a
+    // terminal state before returning, job.terminalSettled would already be
+    // resolved, so join()'s await would queue a microtask that fires BEFORE the
+    // setImmediate, and 'join' would win. On correct code, join() is pending and
+    // the setImmediate fires first, so 'sentinel' wins.
+    //
+    // This probe fails when the regression is present and passes on fixed code,
+    // with no wall-clock thresholds.
     const SENTINEL = 'sentinel';
     const winner = await Promise.race([
       registry.join(job.jobId).then(() => 'join'),
-      Promise.resolve(SENTINEL),
+      new Promise<string>((resolve) => setImmediate(resolve, SENTINEL)),
     ]);
     expect(winner).toBe(SENTINEL);
 
     // Clean up: fire terminal so the dangling join() settles and doesn't leak.
     handle.__fireTerminal(successResult('sub-1', 'done'));
+    await registry.join(job.jobId);
+    expect(registry.get(job.jobId)?.status).toBe('completed');
   });
 
   it('join() resolves with the completed result and emits .completed + .joined', async () => {
