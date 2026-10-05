@@ -6,6 +6,7 @@
  * or LLM calls.
  */
 
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // ── Mock the classifier so no real LLM calls happen ─────────────────────────
@@ -544,10 +545,17 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     await hook(makeSessionEndContext());
     const afterFirst = mockEntry.description;
 
+    // Clear the fingerprint store so the second call is not short-circuited by
+    // isDuplicateDiff. Each invocation must really reach classifyDiff — otherwise
+    // repeated-annotation bugs are invisible to this test.
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
+
     // Second fire — findEntry still returns the (now-mutated) mockEntry
     await hook(makeSessionEndContext());
     const afterSecond = mockEntry.description;
 
+    // Both hook calls must have reached classifyDiff.
+    expect(classifyDiff).toHaveBeenCalledTimes(2);
     // The description after the second fire must equal the description after the first fire
     expect(afterSecond).toBe(afterFirst);
     // And it must contain exactly one "reinforced" annotation
@@ -789,10 +797,17 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     await hook(makeSessionEndContext());
     const afterFirst = mockEntry.description;
 
+    // Clear the fingerprint store so the second call is not short-circuited by
+    // isDuplicateDiff. Each invocation must really reach classifyDiff — otherwise
+    // repeated-annotation bugs are invisible to this test.
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
+
     // Second fire
     await hook(makeSessionEndContext());
     const afterSecond = mockEntry.description;
 
+    // Both hook calls must have reached classifyDiff.
+    expect(classifyDiff).toHaveBeenCalledTimes(2);
     expect(afterSecond).toBe(afterFirst);
     const weakenedMatches = afterSecond.match(/\(partially weakened /g) ?? [];
     expect(weakenedMatches).toHaveLength(1);
@@ -1236,14 +1251,21 @@ describe('createSpineSessionEndHook — #2867 regressions', () => {
 
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
 
-    // Fire once
+    // Fire once — classifyDiff is called; fingerprint is persisted to _mockFsStore.
     await hook(makeSessionEndContext());
     const afterFirst = mockEntry.description;
+
+    // Clear the fingerprint store so the second call is not short-circuited by
+    // isDuplicateDiff. Each invocation must really reach classifyDiff — otherwise
+    // body-shrink regressions are invisible to this test.
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
 
     // Fire again (description now includes annotation)
     await hook(makeSessionEndContext());
     const afterSecond = mockEntry.description;
 
+    // Both hook calls must have reached classifyDiff.
+    expect(classifyDiff).toHaveBeenCalledTimes(2);
     // Body must not shrink across invocations
     const bodyAfterFirst = afterFirst.slice(0, afterFirst.lastIndexOf(' (reinforced '));
     const bodyAfterSecond = afterSecond.slice(0, afterSecond.lastIndexOf(' (reinforced '));
@@ -1294,12 +1316,21 @@ describe('createSpineSessionEndHook — #2867 regressions', () => {
 
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
 
+    // Fire once — classifyDiff is called; fingerprint is persisted to _mockFsStore.
     await hook(makeSessionEndContext());
     const afterFirst = mockEntry.description;
 
+    // Clear the fingerprint store so the second call is not short-circuited by
+    // isDuplicateDiff. Each invocation must really reach classifyDiff — otherwise
+    // body-shrink regressions are invisible to this test.
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
+
+    // Fire again (description now includes annotation)
     await hook(makeSessionEndContext());
     const afterSecond = mockEntry.description;
 
+    // Both hook calls must have reached classifyDiff.
+    expect(classifyDiff).toHaveBeenCalledTimes(2);
     const bodyAfterFirst = afterFirst.slice(0, afterFirst.lastIndexOf(' (partially weakened '));
     const bodyAfterSecond = afterSecond.slice(0, afterSecond.lastIndexOf(' (partially weakened '));
     expect(bodyAfterFirst).toBe(body);
@@ -1683,8 +1714,11 @@ describe('createSpineSessionEndHook — duplicate-fingerprint skips classifyDiff
   // The SHA-256 fingerprint of the default diff used by setupDiffMock.
   // Computed from sha256hex(filterSpineEdits(diffContent)) where diffContent is
   // the setupDiffMock default: 'diff --git a/foo.ts b/foo.ts\n+const x = 1;'.
-  // Kept as a literal so the test is self-contained and does not re-import internals.
-  const KNOWN_FINGERPRINT = '98cf6d2f4b3776cf347aeb188907e5df8c96a74ce0199e94d46ca83224d8d405';
+  // filterSpineEdits is a no-op for this diff (no SPINE.md hunk), so the
+  // fingerprint is sha256hex(diffContent) directly.  Computed dynamically so
+  // this test stays correct if setupDiffMock's default ever changes.
+  const DEFAULT_DIFF_CONTENT = 'diff --git a/foo.ts b/foo.ts\n+const x = 1;';
+  const KNOWN_FINGERPRINT = createHash('sha256').update(DEFAULT_DIFF_CONTENT, 'utf8').digest('hex');
 
   beforeEach(() => {
     vi.clearAllMocks();
