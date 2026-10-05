@@ -331,6 +331,9 @@ const historyCmd = infoCommands.find((c) => c.name === '/history')!;
 describe('/history', () => {
   beforeEach(() => {
     mockReplayTurns.mockReset();
+    // Explicit void contract: the handler does not use replayTurns' return
+    // value, but making it explicit avoids a silent undefined after mockReset().
+    mockReplayTurns.mockReturnValue(undefined);
     // Default: journal has nothing → fall through to sidecar path, so the
     // existing sidecar tests work without changes.
     mockReplayJournal.mockReset();
@@ -344,6 +347,11 @@ describe('/history', () => {
     ctx.stats.turns = [];
     await historyCmd.handler(ctx, '');
     expect(lines.join('\n')).toMatch(/No conversation history yet/);
+    // replayJournal is still called (journal-first), but with an empty hints
+    // list since there are no sidecar turns to extract user texts from.
+    expect(mockReplayJournal).toHaveBeenCalledOnce();
+    const [, , emptyHintsOpts] = mockReplayJournal.mock.calls[0]!;
+    expect(emptyHintsOpts).toEqual(expect.objectContaining({ hints: [] }));
     expect(mockReplayTurns).not.toHaveBeenCalled();
   });
 
@@ -438,7 +446,11 @@ describe('/history', () => {
     (ctx.session.current as unknown as { messageJournal: unknown }).messageJournal = { flush };
 
     const done = historyCmd.handler(ctx, '');
-    // Yield once — replayJournal must NOT have been called yet (still awaiting flush).
+    // Single-tick probe: the handler must not have called replayJournal within
+    // the first microtask tick, because it is still awaiting the flush promise.
+    // NOTE: this assertion is tied to the assumption that no additional `await`
+    // exists between handler entry and the flush call; the ordering assertion
+    // below (`expect(order)`) is the canonical invariant and is tick-agnostic.
     await Promise.resolve();
     expect(mockReplayJournal).not.toHaveBeenCalled();
 
@@ -455,6 +467,9 @@ describe('/history', () => {
     (ctx.session.current as unknown as { messageJournal: unknown }).messageJournal = {
       flush: () => Promise.reject(new Error('disk error')),
     };
+    // Note: the turns[] below are not consulted — replayJournal returns 2 so
+    // the journal path is taken regardless; setting turns documents that the
+    // sidecar is NOT consulted even when turns exist (flush-error isolation).
     ctx.stats.turns = [
       { user: 'a', assistant: '1' },
       { user: 'b', assistant: '2' },
