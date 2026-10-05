@@ -54,6 +54,12 @@ function truncate(text: string, n: number): string {
   return oneLine.slice(0, n - 1) + '…';
 }
 
+/** Strip C0/C1 control characters (except space) from a string for safe display. */
+function stripControls(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+}
+
 export const inboxCmd: SlashCommand = {
   name: '/inbox',
   usage: '/inbox [accept <id-prefix|all> | drop <id-prefix|all>]',
@@ -91,7 +97,7 @@ export const inboxCmd: SlashCommand = {
         for (const entry of held) {
           if (entry.corrupt) {
             // Show unparseable held files so the operator can drop them.
-            const fileShort = entry.file.slice(0, 8);
+            const fileShort = stripControls(entry.file).slice(0, 8);
             ctx.out.line(
               `  ${fileShort}  ${'[corrupt]'.padEnd(20)}  ${'?'.padEnd(4)}  ` +
               palette.dim('(unparseable — use /inbox drop to remove)'),
@@ -168,11 +174,18 @@ export const inboxCmd: SlashCommand = {
           id: h.corrupt ? `[corrupt:${h.file}]` : h.envelope.messageId,
         }));
       } else {
-        // Only match parseable entries by id prefix.
-        targets = held
+        // Match parseable entries by messageId prefix, and corrupt entries by
+        // filename prefix so the operator can drop individual corrupt files
+        // without resorting to "drop all".
+        const parseableMatches = held
           .filter((h): h is Extract<HeldEntry, { corrupt?: never }> => !h.corrupt)
           .filter(({ envelope: e }) => e.messageId.startsWith(arg))
           .map(({ file, envelope: e }) => ({ file, id: e.messageId }));
+        const corruptMatches = held
+          .filter((h): h is Extract<HeldEntry, { corrupt: true }> => !!h.corrupt)
+          .filter((h) => h.file.startsWith(arg))
+          .map((h) => ({ file: h.file, id: `[corrupt:${h.file}]` }));
+        targets = [...parseableMatches, ...corruptMatches];
         if (targets.length === 0) {
           ctx.out.warn(`No held message id starts with "${arg}".`);
           return 'continue';

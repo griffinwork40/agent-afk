@@ -358,6 +358,19 @@ describe('hold/listHeld/releaseHeld/dropHeld', () => {
     const result = await dropHeld(TARGET_ID, 'ghost.json');
     expect(result).toBe(false);
   });
+
+  it('listHeld returns { file, corrupt: true } for an unparseable held file', async () => {
+    const { listHeld } = await getInboxStore();
+    const heldDir = path.join(tmpDir, 'inbox', TARGET_ID, 'held');
+    fs.mkdirSync(heldDir, { recursive: true, mode: 0o700 });
+    const filename = 'corrupt-entry.json';
+    fs.writeFileSync(path.join(heldDir, filename), 'NOT VALID JSON', { mode: 0o600 });
+    const held = await listHeld(TARGET_ID);
+    expect(held).toHaveLength(1);
+    expect(held[0]!.file).toBe(filename);
+    expect(held[0]!.corrupt).toBe(true);
+    expect(held[0]!.envelope).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

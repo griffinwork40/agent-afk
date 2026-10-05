@@ -372,9 +372,18 @@ export class PeerInboxNotifier {
 
   /** Notify the operator when an unparseable or corrupt pending file is quarantined. */
   private noteCorrupt(file: string): void {
+    // Strip control characters from the filename for safe terminal display.
+    // eslint-disable-next-line no-control-regex
+    const safeFile = file.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
     this.opts.writeLine(
-      palette.dim(`↘ peer message held (corrupt/unsupported format: ${file}) · /inbox drop to remove`),
+      palette.dim(`↘ peer message held (corrupt/unsupported format: ${safeFile}) · /inbox drop to remove`),
     );
+    void emitPeerMessage(this.resolveTraceWriter(), {
+      action: 'held',
+      peer: 'unknown',
+      bytes: 0,
+      reason: 'corrupt',
+    });
   }
 
   private fireInjectable(): void {
