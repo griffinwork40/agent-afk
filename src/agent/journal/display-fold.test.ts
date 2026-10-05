@@ -144,6 +144,59 @@ describe('foldForDisplay', () => {
     const fork = [meta('child', { sessionId: 'parent', length: 2 }), ap(0, summary()), ap(1, ack()), ap(2, user('q2'))];
     expect(texts(foldForDisplay([parent, fork]))).toEqual(['q1', 'a1', 'q2']);
   });
+
+  // S1: soft-truncate reasons other than 'compact' — resync, repair, provider_switch,
+  // and a bare truncate (no reason) — must all keep displaced rows in the display.
+  it.each<[JournalTruncateReason | undefined, string]>([
+    ['resync', 'resync'],
+    ['repair', 'repair'],
+    ['provider_switch', 'provider_switch'],
+    [undefined, 'no-reason (bare truncate)'],
+  ])('soft-truncate reason %s keeps displaced rows and matches re-appended tail', (reason, _label) => {
+    // History: q1(0) → a1(1) → q2(2) → a2(3).
+    // Soft-truncate to 2 (any non-hard reason), then re-append q2 and a2.
+    // Both re-appended messages should match their original rows, so the display
+    // shows all four messages exactly once with no duplicates.
+    const recs = [
+      ap(0, user('q1')), ap(1, assistant('a1')), ap(2, user('q2')), ap(3, assistant('a2')),
+      tr(2, reason),
+      ap(2, user('q2')), ap(3, assistant('a2')),
+      ap(4, user('q3')),
+    ];
+    expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q2', 'a2', 'q3']);
+  });
+
+  // C1: chained compact → preamble → provider_switch → re-append.
+  // The compaction preamble pushes -1 entries onto `live` without consuming the
+  // pending window from the compact.  A subsequent provider_switch soft-truncate
+  // must NOT inherit that stale pending set: otherwise a re-appended message that
+  // shares a fingerprint with a pre-compact message would silently match the wrong
+  // (old) display row instead of creating its own new row.
+  it('C1: compact → preamble → provider_switch → re-append does not match stale compact-phase pending', () => {
+    // Phase 1: q1(0) + a1(1) in history.
+    // Phase 2: compact to 0 → q1/a1 go to pending (cap=1); preamble summary(-1)+ack(-1) appended.
+    // Phase 3: provider_switch to 0 → live=[] again; NEW window, stale pending cleared.
+    // Phase 4: re-append user('q1') + assistant('a1') — same text as before but genuinely new
+    //   messages after the switch.  They must NOT match the now-cleared stale pending and
+    //   must each get their own display rows, so the final display has 4 rows total.
+    const recs = [
+      ap(0, user('q1')), ap(1, assistant('a1')),
+      tr(0, 'compact'),
+      ap(0, summary()), ap(1, ack()),
+      tr(0, 'provider_switch'),
+      ap(0, user('q1')),
+      ap(1, assistant('a1')),
+      ap(2, user('q2')),
+    ];
+    // Without the fix: re-appended q1/a1 wrongly consumed the stale pending entries
+    // (row0/row1) from the compact phase.  user('q2') at index 2 would then exceed
+    // the stale cap (1) and clear pending, making q2 a new row — but q1/a1 are
+    // already double-mapped to the original rows, so q2 appears without the
+    // duplicated q1/a1 prefixes: ['q1', 'a1', 'q2'].
+    // With the fix: provider_switch opens a fresh window with no pending; q1/a1
+    // miss → new rows; q2 → new row.  Display: ['q1', 'a1', 'q1', 'a1', 'q2'].
+    expect(texts(foldForDisplay([recs]))).toEqual(['q1', 'a1', 'q1', 'a1', 'q2']);
+  });
 });
 
 describe('displaySegments', () => {

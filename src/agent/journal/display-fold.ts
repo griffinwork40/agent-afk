@@ -113,15 +113,22 @@ class DisplayFoldState {
   private pendingWindowCap = -1;
 
   softTruncate(length: number): void {
-    for (const row of this.live.slice(length)) {
-      const msg = row >= 0 ? this.rows[row] : null;
-      if (!msg) continue;
-      const fp = messageFingerprint(msg);
-      const list = this.pending.get(fp) ?? [];
-      list.push(row);
-      this.pending.set(fp, list);
+    if (this.live.length > length) {
+      // A new displacement window begins: stale pending entries from a prior
+      // soft-truncate (e.g. a compaction preamble phase) must not bleed into
+      // this window's match set.  Reset first, then populate from the newly
+      // displaced rows only.
+      this.pending.clear();
+      this.pendingWindowCap = this.live.length - 1;
+      for (const row of this.live.slice(length)) {
+        const msg = row >= 0 ? this.rows[row] : null;
+        if (!msg) continue;
+        const fp = messageFingerprint(msg);
+        const list = this.pending.get(fp) ?? [];
+        list.push(row);
+        this.pending.set(fp, list);
+      }
     }
-    if (this.live.length > length) this.pendingWindowCap = this.live.length - 1;
     this.live.length = Math.min(this.live.length, length);
   }
 
