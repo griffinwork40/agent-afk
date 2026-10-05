@@ -61,6 +61,7 @@ import { TELEGRAM_ENV_REGISTRY } from './env.telegram.js';
 import { UI_ENV_REGISTRY } from './env.ui.js';
 import { WHATIF_ENV_REGISTRY } from './env.whatif.js';
 import { SESSION_STORAGE_ENV_REGISTRY } from './env.session-storage.js';
+import { MEMORY_GC_ENV_REGISTRY } from './env.memory-gc.js';
 
 export type EnvVarType = 'string' | 'number' | 'boolean' | 'json';
 
@@ -125,6 +126,8 @@ export const ENV_REGISTRY = [
   ...MODEL_ENV_REGISTRY,
   // Model tiers, timeouts, suggestions, legacy aliases (env.model-tiers.ts)
   ...MODEL_TIERS_ENV_REGISTRY,
+  // Memory GC env vars (env.memory-gc.ts)
+  ...MEMORY_GC_ENV_REGISTRY,
 
   // ── System prompt / Auth / Image generation (env.auth.ts) ─────────────────
   ...AUTH_ENV_REGISTRY,

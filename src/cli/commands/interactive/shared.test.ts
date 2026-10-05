@@ -218,9 +218,9 @@ describe('formatStatusFields — subscription-quota segment', () => {
       observedAt,
     });
     const windows = formatStatusFields(makeStats([])).quotaWindows;
-    expect(windows?.fiveHour?.resetsAt).toBe(fiveHourResetsAt);
-    expect(windows?.sevenDay?.resetsAt).toBe(sevenDayResetsAt);
-    expect(windows?.observedAt).toBe(observedAt);
+    expect(windows?.fiveHour?.resetsAt).toEqual(fiveHourResetsAt);
+    expect(windows?.sevenDay?.resetsAt).toEqual(sevenDayResetsAt);
+    expect(windows?.observedAt).toEqual(observedAt);
   });
 
   it('carries only the 5h window when the 7d window is absent', () => {

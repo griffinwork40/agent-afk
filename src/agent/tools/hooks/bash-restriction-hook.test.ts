@@ -344,14 +344,12 @@ describe('createBashRestrictionHook — grant containment direction (F4 regressi
 });
 
 describe('createBashRestrictionHook — context.grantManager precedence (#514)', () => {
-  // #514: SessionToolDispatcher injects the EXECUTING session's provider as
-  // context.grantManager (bash-restriction-hook.ts:229 —
-  // `context.grantManager ?? opts.getGrantManager()`), mirroring the same
-  // precedence path-approval-hook.test.ts pins in its own "#514" describe
-  // block ("context.grantManager takes precedence over opts.getGrantManager").
-  // Before this hook read context.grantManager at all, a forked child's
-  // restricted-root view was blind to its OWN grants and pinned to whichever
-  // session's ref happened to construct the hook closure.
+  // #514: SessionToolDispatcher injects the EXECUTING session's grant manager as
+  // context.grantManager. The hook reads context.grantManager directly — there
+  // is no opts.getGrantManager() fallback. Before this hook read
+  // context.grantManager at all, a forked child's restricted-root view was blind
+  // to its OWN grants and pinned to whichever session's ref happened to
+  // construct the hook closure.
   const home = homedir();
   const sshPath = `${home}/.ssh`;
 

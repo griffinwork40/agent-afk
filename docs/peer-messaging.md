@@ -106,6 +106,7 @@ Sends a message to another session.
 | `hop-limit` | Reply chain exceeded 6 hops (`PEER_MAX_HOPS`, `envelope.ts:26`) |
 | `rate-limited` | >10 messages/min to the same target (`guards.ts:48`) |
 | `duplicate` | Same body sent to same target within 60 s (`guards.ts:52`) |
+| `inbound-off` | Target session has disabled peer inbound (`guards.ts`) |
 
 ---
 
@@ -237,7 +238,7 @@ Envelopes are recovered after a process crash that occurs between claim and inje
 
 A `peer_message` trace event is emitted for every state transition (`src/agent/trace/emit.ts:105`):
 - `action`: emitted values are `sent` and `refused` (sender side, `src/agent/tools/handlers/peer.ts`), and `claimed`, `held`, and `injected` (receiver side, `peer-inbox-notifier.ts`). A delivered message shows `sent` → `claimed` → `injected`.
-- The type (`src/agent/trace/types.ts`) also lists `delivered`, `dropped`, and `reclaimed`. `delivered` is the pre-#2810 receiver action; traces from older builds show `sent` → `delivered` instead (see #2901). `dropped` and `reclaimed` are emitted by `PeerInboxNotifier.reclaim()` during session swaps (e.g. `/resume`): `reclaimed` when an envelope is successfully moved back to `pending/`, `dropped` when that move returns false (`peer-inbox-notifier.ts:222-227`).
+- The type (`src/agent/trace/types.ts`) also lists `delivered`, `dropped`, and `reclaimed`. `delivered` is the pre-#2810 receiver action; traces from older builds show `sent` → `delivered` instead (see #2901). `dropped` and `reclaimed` are emitted by `PeerInboxNotifier.reclaim()` during session swaps (e.g. `/resume`): `reclaimed` when an envelope is successfully moved back to `pending/`, `dropped` when that move returns false (see `reclaim()` in `peer-inbox-notifier.ts`).
 - `messageId`, `peer` (the other session's id), `bytes` (UTF-8 byte count)
 - `reason` (for `refused`/`held`)
 

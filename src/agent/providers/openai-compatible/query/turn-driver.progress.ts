@@ -48,6 +48,11 @@ export function buildRoundProgressEvent(
       summary: `${formatRoundLabel(round, maxIterations)}: ${lastToolHeadline}`,
       lastToolName,
       totalTokens: accumulatedUsage.totalTokens ?? 0,
+      // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far
+      // in this turn (not the round number), so downstream
+      // formatToolCallStat renders "N tool calls" truthfully even when a
+      // round batched parallel calls. The `summary` above legitimately
+      // names the ROUND — leave it.
       toolUses: toolCallCount,
       durationMs: Date.now() - turnStartTime,
     },
