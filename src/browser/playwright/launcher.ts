@@ -22,6 +22,7 @@ import { decoratePlaywrightLaunchError } from '../playwright-missing.js';
 import { getBrowserStorageStatePath } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
+import { assertEgressAllowed } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Close-with-fallback timeout
@@ -89,6 +90,7 @@ interface SessionEntry {
   consoleErrors: number;
   lastHttpStatus: number | null;
   openDialog: Dialog | undefined;
+  requestGuardError: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,10 +328,36 @@ export class BrowserLauncher {
       consoleErrors: 0,
       lastHttpStatus: null,
       openDialog: undefined,
+      requestGuardError: undefined,
     };
+
+    await this.installInteractiveRequestGuard(context, entry);
 
     this.sessions.set(sessionId, entry);
     return context;
+  }
+
+  private async installInteractiveRequestGuard(
+    context: BrowserContext,
+    entry: SessionEntry,
+  ): Promise<void> {
+    await context.route('**/*', async (route) => {
+      const request = route.request();
+      if (!request.isNavigationRequest()) {
+        await route.continue();
+        return;
+      }
+
+      try {
+        await assertEgressAllowed(request.url());
+      } catch (err) {
+        entry.requestGuardError = err;
+        await route.abort('blockedbyclient');
+        return;
+      }
+
+      await route.continue();
+    });
   }
 
   /**
@@ -418,6 +446,14 @@ export class BrowserLauncher {
    */
   getPage(sessionId: string): Page | undefined {
     return this.sessions.get(sessionId)?.page;
+  }
+
+  consumeRequestGuardError(sessionId: string): unknown {
+    const entry = this.sessions.get(sessionId);
+    if (entry === undefined) return undefined;
+    const err = entry.requestGuardError;
+    entry.requestGuardError = undefined;
+    return err;
   }
 
   // -------------------------------------------------------------------------

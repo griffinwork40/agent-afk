@@ -139,11 +139,20 @@ vi.mock('playwright', () => ({
   },
 }));
 
+vi.mock('../../config/env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/env.js')>();
+  return {
+    ...actual,
+    privateHostsAllowed: vi.fn(() => false),
+  };
+});
+
 // Import AFTER the mock so the hoisted mock is in place.
 import { BrowserLauncher } from './launcher.js';
 import type { BrowserConfig } from '../types.js';
 import { chromium } from 'playwright';
 import { getBrowserProfileStateDir, getBrowserStorageStatePath } from '../../paths.js';
+import { privateHostsAllowed } from '../../config/env.js';
 
 // ---------------------------------------------------------------------------
 // Test config fixture
@@ -418,6 +427,43 @@ describe('BrowserLauncher', () => {
       const ctx = await launcher.ensureContext('session-A');
       expect(ctx).toBeDefined();
       expect(currentStubBrowser.newContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('installs an SSRF guard on interactive navigation requests', async () => {
+      vi.mocked(privateHostsAllowed).mockReturnValue(false);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = await launcher.ensureContext('session-A') as unknown as StubContext;
+
+      expect(ctx.route).toHaveBeenCalledWith('**/*', expect.any(Function));
+      const handler = ctx.route.mock.calls[0]?.[1] as (route: {
+        request: () => { url: () => string; isNavigationRequest: () => boolean };
+        continue: () => Promise<void>;
+        abort: (reason: string) => Promise<void>;
+      }) => Promise<void>;
+
+      const blocked = {
+        request: () => ({
+          url: () => 'http://169.254.169.254/latest/meta-data/',
+          isNavigationRequest: () => true,
+        }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(blocked);
+      expect(blocked.continue).not.toHaveBeenCalled();
+      expect(blocked.abort).toHaveBeenCalledWith('blockedbyclient');
+
+      const subresource = {
+        request: () => ({
+          url: () => 'http://169.254.169.254/latest/meta-data/',
+          isNavigationRequest: () => false,
+        }),
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await handler(subresource);
+      expect(subresource.continue).toHaveBeenCalledOnce();
+      expect(subresource.abort).not.toHaveBeenCalled();
     });
 
     it('returns the cached context on repeated calls for the same session', async () => {

@@ -15,6 +15,7 @@
 import type { ActOutcome } from '../provider.js';
 import type { ActInput, InteractiveElement, Target } from '../types.js';
 import { enforceDomainPolicy } from '../config.js';
+import { checkEgressTarget } from '../../http-client/egress-guard.js';
 import type { BrowserConfig } from '../types.js';
 import type { AgentBrowserClient, InspectElement } from './client.js';
 import { escapeShellString } from '../../utils/shell-escape.js';
@@ -188,8 +189,17 @@ export async function resolveSemanticAndAct(
     input.timeoutMs,
   );
 
-  // Check if action triggered a navigation to a blocked domain.
+  // Check if action triggered a navigation to a blocked target.
   const readResult = await ctx.client.read(ctx.tabId, { mode: 'main' });
+  const egressVerdict = await checkEgressTarget(readResult.url);
+  if (!egressVerdict.allowed) {
+    return {
+      outcome: 'blocked_by_policy',
+      url: readResult.url,
+      reason: `action navigated to blocked egress target: ${egressVerdict.reason}`,
+    };
+  }
+
   const policy = enforceDomainPolicy(readResult.url, ctx.config);
   if (!policy.allowed) {
     return {

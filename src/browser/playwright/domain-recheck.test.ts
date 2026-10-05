@@ -6,6 +6,12 @@
  * enough. The real `enforceDomainPolicy` from ../config.js is used here (it is
  * a pure function over BrowserConfig), so these tests exercise the actual
  * allow/block glob semantics rather than a mock's idea of them.
+ *
+ * The SSRF guard (checkEgressTarget) is exercised via two mechanisms:
+ *   - Existing domain-policy tests pass `allowPrivateHosts: true` so they skip
+ *     DNS and remain fast and deterministic.
+ *   - The new #2301 SSRF tests pass an injectable `lookupFn` that returns
+ *     controlled addresses, verifying SSRF classification logic directly.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -38,8 +44,14 @@ function makePage(landedUrl: string): RecheckablePage & {
   };
 }
 
+/**
+ * Convenience wrapper for domain-policy-only tests: bypasses the SSRF guard
+ * (`allowPrivateHosts: true`) so tests stay deterministic without real DNS.
+ */
 function recheck(page: RecheckablePage, config: BrowserConfig, clearedUrl: string) {
-  return recheckLandedUrl(page, config, clearedUrl, vi.fn().mockResolvedValue(undefined));
+  return recheckLandedUrl(page, config, clearedUrl, vi.fn().mockResolvedValue(undefined), {
+    allowPrivateHosts: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -136,5 +148,88 @@ describe('recheckLandedUrl', () => {
       outcome: 'blocked_by_policy',
       reason: 'invalid URL: not a url',
     });
+  });
+
+
+
+  it('does not treat browser error pages as egress policy blocks', async () => {
+    const page = makePage('chrome-error://chromewebdata/');
+    const config = makeConfig({ allowedDomains: ['example.com'] });
+
+    const result = await recheckLandedUrl(
+      page,
+      config,
+      'https://example.com/start',
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    expect(result).toBeNull();
+    expect(page.goBack).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // SSRF guard on landed URL (#2301)
+  //
+  // A redirect from a public URL to a private IP bypasses the pre-navigation
+  // check in open(). recheckLandedUrl now runs checkEgressTarget on the landed
+  // URL so that redirect-laundered SSRF is also blocked.
+  // -------------------------------------------------------------------------
+
+  it('blocks a private-IP landed URL via the SSRF guard (#2301)', async () => {
+    // Simulate: public URL redirected to the IMDS endpoint.
+    const page = makePage('http://169.254.169.254/latest/meta-data/');
+    // Injectable lookup returns a private IP so we don't need real DNS.
+    const lookupFn = vi.fn().mockResolvedValue([{ address: '169.254.169.254' }]);
+
+    const result = await recheckLandedUrl(
+      page,
+      makeConfig(),
+      'https://allowed.example/start',
+      vi.fn().mockResolvedValue(undefined),
+      { lookupFn },
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'http://169.254.169.254/latest/meta-data/',
+      reason: expect.stringContaining('169.254.169.254'),
+    });
+    // goBack() attempted as best-effort rollback.
+    expect(page.goBack).toHaveBeenCalled();
+  });
+
+  it('blocks a loopback-resolved hostname landed URL via the SSRF guard (#2301)', async () => {
+    // Simulate: public redirect target resolves to 127.0.0.1.
+    const page = makePage('http://internal.example/');
+    const lookupFn = vi.fn().mockResolvedValue([{ address: '127.0.0.1' }]);
+
+    const result = await recheckLandedUrl(
+      page,
+      makeConfig(),
+      'https://allowed.example/start',
+      vi.fn().mockResolvedValue(undefined),
+      { lookupFn },
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'http://internal.example/',
+      reason: expect.stringContaining('127.0.0.1'),
+    });
+  });
+
+  it('allows a public landed URL when SSRF guard passes (#2301)', async () => {
+    const page = makePage('https://cdn.example/page');
+    const lookupFn = vi.fn().mockResolvedValue([{ address: '93.184.216.34' }]);
+
+    const result = await recheckLandedUrl(
+      page,
+      makeConfig(),
+      'https://allowed.example/start',
+      vi.fn().mockResolvedValue(undefined),
+      { lookupFn },
+    );
+
+    expect(result).toBeNull();
   });
 });

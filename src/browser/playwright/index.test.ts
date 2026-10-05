@@ -50,6 +50,7 @@ vi.mock('./launcher.js', () => {
         (ctx.getLastHttpStatusFn as (...a: unknown[]) => unknown)(...args),
       hasOpenDialog: (...args: unknown[]) =>
         (ctx.hasOpenDialogFn as (...a: unknown[]) => unknown)(...args),
+      consumeRequestGuardError: vi.fn().mockReturnValue(undefined),
     };
   }
   return { BrowserLauncher: MockBrowserLauncher };
@@ -81,6 +82,11 @@ vi.mock('../config.js', () => ({
   enforceDomainPolicy: vi.fn(),
 }));
 
+vi.mock('../../http-client/egress-guard.js', () => ({
+  checkEgressTarget: vi.fn(),
+  EgressBlockedError: class EgressBlockedError extends Error {},
+}));
+
 // ---------------------------------------------------------------------------
 // Import subjects AFTER mocks
 // ---------------------------------------------------------------------------
@@ -90,6 +96,7 @@ import { observePage } from './observe.js';
 import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { writeScreenshotSidecar } from '../witness.js';
+import { checkEgressTarget } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Type helpers
@@ -202,6 +209,7 @@ beforeEach(() => {
   // Default behaviour for module-level mocks.
   asMock(observePage).mockResolvedValue(makeStubObservation());
   asMock(enforceDomainPolicy).mockReturnValue({ allowed: true });
+  asMock(checkEgressTarget).mockResolvedValue({ allowed: true });
   asMock(writeScreenshotSidecar).mockResolvedValue({ path: '/fake/screenshot.png', bytes: 100 });
   asMock(resolveTarget).mockResolvedValue({ outcome: 'resolved', locator: ctx.locator });
 });
@@ -435,6 +443,82 @@ describe('open()', () => {
       lastAction: 'browser_open',
     });
     expect(state?.lastActionAt).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Regression: #2301 — SSRF egress guard in browser_open
+  //
+  // browser_open previously only checked the allow/block glob lists, meaning
+  // private/loopback/metadata ranges (169.254.169.254, 127.x.x.x, etc.) were
+  // reachable by default. Now checkEgressTarget runs before any browser
+  // interaction, matching the guard applied by web_request and web_scrape.
+  // -------------------------------------------------------------------------
+
+  it('returns BlockedByPolicy for a private-IP URL (#2301)', async () => {
+    asMock(checkEgressTarget).mockResolvedValue({
+      allowed: false,
+      reason:
+        'refusing to fetch 169.254.169.254 — internal/private address 169.254.169.254 ' +
+        '(loopback, link-local, cloud metadata, or RFC1918 space). ' +
+        'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
+    });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'http://169.254.169.254/latest/meta-data/',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'http://169.254.169.254/latest/meta-data/',
+      reason: expect.stringContaining('169.254.169.254'),
+    });
+
+    // No browser interaction when the SSRF guard fires.
+    expect(ctx.ensurePageFn).not.toHaveBeenCalled();
+  });
+
+  it('returns BlockedByPolicy for a loopback URL (#2301)', async () => {
+    asMock(checkEgressTarget).mockResolvedValue({
+      allowed: false,
+      reason:
+        'refusing to fetch 127.0.0.1 — internal/private address 127.0.0.1 ' +
+        '(loopback, link-local, cloud metadata, or RFC1918 space). ' +
+        'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
+    });
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'http://127.0.0.1:7777/',
+    });
+
+    expect(result).toMatchObject({
+      outcome: 'blocked_by_policy',
+      url: 'http://127.0.0.1:7777/',
+      reason: expect.stringContaining('127.0.0.1'),
+    });
+
+    expect(ctx.ensurePageFn).not.toHaveBeenCalled();
+    // The domain policy check must not have run (SSRF fires first).
+    expect(enforceDomainPolicy).not.toHaveBeenCalled();
+  });
+
+  it('allows a public URL when AFK_WEB_ALLOW_PRIVATE_HOSTS escapes the guard (#2301)', async () => {
+    // When the guard is bypassed (opt-out), open() proceeds normally.
+    asMock(checkEgressTarget).mockResolvedValue({ allowed: true });
+    const obs = makeStubObservation({ url: 'https://example.com' });
+    asMock(observePage).mockResolvedValue(obs);
+
+    const provider = makeProvider();
+    const result = await provider.open({
+      sessionId: 'sess1',
+      url: 'https://example.com',
+    });
+
+    expect(result).toBe(obs);
+    expect(ctx.ensurePageFn).toHaveBeenCalled();
   });
 });
 
