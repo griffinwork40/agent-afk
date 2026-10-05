@@ -28,6 +28,7 @@ import { formatSubmittedEcho } from '../../input/echo.js';
 import { buildPrompt } from './repl-loop-shared.js';
 import { palette } from '../../palette.js';
 import { stripCommandTags } from '../../slash/_lib/command-tags.js';
+import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { extractUserContent, isPreamble } from '../../../agent/session/preamble-strip.js';
 import {
   hydrateMessages,
@@ -153,8 +154,13 @@ export function turnEvents(body: readonly JournalMessage[]): OutputEvent[] {
       if (m.role === 'assistant' && b.type === 'text' && b.text.length > 0) {
         // Separate text from consecutive assistant messages as paragraphs,
         // the way successive model rounds read live.
-        events.push({ type: 'chunk', chunk: { type: 'content', content: lastWasText ? `\n\n${b.text}` : b.text } });
-        lastWasText = true;
+        // Security boundary: strip terminal escape sequences from assistant text
+        // before it reaches the terminal, matching the sidecar replay's behaviour.
+        const safeText = stripEscapeSequences(lastWasText ? `\n\n${b.text}` : b.text);
+        if (safeText.length > 0) {
+          events.push({ type: 'chunk', chunk: { type: 'content', content: safeText } });
+          lastWasText = true;
+        }
       } else if (m.role === 'assistant' && b.type === 'tool_use') {
         const toolInput = typeof b.input === 'string' ? b.input : JSON.stringify(b.input ?? {});
         events.push({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: b.id, toolName: b.name, toolInput } });
@@ -196,9 +202,13 @@ async function renderRound(round: readonly JournalMessage[], sink: WriterSink): 
 
 async function renderTurn(turn: ReplayTurn, sink: WriterSink): Promise<void> {
   if (turn.note !== undefined) {
-    sink.fn(palette.dim(`  ↳ ${turn.note}`));
+    // Security boundary: strip escape sequences from notes that originated in
+    // journal text (e.g. background-subagent annotation derived from message content).
+    sink.fn(palette.dim(`  ↳ ${stripEscapeSequences(turn.note)}`));
   } else if (turn.user) {
-    sink.fn(formatSubmittedEcho({ buffer: turn.user, promptText: buildPrompt('default'), isTTY: Boolean(process.stdout.isTTY) }));
+    // Security boundary: strip escape sequences from the human text before
+    // passing it to formatSubmittedEcho, which writes it to the terminal.
+    sink.fn(formatSubmittedEcho({ buffer: stripEscapeSequences(turn.user), promptText: buildPrompt('default'), isTTY: Boolean(process.stdout.isTTY) }));
   }
   // Invariant: one renderer per model ROUND, each disposed before the next
   // starts. dispose() is the flush gate that commits pending markdown, and on

@@ -95,6 +95,27 @@ describe('groupTurns / splitRounds / turnEvents', () => {
       { type: 'done' },
     ]);
   });
+
+  it('strips CSI and OSC sequences from assistant text in turnEvents', () => {
+    // \x1b[2J is a clear-screen CSI; \x1b]0;evil\x07 is an OSC title-set.
+    const events = turnEvents([assistant('safe \x1b[2J text \x1b]0;evil\x07 end')]);
+    const contentChunks = events.filter(
+      (e): e is Extract<typeof events[number], { type: 'chunk' }> =>
+        e.type === 'chunk' && e.chunk.type === 'content',
+    );
+    expect(contentChunks.length).toBe(1);
+    const content = contentChunks[0]!.chunk.type === 'content' ? contentChunks[0]!.chunk.content : '';
+    expect(content).not.toMatch(/\x1b/);
+    expect(content).toContain('safe');
+    expect(content).toContain('end');
+  });
+
+  it('strips assistant text that reduces to empty after escape stripping (no empty content chunk)', () => {
+    // A message that is ONLY a clear-screen escape should not produce a content event.
+    const events = turnEvents([assistant('\x1b[2J')]);
+    const contentChunks = events.filter((e) => e.type === 'chunk' && e.chunk.type === 'content');
+    expect(contentChunks).toHaveLength(0);
+  });
 });
 
 describe('replayJournal / printResumeBanner (real journal on disk)', () => {
@@ -179,5 +200,23 @@ describe('replayJournal / printResumeBanner (real journal on disk)', () => {
     const writer: CompletionWriter = { fn: (l: string) => lines.push(l) } as CompletionWriter;
     await printResumeBanner(stats('no-journal', [{ user: 'q', assistant: 'sidecar answer', timestamp: 0 }]), writer);
     expect(stripAnsi(lines.join('\n'))).toContain('sidecar answer');
+  });
+
+  it('does not pass CSI/OSC sequences in user text or assistant text to the terminal', async () => {
+    // The injected sequences are the ones the spec calls out: clear-screen CSI
+    // and OSC title-set. Palette/prompt styling may legitimately emit SGR
+    // codes (e.g. \x1b[0m), so we check for the *specific* injected patterns
+    // rather than all ESC bytes.
+    const injectedUser = 'hello \x1b[2J world \x1b]0;evil\x07';
+    const injectedAssistant = 'assistant reply \x1b[2J done \x1b]0;pwned\x07';
+    await writeJournal('s-escape', [user(injectedUser), assistant(injectedAssistant)]);
+    const lines: string[] = [];
+    await replayJournal('s-escape', { fn: (l) => lines.push(l) });
+    const out = lines.join('\n');
+    // The specific injected clear-screen and OSC sequences must not appear.
+    expect(out).not.toContain('\x1b[2J');
+    expect(out).not.toContain('\x1b]0;');
+    // Human-readable content should survive (possibly reformatted by markdown renderer).
+    expect(out).toMatch(/hello/);
   });
 });
