@@ -28,6 +28,9 @@ import type { RepeatFailureGuard } from './repeat-failure-guard.js';
 import type { ToolCall, ToolResult } from '../providers/anthropic-direct/types.js';
 import type { SubagentExecutor } from './subagent-executor.js';
 import type { Batch } from './dispatch-batching.js';
+import type { TraceSink } from '../trace/index.js';
+import type { ToolHealthMonitor } from './tool-health-monitor.js';
+import { applyToolHealth } from './tool-health-monitor.js';
 
 /**
  * Indexed entry produced by `executeBatch`'s phase-1 loop. Each element pairs
@@ -82,6 +85,16 @@ export interface BatchExecDeps {
    * Optional: omit to suppress activity reporting entirely.
    */
   onActivity?: (activeIds: readonly string[]) => void;
+  /**
+   * Per-session tool-health monitor. `applyToolHealth` is called after every
+   * batch result settles (parallel and sequential paths) so batched calls are
+   * observed exactly once — the same behaviour as the single-call `execute()`
+   * path. The length-1 fast path bypasses these helpers entirely by delegating
+   * to `execute()` directly, so there is no risk of double-counting.
+   */
+  toolHealthMonitor: ToolHealthMonitor;
+  /** Witness trace writer forwarded to `applyToolHealth` → `emitToolDegraded`. */
+  traceWriter: TraceSink | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,9 +370,13 @@ export async function runConcurrentBatch(
     // batch's original call order rather than completion order.
     for (const batchIdx of wave) {
       const { call, originalIndex } = executableCalls[batchIdx]!;
-      const result = results[originalIndex];
+      let result = results[originalIndex];
       if (result !== undefined && result.failureClass !== 'abort') {
         deps.repeatFailureGuard.note(call, result);
+        // Tool-health monitor: observe and potentially append notice.
+        // applyToolHealth is a no-op for non-error results and when not degraded.
+        result = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, result);
+        results[originalIndex] = result;
       }
     }
 
@@ -410,9 +427,12 @@ export async function runSequentialBatch(
     const coreResult = await deps.executeCore(call);
     // Stamp per-call completion time before batch-wide emit so the trace
     // event carries THIS call's elapsed duration, not the batch's. See #2249.
-    const result = { ...coreResult, completedAt: Date.now() };
+    const stamped = { ...coreResult, completedAt: Date.now() };
+    deps.repeatFailureGuard.note(call, stamped);
+    // Tool-health monitor: observe and potentially append notice.
+    // applyToolHealth is a no-op for non-error results and when not degraded.
+    const result = applyToolHealth(deps.toolHealthMonitor, deps.traceWriter, call, stamped);
     results[originalIndex] = result;
-    deps.repeatFailureGuard.note(call, result);
   }
 }
 

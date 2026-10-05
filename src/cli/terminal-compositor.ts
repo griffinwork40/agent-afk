@@ -23,7 +23,7 @@ import type { AutocompleteState } from './input/autocomplete-state.js';
 import type { IHistoryRing } from './input/types.js';
 import type { ImageAttachment } from './input/attachments.js';
 import { SpinnerController } from './input/spinner.js';
-import { verbForToolName } from './input/work-derived-verb.js';
+import { waitHintText } from './input/work-derived-verb.js';
 import { CaretBlinkController, DEFAULT_CARET_BLINK_INTERVAL_MS } from './input/caret-blink.js';
 import type { StdinClaimHandle } from './input/stdin-claim.js';
 import {
@@ -381,12 +381,15 @@ export class TerminalCompositor {
   /** @internal Relaxed from `private` for the frame module (FrameHost). */
   readonly spinnerController: SpinnerController;
   /**
-   * Name of the tool currently in flight, or `undefined` when idle. Written only
-   * by {@link setActiveToolName} and read only by the spinner's `workVerb`
-   * provider, so it carries no layout or geometry consequences — the spinner row
-   * already has a variable-width verb.
+   * Pre-resolved work verb for the current in-flight tool wave, or `undefined`
+   * when idle. Written only by {@link setActiveToolName} (which receives the
+   * verb already resolved by {@link InFlightToolTracker.currentVerb}) and read
+   * only by the spinner's `workVerb` provider, so it carries no layout or
+   * geometry consequences — the spinner row already has a variable-width verb.
    */
   private activeToolName: string | undefined;
+  /** Root-session wait_for in flight; read only by the spinner's contextTip. */
+  private rootWaitActive = false;
   /**
    * Owns the input caret's blink phase + timer. Started in arm() / resumeInput(),
    * stopped in disarm() / suspendInput(), reset-to-solid on each non-paste
@@ -667,10 +670,13 @@ export class TerminalCompositor {
       captureMode: opts.captureMode ?? false,
       goblin: opts.goblinSpinner ?? false,
       onTick: () => this.repaint(),
-      // Pull-based so the spinner reads the live tool during its existing 80ms
+      // Pull-based so the spinner reads the live verb during its existing frame
       // tick — no extra timer, no extra repaint path. Returns undefined when no
       // tool is in flight, which routes the spinner back to its flavour pool.
-      workVerb: () => verbForToolName(this.activeToolName),
+      // The verb is pre-resolved by InFlightToolTracker.currentVerb() so no
+      // per-frame tool-name lookup is needed here.
+      workVerb: () => this.activeToolName,
+      contextTip: () => waitHintText({ waiting: this.rootWaitActive, queued: this.hasPendingSubmission() }),
     });
     // Caret blink defaults OFF: enablement (incl. reduced-motion) is resolved
     // by the interactive caller and passed as `caretBlink`, mirroring how the
@@ -923,9 +929,9 @@ export class TerminalCompositor {
 
   // ora's imperative cursor + linesToClear tracking collides with log-update's
   // region tracking when both run concurrently. The SpinnerController owns the
-  // spinner state + 80ms ticker; the compositor owns the frame and pulls the
-  // spinner/tip rows from it at repaint time, so the spinner row lives inside
-  // the same render frame and the race is eliminated. The TTY guard stays here
+  // spinner state + frame ticker (80ms warm, 250ms idle); the compositor owns
+  // the frame and pulls the spinner/tip rows from it at repaint time, so the
+  // spinner row lives inside the same render frame and the race is eliminated. The TTY guard stays here
   // — the controller is terminal-agnostic and assumes an interactive surface.
   setSpinner(config: { enabled: boolean; rotateVerbEveryMs?: number }): void {
     if (!this.stdout.isTTY) return;
@@ -936,7 +942,7 @@ export class TerminalCompositor {
    * Record the tool currently in flight so the spinner's verb can describe real
    * work instead of rotating random flavour words.
    *
-   * Deliberately does NOT repaint: the spinner's existing 80ms tick picks the new
+   * Deliberately does NOT repaint: the spinner's existing frame tick picks the new
    * verb up on its next frame, and the caller (StreamRenderer) is already firing
    * a repaint for the same transition. Painting here too would add a second
    * frame write per tool event for no visible gain.
@@ -945,6 +951,11 @@ export class TerminalCompositor {
    */
   setActiveToolName(toolName: string | undefined): void {
     this.activeToolName = toolName;
+  }
+
+  /** Root wait_for in-flight flag for the queue-to-stop hint. No repaint (same rationale as above). */
+  setRootWaitActive(active: boolean): void {
+    this.rootWaitActive = active;
   }
 
   // Committed-band lifecycle extracted to terminal-compositor.committed-band.ts

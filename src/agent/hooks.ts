@@ -379,6 +379,27 @@ export interface StopContext {
    * "Done (unverified)" label.
    */
   doneEvidenceClassification?: 'no-code-changes' | 'verified' | 'unverified';
+  /**
+   * True when this Stop is firing during a same-turn continuation round
+   * (issue #2714). A blocking hook that already triggered a continuation in
+   * this turn receives this flag so it can decide not to block again —
+   * mirroring Claude Code's `stop_hook_active` field in the shell stdin payload.
+   *
+   * Absent (undefined / falsy) on the first Stop dispatch for a turn.
+   * True from the second dispatch onward (i.e. once at least one continuation
+   * has already run). Shell hook stdin receives a matching `stop_hook_active`
+   * boolean (see hook-executor.ts).
+   */
+  stopHookActive?: boolean;
+  /**
+   * 0-based index of the current continuation round within this turn.
+   * 0 on the first Stop dispatch (no continuation has run yet).
+   * Increments by 1 for every continuation round that fires.
+   *
+   * Shell hook stdin receives a matching `continuation` number so CC-style
+   * hooks can count how many times they have already blocked this turn.
+   */
+  continuation?: number;
 }
 
 export interface UserPromptSubmitContext {

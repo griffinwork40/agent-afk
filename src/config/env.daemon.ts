@@ -27,7 +27,7 @@ export const DAEMON_ENV_REGISTRY = [
   },
   {
     name: 'AFK_DAEMON_BUDGET_SKIP_PCT',
-    description: 'Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window\'s utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to never skip (the gate stays enabled but always passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).',
+    description: 'Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window\'s utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the gate entirely (no usage fetch is made and every task passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).',
     type: 'number',
     required: false,
     default: '90',
@@ -73,6 +73,14 @@ export const DAEMON_ENV_REGISTRY = [
     name: 'AFK_DAEMON_SHELL_TIMEOUT_MS',
     description: 'Wall-clock timeout in milliseconds for executor:shell scheduled tasks. Defaults to 2700000 (45 minutes), matching the agent executor budget (AFK_SUBAGENT_TIMEOUT_MS). The child process is killed on timeout; the telemetry errorMessage will read "daemon shell timeout after NNNs" to distinguish a daemon-imposed kill from a process or network failure.',
     type: 'number',
+    required: false,
+    category: 'daemon',
+  },
+  {
+    name: 'AFK_TOOL_HEALTH_DISABLE',
+    description:
+      'Disable the tool-health daemon builtin entirely. Set to "1" to skip registration.',
+    type: 'boolean',
     required: false,
     category: 'daemon',
   },

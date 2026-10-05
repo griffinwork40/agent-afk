@@ -7,6 +7,9 @@ import { describe, it, expect } from 'vitest';
 import {
   compactUsageEntries,
   describeBindingWindow,
+  describeResetTime,
+  describeUsageLimit,
+  usageLimitProviderName,
   errorProviderSummary,
   formatUsageSummaryText,
   summarizeUsageRecord,
@@ -149,5 +152,31 @@ describe('summarizeUsageRecord — per-section staleness (Item 3)', () => {
     })], NOW);
     expect(entries[0]?.status).toBe('ok');
     expect(entries[0]?.fiveHourPct).toBeUndefined();
+  });
+});
+
+describe('describeUsageLimit', () => {
+  it('names Codex, the plan and the reset with a countdown', () => {
+    const resetsAt = new Date(NOW + (2 * 60 + 10) * 60_000);
+    const s = describeUsageLimit({ provider: 'codex', kind: 'subscription', plan: 'plus', resetsAt }, NOW);
+    expect(s).toMatch(/^Codex usage limit reached \(plus plan\), resets at .+ \(in ~2h10m\)$/);
+  });
+
+  it('names Claude for anthropic and omits absent fields', () => {
+    expect(describeUsageLimit({ provider: 'anthropic', kind: 'subscription' }, NOW)).toBe('Claude usage limit reached');
+  });
+
+  it('credit kind reads as an empty balance', () => {
+    expect(describeUsageLimit({ provider: 'anthropic', kind: 'credit' }, NOW)).toBe('Anthropic API credit balance is empty');
+  });
+
+  it('a reset a day or more away names the weekday; a past reset drops the countdown', () => {
+    expect(describeResetTime(new Date(NOW + 3 * 86_400_000), NOW)).toMatch(/^\w{3} .+ \(in ~3d0h\)$/);
+    expect(describeResetTime(new Date(NOW - 60_000), NOW)).not.toContain('in ~');
+  });
+
+  it('usageLimitProviderName treats an absent provider as Claude', () => {
+    expect(usageLimitProviderName(undefined)).toBe('Claude');
+    expect(usageLimitProviderName('codex')).toBe('Codex');
   });
 });

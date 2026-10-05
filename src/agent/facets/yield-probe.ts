@@ -191,9 +191,8 @@ export function patchYieldFields(
 
   // Never downgrade produced_pr=true to false (#2777).
   const effectiveProducedPr = existingYt.produced_pr === true ? true : produced_pr;
-  // Keep existing pr_url if new one is not provided and existing is non-null
-  const effectivePrUrl = pr_url !== undefined ? pr_url
-    : (existingYt.pr_url !== undefined ? existingYt.pr_url : null);
+  // Keep existing pr_url if new one is not provided.
+  const effectivePrUrl = pr_url !== undefined ? pr_url : existingYt.pr_url;
 
   const facet: SessionFacet = {
     ...existing,

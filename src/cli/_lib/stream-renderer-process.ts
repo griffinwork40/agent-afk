@@ -23,7 +23,7 @@ import type { InFlightToolTracker } from '../input/work-derived-verb.js';
 import type { OrchestratorCtx } from './stream-renderer-orchestrator.js';
 import type { LoopStage, StageSignals } from '../commands/interactive/loop-stage.js';
 import { ORCHESTRATOR_SOURCE_KEY, type SourceState, freshSourceState } from './stream-renderer-source.js';
-import { noteToolEvent } from '../input/work-derived-verb.js';
+import { noteRootWaitEvent, noteToolEvent } from '../input/work-derived-verb.js';
 import { handleOrchestratorEvent, setComposedOverlay } from './stream-renderer-orchestrator.js';
 import { handleSubagentEvent, synthesizeAgentEntry } from './stream-renderer-subagent.js';
 import { commitSubagentBlock } from './commit-block.js';
@@ -63,6 +63,8 @@ export interface ProcessCtx {
   childActivity: ChildActivityTracker;
   /** In-flight tool set backing the spinner's work-derived verb. */
   inFlightTools: InFlightToolTracker;
+  /** Root-session-only in-flight tools; drives the wait_for queue-to-stop hint. */
+  rootTools: InFlightToolTracker;
   /** Per-source rendering state map, keyed by sourceId. */
   sources: Map<string, SourceState>;
   /** Per-subagent streaming markdown renderers. */
@@ -88,6 +90,26 @@ export interface ProcessCtx {
 }
 
 /**
+ * Feed the spinner's tool trackers. Runs in `processEvent` before delegation
+ * because that is the one choke point that sees tool events from BOTH the
+ * orchestrator and every subagent, so neither handler needs its own call site.
+ * Pure bookkeeping plus setters; fires no repaint of its own.
+ *
+ * - `inFlightTools` spans every source: the work-derived verb describes the
+ *   whole session.
+ * - `rootTools` is root-only: a subagent's wait_for never yields to a queued
+ *   message, so it must not drive the queue-to-stop hint.
+ */
+function noteToolTrackers(
+  ctx: Pick<ProcessCtx, 'inFlightTools' | 'rootTools' | 'compositor'>,
+  event: OutputEvent,
+  meta: SubagentProgressMeta | undefined,
+): void {
+  noteToolEvent(event, ctx.inFlightTools, ctx.compositor);
+  if (!meta?.subagentId) noteRootWaitEvent(event, ctx.rootTools, ctx.compositor);
+}
+
+/**
  * Process one OutputEvent. `meta.subagentId` identifies the source; absent
  * meta is treated as the orchestrator source (`__main__`).
  *
@@ -95,11 +117,8 @@ export interface ProcessCtx {
  * `this.disposed` and returns early before delegating to this function.
  */
 export function processEvent(ctx: ProcessCtx, event: OutputEvent, meta?: SubagentProgressMeta): void {
-  // Feed the spinner's work-derived verb. Done here — before delegation —
-  // because `process` is the one choke point that sees tool events from BOTH
-  // the orchestrator and every subagent, so neither handler needs its own
-  // call site. Pure bookkeeping plus one setter; fires no repaint of its own.
-  noteToolEvent(event, ctx.inFlightTools, ctx.compositor);
+  noteToolTrackers(ctx, event, meta);
+  if (meta?.parentId && meta.skillIdentity) ctx.toolLane.setSkillIdentity(meta.parentId, meta.skillIdentity);
   const sourceId = meta?.subagentId ?? ORCHESTRATOR_SOURCE_KEY;
   const isOrchestrator = sourceId === ORCHESTRATOR_SOURCE_KEY;
   let source = ctx.sources.get(sourceId);

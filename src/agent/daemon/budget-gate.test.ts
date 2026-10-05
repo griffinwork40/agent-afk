@@ -103,6 +103,26 @@ describe('evaluateBudgetGate', () => {
     expect(result.skip).toBe(true);
   });
 
+  it('skips at the exact skipPct boundary (skipPct: 99 at 0.99 utilization)', async () => {
+    // 0.99 * 100 = 99 >= 99 → skip
+    const result = await evaluateBudgetGate({
+      skipPct: 99,
+      fetchUsage: async () => makeOkResult(0.99),
+    });
+    expect(result.skip).toBe(true);
+    if (result.skip) {
+      expect(result.binding.utilization).toBeCloseTo(0.99);
+    }
+  });
+
+  it('passes just below the skipPct boundary (skipPct: 99 at 0.98 utilization)', async () => {
+    const result = await evaluateBudgetGate({
+      skipPct: 99,
+      fetchUsage: async () => makeOkResult(0.98),
+    });
+    expect(result.skip).toBe(false);
+  });
+
   it('passes when skipPct is 100 (never-skip) even at 100% utilization, without calling fetchUsage', async () => {
     let called = false;
     const result = await evaluateBudgetGate({

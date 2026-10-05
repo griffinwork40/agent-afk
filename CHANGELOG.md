@@ -11,6 +11,185 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.295.6] - 2026-10-05
+
+### Added
+- record thumbs reactions as /good and /bad feedback (#2646) (90c9bb06)
+
+### Fixed
+- explicit truncation notice with line count on both Telegram and REPL (#2642) (0fb04855)
+- render the skill identity preview once per dispatch (#2915) (9bc80faa)
+
+## [5.295.5] - 2026-10-05
+
+### Changed
+- drop the spinner to 4 Hz after a 2 s warm-up and skip identical frames (#2946) (1e43fa75)
+
+## [5.295.4] - 2026-10-05
+
+### Fixed
+- recover claimed-but-uninjected peer envelopes after crash (#2924) (4c199481)
+
+## [5.295.3] - 2026-10-05
+
+### Added
+- blocking Stop hook continues the turn with a hard cap (#2740) (082b7609)
+
+### Fixed
+- introduce parentCredential to atomically pair key+sourceModel (#2928) (86ebeab6)
+- preserve body text when annotating; strip dangling label fragments (#2921) (cec37cf8)
+
+### Changed
+- rebuild parseSelfReport on parseTerminalState (#2922) (23b9194e)
+
+## [5.295.2] - 2026-10-05
+
+### Fixed
+- anchor breaking-change footer grep to line start (#2918) (598406db)
+- unref poller and exit on stdin close in test-server-dynamic fixture (#2917) (68e536a7)
+- pick most-representative verb for mixed parallel tool waves (#2920) (2a87e812)
+
+## [5.295.1] - 2026-10-04
+
+### Fixed
+- root session dirs at /tmp on darwin to fix sun_path EINVAL (#2942) (aa759578)
+- patch prod-path SSRF advisories (fast-uri, MCP SDK stack) (#2943) (92e65c4c)
+
+## [5.295.0] - 2026-10-04
+
+### Added
+- fire Stop on every top-level surface from the session layer (#2713) (ab6a3bc7)
+
+## [5.294.0] - 2026-10-04
+
+### Added
+- hint that a queued message stops a running wait_for (#2926) (58d369d6)
+
+### Fixed
+- add subagent PR detection (gap 6) and refactor detection to shared module (#2925) (634be66d)
+- surface Responses-API overload shapes as retryable errors (#2923) (aa724051)
+- tell the model its timeout limit and when a value was clamped (#2927) (d8c08dc1)
+
+### Changed
+- make the dynamic MCP fixture exit on stdin EOF (removes 10s vitest teardown stall) (#2930) (9c899d20)
+
+## [5.293.1] - 2026-10-04
+
+### Added
+- detach in-flight compose with Ctrl+B (#2746) (5b6e5510)
+
+### Fixed
+- skip WSL bash.exe in findGitBashOnWindows; derive from git.exe (#2763) (4deddfe0)
+- correct stale delivery-timing text and add sender rules (#2907) (616a9a05)
+
+### Changed
+- remove internal @deprecated items (#2748) (9d2cf2f3)
+
+## [5.293.0] - 2026-10-04
+
+### Fixed
+- SIGTERM tracked stdio servers at process exit so stubborn servers are never orphaned (#2931) (7f904dff)
+- wire DetachableToolRegistry at REPL bootstrap so Ctrl+B works on bash (#2753) (26064ba9)
+
+### Changed
+- regenerate env-registry after per-session TMPDIR change (#2929) (a57839af)
+- regenerate env-registry after #2747 merge (212 vars) (#2916) (8c1ab0ea)
+
+## [5.292.3] - 2026-10-04
+
+### Added
+- per-session and per-subagent private TMPDIR for spawned shells (#2747) (824f383d)
+
+### Fixed
+- settle post-detach deliver() on bounded timer when close never arrives (#2743) (7366139d)
+- newest explicit feedback vote wins (#2751) (00ccaa24)
+
+## [5.292.2] - 2026-10-04
+
+### Fixed
+- fix npm bin PATH check for Windows (delimiter and /bin suffix) (#2768) (d08d77c6)
+- silence Ajv unknown-format warnings for gRPC integer formats (#2767) (2696e63a)
+
+### Changed
+- bump the prod-minor-patch group across 1 directory with 7 updates (#2890) (46c634f0)
+
+## [5.292.1] - 2026-10-04
+
+### Fixed
+- emit PowerShell-compatible env-var syntax in Playwright install hint on win32 (#2765) (5a13c15e)
+- allowlist gh/curl read-only CI polls; fail fast on classifier block (#2769) (a034b5ff)
+- doctor: use resolveOpenAIAuth to cover ChatGPT/Codex OAuth (#2766) (85f9c2e8)
+
+### Changed
+- gate-liveness coverage for safety-gate wiring (#2882) (c78dcfb0)
+
+## [5.292.0] - 2026-10-04
+
+### Added
+- integrate skill previews with live dispatch activity (#2895) (0d2b4bc8)
+- improve peer-arrival UX — sanitized identity, silent auto-resume echo (#2896) (f68305fd)
+
+### Fixed
+- consistent, provider-labeled usage-limit errors for Claude and Codex (#2883) (5d3c2cb5)
+
+### Changed
+- redirect HOME in every test worker so tests can never hit the real home (#2905) (4f0d82d0)
+
+## [5.291.1] - 2026-10-04
+
+### Fixed
+- read tool arguments from Responses *.done events (#2904) (45a3a0fc)
+
+### Changed
+- bump openai from 6.38.0 to 7.25.0 (#2893) (ff5379c3)
+- bump shiki (#2898) (077d20f3)
+- bump vitest from 3.2.7 to 5.0.3 in /dashboard (#2889) (fcfe9576)
+- bump @vitejs/plugin-react in /dashboard (#2888) (524c13df)
+- bump @types/node from 26.6.2 to 26.6.3 in /website (#2885) (de8d70f5)
+- bump jsdom and @types/jsdom (#2892) (ddd4991e)
+- bump @types/node from 22.19.11 to 26.6.3 (#2897) (fdd13ba7)
+- bump the fumadocs group across 1 directory with 3 updates (#2884) (df8022ff)
+
+## [5.291.0] - 2026-10-04
+
+### Fixed
+- keep facet schema backward-compatible with v7 caches missing `pr_url` (#2863)
+
+### Changed
+- document SessionFacet v7 outcome semantics for public consumers (#2797)
+
+### Added
+- cooperative mid-turn boundary delivery for both providers (#2810) (fa17faaa)
+- tool-health builtin alerts on cross-session tool degradation (#2774 3/3) (#2785) (14c7fc9f)
+- per-session ToolHealthMonitor + tool_degraded trace event (#2774 2/3) (#2784) (fd77b367)
+- Claude Fable 5.1 support with drop_block prefix-binding observable (#2854) (b9dddee3)
+- one traced retry layer for compaction and one-shot calls (#2851) (baad7c6a)
+- opt-in usage-limit park for subagents so an account switch rescues in-flight children (#2826) (464fdac3)
+- cross-process usage awareness (per-provider buckets, afk usage, daemon budget gate) (#2853) (b90e9112)
+
+### Fixed
+- unify spinner verbs onto humanVerbForTool and prune flavour pools (#2878) (17b30f66)
+- key unparseable baseURLs distinctly in rate-limit/ledger (#2872) (#2879) (f0d82a2b)
+- add endedAt + exitReason to session sidecar on all exit paths (#2771) (aafff031)
+- prefer remote default branch over mutable local HEAD in resolveAnchorBaseRef (#2770) (e08b023c)
+- polish v7 public schema notes (#2863) (8f447b64)
+- fix gh pr create detection gaps (quoted separators, $(), flattened multi-line) (#2834) (71aceb7f)
+- resolve ghost-text credential per suggest model; route ChatGPT OAuth over Responses (#2864) (884a2da4)
+- accept completed response when transport drops after stop_reason (#2835) (68f14880)
+- advisory follow-ups from #2845 review (#2855) (#2860) (93b90799)
+- address allowlist wiring test and fork-site audit (#2848) (#2859) (a60783f9)
+- treat raised engines.node floor as major in auto-release (#2839) (c4db34e1)
+
+### Changed
+- remove @types/jest, refresh lockfile to clear prod advisories (#2825) (afd64a82)
+- bump the dashboard-minor-patch group (#2886) (6b1d592e)
+- bump chalk from 5.6.2 to 6.0.1 (#2894) (297013ea)
+- bump the dev-minor-patch group with 2 updates (#2891) (a305976e)
+- bump next from 16.3.6 to 16.3.8 in /website (#2887) (260f51f5)
+- point Dependabot at the root package and dashboard (#2824) (77cf1bd7)
+- remove stale autoRouting daemon refs (#2862) (03469197)
+- regression tests for redactSecrets at Telegram push boundary (#2849) (#2866) (e25238dd)
+
 ## [5.290.4] - 2026-10-03
 
 ### Fixed

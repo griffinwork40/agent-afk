@@ -129,8 +129,10 @@ export const CLAUDE_OPUS_ID = 'claude-opus-5-5';
  * exact model even if {@link CLAUDE_OPUS_ID} is later bumped to Opus 6+.
  */
 export const CLAUDE_OPUS_55_ID = 'claude-opus-5-5';
-/** Claude Fable 5 wire id — Anthropic's most-capable widely-released model. */
+/** Claude Fable 5 wire id — preserved for explicit raw-id back-compat. */
 export const CLAUDE_FABLE_5_ID = 'claude-fable-5';
+/** Claude Fable 5.1 wire id — current target for the stable `fable` alias. */
+export const CLAUDE_FABLE_5_1_ID = 'claude-fable-5-1';
 /**
  * Current xAI Grok flagship wire id — the concrete target for the `grok`
  * short alias. Update this constant when a new flagship ships; the alias
@@ -185,7 +187,7 @@ export const DIRECT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: CLAUDE_SONNET_ID,
   sonnet_1m: CLAUDE_SONNET_ID,
   haiku: CLAUDE_HAIKU_ID,
-  fable: CLAUDE_FABLE_5_ID,
+  fable: CLAUDE_FABLE_5_1_ID,
   // xAI Grok flagship alias — a stable short handle that tracks
   // GROK_FLAGSHIP_ID so upgrading the default Grok model is a one-line
   // change. Not a capability tier: `grok` always resolves to one pinned id.

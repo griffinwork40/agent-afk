@@ -368,6 +368,63 @@ describe('patchYieldFields', () => {
     expect(written.yield_tracking.pr_merged).toBe(true);
   });
 
+  it('patches produced_pr and pr_merged on a v7 cache missing pr_url (#2863)', () => {
+    const sessionId = 'sess-v7-no-pr-url';
+    const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-test-'));
+
+    // v7 facet built WITHOUT pr_url — simulates a cache written before #2777.
+    const facet = {
+      facet_version: 7,
+      session_id: sessionId,
+      source: 'cli',
+      model: 'claude-opus-4-5',
+      derived_at: new Date().toISOString(),
+      derived_from: 'afk-session',
+      source_session_path: `/fake/path/${sessionId}.json`,
+      source_session_mtime_ms: Date.now(),
+      subagent_persistence: 'not_persisted',
+      start_time: new Date().toISOString(),
+      end_time: new Date().toISOString(),
+      duration_minutes: 1,
+      underlying_goal: 'test goal',
+      first_prompt: 'test prompt',
+      goal_categories: {},
+      session_type: 'implementation',
+      brief_summary: 'test summary',
+      total_turns: 1,
+      user_message_count: 1,
+      assistant_message_count: 1,
+      tool_counts: {},
+      commands: [],
+      skills: [],
+      subagents: [],
+      tool_errors: 0,
+      tool_errors_total: 0,
+      tool_error_categories: {},
+      friction_counts: {},
+      friction_detail: '',
+      outcome: 'fully_achieved',
+      outcome_source: 'terminal_state',
+      primary_success: 'test',
+      world_changes: { files_written: 0, files_edited: 0, bash_commands: 0, commits: 0, mutated: false },
+      parallel_dispatch: { total_tool_calls: 0, parallel_tool_calls: 0, parallel_turns: 0, tool_turns: 0, ratio: null },
+      yield_tracking: { is_scheduled_session: false, produced_pr: null, pr_merged: null },
+      decisions: [],
+      evidence_pointers: [],
+    };
+
+    writeFileSync(join(cacheDir, `${sessionId}.json`), JSON.stringify(facet, null, 2) + '\n', 'utf8');
+
+    // Must not throw and must patch produced_pr / pr_merged even without pr_url.
+    expect(() => patchYieldFields(sessionId, true, true, cacheDir)).not.toThrow();
+
+    const written = JSON.parse(
+      require('node:fs').readFileSync(join(cacheDir, `${sessionId}.json`), 'utf8'),
+    ) as { yield_tracking: { produced_pr: unknown; pr_merged: unknown } };
+    expect(written.yield_tracking.produced_pr).toBe(true);
+    expect(written.yield_tracking.pr_merged).toBe(true);
+  });
+
   it('never downgrades produced_pr=true to false when probe finds no PR on branch (#2777)', () => {
     const sessionId = 'sess-no-downgrade';
     const cacheDir = mkdtempSync(join(tmpdir(), 'yield-probe-test-'));

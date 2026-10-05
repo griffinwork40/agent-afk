@@ -28,7 +28,7 @@ import {
 } from './schema.js';
 import { computeParallelDispatch } from './parallel-dispatch.js';
 import { parseTerminalState } from '../outcomes/terminal-state.js';
-import { BARE_PR_URL_RESULT, PR_QUERY_INPUT } from '../outcomes/artifacts.js';
+import { detectPrUrlFromEvents } from './derive.pr-detect.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -62,26 +62,6 @@ const EVIDENCE_CAP = 50;
 const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
 const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
 
-// Invariant: a GitHub PR URL that is the whole of one output line. gh pr create
-// prints the URL on its own line; a URL embedded in grep/rg output or prose is
-// on a line with other text and does not match.
-const GH_PR_URL_LINE_RE = /^[ \t]*(https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+)[ \t]*$/gm;
-
-// Invariant: `gh pr create` counts as an invocation only at the start of a
-// line or right after a shell separator (`;`, `&&`, `||`, `|`), optionally
-// after env assignments (`GH_TOKEN=x gh pr create`). This rejects the phrase
-// as an argument (rg -n "gh pr create" src). It is an approximation: a
-// separator inside a quoted string can still match.
-const GH_PR_CREATE_INVOCATION_RE =
-  /(?:^|[;|&])[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=\S*[ \t]+)*gh[ \t]+pr[ \t]+create(?:[ \t]|$)/m;
-
-/** Last GitHub PR URL that sits alone on an output line, or null. */
-function lastOwnLinePrUrl(result: string): string | null {
-  let url: string | null = null;
-  for (const m of result.matchAll(GH_PR_URL_LINE_RE)) url = m[1] ?? url;
-  return url;
-}
-
 /**
  * Map a parsed TerminalKind to a FacetOutcome.
  * Mapping: done -> fully_achieved; asking -> partially_achieved;
@@ -93,6 +73,71 @@ function terminalKindToOutcome(kind: string): FacetOutcome {
   if (kind === 'blocked') return 'not_achieved';
   if (kind === 'interrupted') return 'aborted';
   return 'unknown';
+}
+
+interface OutcomeResult {
+  outcome: FacetOutcome;
+  outcomeSource: FacetOutcomeSource;
+  primarySuccess: string;
+}
+
+/**
+ * Derive outcome, outcome_source, and primary_success from the turns array.
+ * Extracted to keep deriveSessionFacet under the 200-line function ceiling.
+ */
+function deriveOutcome(
+  turns: StoredSessionInput['turns'],
+  sessionType: string,
+): OutcomeResult {
+  const lastAssistant =
+    [...(turns ?? [])].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
+  // Determine outcome and outcome_source (#2777):
+  //   - zero turns → 'aborted' (structural)
+  //   - empty last assistant → 'partially_achieved' (structural)
+  //   - terminal-state heading found → mapped kind (terminal_state)
+  //   - non-empty assistant, no heading → 'unknown' (none)
+  let outcome: FacetOutcome;
+  let outcomeSource: FacetOutcomeSource;
+  let whatWasDone: string | undefined;
+
+  const tArr = turns ?? [];
+  if (tArr.length === 0) {
+    outcome = 'aborted';
+    outcomeSource = 'structural';
+  } else if (lastAssistant.trim().length === 0) {
+    outcome = 'partially_achieved';
+    outcomeSource = 'structural';
+  } else {
+    const parsed = parseTerminalState(lastAssistant);
+    if (parsed !== null) {
+      outcome = terminalKindToOutcome(parsed.kind);
+      outcomeSource = 'terminal_state';
+      whatWasDone = parsed.whatWasDone;
+    } else {
+      outcome = 'unknown';
+      outcomeSource = 'none';
+    }
+  }
+
+  // primary_success (#2777):
+  //   - Done + whatWasDone parsed → oneLine(whatWasDone, 160)
+  //   - Done, no whatWasDone → existing behavior (lastAssistant fallback)
+  //   - partially_achieved (empty/structural) → firstPrompt or sessionType
+  //   - not_achieved / aborted → 'none'
+  //   - unknown → existing last-assistant fallback (not 'none')
+  const firstPrompt = tArr[0]?.user ?? '';
+  let primarySuccess: string;
+  if (outcome === 'not_achieved' || outcome === 'aborted') {
+    primarySuccess = 'none';
+  } else if (outcome === 'fully_achieved') {
+    primarySuccess = whatWasDone
+      ? oneLine(whatWasDone, 160) || sessionType
+      : oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  } else {
+    primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  }
+
+  return { outcome, outcomeSource, primarySuccess };
 }
 
 /** Parse a stringified tool input to an object, swallowing malformed JSON. */
@@ -173,8 +218,6 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
   let filesEdited = 0;
   let bashCommands = 0;
   let commits = 0;
-  let detectedPrUrl: string | null = null;
-
   for (const ev of allEvents) {
     const name = ev.toolName;
     toolCounts[name] = (toolCounts[name] ?? 0) + 1;
@@ -205,24 +248,6 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
       const cmd = asString(parsed?.['command']) ?? ev.input;
       if (cmd && COMMIT_RE.test(cmd)) commits += 1;
 
-      // PR detection (#2777): when a bash event whose input looks like a real
-      // `gh pr create` invocation has a result containing a GitHub PR URL on
-      // its own line, record the URL. The LAST URL wins (in case of multiple).
-      // We never set produced_pr=false here — that is left to the async yield probe.
-      // Truncated-input path: if the stored input ends in '…', the command may
-      // have been cut before `gh pr create`; treat a bare-PR-URL result with a
-      // non-query truncated input the same as artifacts.ts does.
-      if (ev.isError !== true && ev.result) {
-        const inputStr = asString(parsed?.['command']) ?? ev.input ?? '';
-        const truncated = inputStr.trimEnd().endsWith('\u2026');
-        // The truncated path requires the WHOLE result to be a bare PR URL
-        // (gh pr create's stdout shape), same as artifacts.ts isPRCreateEvent.
-        const isTruncatedCreate =
-          truncated && BARE_PR_URL_RESULT.test(ev.result) && !PR_QUERY_INPUT.test(inputStr);
-        if (GH_PR_CREATE_INVOCATION_RE.test(inputStr) || isTruncatedCreate) {
-          detectedPrUrl = lastOwnLinePrUrl(ev.result) ?? detectedPrUrl;
-        }
-      }
     }
 
     if (FILE_TOOLS.has(name)) {
@@ -245,6 +270,10 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
       subagents.push(label ? { tool: name, label } : { tool: name });
     }
   }
+
+  // PR detection (#2777, #2795): delegate to the shared helper so subagent
+  // journals can reuse identical logic via journal-adapter.ts.
+  const detectedPrUrl = detectPrUrlFromEvents(allEvents);
 
   return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl };
 }
@@ -270,6 +299,15 @@ export function deriveSessionFacet(
     .reduce((acc, s) => acc + s.tool_errors, 0);
   const toolErrorsTotal = toolErrors + subagentToolErrorsTotal;
 
+  // Subagent PR detection (#2795 gap 6): if a subagent opened a PR that the
+  // parent did not detect, promote the subagent URL. Last non-null wins —
+  // same policy as the parent path. Parent URL takes precedence (already set).
+  const effectivePrUrl: string | null = detectedPrUrl ??
+    (options.subagentBreakdown ?? []).reduce<string | null>(
+      (acc, s) => s.detected_pr_url ?? acc,
+      null,
+    );
+
   // --- semantic (heuristic) ---
   const firstPrompt = turns[0]?.user ?? '';
   const source = session.source ?? 'cli';
@@ -284,56 +322,9 @@ export function deriveSessionFacet(
 
   const userMessageCount = turns.filter((t) => (t.user ?? '').trim().length > 0).length;
   const assistantMessageCount = turns.filter((t) => (t.assistant ?? '').trim().length > 0).length;
-
   const lastAssistant = [...turns].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
 
-  // Determine outcome and outcome_source (#2777):
-  //   - zero turns → 'aborted' (structural)
-  //   - empty last assistant → 'partially_achieved' (structural)
-  //   - terminal-state heading found → mapped kind (terminal_state)
-  //   - non-empty assistant, no heading → 'unknown' (none)
-  let outcome: FacetOutcome;
-  let outcomeSource: FacetOutcomeSource;
-  let whatWasDone: string | undefined;
-
-  if (turns.length === 0) {
-    outcome = 'aborted';
-    outcomeSource = 'structural';
-  } else if (lastAssistant.trim().length === 0) {
-    outcome = 'partially_achieved';
-    outcomeSource = 'structural';
-  } else {
-    const parsed = parseTerminalState(lastAssistant);
-    if (parsed !== null) {
-      outcome = terminalKindToOutcome(parsed.kind);
-      outcomeSource = 'terminal_state';
-      whatWasDone = parsed.whatWasDone;
-    } else {
-      outcome = 'unknown';
-      outcomeSource = 'none';
-    }
-  }
-
-  // primary_success (#2777):
-  //   - Done + whatWasDone parsed → oneLine(whatWasDone, 160)
-  //   - Done, no whatWasDone → existing behavior (lastAssistant fallback)
-  //   - partially_achieved (empty/structural) → firstPrompt or sessionType
-  //   - not_achieved / aborted → 'none'
-  //   - unknown → existing last-assistant fallback (not 'none')
-  let primarySuccess: string;
-  if (outcome === 'not_achieved' || outcome === 'aborted') {
-    primarySuccess = 'none';
-  } else if (outcome === 'fully_achieved') {
-    // Prefer the Done block's "What was done" bullet, parsed once above.
-    if (whatWasDone) {
-      primarySuccess = oneLine(whatWasDone, 160) || sessionType;
-    } else {
-      primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
-    }
-  } else {
-    // partially_achieved or unknown — use existing fallback
-    primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
-  }
+  const { outcome, outcomeSource, primarySuccess } = deriveOutcome(turns, sessionType);
 
   const frictionDetail =
     toolErrors > 0
@@ -362,13 +353,15 @@ export function deriveSessionFacet(
   // Yield tracking: is_scheduled_session is mechanical (from source); produced_pr
   // and pr_merged require async git/gh probes run by the session-end hook after
   // teardown, so they start as null here and are written back by that hook.
-  // Exception: when derive detects a `gh pr create` URL in bash output (#2777),
-  // set produced_pr=true and record the URL immediately. Never set false here.
+  // Exception: when derive detects a `gh pr create` URL in bash output (#2777,
+  // #2795), set produced_pr=true and record the URL immediately. effectivePrUrl
+  // covers both the parent session and any subagent-opened PR (#2795 gap 6).
+  // Never set false here.
   const yieldTracking: YieldTracking = {
     is_scheduled_session: source === 'daemon',
-    produced_pr: detectedPrUrl !== null ? true : null,
+    produced_pr: effectivePrUrl !== null ? true : null,
     pr_merged: null,
-    ...(detectedPrUrl !== null ? { pr_url: detectedPrUrl } : { pr_url: null }),
+    ...(effectivePrUrl !== null ? { pr_url: effectivePrUrl } : { pr_url: null }),
   };
 
   const facet: SessionFacet = {
