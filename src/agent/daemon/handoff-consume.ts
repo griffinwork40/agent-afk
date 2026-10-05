@@ -134,7 +134,8 @@ async function listAnsweredHandoffs(
 
     // Phase 1: read the raw bytes. An I/O error here is likely transient
     // (e.g. ENOENT from a concurrent rename/delete, EPERM from a FS hiccup).
-    // Silently skip — it may succeed on the next sweep.
+    // Log and skip: it may succeed on the next sweep, and a persistent failure
+    // stays visible on stderr instead of being skipped silently forever.
     let raw: string;
     try {
       raw = await readFile(fullPath, 'utf-8');

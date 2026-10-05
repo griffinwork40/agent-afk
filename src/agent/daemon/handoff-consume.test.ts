@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -396,24 +396,17 @@ describe('processAnsweredHandoffs', () => {
   // Phase 1 readFile failure logging
   // -------------------------------------------------------------------------
 
-  it('logs to stderr when readFile fails with EACCES instead of skipping silently', async () => {
+  it('logs to stderr when readFile fails instead of skipping silently', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    // Write a valid answered record so it appears in readdir.
-    const record = makeAnsweredRecord({ taskId: 'q-eacces-lll' });
-    await writeHandoff(record, handoffsDir);
-
-    // Make the file unreadable.
-    const filePath = join(handoffsDir, 'q-eacces-lll.json');
-    const { chmodSync } = await import('node:fs');
-    chmodSync(filePath, 0o000);
+    // Invariant: the read failure must be portable. chmod 0o000 does not make
+    // a file unreadable on Windows, so instead a DIRECTORY named like a record
+    // is listed by readdir and makes readFile throw EISDIR on every platform.
+    mkdirSync(join(handoffsDir, 'q-unreadable-lll.json'), { recursive: true });
 
     const result = await processAnsweredHandoffs(queueDir, handoffsDir);
 
-    // Restore permissions for cleanup.
-    chmodSync(filePath, 0o644);
-
-    // The unreadable file must not be requeued.
+    // The unreadable entry must not be requeued.
     expect(result.requeued).toBe(0);
 
     // A log message must have been emitted.
