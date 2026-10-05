@@ -1189,11 +1189,9 @@ fi
         pluginOptions: { provider: 'openai' },
         pluginKey: 'some-plugin',
       });
-      // CLAUDE_PLUGIN_OPTION_* not injected without pluginRoot (applyPluginOptionEnv is gated)
-      // CLAUDE_PLUGIN_DATA IS injected (pluginKey is sufficient for data dir)
-      // So this tests a mixed expectation: pluginKey alone still exports CLAUDE_PLUGIN_DATA
-      // The hook above checks for absence of CLAUDE_PLUGIN_OPTION_PROVIDER (correct).
-      // But CLAUDE_PLUGIN_DATA will be set — rewrite to just verify PROVIDER is absent.
+      // CLAUDE_PLUGIN_OPTION_* not injected without pluginRoot (applyPluginOptionEnv is gated).
+      // CLAUDE_PLUGIN_DATA IS still injected (pluginKey alone is sufficient for data dir).
+      // The shell guard above only checks PROVIDER is absent — that is the correct assertion.
       expect(result.decision).toBeTruthy();
     });
   });

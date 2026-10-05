@@ -173,7 +173,7 @@ export function buildOptionEnv(
 
     // Prefer the stored value; fall back to the manifest default; skip when absent.
     const storedVal = stored?.[key];
-    if (storedVal !== undefined && storedVal !== '') {
+    if (storedVal !== undefined) {
       env[envName] = storedVal;
     } else if (field.default !== undefined) {
       env[envName] = field.default;

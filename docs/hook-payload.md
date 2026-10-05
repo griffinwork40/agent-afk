@@ -184,8 +184,6 @@ follow-up tracking item.
 
 ---
 
----
-
 ## Plugin-hook environment variables  (#2373)
 
 Hook subprocesses for **user-scope installed plugins** receive three additional

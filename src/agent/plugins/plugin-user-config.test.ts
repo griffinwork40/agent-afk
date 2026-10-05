@@ -168,6 +168,12 @@ describe('buildOptionEnv', () => {
     const env = buildOptionEnv(schema, { 'api-key': 'val' });
     expect(env['CLAUDE_PLUGIN_OPTION_API_KEY']).toBe('val');
   });
+
+  it('exports stored empty string instead of falling back to default', () => {
+    const schema = { provider: { default: 'anthropic' } };
+    const env = buildOptionEnv(schema, { provider: '' });
+    expect(env['CLAUDE_PLUGIN_OPTION_PROVIDER']).toBe('');
+  });
 });
 
 // ---------------------------------------------------------------------------
