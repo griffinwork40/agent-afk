@@ -16,7 +16,7 @@ import type { ModelProvider } from './provider.js';
 import type { SubagentManager } from './subagent.js';
 import type { JournalParent } from './subagent/fork-types.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
-import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
+import { attachSubagentContext, annotateIfIncomplete, isIncompleteStopReason } from './subagent/result.js';
 import { TimeoutError, errorMessage } from '../utils/errors.js';
 import { resolveSoftDeadlineMs } from './providers/shared/soft-deadline.js';
 import { resolveSubagentTimeoutMs } from './subagent/constants.js';
@@ -261,6 +261,36 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
   }
 }
 
+type PartialNode = DAGRunResult['partial'][number];
+
+/**
+ * Record a node that SUCCEEDED but wound down early (soft deadline, budget
+ * cap) so compose can surface it to the parent and the facet (#2970).
+ * Contract: does not change what `isError` means and does not withhold the
+ * node's output from downstream DAG nodes. Hard `node_timeout_ms` failures
+ * never reach here; they throw into `failed`.
+ */
+function recordIfPartial(sink: PartialNode[], id: string, stopReason: string | undefined): void {
+  if (isIncompleteStopReason(stopReason)) sink.push({ id, stopReason: stopReason as string });
+}
+
+/**
+ * Soft deadline shared by every node in one DAG. Computed once per DAG.
+ *
+ * Contract: derive from the SMALLER of the two hard budgets that can fire.
+ * A DAG node is bounded twice: by runDAG's per-node timer AND by the fork's
+ * own `withTimeout` (this layer never sets `config.timeoutMs`, so that is
+ * `resolveSubagentTimeoutMs()`). Deriving from the node budget alone would,
+ * whenever it is the larger of the two, place the soft deadline AFTER the
+ * budget that actually fires, arming a wind-down that can never run. `0`
+ * means unbounded on either side and so never binds; when the result is `0`,
+ * `forkSubagent` still derives a deadline from its own budget.
+ */
+function resolveDagSoftDeadlineMs(nodeTimeoutMs: number | undefined): number {
+  const nodeBudgets = [nodeTimeoutMs ?? 0, resolveSubagentTimeoutMs()].filter((ms) => ms > 0);
+  return nodeBudgets.length > 0 ? resolveSoftDeadlineMs(Math.min(...nodeBudgets)) : 0;
+}
+
 /**
  * Run a subagent DAG by topologically ordering nodes and executing each in
  * dependency order.
@@ -281,20 +311,11 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
   // bodies increment it non-atomically.
   let dagIsolationCounter = 0;
 
-  // Soft deadline for every node in this DAG (see the arming comment in the
-  // fork config below). Computed once — it is the same for every node.
-  //
-  // Contract: derive from the SMALLER of the two hard budgets that can fire.
-  // A DAG node is bounded twice — by runDAG's per-node timer AND by the fork's
-  // own `withTimeout` (this layer never sets `config.timeoutMs`, so that is
-  // `resolveSubagentTimeoutMs()`). Deriving from the node budget alone would,
-  // whenever it is the larger of the two, place the soft deadline AFTER the
-  // budget that actually fires — arming a wind-down that can never run. `0`
-  // means unbounded on either side and so never binds; when the result is `0`,
-  // `forkSubagent` still derives a deadline from its own budget.
-  const nodeBudgets = [nodeTimeoutMs ?? 0, resolveSubagentTimeoutMs()].filter((ms) => ms > 0);
-  const softDeadlineForNode =
-    nodeBudgets.length > 0 ? resolveSoftDeadlineMs(Math.min(...nodeBudgets)) : 0;
+  // Soft deadline for every node (see resolveDagSoftDeadlineMs).
+  const softDeadlineForNode = resolveDagSoftDeadlineMs(nodeTimeoutMs);
+
+  // Side-channel: nodes that succeeded but wound down early (#2970).
+  const partialNodes: PartialNode[] = [];
 
   const dagNodes: DAGNode[] = nodes.map((originalSpec) => ({
     id: originalSpec.id,
@@ -490,6 +511,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
             subagentId: result.id,
           });
         }
+        recordIfPartial(partialNodes, spec.id, result.stopReason);
         // result.output is a structured parse (complete by construction); only
         // the raw-text fallback can be an incomplete partial, so annotate just
         // that branch. No-op marker for clean completions.
@@ -518,5 +540,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
     },
   }));
 
-  return runDAG({ nodes: dagNodes, edges }, signal, { failFast, nodeTimeoutMs });
+  // runDAG's own `partial` is always [] (it has no notion of partial output).
+  const dagResult = await runDAG({ nodes: dagNodes, edges }, signal, { failFast, nodeTimeoutMs });
+  return { ...dagResult, partial: partialNodes };
 }

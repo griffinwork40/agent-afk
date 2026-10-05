@@ -20,7 +20,7 @@ import {
 } from '../../paths.js';
 import { hydrateBlock, hydrateMessage } from './hydrate.js';
 import { readJournalFile, type JournalFileRead } from './records.js';
-import type { JournalBlock, JournalMessage, JournalRecord } from './types.js';
+import type { JournalBlock, JournalMessage, JournalRecord, ToolResultLookup } from './types.js';
 import { isMessageJournalDisabled } from './noop.js';
 
 export interface JournalLocator {
@@ -159,7 +159,7 @@ function scanForToolResult(
 export function findToolResult(
   sessionId: string,
   toolUseId: string,
-): { block: Extract<JournalBlock, { type: 'tool_result' }>; subagentId?: string } | null {
+): ToolResultLookup | null {
   if (typeof toolUseId !== 'string' || toolUseId.length === 0) return null;
   let best: { block: ToolResultBlock; ts: number; subagentId?: string } | null = null;
   const locators: JournalLocator[] = [{}, ...listSubagentJournals(sessionId).map((subagentId) => ({ subagentId }))];

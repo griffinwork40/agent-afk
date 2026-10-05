@@ -37,6 +37,7 @@
  */
 
 import type { DetachableToolRegistry, DetachToken, DetachedToolResult } from './detach-registry.js';
+import { partialNodeFlag } from './compose-executor.partial.js';
 
 /**
  * Maximum nodes to list in the detach label before collapsing to "N nodes".
@@ -221,7 +222,14 @@ export async function raceComposeDetach(
         const merged = attachmentErrors.length > 0
           ? { ...r, failed: [...attachmentErrors, ...r.failed] } : r;
         const failed = merged.failed.length > 0;
-        token.deliver(buildComposeDelivery(toolUseId, label, p.formatResult(merged), failed, startedAt));
+        // Carry the soft-deadline partial flag (#2970) so the detached
+        // delivery matches the non-detached tool result. Note: no production
+        // subscriber consumes the registry's 'settled' event yet, so this flag
+        // reaches the sidecar only once detached delivery is wired.
+        token.deliver({
+          ...buildComposeDelivery(toolUseId, label, p.formatResult(merged), failed, startedAt),
+          ...partialNodeFlag(merged.partial),
+        });
       })
       .catch((err: unknown) => {
         const msg = errorMessage(err);

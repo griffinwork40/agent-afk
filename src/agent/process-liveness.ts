@@ -11,10 +11,10 @@
  * a record left behind by a process that died without running its cleanup
  * handlers (SIGKILL, OOM kill, power loss) looks live forever.
  *
- * NOTE: `src/agent/worktree-sweep.ts` carries its own private copy of this
- * idiom. It is deliberately left in place for now — that file has unmerged work
- * in flight on another branch, and consolidating it here would create a
- * conflict for no functional gain. Fold it in once that lands.
+ * NOTE: `src/agent/worktree/worktree-sweep.classify.ts` previously carried its
+ * own private copy of this idiom. That copy has been removed and replaced with
+ * a re-export from this module (`export { isProcessAlive } from
+ * '../../process-liveness.js'`). Consolidation is complete.
  *
  * @module agent/process-liveness
  */
