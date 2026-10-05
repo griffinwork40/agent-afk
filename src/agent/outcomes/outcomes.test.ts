@@ -283,6 +283,33 @@ describe('parseSelfReport / parseTerminalState parity', () => {
   }
 });
 
+// parseSelfReport / parseTerminalState intentional divergence
+//
+// parseSelfReport has a legacy inline-bold fallback (added in #2799) for the
+// backfill path: historical transcripts used inline bold markers like
+// "Task complete. **Done**" rather than a heading-only line. parseTerminalState
+// is conservative and does NOT match those forms — the keyword is not on its
+// own short line. Document the divergence explicitly so a future refactor does
+// not accidentally collapse the two to the same behaviour.
+// ---------------------------------------------------------------------------
+
+describe('parseSelfReport / parseTerminalState intentional divergence', () => {
+  it('Task complete. **Done** -> parseSelfReport done (legacy fallback), parseTerminalState null', () => {
+    const text = 'Task complete. **Done**';
+    // parseSelfReport recognises the inline bold marker via the legacy fallback.
+    expect(parseSelfReport(text)).toBe('done');
+    // parseTerminalState is conservative: the keyword is not on its own heading
+    // line, so it returns null.
+    expect(parseTerminalState(text)).toBeNull();
+  });
+
+  it('**Blocked** — needs credentials. -> parseSelfReport blocked (legacy fallback), parseTerminalState null', () => {
+    const text = '**Blocked** — needs credentials.';
+    expect(parseSelfReport(text)).toBe('blocked');
+    expect(parseTerminalState(text)).toBeNull();
+  });
+});
+
 describe('lfErrorTail', () => {
   const now = '2026-01-01T00:00:00.000Z';
 

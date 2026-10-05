@@ -123,7 +123,7 @@ export function parseSelfReport(assistantText: string): SelfReport {
   // own heading line.
   const m = LEGACY_SELF_REPORT_PATTERN.exec(assistantText);
   if (m) {
-    const kw = m[1]?.toLowerCase();
+    const kw = m[1]!.toLowerCase();
     if (kw === 'done') return 'done';
     if (kw === 'blocked') return 'blocked';
     if (kw === 'asking') return 'asking';
