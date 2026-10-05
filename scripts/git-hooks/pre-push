@@ -26,7 +26,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 # Fail-open: this package/branch does not define check:audits.
-if ! node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));process.exit(p.scripts&&p.scripts['check:audits']?0:1)" >/dev/null 2>&1; then
+if ! node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));process.exit(p.scripts&&p.scripts['check:audits']?0:1)" "$toplevel/package.json" >/dev/null 2>&1; then
   echo "pre-push: package.json lacks scripts.check:audits — skipping audit gates" >&2
   exit 0
 fi
@@ -39,15 +39,25 @@ fi
 
 # If every pushed ref is a deletion (local sha is all zeros), skip.
 # Git pre-push stdin fields are: <local-ref> <local-sha> <remote-ref> <remote-sha>.
+# Strip \r before the read loop so the deletion-skip check works on CRLF git
+# clients under POSIX dash/ash (dash's `read -r` does not strip \r before
+# field splitting). Use a temporary variable + printf to avoid the empty-stdin
+# ambiguity that a plain heredoc $var expansion would introduce.
+push_stdin=$(cat | tr -d '\r')
 all_deletions=1
 found_any=0
-while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
-  found_any=1
-  case "$local_sha" in
-    0000000000000000000000000000000000000000) ;;
-    *) all_deletions=0 ;;
-  esac
-done
+if [ -n "$push_stdin" ]; then
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_sha" ] && continue
+    found_any=1
+    case "$local_sha" in
+      0000000000000000000000000000000000000000) ;;
+      *) all_deletions=0 ;;
+    esac
+  done <<PUSH_STDIN_END
+$push_stdin
+PUSH_STDIN_END
+fi
 
 # No refs pushed (empty stdin) or all deletions — nothing to check.
 if [ "$found_any" -eq 0 ] || [ "$all_deletions" -eq 1 ]; then
