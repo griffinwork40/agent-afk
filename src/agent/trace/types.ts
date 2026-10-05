@@ -692,6 +692,12 @@ export interface PeerMessagePayload {
   bytes: number;
   /** Why the message was refused or dropped. Absent for other actions. */
   reason?: string;
+  /**
+   * Sanitized inbox filename. Present only for `action: 'held'` with
+   * `reason: 'corrupt'` — allows repeated corrupt-quarantine events to be
+   * correlated by filename in the trace even when no parseable envelope exists.
+   */
+  file?: string;
 }
 
 export interface BrowserEventPayload {

@@ -359,6 +359,40 @@ describe('hold/listHeld/releaseHeld/dropHeld', () => {
     expect(result).toBe(false);
   });
 
+  it('holdPending rejects traversal filenames', async () => {
+    const { holdPending } = await getInboxStore();
+    await expect(holdPending(TARGET_ID, '../etc')).rejects.toThrow(/Invalid file/);
+    await expect(holdPending(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+    await expect(holdPending(TARGET_ID, 'a\\b')).rejects.toThrow(/Invalid file/);
+    await expect(holdPending(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('peekPending rejects traversal filenames', async () => {
+    const { peekPending } = await getInboxStore();
+    await expect(peekPending(TARGET_ID, '../etc')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, 'a\\b')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('dropHeld rejects traversal filenames', async () => {
+    const { dropHeld } = await getInboxStore();
+    await expect(dropHeld(TARGET_ID, '../etc')).rejects.toThrow(/Invalid file/);
+    await expect(dropHeld(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+    await expect(dropHeld(TARGET_ID, 'a\\b')).rejects.toThrow(/Invalid file/);
+    await expect(dropHeld(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('holdPending/peekPending/dropHeld accept plain bare filenames', async () => {
+    const { holdPending, peekPending, dropHeld } = await getInboxStore();
+    // peekPending on a nonexistent plain name returns 'vanished' (not a throw).
+    await expect(peekPending(TARGET_ID, 'plain-name.json')).resolves.toBe('vanished');
+    // holdPending on a missing file returns false (not a throw).
+    await expect(holdPending(TARGET_ID, 'plain-name.json')).resolves.toBe(false);
+    // dropHeld on a missing file returns false (not a throw).
+    await expect(dropHeld(TARGET_ID, 'plain-name.json')).resolves.toBe(false);
+  });
+
   it('listHeld returns { file, corrupt: true } for an unparseable held file', async () => {
     const { listHeld } = await getInboxStore();
     const heldDir = path.join(tmpDir, 'inbox', TARGET_ID, 'held');

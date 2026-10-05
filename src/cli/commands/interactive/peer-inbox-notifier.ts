@@ -387,6 +387,7 @@ export class PeerInboxNotifier {
       peer: 'unknown',
       bytes: 0,
       reason: 'corrupt',
+      file: safeFile,
     });
   }
 
