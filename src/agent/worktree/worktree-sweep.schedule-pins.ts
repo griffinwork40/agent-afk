@@ -18,6 +18,7 @@
 
 import { promises as fs } from 'node:fs';
 import { getSchedulesPath } from '../../paths.js';
+import { expandCwd } from '../daemon/cwd-validator.js';
 import type { ScheduledTaskConfig } from '../daemon/schedule-store.js';
 import { isPathWithin } from './worktree-sweep.classify.js';
 
@@ -106,10 +107,17 @@ export async function resolveSchedulePins(
   // is on the containment path.  `isPathWithin(taskCwd, worktreePath)` is true
   // when taskCwd is the worktreePath itself or is inside it -- meaning the task
   // would be running from within that worktree.
+  //
+  // Invariant: task.cwd may be stored in `~/...` form by hand-edited schedules.
+  // realpathSafe (used inside isPathWithin) calls realpathSync, which does not
+  // expand `~`, so a tilde path would never match an absolute worktree path.
+  // expandCwd mirrors the same expansion toScheduledTask applies at runtime, so
+  // the sweep and the scheduler agree on which worktrees are pinned.
   for (const task of tasks) {
     if (typeof task.cwd !== 'string' || task.cwd.length === 0) continue;
+    const resolvedCwd = expandCwd(task.cwd);
     for (const wt of worktreePaths) {
-      if (!pinnedByTask.has(wt) && isPathWithin(task.cwd, wt)) {
+      if (!pinnedByTask.has(wt) && isPathWithin(resolvedCwd, wt)) {
         pinnedByTask.set(wt, task.id);
       }
     }

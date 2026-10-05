@@ -22,8 +22,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { resolveSchedulePins } from './worktree-sweep.schedule-pins.js';
 import { runSweep } from './worktree-sweep.js';
 import type { ExecFileFn } from './worktree-sweep.js';
@@ -207,6 +208,24 @@ describe('resolveSchedulePins', () => {
     const result = await resolveSchedulePins([worktreePath], schedulesPath);
     // First match wins; second is still covered because the worktree is already pinned.
     expect(result.pinnedByTask.get(worktreePath)).toBe('first-task');
+  });
+
+  it('pins a worktree when the schedule cwd uses a ~/... tilde form', async () => {
+    // Regression: realpathSync does not expand `~`, so a hand-edited schedule
+    // with a tilde cwd would silently fail to pin its worktree before this fix.
+    // We construct a worktree path relative to $HOME so the tilde form is valid.
+    const home = homedir();
+    // tmpDir is under /tmp, which may not be inside $HOME on all platforms, so
+    // we express the worktree as a relative path from HOME and build both forms.
+    const relFromHome = relative(home, tmpDir);
+    const worktreePath = join(tmpDir, '.afk-worktrees', 'tilde-wt');
+    const tildeTaskCwd = `~/${relFromHome}/.afk-worktrees/tilde-wt/workspace`;
+
+    writeSchedules(schedulesPath, [{ id: 'tilde-task', cwd: tildeTaskCwd, enabled: true }]);
+
+    const result = await resolveSchedulePins([worktreePath], schedulesPath);
+    expect(result.pinnedByTask.get(worktreePath)).toBe('tilde-task');
+    expect(result.notes).toHaveLength(0);
   });
 });
 
