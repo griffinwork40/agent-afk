@@ -1,12 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 import {
   groupTurns,
   humanText,
   loadReplayTurns,
   replayJournal,
+  renderReplayTurns,
   splitRounds,
   turnEvents,
+  type ReplayTurn,
 } from './turn-record-renderer.replay.journal.js';
 import { printResumeBanner, type CompletionWriter } from './shared.js';
 import { createMessageJournal, JournalSync, type JournalAdapter, type JournalMessage } from '../../../agent/journal/index.js';
@@ -116,6 +118,18 @@ describe('groupTurns / splitRounds / turnEvents', () => {
     const contentChunks = events.filter((e) => e.type === 'chunk' && e.chunk.type === 'content');
     expect(contentChunks).toHaveLength(0);
   });
+
+  it('fix#1: escape-only block after a text block does not produce a blank-paragraph chunk', () => {
+    // lastWasText=true (from 'real text') then an escape-only block: the old
+    // code prepended '\\n\\n' before stripping, so safeText === '\\n\\n' passed
+    // the length>0 guard and emitted a content chunk of just two newlines.
+    const events = turnEvents([assistant('real text'), assistant('\x1b[2J')]);
+    const contentChunks = events.filter((e) => e.type === 'chunk' && e.chunk.type === 'content');
+    // Only the 'real text' chunk — no trailing blank-paragraph chunk.
+    expect(contentChunks).toHaveLength(1);
+    const only = contentChunks[0]!;
+    expect(only.type === 'chunk' && only.chunk.type === 'content' ? only.chunk.content : '').toBe('real text');
+  });
 });
 
 describe('replayJournal / printResumeBanner (real journal on disk)', () => {
@@ -218,5 +232,70 @@ describe('replayJournal / printResumeBanner (real journal on disk)', () => {
     expect(out).not.toContain('\x1b]0;');
     // Human-readable content should survive (possibly reformatted by markdown renderer).
     expect(out).toMatch(/hello/);
+  });
+});
+
+describe('renderReplayTurns (unit — no disk I/O)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('fix#2: returns the count actually rendered when a mid-render failure stops early', async () => {
+    // Build three turns; the second one will throw during renderTurn.
+    const makeTurn = (u: string): ReplayTurn => ({ user: u, body: [] });
+    const turns: ReplayTurn[] = [makeTurn('one'), makeTurn('THROW'), makeTurn('three')];
+    const lines: string[] = [];
+    const sink = { fn: (l: string) => lines.push(l) };
+
+    // Patch renderRound (called inside renderTurn for each round) to throw on
+    // the second turn. Because the body is empty, renderRound is never called
+    // and we instead throw directly in renderTurn via the WriterSink when the
+    // user echo fires. We can simulate this by making the sink throw on the
+    // second call (which corresponds to the second user echo).
+    let callCount = 0;
+    const throwingSink = {
+      fn: (l: string) => {
+        callCount++;
+        if (callCount === 2) throw new Error('simulated mid-render failure');
+        lines.push(l);
+      },
+    };
+
+    const rendered = await renderReplayTurns(turns, throwingSink);
+    // Only 1 turn completed before the throw; the catch path fires for turn 2.
+    expect(rendered).toBe(1);
+    // The incomplete-replay notice should have been emitted.
+    expect(stripAnsi(lines.join('\n'))).toContain('history replay incomplete');
+  });
+
+  it('fix#3: formatSubmittedEcho always uses isTTY:false regardless of process.stdout.isTTY', async () => {
+    // Simulate a TTY stdout — the old code read process.stdout.isTTY live,
+    // which would produce right-aligned output inconsistent with forceNonTty.
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    try {
+      const turn: ReplayTurn = { user: 'hello from user', body: [] };
+      const lines: string[] = [];
+      await renderReplayTurns([turn], { fn: (l: string) => lines.push(l) });
+      const out = stripAnsi(lines.join('\n'));
+      // Non-TTY echo: promptText + buffer verbatim, no right-alignment padding.
+      // The line must contain the user text without any leading space padding
+      // that the TTY right-align path would produce.
+      expect(out).toContain('hello from user');
+      // TTY path would right-pad with spaces; non-TTY path produces no leading spaces.
+      // The non-TTY echo is "promptText + buffer" with no right-alignment spaces.
+      const echoLine = lines.find((l) => stripAnsi(l).includes('hello from user')) ?? '';
+      // If the TTY path had fired, the line would start with many spaces (right-align
+      // pad). Non-TTY produces "▶ hello from user" style or "prompt> hello from user" —
+      // either way the content appears immediately after the prompt, not after a
+      // long whitespace run. We assert fewer than 10 leading spaces.
+      const leadingSpaces = (stripAnsi(echoLine).match(/^(\s*)/) ?? ['', ''])[1]!.length;
+      expect(leadingSpaces).toBeLessThan(10);
+    } finally {
+      if (originalIsTTY !== undefined) {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY);
+      } else {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        delete (process.stdout as any).isTTY;
+      }
+    }
   });
 });

@@ -156,11 +156,13 @@ export function turnEvents(body: readonly JournalMessage[]): OutputEvent[] {
         // the way successive model rounds read live.
         // Security boundary: strip terminal escape sequences from assistant text
         // before it reaches the terminal, matching the sidecar replay's behaviour.
-        const safeText = stripEscapeSequences(lastWasText ? `\n\n${b.text}` : b.text);
-        if (safeText.length > 0) {
-          events.push({ type: 'chunk', chunk: { type: 'content', content: safeText } });
-          lastWasText = true;
-        }
+        // Fix: strip BEFORE prepending the separator so an escape-only block
+        // that follows a text block does not yield a content chunk of just `\n\n`.
+        const stripped = stripEscapeSequences(b.text);
+        if (stripped.length === 0) continue;
+        const safeText = lastWasText ? `\n\n${stripped}` : stripped;
+        events.push({ type: 'chunk', chunk: { type: 'content', content: safeText } });
+        lastWasText = true;
       } else if (m.role === 'assistant' && b.type === 'tool_use') {
         const toolInput = typeof b.input === 'string' ? b.input : JSON.stringify(b.input ?? {});
         events.push({ type: 'chunk', chunk: { type: 'tool_use_detail', toolUseId: b.id, toolName: b.name, toolInput } });
@@ -208,7 +210,9 @@ async function renderTurn(turn: ReplayTurn, sink: WriterSink): Promise<void> {
   } else if (turn.user) {
     // Security boundary: strip escape sequences from the human text before
     // passing it to formatSubmittedEcho, which writes it to the terminal.
-    sink.fn(formatSubmittedEcho({ buffer: stripEscapeSequences(turn.user), promptText: buildPrompt('default'), isTTY: Boolean(process.stdout.isTTY) }));
+    // Fix: derive isTTY from the same forceNonTty:true setting that renderRound
+    // uses, so piped/redirected stdout never sees an inconsistent prompt style.
+    sink.fn(formatSubmittedEcho({ buffer: stripEscapeSequences(turn.user), promptText: buildPrompt('default'), isTTY: false }));
   }
   // Invariant: one renderer per model ROUND, each disposed before the next
   // starts. dispose() is the flush gate that commits pending markdown, and on
@@ -240,12 +244,18 @@ export async function renderReplayTurns(
   const omitted = Math.max(0, turns.length - maxTurns);
   if (omitted > 0) sink.fn(palette.dim(`    ... ${omitted} earlier turn${omitted === 1 ? '' : 's'} omitted`));
   const slice = omitted > 0 ? turns.slice(omitted) : turns;
+  // Fix: track the count actually rendered so a mid-render failure returns
+  // the correct number instead of slice.length.
+  let rendered = 0;
   try {
-    for (const turn of slice) await renderTurn(turn, sink);
+    for (const turn of slice) {
+      await renderTurn(turn, sink);
+      rendered++;
+    }
   } catch {
     sink.fn(palette.dim('    (history replay incomplete)'));
   }
-  return slice.length;
+  return rendered;
 }
 
 /**
