@@ -439,6 +439,10 @@ export class SessionToolDispatcher implements ToolDispatcher {
   private get handlerContext(): ToolHandlerContext {
     return {
       resolveBase: this.resolveBase,
+      // @deprecated alias — kept for back-compat with custom tools that read
+      // context.cwd (#2935). Internal code must NOT start reading this field;
+      // use resolveBase directly. Will be removed in the next semver-major.
+      ...(this.resolveBase !== undefined ? { cwd: this.resolveBase } : {}),
       readRoots: this._readRoots.slice(),
       writeRoots: this._writeRoots.slice(),
       ...(this._allowAll ? { allowAll: true } : {}),

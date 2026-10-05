@@ -206,10 +206,11 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     expect(decision.reason).toContain('Sub-agent path access denied');
   });
 
-  it('context.grantManager takes precedence over opts.getGrantManager (the ref)', async () => {
-    // Ref grants the sibling; the injected (child) manager does NOT. If the
-    // injected manager wins, the fork write is restricted → auto-deny.
-    const refMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
+  it('injected context.grantManager confines forked-child writes (restrictive injected manager denies out-of-root path)', async () => {
+    // The injected (child) manager grants only BASE. A write to the sibling
+    // path is outside those grants → restricted → auto-deny, regardless of
+    // what any parent-level ref might permit. (No stale opts.getGrantManager
+    // fallback exists; the hook reads context.grantManager directly.)
     const injectedMgr = makeMockGrantManager({ writeRoots: [BASE] });
     const { preToolUse } = createPathApprovalHook({
       getCwd: () => BASE,

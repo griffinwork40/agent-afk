@@ -11,6 +11,9 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+### Fixed
+- restore `context.cwd` as a `@deprecated` runtime alias of `context.resolveBase` for custom tools (#2935): the `tool()` API reaches the public npm surface; removing `cwd` in #2748 without a shim was a silent breaking change for JS consumers. Migrate to `context.resolveBase`; the alias will be removed in the next semver-major.
+
 ## [5.295.1] - 2026-10-04
 
 ### Fixed
