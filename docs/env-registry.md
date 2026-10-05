@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**214 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**213 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -223,7 +223,6 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `FORCE_COLOR` | string |  |  | `1` | Standard Node convention. Force-enable ANSI color output even when stdout is not a TTY. |
 | `HOME` | string |  |  |  | Standard Unix home directory. Used as the fallback when AFK_HOME is unset. |
 | `LOCALAPPDATA` | string |  |  |  | Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.). |
-| `MSYSTEM` | string |  |  |  | Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts. |
 | `NO_COLOR` | string |  |  | `1` | Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output. |
 | `NO_UPDATE_NOTIFIER` | boolean |  |  |  | Disable the update-available notifier on CLI startup. Standard convention shared with many Node CLIs. |
 | `NODE_ENV` | string |  |  | `production` | Standard Node environment marker. test \| development \| production. Used by routing-telemetry.ts to suppress test-time writes. |
@@ -231,7 +230,6 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `PATH` | string |  |  |  | System PATH. Read for executable resolution (git, gh, etc.) in tool handlers. |
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
-| `SystemRoot` | string |  |  |  | Windows system root directory (typically C:\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
 | `TMUX_PANE` | string |  |  | `%0` | tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label. |
 | `USER` | string |  |  |  | Unix login name of the current user. Used as a default approver identity in improve/approve. |
@@ -268,6 +266,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_SHELL_PASSTHROUGH` | boolean |  | `1` | `0` | Enable the interactive REPL `!cmd` / `!&cmd` shell-passthrough feature. On by default. Set to 0, false, off, or no (case-insensitive) to disable, so inputs beginning with ! are sent to the model as literal text instead of being executed as shell commands. Equivalent to the --no-shell-passthrough flag. |
 | `AFK_SHOW_DIFFS` | boolean |  |  |  | Show inline diffs in the tool-lane output for edit/write tool calls. 1 = on, 0 = off. |
 | `AFK_SPINNER_TIPS` | boolean |  |  |  | Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. State-specific hints (e.g. the wait_for queue-to-stop hint) still show. |
+| `AFK_STOP_HOOK_MAX_CONTINUATIONS` | number |  | `2` | `3` | Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2. |
 | `AFK_TERM_TITLE` | boolean |  |  | `0` | Set the terminal/tab title (OSC 2) to reflect afk state — "afk — <cwd> · running" during a turn, "afk — <cwd>" when idle, cleared on exit. 1 = on (default when stdout is a TTY), 0 = leave the title alone. TTY-only. |
 | `AFK_TEXT_MEASURE` | string |  | `100` | `full` | Maximum line length (columns) for unbordered streamed text in the interactive REPL: assistant prose, thinking blocks, tool-lane text, and subagent text. Display-only — affects wrapping, never behavior. Bordered elements (cards, error boxes) already cap at 100; this applies the same ceiling to the unbordered surfaces, which previously scaled to the full terminal width. Accepts a positive integer (minimum 20), or full \| off \| none \| 0 to disable capping and restore full-width wrapping. Unparseable or below-minimum values fall back to the default. No-op on terminals at or below the measure, so narrow terminals are unaffected. |
 | `AFK_THEME` | string |  | `dark` | `light` | TUI color palette for the interactive REPL and all CLI rendering: dark \| light \| umber \| auto. Display-only — swaps the semantic color palette, never behavior (cost/latency unaffected). auto detects from COLORFGBG and falls back to dark; umber matches the Umber terminal, is dark-only, and is never chosen by auto. Overridden per-launch by --theme and mutable mid-session via /theme. Precedence: --theme flag > this env > config theme > auto-detect > dark. Invalid values are ignored (dark). |

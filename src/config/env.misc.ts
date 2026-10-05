@@ -197,6 +197,20 @@ export const MISC_ENV_REGISTRY = [
     category: 'misc',
   },
   {
+    name: 'AFK_STOP_HOOK_MAX_CONTINUATIONS',
+    description:
+      'Maximum number of same-turn continuation rounds a blocking Stop hook may trigger ' +
+      'before the turn ends normally (issue #2714). Each continuation re-enters the model ' +
+      'loop with the block reason as a framework user message, giving the agent another ' +
+      'chance to address the hook. 0 disables continuation entirely (the turn ends on ' +
+      'first block). Default: 2.',
+    type: 'number',
+    required: false,
+    default: '2',
+    example: '3',
+    category: 'misc',
+  },
+  {
     name: 'AFK_PREEXISTING_LEDGER_DISABLE',
     description:
       'Set to 1 to disable the pre-existing-defect SessionEnd hook. ' +

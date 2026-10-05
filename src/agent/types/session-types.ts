@@ -466,4 +466,10 @@ export interface StopWiring {
   onStopBlocked?: (reason: string | undefined) => void;
   /** A Stop handler exceeded STOP_HOOK_HANDLER_TIMEOUT_MS. */
   onStopTimeout?: () => void;
+  /**
+   * Finding 2: set to `true` by `buildBeforeTurnEnd` after the provider seam
+   * dispatches Stop. Checked by `dispatchTurnStop` in turn-stream-runner.ts to
+   * avoid firing Stop twice on the same turn. Reset per turn by the session.
+   */
+  stopDispatchedBySeam?: boolean;
 }

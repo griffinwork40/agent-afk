@@ -17,7 +17,7 @@
 
 import type { ElicitationRequest } from '../../agent/types/sdk-types.js';
 import { debugLog } from '../../utils/debug.js';
-import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { sanitizeSchemaString, truncateMessageWithCount } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
 
@@ -129,7 +129,7 @@ export function renderFormHeader(
   writer.line();
   writer.line(palette.warning(banner));
   writer.line(palette.dim('  server:  ') + palette.bold(sanitizeSchemaString(req.serverName, 64)));
-  writer.line(palette.dim('  message: ') + sanitizeSchemaString(req.message, messageCap));
+  writer.line(palette.dim('  message: ') + truncateMessageWithCount(req.message, messageCap));
   if (req.elicitationId) {
     writer.line(palette.dim('  id:      ') + sanitizeSchemaString(req.elicitationId, 64));
   }

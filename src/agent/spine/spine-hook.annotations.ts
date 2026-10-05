@@ -42,6 +42,11 @@ const DATE_TEMPLATE = /^\d{1,4}(?:-\d{0,2}(?:-\d{0,2}\)?)?)?$/;
  *
  * Contract: matching is character-exact against `label`, so every truncation
  * point is recognised, not just word or chunk boundaries.
+ *
+ * NOTE: This function intentionally does NOT strip the form `label + " "` (full
+ * label followed by a single space, no date digits) to avoid false positives
+ * against legitimate trailing parentheticals like `(reinforced by review)`. Use
+ * `stripAnnotationLabelPlusSpace` for that specific truncation shape.
  */
 export function stripTrailingAnnotation(
   description: string,
@@ -51,6 +56,30 @@ export function stripTrailingAnnotation(
   if (open === -1) return description;
   const tail = description.slice(open + 2); // text after " ("
   if (isAnnotationPrefix(tail, label)) return description.slice(0, open);
+  return description;
+}
+
+/**
+ * Strip the specific `" (<label> "` (label + single trailing space, no date)
+ * fragment that the old 120-char truncation left on disk (#2867 Bug 2).
+ *
+ * `stripTrailingAnnotation` deliberately preserves this form because
+ * DATE_TEMPLATE requires at least one date digit, but after stripping a
+ * stacked annotation the dangling `" (label "` tail can remain undetected.
+ * This helper catches exactly that shape — it is intentionally narrower than
+ * `stripTrailingAnnotation` so it does not widen the false-positive window.
+ *
+ * Only the exact literal `" (<label> "` tail (label length + two chars: `" "` and
+ * trailing space) is recognised — no shorter or longer forms.
+ */
+export function stripAnnotationLabelPlusSpace(
+  description: string,
+  label: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL,
+): string {
+  const fragment = ` (${label} `;
+  if (description.endsWith(fragment)) {
+    return description.slice(0, description.length - fragment.length);
+  }
   return description;
 }
 

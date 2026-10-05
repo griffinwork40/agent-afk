@@ -46,11 +46,13 @@ describe('identity and live tool activity', () => {
       if (direct) (renderer as unknown as { overlayComposer: OverlayComposer | null }).overlayComposer = null;
       renderer.process(tool('root', '/tmp/root-evidence.ts'));
       let frame = stripAnsi(c.setOverlay.mock.lastCall![0]);
-      expect(frame).toContain('/review');
+      // The identity lives in scrollback only (committed once at arm).
+      expect(frame).not.toContain('/review');
       expect(frame).toContain('root-evidence.ts');
       renderer.process(tool('child-tool', '/tmp/child-evidence.ts'), { subagentId: 'child', agentType: 'research-agent' });
       frame = stripAnsi(c.setOverlay.mock.lastCall![0]);
-      for (const token of ['/review', 'root-evidence.ts', 'child-evidence.ts']) expect(frame).toContain(token);
+      for (const token of ['root-evidence.ts', 'child-evidence.ts']) expect(frame).toContain(token);
+      expect(frame).not.toContain('/review');
       expect(c.commitAbove.mock.calls.filter(([s]) => stripAnsi(s).includes('Check changes'))).toHaveLength(1);
     } finally { await renderer.dispose(); }
     // Pending tools may survive borrow-dispose; the invocation identity must not.
@@ -72,7 +74,7 @@ describe('identity and live tool activity', () => {
       } finally { await renderer.dispose(); }
     }
     expect(frames[0]).toContain('child-evidence.ts');
-    expect(frames[0]).toContain('/review');
+    expect(frames[0]).not.toContain('/review');
     expect(frames[1]).toBe(frames[0]);
   });
 
@@ -105,7 +107,8 @@ describe('identity and live tool activity', () => {
       expect(arm).toHaveBeenCalledTimes(1);
       expect(renderer.getCompositor()).toBeInstanceOf(TerminalCompositor);
       renderer.process(tool('root', '/tmp/root-evidence.ts'));
-      expect(stripAnsi(overlay.mock.lastCall![0])).toContain('/review');
+      expect(stripAnsi(overlay.mock.lastCall![0])).toContain('root-evidence.ts');
+      expect(commit.mock.calls.filter(([s]) => stripAnsi(s).includes('Check changes'))).toHaveLength(1);
     } finally { await renderer.dispose(); }
     await renderer.dispose();
     expect(disarm).toHaveBeenCalledTimes(1);

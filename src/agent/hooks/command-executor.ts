@@ -153,6 +153,10 @@ function buildStdinPayload(
   if (context.event === 'UserPromptSubmit') {
     payload['prompt'] = context.prompt;
   }
+  if (context.event === 'Stop') {
+    payload['stop_hook_active'] = context.continuation !== undefined && context.continuation > 0;
+    payload['continuation'] = context.continuation ?? 0;
+  }
   // transcript_path: always emit the key so hook scripts can detect its absence.
   // Use the supplied path when provided and non-empty; fall back to null so
   // JSON.stringify always includes the key (undefined would drop it).

@@ -929,6 +929,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
+      "description": "Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2.",
+      "type": "number",
+      "required": false,
+      "default": "2",
+      "example": "3",
+      "category": "misc"
+    },
+    {
       "name": "AFK_STREAM_BUFFER_MS",
       "description": "Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50.",
       "type": "number",
