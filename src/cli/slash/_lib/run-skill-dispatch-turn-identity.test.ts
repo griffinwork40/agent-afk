@@ -67,7 +67,7 @@ describe('identity-bearing dispatch abnormal exits', () => {
     const failure = new Error('provider stream failed');
     f.sendMessageStream.mockImplementation(async function* () {
       yield activity;
-      expect(stripAnsi(f.c.setOverlay.mock.lastCall![0])).toContain('/review');
+      expect(stripAnsi(f.c.setOverlay.mock.lastCall![0])).not.toContain('/review'); // intro is scrollback-only
       expect(stripAnsi(f.c.setOverlay.mock.lastCall![0])).toContain('read_file');
       throw failure;
     });
@@ -81,7 +81,7 @@ describe('identity-bearing dispatch abnormal exits', () => {
     f.sendMessageStream.mockImplementation(async function* () {
       try {
         yield activity;
-        expect(stripAnsi(f.c.setOverlay.mock.lastCall![0])).toContain('/review');
+        expect(stripAnsi(f.c.setOverlay.mock.lastCall![0])).not.toContain('/review'); // intro is scrollback-only
         expect(stripAnsi(f.c.setOverlay.mock.lastCall![0])).toContain('read_file');
         f[kind]();
         expect(f.interrupt).toHaveBeenCalledTimes(1);

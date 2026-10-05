@@ -1,6 +1,5 @@
-import { Context } from 'telegraf';
+import { Context, Telegraf } from 'telegraf';
 import type { Message } from 'telegraf/types';
-import { Telegraf } from 'telegraf';
 import { SessionManager } from '../session-manager.js';
 import { formatError, formatClear, formatInternalError, formatCompact, formatCompactNoop, formatMicrocompact, formatQueued, escapeHtml } from '../formatter.js';
 import { isRateLimitError, isNetworkError, isTelegramTransportError, formatRateLimitReply } from '../error-utils.js';
@@ -22,6 +21,7 @@ import { handleDocumentMessage } from './document.js';
 import { sniffMimeType, readResponseBytesWithLimit } from './message.media-helpers.js';
 import { drainBgInjections, prependToContent } from '../bg-injection.js';
 import { addressedToBot } from './message.addressed-to-bot.js';
+import { reactionMap } from '../reaction-map.js';
 
 export { addressedToBot };
 
@@ -874,6 +874,8 @@ export class MessageHandler {
           onComplete: (assistantText, metadata) => {
             this.sessionManager.recordTelegramTurn(route, userText, assistantText, metadata);
           },
+          // Map bot message ids → session id for thumbs-reaction feedback.
+          onBotMessage: (cid, mid) => { const sid = this.sessionManager.getSessionId(route); if (sid) reactionMap.set(cid, mid, sid); },
         }),
       );
     } catch (error) {
@@ -938,14 +940,9 @@ export class MessageHandler {
     // Prune the map entry once the queue is empty so messageQueues does not
     // accumulate permanent entries for every route that has ever sent a message.
     if (queue.length === 0) this.messageQueues.delete(key);
-    if (item.type === 'message') {
-      await this.processOne(route, item.ctx, item.text);
-    } else if (item.type === 'photo' || item.type === 'document') {
-      await this.processOne(route, item.ctx, item.content);
-    } else if (item.type === 'compact') {
-      await this.processCompactDirect(route, item.ctx);
-    } else {
-      await this.processClearDirect(route, item.ctx);
-    }
+    if (item.type === 'message') await this.processOne(route, item.ctx, item.text);
+    else if (item.type === 'photo' || item.type === 'document') await this.processOne(route, item.ctx, item.content);
+    else if (item.type === 'compact') await this.processCompactDirect(route, item.ctx);
+    else await this.processClearDirect(route, item.ctx);
   }
 }

@@ -6,9 +6,11 @@
  * inter-round boundary (after the batch, before the next model request) instead
  * of waiting for the next turn.
  *
- * Delivery priority (FIFO within each tier):
- *   1. Human queued-user-messages (user typed + Enter while a turn was running)
- *   2. Peer messages (from other sessions' inboxes)
+ * Peer messages ONLY. A human queued-user-message (typed + Enter while a turn
+ * runs) is never injected here: it stays in the compositor queue and runs as
+ * its own turn at end of turn, which the yield-to-user contract
+ * (`agent/tools/user-yield.ts`) relies on. It still takes priority: while one
+ * is pending, peers are held back so the user's turn runs first.
  *
  * Barriers preventing peer injection:
  *   - Any human queued-user-message is present in the compositor → peer waits.
@@ -17,8 +19,8 @@
  *     still block peer injection correctly.
  *   - The REPL input buffer is non-empty (half-typed) → not an inter-round
  *     concern; the boundary callback doesn't touch readline state.
- *   - Attachments or slash-commands in the compositor queue → human-first tier
- *     handles it; peer remains in the PeerInboxNotifier buffer.
+ *   - Attachments or slash-commands in the compositor queue → same barrier;
+ *     peer remains in the PeerInboxNotifier buffer.
  *   - Admission queue byte or count ceiling reached mid-batch → only admitted
  *     envelopes are consumed from the notifier buffer; rejected envelopes stay
  *     in FIFO order for the next boundary turn or next-turn fallback. Each
@@ -43,19 +45,19 @@ import { renderPeerMessageBlock } from '../../../agent/peer/envelope.js';
 import type { InteractiveCtx } from './shared.js';
 import type { InputSurface } from '../../input/input-surface.js';
 
-/** Minimal compositor surface for reading and consuming the human queue. */
+/**
+ * Minimal compositor surface: a read-only probe of the human queue.
+ *
+ * Contract: deliberately has no peek/reserve/drop members, so the boundary
+ * cannot consume the human queue (see the module doc for why).
+ */
 export interface BoundaryCompositor {
   /**
    * True when ANY human payload is pending (text, attachment, slash command, or
-   * shell passthrough). Unlike `peekQueuedText`, this returns true even when the
-   * queued payload contains an image or other non-text attachment — i.e. exactly
-   * when the boundary should block peer injection and defer to the human turn.
+   * shell passthrough), i.e. exactly when the boundary should block peer
+   * injection and defer to the human turn.
    */
   hasPendingSubmission(): boolean;
-  peekQueuedText(): { text: string; payloads: readonly unknown[] } | undefined;
-  reserveQueued(snapshot: { payloads: readonly unknown[] }): void;
-  releaseQueued(snapshot: { payloads: readonly unknown[] }): void;
-  dropQueued(snapshot: { payloads: readonly unknown[] }): number;
 }
 
 /** Minimal session surface: only what boundary needs. */
@@ -76,6 +78,8 @@ export interface PeerBoundaryOpts {
   peerNotifier: PeerInboxNotifier;
   /** Admission queue shared with next-turn fallback. */
   admissionQueue: AdmissionQueue;
+  /** Explicit active-turn barrier, including a human already removed from FIFO. */
+  isQueuedHumanTurn?: () => boolean;
 }
 
 /**
@@ -96,8 +100,7 @@ export interface PeerBoundaryOpts {
  *   3. Takes an AdmissionQueue snapshot and returns the drained text, or
  *      `undefined` if nothing is ready to deliver.
  *
- * Human entries are REMOVED from the compositor queue via `dropQueued` so they
- * are not delivered a second time by the next-turn idle drain. Peer entries are
+ * The human queue is never read or modified here. Peer entries are
  * removed from `admissionQueue` via `drain()`. Peer entries that do NOT fit in
  * the queue remain in the PeerInboxNotifier buffer for the next boundary turn or
  * the next-turn fallback, and are never silently lost.
@@ -111,34 +114,23 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
     const compositor = getCompositor();
 
     // ── 1. Human barrier check ───────────────────────────────────────────────
+    // Invariant: the boundary NEVER consumes the human queue. A message the
+    // user typed + Entered mid-turn is delivered at END OF TURN by the
+    // compositor's `→ idle` drain, as its own turn. The yield-to-user contract
+    // (`agent/tools/user-yield.ts`) depends on this: a yielding tool such as
+    // wait_for tells the model "end your turn so the message is delivered
+    // first", which is only true if nothing pulls the message in mid-turn.
+    // History: #2810 drained human text here too, so a queued message landed
+    // after ANY tool round (bash, compose, ...) and the yield notice lied.
+    //
     // hasPendingSubmission() is true for ANY human payload: text, attachment,
     // image, slash command. peekQueuedText() alone returns undefined for image-
-    // bearing payloads, which would incorrectly allow peer injection past the
-    // human-first barrier. We check hasPendingSubmission first.
-    const humanPending = compositor?.hasPendingSubmission() ?? false;
-    if (humanPending) {
-      // Human has something queued (may include attachments). Try to admit
-      // text-only entries; attachment-bearing payloads will be forwarded by the
-      // normal next-turn drain path, not the boundary callback.
-      const humanSnap = compositor!.peekQueuedText();
-      if (humanSnap !== undefined) {
-        // Reserve so concurrent Ctrl+B doesn't double-consume while we decide.
-        compositor!.reserveQueued(humanSnap);
-        // Submit to admission queue as human priority.
-        const admitted = admissionQueue.submitHuman(humanSnap.text);
-        if (!admitted) {
-          // Queue full — release back to compositor for normal next-turn drain.
-          compositor!.releaseQueued(humanSnap);
-        } else {
-          // Drop from compositor: we now own the text via admissionQueue.
-          compositor!.dropQueued(humanSnap);
-        }
-      }
-      // Human barrier active — do NOT drain peer messages this boundary.
-      // Peer messages stay in the notifier buffer and will be picked up at
-      // the next boundary (once the human queue is empty) or by the next-turn
-      // fallback.
-    } else {
+    // bearing payloads, so it would wrongly let peers past the barrier.
+    const humanPending = opts.isQueuedHumanTurn?.() === true || (compositor?.hasPendingSubmission() ?? false);
+    // Human barrier active → skip peers entirely this boundary. They stay in
+    // the notifier buffer so the user's queued turn runs first; the next-turn
+    // drain (or a later boundary) delivers them.
+    if (!humanPending) {
       // ── 2. No human barrier: admit peer messages one envelope at a time ──
       // Peek the buffered envelopes without consuming them, then attempt to
       // admit each individually into the admission queue using the envelope's
@@ -174,7 +166,9 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
     }
 
     // ── 3. Snapshot and drain ───────────────────────────────────────────────
-    if (!admissionQueue.pending) return undefined;
+    // Under the human barrier nothing is injected, even a peer straggler: the
+    // user's queued turn must run first (next-turn fallback picks it up).
+    if (humanPending || !admissionQueue.pending) return undefined;
     const snap = admissionQueue.snapshot();
     if (snap.entries.length === 0) return undefined;
     const text = admissionQueue.drain(snap);
@@ -217,8 +211,7 @@ export function reinstallPeerBoundary(
  * callback did not consume (e.g. turn had no tool rounds) are prepended to
  * `text` before it is submitted to the model. Returns the updated text.
  *
- * Human entries have already been removed from the compositor via `dropQueued`
- * inside the boundary callback; only peer stragglers reach here.
+ * Only peer stragglers reach here: the boundary never admits human entries.
  */
 export function drainAdmissionQueueFallback(text: string, q: AdmissionQueue): string {
   if (!q.pending) return text;
@@ -238,6 +231,7 @@ export function setupPeerBoundary(
   ctx: InteractiveCtx,
   surface: InputSurface,
   peerNotifier: PeerInboxNotifier,
+  isQueuedHumanTurn: () => boolean,
 ): { admissionQueue: AdmissionQueue; reinstall: () => void } {
   const admissionQueue = new AdmissionQueue();
   const opts: PeerBoundaryOpts = {
@@ -245,6 +239,7 @@ export function setupPeerBoundary(
     getCompositor: () => surface.getCompositor() as BoundaryCompositor | null,
     peerNotifier,
     admissionQueue,
+    isQueuedHumanTurn,
   };
   let dispose = installPeerBoundary(opts);
   const reinstall = () => { dispose = reinstallPeerBoundary(opts, dispose); };

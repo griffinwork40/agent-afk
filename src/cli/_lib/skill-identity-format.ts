@@ -25,12 +25,3 @@ export function formatSkillIdentity(input: SkillIdentity, width: number, activit
   const detail = activity || [identity.purpose, identity.arguments ? `args: ${identity.arguments}` : undefined].filter(Boolean).join(' · ');
   return truncateDisplayWidth(`/${identity.name}${detail ? ` · ${detail}` : ''}`, Math.max(0, Math.min(width, SKILL_IDENTITY_BUDGETS.total)));
 }
-
-/** Same progress-slot composition for OverlayComposer and direct fallback. */
-export function skillIdentityBanner(identity: SkillIdentity | undefined, lines: string[], width: number): string {
-  if (!identity) return lines.join('\n');
-  if (!lines.length) return formatSkillIdentity(identity, width);
-  // Progress rows are already width-clamped; keep activity/stopping and stats
-  // intact instead of truncating them behind the description and invocation.
-  return [formatSkillIdentity({ name: identity.name }, width), ...lines].join('\n');
-}

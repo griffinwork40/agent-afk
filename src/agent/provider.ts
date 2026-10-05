@@ -528,6 +528,17 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    */
   setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
   /**
+   * Optional. Wire the provider-side stop-hook seam (issue #2714).
+   * When wired, the provider calls this callback before emitting `turn.completed`
+   * on natural turn ends. A return value of `{ continueWith: string }` causes
+   * the provider to push a framework user message and re-enter the model loop
+   * in the same turn. `undefined` / `{}` ends the turn normally.
+   *
+   * Wired by `AgentSession.wireStopHook()` via the session layer, so the same
+   * mechanism that delivers Stop on every surface also enables continuation.
+   */
+  setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
+  /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).
    *
