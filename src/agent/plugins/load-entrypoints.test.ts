@@ -70,7 +70,7 @@ describe('loadPluginEntrypoints', () => {
     );
     const plugins: SdkPluginConfig[] = [{ type: 'local', path: dir, main: 'entry.mjs' }];
 
-    await loadPluginEntrypoints(plugins);
+    await loadPluginEntrypoints(plugins, { onError: (_p, err) => { throw err; } });
 
     const store = globalThis as unknown as Record<string, unknown>;
     try {
@@ -152,7 +152,7 @@ describe('loadPluginEntrypoints', () => {
     );
     const plugins: SdkPluginConfig[] = [{ type: 'local', path: dir, main: 'entry.mjs' }];
 
-    await loadPluginEntrypoints(plugins, { pluginApi: fullApi });
+    await loadPluginEntrypoints(plugins, { pluginApi: fullApi, onError: (_p, err) => { throw err; } });
 
     try {
       expect(listSkills()).toContain(skillName);
@@ -169,7 +169,7 @@ describe('loadPluginEntrypoints', () => {
     const store = globalThis as unknown as Record<string, unknown>;
     try {
       await expect(
-        loadPluginEntrypoints(plugins, { pluginApi: fullApi }),
+        loadPluginEntrypoints(plugins, { pluginApi: fullApi, onError: (_p, err) => { throw err; } }),
       ).resolves.toBeUndefined();
       expect(store[key]).toBe(true);
     } finally {
@@ -203,7 +203,7 @@ describe('loadPluginEntrypoints', () => {
     const plugins: SdkPluginConfig[] = [{ type: 'local', path: dir, main: 'entry.mjs' }];
     const store = globalThis as unknown as Record<string, unknown>;
     try {
-      await loadPluginEntrypoints(plugins, { pluginApi: fullApi });
+      await loadPluginEntrypoints(plugins, { pluginApi: fullApi, onError: (_p, err) => { throw err; } });
       const probe = store.__afkApiProbe as Record<string, unknown> | undefined;
       expect(probe).toBeDefined();
       expect(probe?.envType).toBe('object');
@@ -294,6 +294,7 @@ describe('loadPluginEntrypoints', () => {
       const plugins: SdkPluginConfig[] = [{ type: 'local', path: dir, main: 'hook-entry.mjs' }];
       await loadPluginEntrypoints(plugins, {
         pluginApi: { ...fullApi, registerHook: registerPluginHook },
+        onError: (_p, err) => { throw err; },
       });
       const first = createDefaultHookRegistry().registry;
       const second = createDefaultHookRegistry().registry;

@@ -417,7 +417,7 @@ describe('maybeRestartServices', () => {
       platform: 'darwin',
       env: { npm_config_global: 'true' },
       pkgRoot: FAKE_PKG_ROOT,
-      existsFn: (p) => p === `${FAKE_PKG_ROOT}/.git`, // .git present
+      existsFn: (p) => p === join(FAKE_PKG_ROOT, '.git'), // .git present
       restartFn,
     });
     expect(result).toEqual([]);
@@ -536,13 +536,13 @@ describe('isMainModule', () => {
     // catches and falls back to comparing fileURLToPath(metaUrl) === argv1.
     // Both sides are now raw paths, so the comparison is correct.
     const spaceUrl = 'file:///my%20dir/script.mjs';
-    const rawPath = '/my dir/script.mjs'; // same path, not URL-encoded
+    const rawPath = fileURLToPath(spaceUrl); // cross-platform: /my dir/script.mjs on POSIX, C:\my dir\script.mjs on Windows
     expect(isMainModule(spaceUrl, rawPath)).toBe(true);
   });
 
   it('handles non-ASCII characters in the path without throwing', () => {
     const encodedUrl = 'file:///home/caf%C3%A9/script.mjs'; // café
-    const rawPath = '/home/café/script.mjs';
+    const rawPath = fileURLToPath(encodedUrl); // cross-platform: /home/café/script.mjs on POSIX, C:\home\café\script.mjs on Windows
     expect(isMainModule(encodedUrl, rawPath)).toBe(true);
   });
 
