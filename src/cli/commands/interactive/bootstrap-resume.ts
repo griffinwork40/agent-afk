@@ -55,6 +55,9 @@ export function createResumeRequest(
           infra.subagentExecutor, infra.skillExecutor, infra.composeExecutor,
           infra.rootManager, infra.backgroundRegistry,
         ]);
+        // Re-install the peer boundary callback on the resumed session so
+        // mid-turn delivery works and old admission-queue entries are cleared.
+        ctx.reinstallPeerBoundary?.();
         if (ctx.hasPendingUserMessage) {
           sessionRef.current?.setPlanExitQueueCheck(ctx.hasPendingUserMessage);
         }

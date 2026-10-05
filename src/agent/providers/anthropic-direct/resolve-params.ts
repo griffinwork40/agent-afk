@@ -27,8 +27,10 @@ const isOpus47Plus = (model: string): boolean => /opus-4-(7|[89])/.test(model);
  * as Opus 4.8). Note: `opus-5-5` is matched by the `opus-5` branch of the
  * regex below.
  */
+export const isFable51 = (model: string): boolean => /(claude-)?fable-5[-.]1(?:[-.@]|$)/.test(model);
+
 const requiresAdaptiveThinking = (model: string): boolean =>
-  isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model);
+  isOpus47Plus(model) || /(claude-)?(opus|sonnet)-5/.test(model) || isFable51(model);
 
 // resolveAutoCompactThreshold moved to shared/auto-compact.ts (both providers
 // auto-compact now). Re-exported here so existing importers (index.ts) resolve
@@ -48,6 +50,14 @@ const warnedTemperatureClamps = new Set<string>();
 const ANTHROPIC_MAX_TEMPERATURE = 1.0;
 
 /**
+ * Reset temperature-clamp dedup state. Exposed for tests only — do not call in production code.
+ * @internal
+ */
+export function _resetWarnedTemperatureClampsForTest(): void {
+  warnedTemperatureClamps.clear();
+}
+
+/**
  * Validate and clamp the sampling temperature for the Anthropic Messages API.
  *
  * The Anthropic API accepts `0.0`-`1.0`; values above `1.0` are rejected with
@@ -61,10 +71,25 @@ const ANTHROPIC_MAX_TEMPERATURE = 1.0;
  * Values at or below `1.0` pass through unchanged. `undefined` stays `undefined`
  * (server default). Negative or non-finite values are treated as unset.
  */
+export function isNonDefaultSamplingForbiddenModel(model: string | undefined): boolean {
+  return typeof model === 'string' && isFable51(model);
+}
+
 export function resolveAnthropicTemperature(
   temperature: number | undefined,
+  model?: string,
 ): number | undefined {
   if (temperature === undefined) return undefined;
+  if (isNonDefaultSamplingForbiddenModel(model)) {
+    const key = `fable-temp-drop:${model}`;
+    if (!warnedTemperatureClamps.has(key)) {
+      warnedTemperatureClamps.add(key);
+      console.warn(
+        `[afk] temperature=${temperature} dropped for ${model} (non-default sampling forbidden)`,
+      );
+    }
+    return undefined;
+  }
   if (!Number.isFinite(temperature) || temperature < 0) return undefined;
   if (temperature > ANTHROPIC_MAX_TEMPERATURE) {
     const key = `temp:${temperature}`;
@@ -314,7 +339,7 @@ const OPUS5_DISABLED_FORBIDDEN_EFFORTS = new Set<string>(['xhigh', 'max']);
  * 4.7/4.8 and Sonnet 5 accept `disabled`). Claude Opus 5 rejects `disabled` only
  * at xhigh/max and is handled separately via OPUS5_DISABLED_FORBIDDEN_EFFORTS.
  */
-const isAlwaysAdaptiveModel = (model: string): boolean => /(claude-)?opus-5[-.]5/.test(model);
+const isAlwaysAdaptiveModel = (model: string): boolean => /(claude-)?opus-5[-.]5/.test(model) || isFable51(model);
 
 /**
  * Claude Sonnet 5.5 rejects `{type:'disabled'}` with HTTP 400 and replaces it
@@ -505,6 +530,9 @@ export function resolveEffort(
 ): EffortLevel | undefined {
   if (callerEffort !== undefined) return callerEffort;
   const m = model.toLowerCase();
+  // Fable 5.1 default effort is `high`; send it explicitly so every Fable 5.1
+  // request uses the supported adaptive-thinking effort path without `max`.
+  if (isFable51(m)) return 'high';
   // Opus 5.5 (released 2026-09-22): server default is `medium` (the only
   // model where the default is not `high`). We raise to `high` for agentic
   // coding depth without the excessive thinking-token accumulation that `max`

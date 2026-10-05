@@ -295,11 +295,10 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   const rawPattern = obj.pattern;
   // Effective cwd priority:
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-  // 2. context?.cwd — per-call back-compat alias
-  // 3. factory-level cwd — session worktree isolation
-  // 4. process.cwd() fallback
+  // 2. factory-level cwd — session worktree isolation
+  // 3. process.cwd() fallback
   const explicitPath = obj.path !== undefined && obj.path !== null;
-  let rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+  let rawPath = obj.path ?? context?.resolveBase ?? cwd ?? process.cwd();
 
   // Validate required field
   if (typeof rawPattern !== 'string') {

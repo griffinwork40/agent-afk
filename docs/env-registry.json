@@ -161,7 +161,7 @@
     },
     {
       "name": "AFK_DAEMON_BUDGET_SKIP_PCT",
-      "description": "Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window's utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to never skip (the gate stays enabled but always passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).",
+      "description": "Subscription-usage skip threshold (0–100 integer) for the daemon budget gate. When any Claude subscription window's utilization is at or above this percentage, scheduled agent tasks are skipped with a Telegram notice. Default 90 (90%). Set to 100 to disable the gate entirely (no usage fetch is made and every task passes). Requires AFK_DAEMON_BUDGET_GATE_DISABLED=0 (default).",
       "type": "number",
       "required": false,
       "default": "90",
@@ -878,6 +878,14 @@
       "category": "debug"
     },
     {
+      "name": "AFK_SESSION_TMPDIR_DISABLE",
+      "description": "Disable per-session private temp dirs. By default every session and subagent gets its own directory under <os tmpdir>/afk-<uid>/ (removed on close) injected as TMPDIR/TMP/TEMP into bash and test_run child processes, so one session cleaning its temp files cannot delete a concurrent session's. Set to 1 to share the inherited TMPDIR instead.",
+      "type": "boolean",
+      "required": false,
+      "example": "1",
+      "category": "process"
+    },
+    {
       "name": "AFK_SESSIONSTART_COOLDOWN_MS",
       "description": "Cooldown in milliseconds between SessionStart trigger fires in the daemon. Prevents thundering-herd on rapid restarts.",
       "type": "number",
@@ -926,7 +934,7 @@
     },
     {
       "name": "AFK_SPINNER_TIPS",
-      "description": "Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off.",
+      "description": "Show rotating tips in the loading spinner during long calls. 1 = on, 0 = off. State-specific hints (e.g. the wait_for queue-to-stop hint) still show.",
       "type": "boolean",
       "required": false,
       "category": "misc"
@@ -939,6 +947,15 @@
       "category": "paths"
     },
     {
+      "name": "AFK_STOP_HOOK_MAX_CONTINUATIONS",
+      "description": "Maximum number of same-turn continuation rounds a blocking Stop hook may trigger before the turn ends normally (issue #2714). Each continuation re-enters the model loop with the block reason as a framework user message, giving the agent another chance to address the hook. 0 disables continuation entirely (the turn ends on first block). Default: 2.",
+      "type": "number",
+      "required": false,
+      "default": "2",
+      "example": "3",
+      "category": "misc"
+    },
+    {
       "name": "AFK_STREAM_BUFFER_MS",
       "description": "Input buffer window for TUI streaming in milliseconds. When set to a positive value, incoming tokens are micro-batched before parsing and rendering, producing smoother visual output. The first token after idle always passes through immediately (leading-edge). 0 = disabled (every token is parsed individually). Reasonable range: 8-50.",
       "type": "number",
@@ -946,6 +963,15 @@
       "default": "0",
       "example": "16",
       "category": "display"
+    },
+    {
+      "name": "AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT",
+      "description": "When set to 1/true, forked sub-agents that hit an OAuth usage-limit 429 will park and wait (up to 2 hours) for a keychain account hot-swap before surfacing the error — the same behaviour as top-level interactive sessions. When false (the default), forks fail fast so the parent session can decide how to recover. Ignored for daemon-surface sessions, because no human can switch accounts there. Callers may override per-fork via config.autoResumeOnUsageLimit; an explicit value always wins over this env var.",
+      "type": "boolean",
+      "required": false,
+      "default": "0",
+      "example": "1",
+      "category": "model"
     },
     {
       "name": "AFK_SUBAGENT_IDLE_TIMEOUT_MS",
@@ -1156,6 +1182,13 @@
       "required": false,
       "example": "120000",
       "category": "model"
+    },
+    {
+      "name": "AFK_TOOL_HEALTH_DISABLE",
+      "description": "Disable the tool-health daemon builtin entirely. Set to \"1\" to skip registration.",
+      "type": "boolean",
+      "required": false,
+      "category": "daemon"
     },
     {
       "name": "AFK_TRACE_DISABLED",

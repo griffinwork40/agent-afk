@@ -53,7 +53,7 @@ import { selectBaseSchemas } from './base-schemas.js';
 import { userAttentionFrom } from '../../tools/user-yield.js';
 import { buildQueryFromConfig } from './query.js';
 import { isCustomOpenAIEndpoint } from './query/fast-tier-session.js';
-import { oneShotChatCompletion, type OpenAIOneShotInput } from './oneshot.js';
+import { completeWithWire, type OpenAIOneShotInput } from './complete-wire.js';
 import {
   getRuntimeStateTool,
   createGetRuntimeStateHandler,
@@ -325,6 +325,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
           ...(config.parentSessionId !== undefined ? { parentSessionId: config.parentSessionId } : {}),
           ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
+          ...(config.env !== undefined ? { env: config.env } : {}), // PLUGIN_ROOT, session TMPDIR
           // Fork-scoped central output cap (#661): forwarded from the child
           // config that forkSubagent stamped, arming maxOutputBytes for forks
           // only (top-level leaves it unset). Parity with anthropic-direct.
@@ -334,6 +335,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
           ...(config.traceWriter !== undefined ? { traceWriter: config.traceWriter } : {}),
           ...(config.bashOutputTailReporter !== undefined
             ? { bashOutputTailReporter: config.bashOutputTailReporter }
+            : {}),
+          // #2542/#2735: Forward detach registry from AgentConfig so REPL
+          // Ctrl+B handler and this dispatcher share the same instance.
+          ...(config.detachRegistry !== undefined
+            ? { detachRegistry: config.detachRegistry }
             : {}),
           runtimeStateSource,
           ...(config.isSkillDispatch ? { isSkillDispatch: true } : {}),
@@ -425,6 +431,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
        * to the child that provoked it. Undefined on a top-level session.
        */
       subagentId?: string;
+      /** `AgentConfig.env` — parity with anthropic-direct (bash/test_run child env). */
+      env?: Record<string, string>;
       /**
        * Explicit "this session is a forked subagent" signal carrying the
        * per-result output-cap budget (#661) — parity with
@@ -436,6 +444,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
       traceWriter?: import('../../trace/index.js').TraceSink;
       /** Factory for the REPL-only live bash output tail callback. */
       bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+      /**
+       * Session-scoped detach registry for the Ctrl+B bash-backgrounding
+       * contract (#2542, #2735) — parity with anthropic-direct buildDispatcher.
+       * Absent for headless surfaces and forked children.
+       */
+      detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
       /**
        * Live source for the `get_runtime_state` tool — see the matching
        * comment in `anthropic-direct/index.ts:buildDispatcher`.
@@ -554,19 +568,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
     );
     if (effectivePermissions !== undefined) dispatcherOpts.permissions = effectivePermissions;
     if (this.providerOpts.subagentExecutor !== undefined) dispatcherOpts.subagentExecutor = this.providerOpts.subagentExecutor;
-    if (this.providerOpts.skillExecutor !== undefined)
-      dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
-    if (this.providerOpts.composeExecutor !== undefined)
-      dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
+    if (this.providerOpts.skillExecutor !== undefined) dispatcherOpts.skillExecutor = this.providerOpts.skillExecutor;
+    if (this.providerOpts.composeExecutor !== undefined) dispatcherOpts.composeExecutor = this.providerOpts.composeExecutor;
     // In-process permission callback (Dim 8) — parity with anthropic-direct.
-    if (this.providerOpts.canUseTool !== undefined)
-      dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
+    if (this.providerOpts.canUseTool !== undefined) dispatcherOpts.canUseTool = this.providerOpts.canUseTool;
     if (opts.cwd !== undefined) dispatcherOpts.cwd = opts.cwd;
     if (opts.readRoots !== undefined) dispatcherOpts.readRoots = opts.readRoots;
     if (opts.writeRoots !== undefined) dispatcherOpts.writeRoots = opts.writeRoots;
     if (opts.sessionId !== undefined) dispatcherOpts.sessionId = opts.sessionId;
     if (opts.parentSessionId !== undefined) dispatcherOpts.parentSessionId = opts.parentSessionId;
     if (opts.subagentId !== undefined) dispatcherOpts.subagentId = opts.subagentId;
+    if (opts.env !== undefined) dispatcherOpts.env = opts.env;
     // Central output-cap backstop (#661), FORK-SCOPED — parity with
     // AnthropicDirectProvider.buildDispatcher. Armed from the explicit
     // `subagentToolOutputCapBytes` signal that `SubagentManager.forkSubagent`
@@ -599,6 +611,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
     dispatcherOpts.spawnedPidRegistry = this._spawnedPidRegistry;
     // Yield contract: queued-message probe, late-bound off planExitControls (top-level only).
     if (planExitControls) dispatcherOpts.userAttention = userAttentionFrom(planExitControls);
+    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding — parity with
+    // AnthropicDirectProvider.buildDispatcher. Top-level REPL sessions only.
+    if (opts.detachRegistry !== undefined) dispatcherOpts.detachRegistry = opts.detachRegistry;
 
     return new SessionToolDispatcher(dispatcherOpts);
   }
@@ -665,9 +680,11 @@ export class OpenAICompatibleProvider implements ModelProvider {
   /**
    * Single-shot completion (see {@link ModelProvider.complete}). Resolves auth
    * via {@link resolveOpenAIAuth} (the standard `OPENAI_API_KEY` →
-   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and honours the
-   * provider's construction-time `baseURL` so local MLX / llama.cpp / vLLM
-   * shims are reached transparently.
+   * `CODEX_API_KEY` → `~/.codex/auth.json` chain) and picks the wire from it
+   * (`./complete-wire`): ChatGPT-subscription OAuth goes to the ChatGPT
+   * backend over Responses, everything else over Chat Completions honouring
+   * the provider's construction-time `baseURL` (local MLX / llama.cpp / vLLM
+   * shims).
    * `args.baseUrl` overrides the construction option when both are present.
    */
   async complete(args: ProviderCompleteArgs): Promise<string> {
@@ -684,7 +701,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
     // setEndpointDefaults) so complete() matches query() credentials.
     if (this._defaultHeaders !== undefined) input.defaultHeaders = this._defaultHeaders;
     if (args.signal) input.signal = args.signal;
-    return oneShotChatCompletion(input);
+    return completeWithWire(input);
   }
 }
 

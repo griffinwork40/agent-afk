@@ -803,6 +803,385 @@ describe('deriveSessionFacet', () => {
     expect(facet.yield_tracking.pr_url).toBe(prUrl);
   });
 
+  // ---------------------------------------------------------------------------
+  // #2795: detection gaps — quoted separators, $(), flattened multi-line
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: quoted "|" separator does NOT trigger false positive (#2795)', () => {
+    // rg "gh pr view|gh pr create " src — the | is inside quotes; stripping
+    // quoted spans must prevent it from being treated as a shell separator.
+    const prUrl = 'https://github.com/owner/repo/pull/99';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-quoted-pipe',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'search',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'q-pipe',
+          input: JSON.stringify({ command: 'rg "gh pr view|gh pr create " src' }),
+          // Even if the result happens to contain a URL line, no PR should be detected
+          result: `src/agent/facets/derive.ts:75:\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: $() subshell invocation is detected (#2795)', () => {
+    // PR=$(gh pr create --fill) — the open-paren before gh pr create is now
+    // recognized as a valid invocation boundary.
+    const prUrl = 'https://github.com/owner/repo/pull/101';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-subshell',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'sub-1',
+          input: JSON.stringify({ command: 'PR=$(gh pr create --fill) && echo $PR' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: bare ( subshell invocation is detected (#2795)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/102';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-bare-paren',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'sub-2',
+          input: JSON.stringify({ command: '(gh pr create --title "feat" --body "x")' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: flattened multi-line with bare PR URL result is detected (#2795)', () => {
+    // `git push\ngh pr create --fill` flattened by summarizeToolInput to a
+    // space-separated string with no shell separator before `gh`. When the
+    // result is a bare PR URL (gh pr create's stdout shape), it should be
+    // detected via the word-boundary fallback.
+    const prUrl = 'https://github.com/owner/repo/pull/103';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-flattened',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'flat-1',
+          // Stored as a summarized (flattened) input — no inputRaw — so detection
+          // must work on the flattened string.
+          input: 'git push gh pr create --fill',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: flattened multi-line with non-bare result is NOT detected (#2795)', () => {
+    // Word-boundary match only fires when the result is exclusively a PR URL.
+    // A multi-line result (e.g. push output + URL mixed with other text) must
+    // not be detected via the word-boundary path.
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-flattened-neg',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'flat-neg',
+          input: 'git push gh pr create --fill',
+          result: 'Pushing to origin...\nhttps://github.com/owner/repo/pull/104\nDone.\n',
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: journalEvents path detects PR from gh pr create (#2795 gap 5)', () => {
+    // No existing test drives PR detection through journalEvents (the production
+    // input shape for post-#2461 sessions). This drives the full path.
+    const prUrl = 'https://github.com/owner/repo/pull/200';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-journal',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 0,
+        turns: [],
+      },
+      {
+        journalEvents: [{
+          toolName: 'bash',
+          toolUseId: 'j-pr-1',
+          input: JSON.stringify({ command: 'gh pr create --fill --title "feat: new"' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: journalEvents path with $() subshell detects PR (#2795 gap 5)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/201';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-journal-sub',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 0,
+        turns: [],
+      },
+      {
+        journalEvents: [{
+          toolName: 'bash',
+          toolUseId: 'j-sub-1',
+          input: JSON.stringify({ command: 'URL=$(gh pr create --fill) && echo $URL' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  // ---------------------------------------------------------------------------
+  // #2795 gap 6: PRs opened by subagents propagate to the parent facet
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: subagent-opened PR detected via subagentBreakdown (#2795 gap 6)', () => {
+    // A /ship subagent runs gh pr create; the parent never touches `gh`.
+    // The subagent breakdown carries detected_pr_url; derive must promote it.
+    const prUrl = 'https://github.com/owner/repo/pull/500';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-subagent',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: '/ship', assistant: 'Done.', timestamp: 1 }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'ship-worker',
+          tool_calls: 5,
+          tool_errors: 0,
+          tool_counts: { bash: 5 },
+          detected_pr_url: prUrl,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: parent-opened PR takes precedence over subagent URL (#2795 gap 6)', () => {
+    // Both parent and subagent detect a PR; parent URL wins.
+    const parentUrl = 'https://github.com/owner/repo/pull/501';
+    const subUrl = 'https://github.com/owner/repo/pull/502';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-both',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{
+          user: '/ship',
+          assistant: 'Done.',
+          timestamp: 1,
+          toolEvents: [{
+            toolName: 'bash',
+            toolUseId: 'parent-pr',
+            input: JSON.stringify({ command: 'gh pr create --fill' }),
+            result: `${parentUrl}\n`,
+            isError: false,
+          }],
+        }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'sub-ship',
+          tool_calls: 3,
+          tool_errors: 0,
+          tool_counts: { bash: 3 },
+          detected_pr_url: subUrl,
+        }],
+      },
+    );
+    // Parent URL should win
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(parentUrl);
+  });
+
+  it('yield_tracking: no subagent PR when detected_pr_url absent from breakdown (#2795 gap 6)', () => {
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-sub-none',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: '/deploy', assistant: 'Done.', timestamp: 1 }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'deploy-worker',
+          tool_calls: 3,
+          tool_errors: 0,
+          tool_counts: { bash: 3 },
+          // no detected_pr_url
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #2834: $() inside double-quoted spans and GH_PR_CREATE_WORD_RE anchoring
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: PR_URL="$(gh pr create --fill)" double-quoted command substitution is detected (#2834)', () => {
+    // stripQuotedSpans erases the entire "$(gh pr create --fill)" span, so the
+    // invocation RE must also be tested against the raw (unstripped) input.
+    const prUrl = 'https://github.com/owner/repo/pull/300';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-dq-subst',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'dq-sub-1',
+          input: JSON.stringify({ command: 'PR_URL="$(gh pr create --fill)" && echo "$PR_URL"' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: quoted-separator rg search is NOT false-positive even with raw input test (#2834)', () => {
+    // Regression guard: testing raw input must not re-introduce the quoted-separator
+    // false positive that stripQuotedSpans was added to prevent.
+    // In raw form, 'rg "gh pr view|gh pr create" src' does NOT match INVOCATION_RE
+    // because `gh pr create"` ends with `"` (no trailing space or EOL) so the
+    // mandatory trailing `(?:[ \t]|$)` fails. Both raw and stripped paths must be false.
+    const prUrl = 'https://github.com/owner/repo/pull/301';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-dq-quoted-sep-guard',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'search',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'dq-sep-1',
+          input: JSON.stringify({ command: 'rg "gh pr view|gh pr create" src' }),
+          result: `src/agent/facets/derive.ts:90:\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: path-prefixed gh (e.g. /usr/bin/gh pr create) is NOT detected by word-boundary fallback (#2834)', () => {
+    // GH_PR_CREATE_WORD_RE previously used \b which matched 'gh' after '/' (a
+    // non-word char). The lookbehind (?<![\\/\w-]) rejects it.
+    const prUrl = 'https://github.com/owner/repo/pull/302';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-path-prefix-guard',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'check help',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'path-gh-1',
+          // Flattened-style input (no inputRaw): the stored summary string
+          // happens to contain '/usr/local/bin/gh pr create' with no separator
+          // before 'gh'. WORD_RE fallback must NOT fire since gh follows '/'.
+          input: 'git push /usr/local/bin/gh pr create --fill',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
   // outcome derived from terminal-state heading
   function oneAssistant(assistant: string): StoredSessionInput {
     return {

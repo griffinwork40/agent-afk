@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { stripTrailingAnnotation, REINFORCED_LABEL, WEAKENED_LABEL } from './spine-hook.annotations.js';
+import {
+  stripTrailingAnnotation,
+  stripAnnotationLabelPlusSpace,
+  REINFORCED_LABEL,
+  WEAKENED_LABEL,
+} from './spine-hook.annotations.js';
 
 const BASE = 'Single main branch; enforced by check-*.sh scripts.';
 
@@ -91,5 +96,43 @@ describe('stripTrailingAnnotation (#2484)', () => {
   it('only strips the annotation for the label it was asked about', () => {
     const weakened = `${BASE} (partially weakened 2026-09-22)`;
     expect(stripTrailingAnnotation(weakened, REINFORCED_LABEL)).toBe(weakened);
+  });
+});
+
+describe('stripAnnotationLabelPlusSpace (#2921)', () => {
+  it('positive: strips the exact " (<label> " tail for each label', () => {
+    // The " (<label> " fragment is the shape left after a stacked-annotation
+    // stripping pass clears the date but not the open-paren + label + space.
+    expect(stripAnnotationLabelPlusSpace(`${BASE} (reinforced `, REINFORCED_LABEL)).toBe(BASE);
+    expect(stripAnnotationLabelPlusSpace(`${BASE} (partially weakened `, WEAKENED_LABEL)).toBe(BASE);
+  });
+
+  it('no-op: returns description unchanged when the tail does not match', () => {
+    // No annotation at all
+    expect(stripAnnotationLabelPlusSpace(BASE, REINFORCED_LABEL)).toBe(BASE);
+    expect(stripAnnotationLabelPlusSpace(BASE, WEAKENED_LABEL)).toBe(BASE);
+    // Full annotation with date — NOT the label+space shape
+    expect(
+      stripAnnotationLabelPlusSpace(`${BASE} (reinforced 2026-09-22)`, REINFORCED_LABEL),
+    ).toBe(`${BASE} (reinforced 2026-09-22)`);
+    // Truncated annotation that still has date digits — also not this shape
+    expect(
+      stripAnnotationLabelPlusSpace(`${BASE} (reinforced 2026`, REINFORCED_LABEL),
+    ).toBe(`${BASE} (reinforced 2026`);
+    // Label alone without the trailing space — not this exact shape
+    expect(
+      stripAnnotationLabelPlusSpace(`${BASE} (reinforced`, REINFORCED_LABEL),
+    ).toBe(`${BASE} (reinforced`);
+  });
+
+  it('cross-label: does NOT strip the wrong label', () => {
+    // A " (reinforced " tail must not be stripped when asked about WEAKENED_LABEL
+    expect(
+      stripAnnotationLabelPlusSpace(`${BASE} (reinforced `, WEAKENED_LABEL),
+    ).toBe(`${BASE} (reinforced `);
+    // A " (partially weakened " tail must not be stripped when asked about REINFORCED_LABEL
+    expect(
+      stripAnnotationLabelPlusSpace(`${BASE} (partially weakened `, REINFORCED_LABEL),
+    ).toBe(`${BASE} (partially weakened `);
   });
 });

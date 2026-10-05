@@ -48,6 +48,8 @@ export type OneShotOpenAIClientFactory = (opts: {
   apiKey: string;
   baseURL?: string;
   defaultHeaders?: Record<string, string>;
+  /** Contract: always 0 — AFK owns retries. The factory must forward this. */
+  maxRetries: number;
 }) => OpenAI;
 let oneShotClientFactory: OneShotOpenAIClientFactory | null = null;
 
@@ -151,7 +153,8 @@ export async function oneShotChatCompletion(input: OpenAIOneShotInput): Promise<
       apiKey: string;
       baseURL?: string;
       defaultHeaders?: Record<string, string>;
-    } = { apiKey: auth.apiKey };
+      maxRetries: number;
+    } = { apiKey: auth.apiKey, maxRetries: 0 };
     if (baseURL !== undefined) clientOpts.baseURL = baseURL;
     if (defaultHeaders !== undefined) clientOpts.defaultHeaders = defaultHeaders;
     const factory = clientFactory ?? oneShotClientFactory;

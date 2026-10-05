@@ -1,45 +1,18 @@
 /**
  * Work-derived spinner verbs.
  *
- * The spinner's verb slot rotates every 3500ms via `Math.random()` over a static
- * pool (`SPINNER_VERBS` in ../constants.ts — "Stalking", "Shadowing", "Tailing").
- * That motion is uncorrelated with the work, so it teaches the operator nothing
- * and actively misleads: "Stalking" rotating to "Gnawing" implies a state change
- * that never happened. Since it is the fastest-moving text on screen during a
- * long turn, it is also the highest-leverage place to put a true signal.
+ * The vocabulary owner is cli/tool-category.ts: delegating to its
+ * `humanVerbForTool` keeps the spinner and tool lane from disagreeing about
+ * the same tool. Only the trailing ellipsis is removed here, since the spinner
+ * appends its own punctuation.
  *
- * This module maps the tool currently in flight to an honest present participle.
- * It returns `undefined` when nothing is running, which is the signal for the
- * caller to fall back to the flavour pool — idle time has no work to describe,
- * and that is where the noir/goblin character belongs.
+ * With no tool in flight this returns `undefined`, allowing the spinner to
+ * rotate noir/goblin flavour words while the model thinks or streams.
  *
  * @module cli/input/work-derived-verb
  */
 
-import { categorizeTool, type ToolCategory } from '../../agent/tool-category.js';
-
-/**
- * Category → verb. Exhaustive over `ToolCategory` (a `Record`, not a `Partial`),
- * so adding a category to the union is a compile error here rather than a silent
- * fall-through to a flavour verb that misdescribes real work.
- *
- * `other` maps to a deliberately vague "Working": it is the catch-all bucket, so
- * a specific claim would risk being wrong.
- */
-const CATEGORY_VERB: Record<ToolCategory, string> = {
-  read: 'Reading',
-  write: 'Editing',
-  shell: 'Running',
-  subagent: 'Delegating',
-  skill: 'Orchestrating',
-  dag: 'Orchestrating',
-  mcp: 'Calling',
-  web: 'Fetching',
-  browser: 'Browsing',
-  planning: 'Planning',
-  schedule: 'Scheduling',
-  other: 'Working',
-};
+import { categorizeTool, CATEGORY_HUMAN_VERB, humanVerbForTool } from '../tool-category.js';
 
 /**
  * The verb for a tool name, or `undefined` when there is no tool to describe.
@@ -50,7 +23,7 @@ const CATEGORY_VERB: Record<ToolCategory, string> = {
  */
 export function verbForToolName(toolName: string | undefined): string | undefined {
   if (!toolName || !toolName.trim()) return undefined;
-  return CATEGORY_VERB[categorizeTool(toolName)];
+  return humanVerbForTool(toolName).replace(/…$/, '');
 }
 
 /**
@@ -82,11 +55,70 @@ export class InFlightToolTracker {
     this.inFlight.delete(toolUseId);
   }
 
+  /** True when at least one in-flight call is for `toolName`. */
+  has(toolName: string): boolean {
+    for (const name of this.inFlight.values()) if (name === toolName) return true;
+    return false;
+  }
+
   /** The most recently started still-running tool name, or `undefined` if idle. */
   current(): string | undefined {
     let last: string | undefined;
     for (const name of this.inFlight.values()) last = name;
     return last;
+  }
+
+  /**
+   * The most representative in-progress verb for the current wave, or
+   * `undefined` when idle.
+   *
+   * Selection rules (applied in priority order):
+   * 1. **Idle** — no tools in flight → `undefined` (spinner falls back to its
+   *    flavour pool).
+   * 2. **Unanimous verb** — every in-flight tool resolves to the same verb
+   *    (e.g. three `read_file` calls all say "Reading") → show that verb.
+   * 3. **Unanimous category** — verbs differ but all tools share the same
+   *    category (e.g. `bash` and `test_run` both in `shell`) → show the
+   *    category's human label (e.g. "Running").
+   * 4. **Mixed categories** — tools span different categories (e.g. `agent`
+   *    and `wait_for`) → show "Working" so the spinner is honest without
+   *    privileging whichever tool started last.
+   *
+   * The trailing `…` from `CATEGORY_HUMAN_VERB` is stripped here (not in
+   * `verbForToolName`) so the spinner's own punctuation appends cleanly.
+   */
+  currentVerb(): string | undefined {
+    if (this.inFlight.size === 0) return undefined;
+
+    // Collect unique verbs and categories across all in-flight tools.
+    let firstVerb: string | undefined;
+    let firstCategory: string | undefined;
+    let unanimousVerb = true;
+    let unanimousCategory = true;
+
+    for (const toolName of this.inFlight.values()) {
+      const verb = humanVerbForTool(toolName).replace(/…$/, '');
+      const cat = categorizeTool(toolName);
+
+      if (firstVerb === undefined) {
+        firstVerb = verb;
+        firstCategory = cat;
+      } else {
+        if (verb !== firstVerb) unanimousVerb = false;
+        if (cat !== firstCategory) unanimousCategory = false;
+      }
+    }
+
+    // Rule 2: all tools agree on the same verb.
+    if (unanimousVerb) return firstVerb;
+
+    // Rule 3: verbs differ but all tools share the same category.
+    if (unanimousCategory && firstCategory !== undefined) {
+      return CATEGORY_HUMAN_VERB[firstCategory as keyof typeof CATEGORY_HUMAN_VERB].replace(/…$/, '');
+    }
+
+    // Rule 4: mixed categories — use a neutral fallback.
+    return 'Working';
   }
 
   /** Drop all tracking — call between turns so state never leaks. */
@@ -95,9 +127,35 @@ export class InFlightToolTracker {
   }
 }
 
+/**
+ * The tool whose in-flight state drives the queue-to-stop hint. Literal (not an
+ * import from the agent layer) to keep this module a CLI leaf; the yield set it
+ * mirrors is `YIELDABLE_TOOLS` in `agent/tools/user-yield.ts`.
+ */
+export const WAIT_HINT_TOOL = 'wait_for';
+
+/**
+ * Copy for the spinner's context hint while the ROOT session's `wait_for` is
+ * running, or `undefined` when no hint applies.
+ *
+ * Contract: only meaningful for a root-session wait. A subagent's `wait_for` has
+ * no user-attention probe and never yields, so callers must not set `waiting`
+ * for it (see `stream-renderer-process.ts`). The copy promises the WAIT stops,
+ * not that the message is read immediately: after a yield the model still has to
+ * end its turn before the queued message is delivered.
+ */
+export function waitHintText(state: { waiting: boolean; queued: boolean }): string | undefined {
+  if (!state.waiting) return undefined;
+  return state.queued
+    ? 'message queued, the wait will stop within ~1s'
+    : 'type a message + Enter to stop waiting';
+}
+
 /** The slice of the compositor this adapter needs. Structural, so mocks satisfy it. */
 export interface ActiveToolNameSink {
   setActiveToolName?(toolName: string | undefined): void;
+  /** Root-session `wait_for` in flight (drives the queue-to-stop hint). */
+  setRootWaitActive?(active: boolean): void;
 }
 
 /** Minimal event shape — avoids importing the full OutputEvent union here. */
@@ -134,6 +192,25 @@ export function noteToolEvent(
   } else {
     return false;
   }
-  sink?.setActiveToolName?.(tracker.current());
+  sink?.setActiveToolName?.(tracker.currentVerb());
+  return true;
+}
+
+/**
+ * Mirror one ROOT-session stream event into `tracker` and push whether a root
+ * `wait_for` is still in flight to `sink`. Returns true on a tool transition.
+ *
+ * Contract: callers MUST pass only orchestrator (root) events. A subagent's
+ * `wait_for` cannot yield to a queued message, so feeding it here would make the
+ * hint lie. The tracker is separate from the session-wide verb tracker for the
+ * same reason: that one deliberately spans subagents.
+ */
+export function noteRootWaitEvent(
+  event: MaybeToolEvent,
+  tracker: InFlightToolTracker,
+  sink: ActiveToolNameSink | null | undefined,
+): boolean {
+  if (!noteToolEvent(event, tracker, null)) return false;
+  sink?.setRootWaitActive?.(tracker.has(WAIT_HINT_TOOL));
   return true;
 }

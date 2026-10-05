@@ -4,6 +4,14 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // Invariant: forks (vitest's default), pinned so nobody "speeds up" the
+    // suite with threads. Under worker_threads, os.homedir() ignores HOME set
+    // in JS, so no HOME redirect works and security tests aimed at ~/.ssh,
+    // ~/.aws and ~/Library/LaunchAgents can hit the REAL home (#2905). The
+    // redirect-paths-env.ts tripwire fails every file if `--pool=threads` is
+    // passed anyway. `--no-isolate` is likewise unsupported (hundreds of
+    // tests fail on shared module state).
+    pool: 'forks',
     setupFiles: [
       './src/__test-utils__/stdin-claim-reset.ts',
       // Redirect the AFK paths tier (AFK_HOME) to a per-file temp sentinel so

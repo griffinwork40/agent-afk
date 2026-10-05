@@ -10,7 +10,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type OpenAI from 'openai';
 import type { ProviderEvent, ProviderUserTurn } from '../../provider.js';
 import type { AgentConfig } from '../../types/config-types.js';
-import { __setOpenAIClientFactory, OpenAICompatibleQuery, type OpenAIClientFactory } from './query.js';
+import { __setOpenAIClientFactory, OpenAICompatibleQuery, type OpenAIClientFactory, __setRetryBaseDelay } from './query.js';
 import type { ResponsesStreamEvent } from './responses-translate.js';
 import { CHATGPT_BACKEND_BASE_URL, DEFAULT_RESPONSES_INSTRUCTIONS } from './responses-config.js';
 import type { OpenAIAuthResolution } from './auth.js';
@@ -253,5 +253,113 @@ describe('query — Responses wire (ChatGPT subscription auth)', () => {
     expect(err!.error.message).toContain('gpt-5.1');
     expect(err!.error.message).toContain('gpt-5.5');
     expect(err!.error.message).toContain('Backend said');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2843 — Responses-API overload shapes that bypass inline retry/pause
+// ---------------------------------------------------------------------------
+
+describe('query — Responses wire overload bypass shapes (#2843)', () => {
+  afterEach(() => {
+    __setRetryBaseDelay(null);
+  });
+
+  /**
+   * Shape 1: a top-level `{type:'error', code:'server_is_overloaded', message}`
+   * SSE event. The OpenAI SDK yields it as a normal event — no `error` key so
+   * the SDK does NOT throw. After exhausting stream retries the overload-pause
+   * tier must emit an `error` event (daemon/cron: ceilingMs=0 → fail-fast).
+   */
+  it('shape 1: SSE error event with server_is_overloaded surfaces as an error event (daemon/cron fast path)', async () => {
+    // Speed up retry waits to zero.
+    __setRetryBaseDelay(0);
+    installResponsesMock();
+    // Server responds with overload event on every attempt (retry budget = 3).
+    pendingEvents = [
+      { type: 'error', code: 'server_is_overloaded', message: 'Our servers are currently overloaded' },
+    ];
+    const query = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-x', source: 'env' },
+      model: 'gpt-5',
+      synthesizedSessionId: 'sess-overload-1',
+      promptStream: singleInput('hi'),
+      // surface undefined → ceilingMs 0 (daemon/cron) → fail-fast
+      config: config({ surface: undefined } as Partial<AgentConfig>),
+      useResponsesApi: true,
+    });
+    const events = await collect(query);
+    // Must surface an error event (not a clean turn.completed).
+    const errEvent = events.find((e) => e.type === 'error') as
+      | { type: 'error'; error: Error }
+      | undefined;
+    expect(errEvent).toBeDefined();
+    // Must NOT silently deliver an empty assistant.message as success.
+    const completedWithText = events
+      .filter((e) => e.type === 'assistant.message')
+      .find((e) => (e as { text?: string }).text && (e as { text: string }).text.length > 0);
+    expect(completedWithText).toBeUndefined();
+    // At least one stream.retry event shows the inline retry budget was used.
+    expect(events.some((e) => e.type === 'stream.retry')).toBe(true);
+  });
+
+  /**
+   * Shape 2: `response.failed` event whose `response.error` carries a
+   * server-overload message. Today this only sets finishReason='failed' and the
+   * overload-pause tier never sees it. After the fix it must surface as an error.
+   */
+  it('shape 2: response.failed with overload message surfaces as an error event (daemon/cron fast path)', async () => {
+    __setRetryBaseDelay(0);
+    installResponsesMock();
+    pendingEvents = [
+      {
+        type: 'response.failed',
+        response: {
+          status: 'failed',
+          error: { code: 'server_error', message: 'Our servers are currently overloaded with requests' },
+        },
+      },
+    ];
+    const query = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-x', source: 'env' },
+      model: 'gpt-5',
+      synthesizedSessionId: 'sess-overload-2',
+      promptStream: singleInput('hi'),
+      config: config({ surface: undefined } as Partial<AgentConfig>),
+      useResponsesApi: true,
+    });
+    const events = await collect(query);
+    const errEvent = events.find((e) => e.type === 'error') as
+      | { type: 'error'; error: Error }
+      | undefined;
+    expect(errEvent).toBeDefined();
+    expect(events.some((e) => e.type === 'stream.retry')).toBe(true);
+  });
+
+  it('shape 2: response.failed with a non-overload error surfaces as turn with finishReason=failed (no retry)', async () => {
+    __setRetryBaseDelay(0);
+    installResponsesMock();
+    pendingEvents = [
+      {
+        type: 'response.failed',
+        response: {
+          status: 'failed',
+          error: { code: 'invalid_prompt', message: 'Prompt contained disallowed content' },
+        },
+      },
+    ];
+    const query = new OpenAICompatibleQuery({
+      auth: { apiKey: 'sk-x', source: 'env' },
+      model: 'gpt-5',
+      synthesizedSessionId: 'sess-failed-noop',
+      promptStream: singleInput('hi'),
+      config: config(),
+      useResponsesApi: true,
+    });
+    const events = await collect(query);
+    // Non-overload failure must NOT retry.
+    expect(events.some((e) => e.type === 'stream.retry')).toBe(false);
+    // Must complete with a turn.completed (failed stop reason, not a thrown error).
+    expect(events.some((e) => e.type === 'turn.completed')).toBe(true);
   });
 });

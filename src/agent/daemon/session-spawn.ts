@@ -266,6 +266,16 @@ export async function spawnDaemonSession(taskId: string, options: DaemonSpawnOpt
     const session = options.sessionFactory
       ? options.sessionFactory(config, traceOwner)
       : new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory(config))), traceOwner);
+    // Wire session-layer Stop dispatch for the daemon surface. Daemon/cron tasks
+    // are one-shot: there is no next user turn for injectContext delivery.
+    // `getHasNextTurn: () => false` causes the session layer to drop injectContext
+    // and emit a `stop_inject_dropped` trace event instead.
+    //
+    // The terminal-state gate is NOT registered here: it only returns
+    // injectContext, which a one-shot tick always drops. It joins the daemon
+    // with same-turn continuation (PR 2); `daemon.verifyDone` still relabels
+    // an unbacked Done in the push. Shell hooks run only with enableShellHooks.
+    session.wireStopHook?.({ getHasNextTurn: () => false });
     // Step 7: register the daemon session in the cross-surface registry.
     // Best-effort; dispose() (archive) is invoked by runOnce on session close
     // so the long-running daemon never accumulates registry handles.

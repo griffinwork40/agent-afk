@@ -113,7 +113,7 @@ Sends a message to another session.
 
 **Idle + empty buffer**: when the REPL is awaiting input with nothing typed, `PeerInboxNotifier` fires `onInjectable` → `tryAutoResume` → `surface.abortPendingRead()`. The message is prepended to the next turn via `prependTurnInjections`. The model sees an `[auto-resume]` directive saying a peer message arrived; it should use `send_to_session` if a reply is needed.
 
-**Busy (mid-turn)**: the envelope sits in `pending/` until the current turn completes. At the top of the next turn, `prependTurnInjections` drains the buffer. The running turn is **never interrupted**.
+**Busy (mid-turn)**: the envelope is injected into the running turn at the next boundary between tool rounds (after the current tool batch, before the next model request), via the `setBeforeNextRound` callback installed by `loop-iteration.boundary.ts`. A message to a busy session therefore lands inside the task it is working on now. Input the user typed always goes first (see [Admission queue and human-priority barrier](#admission-queue-and-human-priority-barrier)). If the turn has no further tool round, the envelope falls back to the top-of-next-turn drain — the same `prependTurnInjections` path used for [idle delivery](#delivery-semantics) above. No tool call or model request is ever cut short.
 
 **Half-typed input**: `tryAutoResume` checks `surface.bufferIsEmpty()` before calling `abortPendingRead()` — it **never clobbers** in-progress user input (`loop-iteration.ts:92-100`).
 
@@ -212,20 +212,50 @@ Peer messages carry **no user authority**. The model system prompt (`system-prom
 
 ---
 
-## Crash window
+## Crash recovery (injection-ack protocol)
 
-An envelope claimed by an exclusive hard-link receipt in `delivered/` but not yet drained into a turn is lost if the process dies. The receipt stays in `delivered/` for forensics; it is never retried, even if a crash leaves its source in `pending/` or `held/`. Rate history counts these copies once by message identity. This window is intentionally small (the claim and turn-start are close in wall time) and is documented as a known limitation.
+Envelopes are recovered after a process crash that occurs between claim and injection.
+
+**Lifecycle states** (distinct; recovery must not conflate them):
+- `claimed` — exclusive receipt written to `delivered/<file>`; pending source removed.
+- `injected` — ack marker written to `delivered/acked/<file>` after turn injection.
+- `processed` — model has replied to the injected message (not tracked at the mailbox layer).
+
+**Ack marker**: after an envelope is successfully injected into a model turn, the receiver calls `writeInjectionAck(sessionId, file)` which atomically writes `delivered/acked/<file>` containing the owning sessionId. This is a best-effort write; a failure leaves no ack, which causes the envelope to be recovered on next restart (at-least-once). Call site: `PeerInboxNotifier.consumeEnvelopes()` in `src/cli/commands/interactive/peer-inbox-notifier.ts` — one ack per consumed envelope, fire-and-forget.
+
+**Recovery on restart**: `recoverUnackedDelivered(sessionId)` is called at receiver startup. It scans `delivered/` for receipts with no ack marker and moves them back to `pending/` so they are re-delivered on the next poll. Call site: `PeerInboxNotifier.startWatching()` in `src/cli/commands/interactive/peer-inbox-notifier.ts` — called once when the sessionId first becomes known (first tick that sees a non-undefined sessionId).
+
+**Cross-session safety**: recovery only reclaims envelopes whose `to` field matches the calling sessionId. Envelopes belonging to another session are never reclaimed into an unrelated conversation.
+
+**Delivery contract**: **at-least-once**. A crash between ack-write and turn-injection (ack exists, but model turn was never issued) will NOT recover the envelope — callers should deduplicate by `messageId` when this matters. A crash between claim and ack-write (no ack) WILL recover the envelope and re-deliver it. Rate-history and dedup guards count these copies once by message identity.
+
+**Retention**: delivered receipts in `delivered/` are pruned by `pruneDeliveredReceipts` once they are older than `DELIVERED_RECEIPT_MAX_AGE_MS` and either acknowledged or older than `UNACKED_RETENTION_MAX_AGE_MS`. Ack markers in `delivered/acked/` are not individually pruned; they are removed together with the whole session inbox directory by `sweepPeerInboxes` after 7 days of inactivity for dead sessions.
 
 ---
 
 ## Observability
 
 A `peer_message` trace event is emitted for every state transition (`src/agent/trace/emit.ts:105`):
-- `action`: `sent | delivered | held | refused | dropped`
+- `action`: emitted values are `sent` and `refused` (sender side, `src/agent/tools/handlers/peer.ts`), and `claimed`, `held`, and `injected` (receiver side, `peer-inbox-notifier.ts`). A delivered message shows `sent` → `claimed` → `injected`.
+- The type (`src/agent/trace/types.ts`) also lists `delivered`, `dropped`, and `reclaimed`. `delivered` is the pre-#2810 receiver action; traces from older builds show `sent` → `delivered` instead (see #2901). `dropped` and `reclaimed` are emitted by `PeerInboxNotifier.reclaim()` during session swaps (e.g. `/resume`): `reclaimed` when an envelope is successfully moved back to `pending/`, `dropped` when that move returns false (`peer-inbox-notifier.ts:222-227`).
 - `messageId`, `peer` (the other session's id), `bytes` (UTF-8 byte count)
 - `reason` (for `refused`/`held`)
 
 **Body text is never written to the trace.** Only identifiers and byte counts are persisted.
+
+---
+
+## Sending guidelines
+
+The `send_to_session` tool description carries these rules so every sender sees them; this section is the rationale.
+
+- **Look before sending.** Call `list_sessions` and read the target's `turnState`, `activity.promptHead`, `cwd`, `branch`, and `pendingMessages`; use `read_witness` for detail. Busy receivers get messages mid-turn, so an unrelated message lands inside someone else's task.
+- **Busy:** send only when the message bears on the target's current task or is urgent. **Blocked:** don't send; the session is waiting on a human, so tell the user instead. **Pending messages:** consolidate rather than add another.
+- **Shared repo or branch:** name the files or branch at risk of collision.
+- **Self-contained body:** paths, branch, commit SHA, and the exact ask. Large content goes in a file; secrets never go in a body (bodies sit on disk in the receiver's inbox).
+- **State the expected reply.** "No reply needed" prevents acknowledgement loops, which the receiver-side no-ack rule alone did not stop in practice.
+- **No authority relay.** Never write "relaying with the user's approval" or similar. The receiver cannot verify it and treats peer content as carrying no user authority. A structured, harness-set signal of what started the sender's turn is tracked in #2906 (per-turn origin).
+- **Target by sessionId** and check `resolvedTo`; names can be reused when tmux windows are renamed.
 
 ---
 
@@ -238,6 +268,7 @@ Individual files in `delivered/` are pruned by a throttled sweep that runs from 
 | Retention threshold | wake-budget window (1 h) + dedup window (60 s) + 60 s safety margin ≈ **62 minutes** |
 | Throttle | at most once per **5 minutes** per receiver session |
 | Invariant | a receipt is **never removed** while its `pending/` source still exists (receipt-as-claim-authority) |
+| `acked/` subdir | injection-ack markers live at `delivered/acked/<file>`; reaped with the whole session directory by `sweepPeerInboxes` after 7 days |
 
 The threshold is derived from `PEER_WAKE_BUDGET_WINDOW_MS` (`src/agent/peer/guards.ts`) rather than hardcoded separately. `checkSendGuards` reads only files within the 60 s rate/dedup window, so receipts outside that window are not needed by the guard path; `findDeliveredEnvelope` (reply-hop lookup) needs receipts within roughly the wake-budget window; the extra margin covers edge cases where a reply arrives shortly after the wake budget resets.
 
@@ -248,7 +279,47 @@ The threshold is derived from `PEER_WAKE_BUDGET_WINDOW_MS` (`src/agent/peer/guar
 ## v1 limits / deferred
 
 - **Receivers**: REPL sessions only. Telegram receiver, daemon receiver deferred.
-- **Delivery timing**: messages cannot be injected mid-turn (between tool calls). They wait for the next turn boundary.
+- **Delivery timing**: messages are injected at the inter-round boundary (after a tool batch, before the next model request) via `setBeforeNextRound`. Sessions with no tool rounds fall back to the next REPL turn.
 - **Shared task board**: deferred (see plan for design notes).
 - **`afk send` shell subcommand**: deferred.
 - **Windows**: filesystem rename semantics and `fs.watch` differ; not tested on Windows.
+
+---
+
+## Mid-turn boundary delivery (cooperative steering)
+
+Peer messages that arrive while a tool batch is running are not injected immediately. They wait for a **safe inter-round boundary**: after the current tool batch completes and before the next model request is issued. Both the Anthropic and OpenAI providers support this via `setBeforeNextRound`.
+
+### Contract
+
+- **Provider forwarding**: `ProviderRouter.setBeforeNextRound` stores the callback and forwards it to the active inner provider, and re-forwards it whenever the inner is rebuilt (model swap). No steering callback is silently dropped across `/model` switches.
+- **Message injection**: the Anthropic provider appends a fresh user turn after the tool-result batch (a new `MessageParam` object, not an in-place mutation). This guarantees `JournalSync` detects the change by reference comparison (see `docs/message-journal.md`).
+- **OpenAI**: the OpenAI provider likewise injects a fresh user turn after the tool-result batch (`priorTurns`). The old capability-check that incorrectly refused OpenAI sessions has been removed.
+- **Next-turn fallback**: messages that arrive when no tool round is running (idle REPL) are injected by the existing `prependTurnInjections` / `drainInjections` path at the top of the next REPL turn.
+
+### Guards improvements
+
+- **`held/` directory included**: the sender-side rate-limit and dedup guards now scan the target's `held/` directory in addition to `pending/` and `delivered/`. Previously, messages moved to `held/` by the receiver's hold mode were invisible to the guards, allowing a sender to bypass the rate limit by targeting a session in hold mode.
+- **Live trace writer**: `PeerInboxNotifier` now uses a live getter (`getTraceWriter`) rather than a value captured at construction. This ensures trace events after a mid-session `/resume` are written to the correct, current writer.
+- **Rekey isolation**: when the session id changes (mid-session resume), messages buffered for the old session are discarded rather than injected into the new session's conversation.
+
+### Admission queue and human-priority barrier
+
+A typed bounded `AdmissionQueue` (`src/agent/peer/admission-queue.ts`) aggregates both human queued-user-messages and peer messages for each boundary invocation:
+
+- **Human priority**: human entries (typed + Enter while a turn runs) are always admitted before peer entries. If any human entry is present, the snapshot returns ONLY human entries -- peer messages wait for the next boundary. This is a FIFO-per-source barrier, not just prompt ordering.
+- **Bounds**: max 50 entries, 256 KiB total bytes, 10 per sender.
+- **Consume-once**: the boundary callback drains its snapshot exactly once. The next-turn fallback (`drainAdmissionQueueFallback`) consumes any remainder for sessions with no tool rounds.
+- **Human compositor drain**: human queued-user-messages are peeked from the terminal compositor (`peekQueuedText`), admitted into the queue, and then dropped from the compositor (`dropQueued`) so they are not delivered a second time by the next-turn idle drain.
+- **Rekey**: when the session changes (after `/resume`), the admission queue is cleared and a fresh callback is installed on the new session (`reinstallPeerBoundary`).
+
+### Barriers (attachments / slash / shell)
+
+Payloads with attachments in the compositor queue are not peeked by `peekQueuedText` (the compositor returns `undefined` on any attachment payload). These remain in the compositor for normal next-turn delivery with their images intact. Slash commands and shell pass-through (`!cmd`) sit in the REPL's `prependTurnInjections` path and are not visible to the boundary callback -- peer messages cannot jump ahead of them.
+
+### Deferred
+
+- Telegram/daemon receivers: deferred.
+- Shared task board: deferred.
+- `afk send` shell subcommand: deferred.
+- `/resume` rekey: envelopes claimed before a `/resume` and not yet acked will be recovered on the resumed session's next startup if the owning sessionId matches — this is handled by `recoverUnackedDelivered`. Envelopes whose sessionId does not match the resumed session remain in `delivered/` for forensics.

@@ -135,8 +135,6 @@ export function setupFooterSubsystems(
     healthRail,
     verdictLedger,
     shellPassthrough,
-    bgResultNotifier,
-    // buildAndWirePeerNotifier also wires ctx.resetPeerNotifier for /resume.
-    peerNotifier: buildAndWirePeerNotifier(ctx),
+    bgResultNotifier, peerNotifier: buildAndWirePeerNotifier(ctx),
   };
 }
