@@ -17,7 +17,7 @@
 import { palette } from '../../palette.js';
 import type { SlashCommand } from '../types.js';
 import type { PeerInboxNotifier } from '../../commands/interactive/peer-inbox-notifier.js';
-import { listHeld, dropHeld } from '../../../agent/peer/inbox-store.js';
+import { listHeld, dropHeld, type HeldEntry } from '../../../agent/peer/inbox-store.js';
 import { resolvePeerInboundMode } from '../../../agent/peer/inbound-mode.js';
 
 let notifierRef: PeerInboxNotifier | undefined;
@@ -88,7 +88,17 @@ export const inboxCmd: SlashCommand = {
       } else {
         ctx.out.line(palette.dim('  id        from                  age   preview'));
         const now = Date.now();
-        for (const { envelope: e } of held) {
+        for (const entry of held) {
+          if (entry.corrupt) {
+            // Show unparseable held files so the operator can drop them.
+            const fileShort = entry.file.slice(0, 8);
+            ctx.out.line(
+              `  ${fileShort}  ${'[corrupt]'.padEnd(20)}  ${'?'.padEnd(4)}  ` +
+              palette.dim('(unparseable — use /inbox drop to remove)'),
+            );
+            continue;
+          }
+          const e = entry.envelope;
           const idShort = e.messageId.slice(0, 8);
           const fromLabel =
             e.from.name !== undefined
@@ -116,8 +126,10 @@ export const inboxCmd: SlashCommand = {
       if (arg === '' || arg === 'all') {
         ids = 'all';
       } else {
-        // Match the prefix against held message ids.
+        // Match the prefix against held message ids. Corrupt entries have no
+        // messageId and cannot be accepted; they can only be dropped.
         const matched = held
+          .filter((h): h is Extract<HeldEntry, { corrupt?: never }> => !h.corrupt)
           .filter(({ envelope: e }) => e.messageId.startsWith(arg))
           .map(({ envelope: e }) => e.messageId);
         if (matched.length === 0) {
@@ -149,9 +161,16 @@ export const inboxCmd: SlashCommand = {
 
       let targets: Array<{ file: string; id: string }>;
       if (arg === '' || arg === 'all') {
-        targets = held.map(({ file, envelope: e }) => ({ file, id: e.messageId }));
+        // Corrupt entries have no messageId; use the filename as a fallback id
+        // so the operator can still drop them with /inbox drop all.
+        targets = held.map((h) => ({
+          file: h.file,
+          id: h.corrupt ? `[corrupt:${h.file}]` : h.envelope.messageId,
+        }));
       } else {
+        // Only match parseable entries by id prefix.
         targets = held
+          .filter((h): h is Extract<HeldEntry, { corrupt?: never }> => !h.corrupt)
           .filter(({ envelope: e }) => e.messageId.startsWith(arg))
           .map(({ file, envelope: e }) => ({ file, id: e.messageId }));
         if (targets.length === 0) {

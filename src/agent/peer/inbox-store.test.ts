@@ -121,8 +121,12 @@ describe('peekPending', () => {
     expect(files).toHaveLength(1);
 
     const peeked = await peekPending(TARGET_ID, files[0]!);
-    expect(peeked).not.toBeNull();
-    expect(peeked!.messageId).toBe(env.messageId);
+    // A valid envelope is returned as-is.
+    expect(peeked).not.toBe('vanished');
+    expect(peeked).not.toBe('unparseable');
+    // Type narrowing: peeked is PeerEnvelope here.
+    if (typeof peeked === 'string') throw new Error('unexpected string result');
+    expect(peeked.messageId).toBe(env.messageId);
 
     // File is still in pending after peek.
     const filesAfterPeek = await listPending(TARGET_ID);
@@ -130,10 +134,34 @@ describe('peekPending', () => {
     expect(filesAfterPeek[0]).toBe(files[0]);
   });
 
-  it('returns null for a nonexistent file', async () => {
+  it('returns "vanished" for a nonexistent file', async () => {
     const { peekPending } = await getInboxStore();
     const result = await peekPending(TARGET_ID, 'nonexistent.json');
-    expect(result).toBeNull();
+    expect(result).toBe('vanished');
+  });
+
+  it('returns "unparseable" for a file that exists but has invalid content', async () => {
+    const { peekPending } = await getInboxStore();
+    const pendingDir = path.join(tmpDir, 'inbox', TARGET_ID, 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true, mode: 0o700 });
+    const file = 'bad-content.json';
+    fs.writeFileSync(path.join(pendingDir, file), 'THIS IS NOT JSON', { mode: 0o600 });
+    const result = await peekPending(TARGET_ID, file);
+    expect(result).toBe('unparseable');
+  });
+
+  it('returns "unparseable" for a v:2 envelope (unsupported version)', async () => {
+    const { peekPending } = await getInboxStore();
+    const pendingDir = path.join(tmpDir, 'inbox', TARGET_ID, 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true, mode: 0o700 });
+    const file = 'v2-envelope.json';
+    fs.writeFileSync(
+      path.join(pendingDir, file),
+      JSON.stringify({ v: 2, messageId: 'x', from: { id: 'a' }, to: 'b', hop: 0, ts: new Date().toISOString(), body: 'hi' }),
+      { mode: 0o600 },
+    );
+    const result = await peekPending(TARGET_ID, file);
+    expect(result).toBe('unparseable');
   });
 });
 

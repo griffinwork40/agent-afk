@@ -238,18 +238,32 @@ export async function checkOrphanPending(
 /**
  * Read a pending envelope WITHOUT claiming it, so a receiver can decide
  * (sender identity, wake budget) before committing to claim or hold.
- * Returns `null` when the file is gone or unparseable. Never throws.
+ *
+ * Returns:
+ *   - A {@link PeerEnvelope} when the file is readable and parses cleanly.
+ *   - `'vanished'`    — the file is gone (ENOENT); safe to silently skip.
+ *   - `'unparseable'` — the file exists but does not parse (corrupt bytes or
+ *                       an unsupported schema version); caller should move it
+ *                       to `held/` so it stops re-appearing on every poll.
+ *
+ * Never throws.
  */
 export async function peekPending(
   sessionId: string,
   file: string,
-): Promise<PeerEnvelope | null> {
+): Promise<PeerEnvelope | 'vanished' | 'unparseable'> {
+  let raw: string;
   try {
-    const raw = await readFile(join(getPeerInboxDir(sessionId), 'pending', file), 'utf8');
-    return parseEnvelope(raw);
-  } catch {
-    return null;
+    raw = await readFile(join(getPeerInboxDir(sessionId), 'pending', file), 'utf8');
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return 'vanished';
+    // Other read errors (EACCES, EIO, …): treat as unparseable — content may
+    // be partially intact; move to held/ rather than leaving it looping.
+    return 'unparseable';
   }
+  const env = parseEnvelope(raw);
+  return env !== null ? env : 'unparseable';
 }
 
 /**
@@ -272,13 +286,42 @@ export async function holdPending(sessionId: string, file: string): Promise<bool
 }
 
 /**
- * List held envelopes for a session, sorted chronologically.
- * Returns an array of `{ file, envelope }` pairs; unparseable entries are
- * skipped silently.
+ * A successfully parsed held entry.
+ * @see listHeld
  */
-export async function listHeld(
-  sessionId: string,
-): Promise<Array<{ file: string; envelope: PeerEnvelope }>> {
+export interface HeldEntryOk {
+  file: string;
+  envelope: PeerEnvelope;
+  /** Discriminant: always absent on a parseable entry. */
+  corrupt?: never;
+}
+
+/**
+ * A held entry whose content cannot be parsed (corrupt bytes or unsupported
+ * schema version). Content is preserved in `held/`; only the structured
+ * envelope is unavailable.
+ * @see listHeld
+ */
+export interface HeldEntryCorrupt {
+  file: string;
+  /** Discriminant: true when the envelope cannot be parsed. */
+  corrupt: true;
+  envelope?: never;
+}
+
+/** Discriminated union for a single entry returned by {@link listHeld}. */
+export type HeldEntry = HeldEntryOk | HeldEntryCorrupt;
+
+/**
+ * List held envelopes for a session, sorted chronologically.
+ *
+ * Returns one {@link HeldEntry} per file in `held/`:
+ *   - `{ file, envelope }` when the file is readable and parses cleanly.
+ *   - `{ file, corrupt: true }` when the file exists but cannot be parsed
+ *     (corrupt bytes, unsupported schema version, or partial write). Content
+ *     is preserved; the caller may {@link dropHeld} the entry by `file`.
+ */
+export async function listHeld(sessionId: string): Promise<HeldEntry[]> {
   const dir = join(getPeerInboxDir(sessionId), 'held');
   let files: string[];
   try {
@@ -286,14 +329,20 @@ export async function listHeld(
   } catch {
     return [];
   }
-  const results: Array<{ file: string; envelope: PeerEnvelope }> = [];
+  const results: HeldEntry[] = [];
   for (const file of files) {
     try {
       const raw = await readFile(join(dir, file), 'utf8');
       const env = parseEnvelope(raw);
-      if (env) results.push({ file, envelope: env });
+      if (env) {
+        results.push({ file, envelope: env });
+      } else {
+        results.push({ file, corrupt: true });
+      }
     } catch {
-      // Skip unreadable files silently.
+      // Unreadable (EACCES, EIO, …): still surface it as corrupt so the
+      // operator can see and drop it via /inbox.
+      results.push({ file, corrupt: true });
     }
   }
   return results;

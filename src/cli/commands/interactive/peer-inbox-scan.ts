@@ -17,6 +17,10 @@
  * removed silently without spending a wake-budget slot and without creating a
  * held/ entry. A corrupt receipt leaves the pending file intact.
  *
+ * Invariant: an unparseable pending file is moved to `held/` with reason
+ * `'corrupt'` on first encounter, stopping the infinite re-read loop. Content
+ * is preserved; no wake-budget slot is spent.
+ *
  * Invariant: a wake-budget slot is spent ONLY when claimPending returns a
  * non-null envelope. A null return (lost race or vanished source) or a thrown
  * claim triggers an immediate refund via `wakeBudget.refund()`.
@@ -35,11 +39,34 @@ import type { PeerInboundMode } from '../../../agent/peer/inbound-mode.js';
 import type { WakeBudget } from '../../../agent/peer/guards.js';
 import type { PeerEnvelope } from '../../../agent/peer/envelope.js';
 
-export type HeldReason = 'inbound-hold' | 'wake-budget';
+export type HeldReason = 'inbound-hold' | 'wake-budget' | 'corrupt';
+
+/**
+ * A held entry with a successfully parsed envelope (`reason` is `'inbound-hold'`
+ * or `'wake-budget'`).
+ */
+export interface HeldEntryOk {
+  envelope: PeerEnvelope;
+  reason: Exclude<HeldReason, 'corrupt'>;
+}
+
+/**
+ * A held entry for an envelope that could not be parsed. The file has been
+ * moved to `held/` to stop it from re-appearing on every poll, but no
+ * structured envelope is available.
+ */
+export interface HeldEntryCorrupt {
+  envelope?: never;
+  reason: 'corrupt';
+  /** Filename that was moved to `held/`. */
+  file: string;
+}
+
+export type HeldEntry = HeldEntryOk | HeldEntryCorrupt;
 
 export interface PeerScanResult {
   claimed: PeerEnvelope[];
-  held: Array<{ envelope: PeerEnvelope; reason: HeldReason }>;
+  held: HeldEntry[];
 }
 
 export interface PeerScanArgs {
@@ -69,14 +96,30 @@ async function processPendingFile(
 ): Promise<void> {
   try {
     // Orphan check: if a delivered receipt already exists, this pending file
-    // is crash residue. Remove it (if the receipt is valid) without spending
-    // budget or creating a held/ entry.
+    // is crash residue.
+    //   'valid'  — receipt parsed; pending source removed; skip silently.
+    //   'corrupt' — receipt exists but is unparseable (e.g. partial copy on
+    //               crash); pending source is intact. Move it to held/ so it
+    //               stops re-appearing on every poll (content preserved).
+    //   'none'   — not an orphan; process normally.
     const orphan = await checkOrphanPending(args.sessionId, file);
-    if (orphan === 'valid' || orphan === 'corrupt') return;
+    if (orphan === 'valid') return;
+    if (orphan === 'corrupt') {
+      const moved = await holdPending(args.sessionId, file);
+      if (moved) result.held.push({ reason: 'corrupt', file });
+      return;
+    }
 
     const peeked = await peekPending(args.sessionId, file);
-    if (peeked === null) return; // vanished (another claimer) or unparseable
-    let reason: HeldReason | undefined;
+    if (peeked === 'vanished') return; // silently gone — another claimer won or the file was removed
+    if (peeked === 'unparseable') {
+      // Move to held/ so it does not re-appear on every poll. Content is
+      // preserved; the operator can inspect or drop it via /inbox.
+      const moved = await holdPending(args.sessionId, file);
+      if (moved) result.held.push({ reason: 'corrupt', file });
+      return;
+    }
+    let reason: Exclude<HeldReason, 'corrupt'> | undefined;
     if (args.mode === 'hold') reason = 'inbound-hold';
     else if (!args.wakeBudget.tryConsume(peeked.from.id)) reason = 'wake-budget';
     if (reason !== undefined) {
