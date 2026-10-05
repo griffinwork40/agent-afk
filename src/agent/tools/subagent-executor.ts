@@ -19,7 +19,7 @@ import { stripEscapeSequences } from '../../utils/terminal-sanitize.js';
 import { deriveOrigin, actorFromDepth, type TraceOrigin, type TraceActor } from '../session/session-identity.js';
 import { parseAgentInput, type AgentInput, type AgentExecutionMode } from './subagent/input-parse.js';
 import { emitTelemetry, truncate } from './subagent/failure-payload.js';
-import { buildChildConfig } from './subagent/child-config.js';
+import { buildChildConfig, type BuildChildConfigArgs } from './subagent/child-config.js';
 import { runBackgroundBranch } from './subagent/background-branch.js'; import { cancelBackgroundJob as executeBackgroundCancel } from './subagent/background-cancel.js';
 import { sendMessageToAgent as executeSendMessage } from './subagent/send-message.js'; import { getBackgroundJobHealth as executeBackgroundHealth } from './subagent/background-health.js';
 import { runForegroundWithPromotion, type PromotionTrigger } from './subagent/foreground-promotion.js';
@@ -154,6 +154,28 @@ export class SubagentExecutor implements SubagentControl {
     cwd?: string,
   ): void {
     this.waveTracker.updateUnit(callId, status, error, cwd);
+  }
+
+  /**
+   * Executor-context fields `buildChildConfig` inherits unchanged. Extracted
+   * from `executeOnce` (function-size ceiling). `parentRootSessionId` (#2442)
+   * falls back to this executor's live parent id, which IS the root at depth 0,
+   * so depth-1 forks seed the root id their own descendants inherit.
+   */
+  private inheritedChildConfigArgs(): Partial<BuildChildConfigArgs> {
+    const c = this.ctx;
+    const rootSessionId = c.parentRootSessionId ?? c.parentSession.sessionId;
+    return {
+      ...(c.surface !== undefined ? { surface: c.surface } : {}),
+      ...(c.allowedTools !== undefined ? { allowedTools: c.allowedTools } : {}),
+      ...(c.readOnlyBash !== undefined ? { readOnlyBash: c.readOnlyBash } : {}),
+      ...(c.agentRegistry !== undefined ? { agentRegistry: c.agentRegistry } : {}),
+      ...(c.parentModel !== undefined ? { parentModel: c.parentModel } : {}),
+      ...(c.traceWriter !== undefined ? { traceWriter: c.traceWriter } : {}),
+      ...(c.workspaceStore !== undefined ? { workspaceStore: c.workspaceStore } : {}),
+      ...(c.delegationBudget !== undefined ? { delegationBudget: c.delegationBudget } : {}),
+      ...(rootSessionId !== undefined ? { parentRootSessionId: rootSessionId } : {}),
+    };
   }
 
   supportsBackgroundJobs(): boolean { return this.ctx.backgroundRegistry !== undefined; }
@@ -439,15 +461,7 @@ export class SubagentExecutor implements SubagentControl {
       ...(this.ctx.childSkillExecutorFactory !== undefined
         ? { childSkillExecutorFactory: this.ctx.childSkillExecutorFactory }
         : {}),
-      ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
-      ...(this.ctx.allowedTools !== undefined ? { allowedTools: this.ctx.allowedTools } : {}),
-      ...(this.ctx.readOnlyBash !== undefined ? { readOnlyBash: this.ctx.readOnlyBash } : {}),
-      ...(this.ctx.agentRegistry !== undefined ? { agentRegistry: this.ctx.agentRegistry } : {}),
-      ...(this.ctx.parentModel !== undefined ? { parentModel: this.ctx.parentModel } : {}),
-      ...(this.ctx.traceWriter !== undefined ? { traceWriter: this.ctx.traceWriter } : {}),
-      ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
-      ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
-      parentRootSessionId: this.ctx.parentRootSessionId ?? this.ctx.parentSession.sessionId, // #2442
+      ...this.inheritedChildConfigArgs(),
       createChildExecutor: (childCtx) => new SubagentExecutor(childCtx),
     });
 

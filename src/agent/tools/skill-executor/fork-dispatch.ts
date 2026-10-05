@@ -415,8 +415,12 @@ export async function runForkedSkillToResult(
       parentId,
       agentType: label,
     });
-    // Nested forks of this skill child journal via ITS journal (forSubagent).
-    if (journalView !== undefined) journalView.messageJournal = handle.session?.messageJournal;
+    // Nested forks of this skill child journal via ITS journal (forSubagent),
+    // and carry ITS id as their parentSessionId (#2442 child-attribution).
+    if (journalView !== undefined) {
+      journalView.messageJournal = handle.session?.messageJournal;
+      journalView.sessionId = handle.id;
+    }
 
     // Invariant: the anchor is ALWAYS sent, args or not. Naming the skill
     // removes the "which skill?" ambiguity a bare "Run the skill." would leave;

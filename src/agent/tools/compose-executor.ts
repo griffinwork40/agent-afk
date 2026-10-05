@@ -183,13 +183,6 @@ export interface ComposeExecutorContext {
   /** Tree-wide delegation budget. Opt-in: undefined when no budget env vars set. */
   delegationBudget?: import('./delegation-budget.js').DelegationBudget;
   /**
-   * Root (depth-0) session id inherited by this executor's parent. Threaded
-   * into the per-call {@link SubagentManager} so compose DAG nodes are
-   * attributed to the root record rather than an intermediate session.
-   * Parity with {@link SubagentExecutorContext.parentRootSessionId}.
-   */
-  parentRootSessionId?: string;
-  /**
    * Inbound attachment registry for resolving image IDs in per-node
    * `attachments` arrays. Falls back to the module-scope singleton
    * (`defaultInboundAttachmentRegistry`) when absent — matching the pattern
@@ -422,7 +415,6 @@ export class ComposeExecutor {
       // this.ctx.surface already drives routing telemetry (deriveOrigin).
       ...(this.ctx.surface !== undefined ? { surface: this.ctx.surface } : {}),
       ...(this.ctx.workspaceStore !== undefined ? { workspaceStore: this.ctx.workspaceStore } : {}),
-      ...(this.ctx.parentRootSessionId !== undefined ? { parentRootSessionId: this.ctx.parentRootSessionId } : {}),
     });
     // Subagent-success rollup: wire the per-call manager with the same
     // callback that the root manager receives (see bootstrap.ts and the

@@ -112,6 +112,9 @@ export interface SkillExecutorContext {
     // Forking child's journal view (read lazily): nested skill forks journal
     // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
     journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   /**
    * Witness-layer trace writer. When provided, the per-call

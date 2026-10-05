@@ -78,6 +78,13 @@ export interface AssembleChildConfigArgs<T> {
   nestedAgentAllowlist?: readonly string[];
 }
 
+/** The manager-owned parent fields every fork passes (`SubagentManager.parentForkFields`). */
+export type ParentForkFields = Pick<
+  AssembleChildConfigArgs<unknown>,
+  | 'parentCwd' | 'parentApiKey' | 'parentBaseUrl' | 'parentProvider'
+  | 'parentTraceWriter' | 'parentSurface' | 'parentCanUseTool' | 'parentRootSessionId'
+>;
+
 /**
  * Append the model-facing fork preambles to a fully resolved child config.
  *

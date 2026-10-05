@@ -93,6 +93,9 @@ export interface BuildChildConfigArgs {
     // Forking child's journal view (read lazily): nested skill forks journal
     // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
     journalParent?: JournalParent,
+    // Root (depth-0) session id for child-attribution (#2442); becomes the
+    // nested executor's `parentRootSessionId`.
+    rootSessionId?: string,
   ) => SkillExecutor;
   surface?: Surface;
   allowedTools?: string[];
@@ -173,6 +176,38 @@ export interface BuildChildConfigResult {
  * executor + provider). Returns the config plus the mutable child parent
  * session the caller backfills with `handle.id` after `forkSubagent`.
  */
+/**
+ * Build the depth-2+ {@link SubagentManager} a nested child uses for its own
+ * `agent` forks. Extracted from {@link buildChildConfig} (function-size
+ * ceiling); every input is an explicit parameter.
+ *
+ * Each field chains one parent property to the grandchild forks:
+ * - `cwd`: worktree anchor (else `forkSubagent` reads an undefined
+ *   `parentCwd` and grandchild bash/grep fall back to process.cwd()).
+ * - `parentReadRoots`: transitive read scope (../subagent-read-scope), so a
+ *   read-open child does not re-confine its grandchildren to `[cwd]`.
+ * - `traceWriter`: witness layer; without it depth-2+ forks emit no
+ *   subagent_lifecycle events.
+ * - `surface`: origin attribution ('cli'/'telegram'/'daemon', not 'unknown').
+ * - `workspaceStore`: workspace READ channel.
+ * - `parentRootSessionId` (#2442): grandchildren credit artifacts to the root.
+ */
+function buildNestedChildManager(
+  args: BuildChildConfigArgs,
+  signal: AbortSignal,
+  currentCwd: string | undefined,
+): SubagentManager {
+  return new SubagentManager({
+    parentAbortSignal: signal,
+    ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
+    ...(args.childInheritedReadRoots !== undefined ? { parentReadRoots: args.childInheritedReadRoots } : {}),
+    ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
+    ...(args.surface !== undefined ? { surface: args.surface } : {}),
+    ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
+    ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
+  });
+}
+
 export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigResult {
   const {
     parsed,
@@ -412,29 +447,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
     // Without this, `SubagentManager.forkSubagent` reads `this.parentCwd`
     // (undefined) and depth-2 child config.cwd is omitted — its
     // bash/grep/read_file fall back to process.cwd() (host repo).
-    childManager = new SubagentManager({
-      parentAbortSignal: signal,
-      ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
-      // Transitive read-scope: seed the grandchild manager with THIS child's
-      // inherited read roots (see ../subagent-read-scope) so a read-open child
-      // does not re-confine its own grandchildren to `[cwd]`.
-      ...(args.childInheritedReadRoots !== undefined
-        ? { parentReadRoots: args.childInheritedReadRoots }
-        : {}),
-      // Witness layer: without this, depth-2+ `agent` forks emit no
-      // subagent_lifecycle events — the nested manager had no writer and
-      // agent-tool dispatches never set config.traceWriter. Mirrors the
-      // cwd chaining above; see BuildChildConfigArgs.traceWriter.
-      ...(args.traceWriter !== undefined ? { traceWriter: args.traceWriter } : {}),
-      // Origin attribution: thread the surface into the nested manager so
-      // depth-2+ `agent` forks inherit the owning surface's origin
-      // ('cli'/'telegram'/'daemon', not 'unknown') via forkSubagent's
-      // parentSurface fill. Mirrors the traceWriter/cwd chaining above and the
-      // recursive child executor ctx below (which already forwards args.surface).
-      ...(args.surface !== undefined ? { surface: args.surface } : {}),
-      ...(args.workspaceStore !== undefined ? { workspaceStore: args.workspaceStore } : {}),
-      ...(args.parentRootSessionId !== undefined ? { parentRootSessionId: args.parentRootSessionId } : {}),
-    });
+    childManager = buildNestedChildManager(args, signal, currentCwd);
     childParentSession = createStubParentSession(signal) as ChildParentSession;
     const childExecutor = createChildExecutor({
       subagentManager: childManager,
@@ -490,6 +503,7 @@ export function buildChildConfig(args: BuildChildConfigArgs): BuildChildConfigRe
       ? args.childSkillExecutorFactory(
           depth + 1, maxDepth, signal, currentCwd, childReadScope,
           namedAgent === undefined ? defaultConfig.skillDispatchName : undefined, childParentSession, // Fix A; journal view
+          args.parentRootSessionId, // #2442: root id for the nested skill executor
         )
       : undefined;
     // Pass `model` so the factory routes between AnthropicDirect /

@@ -38,7 +38,7 @@ import { type ReadScopeInputs } from './subagent-read-scope.js';
 import { resolveReadScope, composeWriteRoots } from './subagent/resolve-fork-scope.js';
 import { providerForModel, type BundledProviderName } from './providers/index.js';
 import { validatePhaseRole } from './subagent/fork-validation.js';
-import { assembleChildConfig } from './subagent/fork-child-config.js';
+import { assembleChildConfig, type ParentForkFields } from './subagent/fork-child-config.js';
 import { emitForkStarted, appendForkTelemetry, emitSubagentStartedEvent } from './subagent/fork-lifecycle.js';
 import { SubagentHandleImpl, type SubagentHandle } from './subagent/handle.js';
 import { resolveForkInputs } from './subagent/fork-resolution.js';
@@ -282,6 +282,16 @@ export class SubagentManager {
     return { parentReadRoots: this.parentReadRoots, parentCwd: this.parentCwd };
   }
 
+  /**
+   * The manager-owned parent fields every fork hands to
+   * {@link assembleChildConfig}. Extracted from `forkSubagent` (function-size
+   * ceiling); `parentRootSessionId` (#2442) seeds grandchild root attribution.
+   */
+  private parentForkFields(): ParentForkFields {
+    const { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId } = this;
+    return { parentCwd, parentApiKey, parentBaseUrl, parentProvider, parentTraceWriter, parentSurface, parentCanUseTool, parentRootSessionId };
+  }
+
   private async resolveMainRootForCwd(cwd: string): Promise<string | undefined> {
     return this.worktreeMainRootCache.resolve(cwd);
   }
@@ -420,14 +430,7 @@ export class SubagentManager {
         inheritedReadRoots,
         composedWriteRoots,
         childController,
-        parentCwd: this.parentCwd,
-        parentApiKey: this.parentApiKey,
-        parentBaseUrl: this.parentBaseUrl,
-        parentProvider: this.parentProvider,
-        parentTraceWriter: this.parentTraceWriter,
-        parentSurface: this.parentSurface,
-        parentCanUseTool: this.parentCanUseTool,
-        parentRootSessionId: this.parentRootSessionId,
+        ...this.parentForkFields(),
         workspaceStore: this.workspaceStore, ...(options.nestedAgentAllowlist !== undefined ? { nestedAgentAllowlist: options.nestedAgentAllowlist } : {}),
       });
 

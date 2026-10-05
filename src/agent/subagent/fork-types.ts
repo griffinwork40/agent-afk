@@ -40,6 +40,13 @@ export interface ForkParent {
  */
 export interface JournalParent {
   readonly messageJournal?: MessageJournal;
+  /**
+   * Live id of the forking parent, when the view is backed by a mutable stub
+   * that is backfilled after its own fork returns (#2442). Read lazily by the
+   * nested SkillExecutor factory so skill forks inside a sub-agent get a real
+   * `parentSessionId`. Absent on plain journal-only views.
+   */
+  readonly sessionId?: string | undefined;
 }
 
 export interface ForkSubagentOptions<T = unknown> {

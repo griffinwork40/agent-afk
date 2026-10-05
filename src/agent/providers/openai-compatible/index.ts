@@ -36,7 +36,6 @@ import {
   createExitPlanModeHandler,
   EXIT_PLAN_MODE_TOOL_NAME,
 } from '../../tools/handlers/exit-plan-mode.js';
-import type { PlanExitControls } from '../../types/config-types.js';
 import {
   builtinToolSchemas,
   agentTool,
@@ -64,6 +63,7 @@ import {
 import { resolveSessionId, registerSessionPresence } from './session-wiring.js';
 import { buildSystemPromptWiring } from './system-prompt-wiring.js';
 import { type ChildSessionOptions, isStateRestricted, stateToolSchemas, stateReadToolSchemas } from './index.child-session.js';
+import type { BuildDispatcherOpts } from './index.dispatcher-opts.js';
 
 const PROVIDER_NAME = 'openai-compatible';
 
@@ -419,77 +419,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
    */
   private buildDispatcher(
     permissionMode: string,
-    opts: {
-      cwd?: string;
-      readRoots?: string[];
-      writeRoots?: string[];
-      sessionId?: string;
-      parentSessionId?: string;
-      /**
-       * Root (depth-0) session id, forwarded from {@link AgentConfig.rootSessionId}.
-       * Undefined on top-level sessions. Parity with
-       * `anthropic-direct/build-dispatcher.ts:BuildDispatcherOpts.rootSessionId`.
-       */
-      rootSessionId?: string;
-      /**
-       * This fork's own subagent id — parity with
-       * `anthropic-direct/index.ts:buildDispatcher`. Stamped onto every
-       * `hook_decision` the dispatcher emits so a policy block is attributable
-       * to the child that provoked it. Undefined on a top-level session.
-       */
-      subagentId?: string;
-      /** `AgentConfig.env` — parity with anthropic-direct (bash/test_run child env). */
-      env?: Record<string, string>;
-      /**
-       * Explicit "this session is a forked subagent" signal carrying the
-       * per-result output-cap budget (#661) — parity with
-       * `anthropic-direct/index.ts:buildDispatcher`. Set to MODEL_CAP_BYTES by
-       * `SubagentManager.forkSubagent` for EVERY fork; undefined on a top-level
-       * session. Arms the dispatcher's `maxOutputBytes` backstop declaratively.
-       */
-      subagentToolOutputCapBytes?: number;
-      traceWriter?: import('../../trace/index.js').TraceSink;
-      /** Factory for the REPL-only live bash output tail callback. */
-      bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
-      /**
-       * Session-scoped detach registry for the Ctrl+B bash-backgrounding
-       * contract (#2542, #2735) — parity with anthropic-direct buildDispatcher.
-       * Absent for headless surfaces and forked children.
-       */
-      detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
-      /**
-       * Live source for the `get_runtime_state` tool — see the matching
-       * comment in `anthropic-direct/index.ts:buildDispatcher`.
-       */
-      runtimeStateSource?: RuntimeStateSource;
-      /**
-       * When true, this is a skill-dispatch sub-agent: strip the `ask_question`
-       * escape-hatch tool so it cannot ask the operator "which skill?". Parity
-       * with the `config.isSkillDispatch` toolDefs filter in
-       * AnthropicDirectProvider.
-       */
-      isSkillDispatch?: boolean;
-      /**
-       * When true, this is a non-interactive surface (daemon, scheduler/cron,
-       * one-shot chat) where no human answers elicitations. Strip `ask_question`
-       * only (not `terminal_font_size`). Parity with the `config.isNonInteractive`
-       * toolDefs filter in AnthropicDirectProvider.
-       */
-      isNonInteractive?: boolean;
-      /**
-       * Session-scoped hook registry from `AgentConfig.hookRegistry`. Threaded
-       * here so `PreToolUse`/`PostToolUse` hooks (notably the plan-mode gate)
-       * fire on the per-query dispatcher. Falls back to the constructor-time
-       * `providerOpts.hookRegistry` when unset. Mirrors AnthropicDirectProvider.
-       */
-      hookRegistry?: import('../../hooks.js').HookRegistry;
-      /**
-       * Session-control bridge for `exit_plan_mode`, forwarded from the query
-       * config (top-level sessions only). When set AND `permissionMode ===
-       * 'plan'`, the handler + schema are registered. Mirrors AnthropicDirectProvider.
-       */
-      planExitControls?: PlanExitControls;
-    },
+    opts: BuildDispatcherOpts,
   ): SessionToolDispatcher {
     const handlers = createBuiltinHandlers(permissionMode, opts.cwd);
     const memoryHandlers = guardChildHotWrites(createMemoryHandlers((this._memoryStore ??= makeDefaultMemoryStore()), undefined, this.providerOpts.surface ?? 'cli'), isForkedChildSession(this.providerOpts.readOnlyState, opts));
