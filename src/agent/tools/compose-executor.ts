@@ -23,6 +23,7 @@ import { resolveChildModel } from '../subagent/resolve-child-model.js';
 import { providerForModel } from '../providers/index.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { applyParentCredentialFallback } from './child-credential.js';
+import { buildParentCredentialOpt } from './compose-executor.credential.js';
 
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
@@ -389,10 +390,9 @@ export class ComposeExecutor {
     );
     manager = new SubagentManager({
       parentAbortSignal: call.signal,
-      apiKey: this.ctx.apiKey,
-      // Use credentialModel (key's source model) not defaultModel (routing model)
-      // so parentProvider aligns with the credential shape — see field JSDoc.
-      parentModel: this.ctx.credentialModel ?? this.ctx.defaultModel,
+      // #2844: pair credential with its source model (credentialModel, not defaultModel) so provider can't mismatch.
+      // Built only when a real source model is known; see compose-executor.credential.ts.
+      ...buildParentCredentialOpt(this.ctx.apiKey, this.ctx.credentialModel ?? this.ctx.defaultModel),
       // Keep ambient rendering failures isolated from node execution. The
       // forwarding sink resolves the ambient sink per event, so sinks
       // installed after manager construction are still observed.

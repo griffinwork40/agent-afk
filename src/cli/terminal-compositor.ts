@@ -670,7 +670,7 @@ export class TerminalCompositor {
       captureMode: opts.captureMode ?? false,
       goblin: opts.goblinSpinner ?? false,
       onTick: () => this.repaint(),
-      // Pull-based so the spinner reads the live verb during its existing 80ms
+      // Pull-based so the spinner reads the live verb during its existing frame
       // tick — no extra timer, no extra repaint path. Returns undefined when no
       // tool is in flight, which routes the spinner back to its flavour pool.
       // The verb is pre-resolved by InFlightToolTracker.currentVerb() so no
@@ -929,9 +929,9 @@ export class TerminalCompositor {
 
   // ora's imperative cursor + linesToClear tracking collides with log-update's
   // region tracking when both run concurrently. The SpinnerController owns the
-  // spinner state + 80ms ticker; the compositor owns the frame and pulls the
-  // spinner/tip rows from it at repaint time, so the spinner row lives inside
-  // the same render frame and the race is eliminated. The TTY guard stays here
+  // spinner state + frame ticker (80ms warm, 250ms idle); the compositor owns
+  // the frame and pulls the spinner/tip rows from it at repaint time, so the
+  // spinner row lives inside the same render frame and the race is eliminated. The TTY guard stays here
   // — the controller is terminal-agnostic and assumes an interactive surface.
   setSpinner(config: { enabled: boolean; rotateVerbEveryMs?: number }): void {
     if (!this.stdout.isTTY) return;
@@ -942,7 +942,7 @@ export class TerminalCompositor {
    * Record the tool currently in flight so the spinner's verb can describe real
    * work instead of rotating random flavour words.
    *
-   * Deliberately does NOT repaint: the spinner's existing 80ms tick picks the new
+   * Deliberately does NOT repaint: the spinner's existing frame tick picks the new
    * verb up on its next frame, and the caller (StreamRenderer) is already firing
    * a repaint for the same transition. Painting here too would add a second
    * frame write per tool event for no visible gain.
