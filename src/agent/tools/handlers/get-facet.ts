@@ -131,9 +131,25 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
       // Route through name resolver so an SDK id that differs from the sidecar
       // filename stem still resolves correctly (Item 4).
       const resolved = resolveSessionByName(callerSessionId);
-      sessionId = resolved?.sidecarId ?? callerSessionId;
-      resolvedByName = true;
-      isSelfResolution = true;
+      if (resolved) {
+        sessionId = resolved.sidecarId;
+        resolvedByName = true;
+        // Only mark isSelfResolution when the resolved session is genuinely the
+        // caller's — i.e. when its stored sessionId equals callerSessionId.
+        isSelfResolution = resolved.sessionId === callerSessionId;
+      } else {
+        // Resolution failed (sidecar not yet flushed / swept). Fall through to
+        // "latest" semantics rather than handing a bare SDK id to getOrDeriveFacet
+        // (which would look for a <sdk-id>.json that does not exist).
+        const ids = listSessionIds();
+        if (ids.length > 0) {
+          const sessionsDir = getSessionsDir();
+          const winner = resolveLatest(ids, sessionsDir, callerCwd);
+          sessionId = winner?.id;
+          latestWinnerCwd = winner?.cwd;
+          cwdMismatch = winner ? !winner.cwdMatch : false;
+        }
+      }
     } else {
       // No context — fall through to "latest" semantics.
       const ids = listSessionIds();
@@ -197,12 +213,20 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
 
   // When no callerCwd is available, cwd_mismatch stays false (not a cross-cwd call).
   // When callerCwd is set but sessionCwd is unknown, also stays false (Item 3).
-  if (callerCwd !== undefined && sessionCwd !== undefined) {
-    cwdMismatch = sessionCwd !== callerCwd;
-  } else if (callerCwd === undefined) {
+  // Guard: only recompute cwdMismatch for the explicit-id path when callerCwd is set;
+  // the latest and self-alias paths already set cwdMismatch correctly via resolveLatest
+  // when callerCwd is present. The callerCwd-absent reset (false) still runs
+  // unconditionally because resolveLatest returns cwdMatch:false when no callerCwd is
+  // given, which would incorrectly set cwdMismatch to true on the latest/self paths.
+  if (callerCwd === undefined) {
     cwdMismatch = false;
-  } else if (sessionCwd === undefined) {
-    cwdMismatch = false;
+  } else if (resolvedByName) {
+    if (sessionCwd !== undefined) {
+      cwdMismatch = sessionCwd !== callerCwd;
+    } else {
+      // callerCwd set but sessionCwd unknown — Item 3.
+      cwdMismatch = false;
+    }
   }
 
   const raw = facet as Record<string, unknown>;

@@ -441,6 +441,20 @@ describe('getFacetHandler – "current" / "self" resolution', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('"current" with a ctx.sessionId that matches no sidecar → falls back to latest, not isError', async () => {
+    // Simulate the first-turn flush race: the caller has an SDK-assigned session id
+    // that resolveSessionByName cannot find (no sidecar exists for it yet).
+    // The handler must NOT return 'Session not found'; it must fall back to latest.
+    writeSession('sess-latest-fallback');
+
+    const ctx: ToolHandlerContext = { sessionId: 'sdk-unresolvable-id-xyz' };
+    const result = await getFacetHandler({ session: 'current' }, ABORT, ctx);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    // Must resolve to the existing session via latest fallback
+    expect(parsed['session_id']).toBe('sess-latest-fallback');
+  });
+
   it('"current" resolves correctly when SDK id differs from sidecar filename stem', async () => {
     // Write a sidecar whose filename stem ('sess-current-sdk') differs from the
     // stored sessionId field ('sdk-id-abc'). This simulates an SDK-assigned id.
