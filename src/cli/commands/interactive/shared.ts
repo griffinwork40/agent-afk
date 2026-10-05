@@ -23,8 +23,7 @@ import { ContextSampler } from '../../context-sampler.js';
 import type { GitStatusSampler } from '../../git-status-sampler.js';
 import { formatTurnSparkline } from '../../render/context-sparkline.js';
 import { quotaWindowsFromRecord, quotaWindowsFromSnapshot } from '../../quota-indicator.js';
-import { readUsageRecord } from '../../../agent/usage/usage-snapshot.js';
-import { ANTHROPIC_OAUTH } from '../../../agent/usage/usage-snapshot.js';
+import { readUsageRecord, ANTHROPIC_OAUTH } from '../../../agent/usage/usage-snapshot.js';
 import { palette } from '../../palette.js';
 import { replayTurns } from './turn-record-renderer.replay.js';
 

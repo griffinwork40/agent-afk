@@ -19,10 +19,12 @@
  * The projection math uses the rate computed between the OLDEST and NEWEST
  * samples that both show rising utilization (widest span → least noise).
  *
- * Pure module: no I/O, no module state, no imports from I/O layers.
+ * Pure module: no I/O, no module state.
  *
  * @module agent/usage/burn-rate
  */
+
+import { WINDOWS_HISTORY_MAX } from './usage-record.js';
 
 /** One historical snapshot, as stored in the observation ring. */
 export interface WindowObservationSample {
@@ -122,8 +124,11 @@ export function computeBurnRate(
  * Maximum ring size: keep only the last N samples. Any older samples are
  * trimmed when a new one is appended. Exported so callers (ledger, tests) use
  * the same constant.
+ *
+ * @deprecated Use {@link WINDOWS_HISTORY_MAX} directly. Kept as a re-export
+ * alias for existing call-sites and tests.
  */
-export const RING_SIZE = 12;
+export const RING_SIZE: number = WINDOWS_HISTORY_MAX;
 
 /**
  * Append one sample to an existing ring, trimming to {@link RING_SIZE}.
