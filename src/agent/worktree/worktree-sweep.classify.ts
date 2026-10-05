@@ -138,32 +138,15 @@ export const MAX_TRUSTED_PID_AGE_MS = 30 * 86_400_000;
 // Utility functions
 // ---------------------------------------------------------------------------
 
-/**
- * Probe whether a PID corresponds to a live process via `kill(pid, 0)`.
- * Returns `true` if the kernel accepts the signal (process exists, may or
- * may not be ours to signal), `false` if it's gone (`ESRCH`).
- *
- * Note: `EPERM` (permission denied) means the process exists but isn't
- * ours — still alive from the sweep engine's perspective, so we return
- * `true`. This is the same idiom `acquireLock` uses for stale-lock
- * detection.
- */
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM = process exists but isn't ours to signal — still alive.
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
+// isProcessAlive was previously defined here; now re-exported from the
+// canonical process-liveness module so worktree-sweep.ts imports continue
+// to work without any change to their import path.
+export { isProcessAlive } from '../process-liveness.js';
 
-/**
- * Resolve a path through symlinks, falling back to the raw path when it can't
- * be resolved. macOS aliases /var → /private/var, so both the worktree path
- * and a session cwd must be normalized before any containment check or the
- * comparison silently fails.
- */
+// Invariant: this realpathSafe is intentionally distinct from the one in
+// _cwd-utils.ts. The _cwd-utils version resolves the nearest existing ancestor
+// for not-yet-created write targets; this version only resolves paths that
+// already exist (falling back to the raw path). Do not consolidate.
 export function realpathSafe(p: string): string {
   try { return realpathSync(p); } catch { return p; }
 }

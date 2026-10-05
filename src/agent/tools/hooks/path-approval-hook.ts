@@ -68,6 +68,7 @@ import {
   extractCandidatePath,
   extractAllPaths,
   promptForApproval,
+  pathApprovalKey,
 } from './path-approval-hook.prompt.js';
 export { extractCandidatePath, extractAllPaths } from './path-approval-hook.prompt.js';
 import { isSubagentContext } from '../../hooks/hook-utils.js';
@@ -105,7 +106,12 @@ export interface PathApprovalHookOptions {
   surface: PathApprovalSurface;
 }
 
-/** Shared closure state between the Pre/Post hooks. */
+/**
+ * Shared closure state between the Pre/Post hooks.
+ *
+ * @internal Exported for sibling module consumption (`path-approval-hook.prompt.ts`)
+ * only. Not part of the public API surface.
+ */
 export interface PathApprovalState {
   /** Set of `<mode>:<resolvedPath>` keys approved for the whole session. */
   sessionApproved: Set<string>;
@@ -145,10 +151,6 @@ export interface PathApprovalHookHandlers {
    * into a full-session grant.
    */
   sessionEnd: HookHandler;
-}
-
-function pathApprovalKey(mode: 'read' | 'write', resolvedPath: string): string {
-  return `${mode}:${resolvedPath}`;
 }
 
 /**

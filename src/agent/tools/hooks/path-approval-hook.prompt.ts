@@ -93,7 +93,7 @@ export function extractAllPaths(
   return candidate !== undefined ? [candidate] : [];
 }
 
-function pathApprovalKey(mode: 'read' | 'write', resolvedPath: string): string {
+export function pathApprovalKey(mode: 'read' | 'write', resolvedPath: string): string {
   return `${mode}:${resolvedPath}`;
 }
 
