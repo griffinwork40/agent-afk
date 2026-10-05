@@ -179,11 +179,11 @@ export interface WebRequestHandlerOptions {
   /** Optional effect ledger hook (see #1412). */
   recordEffect?: RecordEffectFn;
   /**
-   * Override browser.json reader for tests. Passed through to loadDomainLists
-   * so tests can inject a fake browser.json without touching the filesystem.
-   * When omitted, the real fs is used.
+   * Filesystem read seam for tests. Passed to loadDomainLists() so tests can
+   * inject a fake browser.json without touching the filesystem.
+   * Return `undefined` to simulate a missing file.
    */
-  readFileSync?: (path: string) => string | undefined;
+  readFileSyncFn?: (path: string) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,18 +196,18 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
 
   // Resolve domain policy via loadDomainLists (B2): browser.json domain arrays replace
   // env arrays (not union), matching loadBrowserConfig semantics. loadDomainLists is a
-  // domain-only loader that never throws — bad/non-object browser.json triggers a one-time
-  // warning and falls back to env lists (B1). It also ignores unrelated fields like
-  // AFK_BROWSER_BACKEND so an invalid backend never drops AFK_BROWSER_BLOCKED_DOMAINS
-  // (#2881). If opts.domainCheck is supplied (tests), it takes precedence.
+  // domain-only loader that never throws — bad/non-object/unreadable browser.json
+  // triggers a one-time warning and falls back to env lists (B1). It also ignores
+  // unrelated fields like AFK_BROWSER_BACKEND so an invalid backend never drops
+  // AFK_BROWSER_BLOCKED_DOMAINS (#2881). If opts.domainCheck is supplied (tests),
+  // it takes precedence.
   async function resolveDomainCheck(): Promise<DomainCheckFn | undefined> {
     if (opts.domainCheck !== undefined) return opts.domainCheck;
     try {
       const { loadDomainLists, enforceDomainPolicy } = await import('../../../browser/config.js');
-      // Cast envSource: loadDomainLists accepts Record<string, string | undefined>.
       const { allowedDomains, blockedDomains } = loadDomainLists({
-        env: envSource as Record<string, string | undefined>,
-        readFileSync: opts.readFileSync,
+        env: envSource,
+        readFileSync: opts.readFileSyncFn,
       });
       if (allowedDomains.length === 0 && blockedDomains.length === 0) return undefined;
       const minimalConfig = {
