@@ -159,15 +159,13 @@ async function runPredictPhase(
   // onProgress BEFORE the model call so a user can abort a paid run early.
   // Elapsed time is reported so operators know when a large system prompt
   // (many paragraphs × many added paragraphs) is driving the O(n×m) pass.
-  const redundancyStart = Date.now();
+  const redundancyStart = performance.now();
   const redundancyWarnings = checkRedundancy(structural.baseline.system, structural.systemDiff);
-  const redundancyElapsedMs = Date.now() - redundancyStart;
-  if (redundancyElapsedMs > 0) {
-    deps.onProgress?.({
-      stage: 'predict',
-      message: `[redundancy] Jaccard pass complete (${redundancyElapsedMs}ms)`,
-    });
-  }
+  const redundancyElapsedMs = performance.now() - redundancyStart;
+  deps.onProgress?.({
+    stage: 'predict',
+    message: `[redundancy] Jaccard pass complete (${redundancyElapsedMs.toFixed(2)}ms)`,
+  });
   for (const w of redundancyWarnings) {
     const sectionNote = w.sourceSection ? ` (§ ${w.sourceSection})` : '';
     const scoreNote = ` [${(w.similarity * 100).toFixed(0)}% similar]`;

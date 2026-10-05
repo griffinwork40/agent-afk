@@ -382,6 +382,78 @@ describe('ComposeExecutor detach contract (#2542)', () => {
     expect(lastTeardownAll!.mock.calls).toHaveLength(1);
   });
 
+  it('deliver() carries incomplete when the detached DAG has partial nodes (#2970)', async () => {
+    const call = makeCall('detach-partial-1');
+    const { parentSession } = makeCtx();
+    const registry = new DetachableToolRegistry();
+    const executor = new ComposeExecutor({
+      parentSession,
+      defaultSubagentModel: 'claude-3-5-haiku-20241022',
+      apiKey: 'sk-ant-test',
+      systemPrompt: 'test',
+    });
+
+    const settledPromise = new Promise<DetachedToolResult>((resolve) => {
+      registry.on('settled', (r: DetachedToolResult) => resolve(r));
+    });
+
+    const execPromise = executor.execute(call, registry);
+    await drainMicrotasks();
+    registry.detachAll();
+    await execPromise;
+
+    resolveDAG?.({
+      outputs: { 'node-a': 'partial from A', 'node-b': 'hello from B' },
+      failed: [],
+      skipped: [],
+      partial: [{ id: 'node-a', stopReason: 'soft_deadline' }],
+    });
+
+    const settled = await Promise.race([
+      settledPromise,
+      new Promise<null>((r) => setTimeout(() => r(null), 2000)),
+    ]);
+
+    expect(settled).not.toBeNull();
+    expect(settled!.status).toBe('completed');
+    expect(settled!.incomplete).toBe(true);
+    expect(settled!.incompleteReason).toBe('compose_partial_nodes');
+    await drainMicrotasks();
+  });
+
+  it('deliver() omits incomplete for a clean detached DAG', async () => {
+    const call = makeCall('detach-clean-1');
+    const { parentSession } = makeCtx();
+    const registry = new DetachableToolRegistry();
+    const executor = new ComposeExecutor({
+      parentSession,
+      defaultSubagentModel: 'claude-3-5-haiku-20241022',
+      apiKey: 'sk-ant-test',
+      systemPrompt: 'test',
+    });
+
+    const settledPromise = new Promise<DetachedToolResult>((resolve) => {
+      registry.on('settled', (r: DetachedToolResult) => resolve(r));
+    });
+
+    const execPromise = executor.execute(call, registry);
+    await drainMicrotasks();
+    registry.detachAll();
+    await execPromise;
+
+    resolveDAG?.({ outputs: { 'node-a': 'A', 'node-b': 'B' }, failed: [], skipped: [], partial: [] });
+
+    const settled = await Promise.race([
+      settledPromise,
+      new Promise<null>((r) => setTimeout(() => r(null), 2000)),
+    ]);
+
+    expect(settled).not.toBeNull();
+    expect(settled!.incomplete).toBeUndefined();
+    expect(settled!.incompleteReason).toBeUndefined();
+    await drainMicrotasks();
+  });
+
   it('teardownAll is NOT called synchronously on the detach path (only after DAG settles)', async () => {
     const call = makeCall('teardown-timing-1');
     const { parentSession } = makeCtx();

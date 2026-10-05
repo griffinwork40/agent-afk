@@ -205,6 +205,8 @@ interface AggregateToolEventsResult {
   commits: number;
   /** GitHub PR URL from a gh pr create result, if found. */
   detectedPrUrl: string | null;
+  /** Compose calls with >=1 node that wound down partial (#2970). */
+  composePartialNodes: number;
 }
 
 function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsResult {
@@ -218,6 +220,7 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
   let filesEdited = 0;
   let bashCommands = 0;
   let commits = 0;
+  let composePartialNodes = 0;
   for (const ev of allEvents) {
     const name = ev.toolName;
     toolCounts[name] = (toolCounts[name] ?? 0) + 1;
@@ -269,13 +272,19 @@ function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsRe
       }
       subagents.push(label ? { tool: name, label } : { tool: name });
     }
+
+    // Count compose calls that had at least one partial node (#2970).
+    // ev.incomplete is set by the compose executor when result.partial.length > 0.
+    if (name === 'compose' && ev.incomplete === true) {
+      composePartialNodes += 1;
+    }
   }
 
   // PR detection (#2777, #2795): delegate to the shared helper so subagent
   // journals can reuse identical logic via journal-adapter.ts.
   const detectedPrUrl = detectPrUrlFromEvents(allEvents);
 
-  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl };
+  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl, composePartialNodes };
 }
 
 export function deriveSessionFacet(
@@ -292,7 +301,7 @@ export function deriveSessionFacet(
     : dedupeToolEvents(turns.flatMap((t) => t.toolEvents ?? []));
 
   // --- mechanical: tool + error aggregation ---
-  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl } = aggregateToolEvents(allEvents);
+  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl, composePartialNodes } = aggregateToolEvents(allEvents);
 
   // tool_errors_total = parent tool_errors + sum of per-subagent tool_errors (#2777)
   const subagentToolErrorsTotal = (options.subagentBreakdown ?? [])
@@ -398,6 +407,8 @@ export function deriveSessionFacet(
     tool_error_categories: toolErrorCategories,
     friction_counts: { ...toolErrorCategories },
     friction_detail: frictionDetail,
+    // Compose calls with >=1 partial node (#2970); omitted when zero.
+    ...(composePartialNodes > 0 ? { compose_partial_nodes: composePartialNodes } : {}),
 
     outcome,
     outcome_source: outcomeSource,

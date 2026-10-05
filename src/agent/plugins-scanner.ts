@@ -311,7 +311,11 @@ export function indexKeyForPath(
   try {
     resolvedLeaf = realpathSync(leaf);
   } catch { /* keep raw leaf string when the path cannot be resolved */ }
-  if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
+  if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) {
+    if (!leaf.startsWith(root + sep) && leaf !== root) return null;
+    resolvedRoot = root;
+    resolvedLeaf = leaf;
+  }
   const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
   const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);
