@@ -78,6 +78,8 @@ export interface PeerBoundaryOpts {
   peerNotifier: PeerInboxNotifier;
   /** Admission queue shared with next-turn fallback. */
   admissionQueue: AdmissionQueue;
+  /** Explicit active-turn barrier, including a human already removed from FIFO. */
+  isQueuedHumanTurn?: () => boolean;
 }
 
 /**
@@ -124,7 +126,7 @@ export function installPeerBoundary(opts: PeerBoundaryOpts): () => void {
     // hasPendingSubmission() is true for ANY human payload: text, attachment,
     // image, slash command. peekQueuedText() alone returns undefined for image-
     // bearing payloads, so it would wrongly let peers past the barrier.
-    const humanPending = compositor?.hasPendingSubmission() ?? false;
+    const humanPending = opts.isQueuedHumanTurn?.() === true || (compositor?.hasPendingSubmission() ?? false);
     // Human barrier active → skip peers entirely this boundary. They stay in
     // the notifier buffer so the user's queued turn runs first; the next-turn
     // drain (or a later boundary) delivers them.
@@ -229,6 +231,7 @@ export function setupPeerBoundary(
   ctx: InteractiveCtx,
   surface: InputSurface,
   peerNotifier: PeerInboxNotifier,
+  isQueuedHumanTurn: () => boolean,
 ): { admissionQueue: AdmissionQueue; reinstall: () => void } {
   const admissionQueue = new AdmissionQueue();
   const opts: PeerBoundaryOpts = {
@@ -236,6 +239,7 @@ export function setupPeerBoundary(
     getCompositor: () => surface.getCompositor() as BoundaryCompositor | null,
     peerNotifier,
     admissionQueue,
+    isQueuedHumanTurn,
   };
   let dispose = installPeerBoundary(opts);
   const reinstall = () => { dispose = reinstallPeerBoundary(opts, dispose); };
