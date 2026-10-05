@@ -6,10 +6,12 @@
  * here prevents the mock from contaminating handoff-consume.test.ts.
  *
  * Covered branches (mirrors queue-store-poison-fallback.test.ts pattern):
- *   Branch 1: both rename attempts throw -> falls back to unlink so the sweep
- *     unblocks instead of re-processing the file every ~30s tick.
+ *   Branch 1: rename throws -> falls back to unlink so the sweep unblocks
+ *     instead of re-processing the file every ~30s tick.
  *   Branch 2: rename AND unlink both throw -> deadLetterHandoffFile still does
  *     NOT rethrow; the entry is left in place and retried on the next sweep.
+ *   Branch 3 (unique-suffix): two calls for the same displayName produce two
+ *     separate files in dead-letter/ — neither overwrites the other.
  *
  * @module agent/daemon/handoff-consume.dead-letter-fallback.test
  */
@@ -55,7 +57,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 // Import AFTER vi.mock (hoisting ensures the mock is in place).
-import { deadLetterHandoffFile } from './handoff-consume.dead-letter.js';
+import { deadLetterHandoffFile, DEAD_LETTER_SUBDIR } from './handoff-consume.dead-letter.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -80,7 +82,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('deadLetterHandoffFile - unlink fallback (branch 1: rename fails, unlink succeeds)', () => {
-  it('unlinks the file when both rename attempts fail', async () => {
+  it('unlinks the file when the rename attempt fails', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const srcFile = join(tmpDir, 'malformed.json');
     await realWriteFile(srcFile, 'bad-json');
@@ -135,6 +137,38 @@ describe('deadLetterHandoffFile - stuck entry (branch 2: rename AND unlink fail)
 
     // File must still exist (neither rename nor unlink succeeded).
     expect(realFs.existsSync(srcFile)).toBe(true);
+
+    errorSpy.mockRestore();
+  });
+});
+
+describe('deadLetterHandoffFile - unique suffix (branch 3: no overwrites)', () => {
+  it('produces two distinct files in dead-letter/ when dead-lettering the same displayName twice', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // Write two separate source files with the same displayName (simulating
+    // two separate dead-letter events, e.g. a manual re-quarantine after restore).
+    const src1 = join(tmpDir, 'dup-record.json');
+    const src2 = join(tmpDir, 'dup-record-2.json');
+    await realWriteFile(src1, 'bad-json-1');
+    await realWriteFile(src2, 'bad-json-2');
+
+    // Both calls use the same displayName — the unique suffix ensures they land
+    // as separate files, not overwriting each other.
+    await deadLetterHandoffFile(tmpDir, src1, 'dup-record.json', 'test reason 1');
+    await deadLetterHandoffFile(tmpDir, src2, 'dup-record.json', 'test reason 2');
+
+    const deadLetterDir = join(tmpDir, DEAD_LETTER_SUBDIR);
+    const deadFiles = realFs.readdirSync(deadLetterDir).filter((f) =>
+      f.includes('dup-record'),
+    );
+
+    // Both calls must produce a distinct file — not overwrite the first.
+    expect(deadFiles).toHaveLength(2);
+
+    // Both source files must be gone.
+    expect(realFs.existsSync(src1)).toBe(false);
+    expect(realFs.existsSync(src2)).toBe(false);
 
     errorSpy.mockRestore();
   });
