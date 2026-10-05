@@ -15,7 +15,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { basename, join, resolve, relative, isAbsolute } from 'path';
 import type { Procedure } from './types.js';
 
-const PROCEDURES_DIR = 'procedures';
+export const PROCEDURES_DIR = 'procedures';
 const SAFE_PROCEDURE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
 export function validateProcedureName(name: string): string {

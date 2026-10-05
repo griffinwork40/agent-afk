@@ -7,9 +7,8 @@
  * @module agent/worktree-sweep
  */
 
-import { promises as fs, existsSync, createReadStream, realpathSync } from 'node:fs';
-import { join, relative, isAbsolute } from 'node:path';
-import { createInterface } from 'node:readline';
+import { promises as fs, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { getWorktreeSweepLockPath, getTelemetryPath } from '../../paths.js';
 import { readPresenceFiles, type PresenceRecord } from '../awareness/presence.js';
 // Runtime value import. Safe despite the mutual reference: the only import
@@ -21,6 +20,25 @@ import { readRootSweepCount, recordRootSweep, SOFT_LAUNCH_RUNS } from './worktre
 import { classifyOrphanDir } from './worktree-orphan-guard.js';
 import { reconsiderLockedWorktree } from './worktree-sweep.reconsider.js';
 import { errorMessage } from '../../utils/errors.js';
+import {
+  countPriorSuccessfulRuns,
+  acquireLock,
+  LockContestedError,
+} from './worktree-sweep.lock.js';
+import {
+  type DirtyReason,
+  type WorktreeMeta,
+  type WorktreeCandidate,
+  type WorktreeVerdict,
+  MAX_TRUSTED_PID_AGE_MS,
+  MIN_EMPTY_AGE_MS,
+  isProcessAlive,
+  isPathWithin,
+  shortBranchName,
+  parseWorktreeList,
+  classifyCandidate,
+} from './worktree-sweep.classify.js';
+export { MIN_EMPTY_AGE_MS } from './worktree-sweep.classify.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,103 +66,6 @@ export type ExecFileFn = (
   },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-/**
- * Why a candidate reads dirty. Carried so a preservation warning can name the
- * actual cause: an ignored-state protect is NOT "uncommitted changes" — git
- * status calls that tree clean — and reporting it as such sends the reader
- * looking for a diff that does not exist.
- */
-type DirtyReason =
-  | 'clean'
-  | 'uncommitted changes'
-  | 'git status failed'
-  // Carries the offending path. Naming it is the difference between a warning
-  // the reader can act on and one that sends them hunting for a secret that
-  // is not there: the entry holding a tree is as often leftover test detritus
-  // as it is a real `.env`.
-  | `non-rebuildable ignored files: ${string}`
-  | 'ignored-file probe failed';
-
-interface WorktreeMeta {
-  owner: 'interactive' | 'diagnose' | string;
-  /**
-   * PID of the process that created this worktree. Used by the sweep
-   * engine to accelerate reaping of dead-owner ghost worktrees regardless
-   * of age. Optional — worktrees created before this field was added will
-   * lack it and fall through to the existing age-gated verdict path.
-   *
-   * PID reuse is bounded by {@link createdAt}: callers must not trust the
-   * `pid` field once the meta is older than {@link MAX_TRUSTED_PID_AGE_MS},
-   * because the kernel's PID space may have wrapped.
-   */
-  pid?: number;
-  createdAt: string;
-  baseSha?: string;
-  baseBranch?: string;
-  /** Why the tree was preserved at teardown. Only set by teardown paths. */
-  preservedReason?: 'dirty' | 'commits-ahead' | 'ignored-local-state';
-  /** ISO timestamp when the tree was preserved. */
-  preservedAt?: string;
-  /** Number of commits ahead of base at preservation time. */
-  commitsAheadAtPreserve?: number;
-}
-
-interface WorktreeCandidate {
-  path: string;
-  head?: string;
-  branch?: string;
-  locked: boolean;
-  prunable: boolean;
-  meta?: WorktreeMeta;
-  ageMs: number;
-  isDirty: boolean;
-  /** Populated whenever `isDirty` is true; `'clean'` otherwise. */
-  dirtyReason: DirtyReason;
-  commitsAhead: number;
-  /**
-   * Commits on this worktree's HEAD that exist NOWHERE but this checkout —
-   * i.e. `@{upstream}..HEAD`. Zero means every local commit has been pushed,
-   * so the remote holds the work and the checkout is disposable.
-   *
-   * Invariant: this is the only field that may relax a `commitsAhead > 0`
-   * preservation gate, and it fails SAFE — no upstream configured, an
-   * unreadable ref, or any git error yields `commitsUnpushed === commitsAhead`
-   * (treat as unreplaceable). It is never derived from `commitsAhead === 0`.
-   */
-  commitsUnpushed: number;
-  /**
-   * Tri-state liveness of the owning process recorded in `meta.pid`:
-   *   - `'alive'`      — `meta.pid` resolves to a live process.
-   *   - `'dead'`       — `meta.pid` is present, the meta is within the
-   *                       PID-reuse safety window, and the kernel has no
-   *                       process at that pid. Eligible for accelerated
-   *                       reaping when the tree is clean.
-   *   - `'unknown'`    — no `meta.pid` field, or meta is older than the
-   *                       PID-reuse safety window. Caller must fall through
-   *                       to the age-gated verdict path.
-   */
-  ownerLiveness: 'alive' | 'dead' | 'unknown';
-}
-
-type WorktreeVerdict =
-  | 'empty'
-  | 'stale-clean'
-  | 'stale-dirty'
-  | 'locked'
-  | 'active'
-  | 'orphaned-dir'
-  /** An unregistered directory that the orphan guard could not prove safe to remove. */
-  | 'orphaned-dir-preserved'
-  | 'orphaned-registration'
-  /**
-   * The owning process recorded in `.afk-worktree-meta.json` is gone, the
-   * meta is within the PID-reuse safety window, and the worktree has no
-   * uncommitted changes and no commits ahead of base. Eligible for removal
-   * regardless of age — these are the ghost worktrees left behind when a
-   * REPL crashed or was killed. Never assigned when the tree is dirty or
-   * has unpushed commits.
-   */
-  | 'dead-owner';
 
 export interface SweepOptions {
   execFile: ExecFileFn;
@@ -208,283 +129,9 @@ export interface SweepResult {
   contested?: boolean;
 }
 
-/**
- * Minimum age before a worktree with no commits and no dirty changes is
- * classified as `empty` and eligible for removal. Prevents the race where a
- * worktree created seconds before the daemon's cron tick gets reaped on that
- * same tick. One hour is generous enough to cover any human-paced workflow
- * while still letting `empty` survive a sweep when the user has had time to
- * commit.
- *
- * Exported so `worktree-occupancy.ts`'s `DEFAULT_HEARTBEAT_INTERVAL_MS` can be
- * checked against it directly instead of via a prose comment linking two
- * private constants in different files — raising the heartbeat interval above
- * this gate would silently re-break #759 with no test failures otherwise.
- */
-export const MIN_EMPTY_AGE_MS = 3_600_000; // 1 hour
-
-/**
- * Maximum age of a `.afk-worktree-meta.json` whose `pid` field we still
- * trust for liveness checks. Beyond this window we conservatively treat
- * the recorded PID as unknown — the kernel may have wrapped the PID space
- * and any liveness probe could now be referring to an unrelated process.
- *
- * 30 days is well beyond typical Linux PID-wrap intervals on a busy system
- * (default `pid_max` 32768 wraps in hours; tuned-up systems wrap in days).
- * macOS PIDs reuse much faster but still safely fit inside this window for
- * the dead-owner verdict's purpose (accelerated reaping of *recent*
- * ghosts — anything older than 30 days is already eligible for the
- * existing stale-clean / stale-dirty verdicts).
- */
-const MAX_TRUSTED_PID_AGE_MS = 30 * 86_400_000;
-
-/**
- * Probe whether a PID corresponds to a live process via `kill(pid, 0)`.
- * Returns `true` if the kernel accepts the signal (process exists, may or
- * may not be ours to signal), `false` if it's gone (`ESRCH`).
- *
- * Note: `EPERM` (permission denied) means the process exists but isn't
- * ours — still alive from the sweep engine's perspective, so we return
- * `true`. This is the same idiom `acquireLock` uses for stale-lock
- * detection.
- */
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM = process exists but isn't ours to signal — still alive.
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-/**
- * Resolve a path through symlinks, falling back to the raw path when it can't
- * be resolved. macOS aliases /var → /private/var, so both the worktree path
- * and a session cwd must be normalized before any containment check or the
- * comparison silently fails.
- */
-function realpathSafe(p: string): string {
-  try { return realpathSync(p); } catch { return p; }
-}
-
-/**
- * True when `child` is the same path as, or nested inside, `parent`. Both are
- * realpath-normalized first. Used to decide whether a live session's cwd sits
- * inside a candidate worktree.
- */
-function isPathWithin(child: string, parent: string): boolean {
-  const rel = relative(realpathSafe(parent), realpathSafe(child));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-/**
- * `git worktree list --porcelain` reports `branch` as a fully-qualified ref
- * (e.g. `refs/heads/afk/foo`), but `git branch -d` expects the short branch
- * name (`afk/foo`) — passing the qualified ref makes the delete always fail
- * with "branch 'refs/heads/afk/foo' not found" (#371). Strip the prefix
- * before every `git branch -d` invocation.
- */
-function shortBranchName(branch: string): string {
-  return branch.replace(/^refs\/heads\//, '');
-}
 
 // ---------------------------------------------------------------------------
-// Section 2 — Porcelain parser
-// ---------------------------------------------------------------------------
-
-interface ParsedWorktree {
-  path: string;
-  head: string;
-  branch: string;
-  locked: boolean;
-  /** Reason string from `git worktree list --porcelain` (the part after `locked `). */
-  lockReason?: string;
-  prunable: boolean;
-  isBare: boolean;
-}
-
-function parseWorktreeList(stdout: string): ParsedWorktree[] {
-  const blocks = stdout.trim().split(/\n\n+/);
-  const result: ParsedWorktree[] = [];
-  for (const block of blocks) {
-    const lines = block.split('\n');
-    let path = '';
-    let head = '';
-    let branch = '';
-    let locked = false;
-    let lockReason: string | undefined;
-    let prunable = false;
-    let isBare = false;
-    for (const line of lines) {
-      if (line.startsWith('worktree ')) path = line.slice('worktree '.length).trim();
-      else if (line.startsWith('HEAD ')) head = line.slice('HEAD '.length).trim();
-      else if (line.startsWith('branch ')) branch = line.slice('branch '.length).trim();
-      else if (line.trim().startsWith('locked')) { locked = true; lockReason = line.trim().slice('locked'.length).trim() || undefined; }
-      else if (line.trim() === 'prunable') prunable = true;
-      else if (line.trim() === 'bare') isBare = true;
-    }
-    if (path) result.push({ path, head, branch, locked, lockReason, prunable, isBare });
-  }
-  return result;
-}
-
-// ---------------------------------------------------------------------------
-// Section 3 — Verdict classifier
-// ---------------------------------------------------------------------------
-
-/**
- * True when this checkout is the ONLY place its committed work exists.
- *
- * Invariant: `git worktree remove` never deletes the branch ref, so committed
- * work is destroyed only if it is unreachable from anywhere else. A branch
- * whose commits are all pushed (`commitsUnpushed === 0`) has them on the
- * remote, so reaping the checkout costs a directory, not history — which is
- * why a PR-shipped worktree stops being sacred the moment the push lands.
- * Unpushed commits stay protected exactly as before.
- */
-function holdsUnreplaceableCommits(candidate: WorktreeCandidate): boolean {
-  return candidate.commitsAhead > 0 && candidate.commitsUnpushed > 0;
-}
-
-function classifyCandidate(
-  candidate: WorktreeCandidate,
-  maxAgeDaysClean: number,
-  maxAgeDaysDirty: number,
-): WorktreeVerdict {
-  if (candidate.locked) return 'locked';
-
-  const msPerDay = 86_400_000;
-  const cleanThresholdMs = maxAgeDaysClean * msPerDay;
-  const dirtyThresholdMs = maxAgeDaysDirty * msPerDay;
-
-  // Constraint: dead-owner is checked BEFORE empty / stale-clean so that
-  // a recent ghost (REPL crashed 5 minutes ago, age < MIN_EMPTY_AGE_MS,
-  // age < cleanThreshold) still gets reaped on this sweep. The check is
-  // gated on a clean tree AND zero commits ahead — we never reap dead-owner
-  // worktrees that have any work the user could conceivably want back.
-  if (
-    candidate.ownerLiveness === 'dead' &&
-    !candidate.isDirty &&
-    !holdsUnreplaceableCommits(candidate)
-  ) {
-    return 'dead-owner';
-  }
-
-  // No commits ahead, no dirty files, and old enough to not be a freshly-
-  // created worktree mid-setup → empty. The age guard closes the race where
-  // a worktree created seconds before the cron fires would be reaped on its
-  // first tick before the user has a chance to do anything in it. Gated on
-  // ownerLiveness !== 'alive' the same way dead-owner is (#380) — without
-  // this, the live-session presence guard (which forces ownerLiveness to
-  // 'alive' when a live session's cwd is inside the worktree) only ever
-  // protected the dead-owner path, so a live session's clean, 0-commits-
-  // ahead worktree older than MIN_EMPTY_AGE_MS still got reaped mid-session.
-  if (
-    candidate.ownerLiveness !== 'alive' &&
-    !holdsUnreplaceableCommits(candidate) &&
-    !candidate.isDirty &&
-    candidate.ageMs >= MIN_EMPTY_AGE_MS
-  ) {
-    return 'empty';
-  }
-
-  // Has dirty working tree past dirty threshold
-  if (candidate.isDirty && candidate.ageMs > dirtyThresholdMs) return 'stale-dirty';
-
-  // Clean committed work past clean threshold. Clean zero-ahead worktrees are
-  // handled by `empty` once old enough; before then they stay active.
-  if (
-    !candidate.isDirty &&
-    candidate.commitsAhead > 0 &&
-    candidate.ageMs > cleanThresholdMs
-  ) {
-    return 'stale-clean';
-  }
-
-  return 'active';
-}
-
-// ---------------------------------------------------------------------------
-// Section 4 — Soft-launch counter
-// ---------------------------------------------------------------------------
-
-async function countPriorSuccessfulRuns(telemetryPath: string): Promise<number> {
-  if (!existsSync(telemetryPath)) return 0;
-  let count = 0;
-  try {
-    const rl = createInterface({ input: createReadStream(telemetryPath), crlfDelay: Infinity });
-    for await (const line of rl) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const record = JSON.parse(trimmed) as Record<string, unknown>;
-        if (
-          record['taskId'] === 'worktree-prune' &&
-          (record['status'] === 'success' || record['status'] === 'error')
-        ) {
-          count++;
-        }
-      } catch { /* malformed line — skip */ }
-    }
-  } catch { /* file read failure — treat as 0 */ }
-  return count;
-}
-
-// ---------------------------------------------------------------------------
-// Section 5 — Advisory lock
-// ---------------------------------------------------------------------------
-
-class LockContestedError extends Error {
-  constructor(lockPath: string) {
-    super(`Worktree sweep lock contested: ${lockPath} — another sweep may be running.`);
-    this.name = 'LockContestedError';
-  }
-}
-
-async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
-  // Ensure parent directory exists
-  const parentDir = join(lockPath, '..');
-  await fs.mkdir(parentDir, { recursive: true }).catch(() => {});
-
-  const tryOpen = async (): Promise<import('node:fs/promises').FileHandle> => {
-    try {
-      return await fs.open(lockPath, 'wx');
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'EEXIST') throw err;
-
-      // Check if PID in existing lock is still alive
-      let existingPid: number | null = null;
-      try {
-        const content = await fs.readFile(lockPath, 'utf-8');
-        existingPid = parseInt(content.trim(), 10);
-      } catch { /* lock file vanished between checks */ }
-
-      if (existingPid !== null && !Number.isNaN(existingPid)) {
-        let alive = false;
-        try {
-          process.kill(existingPid, 0);
-          alive = true;
-        } catch { /* process gone — stale lock */ }
-        if (!alive) {
-          await fs.unlink(lockPath).catch(() => {});
-          return await fs.open(lockPath, 'wx');
-        }
-      }
-      throw new LockContestedError(lockPath);
-    }
-  };
-
-  const handle = await tryOpen();
-  await handle.writeFile(String(process.pid), 'utf-8');
-  await handle.close();
-
-  return async () => { await fs.unlink(lockPath).catch(() => {}); };
-}
-
-// ---------------------------------------------------------------------------
-// Section 6 — Public entry point: runSweep()
+// Public entry point: runSweep()
 // ---------------------------------------------------------------------------
 
 export async function runSweep(options: SweepOptions): Promise<SweepResult> {

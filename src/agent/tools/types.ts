@@ -38,6 +38,18 @@ export interface ToolHandlerContext {
   /** Path-resolution anchor for relative paths. */
   resolveBase?: string;
   /**
+   * @deprecated Use `resolveBase` instead. Populated at runtime as a direct
+   * alias of `resolveBase` for back-compatibility with custom tools that read
+   * `context.cwd`. Will be removed in the next semver-major release.
+   *
+   * `context.cwd` was removed in #2748 as an internal clean-up. It reaches the
+   * public npm surface via the exported `tool()` API (`custom-tool.ts`), making
+   * the removal a silent breaking change for JS consumers. This alias restores
+   * the field so existing third-party tools continue to work; migrate to
+   * `context.resolveBase` before the next major version.
+   */
+  cwd?: string;
+  /**
    * Allowed roots for read-class tools (read_file, glob, grep,
    * list_directory). Defaults to `[resolveBase]` when unset.
    */

@@ -40,6 +40,7 @@ import {
   writeProcedure as writeProcedureImpl,
   loadProcedure as loadProcedureImpl,
   searchProcedures as searchProceduresImpl,
+  PROCEDURES_DIR,
 } from './memory-store.procedures.js';
 import type {
   AccessStats,
@@ -56,7 +57,6 @@ import type {
 const HOT_FILE = 'HOT.md';
 const HOT_BACKUP = 'HOT.md.bak';
 const DB_FILE = 'memory.db';
-const PROCEDURES_DIR = 'procedures';
 const HOT_TMP = 'HOT.md.tmp';
 const MAX_HOT_CHARS = 5250; // ~1,500 tokens at 3.5 chars/token
 const HOT_TOKEN_CAP = Math.ceil(MAX_HOT_CHARS / 3.5); // 1500 — surfaced in usage reports

@@ -489,3 +489,35 @@ describe('installPlugin — pinnedRef recorded in index', () => {
     expect(stored.pinnedRef).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reinstall carries forward user-configured options (fix #2373)
+// ---------------------------------------------------------------------------
+
+import { setPluginOption, readIndex as readIdx } from './index-store.js';
+
+describe('installPlugin — options carried forward on reinstall', () => {
+  it('preserves options when a local plugin is reinstalled with --force', async () => {
+    writeManifest(sourceDir, 'options-plugin');
+    await installPlugin(sourceDir, {}, { pluginsDir, indexPath, now: () => new Date() });
+    // Simulate the user having set an option.
+    setPluginOption('options-plugin', 'provider', 'openai', indexPath);
+    // Reinstall.
+    await installPlugin(sourceDir, { force: true }, { pluginsDir, indexPath, now: () => new Date() });
+    const stored = readIdx(indexPath).plugins['options-plugin']?.options;
+    expect(stored).toEqual({ provider: 'openai' });
+  });
+
+  it('preserves options when a git plugin is reinstalled with --force', async () => {
+    const { runner } = makeFakeGit(['v1.0.0'], 'sha1', 'git-options-plugin');
+    await installPlugin('owner/git-options-plugin', {}, {
+      pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false,
+    });
+    setPluginOption('git-options-plugin', 'region', 'eu', indexPath);
+    await installPlugin('owner/git-options-plugin', { force: true }, {
+      pluginsDir, indexPath, gitRunner: runner, now: () => new Date(), confirm: false,
+    });
+    const stored = readIdx(indexPath).plugins['git-options-plugin']?.options;
+    expect(stored).toEqual({ region: 'eu' });
+  });
+});
