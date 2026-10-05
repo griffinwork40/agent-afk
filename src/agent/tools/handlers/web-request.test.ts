@@ -345,6 +345,84 @@ describe('web_request handler — domain policy', () => {
 
     expect(r.isError).toBeUndefined();
   });
+
+  // B2: browser.json domain arrays replace env arrays (not union).
+  // The web_request domain policy must match loadBrowserConfig semantics.
+  it('browser.json allowedDomains replaces env allowedDomains (B2 — file wins, not union)', async () => {
+    let fetchCalled = false;
+    const fetchFn = makeFetch(() => {
+      fetchCalled = true;
+      return makeResponse({ body: 'ok' });
+    });
+    // env allows env.example.com; file replaces with file.example.com only.
+    // A request to env.example.com must now be BLOCKED (env list was replaced).
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: { AFK_BROWSER_ALLOWED_DOMAINS: 'env.example.com' },
+      readFileSync: () => JSON.stringify({ allowedDomains: ['file.example.com'] }),
+    });
+    const r = await handler({ url: 'https://env.example.com/', method: 'GET' }, signal());
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/blocked/);
+    expect(fetchCalled).toBe(false);
+  });
+
+  it('browser.json allowedDomains allows the file-listed domain (B2)', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: 'ok', contentType: 'text/plain' }));
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: { AFK_BROWSER_ALLOWED_DOMAINS: 'env.example.com' },
+      readFileSync: () => JSON.stringify({ allowedDomains: ['file.example.com'] }),
+    });
+    const r = await handler({ url: 'https://file.example.com/', method: 'GET' }, signal());
+
+    expect(r.isError).toBeUndefined();
+  });
+
+  // B1: malformed browser.json must not cause domain policy to fail open.
+  // env domain lists must survive a bad file.
+  it('malformed browser.json: env blocked domain still enforced (B1)', async () => {
+    let fetchCalled = false;
+    const fetchFn = makeFetch(() => {
+      fetchCalled = true;
+      return makeResponse({ body: 'should not reach' });
+    });
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: { AFK_BROWSER_BLOCKED_DOMAINS: 'blocked.example.com' },
+      readFileSync: () => '{ not valid json !!!',
+    });
+    const r = await handler({ url: 'https://blocked.example.com/', method: 'GET' }, signal());
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/blocked/);
+    expect(fetchCalled).toBe(false);
+  });
+
+  it('non-object browser.json (array): env allowed domain still enforced (B1)', async () => {
+    let fetchCalled = false;
+    const fetchFn = makeFetch(() => {
+      fetchCalled = true;
+      return makeResponse({ body: 'ok' });
+    });
+    // allowed list has only allowed.example.com; file is an array (invalid) — must fall back to env
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: { AFK_BROWSER_ALLOWED_DOMAINS: 'allowed.example.com' },
+      readFileSync: () => '["not","an","object"]',
+    });
+    // not in env allowed list → must be blocked
+    const r = await handler({ url: 'https://blocked.example.com/', method: 'GET' }, signal());
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/blocked/);
+    expect(fetchCalled).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------

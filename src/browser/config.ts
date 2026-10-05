@@ -13,7 +13,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'path';
 import { env as defaultEnv } from '../config/env.js';
 import { getAfkConfigDir, assertSafeBrowserProfile } from '../paths.js';
+import { parseDomainList } from './domain-lists.js';
 import type { BrowserConfig } from './types.js';
+export { loadDomainLists, parseDomainList } from './domain-lists.js';
 
 // ---------------------------------------------------------------------------
 // Public option types
@@ -91,18 +93,6 @@ function resolveHeadlessDefault(
   }
   // Unknown or unset surface → headed (interactive default).
   return false;
-}
-
-// ---------------------------------------------------------------------------
-// Domain list parsing
-// ---------------------------------------------------------------------------
-
-export function parseDomainList(raw: string | undefined): readonly string[] {
-  if (raw === undefined || raw.trim() === '') return [];
-  return raw
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -250,6 +240,9 @@ export function loadBrowserConfig(opts?: LoadBrowserConfigOptions): BrowserConfi
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
+    // Browser tools still fail closed for malformed browser.json. web_request uses
+    // loadDomainLists, which falls back to env lists so unrelated file errors do not
+    // drop AFK_BROWSER_ALLOWED_DOMAINS / AFK_BROWSER_BLOCKED_DOMAINS.
     throw new Error(`Failed to parse browser config at ${candidatePath}: ${String(err)}`);
   }
 

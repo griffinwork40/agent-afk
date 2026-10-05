@@ -178,6 +178,12 @@ export interface WebRequestHandlerOptions {
   domainCheck?: DomainCheckFn;
   /** Optional effect ledger hook (see #1412). */
   recordEffect?: RecordEffectFn;
+  /**
+   * Override browser.json reader for tests. Passed through to loadDomainLists
+   * so tests can inject a fake browser.json without touching the filesystem.
+   * When omitted, the real fs is used.
+   */
+  readFileSync?: (path: string) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,16 +194,21 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
   const fetchFn: FetchFn = opts.fetchFn ?? globalThis.fetch;
   const envSource: NodeJS.ProcessEnv = opts.env ?? process.env;
 
-  // Resolve domain policy from env vars directly (#2881 fix): parse only the
-  // two domain-list vars, independent of unrelated browser config fields
-  // (backend, profile, browser.json) that used to cause silent fail-open.
-  // If opts.domainCheck is supplied (tests), it takes precedence.
+  // Resolve domain policy via loadDomainLists (B2): browser.json domain arrays replace
+  // env arrays (not union), matching loadBrowserConfig semantics. loadDomainLists is a
+  // domain-only loader that never throws — bad/non-object browser.json triggers a one-time
+  // warning and falls back to env lists (B1). It also ignores unrelated fields like
+  // AFK_BROWSER_BACKEND so an invalid backend never drops AFK_BROWSER_BLOCKED_DOMAINS
+  // (#2881). If opts.domainCheck is supplied (tests), it takes precedence.
   async function resolveDomainCheck(): Promise<DomainCheckFn | undefined> {
     if (opts.domainCheck !== undefined) return opts.domainCheck;
     try {
-      const { parseDomainList, enforceDomainPolicy } = await import('../../../browser/config.js');
-      const allowedDomains = parseDomainList(envSource['AFK_BROWSER_ALLOWED_DOMAINS']);
-      const blockedDomains = parseDomainList(envSource['AFK_BROWSER_BLOCKED_DOMAINS']);
+      const { loadDomainLists, enforceDomainPolicy } = await import('../../../browser/config.js');
+      // Cast envSource: loadDomainLists accepts Record<string, string | undefined>.
+      const { allowedDomains, blockedDomains } = loadDomainLists({
+        env: envSource as Record<string, string | undefined>,
+        readFileSync: opts.readFileSync,
+      });
       if (allowedDomains.length === 0 && blockedDomains.length === 0) return undefined;
       const minimalConfig = {
         allowedDomains,
