@@ -61,6 +61,7 @@ import {
 } from './launchd.js';
 import { launchdManager } from './launchd/manager.js';
 
+// All suites in this file are macOS-only (launchd is macOS-specific) — genuinely POSIX-only.
 describe.skipIf(process.platform !== 'darwin')('labelFor', () => {
   it('emits reverse-DNS label per service', () => {
     expect(labelFor('telegram')).toBe('com.afk.telegram');

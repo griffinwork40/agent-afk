@@ -37,6 +37,7 @@
 import { env } from '../../../config/env.js';
 import type { ProviderCompactResult } from '../../provider.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { withTransientRetry, type RetryInfo } from './transient-retry.js';
 
 /**
  * System instruction for the summarization call. Crafted to preserve what a
@@ -233,6 +234,13 @@ export interface ToolResultRef {
    * Absent when the correlation cannot be established (defensive).
    */
   toolName?: string;
+  /**
+   * Index of the message holding this result in the array passed to
+   * {@link MicrocompactOps.listToolResults}. Lets
+   * {@link microcompactToolResults} report `firstClearedIndex` so the message
+   * journal can re-sync the in-place edits (docs/message-journal.md).
+   */
+  messageIndex?: number;
 }
 
 /**
@@ -271,6 +279,12 @@ export interface MicrocompactResult {
   bytesReclaimed: number;
   /** Total `tool_result` blocks seen (cleared, kept-recent, already-placeholder, or below threshold). */
   blocksScanned: number;
+  /**
+   * Message index of the earliest block cleared in THIS pass (from
+   * {@link ToolResultRef.messageIndex}); absent when nothing was cleared or
+   * the provider did not supply indices.
+   */
+  firstClearedIndex?: number;
 }
 
 /**
@@ -340,7 +354,11 @@ export function microcompactToolResults<M>(
 
   let blocksCleared = 0;
   let bytesReclaimed = 0;
+  let firstClearedIndex: number | undefined;
   for (const ref of candidates) {
+    if (ref.messageIndex !== undefined && (firstClearedIndex === undefined || ref.messageIndex < firstClearedIndex)) {
+      firstClearedIndex = ref.messageIndex;
+    }
     const placeholder = buildMicrocompactPlaceholder(ref.byteLength);
     const before = ref.byteLength;
     ref.clear(placeholder);
@@ -349,7 +367,7 @@ export function microcompactToolResults<M>(
     blocksCleared += 1;
   }
 
-  return { blocksCleared, bytesReclaimed, blocksScanned };
+  return { blocksCleared, bytesReclaimed, blocksScanned, ...(firstClearedIndex !== undefined ? { firstClearedIndex } : {}) };
 }
 
 /** UTF-8 byte length of a string — the metric microcompaction thresholds on. */
@@ -587,6 +605,26 @@ export interface CompactionCoreDeps<M> {
   timeoutMs?: number;
   /** Fired after a successful in-place splice, for witness-layer emit. */
   onSuccess?(info: CompactionSuccess<M>): void;
+  /**
+   * Called once per transient-retry of the summarize call (after the failed
+   * attempt, before the backoff wait). Route to the witness trace as a
+   * `connection_retry` session_phase event. Fire-and-forget — errors here are
+   * not caught.
+   */
+  onRetry?(info: RetryInfo): void;
+  /**
+   * Injected sleep function for tests. When omitted, defaults to the real
+   * `sleepWithAbort`. Lets unit tests fast-forward through backoff waits
+   * without fake timers.
+   */
+  retrySleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /**
+   * Abort signal for the surrounding compaction scope. When provided, threads
+   * through to `withTransientRetry` so a `sleepWithAbort` backoff wait is
+   * interrupted immediately on `session.close()` or `/interrupt` rather than
+   * blocking teardown for up to the full backoff duration.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -638,16 +676,42 @@ export async function runCompactionCore<M>(
   const olderSlice = messages.slice(0, boundary);
   const transcript = renderTranscript(olderSlice, ops);
 
+  // `timedOut` is set when the timeout fires (before `abortInFlight()`) and
+  // feeds the retry loop's `shouldStop`, so a retry waiting in backoff never
+  // launches another summarize after the core has given up. The catch block's
+  // timeout-vs-abort classification is unchanged (CompactionTimeoutError first).
+  let timedOut = false;
   let summary: string;
   try {
-    summary = await withTimeout(summarize(transcript), timeoutMs, deps.abortInFlight);
+    // Invariant: the retry loop runs INSIDE withTimeout so backoff shares the
+    // 60s compaction budget. `shouldStop` is checked before each wait so neither
+    // a timeout nor an abort can launch another attempt after the core gives up.
+    const retryingAttempt = () => withTransientRetry(
+      () => summarize(transcript),
+      {
+        shouldStop: () => timedOut || isAborted(),
+        onRetry: deps.onRetry,
+        ...(deps.retrySleep !== undefined ? { sleep: deps.retrySleep } : {}),
+        ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+      },
+    );
+    summary = await withTimeout(retryingAttempt(), timeoutMs, () => {
+      timedOut = true;
+      deps.abortInFlight?.();
+    });
   } catch (err) {
     // A timeout fires abortInFlight() to cancel the request, which in the real
     // provider wiring also trips the shared abort signal — so check the timeout
     // sentinel BEFORE isAborted(), or a genuine timeout would be misreported as
     // a user-initiated 'aborted'.
-    if (err instanceof CompactionTimeoutError) {
-      return { compacted: false, reason: 'summarization-failed: ' + err.message, ...unchanged };
+    //
+    // We check `timedOut` BEFORE `instanceof CompactionTimeoutError` because
+    // abortInFlight() may cause the in-flight request to throw an AbortError
+    // rather than a CompactionTimeoutError — `timedOut` is the authoritative
+    // sentinel regardless of the error shape.
+    if (timedOut || err instanceof CompactionTimeoutError) {
+      const msg = err instanceof CompactionTimeoutError ? err.message : errorMessage(err);
+      return { compacted: false, reason: 'summarization-failed: ' + msg, ...unchanged };
     }
     if (isAborted()) {
       return { compacted: false, reason: 'aborted', ...unchanged };

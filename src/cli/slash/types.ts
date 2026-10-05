@@ -51,6 +51,15 @@ export interface ToolEvent {
   inputRaw?: string;
   result?: string;
   isError?: boolean;
+  /**
+   * Last ~240 characters of the tool's raw output, after secret redaction.
+   * Present only on verification-like commands (test/lint/build) where the
+   * result summary is commonly at the tail. Optional — absent on older records
+   * and on non-verification tool calls. Used by `lfVerification` to parse
+   * pass/fail even when the command was piped and `isError` reflects the
+   * pipe's last stage rather than the test runner's exit status.
+   */
+  resultTail?: string;
 }
 
 /** A single stored user/assistant exchange — used by /history. */

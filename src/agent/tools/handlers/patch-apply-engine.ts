@@ -120,7 +120,7 @@ function tempPath(targetPath: string): string {
 export async function applyPatch(
   changes: PatchFileChange[],
   fileContents: Map<string, string | null>,
-  resolveBase: string,
+  resolveBase: string | undefined,
   dryRun: boolean,
 ): Promise<PatchApplyResult> {
   // Phase 1: compute new content and diffs for every file.
@@ -141,7 +141,7 @@ export async function applyPatch(
     // paths without suffix-collision ambiguity (e.g. "dir/foo.ts" vs "foo.ts").
     const resolvedPath = isAbsolute(change.path)
       ? change.path
-      : resolve(resolveBase, change.path);
+      : resolve(resolveBase ?? process.cwd(), change.path);
 
     // null sentinel = new file (did not exist before the patch).
     // '' = existing empty file. Both come from the validator.

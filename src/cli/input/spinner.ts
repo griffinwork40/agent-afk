@@ -5,17 +5,29 @@ import { SPINNER_FRAMES, type SpinnerState } from '../terminal-compositor.types.
 import { formatElapsed, formatTipRow } from '../terminal-compositor.scrollback.js';
 import { contentMargin } from '../render/measure.js';
 
+/**
+ * Frame cadence during the first {@link SPINNER_WARMUP_MS} of a spin (12.5 Hz),
+ * so short waits still feel alive.
+ */
+export const SPINNER_WARM_FRAME_MS = 80;
+// Measured 2026-10-04: a pane animating only this spinner at 12.5 Hz cost ~4.4% of a core in Goblin Portal, so long spins drop to 4 Hz.
+export const SPINNER_IDLE_FRAME_MS = 250;
+/** How long a spin (or a new work-derived verb) keeps the warm cadence. */
+export const SPINNER_WARMUP_MS = 2_000;
+
 export interface SpinnerControllerOptions {
   /**
    * Capture-mode flag (script(1) / asciinema / screen recorders). When true
-   * the 80ms ticker is never started — see {@link SpinnerController.set} for
+   * the frame ticker is never started — see {@link SpinnerController.set} for
    * the byte-accumulation rationale.
    */
   captureMode: boolean;
   /**
    * Invoked whenever the spinner state changes and the owning surface must
-   * repaint: on enable, on disable-from-active, and on every 80ms frame tick.
-   * The controller owns no terminal — this callback is its sole render path.
+   * repaint: on enable, on disable-from-active, and on every frame tick whose
+   * composed rows differ from the last ones requested (identical frames are
+   * skipped). The controller owns no terminal — this callback is its sole
+   * render path.
    */
   onTick: () => void;
   /**
@@ -30,10 +42,18 @@ export interface SpinnerControllerOptions {
    * supplies one. Lets the spinner describe the tool actually in flight instead
    * of rotating random noir verbs that imply state changes which never happened.
    *
-   * Pull-based on purpose: the controller already ticks at 80ms, so reading the
+   * Pull-based on purpose: the controller already ticks every frame, so reading the
    * current verb during that tick adds no timer and no new repaint path.
    */
   workVerb?: () => string | undefined;
+  /**
+   * Optional state-specific hint (e.g. the wait_for queue-to-stop hint). When it
+   * returns text, the tip row shows it with a `Hint:` label INSTEAD of the
+   * rotating tip, with no warmup and regardless of AFK_SPINNER_TIPS: that
+   * setting governs rotating tips only, and this hint describes what the user
+   * can do right now. Pulled on each render, so no extra timer.
+   */
+  contextTip?: () => string | undefined;
 }
 
 /**
@@ -52,16 +72,24 @@ export interface SpinnerControllerOptions {
 export class SpinnerController {
   private state: SpinnerState | null = null;
   private interval: ReturnType<typeof setInterval> | null = null;
+  /** Period the live interval was armed with (80 warm / 250 idle). */
+  private intervalMs = 0;
+  /** Start of the current warm-cadence window (spin start or last work-verb change). */
+  private cadenceStartedAt = 0;
+  /** Composed rows last handed to onTick; a tick that would repeat them is skipped. */
+  private lastFrameKey: string | null = null;
   private readonly captureMode: boolean;
   private readonly onTick: () => void;
   private readonly goblin: boolean;
   private readonly workVerb: (() => string | undefined) | undefined;
+  private readonly contextTip: (() => string | undefined) | undefined;
 
   constructor(opts: SpinnerControllerOptions) {
     this.captureMode = opts.captureMode;
     this.onTick = opts.onTick;
     this.goblin = opts.goblin ?? false;
     this.workVerb = opts.workVerb;
+    this.contextTip = opts.contextTip;
   }
 
   /**
@@ -90,17 +118,15 @@ export class SpinnerController {
     // structuring this way means future enable/disable wiring doesn't strand
     // an orphaned interval). Only the enable path is gated.
     if (!config.enabled) {
-      if (this.interval) {
-        clearInterval(this.interval);
-        this.interval = null;
-      }
+      this.clearTimer();
       if (this.state) {
         this.state = null;
+        this.lastFrameKey = null;
         this.onTick();
       }
       return;
     }
-    // Capture-mode constraint: a setInterval-driven repaint at 80ms fires
+    // Capture-mode constraint: a timer-driven repaint at 80ms fires
     // ~12.5 log-update frames per second. In a live TTY these collapse to
     // one visible region via cursor-up + erase-line escapes; in a captured
     // stream (`script(1)`, `asciinema`, screen recorders) the escapes are
@@ -122,8 +148,51 @@ export class SpinnerController {
       tipPool: buildTipPool(),
       currentTip: null,
     };
-    this.interval = setInterval(() => this.tick(rotateMs), 80);
+    this.cadenceStartedAt = now;
+    this.armInterval(rotateMs, SPINNER_WARM_FRAME_MS);
+    this.lastFrameKey = this.frameKey();
     this.onTick();
+  }
+
+  /**
+   * (Re)arm the single frame interval at `ms`. The one setInterval call site
+   * is deliberate (live-progress-no-timer.test.ts pins it): the cadence change
+   * replaces the interval rather than adding a second clock.
+   */
+  private armInterval(rotateMs: number, ms: number): void {
+    this.clearTimer();
+    this.intervalMs = ms;
+    this.interval = setInterval(() => this.tick(rotateMs), ms);
+  }
+
+  private clearTimer(): void {
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = null;
+    }
+  }
+
+  /** Step the interval between warm and idle when the warm-up window flips. */
+  private syncCadence(rotateMs: number, now: number): void {
+    const want = now - this.cadenceStartedAt < SPINNER_WARMUP_MS
+      ? SPINNER_WARM_FRAME_MS
+      : SPINNER_IDLE_FRAME_MS;
+    if (want !== this.intervalMs) this.armInterval(rotateMs, want);
+  }
+
+  /**
+   * Identity of everything this controller contributes to a frame: the
+   * composed spinner row (glyph + verb + elapsed) and the tip-row text. Width-
+   * independent on purpose — a resize repaints through its own path.
+   */
+  private frameKey(): string {
+    let hint: string | undefined;
+    try {
+      hint = this.contextTip?.();
+    } catch {
+      hint = undefined;
+    }
+    return `${this.renderSpinnerRow() ?? ''}\n${hint ?? this.state?.currentTip?.text ?? ''}`;
   }
 
   /**
@@ -131,11 +200,9 @@ export class SpinnerController {
    * caller (disarm) clears the entire frame itself.
    */
   dispose(): void {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-    }
+    this.clearTimer();
     this.state = null;
+    this.lastFrameKey = null;
   }
 
   /** The composed spinner row, or null when no spinner is active. */
@@ -156,7 +223,15 @@ export class SpinnerController {
    * stable across terminal resizes — `selectTip` is width-agnostic.
    */
   renderTipRow(cols: number): string | null {
-    return this.state?.currentTip
+    if (!this.state) return null;
+    let hint: string | undefined;
+    try {
+      hint = this.contextTip?.();
+    } catch {
+      hint = undefined; // a broken hint probe must never take down the render loop
+    }
+    if (hint) return formatTipRow(hint, cols, 'Hint');
+    return this.state.currentTip
       ? formatTipRow(this.state.currentTip.text, cols)
       : null;
   }
@@ -168,8 +243,8 @@ export class SpinnerController {
     // Two triggers for a re-pick: the flavour rotation window elapsing, and the
     // work-derived verb disagreeing with what is displayed. The second keeps the
     // verb honest without waiting out a rotation — and is self-throttling,
-    // because the provider reports a tool CATEGORY, so a burst of reads yields
-    // one stable "Reading" rather than a flicker of new words.
+    // because the provider resolves a tool verb, so tools sharing the same verb
+    // yield one stable label rather than a flicker of new words.
     const derived = (() => {
       try {
         return this.workVerb?.();
@@ -181,6 +256,10 @@ export class SpinnerController {
     if (now >= this.state.nextVerbRotateAt || workVerbChanged) {
       this.state.verb = this.pickVerb();
       this.state.nextVerbRotateAt = now + rotateMs;
+      // A new work-derived verb is a real state change, so it earns a fresh
+      // warm-up. The timed flavour rotation does not: it fires every few
+      // seconds while idle and would hold the spinner at 12.5 Hz forever.
+      if (workVerbChanged) this.cadenceStartedAt = now;
     }
     // Refresh the tip slot every tick. `selectTip` is time-stable — it returns
     // the same tip across consecutive ticks within one rotation window — so
@@ -191,6 +270,11 @@ export class SpinnerController {
       startedAt: this.state.startedAt,
       now,
     });
+    this.syncCadence(rotateMs, now);
+    // Never request a repaint for a frame identical to the last one requested.
+    const key = this.frameKey();
+    if (key === this.lastFrameKey) return;
+    this.lastFrameKey = key;
     this.onTick();
   }
 }

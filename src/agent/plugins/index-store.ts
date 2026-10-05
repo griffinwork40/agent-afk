@@ -39,6 +39,18 @@ export interface PluginIndexEntry {
   ref: string | null;
   /** The commit SHA currently checked out. `null` for local/marketplace plugins. */
   commit: string | null;
+  /**
+   * True when `ref` was explicitly supplied by the user (`--ref`) at install or
+   * last update. False/absent means the updater auto-picked it (latest semver tag
+   * or default branch).
+   *
+   * Legacy migration rule: when `pinnedRef` is `undefined` (pre-fix entry), treat
+   * it as pinned when `ref` is non-null AND is not a semver tag AND is not the
+   * repo's default branch. Auto-pick only ever stores a semver tag or the default
+   * branch, so any other value in an old entry must have come from `--ref`.
+   * Use `isPinnedRef()` to evaluate this rule consistently.
+   */
+  pinnedRef?: boolean;
   /** Whether the scanner should include this plugin. */
   enabled: boolean;
   /** ISO timestamp of first install. */
@@ -60,6 +72,15 @@ export interface MarketplaceIndexEntry {
   ref: string | null;
   /** The commit SHA currently checked out. `null` for local marketplaces. */
   commit: string | null;
+  /**
+   * True when `ref` was explicitly supplied by the user (`--ref`) at install or
+   * last update. False/absent means the updater auto-picked it (latest semver tag
+   * or default branch).
+   *
+   * Legacy migration rule: same as PluginIndexEntry.pinnedRef — use
+   * `isMarketplacePinnedRef()` to evaluate consistently.
+   */
+  pinnedRef?: boolean;
   /** ISO timestamp of first install. */
   installedAt: string;
   /** ISO timestamp of most recent install/update. */
@@ -220,6 +241,41 @@ export function removeMarketplace(
   }
   if (mutated) writeIndex(index, path);
   return index;
+}
+
+/**
+ * Evaluate whether a PluginIndexEntry ref is user-pinned.
+ *
+ * Rule: explicit `pinnedRef: true` → pinned. `pinnedRef: false` → auto-picked.
+ * `pinnedRef: undefined` (legacy entry) → apply the migration heuristic: treat
+ * as pinned when `entry.ref` is non-null AND does not parse as semver AND is not
+ * the repo's default branch. Auto-pick only ever stores a semver tag (e.g.
+ * `v2.0.0`) or the default branch (e.g. `main`), so any other stored ref must
+ * have originated from `--ref`.
+ */
+export function isPinnedRef(entry: Pick<PluginIndexEntry, 'ref' | 'pinnedRef'>, defaultBranch: string): boolean {
+  if (entry.pinnedRef === true) return true;
+  if (entry.pinnedRef === false) return false;
+  const ref = entry.ref;
+  if (!ref) return false;
+  if (ref === defaultBranch) return false;
+  const SEMVER_RE = /^v?\d+\.\d+\.\d+/;
+  return !SEMVER_RE.test(ref);
+}
+
+/**
+ * Evaluate whether a MarketplaceIndexEntry ref is user-pinned.
+ * Identical semantics to isPinnedRef; duplicated so callers receive the
+ * correct entry type without casting.
+ */
+export function isMarketplacePinnedRef(entry: Pick<MarketplaceIndexEntry, 'ref' | 'pinnedRef'>, defaultBranch: string): boolean {
+  if (entry.pinnedRef === true) return true;
+  if (entry.pinnedRef === false) return false;
+  const ref = entry.ref;
+  if (!ref) return false;
+  if (ref === defaultBranch) return false;
+  const SEMVER_RE = /^v?\d+\.\d+\.\d+/;
+  return !SEMVER_RE.test(ref);
 }
 
 function cloneEmpty(): PluginIndex {

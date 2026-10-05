@@ -17,7 +17,7 @@
 
 import type { ElicitationRequest } from '../../agent/types/sdk-types.js';
 import { debugLog } from '../../utils/debug.js';
-import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { sanitizeSchemaString, truncateMessageWithCount } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
 
@@ -101,16 +101,35 @@ export function parseProperties(schema: Record<string, unknown>): {
   return { properties, required, fieldsTruncated, originalFieldCount };
 }
 
+/**
+ * Message-length cap for AFK-harness-originated form elicitations.
+ *
+ * The harness builds messages that include a full command preview (up to 2000
+ * chars). The cap here must comfortably hold the fixed preamble (~120 chars) +
+ * the full preview, so 2400 is generous enough while still bounding terminal
+ * output. Only applies when {@link ElicitationRequest._harnessInternal} is set
+ * — arbitrary MCP servers keep the existing 256-char cap.
+ */
+const HARNESS_MESSAGE_CAP = 2400;
+
 export function renderFormHeader(
   writer: ReplElicitationDeps['writer'],
   req: ElicitationRequest,
 ): void {
   // Sanitise envelope strings — serverName, message, elicitationId are all
   // MCP-controlled and flow directly into terminal output. H-1.
+  //
+  // Spoofing guard: use _harnessInternal (set only by the AFK harness in
+  // afk-mode-gate.ts, never by MCP deserialization) to gate the relaxed path.
+  // Keying on serverName alone would let any external MCP server claim the name
+  // 'agent-afk' and receive a larger cap + a misleading banner.
+  const isHarness = req._harnessInternal === true;
+  const banner = isHarness ? '⚠ AFK safety approval' : '⚠ MCP form elicitation';
+  const messageCap = isHarness ? HARNESS_MESSAGE_CAP : 256;
   writer.line();
-  writer.line(palette.warning('⚠ MCP form elicitation'));
+  writer.line(palette.warning(banner));
   writer.line(palette.dim('  server:  ') + palette.bold(sanitizeSchemaString(req.serverName, 64)));
-  writer.line(palette.dim('  message: ') + sanitizeSchemaString(req.message, 256));
+  writer.line(palette.dim('  message: ') + truncateMessageWithCount(req.message, messageCap));
   if (req.elicitationId) {
     writer.line(palette.dim('  id:      ') + sanitizeSchemaString(req.elicitationId, 64));
   }

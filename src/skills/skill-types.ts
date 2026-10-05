@@ -203,6 +203,24 @@ export interface SkillMetadata {
    */
   audience?: 'public' | 'internal';
   /**
+   * When `true`, exclude this skill from the model-facing manifest while
+   * keeping it fully slash-invocable by the user.
+   *
+   * Matches the Claude Code `disable-model-invocation` SKILL.md frontmatter
+   * field so plugin skills are portable between the two runtimes. Set by the
+   * SKILL.md parser (plugin + disk) or at `registerSkill()` call time for
+   * built-in skills.
+   *
+   * Contract: filtered at the `buildSkillManifest()` boundary only — the same
+   * place `excludeName` and `source !== 'command'` filters live. The slash-
+   * command router, `/skills`, and `afk skill list` still see and invoke the
+   * skill. When the MODEL calls the `skill` tool with a hidden skill's name,
+   * `SkillExecutor.execute()` still dispatches it: the slash path itself
+   * round-trips through a model `skill` tool call, so a refusal would break
+   * `/name` too. Hidden means "not advertised", not "forbidden".
+   */
+  disableModelInvocation?: boolean;
+  /**
    * Job-to-be-done category for grouping in the `/skills` listing.
    *
    * Authored at the source (in SKILL.md frontmatter or registerSkill calls),

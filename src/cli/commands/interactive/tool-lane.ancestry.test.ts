@@ -71,9 +71,9 @@ describe('ancestorDepthOf', () => {
       ['A', a],
       ['B', b],
     ]);
-    // Should terminate quickly and return a small number rather than hanging
+    // A→B→A: walk starts at A (depth 0), steps to B (depth 1), B.agentContext=A
+    // which is already in `seen`, so the cycle guard fires and returns 1.
     const depth = ancestorDepthOf(map, 'A');
-    expect(depth).toBeGreaterThanOrEqual(0);
-    expect(depth).toBeLessThan(32); // well under ANCESTRY_CYCLE_CAP
+    expect(depth).toBe(1);
   });
 });

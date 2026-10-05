@@ -35,6 +35,8 @@ function makeEnabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedHo
     userGlobalEnabled: true,
     allowProjectHooks: false,
     pluginHooksEnabled: false,
+    pluginHookEnv: {},
+    disabledPluginHooks: {},
     sources: [],
     warnings: [],
     ...overrides,
@@ -47,6 +49,8 @@ function makeDisabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedH
     userGlobalEnabled: false,
     allowProjectHooks: false,
     pluginHooksEnabled: false,
+    pluginHookEnv: {},
+    disabledPluginHooks: {},
     sources: [],
     warnings: [],
     ...overrides,
@@ -133,6 +137,7 @@ describe('trust gate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Matcher filtering — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -235,6 +240,7 @@ describe.skipIf(process.platform === 'win32')('matcher filtering', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Non-tool events (no matcher applied) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -285,6 +291,7 @@ describe.skipIf(process.platform === 'win32')('non-tool events', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Blocking — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -336,6 +343,7 @@ describe('multiple handlers', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — integration tests dispatch #!/bin/sh scripts; no Windows shell equivalent (#703)
 // createDefaultHookRegistry integration — some tests dispatch #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -395,6 +403,9 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
         ],
       },
       userGlobalEnabled: true,
+      allowProjectHooks: false,
+      pluginHooksEnabled: false,
+      pluginHookEnv: {},
       sources: [],
       warnings: [],
     };
@@ -423,6 +434,9 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
         ],
       },
       userGlobalEnabled: true,
+      allowProjectHooks: false,
+      pluginHooksEnabled: false,
+      pluginHookEnv: {},
       sources: [],
       warnings: [],
     };
@@ -468,6 +482,7 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Plugin-tier hooks (Claude Code compat) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -545,6 +560,100 @@ describe.skipIf(process.platform === 'win32')('plugin-tier hooks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts to propagate session id; no Windows shell equivalent (#703)
+// Session id resolution — context.sessionId wins over agentConfig.sessionId
+// ---------------------------------------------------------------------------
+
+describe.skipIf(process.platform === 'win32')('session id resolution', () => {
+  it('context.sessionId wins over agentConfig.sessionId (registration-time fallback)', async () => {
+    // Script reads session_id from stdin and emits it as additionalContext.
+    // Written with writeFileSync rather than writeScript to use a plain string
+    // (no template literal) — avoids the esbuild octal-escape-in-template error
+    // that fires on the sed backreference \1 when compiled for test.
+    const scriptPath = join(tmp, 'echo-session-id.sh');
+    writeFileSync(
+      scriptPath,
+      '#!/bin/sh\npayload=$(cat)\nsid=$(echo "$payload" | sed \'s/.*"session_id":"\\([^"]*\\)".*/\\1/\')\necho "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$sid\\"}}"\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        PreToolUse: [
+          { hooks: [{ type: 'command', command: scriptPath, timeoutMs: 5000 }] },
+        ],
+      },
+    });
+    // Registration-time agentConfig has a different sessionId.
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp, sessionId: 'registration-id' });
+
+    // Dispatch with a context that carries a live sessionId.
+    const result = await registry.dispatch({
+      event: 'PreToolUse',
+      toolName: 'bash',
+      sessionId: 'live-context-id',
+    });
+    // The hook should see the live context id, not the registration-time one.
+    expect(result.injectContext).toBe('live-context-id');
+  });
+
+  it('falls back to agentConfig.sessionId when context has no sessionId', async () => {
+    const scriptPath = join(tmp, 'echo-session-id-fallback.sh');
+    writeFileSync(
+      scriptPath,
+      '#!/bin/sh\npayload=$(cat)\nsid=$(echo "$payload" | sed \'s/.*"session_id":"\\([^"]*\\)".*/\\1/\')\necho "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$sid\\"}}"\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        // SubagentStop has no sessionId field — ideal for testing fallback.
+        SubagentStop: [
+          { hooks: [{ type: 'command', command: scriptPath, timeoutMs: 5000 }] },
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp, sessionId: 'registration-fallback-id' });
+
+    const result = await registry.dispatch({
+      event: 'SubagentStop',
+      subagentId: 'sa-fallback',
+      status: 'succeeded',
+    });
+    // SubagentStop carries no sessionId, so the registration-time id is used.
+    expect(result.injectContext).toBe('registration-fallback-id');
+  });
+
+  it('AFK_SESSION_ID env var reflects context.sessionId in the hook subprocess', async () => {
+    const scriptPath = writeScript(
+      'echo-env-session-id.sh',
+      `#!/bin/sh
+echo "{\\"hookSpecificOutput\\":{\\"additionalContext\\":\\"$AFK_SESSION_ID\\"}}"
+`,
+    );
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        PostToolUse: [
+          { hooks: [{ type: 'command', command: scriptPath, timeoutMs: 5000 }] },
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp, sessionId: 'reg-id' });
+
+    const result = await registry.dispatch({
+      event: 'PostToolUse',
+      toolName: 'write_file',
+      sessionId: 'env-context-id',
+    });
+    // AFK_SESSION_ID must carry the live context id, not the registration-time one.
+    expect(result.injectContext).toBe('env-context-id');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Episode mode hook filter
 // ---------------------------------------------------------------------------
 
@@ -569,8 +678,9 @@ describe('episode mode hook filter', () => {
     expect(registry.count('PreToolUse')).toBe(1);
   });
 
-  it('inside episode: only SessionStart and UserPromptSubmit register', () => {
+  it('inside episode (default): only context-injecting events suppressed, tool-gating hooks register', () => {
     vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '');
     const registry = createHookRegistry();
     const config = makeEnabledConfig({
       hooks: {
@@ -583,13 +693,283 @@ describe('episode mode hook filter', () => {
       },
     });
     loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
-    // Context-shaping events register.
+    // Context-injecting events suppressed — both arms see byte-identical first user messages.
+    expect(registry.count('SessionStart')).toBe(0);
+    expect(registry.count('UserPromptSubmit')).toBe(0);
+    // Tool-gating events keep registering — they cannot inject context into the
+    // first user message and their presence preserves episode realism.
+    expect(registry.count('Stop')).toBe(1);
+    expect(registry.count('PreToolUse')).toBe(1);
+    expect(registry.count('SessionEnd')).toBe(1);
+    expect(registry.count('PostToolUse')).toBe(1);
+  });
+
+  it('inside episode with AFK_WHATIF_KEEP_CONTEXT_HOOKS=1: all hooks register', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '1');
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        SessionStart: [makeGroup([{ type: 'command', command: 'echo ss', timeoutMs: 1000 }])],
+        UserPromptSubmit: [makeGroup([{ type: 'command', command: 'echo ups', timeoutMs: 1000 }])],
+        Stop: [makeGroup([{ type: 'command', command: 'echo stop', timeoutMs: 1000 }])],
+        PreToolUse: [makeGroup([{ type: 'command', command: 'echo pre', timeoutMs: 1000 }])],
+        SessionEnd: [makeGroup([{ type: 'command', command: 'echo end', timeoutMs: 1000 }])],
+        PostToolUse: [makeGroup([{ type: 'command', command: 'echo post', timeoutMs: 1000 }])],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    // All hooks register when opt-in is set.
     expect(registry.count('SessionStart')).toBe(1);
     expect(registry.count('UserPromptSubmit')).toBe(1);
-    // Side-effect tails are skipped.
-    expect(registry.count('Stop')).toBe(0);
-    expect(registry.count('PreToolUse')).toBe(0);
-    expect(registry.count('SessionEnd')).toBe(0);
-    expect(registry.count('PostToolUse')).toBe(0);
+    expect(registry.count('Stop')).toBe(1);
+    expect(registry.count('PreToolUse')).toBe(1);
+    expect(registry.count('SessionEnd')).toBe(1);
+    expect(registry.count('PostToolUse')).toBe(1);
+  });
+
+  it('inside episode: cwd-dependent SessionStart hook is NOT registered (cannot differ between arms)', () => {
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_KEEP_CONTEXT_HOOKS', '');
+    const registry = createHookRegistry();
+    // Simulate a pattern-card surfacer that injects cwd-dependent text.
+    const config = makeEnabledConfig({
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: 'echo cwd=$(pwd) > /dev/stdout', timeoutMs: 1000 }]),
+        ],
+      },
+    });
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    // Must NOT register — output would differ per arm (baseline vs candidate cwd).
+    expect(registry.count('SessionStart')).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// transcript_path threading (issue #2372)
+// ---------------------------------------------------------------------------
+
+describe('getTranscriptPath threading (issue #2372)', () => {
+  it('transcript path from getTranscriptPath getter appears in hook stdin payload', async () => {
+    const transcriptFile = join(tmp, '2026-01-01T00-00-00-000Z.md');
+    writeFileSync(transcriptFile, '# Session\n\n## User\n\nhello\n\n');
+
+    // Script that blocks (exit 2) if transcript_path doesn't match.
+    const scriptPath = join(tmp, 'check-transcript-path.sh');
+    writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/sh',
+        'payload=$(cat)',
+        `case "$payload" in`,
+        `  *'"transcript_path":"${transcriptFile}"'*) exit 0 ;;`,
+        `  *) echo "wrong transcript_path: $payload" >&2; exit 2 ;;`,
+        'esac',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        UserPromptSubmit: [
+          makeGroup([{ type: 'command', command: scriptPath, timeoutMs: 5000 }]),
+        ],
+      },
+    });
+
+    loadAndRegisterConfigHooks(registry, config, {
+      cwd: tmp,
+      getTranscriptPath: () => transcriptFile,
+    });
+
+    const decision = await registry.dispatch({
+      event: 'UserPromptSubmit',
+      prompt: 'hello',
+      sessionId: 'test-sid',
+    });
+    expect(decision).toEqual({});
+  });
+
+  it('transcript_path is null when getTranscriptPath is not provided', async () => {
+    const scriptPath = join(tmp, 'check-null-transcript.sh');
+    writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/sh',
+        'payload=$(cat)',
+        'case "$payload" in',
+        `  *'"transcript_path":null'*) exit 0 ;;`,
+        `  *) echo "expected null in: $payload" >&2; exit 2 ;;`,
+        'esac',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        Stop: [makeGroup([{ type: 'command', command: scriptPath, timeoutMs: 5000 }])],
+      },
+    });
+
+    // No getTranscriptPath → null in payload.
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    const decision = await registry.dispatch({ event: 'Stop', sessionId: 'test-sid' });
+    expect(decision).toEqual({});
+  });
+
+  it('getter is called at dispatch time so /clear rotations are visible', async () => {
+    // Simulate a /clear rotation: currentPath changes between registration
+    // and dispatch. The hook payload should reflect the post-rotation path.
+    const beforeClearPath = join(tmp, 'before-clear.md');
+    const afterClearPath = join(tmp, 'after-clear.md');
+    writeFileSync(beforeClearPath, '# before\n');
+    writeFileSync(afterClearPath, '# after\n');
+    let currentPath = beforeClearPath;
+
+    const scriptPath = join(tmp, 'check-dynamic.sh');
+    writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/sh',
+        'payload=$(cat)',
+        `case "$payload" in`,
+        `  *'"transcript_path":"${afterClearPath}"'*) exit 0 ;;`,
+        `  *) echo "expected after-clear path, got: $payload" >&2; exit 2 ;;`,
+        'esac',
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const registry = createHookRegistry();
+    const config = makeEnabledConfig({
+      hooks: {
+        Stop: [makeGroup([{ type: 'command', command: scriptPath, timeoutMs: 5000 }])],
+      },
+    });
+
+    loadAndRegisterConfigHooks(registry, config, {
+      cwd: tmp,
+      getTranscriptPath: () => currentPath,
+    });
+
+    // Simulate /clear rotation: update currentPath before dispatch.
+    currentPath = afterClearPath;
+
+    const decision = await registry.dispatch({ event: 'Stop', sessionId: 'test-sid' });
+    expect(decision).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disabledPluginHooks gate (issue #2816)
+// ---------------------------------------------------------------------------
+
+describe('disabledPluginHooks — per-hook disable', () => {
+  it('suppresses a plugin hook group by event when listed in disabledPluginHooks', async () => {
+    const script = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
+    const registry = createHookRegistry();
+
+    // Plugin hook for SessionStart, plugin name "my-plugin"
+    const config = makeEnabledConfig({
+      disabledPluginHooks: { 'my-plugin': ['SessionStart'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: script, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    // Manually attach pluginName to hooks (normally done by the loader)
+    const group = config.hooks.SessionStart?.[0];
+    if (group) group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    // No handler should have been registered — the event fires but no action.
+    // We can verify by checking the dispatch returns {} immediately (no hook ran).
+    const decision = await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+    expect(decision).toEqual({});
+  });
+
+  it('suppresses only the matching matcher group, not other matchers', async () => {
+    const hitPath = join(tmp, 'hit.txt');
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'record-hit.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
+    const misScript = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
+    const registry = createHookRegistry();
+
+    // Two plugin groups for PreToolUse on "my-plugin":
+    //   group 1: matcher="/^agent$/" → suppressed
+    //   group 2: no matcher → should still run
+    const config = makeEnabledConfig({
+      disabledPluginHooks: { 'my-plugin': ['PreToolUse:/^agent$/'] },
+      hooks: {
+        PreToolUse: [
+          makeGroup([{ type: 'command', command: misScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+            matcher: '/^agent$/',
+          }),
+          makeGroup([{ type: 'command', command: hitScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    // Attach pluginName to both groups' hooks
+    for (const group of config.hooks.PreToolUse ?? []) {
+      group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+    }
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    // Dispatch PreToolUse with tool name "agent" — the suppressed group must
+    // NOT run (misScript); the wildcard group MUST run (hitScript).
+    await registry.dispatch({ event: 'PreToolUse', toolName: 'agent', sessionId: 'sid' });
+
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(hitPath)).toBe(true);
+  });
+
+  it('does not suppress a plugin hook from a different plugin', async () => {
+    const hitPath = join(tmp, 'different-plugin-hit.txt');
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'different-plugin-hook.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
+    const registry = createHookRegistry();
+
+    const config = makeEnabledConfig({
+      // "other-plugin" is disabled, but "my-plugin" should still run
+      disabledPluginHooks: { 'other-plugin': ['SessionStart'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: hitScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    const group = config.hooks.SessionStart?.[0];
+    if (group) group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(hitPath)).toBe(true);
   });
 });

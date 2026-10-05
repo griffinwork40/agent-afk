@@ -143,3 +143,17 @@ export interface PendingApproval {
     questionDefault?: string | boolean | number;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Tool results (message journal)
+// ---------------------------------------------------------------------------
+
+/** `GET /api/sessions/:id/tool-results/:toolUseId` — mirrors ToolResultResponse in src/web-server/routes.tool-results.ts. */
+export interface ToolResultResponse {
+  toolUseId: string;
+  isError: boolean;
+  subagentId?: string;
+  text: string;
+  totalChars: number;
+  truncated: boolean;
+}

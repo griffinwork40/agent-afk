@@ -59,6 +59,7 @@ vi.mock('./commands/interactive.js', () => ({
 }));
 
 vi.mock('./commands/status.js', () => ({ registerStatusCommand: vi.fn() }));
+vi.mock('./commands/usage.js', () => ({ registerUsageCommand: vi.fn() }));
 vi.mock('./commands/config-command.js', () => ({ registerConfigCommand: vi.fn() }));
 vi.mock('./commands/daemon.js', () => ({ registerDaemonCommand: vi.fn() }));
 vi.mock('./commands/login-command.js', () => ({ registerLoginCommand: vi.fn() }));

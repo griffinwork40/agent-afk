@@ -29,7 +29,7 @@ export type TriggerMode = 'cron' | 'sessionstart' | 'both' | 'pull';
 export type TaskExecutor = 'agent' | 'shell' | 'builtin';
 
 /** Known builtin task names that `executor: 'builtin'` can dispatch to. */
-export const KNOWN_BUILTINS = ['worktree-prune'] as const;
+export const KNOWN_BUILTINS = ['worktree-prune', 'tool-health'] as const;
 export type BuiltinTaskName = (typeof KNOWN_BUILTINS)[number];
 
 export interface ScheduledTask {
@@ -80,7 +80,7 @@ export interface ScheduledTask {
   /**
    * Per-task working directory (absolute path). When set, the spawned session's
    * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
-   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd().
    * Shell tasks honor this too: execFile receives it as the `cwd` option.
    */
   cwd?: string;

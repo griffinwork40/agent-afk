@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BackgroundAgentRegistry } from '../agent/background-registry.js';
 import type { SubagentHandle, SubagentResult } from '../agent/subagent.js';
 import { TelegramBgResultNotifier } from './bg-result-notifier.js';
+import { drainBgInjections, prependToContent, registerBgInjectionSource, unregisterBgInjectionSource } from './bg-injection.js';
 
 // Stub pushIfConfigured so we can observe calls without hitting the network.
 vi.mock('./push.js', () => ({
@@ -78,7 +79,7 @@ describe('TelegramBgResultNotifier', () => {
     notifier.dispose();
   });
 
-  it('pushes a notification when a background job completes', () => {
+  it('pushes a notification when a background job completes', async () => {
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({
       handle,
@@ -88,14 +89,15 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(succeed(job.jobId, 'found the answer'));
 
-    expect(pushMock).toHaveBeenCalledTimes(1);
+    // Push is deferred via queueMicrotask — wait for it.
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const text = pushMock.mock.calls[0]![0];
     expect(text).toContain('✅');
     expect(text).toContain('completed');
     expect(text).toContain('investigate something');
   });
 
-  it('pushes a notification when a background job fails', () => {
+  it('pushes a notification when a background job fails', async () => {
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({
       handle,
@@ -105,7 +107,7 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(fail(job.jobId, 'rate limit'));
 
-    expect(pushMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const text = pushMock.mock.calls[0]![0];
     expect(text).toContain('❌');
     expect(text).toContain('failed');
@@ -125,7 +127,7 @@ describe('TelegramBgResultNotifier', () => {
     expect(pushMock).not.toHaveBeenCalled();
   });
 
-  it('targets a specific chat when chatId is provided', () => {
+  it('targets a specific chat when chatId is provided', async () => {
     notifier.dispose();
     notifier = new TelegramBgResultNotifier(registry, 12345);
 
@@ -138,12 +140,12 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(succeed(job.jobId, 'done'));
 
-    expect(pushMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const opts = pushMock.mock.calls[0]![1];
     expect(opts).toEqual({ target: 12345 });
   });
 
-  it('passes messageThreadId when threadId is provided', () => {
+  it('passes messageThreadId when threadId is provided', async () => {
     notifier.dispose();
     notifier = new TelegramBgResultNotifier(registry, 12345, 77);
 
@@ -156,12 +158,12 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(succeed(job.jobId, 'done'));
 
-    expect(pushMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const opts = pushMock.mock.calls[0]![1];
     expect(opts).toEqual({ target: 12345, messageThreadId: 77 });
   });
 
-  it('uses default notify routing when no chatId is provided', () => {
+  it('uses default notify routing when no chatId is provided', async () => {
     const { handle, fireTerminal } = makeBgHandle();
     const job = registry.register({
       handle,
@@ -171,12 +173,12 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(succeed(job.jobId, 'done'));
 
-    expect(pushMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
     const opts = pushMock.mock.calls[0]![1];
     expect(opts).toEqual({ target: undefined });
   });
 
-  it('stops pushing after dispose', () => {
+  it('stops pushing when dispose() is called before the settled event', async () => {
     notifier.dispose();
 
     const { handle, fireTerminal } = makeBgHandle();
@@ -188,7 +190,35 @@ describe('TelegramBgResultNotifier', () => {
 
     fireTerminal(succeed(job.jobId, 'done'));
 
+    // Let the microtask queue drain to confirm no deferred push fires either.
+    await new Promise<void>((r) => queueMicrotask(r));
     expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it('does not push when settled and dispose() happen in the same synchronous frame', async () => {
+    // This exercises the dispose-race window: onSettled enqueues a
+    // queueMicrotask push, then dispose() runs — both in the same synchronous
+    // frame before the microtask has a chance to execute. Without the
+    // `disposed` guard the push would still fire after teardown.
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({
+      handle,
+      prompt: 'settled then dispose',
+      model: 'sonnet',
+    });
+
+    // Both calls are synchronous — fireTerminal enqueues the microtask,
+    // dispose() sets the disposed flag, all before the microtask runs.
+    fireTerminal(succeed(job.jobId, 'done'));
+    notifier.dispose();
+
+    // Drain the microtask queue — the guarded body must not call push.
+    await new Promise<void>((r) => queueMicrotask(r));
+    expect(pushMock).not.toHaveBeenCalled();
+    // dispose() clears pendingInjections, so drainInjections() must return ''
+    // (the job was never injected because dispose ran before the guard-free
+    // pendingInjections.push path could fire).
+    expect(notifier.drainInjections()).toBe('');
   });
 
   it('swallows push errors without throwing', async () => {
@@ -208,5 +238,254 @@ describe('TelegramBgResultNotifier', () => {
     await vi.waitFor(() => {
       expect(pushMock).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // ── #2364: result body delivery + next-turn injection ─────────────────────
+
+  it('includes the result body in the push after the status line', async () => {
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'body task', model: 'sonnet' });
+
+    fireTerminal(succeed(job.jobId, 'FINDING: the cache key is stale'));
+
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    const text = pushMock.mock.calls[0]![0];
+    const [header, ...rest] = text.split('\n\n');
+    expect(header).toContain('Background task completed: body task');
+    expect(rest.join('\n\n')).toBe('FINDING: the cache key is stale');
+  });
+
+  it('includes the failure reason in the push for a failed job', async () => {
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'failing task', model: 'sonnet' });
+
+    fireTerminal(fail(job.jobId, 'rate limit'));
+
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    expect(pushMock.mock.calls[0]![0]).toContain('rate limit');
+  });
+
+  it('caps a >16KB body with a /bgsub:join marker naming the job', async () => {
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'huge task', model: 'sonnet' });
+
+    // Use whitespace-separated words so redactSecrets does not collapse the
+    // body into a single [REDACTED] token before truncation is reached.
+    fireTerminal(succeed(job.jobId, 'output line\n'.repeat(4_000)));
+
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    const text = pushMock.mock.calls[0]![0];
+    expect(text).toContain(`full result via /bgsub:join ${job.jobId}`);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(17 * 1024);
+  });
+
+  // ── #2849: redactSecrets applied at Telegram delivery boundary ───────────
+  // formatBgResultBody (push path) must strip secrets before they leave the
+  // process. buildBgResultInjection (local model-context path) must NOT strip
+  // them so the model receives the full result unmodified.
+
+  it('redacts Anthropic API key in Telegram push but preserves it in local injection', async () => {
+    // Synthetic secret that matches the sk-ant-* pattern in redactSecrets.
+    const syntheticKey = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890abcd';
+    const output = `Token recovered: ${syntheticKey} — please rotate immediately.`;
+
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'secret task', model: 'sonnet' });
+
+    fireTerminal(succeed(job.jobId, output));
+
+    // Push path — secret must be redacted.
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    const pushed = pushMock.mock.calls[0]![0];
+    expect(pushed).not.toContain(syntheticKey);
+    expect(pushed).toContain('[REDACTED]');
+
+    // Local injection — raw content preserved for model context.
+    const injection = notifier.drainInjections();
+    expect(injection).toContain(syntheticKey);
+  });
+
+  it('redacts Bearer token in Telegram push', async () => {
+    const output = 'Authorization: Bearer ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678';
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'bearer task', model: 'sonnet' });
+
+    fireTerminal(succeed(job.jobId, output));
+
+    await vi.waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+    const pushed = pushMock.mock.calls[0]![0];
+    expect(pushed).not.toContain('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678');
+    expect(pushed).toContain('[REDACTED]');
+  });
+
+  it('buffers the result for next-turn injection and drains it exactly once', () => {
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'inject task', model: 'sonnet' });
+    const delivered = vi.spyOn(registry, 'markDelivered');
+
+    fireTerminal(succeed(job.jobId, 'injected <b>finding</b>'));
+
+    const first = notifier.drainInjections();
+    expect(first).toContain(`<background-subagent-result jobId="${job.jobId}" status="completed"`);
+    expect(first).toContain('injected &lt;b&gt;finding&lt;/b&gt;');
+    expect(delivered).toHaveBeenCalledWith(job.jobId);
+    expect(notifier.drainInjections()).toBe('');
+  });
+
+  it('does not buffer cancelled jobs for injection', async () => {
+    const { handle } = makeBgHandle();
+    registry.register({ handle, prompt: 'cancel me', model: 'sonnet' });
+    await registry.cancelAll();
+    expect(notifier.drainInjections()).toBe('');
+  });
+
+  it('routes injections to the owning chat/topic only', () => {
+    notifier.dispose();
+    notifier = new TelegramBgResultNotifier(registry, 555, 9);
+
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'routed task', model: 'sonnet' });
+    fireTerminal(succeed(job.jobId, 'routed result'));
+
+    expect(drainBgInjections('555')).toBe('');
+    expect(drainBgInjections('556:9')).toBe('');
+    expect(drainBgInjections('555:9')).toContain('routed result');
+    expect(drainBgInjections('555:9')).toBe('');
+  });
+
+  it('unregisters its route on dispose without evicting a replacement', () => {
+    notifier.dispose();
+    const old = new TelegramBgResultNotifier(registry, 777);
+    const replacement = new TelegramBgResultNotifier(new BackgroundAgentRegistry({}), 777);
+    old.dispose();
+    notifier = replacement;
+
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'old session', model: 'sonnet' });
+    fireTerminal(succeed(job.jobId, 'from disposed session'));
+
+    // Old notifier is unsubscribed; replacement is still the route's source.
+    expect(drainBgInjections('777')).toBe('');
+    replacement.dispose();
+    expect(drainBgInjections('777')).toBe('');
+  });
+
+  // ── Fix: dispose() must NOT call markDelivered for buffered-but-undrained jobs ────
+  // (#2380 originally made dispose() call markDelivered, but that mislabeled
+  // jobs as "delivered to model context" when they were only push-notified.
+  // The correct behavior: dispose() silently discards the injection buffer
+  // without any witness event — the operator received a push notification and
+  // can recover via /bgsub:join in the next session.)
+
+  it('does NOT call markDelivered for buffered-but-undrained jobs on dispose()', () => {
+    const markDelivered = vi.spyOn(registry, 'markDelivered');
+
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'undrained task', model: 'sonnet' });
+
+    // Push the job into pendingInjections by firing a non-cancelled settle.
+    fireTerminal(succeed(job.jobId, 'result that will never be drained'));
+
+    // Do NOT call drainInjections() — simulate session teardown where drain
+    // is never reached.
+    notifier.dispose();
+
+    // dispose() must NOT mislabel this as delivered. drainInjections() was never
+    // called, so no injection reached the model — markDelivered must not fire.
+    expect(markDelivered).not.toHaveBeenCalled();
+  });
+});
+
+describe('prependToContent', () => {
+  it('returns content unchanged when there is nothing to inject', () => {
+    const blocks = [{ type: 'text' as const, text: 'hi' }];
+    expect(prependToContent('', 'hello')).toBe('hello');
+    expect(prependToContent('', blocks)).toBe(blocks);
+  });
+
+  it('concatenates onto string content', () => {
+    expect(prependToContent('<r/>\n', 'hello')).toBe('<r/>\nhello');
+  });
+
+  it('prepends a text block to content-block arrays, leaving others intact', () => {
+    const image = { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'AA' } };
+    const out = prependToContent('<r/>\n', [image]);
+    expect(out).toEqual([{ type: 'text', text: '<r/>\n' }, image]);
+  });
+});
+
+// ── #2398: warn on stale-source overwrite in registerBgInjectionSource ────────
+
+describe('registerBgInjectionSource', () => {
+  const testKey = '__test_route_warn__';
+  const stubSource = { drainInjections: () => '' };
+
+  afterEach(() => {
+    // Clean up any registrations this suite made.
+    unregisterBgInjectionSource(testKey, stubSource);
+  });
+
+  it('does not warn on first registration for a key', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    registerBgInjectionSource(testKey, stubSource);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('warns when a second registration overwrites an existing key (stale-session signal)', () => {
+    registerBgInjectionSource(testKey, stubSource);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const replacement = { drainInjections: () => '' };
+    registerBgInjectionSource(testKey, replacement);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toContain(testKey);
+    warnSpy.mockRestore();
+    // Clean up the replacement (stubSource was replaced so won't self-evict).
+    unregisterBgInjectionSource(testKey, replacement);
+  });
+});
+
+// ── #2398: deferred body formatting — push happens async, not on the event ───
+//    loop synchronously during onSettled
+
+describe('TelegramBgResultNotifier — deferred push formatting', () => {
+  let registry: BackgroundAgentRegistry;
+  let notifier: TelegramBgResultNotifier;
+
+  beforeEach(() => {
+    registry = new BackgroundAgentRegistry({});
+    notifier = new TelegramBgResultNotifier(registry);
+    pushMock.mockClear();
+  });
+
+  afterEach(() => {
+    notifier.dispose();
+  });
+
+  it('does not invoke pushIfConfigured synchronously during the settled event', () => {
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'deferred task', model: 'sonnet' });
+
+    // fireTerminal is synchronous; if push is deferred (via queueMicrotask)
+    // then pushIfConfigured must not have been called yet at this point.
+    fireTerminal(succeed(job.jobId, 'result'));
+
+    // Push call count must still be 0 synchronously — formatting is deferred.
+    expect(pushMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('eventually invokes pushIfConfigured after the microtask queue drains', async () => {
+    const { handle, fireTerminal } = makeBgHandle();
+    const job = registry.register({ handle, prompt: 'deferred body task', model: 'sonnet' });
+
+    fireTerminal(succeed(job.jobId, 'deferred body'));
+
+    // Allow the queueMicrotask callback to run.
+    await vi.waitFor(() => {
+      expect(pushMock).toHaveBeenCalledTimes(1);
+    });
+
+    const text = pushMock.mock.calls[0]![0];
+    expect(text).toContain('deferred body');
   });
 });

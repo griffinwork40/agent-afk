@@ -10,6 +10,7 @@ import { QueryInputStream } from '../../session/input-iterable.js';
 import { resetSlotBindings, setSlotBindings } from '../../session/model-slots.js';
 import { resolveModelId } from '../../session/model-resolution.js';
 import type { AgentConfig } from '../../types/config-types.js';
+import type { JournalMessage } from '../../journal/index.js';
 import type {
   ModelProvider,
   ProviderQuery,
@@ -95,6 +96,21 @@ class FakeQuery implements ProviderQuery {
     };
   }
   compact?(): Promise<import('../../provider.js').ProviderCompactResult>;
+  /** Set by a test to model a provider that keeps a message journal. */
+  liveSnapshot: JournalMessage[] | undefined;
+  journalSnapshot(): JournalMessage[] | undefined {
+    return this.liveSnapshot;
+  }
+  /** Tracks the most-recently installed steering callback for assertions. */
+  installedBeforeNextRound: (() => string | undefined) | undefined;
+  setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
+    this.installedBeforeNextRound = cb;
+  }
+  /** Tracks the most-recently installed stop-hook seam callback for assertions. */
+  installedBeforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this.installedBeforeTurnEnd = cb;
+  }
   close(): void {
     this.rec.closed = true;
   }
@@ -202,6 +218,91 @@ function makeSlotRouter(model: string): {
   return { router, outer, openai, anthropic };
 }
 
+describe('ProviderRouter — setBeforeTurnEnd forwarding', () => {
+  it('setBeforeTurnEnd reaches the inner query', async () => {
+    const { router, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = async (_continuation: number) => ({ continueWith: 'continue!' });
+    router.setBeforeTurnEnd(cb);
+
+    // The active inner's setBeforeTurnEnd should have been called.
+    const inner = anthropic.queries[0]!;
+    expect(inner.installedBeforeTurnEnd).toBe(cb);
+    await router.close();
+  });
+
+  it('after a model switch/rebuild, the new inner query receives the stored setBeforeTurnEnd callback', async () => {
+    const { router, outer, anthropic, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = async (_continuation: number) => ({ continueWith: 'after-swap' });
+    router.setBeforeTurnEnd(cb);
+
+    // Swap to an OpenAI inner.
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'after-swap');
+
+    // The newly-built OpenAI inner should have the callback installed.
+    const newInner = openai.queries[0]!;
+    expect(newInner.installedBeforeTurnEnd).toBe(cb);
+    // Anthropic inner was torn down.
+    expect(anthropic.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+});
+
+describe('ProviderRouter — setBeforeNextRound forwarding', () => {
+  it('forwards the callback to the active inner immediately', async () => {
+    const { router, outer, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = (): string => 'steer text';
+    router.setBeforeNextRound(cb);
+
+    // The active inner's setBeforeNextRound should have been called.
+    const inner = anthropic.queries[0]!;
+    expect(inner.installedBeforeNextRound).toBe(cb);
+    await router.close();
+  });
+
+  it('forwards the stored callback onto a newly-built inner after a model swap', async () => {
+    const { router, outer, anthropic, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = (): string => 'steer after swap';
+    router.setBeforeNextRound(cb);
+
+    // Swap to an OpenAI inner.
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'after-swap');
+
+    // The newly-built OpenAI inner should have the callback installed.
+    const newInner = openai.queries[0]!;
+    expect(newInner.installedBeforeNextRound).toBe(cb);
+    // Anthropic inner was torn down.
+    expect(anthropic.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+
+  it('clears the stored callback when called with undefined', async () => {
+    const { router, outer, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = (): string => 'steer';
+    router.setBeforeNextRound(cb);
+    router.setBeforeNextRound(undefined);
+
+    expect(anthropic.queries[0]!.installedBeforeNextRound).toBeUndefined();
+    await router.close();
+  });
+});
+
 describe('ProviderRouter', () => {
   beforeEach(() => resetSlotBindings());
   afterEach(() => resetSlotBindings());
@@ -255,6 +356,41 @@ describe('ProviderRouter', () => {
     expect(seeded.length).toBeGreaterThanOrEqual(1);
     expect(seeded[0]!.user).toBe('remember this');
     expect(seeded[0]!.assistant).toContain('reply-from-anthropic-direct#0');
+    await router.close();
+  });
+
+  it('seeds a swapped inner from the live journal snapshot, not the process-start resume snapshot', async () => {
+    const text = (t: string): JournalMessage => ({ role: 'user', content: [{ type: 'text', text: t }] });
+    const stale = [text('as of resume')];
+    const live = [text('as of resume'), { role: 'assistant', content: [{ type: 'text', text: 'later turn' }] } as JournalMessage];
+    const { router, outer, anthropic, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic', resumeMessages: stale });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+    // Initial construction still resumes from the process-start snapshot.
+    expect(anthropic.queries[0]!.rec.config.resumeMessages).toBe(stale);
+
+    await driveTurn(iter, outer, 'first');
+    anthropic.queries[0]!.liveSnapshot = live;
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'second');
+
+    expect(openai.queries[0]!.rec.config.resumeMessages).toEqual(live);
+    await router.close();
+  });
+
+  it('drops the stale resume snapshot on a swap when the outgoing inner keeps no journal', async () => {
+    const stale: JournalMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'as of resume' }] }];
+    const { router, outer, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic', resumeMessages: stale });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+    await driveTurn(iter, outer, 'first');
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'second');
+
+    const cfg = openai.queries[0]!.rec.config;
+    expect(cfg.resumeMessages).toBeUndefined();
+    // The text shadow history still carries the conversation.
+    expect(cfg.resumeHistory?.[0]?.user).toBe('first');
     await router.close();
   });
 

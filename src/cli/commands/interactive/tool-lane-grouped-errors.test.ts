@@ -19,12 +19,8 @@ import { ToolLane } from './tool-lane.js';
 import type { ChalkInstance } from 'chalk';
 import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
-import type { ToolResultChunk } from '../../../agent/types/message-types.js';
 import type { ToolFailureClass } from '../../../agent/trace/types.js';
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return { type: 'tool_result', toolUseId: 'unused', content, isError };
-}
+import { makeResult } from './__fixtures__/tool-lane-render.fixtures.js';
 
 /**
  * Build a lane with an Agent parent and `n` bash children, marking the entries
@@ -96,18 +92,7 @@ function laneWithClassifiedGroup(
     const id = `b${i}`;
     lane.addStartWithAgentContext(id, 'bash', `("cmd ${i}")`, 'agent');
     const f = byIndex.get(i);
-    lane.addResult(
-      id,
-      f
-        ? {
-            type: 'tool_result',
-            toolUseId: 'unused',
-            content: f.message,
-            isError: true,
-            ...(f.cls ? { failureClass: f.cls } : {}),
-          }
-        : makeResult('ok'),
-    );
+    lane.addResult(id, f ? makeResult(f.message, true, f.cls) : makeResult('ok'));
   }
   return lane;
 }
