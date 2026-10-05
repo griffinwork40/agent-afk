@@ -28,7 +28,7 @@ import * as fsp from 'node:fs/promises';
 import * as readline from 'node:readline';
 import { getBgJobsRoot, getBgJobDir, getBgJobLog, getBgJobMeta, getBgJobResult } from '../paths.js';
 import { atomicWriteFileAsync } from '../utils/atomic-write.js';
-import { isProcessAlive } from './process-liveness.js';
+import { classifyPidLiveness } from './process-liveness.js';
 import type { OutputEvent } from './types/session-types.js';
 
 // ---------------------------------------------------------------------------
@@ -69,6 +69,14 @@ export interface BgJobMeta {
    * alive (no promotion), preserving backward compatibility.
    */
   ownerPid?: number;
+  /**
+   * Epoch ms at which the owner process started, captured at registration time
+   * via `ownProcessStartedAt()`. Complements `ownerPid` for future pid-reuse
+   * detection: if a new process inherits the recorded pid, its start time will
+   * differ from this value. Optional and additive — old meta.json files that
+   * predate this field simply lack it.
+   */
+  ownerStartTime?: number;
   schemaVersion: 1;
 }
 
@@ -299,14 +307,16 @@ export class BgJobLogWriter {
  * would inflate any durationMs calculation. Consumers must tolerate an
  * absent `endedAt` (the field is already optional in `BgJobMeta`).
  *
- * Liveness check delegates to `isProcessAlive` from `process-liveness.ts`,
- * which returns `true` for EPERM (process exists, no permission) and `false`
- * for any other error — including ESRCH (no such process) and EINVAL.
+ * Liveness check delegates to `classifyPidLiveness` from `process-liveness.ts`,
+ * which returns `'unknown'` for absent, non-integer, or out-of-range pids
+ * (preserving backward compatibility with legacy meta that lacks `ownerPid`).
+ * Only a verdict of `'dead'` triggers promotion; `'alive'` and `'unknown'`
+ * both cause the meta to be returned unchanged.
  */
 export function reconcileOrphanedMeta(meta: BgJobMeta): BgJobMeta {
   if (meta.status !== 'running') return meta;
-  if (meta.ownerPid === undefined) return meta; // legacy entry — no PID recorded
-  if (isProcessAlive(meta.ownerPid)) return meta;
+  const liveness = classifyPidLiveness(meta.ownerPid);
+  if (liveness !== 'dead') return meta;
   return {
     ...meta,
     status: 'failed',
@@ -365,7 +375,10 @@ export class BgJobLogReader {
       // Reject files with an unexpected schema version (stale v0, future v2, etc.)
       if (parsed.schemaVersion !== 1) return null;
       // Lazily promote orphaned running entries whose owner PID has died.
-      return reconcileOrphanedMeta(parsed);
+      const reconciled = reconcileOrphanedMeta(parsed);
+      // Write-back on promotion: best-effort, fire-and-forget, suppress errors.
+      if (reconciled !== parsed) atomicWriteFileAsync(metaPath, JSON.stringify(reconciled, null, 2), { encoding: 'utf8', mode: 0o600, mkdirp: false }).catch(() => {});
+      return reconciled;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
       // Corrupted meta — log and return null

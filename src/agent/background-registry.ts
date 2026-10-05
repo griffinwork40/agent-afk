@@ -54,6 +54,7 @@ import { debugLog } from '../utils/debug.js';
 import { emitBackgroundAgent } from './trace/emit.js';
 import type { TraceSink } from './trace/index.js';
 import { BgJobLogWriter, type BgJobMeta } from './bg-job-log.js';
+import { ownProcessStartedAt } from './process-liveness.start-time.js';
 import { emitBackgroundRoutingTelemetry } from './background-registry.telemetry.js';
 import { boundedStopReason } from './tools/subagent/failure-payload.js';
 import { sweepOldBgJobs } from './background-registry.sweep.js';
@@ -393,6 +394,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
       startedAt,
       status: 'running',
       ownerPid: process.pid,
+      ownerStartTime: ownProcessStartedAt(),
       ...(args.parentSessionId !== undefined && { parentSessionId: args.parentSessionId }),
       schemaVersion: 1,
     };
@@ -502,9 +504,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // Issue all cancellations concurrently, then wait for each job's
     // terminal callback to settle before returning. This guarantees trace
     // events are flushed even if the trace writer closes immediately after.
-    for (const j of running) {
-      j.cancelSource = 'cascade';
-    }
+    for (const j of running) j.cancelSource = 'cascade';
     await Promise.allSettled(running.map((j) => j.handle.cancel()));
     await Promise.allSettled(
       running.map((j) => {
@@ -570,8 +570,7 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
   // -------------------------------------------------------------------------
 
   private nextJobId(): string {
-    this.counter += 1;
-    return `bg-${Date.now().toString(36)}-${this.counter}`;
+    return `bg-${Date.now().toString(36)}-${++this.counter}`;
   }
 
   /**
@@ -707,11 +706,10 @@ export class BackgroundAgentRegistry extends EventEmitter<BackgroundRegistryEven
     // persist the result body, then close the writer. Fire-and-forget — writer
     // errors are logged inside.
     if (writer && openMeta) {
-      const finalStatus = job.status;
-      persistResultBody(writer, jobId, finalStatus, result); // completed/failed only
+      persistResultBody(writer, jobId, job.status, result); // completed/failed only
       void writer.writeMeta({
         ...openMeta,
-        status: finalStatus,
+        status: job.status,
         ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
         // Persist stopReason so the /bgsub:join disk-fallback path (reached
         // after this job's in-memory entry is TTL-evicted) can reconstruct

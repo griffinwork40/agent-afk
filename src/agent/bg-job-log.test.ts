@@ -398,6 +398,14 @@ describe('reconcileOrphanedMeta', () => {
     expect(result.status).toBe('running');
   });
 
+  it('returns meta unchanged when ownerPid is a non-integer (malformed — classifyPidLiveness returns unknown)', () => {
+    // A corrupted or hand-edited ownerPid of 1.5 must NOT be treated as dead.
+    const meta = makeMeta('orphan-float', { status: 'running', ownerPid: 1.5 as any });
+    const result = reconcileOrphanedMeta(meta);
+    expect(result.status).toBe('running');
+    expect(result).toBe(meta);
+  });
+
   it('promotes running meta to failed when ownerPid is a dead process', () => {
     const origKill = process.kill.bind(process);
     (process as any).kill = (_pid: number, _sig: number) => {
@@ -469,5 +477,52 @@ describe('BgJobLogReader.readMeta — orphan reconciliation', () => {
     const read = await BgJobLogReader.readMeta(jobId);
     expect(read).not.toBeNull();
     expect(read!.status).toBe('running');
+  });
+
+  it('leaves a running meta untouched when ownerPid is a non-integer (malformed/corrupted)', async () => {
+    // classifyPidLiveness returns 'unknown' for non-integer pids, so the meta
+    // must not be promoted to 'failed' — a corrupted file is not a dead owner.
+    const jobId = `orphan-float-read-${Date.now()}`;
+    const w = new BgJobLogWriter(jobId);
+    // Write a syntactically valid ownerPid, then corrupt it on disk.
+    await w.writeMeta(makeMeta(jobId, { status: 'running', ownerPid: process.pid }));
+    await w.close();
+
+    // Overwrite with a non-integer ownerPid to simulate disk corruption.
+    const { getBgJobMeta } = await import('../paths.js');
+    const metaPath = getBgJobMeta(jobId);
+    const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as BgJobMeta;
+    fs.writeFileSync(metaPath, JSON.stringify({ ...raw, ownerPid: 1.5 }, null, 2));
+
+    const read = await BgJobLogReader.readMeta(jobId);
+    expect(read).not.toBeNull();
+    expect(read!.status).toBe('running');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ownerStartTime field
+// ---------------------------------------------------------------------------
+
+describe('BgJobLogWriter — ownerStartTime', () => {
+  let writer: BgJobLogWriter;
+  const jobId = `owner-start-time-${Date.now()}`;
+
+  beforeEach(() => {
+    writer = new BgJobLogWriter(jobId);
+  });
+  afterEach(async () => {
+    await writer.close();
+  });
+
+  it('round-trips ownerStartTime through writeMeta', async () => {
+    const ownerStartTime = Date.now() - 5000;
+    const meta = makeMeta(jobId, { ownerPid: process.pid, ownerStartTime });
+    await writer.writeMeta(meta);
+
+    const { getBgJobMeta } = await import('../paths.js');
+    const metaPath = getBgJobMeta(jobId);
+    const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as BgJobMeta;
+    expect(raw.ownerStartTime).toBe(ownerStartTime);
   });
 });
