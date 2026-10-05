@@ -47,11 +47,13 @@ export const INHERITED_ENV_KEYS: ReadonlySet<string> = new Set([
   'SCRIPT',
   'ASCIINEMA_REC',
   // Windows OS-owned vars that feed the security-sensitive WSL prefix check in
-  // resolve-shell.ts (buildWslPrefixes / isWslBash). Persisting either would let
-  // an agent corrupt the WSL-shim filter or force the MSYSTEM fast-path, both of
-  // which are attacker-controlled outcomes.  Must remain non-config.
+  // resolve-shell.ts (buildWslPrefixes / isWslBash). Persisting any of these
+  // would let an agent corrupt the WSL-shim filter or force the MSYSTEM
+  // fast-path, both of which are attacker-controlled outcomes.  Must remain
+  // non-config.
   'SystemRoot',
   'MSYSTEM',
+  'LOCALAPPDATA',
 ]);
 
 /**

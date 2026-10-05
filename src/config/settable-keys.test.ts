@@ -59,12 +59,14 @@ describe('classifyEnvKey', () => {
     expect(classifyEnvKey('NODE_ENV')).toBe('non-config');
   });
   it('marks Windows OS-owned WSL-related vars as non-config (security: feed buildWslPrefixes)', () => {
-    // SystemRoot and MSYSTEM are OS-owned process vars that directly feed the
-    // security-sensitive WSL prefix check in resolve-shell.ts.  An agent must
-    // not be able to persist them — classifyEnvKey must return 'non-config' so
-    // config_set refuses them unconditionally.
+    // SystemRoot, MSYSTEM, and LOCALAPPDATA are OS-owned process vars that
+    // directly feed the security-sensitive WSL prefix check in
+    // resolve-shell.ts.  An agent must not be able to persist them —
+    // classifyEnvKey must return 'non-config' so config_set refuses them
+    // unconditionally.
     expect(classifyEnvKey('SystemRoot')).toBe('non-config');
     expect(classifyEnvKey('MSYSTEM')).toBe('non-config');
+    expect(classifyEnvKey('LOCALAPPDATA')).toBe('non-config');
   });
   it('marks unknown names as unknown', () => {
     expect(classifyEnvKey('TOTALLY_MADE_UP')).toBe('unknown');
