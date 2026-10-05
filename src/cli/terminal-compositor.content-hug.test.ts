@@ -223,6 +223,21 @@ describe.each([24, 62])('content-hug placement (%i rows)', (ROWS) => {
     rig.dispose();
   });
 
+  it('full viewport: one-row frame jitter does not re-show archived rows', async () => {
+    const rig = await makeRig(ROWS);
+    const committed = Array.from({ length: ROWS * 2 }, (_, i) => `JITTER-${String(i).padStart(4, '0')}`);
+    rig.c.commitAbove(`${committed.join('\n')}\n`);
+    rig.repaint();
+    rig.c.setSpinner({ enabled: true });
+    rig.repaint();
+    rig.c.setSpinner({ enabled: false });
+    rig.repaint();
+    const lines = await rig.lines();
+    expect(reshownArchivedRows(rig.c), dumpOf(lines)).toBe(0);
+    assertNoGaps(lines, committed, PROMPT);
+    rig.dispose();
+  });
+
   it('full viewport: a tall overlay grows then collapses: no history hole, and the prompt returns to the bottom (no gap, no bobbing)', async () => {
     const rig = await makeRig(ROWS);
     const committed = Array.from({ length: ROWS * 2 }, (_, i) => `FILL-${String(i).padStart(4, '0')}`);
