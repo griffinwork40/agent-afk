@@ -317,6 +317,13 @@ export interface InteractiveCtx {
    */
   subagentControl?: SubagentControl;
   /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Shared between the REPL Ctrl+B handler (turn handles) and
+   * the per-query dispatcher so Ctrl+B can free the model's turn while a bash
+   * process keeps running. The teardown path calls cancelAll() (Invariant:D3).
+   */
+  detachRegistry?: DetachableToolRegistry;
+  /**
    * Optional background summarizer. Constructed only when `bgSummaries: true`
    * in afk.config.json. The teardown path calls `stop()` before
    * `backgroundRegistry.cancelAll()` so in-flight Haiku calls are aborted
@@ -354,6 +361,13 @@ export interface InteractiveCtx {
    */
   getInFlight?: () => boolean;
   /**
+   * Mutable ref written by any code path that calls `ctx.rl.close()` so the
+   * session sidecar records WHY the session ended (`exitReason` alongside
+   * `endedAt`). Set by `interactive.ts` before `installSignalHandlers` and
+   * written by signal handlers + the /exit slash command path.
+   */
+  exitReasonRef?: { current: StoredSession['exitReason'] };
+  /**
    * Atomically swap the active session for a stored one. Refuses while a
    * turn is in flight. Tears down the outgoing session, builds a new one,
    * mutates `session.current`, re-runs plugin passthrough registration,
@@ -381,6 +395,7 @@ export interface InteractiveCtx {
    */
   clearBgResultBuffer?: () => void;
   /**
+  /**
    * Resets the peer-inbox notifier's in-session state (injection buffer,
    * wake budget, and generation counter) so the resumed session starts clean.
    * Mirrors `clearBgResultBuffer`: owned by `setupFooterSubsystems`'s
@@ -402,6 +417,14 @@ export interface InteractiveCtx {
    * from the swap's `onSwapped` callback in bootstrap.ts.
    */
   clearPendingStopInjection?: () => void;
+  /**
+   * Clears and re-installs the peer boundary callback on the new session
+   * after a /resume swap, so mid-turn peer delivery works on the resumed
+   * session and old-session admission-queue entries are not leaked.
+   * Owned by `runInputLoop`'s closure; invoked from the swap's `onSwapped`
+   * callback in bootstrap.ts. Optional — no-op before `runInputLoop` sets it.
+   */
+  reinstallPeerBoundary?: () => void;
   /**
    * Cursor row (1-based) at the moment `armCompositor` will be invoked,
    * computed by counting `

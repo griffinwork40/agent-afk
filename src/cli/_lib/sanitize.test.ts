@@ -1,5 +1,5 @@
 /**
- * sanitize.test.ts — Unit tests for sanitizeSchemaString
+ * sanitize.test.ts -- Unit tests for sanitizeSchemaString and truncateMessageWithCount
  *
  * Covers:
  *   - Identity (ASCII, Unicode preserved)
@@ -7,10 +7,11 @@
  *   - Extended trust-boundary coverage: OSC+BEL, OSC+ST, C1 CSI (\x9B), C1 single bytes
  *   - Truncation semantics (strip-first, then clamp)
  *   - Edge cases: empty string, only-ANSI input, maxLen=0, custom maxLen
+ *   - truncateMessageWithCount: line-aware truncation with explicit count (#2366)
  */
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeSchemaString } from './sanitize.js';
+import { sanitizeSchemaString, truncateMessageWithCount } from './sanitize.js';
 
 // ─── Identity / preservation ──────────────────────────────────────────────────
 
@@ -122,5 +123,68 @@ describe('sanitizeSchemaString — truncation', () => {
   it('maxLen=0: any non-empty string becomes "…"', () => {
     // slice(0, 0) = '' → '' + '…' = '…'
     expect(sanitizeSchemaString('x', 0)).toBe('…');
+  });
+});
+
+// ─── truncateMessageWithCount ─────────────────────────────────────────────────
+
+describe('truncateMessageWithCount -- line-aware truncation with explicit count (#2366)', () => {
+  it('returns short single-line strings unchanged', () => {
+    expect(truncateMessageWithCount('hello', 256)).toBe('hello');
+  });
+
+  it('returns short multi-line strings unchanged', () => {
+    const msg = 'line 1\nline 2\nline 3';
+    expect(truncateMessageWithCount(msg, 256)).toBe(msg);
+  });
+
+  it('oversized single-line string: raw char slice (no notice, no newlines to respect)', () => {
+    const long = 'X'.repeat(300);
+    const result = truncateMessageWithCount(long, 256);
+    // Single-line overflow falls back to raw slice -- no notice appended.
+    expect(result.length).toBeLessThanOrEqual(256);
+    expect(result).not.toContain('list truncated:');
+  });
+
+  it('oversized multi-line string: truncates at whole lines and appends count notice', () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `  /project/src/file_${i}.ts`);
+    const msg = lines.join('\n');
+    const result = truncateMessageWithCount(msg, 256);
+    // Must include explicit count notice.
+    expect(result).toContain('list truncated:');
+    expect(result).toMatch(/showing \d+ of 100 lines/);
+    // Total length must be within the cap.
+    expect(result.length).toBeLessThanOrEqual(256);
+    // No partial paths -- last kept line must be complete.
+    const bodyLines = result.split('\n').filter((l) => !l.startsWith('[list'));
+    for (const line of bodyLines) {
+      expect(line).toMatch(/^\s*\/project\/src\/file_\d+\.ts$/);
+    }
+  });
+
+  it('strips ANSI sequences before checking length', () => {
+    // ANSI-laden string that is short after stripping.
+    const s = '\x1b[31m' + 'a'.repeat(10) + '\x1b[0m';
+    const result = truncateMessageWithCount(s, 256);
+    expect(result).toBe('a'.repeat(10));
+  });
+
+  it('uses correct total line count in the notice', () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `/path/file_${i}.ts`);
+    const msg = lines.join('\n');
+    const result = truncateMessageWithCount(msg, 128);
+    // Must report all 50 lines as the total.
+    expect(result).toContain('of 50 lines');
+  });
+
+  it('output fits within the requested maxLen even when notice is appended', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `  /long/prefix/module_${i}/index.ts`);
+    const msg = `header line\n\n${lines.join('\n')}\n\nfooter`;
+    // Test with the Telegram budget.
+    const result = truncateMessageWithCount(msg, 4000);
+    expect(result.length).toBeLessThanOrEqual(4000);
+    if (result.includes('list truncated:')) {
+      expect(result).toMatch(/showing \d+ of \d+ lines/);
+    }
   });
 });

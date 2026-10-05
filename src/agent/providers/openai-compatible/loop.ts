@@ -50,15 +50,55 @@ export function toolDefsToOpenAIFunctions(defs: readonly AnthropicToolDef[]): Op
 }
 
 /**
+ * Names of tools whose input schema declares at least one required field.
+ * Feeds the empty-arguments guard in {@link accumulatedToolCallsToToolCalls}:
+ * an empty argument stream is legitimate for a no-arg tool (some local
+ * OpenAI shims send "" rather than "{}"), but for these tools it can only
+ * mean the arguments were lost in transit.
+ */
+export function toolsRequiringArgs(defs: readonly AnthropicToolDef[]): Set<string> {
+  const names = new Set<string>();
+  for (const def of defs) {
+    if ((def.input_schema.required?.length ?? 0) > 0) names.add(def.name);
+  }
+  return names;
+}
+
+/**
+ * {@link toolsRequiringArgs} for a dispatcher's catalog. `toolDefs` is not on
+ * the ToolDispatcher interface; query.ts reads it the same structural way.
+ * Returns `undefined` (empty-args guard off) when the dispatcher has no defs.
+ */
+export function requiredArgToolsOf(dispatcher: unknown): Set<string> | undefined {
+  const defs = (dispatcher as { toolDefs?: readonly AnthropicToolDef[] } | undefined)?.toolDefs;
+  return Array.isArray(defs) ? toolsRequiringArgs(defs) : undefined;
+}
+
+/** Diagnostic for a tool call that needs arguments but received none. */
+export function noArgumentsReceivedMessage(name: string): string {
+  return (
+    `No arguments received from the API for tool "${name}": the argument stream was empty. ` +
+    'This is a provider/wire delivery failure, not malformed model output.'
+  );
+}
+
+/**
  * Translate accumulated stream-side tool calls into harness `ToolCall`s
  * the dispatcher consumes. JSON.parse failures are surfaced as a synthetic
  * error result rather than silently treated as `{}` — a malformed argument
  * payload from the model almost always means a real problem that should
  * land in the model's next-turn input verbatim.
+ *
+ * Contract: when `requiredArgTools` contains a call's name and its
+ * `argumentsRaw` is empty, a "no arguments received" diagnostic is recorded
+ * in `parseErrors` so the failure reads as a delivery problem instead of the
+ * tool's own "<field> must be a string" validation error. Omitting the set
+ * disables the guard (prior behaviour).
  */
 export function accumulatedToolCallsToToolCalls(
   calls: readonly AccumulatedToolCall[],
   signal: AbortSignal,
+  requiredArgTools?: ReadonlySet<string>,
 ): { calls: ToolCall[]; parseErrors: Map<string, string> } {
   const parsed: ToolCall[] = [];
   const parseErrors = new Map<string, string>();
@@ -72,6 +112,8 @@ export function accumulatedToolCallsToToolCalls(
         parseErrors.set(c.id, `Failed to parse tool arguments as JSON: ${msg}`);
         input = {};
       }
+    } else if (requiredArgTools?.has(c.name)) {
+      parseErrors.set(c.id, noArgumentsReceivedMessage(c.name));
     }
     parsed.push({ id: c.id, name: c.name, input, signal });
   }

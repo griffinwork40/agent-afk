@@ -101,6 +101,16 @@ class FakeQuery implements ProviderQuery {
   journalSnapshot(): JournalMessage[] | undefined {
     return this.liveSnapshot;
   }
+  /** Tracks the most-recently installed steering callback for assertions. */
+  installedBeforeNextRound: (() => string | undefined) | undefined;
+  setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
+    this.installedBeforeNextRound = cb;
+  }
+  /** Tracks the most-recently installed stop-hook seam callback for assertions. */
+  installedBeforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this.installedBeforeTurnEnd = cb;
+  }
   close(): void {
     this.rec.closed = true;
   }
@@ -207,6 +217,91 @@ function makeSlotRouter(model: string): {
   );
   return { router, outer, openai, anthropic };
 }
+
+describe('ProviderRouter — setBeforeTurnEnd forwarding', () => {
+  it('setBeforeTurnEnd reaches the inner query', async () => {
+    const { router, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = async (_continuation: number) => ({ continueWith: 'continue!' });
+    router.setBeforeTurnEnd(cb);
+
+    // The active inner's setBeforeTurnEnd should have been called.
+    const inner = anthropic.queries[0]!;
+    expect(inner.installedBeforeTurnEnd).toBe(cb);
+    await router.close();
+  });
+
+  it('after a model switch/rebuild, the new inner query receives the stored setBeforeTurnEnd callback', async () => {
+    const { router, outer, anthropic, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = async (_continuation: number) => ({ continueWith: 'after-swap' });
+    router.setBeforeTurnEnd(cb);
+
+    // Swap to an OpenAI inner.
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'after-swap');
+
+    // The newly-built OpenAI inner should have the callback installed.
+    const newInner = openai.queries[0]!;
+    expect(newInner.installedBeforeTurnEnd).toBe(cb);
+    // Anthropic inner was torn down.
+    expect(anthropic.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+});
+
+describe('ProviderRouter — setBeforeNextRound forwarding', () => {
+  it('forwards the callback to the active inner immediately', async () => {
+    const { router, outer, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = (): string => 'steer text';
+    router.setBeforeNextRound(cb);
+
+    // The active inner's setBeforeNextRound should have been called.
+    const inner = anthropic.queries[0]!;
+    expect(inner.installedBeforeNextRound).toBe(cb);
+    await router.close();
+  });
+
+  it('forwards the stored callback onto a newly-built inner after a model swap', async () => {
+    const { router, outer, anthropic, openai } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = (): string => 'steer after swap';
+    router.setBeforeNextRound(cb);
+
+    // Swap to an OpenAI inner.
+    await router.setModel('gpt-5.5');
+    await driveTurn(iter, outer, 'after-swap');
+
+    // The newly-built OpenAI inner should have the callback installed.
+    const newInner = openai.queries[0]!;
+    expect(newInner.installedBeforeNextRound).toBe(cb);
+    // Anthropic inner was torn down.
+    expect(anthropic.queries[0]!.rec.closed).toBe(true);
+    await router.close();
+  });
+
+  it('clears the stored callback when called with undefined', async () => {
+    const { router, outer, anthropic } = makeRouter({ model: 'sonnet', apiKey: 'key-anthropic' });
+    const iter = router[Symbol.asyncIterator]();
+    await pullInit(iter);
+
+    const cb = (): string => 'steer';
+    router.setBeforeNextRound(cb);
+    router.setBeforeNextRound(undefined);
+
+    expect(anthropic.queries[0]!.installedBeforeNextRound).toBeUndefined();
+    await router.close();
+  });
+});
 
 describe('ProviderRouter', () => {
   beforeEach(() => resetSlotBindings());

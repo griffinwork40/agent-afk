@@ -21,17 +21,13 @@
  * (`retry-layer.ts` `rate-limit-transient`), which likewise honors `retry-after`
  * with a 120s cap.
  *
- * **Why no `paused`/`resumed` here.** The harness's `paused`/`resumed`
- * `ProviderEvent`s model OAuth *subscription* exhaustion plus keychain
- * account hot-swap — an Anthropic-subscription concept with no analog on a
- * generic OpenAI-compatible endpoint. The Anthropic provider itself does NOT
- * emit those events for a transient rate-limit 429; it reserves them for the
- * `oauth-limit` classification and treats ordinary 429s with exactly this
- * `retry-after` backoff. An OpenAI-compatible 429 is either a transient
- * rate-limit (handled here) or a hard quota/billing error (correctly surfaced
- * as an `error`, not auto-resumable), so honoring `retry-after` IS the parity
- * with the Anthropic path — a pause/resume UI would model a state this surface
- * does not have. See issue #536.
+ * **Why no `paused`/`resumed` here.** This module owns only SHORT transient
+ * retries. Long waits live one tier up in `usage-limit-tier.ts`, which parks
+ * with `paused`/`resumed` on a long `retry-after` 429 or on the ChatGPT/Codex
+ * subscription backend's `usage_limit_reached` 429 (a real subscription window
+ * with a reset time, see `chatgpt-usage-limit.ts`). That marker is never retried
+ * here: retrying an exhausted subscription window only burns calls and delays
+ * the pause, and the official Codex CLI does not retry it either. See #536.
  *
  * @module agent/providers/openai-compatible/query/retry
  */
@@ -42,6 +38,7 @@ import {
   isConnectionPhaseNetworkError,
   CONNECTION_PHASE_RETRYABLE_STATUSES,
 } from '../../shared/connection-error.js';
+import { isChatGptUsageLimitError } from './chatgpt-usage-limit.js';
 
 /**
  * HTTP status codes that warrant a retry for a MID-STREAM error (the stream
@@ -146,7 +143,8 @@ export function getErrorStatus(err: unknown): number | undefined {
  *      it separately when its stream signal is not aborted (the SDK's own
  *      connect timeout, see shared `isConnectionTimeoutError`).
  *
- *   2. Status-bearing transients — the union of `RETRYABLE_STATUS_CODES`
+ *   2. Status-bearing transients (except the ChatGPT `usage_limit_reached`
+ *      429, which the usage-limit tier parks on) — the union of `RETRYABLE_STATUS_CODES`
  *      (429, 500, 502, 503, 529) and `CONNECTION_PHASE_RETRYABLE_STATUSES`
  *      (408, 409, 500, 502, 504; see shared/connection-error.ts). Any of
  *      them carrying a `retry-after` header waits per `retryAfterDelayMs`. Unlike
@@ -159,6 +157,8 @@ export function getErrorStatus(err: unknown): number | undefined {
  * correct there too (a DNS drop does not prove the endpoint is unsupported).
  */
 export function isRetryableConnectionError(err: unknown): boolean {
+  // A ChatGPT subscription window is exhausted: never retry, park instead.
+  if (isChatGptUsageLimitError(err)) return false;
   if (isConnectionPhaseNetworkError(err)) return true;
   const status = getErrorStatus(err);
   if (status === undefined) return false;
@@ -244,9 +244,11 @@ export function isOpenAIOverloadError(err: unknown): boolean {
  * error event mid-flight. OpenAI-compatible APIs surface this as an `APIError`
  * thrown from the async iterator. Same status-code set as connection-phase,
  * plus status-less SDK overload throws ({@link isOpenAIOverloadError}). Other
- * status-less errors are not retried here.
+ * status-less errors, and the ChatGPT `usage_limit_reached` marker with or
+ * without a status, are not retried here.
  */
 export function isRetryableStreamError(err: unknown): boolean {
+  if (isChatGptUsageLimitError(err)) return false;
   if (isOpenAIOverloadError(err)) return true;
   const status = getErrorStatus(err);
   if (status === undefined) return false;

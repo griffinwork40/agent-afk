@@ -41,7 +41,7 @@ import type {
   SpineRelationItem,
 } from './spine-classifier.js';
 import { errorMessage } from '../../utils/errors.js';
-import { stripTrailingAnnotation, REINFORCED_LABEL, WEAKENED_LABEL } from './spine-hook.annotations.js';
+import { stripTrailingAnnotation, stripAnnotationLabelPlusSpace, REINFORCED_LABEL, WEAKENED_LABEL } from './spine-hook.annotations.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 
 // ---------------------------------------------------------------------------
@@ -120,20 +120,9 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           // Auto-write: no human review needed
           const existing = findEntry(doc, item.existingId);
           if (existing) {
-            // Append a parenthetical note to the description to surface the
-            // strengthening without creating a new entry (v1 keeps IDs stable).
-            // Strip any pre-existing annotation (including truncated ones where
-            // the closing paren was sliced off, or where the annotation word was
-            // cut mid-character, e.g. "(reinf") before appending the new one so
-            // that date-rollover and truncation do not accumulate duplicates.
-            //
-            // stripTrailingAnnotation removes any truncated prefix of
-            // " (reinforced YYYY-MM-DD)" at end of string (spine-hook.annotations.ts).
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (reinforced ${isoDate})`;
-            const baseDescription = stripTrailingAnnotation(existing.description, REINFORCED_LABEL)
-              .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
-            const newDescription = baseDescription + suffix;
+            const newDescription = applyAnnotation(existing.description, suffix, REINFORCED_LABEL);
             if (newDescription !== existing.description) {
               existing.description = newDescription;
               dirty = true;
@@ -164,15 +153,7 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           if (existing) {
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (partially weakened ${isoDate})`;
-            // Strip any pre-existing annotation (including truncated ones) before
-            // appending the new one — same date-rollover / truncation guard as
-            // the strengthens branch above.
-            //
-            // stripTrailingAnnotation removes any truncated prefix of
-            // " (partially weakened YYYY-MM-DD)" at end of string.
-            const baseDescription = stripTrailingAnnotation(existing.description, WEAKENED_LABEL)
-              .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
-            const newDescription = baseDescription + suffix;
+            const newDescription = applyAnnotation(existing.description, suffix, WEAKENED_LABEL);
             if (newDescription !== existing.description) {
               existing.description = newDescription;
               dirty = true;
@@ -286,7 +267,50 @@ function handleContradiction(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Strip all existing annotation fragments from `description`, then append
+ * `suffix` (the new annotation) outside the `MAX_DESCRIPTION_LEN` body cap.
+ *
+ * Handles two bug classes (#2867) and a third (#2921):
+ * - Bug 1: the suffix is placed outside the body cap so it never eats body text.
+ * - Bug 2: dangling `" (label "` fragments (label + trailing space, no date) left
+ *   by the old 120-char truncation are removed via `stripAnnotationLabelPlusSpace`.
+ * - Bug 3 (#2921): same-label stacks (`base (reinforced D1) (reinforced D2)`) left
+ *   a buried stale annotation because a single primaryLabel pass only removed the
+ *   outermost entry. Fix: loop both passes until the description stops changing
+ *   (bounded to MAX_STRIP_ITERATIONS to prevent runaway on pathological input).
+ *
+ * Invariant: the loop terminates in at most MAX_STRIP_ITERATIONS rounds because
+ * each iteration that makes progress removes at least one `" ("` token, and the
+ * description is finite.
+ */
+// Contract: must be > the maximum realistic annotation depth (same-day re-fires,
+// cross-label transitions). 20 is far above any observed real-world depth.
+const MAX_STRIP_ITERATIONS = 20;
 
+function applyAnnotation(
+  description: string,
+  suffix: string,
+  primaryLabel: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL,
+): string {
+  const otherLabel = primaryLabel === REINFORCED_LABEL ? WEAKENED_LABEL : REINFORCED_LABEL;
+  let current = description;
+  for (let i = 0; i < MAX_STRIP_ITERATIONS; i++) {
+    const next = stripAnnotationLabelPlusSpace(
+      stripAnnotationLabelPlusSpace(
+        stripTrailingAnnotation(
+          stripTrailingAnnotation(current, primaryLabel),
+          otherLabel,
+        ),
+        primaryLabel,
+      ),
+      otherLabel,
+    );
+    if (next === current) break;
+    current = next;
+  }
+  return current.slice(0, MAX_DESCRIPTION_LEN) + suffix;
+}
 
 function getGitDiff(repoRoot: string): string {
   try {

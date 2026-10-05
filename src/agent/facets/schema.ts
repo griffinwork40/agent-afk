@@ -70,6 +70,8 @@ export const StoredSessionInputSchema = z
     model: z.string(),
     startedAt: z.number(),
     savedAt: z.number(),
+    endedAt: z.number().optional(),
+    exitReason: z.enum(['sigint', 'sigterm', 'sighup', 'exit-command', 'eof']).optional(),
     totalTurns: z.number(),
     totalCostUsd: z.number().optional(),
     totalTokens: z.number().optional(),
@@ -262,6 +264,11 @@ export const SubagentToolSummarySchema = z.object({
   tool_calls: z.number().int(),
   tool_errors: z.number().int(),
   tool_counts: z.record(z.string(), z.number()),
+  /**
+   * GitHub PR URL detected from a `gh pr create` bash result in this subagent's
+   * journal. Set only when the subagent itself opened a PR. (#2795 gap 6)
+   */
+  detected_pr_url: z.string().nullable().optional(),
 });
 export type SubagentToolSummary = z.infer<typeof SubagentToolSummarySchema>;
 

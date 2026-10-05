@@ -23,7 +23,7 @@ import {
  * The injected envelope(s) are prepended at drain time (`runText = envelope +
  * this`), so the model sees the content followed by an explicit, honest
  * continue instruction, never a spoofed empty turn. The `[auto-resume]` tag
- * makes the woken turn legible in scrollback. Background results take the
+ * identifies internal model context, not a submitted human prompt. Background results take the
  * original wording; a wake caused only by peer messages says so instead.
  */
 export function autoResumeDirective(bgResultPending: boolean): string {

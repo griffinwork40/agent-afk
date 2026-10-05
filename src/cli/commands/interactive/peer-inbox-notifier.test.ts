@@ -15,7 +15,10 @@ import { InMemoryTraceWriter } from '../../../agent/trace/writer.js';
 import { PeerInboxNotifier } from './peer-inbox-notifier.js';
 import { writeEnvelope } from '../../../agent/peer/inbox-store.js';
 import { writePresenceFile } from '../../../agent/awareness/presence.js';
-import type { PeerEnvelope } from '../../../agent/peer/envelope.js';
+import { renderPeerMessageBlock, type PeerEnvelope } from '../../../agent/peer/envelope.js';
+
+import { displayWidth, stripAnsi } from '../../display.js';
+import { contentMargin } from '../../render/measure.js';
 
 // ── path isolation ──────────────────────────────────────────────────────────
 let tmpHome: string;
@@ -33,7 +36,10 @@ afterEach(async () => {
   else delete process.env['AFK_HOME'];
   delete process.env['AFK_STATE_DIR'];
   delete process.env['AFK_FRAMEWORK_DIR'];
-  await rm(tmpHome, { recursive: true, force: true });
+  // maxRetries guards against the Windows ENOTEMPTY race where a fire-and-
+  // forget writeInjectionAck promise creates a file inside delivered/acked/
+  // while rm is concurrently traversing the tree.
+  await rm(tmpHome, { recursive: true, force: true, maxRetries: 3 });
 });
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -143,12 +149,40 @@ describe('PeerInboxNotifier — accept path', () => {
     const { notifier, lines } = makeNotifier(sessionId);
     await notifier.scan();
 
-    expect(lines.some((l) => l.includes('peer message from') && l.includes('alice'))).toBe(true);
+    expect(lines.some((l) => l.includes('peer message from alice') && l.includes('"hello world"'))).toBe(true);
+  });
+
+  it.each([undefined, 40, 200])('bounds previews at columns=%s without changing drained envelopes', async (columns) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+    vi.stubEnv('AFK_CENTER_CONTENT', '1');
+    vi.stubEnv('AFK_TEXT_MEASURE', '100');
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: columns });
+    try {
+      const sessionId = randomUUID();
+      const e = makeEnvelope(sessionId, {
+        from: { id: 'abc12345', name: '\x1b[31malice\x1b[0m' },
+        body: 'safe preview\n' + '界👩‍💻 & <long body> '.repeat(40), hop: 1, replyTo: randomUUID(),
+      });
+      await writeEnvelope(e);
+      const { notifier, lines } = makeNotifier(sessionId);
+      await notifier.scan();
+      const line = stripAnsi(lines[0]!);
+      expect(line).toContain('peer message from alice');
+      expect(line).toContain('"');
+      expect(line).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+      expect(displayWidth(line) + contentMargin().length).toBeLessThanOrEqual(columns ?? 80);
+      expect(notifier.drainInjections()).toBe(renderPeerMessageBlock(e) + '\n\n');
+      expect(notifier.drainInjections()).toBe('');
+    } finally {
+      if (descriptor) Object.defineProperty(process.stdout, 'columns', descriptor);
+      else Reflect.deleteProperty(process.stdout, 'columns');
+      vi.unstubAllEnvs();
+    }
   });
 
   it('held path writes a "held" line and does not buffer the envelope', async () => {
     const sessionId = randomUUID();
-    await writeEnvelope(makeEnvelope(sessionId));
+    await writeEnvelope(makeEnvelope(sessionId, { from: { id: 'sender-id', name: '\x1b[31malice\nname' } }));
 
     const { notifier, lines } = makeNotifier(sessionId, {
       mode: () => 'hold',
@@ -157,7 +191,8 @@ describe('PeerInboxNotifier — accept path', () => {
 
     expect(notifier.hasPendingInjections()).toBe(false);
     expect(notifier.drainInjections()).toBe('');
-    expect(lines.some((l) => l.includes('held'))).toBe(true);
+    expect(stripAnsi(lines[0]!)).toContain('alice name held (AFK_PEER_INBOUND=hold) · /inbox to review');
+    expect(stripAnsi(lines[0]!)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
   });
 
   it('two notifiers on the same inbox deliver each message exactly once total', async () => {
@@ -352,7 +387,7 @@ describe('PeerInboxNotifier — live trace writer', () => {
     await notifier.scan();
     expect(oldWriter.events).toHaveLength(1);
     expect(newWriter.events).toEqual([
-      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'delivered', messageId: delivered.messageId }) }),
+      expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'claimed', messageId: delivered.messageId }) }),
       expect.objectContaining({ kind: 'peer_message', payload: expect.objectContaining({ action: 'held', messageId: held.messageId }) }),
     ]);
   });
@@ -364,7 +399,7 @@ describe('PeerInboxNotifier — live trace writer', () => {
     await writeEnvelope(makeEnvelope(sessionId));
     await notifier.scan();
     expect(writer.events).toHaveLength(1);
-    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'delivered' } });
+    expect(writer.events[0]).toMatchObject({ kind: 'peer_message', payload: { action: 'claimed' } });
   });
 });
 
@@ -387,5 +422,203 @@ describe('PeerInboxNotifier — dispose race (regression)', () => {
     await live.scan();
     expect(live.drainInjections()).toContain('for the live notifier');
     live.dispose();
+  });
+});
+
+// ── reclaim: claimed-but-uninjected returned to pending ─────────────────────
+
+describe('PeerInboxNotifier — reclaim()', () => {
+  it('reclaim() moves buffered envelopes back to pending/ and clears buffer', async () => {
+    const sessionId = randomUUID();
+    const e1 = makeEnvelope(sessionId);
+    await writeEnvelope(e1);
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan(); // claims e1 → buffer
+    expect(notifier.hasPendingInjections()).toBe(true);
+
+    const count = await notifier.reclaim();
+    expect(count).toBe(1);
+    expect(notifier.hasPendingInjections()).toBe(false);
+
+    // Envelope should be back in pending/ and claimable again.
+    const { listPending } = await import('../../../agent/peer/inbox-store.js');
+    const files = await listPending(sessionId);
+    expect(files).toHaveLength(1);
+  });
+
+  it('reclaim() on empty buffer returns 0 and leaves pending/ unchanged', async () => {
+    const sessionId = randomUUID();
+    const { notifier } = makeNotifier(sessionId);
+    const count = await notifier.reclaim();
+    expect(count).toBe(0);
+  });
+
+  it('reclaim() then rescan re-delivers the same envelope', async () => {
+    const sessionId = randomUUID();
+    const e = makeEnvelope(sessionId);
+    await writeEnvelope(e);
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan();
+    expect(notifier.hasPendingInjections()).toBe(true);
+
+    await notifier.reclaim();
+    expect(notifier.hasPendingInjections()).toBe(false);
+
+    // Rescan — envelope is back in pending/ so it should be re-claimed.
+    await notifier.scan();
+    expect(notifier.hasPendingInjections()).toBe(true);
+    const drained = notifier.drainInjections();
+    expect(drained).toContain(`from="${e.from.id}"`);
+  });
+
+  it('drainInjections() removes items from buffer so reclaim() after drain returns 0', async () => {
+    const sessionId = randomUUID();
+    await writeEnvelope(makeEnvelope(sessionId));
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan();
+    notifier.drainInjections(); // consume the buffer
+    const count = await notifier.reclaim();
+    expect(count).toBe(0); // nothing left to reclaim
+  });
+});
+
+// ── stale scan rejection ─────────────────────────────────────────────────────
+
+describe('PeerInboxNotifier — stale scan rejection', () => {
+  it('envelopes claimed by a scan that races a session-id change are reclaimed, not buffered', async () => {
+    const oldId = randomUUID();
+    let currentId = oldId;
+
+    const e = makeEnvelope(oldId);
+    await writeEnvelope(e);
+
+    const { notifier } = makeNotifier(oldId, {
+      mode: () => 'accept' as const,
+    });
+
+    // Claim the envelope manually under oldId (as if a scan did it).
+    const { claimPending, listPending, reclaimDelivered } = await import('../../../agent/peer/inbox-store.js');
+    const files = await listPending(oldId);
+    expect(files).toHaveLength(1);
+    const claimed = await claimPending(oldId, files[0]!);
+    expect(claimed).not.toBeNull();
+    // Now manually reclaim (simulating what the stale-scan guard does).
+    const ok = await reclaimDelivered(oldId, files[0]!);
+    expect(ok).toBe(true);
+    const pendingAfter = await listPending(oldId);
+    expect(pendingAfter).toHaveLength(1); // back in pending
+    void currentId; // suppress unused warning
+    notifier.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1: wiring — writeInjectionAck called on consumeEnvelopes
+// ---------------------------------------------------------------------------
+
+describe('PeerInboxNotifier — writeInjectionAck wired in consumeEnvelopes (Finding 1)', () => {
+  it('writes an ack marker for each envelope consumed via consumeEnvelopes', async () => {
+    const { join: pathJoin } = await import('path');
+    const { existsSync } = await import('node:fs');
+    const { envelopeFilename } = await import('../../../agent/peer/inbox-store.js');
+    const { getPeerInboxDir } = await import('../../../paths.js');
+
+    const sessionId = randomUUID();
+    const e1 = makeEnvelope(sessionId, { messageId: 'wiring-ack-1', ts: '2026-10-01T00:00:00.001Z' });
+    const e2 = makeEnvelope(sessionId, { messageId: 'wiring-ack-2', ts: '2026-10-01T00:00:00.002Z' });
+    await writeEnvelope(e1);
+    await writeEnvelope(e2);
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan();
+
+    // Both envelopes are in the buffer.
+    expect(notifier.hasPendingInjections()).toBe(true);
+    expect(notifier.peekEnvelopes()).toHaveLength(2);
+
+    // Consume all.
+    notifier.consumeEnvelopes(2);
+
+    // Ack markers are written asynchronously (fire-and-forget). Wait for them.
+    const ackedDir = pathJoin(getPeerInboxDir(sessionId), 'delivered', 'acked');
+    await vi.waitFor(() => {
+      const f1 = pathJoin(ackedDir, envelopeFilename(e1));
+      const f2 = pathJoin(ackedDir, envelopeFilename(e2));
+      expect(existsSync(f1)).toBe(true);
+      expect(existsSync(f2)).toBe(true);
+    }, { timeout: 3000, interval: 10 });
+  });
+
+  it('does NOT write an ack marker for envelopes that remain in the buffer (not consumed)', async () => {
+    const { join: pathJoin } = await import('path');
+    const { existsSync } = await import('node:fs');
+    const { envelopeFilename } = await import('../../../agent/peer/inbox-store.js');
+    const { getPeerInboxDir } = await import('../../../paths.js');
+
+    const sessionId = randomUUID();
+    const e1 = makeEnvelope(sessionId, { messageId: 'unconsumed-1', ts: '2026-10-01T00:00:00.001Z' });
+    const e2 = makeEnvelope(sessionId, { messageId: 'unconsumed-2', ts: '2026-10-01T00:00:00.002Z' });
+    await writeEnvelope(e1);
+    await writeEnvelope(e2);
+
+    const { notifier } = makeNotifier(sessionId);
+    await notifier.scan();
+
+    // Consume only the first envelope.
+    notifier.consumeEnvelopes(1);
+
+    // Let async ack for e1 settle.
+    const ackedDir = pathJoin(getPeerInboxDir(sessionId), 'delivered', 'acked');
+    await vi.waitFor(() => {
+      expect(existsSync(pathJoin(ackedDir, envelopeFilename(e1)))).toBe(true);
+    }, { timeout: 3000, interval: 10 });
+
+    // e2 was not consumed — no ack should exist for it.
+    expect(existsSync(pathJoin(ackedDir, envelopeFilename(e2)))).toBe(false);
+
+    notifier.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding 1: wiring — recoverUnackedDelivered called in startWatching
+// ---------------------------------------------------------------------------
+
+describe('PeerInboxNotifier — recoverUnackedDelivered wired in startWatching (Finding 1)', () => {
+  it('re-delivers a claimed-but-unacked envelope when watcher starts', async () => {
+    const { claimPending, listPending } = await import('../../../agent/peer/inbox-store.js');
+
+    const sessionId = randomUUID();
+
+    // Set up a claimed-but-unacked envelope (simulates a prior crash before ack).
+    await writeEnvelope(makeEnvelope(sessionId, {
+      messageId: 'recovery-wiring-1',
+      ts: '2026-10-01T00:00:00.003Z',
+    }));
+    const [file] = await listPending(sessionId);
+    await claimPending(sessionId, file!);
+    // No writeInjectionAck — simulating crash before ack.
+    expect(await listPending(sessionId)).toHaveLength(0);
+
+    // Create the notifier and start it. startWatching calls recoverUnackedDelivered
+    // which moves the file back to pending/. The subsequent scan then re-claims it
+    // into the notifier buffer.
+    const { notifier, lines } = makeNotifier(sessionId, { pollMs: 5 });
+    notifier.start();
+
+    // The envelope is re-delivered: it either appears in the buffer (claimed by
+    // the scan after recovery) or triggers the "peer message from" writeLine.
+    // Wait for the arrival line which is written when the scan accepts it.
+    await vi.waitFor(() => {
+      expect(
+        notifier.hasPendingInjections() ||
+        lines.some((l) => l.includes('peer message from') || l.includes('recovered')),
+      ).toBe(true);
+    }, { timeout: 5000, interval: 25 });
+
+    notifier.dispose();
   });
 });

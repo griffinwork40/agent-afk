@@ -221,3 +221,29 @@ describe('OVERLOAD_MESSAGE_RE word-boundary false-positive guard (#2855)', () =>
     expect(isOpenAIOverloadError(err)).toBe(false);
   });
 });
+
+describe('ChatGPT usage_limit_reached is never retried', () => {
+  const body = {
+    type: 'usage_limit_reached',
+    message: 'The usage limit has been reached',
+    plan_type: 'plus',
+    resets_in_seconds: 13_872,
+  };
+
+  it('connection phase: a real SDK RateLimitError carrying the marker is not retried', () => {
+    const err = APIError.generate(429, { error: body }, undefined, new Headers());
+    expect(err.status).toBe(429);
+    expect(isRetryableConnectionError(err)).toBe(false);
+  });
+
+  it('mid-stream: status-bearing and status-less marker errors are not retried', () => {
+    expect(isRetryableStreamError(APIError.generate(429, { error: body }, undefined, new Headers()))).toBe(false);
+    expect(isRetryableStreamError(new APIError(undefined, body, undefined, undefined))).toBe(false);
+  });
+
+  it('a plain 429 (no marker) is still retried in both phases', () => {
+    const plain = APIError.generate(429, { error: { type: 'rate_limit_exceeded' } }, undefined, new Headers());
+    expect(isRetryableConnectionError(plain)).toBe(true);
+    expect(isRetryableStreamError(plain)).toBe(true);
+  });
+});

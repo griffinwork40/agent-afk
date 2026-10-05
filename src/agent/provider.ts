@@ -22,6 +22,7 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentConfig } from './types/config-types.js';
 import type { ToolFailureClass } from './trace/types.js';
+import type { UsageLimitProvider } from '../utils/errors.js';
 
 /**
  * Normalized session identity emitted on the synthetic `session.init` event.
@@ -380,6 +381,15 @@ export type ProviderEvent =
        * belongs to `resetsAt`. Use only for timeout arithmetic.
        */
       waitDeadline?: Date;
+      /**
+       * Which subscription hit its limit. `'anthropic'` = Claude, `'codex'` =
+       * the ChatGPT/Codex subscription backend. Absent means unknown (a
+       * generic OpenAI-compatible quota 429); UI layers treat absent as the
+       * legacy Claude copy for backward compatibility.
+       */
+      provider?: UsageLimitProvider;
+      /** Subscription plan label when the provider reports one (e.g. `plus`). */
+      plan?: string;
     }
   | {
       type: 'resumed';
@@ -517,6 +527,17 @@ export interface ProviderQuery extends AsyncIterable<ProviderEvent> {
    * `AgentSession.setBeforeNextRound()` calls this only when present.
    */
   setBeforeNextRound?(cb: (() => string | undefined) | undefined): void;
+  /**
+   * Optional. Wire the provider-side stop-hook seam (issue #2714).
+   * When wired, the provider calls this callback before emitting `turn.completed`
+   * on natural turn ends. A return value of `{ continueWith: string }` causes
+   * the provider to push a framework user message and re-enter the model loop
+   * in the same turn. `undefined` / `{}` ends the turn normally.
+   *
+   * Wired by `AgentSession.wireStopHook()` via the session layer, so the same
+   * mechanism that delivers Stop on every surface also enables continuation.
+   */
+  setBeforeTurnEnd?(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void;
   /**
    * Optional. Force a fresh SDK client by re-reading whatever credential
    * source the provider uses (e.g. the macOS Keychain for OAuth tokens).

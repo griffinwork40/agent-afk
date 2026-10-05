@@ -3863,3 +3863,93 @@ describe('OpenAICompatibleQuery — listRewindTargets and rewindConversation', (
     q.close();
   });
 });
+
+describe('OpenAICompatibleQuery — Responses wire tool arguments on *.done events', () => {
+  // Regression for the "file_path must be a string" storms: the ChatGPT Codex
+  // backend can deliver parallel function-call arguments only on the terminal
+  // *.done events, with no argument deltas. Drives the real query loop
+  // end-to-end so translator → finalize → dispatch is covered as one path.
+  function runParallel(doneArgs: [string, string]): {
+    seen: Record<string, unknown>[];
+    run: () => Promise<ProviderEvent[]>;
+  } {
+    const seen: Record<string, unknown>[] = [];
+    const dispatcher = new SessionToolDispatcher({
+      handlers: new Map<string, ToolHandler>([
+        ['read_thing', async (input) => {
+          seen.push(input as Record<string, unknown>);
+          return { content: 'ok' };
+        }],
+      ]),
+      schemas: [{
+        name: 'read_thing',
+        description: 'Read',
+        input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      }],
+      hookRegistry: createHookRegistry(),
+    });
+    let calls = 0;
+    __setOpenAIClientFactory(
+      () =>
+        ({
+          chat: { completions: { create: async () => { throw new Error('responses wire only'); } } },
+          responses: {
+            create: async () => {
+              calls++;
+              if (calls === 1) {
+                return (async function* () {
+                  for (const i of [0, 1]) {
+                    yield {
+                      type: 'response.output_item.added',
+                      output_index: i,
+                      item: { type: 'function_call', call_id: `c${i}`, name: 'read_thing', arguments: '' },
+                    };
+                  }
+                  for (const i of [0, 1]) {
+                    yield {
+                      type: 'response.output_item.done',
+                      output_index: i,
+                      item: { type: 'function_call', call_id: `c${i}`, name: 'read_thing', arguments: doneArgs[i] },
+                    };
+                  }
+                  yield { type: 'response.completed', response: { status: 'completed' } };
+                })();
+              }
+              return (async function* () {
+                yield { type: 'response.output_text.delta', delta: 'done' };
+                yield { type: 'response.completed', response: { status: 'completed' } };
+              })();
+            },
+          },
+        }) as unknown as OpenAI,
+    );
+    const run = async (): Promise<ProviderEvent[]> => {
+      const q = buildQueryFromConfig(baseConfig({ model: 'gpt-5.5' }), singleInput('go'), {
+        useResponsesApi: true,
+        toolDispatcher: dispatcher,
+      });
+      const events = await collect(q);
+      q.close();
+      installMockClient();
+      return events;
+    };
+    return { seen, run };
+  }
+
+  it('dispatches parallel calls with the arguments carried on output_item.done', async () => {
+    const { seen, run } = runParallel(['{"path":"/a"}', '{"path":"/b"}']);
+    await run();
+    expect(seen).toEqual([{ path: '/a' }, { path: '/b' }]);
+  });
+
+  it('labels a required-arg call with no arguments as a delivery failure', async () => {
+    const { run } = runParallel(['', '']);
+    const events = await run();
+    const outputs = events.filter((e) => e.type === 'tool.output');
+    expect(outputs).toHaveLength(2);
+    for (const o of outputs) {
+      expect(o).toMatchObject({ isError: true });
+      expect((o as { content: string }).content).toMatch(/No arguments received from the API for tool "read_thing"/);
+    }
+  });
+});

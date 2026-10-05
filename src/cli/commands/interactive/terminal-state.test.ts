@@ -464,6 +464,21 @@ describe('parseTerminalState — CommonMark fidelity (#2794)', () => {
     expect(parseTerminalState(text)?.kind).toBe('done');
     expect(findTerminalStateHeadingOffset(text)).toBe(text.indexOf('**Done**'));
   });
+
+  // Invariant: a line indented 4+ spaces is a CommonMark indented code block,
+  // NOT a heading. lineToKind trims before matching, so the indent guard in
+  // parseTerminalState (and findTerminalStateHeadingOffset) must reject these
+  // lines before lineToKind is called.
+  it('4-space-indented bare keyword is NOT a terminal-state heading', () => {
+    // "    Blocked" with 4 leading spaces — indented code block, not a heading.
+    expect(parseTerminalState('    Blocked')).toBeNull();
+    expect(parseTerminalState('    Done')).toBeNull();
+    expect(findTerminalStateHeadingOffset('    Blocked')).toBe(-1);
+    expect(findTerminalStateHeadingOffset('    Done')).toBe(-1);
+    // 3-space indent IS still a valid heading (the 0–3 space window).
+    expect(parseTerminalState('   Blocked')?.kind).toBe('blocked');
+    expect(findTerminalStateHeadingOffset('   Blocked')).toBe(0);
+  });
 });
 
 describe('findTerminalStateHeadingOffset — CommonMark fidelity, agrees with parseTerminalState (#2794)', () => {
