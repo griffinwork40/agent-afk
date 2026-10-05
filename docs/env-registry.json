@@ -1582,6 +1582,13 @@
       "category": "process"
     },
     {
+      "name": "MSYSTEM",
+      "description": "Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts.",
+      "type": "string",
+      "required": false,
+      "category": "process"
+    },
+    {
       "name": "NO_COLOR",
       "description": "Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output.",
       "type": "string",
@@ -1641,6 +1648,13 @@
       "type": "string",
       "required": false,
       "example": "/bin/zsh",
+      "category": "process"
+    },
+    {
+      "name": "SystemRoot",
+      "description": "Windows system root directory (typically C:\\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts.",
+      "type": "string",
+      "required": false,
       "category": "process"
     },
     {

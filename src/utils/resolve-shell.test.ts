@@ -387,6 +387,66 @@ describe('findGitBashOnWindows — WSL bash filtering', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildWslPrefixes — hoisted prefix construction (issue #2937)
+// ---------------------------------------------------------------------------
+// buildWslPrefixes is not exported; its behaviour is verified by observing
+// that resolveShell skips or accepts candidates based on the env vars it reads.
+
+describe('buildWslPrefixes — env-var wiring', () => {
+  const originalPlatform = process.platform;
+  const originalPath = process.env['PATH'];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+    delete process.env['MSYSTEM'];
+    delete process.env['SystemRoot'];
+    delete process.env['LOCALAPPDATA'];
+    process.env['PATH'] = originalPath;
+  });
+
+  it('uses env.SystemRoot to build the System32 prefix (non-default root)', () => {
+    // If buildWslPrefixes reads env.SystemRoot correctly, a custom root causes
+    // resolveShell to skip bash.exe under that custom root, not under C:\\Windows.
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'D:\\WinCustom';
+    process.env['LOCALAPPDATA'] = '';
+    // bash.exe under the custom root's System32 — should be skipped
+    process.env['PATH'] = 'D:\\WinCustom\\System32;C:\\Program Files\\Git\\bin';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'D:\\WinCustom\\System32\\bash.exe' ||
+        s === 'C:\\Program Files\\Git\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    // Must skip D:\WinCustom\System32\bash.exe and return the real Git Bash
+    expect(result.shell).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+  });
+
+  it('uses env.LOCALAPPDATA to build the WindowsApps prefix', () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    delete process.env['MSYSTEM'];
+    process.env['SystemRoot'] = 'C:\\Windows';
+    process.env['LOCALAPPDATA'] = 'D:\\CustomAppData';
+    process.env['PATH'] =
+      'D:\\CustomAppData\\Microsoft\\WindowsApps;C:\\Program Files\\Git\\bin';
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const s = String(p);
+      return (
+        s === 'D:\\CustomAppData\\Microsoft\\WindowsApps\\bash.exe' ||
+        s === 'C:\\Program Files\\Git\\bin\\bash.exe'
+      );
+    });
+    const result = resolveShell();
+    // Must skip the WindowsApps alias and return the real Git Bash
+    expect(result.shell).toBe('C:\\Program Files\\Git\\bin\\bash.exe');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // git.exe-derived discovery (issue #2759)
 // ---------------------------------------------------------------------------
 
