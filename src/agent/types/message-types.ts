@@ -117,7 +117,11 @@ export interface ToolResultChunk {
    * Absent for clean completions. Present alongside `incompleteReason`.
    */
   incomplete?: boolean;
-  /** The subagent `stopReason` that produced `incomplete: true`. */
+  /**
+   * Why `incomplete: true` was set: the subagent `stopReason` for a single
+   * fork, or a synthetic reason code such as `'compose_partial_nodes'` for a
+   * compose run with at least one partial node.
+   */
   incompleteReason?: string;
   /**
    * `true` when the originating tool handler reported its byte cap was hit

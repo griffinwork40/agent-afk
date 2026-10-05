@@ -1371,7 +1371,7 @@ describe('deriveSessionFacet', () => {
       // when result.partial is non-empty). Derive counts only compose events where
       // ev.incomplete === true, so this is correctly absent.
       const facet = deriveSessionFacet(sessionWithToolEvent([
-        { toolName: 'compose', toolUseId: 'a' }, // isError not set; no incomplete
+        { toolName: 'compose', toolUseId: 'a', isError: true }, // hard failure; no incomplete
       ]));
       expect(facet.compose_partial_nodes).toBeUndefined();
     });
