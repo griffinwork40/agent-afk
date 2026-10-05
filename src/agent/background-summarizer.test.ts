@@ -644,3 +644,210 @@ describe('redactSecrets', () => {
     expect(out).toContain('[REDACTED]');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Item 3: callsThisSession is charged once per actual LLM call (including retry)
+// ---------------------------------------------------------------------------
+
+// Mocked so real withTransientRetry path tests below have zero-delay backoff.
+// Hoisted via vi.mock so the mock is in place before any module import resolves.
+const mockSleepWithAbort = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('./providers/shared/sleep-with-abort.js', () => ({
+  sleepWithAbort: mockSleepWithAbort,
+  sleep: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Mutable ref for oneShotCompletion mock — populated per-test via mockImpl.
+const oneShotImpl = vi.hoisted(() => ({ fn: async (_opts: unknown): Promise<string> => 'default' }));
+vi.mock('./providers/anthropic-direct/oneshot.js', () => ({
+  oneShotCompletion: (...args: unknown[]) => oneShotImpl.fn(args[0]),
+}));
+
+describe('BackgroundSummarizer — retry budget counting', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    mockSleepWithAbort.mockClear();
+    // Reset to no-op default so tests are independent.
+    oneShotImpl.fn = async (_opts: unknown): Promise<string> => 'default';
+  });
+
+  it('injected callLLM: failed real call is charged (not refunded) — cap blocks next tick', async () => {
+    // When callLLM is injected and throws, apiCallAttempted=true → the
+    // reservation from tick() is NOT decremented. The slot is consumed by the
+    // real (failed) API call, so the cap is respected on the next tick.
+    vi.useFakeTimers();
+    const registry = makeRegistry();
+    const handle = createStubHandle('budget-inject-fail');
+    registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+    const callLLM = vi.fn().mockRejectedValue(new Error('permanent failure'));
+
+    const summarizer = new BackgroundSummarizer({
+      registry,
+      apiKey: 'sk-ant-test',
+      intervalMs: 5_000,
+      maxCallsPerSession: 1, // cap = 1
+      callLLM,
+      getTranscript: (_id) => 'some transcript text',
+    });
+    summarizer.start();
+
+    // Tick 1: callsThisSession → 1, callLLM throws (apiCallAttempted=true),
+    // finally: !succeeded && !apiCallAttempted = false → NO decrement.
+    // callsThisSession stays at 1.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    // Tick 2: cap check — callsThisSession(1) >= maxCallsPerSession(1) → skip.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    // callLLM should have been called exactly once — the failed call consumed
+    // the slot and the second tick was capped.
+    expect(callLLM).toHaveBeenCalledTimes(1);
+
+    summarizer.stop();
+  });
+
+  it('injected callLLM: empty transcript refunds reservation (no real call made)', async () => {
+    // When transcript is empty, the early-return fires BEFORE apiCallAttempted
+    // is set. The finally block decrements because !succeeded && !apiCallAttempted.
+    // This is correct: no real API call was made, so the slot should be freed.
+    vi.useFakeTimers();
+    const registry = makeRegistry();
+    const handle = createStubHandle('budget-empty-transcript');
+    registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+    const callLLM = vi.fn().mockResolvedValue('summary');
+
+    const summarizer = new BackgroundSummarizer({
+      registry,
+      apiKey: 'sk-ant-test',
+      intervalMs: 5_000,
+      maxCallsPerSession: 1, // cap = 1
+      callLLM,
+      getTranscript: (_id) => '', // always empty — no API call should fire
+    });
+    summarizer.start();
+
+    // Tick 1: transcript empty → early-return → apiCallAttempted=false →
+    // finally decrements → callsThisSession back to 0.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    // Tick 2: cap not reached (callsThisSession=0) → slot reserved again →
+    // transcript still empty → early-return → decrement again → still 0.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+
+    // callLLM never fired: empty transcript pre-empts the API call.
+    expect(callLLM).toHaveBeenCalledTimes(0);
+
+    summarizer.stop();
+  });
+
+  it('real withTransientRetry path: initial 429 + retry success = 2 charges, cap blocks next tick', async () => {
+    // This test does NOT inject callLLM — it uses the real constructor path
+    // which wraps oneShotCompletion in withTransientRetry with onRetry.
+    // sleepWithAbort is mocked to resolve immediately so backoff is instant.
+    //
+    // Sequence:
+    //   - tick() reserves 1 slot → callsThisSession = 1
+    //   - withTransientRetry calls oneShotCompletion (initial attempt) → throws 429
+    //   - withTransientRetry fires onRetry → callsThisSession++ → 2
+    //   - withTransientRetry calls oneShotCompletion again (retry) → succeeds
+    //   - succeeded=true → finally does NOT decrement → callsThisSession stays 2
+    //   - next tick: callsThisSession(2) >= maxCallsPerSession(1) → skip
+    vi.useFakeTimers();
+
+    let callCount = 0;
+    oneShotImpl.fn = async (_opts: unknown): Promise<string> => {
+      callCount++;
+      if (callCount === 1) {
+        const err = new Error('rate limited') as Error & { status?: number };
+        err.status = 429;
+        throw err;
+      }
+      return 'retry succeeded';
+    };
+
+    const registry = makeRegistry();
+    const handle = createStubHandle('budget-real-retry');
+    registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+    // No callLLM injection — uses real withTransientRetry path.
+    const summarizer = new BackgroundSummarizer({
+      registry,
+      apiKey: 'sk-ant-test',
+      intervalMs: 5_000,
+      maxCallsPerSession: 1, // cap = 1; after initial+retry=2 charges, next tick blocked
+      getTranscript: (_id) => 'some transcript content',
+    });
+    summarizer.start();
+
+    // Tick 1: two real API calls (initial 429 → retry success).
+    // callsThisSession: 1 (tick) + 1 (onRetry) = 2. No decrement (succeeded=true).
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Allow microtasks (withTransientRetry awaits sleep, then retry resolves).
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // Tick 2: cap check — callsThisSession(2) >= maxCallsPerSession(1) → skip.
+    await vi.advanceTimersByTimeAsync(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // oneShotCompletion was called exactly 2 times (initial + one retry).
+    // No further calls because the 2-charge tally exceeds cap=1.
+    expect(callCount).toBe(2);
+
+    summarizer.stop();
+  });
+
+  it('real withTransientRetry path: initial 429 + retry also fails = 2 charges, cap blocks next tick', async () => {
+    // Both attempts fail. Sequence:
+    //   - tick() reserves 1 → callsThisSession = 1
+    //   - initial call throws 429 → onRetry fires → callsThisSession = 2
+    //   - retry call throws 500 (non-retryable after maxRetries=1 exhausted)
+    //   - succeeded=false, apiCallAttempted=true → finally does NOT decrement
+    //   - callsThisSession stays at 2 → next tick blocked by cap=1
+    vi.useFakeTimers();
+
+    let callCount = 0;
+    oneShotImpl.fn = async (_opts: unknown): Promise<string> => {
+      callCount++;
+      if (callCount === 1) {
+        const err = new Error('rate limited') as Error & { status?: number };
+        err.status = 429;
+        throw err;
+      }
+      // Second call also fails (budget exhausted after 1 retry).
+      const err = new Error('server error') as Error & { status?: number };
+      err.status = 500;
+      throw err;
+    };
+
+    const registry = makeRegistry();
+    const handle = createStubHandle('budget-real-retry-fail');
+    registry.register({ handle, prompt: 'work', model: 'sonnet' });
+
+    const summarizer = new BackgroundSummarizer({
+      registry,
+      apiKey: 'sk-ant-test',
+      intervalMs: 5_000,
+      maxCallsPerSession: 1,
+      getTranscript: (_id) => 'transcript',
+    });
+    summarizer.start();
+
+    // Tick 1: 2 real calls, both fail → callsThisSession=2, no decrement.
+    await vi.advanceTimersByTimeAsync(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // Tick 2: capped.
+    await vi.advanceTimersByTimeAsync(5_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    expect(callCount).toBe(2);
+
+    summarizer.stop();
+  });
+});

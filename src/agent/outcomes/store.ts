@@ -111,7 +111,11 @@ export interface UpsertVotesOptions {
  *   - A vote with lf === 'explicit_feedback' causes upsertVotes to call
  *     combine() with explicit_feedback set, so the combiner produces
  *     succeeded/failed at confidence 1.0 / settled immediately.
- *   - Later votes are STILL appended to votes[] and history[], so a /good
+ *   - The MOST RECENT explicit_feedback vote (by observed_at, ties broken by
+ *     later position) decides the override. Multiple explicit_feedback votes
+ *     with different evidence values (e.g. "/good" then "/bad some reason")
+ *     are all preserved in votes[] for audit; only the newest drives the label.
+ *   - Other votes are STILL appended to votes[] and history[], so a /good
  *     session whose commit is reverted remains visible as a disagreement.
  */
 export function upsertVotes(
@@ -131,8 +135,12 @@ export function upsertVotes(
   const merged = _mergeVotes(record.votes, newVotes);
   record.votes = merged;
 
-  // Detect explicit_feedback override
-  const efVote = merged.find((v) => v.lf === 'explicit_feedback');
+  // Detect explicit_feedback override — pick the most recent vote by observed_at
+  // (ties broken by later array position). Rationale: /good then /bad some-note
+  // leaves two explicit_feedback votes with different evidence values; the
+  // earliest .find() would return the stale /good. Newest-wins ensures the last
+  // operator action is authoritative while both votes stay in votes[] for audit.
+  const efVote = _latestExplicitFeedback(merged);
   const explicitFeedback = efVote
     ? efVote.vote === 1
       ? ('good' as const)
@@ -237,6 +245,30 @@ function _atomicWrite(path: string, data: VerifiedOutcome): void {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
   renameSync(tmp, path);
+}
+
+/**
+ * Return the most recent explicit_feedback vote from `votes` (by observed_at,
+ * ties broken by later position in the array). Returns undefined when none
+ * exist. This is the vote that drives the explicit_feedback override in
+ * upsertVotes — always use this instead of Array.find() so the last operator
+ * action wins even when multiple explicit_feedback votes have different
+ * evidence values (e.g. "/good" then "/bad some reason").
+ */
+function _latestExplicitFeedback(votes: Vote[]): Vote | undefined {
+  let latest: Vote | undefined;
+  for (const v of votes) {
+    if (v.lf !== 'explicit_feedback') continue;
+    if (
+      latest === undefined ||
+      v.observed_at > latest.observed_at ||
+      // Tie-break: later position wins (stable on equal timestamps)
+      (v.observed_at === latest.observed_at)
+    ) {
+      latest = v;
+    }
+  }
+  return latest;
 }
 
 function _mergeVotes(existing: Vote[], incoming: Vote[]): Vote[] {

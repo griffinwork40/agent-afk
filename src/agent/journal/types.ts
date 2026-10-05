@@ -66,6 +66,22 @@ export type JournalBlock =
   | { type: 'image'; source: JournalBinary }
   | { type: 'document'; source: JournalBinary; title?: string };
 
+/**
+ * Shared return-type alias for both the sync (`findToolResult` in reader.ts)
+ * and async (`findToolResultAsync` in reader.async.ts) tool-result lookup
+ * paths. Consumers that use either function should import this type to keep
+ * both sides in sync.
+ *
+ * @see findToolResult
+ * @see findToolResultAsync
+ */
+export interface ToolResultLookup {
+  /** Hydrated tool_result block. */
+  block: Extract<JournalBlock, { type: 'tool_result' }>;
+  /** Subagent id, when the result lives in a subagent journal. */
+  subagentId?: string;
+}
+
 export interface JournalMessage {
   role: 'user' | 'assistant';
   content: JournalBlock[];

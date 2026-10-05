@@ -104,62 +104,13 @@ interface ActiveInner {
   input: QueryInputStream;
 }
 
-function stringifyUserContent(content: ProviderUserTurn['content']): string {
-  if (typeof content === 'string') return content;
-  // ContentBlockParam[] — extract text blocks for the text-only shadow history.
-  // Non-text blocks (images) are dropped from the carry; this is intentional.
-  return content
-    .map((block) => {
-      const b = block as { type?: string; text?: string };
-      return b.type === 'text' && typeof b.text === 'string' ? b.text : '';
-    })
-    .filter((t) => t.length > 0)
-    .join('\n');
-}
-
-/**
- * Build the one-turn "your model was switched" system context prepended to the
- * first turn a freshly-swapped inner serves.
- *
- * Motivation: an inner rebuild is otherwise INVISIBLE to the model — the new
- * inner's `session.init` is swallowed (so no re-init is surfaced) and the
- * carried conversation is anonymous prose (the module-level cross-family
- * invariant). Without this notice the switched-to model has no in-context signal
- * that (a) it is a different model than the one that produced earlier turns, or
- * (b) prior structured tool/thinking content was flattened to text — which
- * invites it to over-trust or misattribute the history (e.g. narrate its own
- * identity from a stale premise). The notice is descriptive context, NOT an
- * instruction, and rides only the swap turn — it expires after one turn like any
- * framework nudge.
- */
-function buildSwitchNotice(
-  previousModel: string,
-  currentModel: string,
-  previousFamily: string | undefined,
-  currentFamily: string,
-): string {
-  const familyClause =
-    previousFamily && previousFamily !== currentFamily
-      ? ` (provider ${previousFamily} → ${currentFamily})`
-      : '';
-  return (
-    `[System context — not from the user. Your model was switched at the start of this turn: ` +
-    `${previousModel} → ${currentModel}${familyClause}. Earlier turns in this conversation were produced ` +
-    `by ${previousModel}; the history carried across the switch is plain text only, so any prior tool ` +
-    `calls and extended reasoning are now prose — treat their structure as lost, not authoritative.]`
-  );
-}
-
-/** Prepend a synthetic notice as a leading text block (or line) to outbound turn content. */
-function prependNotice(
-  content: ProviderUserTurn['content'],
-  notice: string,
-): ProviderUserTurn['content'] {
-  if (typeof content === 'string') {
-    return content.length > 0 ? `${notice}\n\n${content}` : notice;
-  }
-  return [{ type: 'text' as const, text: notice }, ...content];
-}
+// Switch-notice helpers extracted to keep this file within the 350-code-line
+// ceiling. See provider-router.switch.ts for docs and rationale.
+import {
+  buildSwitchNotice,
+  prependNotice,
+  stringifyUserContent,
+} from './provider-router.switch.js';
 
 export class ProviderRouter implements ProviderQuery {
   private readonly outerIterator: AsyncIterator<ProviderUserTurn>;
@@ -197,6 +148,21 @@ export class ProviderRouter implements ProviderQuery {
   private pendingAssistantText = '';
   /** sessionId of the most recent outer turn, forwarded to inner input streams. */
   private lastSessionId: string | undefined;
+  /**
+   * Steering callback registered via `setBeforeNextRound()`. Stored here so
+   * it survives inner provider swaps: whenever `buildInner()` constructs a new
+   * active inner, we immediately forward the stored callback if the inner
+   * supports it — preventing a model-swap from silently dropping steering.
+   */
+  private _beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * Stop-hook seam callback registered via `setBeforeTurnEnd()`. Stored here
+   * so it survives inner provider swaps: whenever `buildInner()` constructs a
+   * new active inner, we immediately forward the stored callback if the inner
+   * supports it — preventing a model-swap from silently dropping blocking-Stop
+   * continuation wiring.
+   */
+  private _beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
 
   constructor(args: ProviderRouterArgs, deps: ProviderRouterDeps) {
     this.outerIterator = args.prompt[Symbol.asyncIterator]();
@@ -301,6 +267,15 @@ export class ProviderRouter implements ProviderQuery {
     }
 
     const query = provider.query({ prompt: input.createIterable(), config: innerConfig });
+    // Forward the stored steering callback onto the new inner immediately so a
+    // model swap never silently drops it. The inner silently ignores the call
+    // when it does not implement `setBeforeNextRound` (the method is optional).
+    if (this._beforeNextRound !== undefined) {
+      query.setBeforeNextRound?.(this._beforeNextRound);
+    }
+    if (this._beforeTurnEnd !== undefined) {
+      query.setBeforeTurnEnd?.(this._beforeTurnEnd);
+    }
     return {
       family: provider.name,
       signature,
@@ -464,6 +439,26 @@ export class ProviderRouter implements ProviderQuery {
 
   async interrupt(reason: import('../../abort-reason.js').ProviderAbortReason = 'interrupted'): Promise<void> {
     await this.active?.query.interrupt(reason);
+  }
+
+  /**
+   * Store and forward the steering callback. Stored on `this` so it survives
+   * inner provider rebuilds (model swap); `buildInner()` forwards it onto
+   * every newly-constructed inner immediately after construction.
+   */
+  setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
+    this._beforeNextRound = cb;
+    this.active?.query.setBeforeNextRound?.(cb);
+  }
+
+  /**
+   * Store and forward the stop-hook seam callback. Stored on `this` so it
+   * survives inner provider rebuilds (model swap); `buildInner()` forwards it
+   * onto every newly-constructed inner immediately after construction.
+   */
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this._beforeTurnEnd = cb;
+    this.active?.query.setBeforeTurnEnd?.(cb);
   }
 
   async setModel(model?: string): Promise<void> {

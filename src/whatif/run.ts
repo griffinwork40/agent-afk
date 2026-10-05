@@ -353,6 +353,7 @@ export async function runWhatif(
         spec,
         structural,
         predictions,
+        questionFit: fitResult.level,
         costUsd: analystCostUsd,
         runDir,
         limits,
@@ -453,7 +454,7 @@ export async function runWhatif(
     if (!verifyJudgeResults) throw new Error('verifyRun did not return judgeResults');
 
     pendingReport = await buildAndPersistVerifiedReport({
-      spec, structural, predictions, verifyResult, droppedProbes,
+      spec, structural, predictions, questionFit: fitResult.level, verifyResult, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults,

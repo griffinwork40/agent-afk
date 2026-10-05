@@ -16,6 +16,7 @@ import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
 import {
   accumulatedToolCallsToToolCalls,
+  requiredArgToolsOf,
   assistantMessageWithToolCalls,
   toolImageFollowupMessage,
   toolResultsToMessages,
@@ -83,7 +84,7 @@ export async function* dispatchAndAppendToolCalls({
   for (const c of accumulated) {
     if (c.id.length === 0) c.id = randomUUID();
   }
-  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
+  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal, requiredArgToolsOf(toolDispatcher));
 
   // Witness layer: per-call start timestamps keyed by toolUseId so the
   // completed trace event carries an accurate durationMs. Mirrors
@@ -214,13 +215,16 @@ export async function* dispatchAndAppendToolCalls({
   // precede the tool{} messages, and each tool{} must reference a
   // tool_call_id that exists in the assistant turn.
   //
-  // `state.reasoningText` is threaded in so DeepSeek-R1-class thinking-mode
-  // providers see the reasoning trace echoed back on the assistant turn —
-  // omitting it on those providers yields a 400 ("The `reasoning_content`
-  // in the thinking mode must be passed back to the API"). Empty text is
-  // a no-op for non-thinking providers (the field is omitted entirely).
+  // `state.reasoningText` is threaded in so thinking-mode providers see the
+  // reasoning trace echoed back on the assistant turn — omitting it yields a
+  // 400 ("The `reasoning_content` in the thinking mode must be passed back to
+  // the API" on DeepSeek-R1; "property is unsupported" on Cerebras). Empty
+  // text is a no-op for non-thinking providers (the field is omitted entirely).
+  // `state.reasoningField` preserves which wire key delivered the reasoning so
+  // the echo uses the same key (Cerebras uses `reasoning`; DeepSeek uses
+  // `reasoning_content`).
   priorTurns.push(
-    assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText) as unknown as OpenAIMessage,
+    assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText, state.reasoningField) as unknown as OpenAIMessage,
   );
   for (const m of toolResultsToMessages(results)) {
     priorTurns.push(m as unknown as OpenAIMessage);

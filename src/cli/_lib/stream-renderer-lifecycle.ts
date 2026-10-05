@@ -344,11 +344,13 @@ export function checkPauseAnnotations(ctx: LifecycleContext): boolean {
   // geometry and produce phantom blank rows in scrollback). Does NOT call
   // flush() itself; the block below owns the single flush. Mutates
   // ctx.lastTtfbAnnotation in place when the displayed second advances.
-  const ttfbDirtied = checkTtfbAnnotation(ctx, now);
+  checkTtfbAnnotation(ctx, now);
 
-  if ((changed || ttfbDirtied) && ctx.isTTY && ctx.overlayComposer) {
+  if (ctx.isTTY && ctx.overlayComposer) {
     if (changed) ctx.overlayComposer.markDirty('tool-lane');
-    // progress-banner already marked dirty by checkTtfbAnnotation when ttfbDirtied.
+    // The progress banner is already marked dirty by checkTtfbAnnotation.
+    // Also drain resize invalidations on quiet preparation frames. flush()
+    // is a no-op when clean, retaining a single composed repaint per tick.
     ctx.overlayComposer.flush();
   }
 

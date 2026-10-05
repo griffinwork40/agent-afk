@@ -41,18 +41,23 @@ export interface OpenAIMessage {
   content: string | OpenAIContentPart[];
   tool_call_id?: string;
   /**
-   * Reasoning-trace echo. DeepSeek-R1 and other thinking-mode models on
-   * OpenAI-compatible endpoints emit a `reasoning_content` field separate
-   * from `content` in their responses; DeepSeek's API rejects subsequent
-   * requests with a 400 ("The `reasoning_content` in the thinking mode must
-   * be passed back to the API") unless that field is echoed back on the
-   * assistant turn it came from. Real OpenAI's o-series doesn't expose its
-   * reasoning, so this field stays absent for those calls and the wire
-   * stays bog-standard OpenAI. Only populated when the previous response
-   * actually produced reasoning text — empty/absent fields are stripped at
-   * the serialization seam in `query.ts:defaultClientFactory`.
+   * Reasoning-trace echo for DeepSeek-R1-style providers. DeepSeek streams
+   * reasoning as `delta.reasoning_content` and rejects subsequent requests with
+   * a 400 ("The `reasoning_content` in the thinking mode must be passed back to
+   * the API") unless this field is echoed back on the assistant turn it came from.
+   * Real OpenAI o-series doesn't expose its reasoning, so this field stays absent
+   * for those calls. Only populated when the previous response produced reasoning
+   * text — empty/absent fields are stripped at the serialization seam in
+   * `query.ts:defaultClientFactory`.
    */
   reasoning_content?: string;
+  /**
+   * Reasoning-trace echo for Cerebras-style providers. Cerebras streams reasoning
+   * as `delta.reasoning` and rejects `reasoning_content` in history (HTTP 400:
+   * "property is unsupported"). Echo under this field when `StreamState.reasoningField`
+   * is `'reasoning'`.
+   */
+  reasoning?: string;
   /**
    * Tool calls issued by the assistant. Present on assistant turns that
    * invoke one or more tools; absent on plain-text assistant turns.

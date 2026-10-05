@@ -36,7 +36,7 @@ describe('applyBeforeNextRound', () => {
     vi.mocked(emitQueuedUserMessage).mockClear();
   });
 
-  it('appends a text block to the last message when steeringText is non-empty', () => {
+  it('pushes a NEW user turn (not an in-place mutation) when steeringText is non-empty', () => {
     const lastMsg: MessageParam = {
       role: 'user',
       content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }],
@@ -44,10 +44,19 @@ describe('applyBeforeNextRound', () => {
     const input = makeInput(lastMsg);
     applyBeforeNextRound(input, 'focus on auth module');
 
-    expect(Array.isArray(lastMsg.content)).toBe(true);
-    const content = lastMsg.content as Array<{ type: string; text?: string }>;
-    expect(content.at(-1)).toEqual({ type: 'text', text: 'focus on auth module' });
-    expect(content).toHaveLength(2);
+    // The original tool_result message must be UNCHANGED (JournalSync detects
+    // new pushes by reference; in-place mutations are invisible to the journal).
+    const originalContent = lastMsg.content as Array<{ type: string }>;
+    expect(originalContent).toHaveLength(1);
+    expect(originalContent[0]!.type).toBe('tool_result');
+
+    // A fresh user turn was pushed after the tool_result turn.
+    expect(input.messages).toHaveLength(2);
+    const newTurn = input.messages[1] as MessageParam;
+    expect(newTurn.role).toBe('user');
+    const newContent = newTurn.content as Array<{ type: string; text: string }>;
+    expect(newContent).toHaveLength(1);
+    expect(newContent[0]).toEqual({ type: 'text', text: 'focus on auth module' });
   });
 
   it('is a no-op when steeringText is undefined', () => {
@@ -58,8 +67,8 @@ describe('applyBeforeNextRound', () => {
     const input = makeInput(lastMsg);
     applyBeforeNextRound(input, undefined);
 
-    const content = lastMsg.content as unknown[];
-    expect(content).toHaveLength(1);
+    // No extra turn pushed.
+    expect(input.messages).toHaveLength(1);
     expect(emitQueuedUserMessage).not.toHaveBeenCalled();
   });
 
@@ -71,8 +80,8 @@ describe('applyBeforeNextRound', () => {
     const input = makeInput(lastMsg);
     applyBeforeNextRound(input, '');
 
-    const content = lastMsg.content as unknown[];
-    expect(content).toHaveLength(1);
+    // No extra turn pushed.
+    expect(input.messages).toHaveLength(1);
     expect(emitQueuedUserMessage).not.toHaveBeenCalled();
   });
 
@@ -117,21 +126,25 @@ describe('applyBeforeNextRound', () => {
     const input = makeInput(lastMsg);
     applyBeforeNextRound(input, 'redirect now');
 
-    const content = lastMsg.content as unknown[];
-    expect(content).toHaveLength(1);
+    // No extra turn pushed, original unchanged.
+    expect(input.messages).toHaveLength(1);
     expect(emitQueuedUserMessage).not.toHaveBeenCalled();
   });
 
-  it('handles string content by converting to array (defensive branch)', () => {
-    // This branch should not fire at tool_result boundary, but the guard exists
-    // to avoid corrupting messages if it ever does.
+  it('pushes a fresh user turn even when last message has string content', () => {
+    // A string-content user turn: the guard allows it (role === 'user'), and we
+    // push a separate new user turn for the steering text rather than mutating.
     const lastMsg = { role: 'user' as const, content: 'plain string content' };
     const input = makeInput(lastMsg as unknown as MessageParam);
     applyBeforeNextRound(input, 'steering');
 
-    const content = (lastMsg as unknown as { content: unknown[] }).content;
-    expect(Array.isArray(content)).toBe(true);
-    expect(content).toHaveLength(2);
-    expect(content.at(-1)).toEqual({ type: 'text', text: 'steering' });
+    // Original message is UNCHANGED.
+    expect(lastMsg.content).toBe('plain string content');
+    // A new turn was pushed.
+    expect(input.messages).toHaveLength(2);
+    const newTurn = input.messages[1] as MessageParam;
+    expect(newTurn.role).toBe('user');
+    const newContent = newTurn.content as Array<{ type: string; text: string }>;
+    expect(newContent[0]).toEqual({ type: 'text', text: 'steering' });
   });
 });

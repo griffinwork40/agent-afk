@@ -4,6 +4,7 @@ import type { AccumulatedToolCall } from './translate.js';
 import {
   toolDefsToOpenAIFunctions,
   accumulatedToolCallsToToolCalls,
+  toolsRequiringArgs,
   assistantMessageWithToolCalls,
   toolResultsToMessages,
   toolImageFollowupMessage,
@@ -86,6 +87,32 @@ describe('accumulatedToolCallsToToolCalls', () => {
     expect(out).toHaveLength(1);
     expect(out[0]!.input).toEqual({});
     expect(parseErrors.get('call_x')).toMatch(/Failed to parse/);
+  });
+
+  it('flags an empty argument stream for a tool that requires args', () => {
+    const { calls: out, parseErrors } = accumulatedToolCallsToToolCalls(
+      [
+        { index: 0, id: 'call_r', name: 'read_file', argumentsRaw: '', startEmitted: false },
+        { index: 1, id: 'call_n', name: 'list_sessions', argumentsRaw: '', startEmitted: false },
+        { index: 2, id: 'call_ok', name: 'read_file', argumentsRaw: '{"file_path":"/a"}', startEmitted: false },
+      ],
+      signal,
+      new Set(['read_file']),
+    );
+    expect(out.map((c) => c.input)).toEqual([{}, {}, { file_path: '/a' }]);
+    expect(parseErrors.get('call_r')).toMatch(/No arguments received from the API for tool "read_file"/);
+    // No-arg tools and populated calls are untouched.
+    expect(parseErrors.has('call_n')).toBe(false);
+    expect(parseErrors.has('call_ok')).toBe(false);
+  });
+
+  it('toolsRequiringArgs selects only schemas with required fields', () => {
+    const names = toolsRequiringArgs([
+      { name: 'a', input_schema: { type: 'object', required: ['x'] } },
+      { name: 'b', input_schema: { type: 'object', required: [] } },
+      { name: 'c', input_schema: { type: 'object' } },
+    ]);
+    expect([...names]).toEqual(['a']);
   });
 
   it('handles empty argument strings as empty object input', () => {
@@ -177,6 +204,34 @@ describe('assistantMessageWithToolCalls', () => {
       );
       expect(msg.content).toBeNull();
       expect(msg.reasoning_content).toBe('I need to run a command.');
+    });
+
+    it('echoes under reasoning field for Cerebras-style providers (tool-call turn)', () => {
+      const msg = assistantMessageWithToolCalls(
+        '',
+        [{ index: 0, id: 'a', name: 'bash', argumentsRaw: '{}', startEmitted: false }],
+        'Cerebras inner thought.',
+        'reasoning',
+      );
+      expect(msg.reasoning).toBe('Cerebras inner thought.');
+      expect(msg).not.toHaveProperty('reasoning_content');
+    });
+
+    it('echoes under reasoning_content when field is explicitly reasoning_content (DeepSeek regression guard)', () => {
+      const msg = assistantMessageWithToolCalls(
+        'Let me check.',
+        [{ index: 0, id: 'a', name: 'bash', argumentsRaw: '{}', startEmitted: false }],
+        'DeepSeek thought.',
+        'reasoning_content',
+      );
+      expect(msg.reasoning_content).toBe('DeepSeek thought.');
+      expect(msg).not.toHaveProperty('reasoning');
+    });
+
+    it('omits both reasoning fields when reasoningText is empty regardless of reasoningField', () => {
+      const msg = assistantMessageWithToolCalls('Answer.', [], '', 'reasoning');
+      expect(msg).not.toHaveProperty('reasoning');
+      expect(msg).not.toHaveProperty('reasoning_content');
     });
   });
 });

@@ -22,7 +22,6 @@ import {
 } from '../../shared/truncation.js';
 import {
   TOOL_USE_LOOP_CAPPED,
-  formatRoundLabel,
   resolveMaxToolIterations,
   shouldWindDown,
 } from '../../shared/tool-loop-cap.js';
@@ -30,10 +29,11 @@ import {
   SOFT_DEADLINE_WIND_DOWN,
   softDeadlineExpired,
 } from '../../shared/soft-deadline.js';
-import { summarizeToolInput } from '../../shared/tool-input-summary.js';
+import { buildRoundProgressEvent } from './turn-driver.progress.js';
 import { supportsVision } from '../../../model-capabilities.js';
 import { usageFromState, finalizedToolCalls, type StreamState } from '../translate.js';
 import { checkContextOverflow } from './context-overflow.js';
+import { roundContextWindowTokens } from './turn-driver.context-window.js';
 import {
   runIteration,
   finishTurn,
@@ -76,6 +76,16 @@ export interface TurnDriverContext extends IterationContext, FinishTurnContext {
   readonly closed: boolean;
   /** Inter-round steering callback; set via setBeforeNextRound(). Read live. */
   readonly beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * Provider-side seam: blocking Stop hook → same-turn continuation (issue #2714).
+   * Mirrors RunTurnInput.beforeTurnEnd for the anthropic-direct provider.
+   * Called once per natural turn end (not wind-down, not abort, not truncation).
+   * Returns `{ continueWith: string }` to continue the turn, or undefined to end.
+   *
+   * Finding 3: optional second arg threads the just-finished assistant text
+   * directly so buildStopContext doesn't need to scan stale history.
+   */
+  readonly beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
 }
 
 /**
@@ -219,152 +229,196 @@ export async function* runTurnInner(
     return;
   }
 
-  pushUserTurn(ctx, content);
-
-  // Accumulate usage across all tool-loop iterations.
-  let accumulatedUsage: ProviderUsage = {
-    stopReason: null,
-    resultSubtype: 'success',
-    isError: false,
-  };
-  let finalAssistantText = '';
-  let finalReasoningText = '';
+  // Finding 1: stop-hook-continuation counter lives OUTSIDE the outer loop so
+  // it persists across same-turn re-entries (continuation rounds). Previously
+  // this was inside a recursive call which reset it to 0 each time, making the
+  // cap unreachable. The loop approach (matching anthropic-direct/loop.ts)
+  // shares a single counter for the lifetime of the whole turn.
+  let stopHookContinuation = 0;
+  // Mutable content cursor — updated to the continuation message on each
+  // blocking Stop hook re-entry instead of recursing.
+  let currentContent = content;
 
   const maxIterations = resolveMaxToolIterations(ctx.opts.config.maxToolUseIterations);
   const softDeadlineMs = ctx.opts.config.softDeadlineMs ?? 0;
-  let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
-  let round = 0;
-  // Invariant: tool calls that were being streamed when the output cap cut the
-  // round off. `isTruncationStopReason` returns false for any explicit non-tool
-  // finish reason, so a call truncated mid-arguments sets needsToolDispatch=false
-  // and is discarded in-memory — it never reaches `dispatchAndAppend`, which is
-  // the ONLY site that builds an assistant `tool_calls` message. That silent drop
-  // is correct (a half-built call would poison history with an incomplete id).
-  let toolCallCount = 0;
-  let droppedToolNames: string[] = [];
 
+  // Outer loop: each iteration is one "mini-turn" (initial + any continuations
+  // triggered by a blocking Stop hook). The vast majority of runs execute
+  // exactly once; only blocking Stop hooks cause a second iteration.
   for (;;) {
-    if (controller.signal.aborted) {
-      ctx.abort.clear(controller);
-      yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
-      return;
-    }
+    pushUserTurn(ctx, currentContent);
 
-    const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason);
-    if (result === null) {
-      ctx.abort.clear(controller);
-      if (controller.signal.aborted || ctx.closed) {
-        yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
-      }
-      return;
-    }
-
-    const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
-    const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
-    accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
-    // Context-window footprint: OpenAI's prompt_tokens already includes cached
-    // tokens, so window = input + output (not cumulative across rounds).
-    accumulatedUsage.contextWindowTokens =
-      (roundUsage.inputTokens ?? 0) + (roundUsage.outputTokens ?? 0);
-    ctx.lastUsage = accumulatedUsage;
-    if (result.text.length > 0) finalAssistantText = result.text;
-    finalReasoningText = result.state.reasoningText;
-
-    if (!result.needsToolDispatch) {
-      if (isTruncationStopReason(result.state.finishReason)) {
-        droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
-      }
-      break;
-    }
-
-    if (windDownReason !== null) {
-      // Wind-down round still asked for a tool (model fabricated one). Hard stop.
-      break;
-    }
-
-    const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision);
-    if (denialTrip) {
-      ctx.abort.clear(controller);
-      yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
-      return;
-    }
-    applyAndSyncSteering(ctx);
-    round += 1;
-
-    {
-      const roundCalls = finalizedToolCalls(result.state);
-      toolCallCount += roundCalls.length;
-      const lastCall = roundCalls.at(-1);
-      const lastToolName = lastCall?.name;
-      let lastCallInput: unknown;
-      try {
-        lastCallInput = lastCall ? JSON.parse(lastCall.argumentsRaw || '{}') : undefined;
-      } catch {
-        lastCallInput = undefined;
-      }
-      const lastToolHeadline = lastCall
-        ? `${lastCall.name}${summarizeToolInput(lastCall.name, lastCallInput)}`
-        : 'unknown';
-      yield {
-        type: 'progress',
-        progress: {
-          taskId,
-          description: 'Working',
-          summary: `${formatRoundLabel(round, maxIterations)}: ${lastToolHeadline}`,
-          lastToolName,
-          totalTokens: accumulatedUsage.totalTokens ?? 0,
-          // Contract: `toolUses` is the cumulative COUNT OF TOOL CALLS so far
-          // in this turn (not the round number), so downstream
-          // formatToolCallStat renders "N tool calls" truthfully even when a
-          // round batched parallel calls. The `summary` above legitimately
-          // names the ROUND — leave it.
-          toolUses: toolCallCount,
-          durationMs: Date.now() - turnStartTime,
-        },
-        sessionId: ctx.initSessionId,
-      };
-    }
-
-    if (controller.signal.aborted) {
-      ctx.abort.clear(controller);
-      yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
-      return;
-    }
-
-    const roundsSpent = shouldWindDown(round, maxIterations);
-    const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
-    if (roundsSpent || timeSpent) {
-      windDownReason = roundsSpent ? TOOL_USE_LOOP_CAPPED : SOFT_DEADLINE_WIND_DOWN;
-      continue;
-    }
-  }
-
-  ctx.abort.clear(controller);
-
-  // Push the final assistant turn to history.
-  if (finalAssistantText.length > 0) {
-    const assistantTurn: OpenAIMessage = {
-      role: 'assistant',
-      content: finalAssistantText,
+    // Reset per-iteration accumulators at the TOP so a continuation starts fresh.
+    let accumulatedUsage: ProviderUsage = {
+      stopReason: null,
+      resultSubtype: 'success',
+      isError: false,
     };
-    if (finalReasoningText.length > 0) {
-      assistantTurn.reasoning_content = finalReasoningText;
-    }
-    ctx.priorTurns.push(assistantTurn);
-  }
+    let finalAssistantText = '';
+    let finalReasoningText = '';
+    let finalReasoningField: 'reasoning_content' | 'reasoning' = 'reasoning_content';
+    let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
+    let round = 0;
+    let toolCallCount = 0;
+    // Invariant: tool calls that were being streamed when the output cap cut the
+    // round off. `isToolCallStop` returns false for any truncation finish reason,
+    // so a call truncated mid-arguments sets needsToolDispatch=false and is
+    // discarded in-memory — it never reaches `dispatchAndAppend`, which is the
+    // ONLY site that builds an assistant `tool_calls` message. That silent drop
+    // is correct (a half-built call would poison history with an incomplete id).
+    // The names are captured here for `emitTurnTerminal`'s truncation notice.
+    let droppedToolNames: string[] = [];
 
+    // Inner tool-use loop: keep driving the model as long as it emits tool calls.
+    for (;;) {
+      if (controller.signal.aborted) {
+        ctx.abort.clear(controller);
+        yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
+        return;
+      }
+
+      const result = yield* makeCompositeIteration(ctx, controller, vision, windDownReason);
+      if (result === null) {
+        ctx.abort.clear(controller);
+        if (controller.signal.aborted || ctx.closed) {
+          yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
+        }
+        return;
+      }
+
+      const pricedModel = ctx.useOpenAIPricing ? ctx.currentModel : undefined;
+      const roundUsage = usageFromState(result.state, pricedModel, ctx.fastTier.confirmedFast());
+      accumulatedUsage = sumProviderUsage(accumulatedUsage, roundUsage);
+      // Context-window footprint for this round; carries the last known value
+      // forward (never 0) when the round had no usage. See the helper's Contract.
+      accumulatedUsage.contextWindowTokens = roundContextWindowTokens(roundUsage, ctx.lastUsage);
+      ctx.lastUsage = accumulatedUsage;
+      if (result.text.length > 0) finalAssistantText = result.text;
+      finalReasoningText = result.state.reasoningText;
+      finalReasoningField = result.state.reasoningField;
+
+      if (!result.needsToolDispatch) {
+        if (isTruncationStopReason(result.state.finishReason)) {
+          droppedToolNames = finalizedToolCalls(result.state).map((c) => c.name);
+        }
+        break;
+      }
+
+      if (windDownReason !== null) {
+        // Wind-down round still asked for a tool (model fabricated one). Hard stop.
+        break;
+      }
+
+      const denialTrip = yield* dispatchAndAppend(ctx, result.state, controller.signal, vision);
+      if (denialTrip) {
+        ctx.abort.clear(controller);
+        yield { type: 'error', error: new DenialCircuitBreakerError(denialTrip.content) };
+        return;
+      }
+      applyAndSyncSteering(ctx);
+      round += 1;
+
+      toolCallCount += finalizedToolCalls(result.state).length;
+      yield buildRoundProgressEvent(
+        ctx.initSessionId, result.state, taskId, round, maxIterations,
+        accumulatedUsage, toolCallCount, turnStartTime,
+      );
+
+      if (controller.signal.aborted) {
+        ctx.abort.clear(controller);
+        yield* finishTurn(ctx, accumulatedUsage, turnStartTime);
+        return;
+      }
+
+      const roundsSpent = shouldWindDown(round, maxIterations);
+      const timeSpent = softDeadlineExpired(turnStartTime, softDeadlineMs);
+      if (roundsSpent || timeSpent) {
+        windDownReason = roundsSpent ? TOOL_USE_LOOP_CAPPED : SOFT_DEADLINE_WIND_DOWN;
+        continue;
+      }
+    }
+    // — end inner tool-use loop —
+
+    ctx.abort.clear(controller);
+
+    // Push the final assistant turn to history. Echo reasoning under the same
+    // wire field it arrived in (Cerebras uses `reasoning`; DeepSeek uses
+    // `reasoning_content`) so the next request is not rejected with HTTP 400.
+    if (finalAssistantText.length > 0) {
+      const assistantTurn: OpenAIMessage = {
+        role: 'assistant',
+        content: finalAssistantText,
+      };
+      if (finalReasoningText.length > 0) {
+        assistantTurn[finalReasoningField] = finalReasoningText;
+      }
+      ctx.priorTurns.push(assistantTurn);
+    }
+
+    // stop-hook-continuation rule: call beforeTurnEnd ONLY on natural ends.
+    // Guards (same as anthropic-direct/loop.ts):
+    //   - abort: signal already fired → skip (hook must not fight the budget)
+    //   - truncation (max_tokens etc.): runtime output-ceiling → skip
+    //   - wind-down round: iteration cap / soft-deadline → skip
+    const isNaturalEnd = !controller.signal.aborted
+      && !isTruncationStopReason(accumulatedUsage.stopReason)
+      && windDownReason === null;
+
+    if (isNaturalEnd && ctx.beforeTurnEnd !== undefined) {
+      // Finding 3: pass finalAssistantText so buildStopContext gets fresh data
+      // directly from the provider rather than scanning stale history.
+      const seamResult = await ctx.beforeTurnEnd(stopHookContinuation, finalAssistantText);
+      if (seamResult?.continueWith) {
+        // A blocking Stop hook wants a same-turn continuation. Increment the
+        // shared counter (Finding 1: counter is outside this loop so the cap
+        // IS reachable), update the content cursor, and loop rather than recurse.
+        stopHookContinuation += 1;
+        currentContent = seamResult.continueWith;
+        continue; // outer loop — next iteration pushes the continuation message
+      }
+      // Non-blocking: fall through to emit assistant.message and turn.completed.
+    }
+
+    yield* emitTurnTerminal(
+      ctx,
+      finalAssistantText,
+      droppedToolNames,
+      accumulatedUsage,
+      windDownReason,
+      turnStartTime,
+    );
+    return; // done — exit the outer loop
+  }
+  // — end outer continuation loop —
+}
+
+/**
+ * Emit the terminal assistant.message event (with truncation notice appended
+ * when the stop reason is a runtime output-token ceiling) followed by
+ * `turn.completed`.
+ *
+ * Extracted from `runTurnInner` to keep it under the 200-line ceiling.
+ * All parameters are explicit — no closure over outer locals.
+ */
+async function* emitTurnTerminal(
+  ctx: TurnDriverContext,
+  finalAssistantText: string,
+  droppedToolNames: string[],
+  accumulatedUsage: ProviderUsage,
+  windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
+  turnStartTime: number,
+): AsyncGenerator<ProviderEvent> {
   // Invariant: the truncation notice is APPENDED to the single terminal
   // assistant.message, never yielded as a second one — last-wins consumers
   // (the non-streaming sendMessage() path, a subagent's final-message
   // capture) keep only the LAST assistant message of a turn, so a second
   // event would discard the model's real partial answer and surface only the
   // warning. Same rule as the anthropic-direct terminal path. Deliberately
-  // applied AFTER the priorTurns push above: the notice is operator-facing
-  // and must not enter conversation history.
+  // applied AFTER the priorTurns push: the notice is operator-facing and
+  // must not enter conversation history.
   //
   // Issue #970: textless truncations use the `notice` channel instead of
   // silently dropping. See the analogous logic in the anthropic-direct loop.
-  // Emit the terminal assistant.message (with truncation notice appended).
   const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
     ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
         canIncreaseOutputLimit: !(

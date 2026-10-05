@@ -21,5 +21,5 @@ export {
   type FoldResult,
   type JournalLocator,
 } from './reader.js';
-export { findToolResultAsync, type ToolResultLookup } from './reader.async.js';
+export { findToolResultAsync } from './reader.async.js';
 export { forkJournal } from './fork.js';

@@ -278,7 +278,7 @@ export function loadEnvConfig(): Partial<CliConfig> {
 
   if (env.AFK_AUTO_ROUTING) {
     const val = env.AFK_AUTO_ROUTING.toLowerCase() === 'true';
-    config.autoRouting = { interactive: val, chat: val, telegram: val, daemon: val };
+    config.autoRouting = { interactive: val, chat: val, telegram: val };
   }
 
   // OpenAI-compatible endpoint override. Documented in
