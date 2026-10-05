@@ -185,6 +185,53 @@ describe('waitForHandler — timeout outcome', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('timed_out');
   });
+
+  it('timed_out tells the model the condition was not met and how to keep waiting', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    vi.mocked(evaluateFile).mockResolvedValue({ met: false, detail: 'file not found: /tmp/x' });
+    const result = await waitForHandler({ type: 'file', path: '/tmp/x', timeout_ms: 0 }, neverSignal);
+    expect(result.content).toContain('Condition not met within the timeout');
+    expect(result.content).toContain('Call wait_for again if it is still needed');
+    expect(result.content).not.toContain('clamped');
+  });
+});
+
+describe('waitForHandler — limit notices', () => {
+  it('reports a timeout_ms above the max as clamped, without failing the call', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    vi.mocked(evaluateFile).mockResolvedValue({ met: true, detail: 'file exists' });
+    const result = await waitForHandler(
+      { type: 'file', path: '/tmp/x', timeout_ms: 1_800_000 },
+      neverSignal,
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('succeeded');
+    expect(result.content).toContain(
+      'timeout_ms clamped: requested 1800000ms exceeds the maximum 600000ms; using 600000ms.',
+    );
+  });
+
+  it('reports a poll_interval_ms below the min as raised', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    vi.mocked(evaluateFile).mockResolvedValue({ met: true, detail: 'file exists' });
+    const result = await waitForHandler(
+      { type: 'file', path: '/tmp/x', poll_interval_ms: 10 },
+      neverSignal,
+    );
+    expect(result.content).toContain(
+      'poll_interval_ms raised: requested 10ms is below the minimum 1000ms; using 1000ms.',
+    );
+  });
+
+  it('adds no notice when values are within limits', async () => {
+    const { evaluateFile } = await import('./wait-for-conditions.js');
+    vi.mocked(evaluateFile).mockResolvedValue({ met: true, detail: 'file exists' });
+    const result = await waitForHandler(
+      { type: 'file', path: '/tmp/x', timeout_ms: 600_000, poll_interval_ms: 1000 },
+      neverSignal,
+    );
+    expect(result.content).not.toContain('Note:');
+  });
 });
 
 describe('waitForHandler — cancelled outcome', () => {
@@ -317,7 +364,7 @@ describe('waitForHandler — #1430 PID registry wiring', () => {
 });
 
 // ---------------------------------------------------------------------------
-// P5: relative file path → resolved against context.cwd / resolveBase
+// P5: relative file path → resolved against context.resolveBase
 // ---------------------------------------------------------------------------
 
 describe('waitForHandler — relative path resolution for file type', () => {
@@ -326,7 +373,7 @@ describe('waitForHandler — relative path resolution for file type', () => {
     mockCheckEgress.mockResolvedValue({ allowed: true });
   });
 
-  it('resolves a relative path against context.cwd', async () => {
+  it('resolves a relative path against context.resolveBase', async () => {
     const { evaluateFile } = await import('./wait-for-conditions.js');
     const mockEvalFile = vi.mocked(evaluateFile);
     let capturedCond: unknown;
@@ -335,14 +382,14 @@ describe('waitForHandler — relative path resolution for file type', () => {
       return Promise.resolve({ met: true, detail: 'file exists (0 bytes)' });
     });
 
-    const cwd = path.resolve('/home/user/myproject');
+    const resolveBase = path.resolve('/home/user/myproject');
     await waitForHandler(
       { type: 'file', path: 'dist/server.js' },
       neverSignal,
-      { cwd, resolveBase: undefined } as never,
+      { resolveBase } as never,
     );
 
-    expect((capturedCond as { path: string })?.path).toBe(path.resolve(cwd, 'dist/server.js'));
+    expect((capturedCond as { path: string })?.path).toBe(path.resolve(resolveBase, 'dist/server.js'));
   });
 
   it('prefers context.resolveBase over context.cwd', async () => {
@@ -378,7 +425,7 @@ describe('waitForHandler — relative path resolution for file type', () => {
     await waitForHandler(
       { type: 'file', path: absPath },
       neverSignal,
-      { cwd: path.resolve('/home/user/myproject') } as never,
+      { resolveBase: path.resolve('/home/user/myproject') },
     );
 
     expect((capturedCond as { path: string })?.path).toBe(absPath);

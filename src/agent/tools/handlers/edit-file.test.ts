@@ -328,7 +328,7 @@ function bar() {
 // ---------------------------------------------------------------------------
 
 describe('editFileHandler cwd containment', () => {
-  it('rejects absolute path outside context.cwd', async () => {
+  it('rejects absolute path outside context.resolveBase', async () => {
     const signal = new AbortController().signal;
     const result = await editFileHandler(
       {
@@ -337,13 +337,13 @@ describe('editFileHandler cwd containment', () => {
         new_string: 'root',
       },
       signal,
-      { cwd: tempDir },
+      { resolveBase: tempDir },
     );
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/outside the allowed/);
   });
 
-  it('resolves relative path against context.cwd', async () => {
+  it('resolves relative path against context.resolveBase', async () => {
     await mkdir(tempDir, { recursive: true });
     const absPath = path.join(tempDir, 'relative.txt');
     await writeFile(absPath, 'foo bar baz', 'utf-8');
@@ -356,13 +356,13 @@ describe('editFileHandler cwd containment', () => {
         new_string: 'qux',
       },
       signal,
-      { cwd: tempDir },
+      { resolveBase: tempDir },
     );
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('Replaced 1 occurrence');
   });
 
-  it('allows absolute path within context.cwd', async () => {
+  it('allows absolute path within context.resolveBase', async () => {
     await mkdir(tempDir, { recursive: true });
     const absPath = path.join(tempDir, 'inside.txt');
     await writeFile(absPath, 'hello world', 'utf-8');
@@ -375,7 +375,7 @@ describe('editFileHandler cwd containment', () => {
         new_string: 'goodbye',
       },
       signal,
-      { cwd: tempDir },
+      { resolveBase: tempDir },
     );
     expect(result.isError).toBeFalsy();
   });
