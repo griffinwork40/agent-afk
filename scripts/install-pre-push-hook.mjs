@@ -81,6 +81,29 @@ function configuredHooksPath() {
 }
 
 /**
+ * Normalise a filesystem path for comparison: resolve to real path, then
+ * normalise separators. On Windows (case-insensitive FS), also lower-cases
+ * the result so that paths differing only in case or in 8.3 vs long-name form
+ * compare equal.
+ * @param {string} p
+ * @returns {string}
+ */
+function normalisedPath(p) {
+  try {
+    const real = realpathSync(p);
+    // Replace forward slashes with platform separator then normalise.
+    // On Windows git returns forward-slash paths; resolve() converts them but
+    // realpathSync() may not have received the already-resolved form, so we
+    // normalise the raw real path instead.
+    const n = normalize(real);
+    return process.platform === 'win32' ? n.toLowerCase() : n;
+  } catch {
+    const n = normalize(resolve(p));
+    return process.platform === 'win32' ? n.toLowerCase() : n;
+  }
+}
+
+/**
  * True only when this installer is running from the checkout it is about to
  * modify. This prevents a nested consumer package or copied script from writing
  * hooks into an ancestor repository that does not own this package.
@@ -89,11 +112,7 @@ function configuredHooksPath() {
 function installerBelongsToTopLevel(dir) {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptDir);
-  try {
-    return normalize(realpathSync(packageRoot)) === normalize(realpathSync(resolve(dir)));
-  } catch {
-    return normalize(resolve(packageRoot)) === normalize(resolve(dir));
-  }
+  return normalisedPath(packageRoot) === normalisedPath(dir);
 }
 
 // ── Launcher content ──────────────────────────────────────────────────────────
