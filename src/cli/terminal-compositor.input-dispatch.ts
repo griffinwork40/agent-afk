@@ -568,13 +568,6 @@ function handleVerticalNav(self: KeyDispatchHost, key: KeyInfo): boolean {
   return false;
 }
 
-// handleEnter, handleBackspace, commitIfChanged, applyAtomicPlaceholderDelete,
-// and mergeSubmissionPayloads are defined in
-// terminal-compositor.input-dispatch.enter.ts and imported above.
-
-// handleCursorAndEdit is defined in terminal-compositor.input-dispatch.cursor.ts
-// and imported above.
-
 function handleBackground(self: KeyDispatchHost, key: KeyInfo): boolean {
   // Ctrl+B → background current turn. Streaming-mode only — there's
   // no turn to background between turns. Once-only guard prevents

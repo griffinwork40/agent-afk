@@ -44,9 +44,8 @@ export interface CsiHost {
   clampRow(r: number): number;
   /** Clamp a column value to [1, cols]. */
   clampCol(c: number): number;
-  /** Return the right-trimmed text of row `row` (1-based). */
+  // Called by VirtualScreen internally (via dispatchCsi); not used by CSI helpers directly.
   lineAt(row: number): string;
-  /** Scroll the scroll region up one line. */
   scrollRegionUp(): void;
 }
 

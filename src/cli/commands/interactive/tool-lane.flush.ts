@@ -31,7 +31,6 @@ import { ancestorDepthOf as ancestorDepthIn } from './tool-lane.ancestry.js';
 export interface ToolLaneFlushHost {
   readonly entries: Map<string, Entry>;
   order: string[];
-  readonly agentIdStack: string[];
   readonly compactScrollback: boolean;
 }
 
