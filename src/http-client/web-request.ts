@@ -290,8 +290,13 @@ export async function webRequest(opts: WebRequestOptions): Promise<WebRequestRes
       retry: retryOpts,
     });
   } catch (err) {
-    // EgressBlockedError surfaces cleanly — re-throw as-is for the handler.
+    // Re-throw EgressBlockedError at the top level so callers can
+    // `instanceof EgressBlockedError` without knowing about undici's wrapping.
+    // When undici wraps a connect-time block as TypeError('fetch failed', { cause }),
+    // surface the cause so the handler sees the policy error, not "fetch failed".
     if (err instanceof EgressBlockedError) throw err;
+    const cause = (err instanceof Error && (err as { cause?: unknown }).cause);
+    if (cause instanceof EgressBlockedError) throw cause;
     throw err;
   }
 

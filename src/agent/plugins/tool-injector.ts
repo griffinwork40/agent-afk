@@ -100,6 +100,12 @@ export interface PluginSkillMetadata {
    * system-prompt manifest stays in lockstep with the slash-command surface.
    */
   audience?: 'public' | 'internal';
+  /**
+   * When `true`, this skill is excluded from the model-facing manifest while
+   * remaining slash-invocable. Parsed from the `disable-model-invocation:`
+   * frontmatter field (Claude Code parity). Absent = false (visible to model).
+   */
+  disableModelInvocation?: boolean;
 }
 
 /**
@@ -400,6 +406,11 @@ export function parseSkillMetadata(
         if (raw === 'public' || raw === 'internal') {
           metadata.audience = raw;
         }
+      } else if (key === 'disable-model-invocation') {
+        // Claude Code parity: `true` opts this skill out of the model-facing
+        // manifest while keeping it fully slash-invocable by the user.
+        const raw = value.replace(/^["']|["']$/g, '').trim();
+        if (raw === 'true') metadata.disableModelInvocation = true;
       } else if (key === 'context') {
         metadata.context = value.replace(/^["']|["']$/g, '');
       } else if (key === 'read-only' || key === 'readOnly') {

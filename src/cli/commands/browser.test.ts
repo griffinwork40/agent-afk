@@ -60,11 +60,13 @@ describe('readMcpConfigFile / writeMcpConfigFileAtomic', () => {
     expect(readMcpConfigFile(path)).toEqual(cfg);
   });
 
+  // Skipped on Windows: POSIX file-mode bits (0o644) not exposed by NTFS — genuinely POSIX-only.
   it.skipIf(process.platform === 'win32')('creates a new config with mode 0o644', () => {
     writeMcpConfigFileAtomic(path, { mcpServers: {} });
     expect(statSync(path).mode & 0o777).toBe(0o644);
   });
 
+  // Skipped on Windows: POSIX file-mode bits (0o600) not exposed by NTFS — genuinely POSIX-only.
   it.skipIf(process.platform === 'win32')('preserves a restrictive mode when rewriting a config', () => {
     writeFileSync(path, JSON.stringify({ mcpServers: {} }), 'utf-8');
     chmodSync(path, 0o600);

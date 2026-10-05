@@ -10,7 +10,7 @@
  * before launcher.ts is imported.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import nodePath from 'node:path';
@@ -44,6 +44,7 @@ interface StubBrowser {
   newContext: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   isConnected: ReturnType<typeof vi.fn>;
+  process: ReturnType<typeof vi.fn>;
   _contexts: StubContext[];
 }
 
@@ -102,9 +103,15 @@ function makeStubContext(): StubContext {
 }
 
 function makeStubBrowser(): StubBrowser {
+  const stubProcess = { kill: vi.fn().mockReturnValue(true) };
   const b: StubBrowser = {
     close: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
+    // Playwright's launched browsers expose browser.process() returning a
+    // ChildProcess-like object with a .kill() method. CDP/remote browsers
+    // return null. Default to returning the stub process so SIGKILL tests
+    // can assert on kill() without extra setup.
+    process: vi.fn().mockReturnValue(stubProcess),
     newContext: vi.fn(),
     _contexts: [],
   };
@@ -588,6 +595,164 @@ describe('BrowserLauncher', () => {
       expect(out.finalUrl).toBe('about:blank');
       // Context must still be torn down.
       expect(ctx.close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // renderHtml — abort + hung-close safety (issue #2519)
+  // -------------------------------------------------------------------------
+
+  describe('renderHtml — abort and hung-close safety (issue #2519)', () => {
+    beforeEach(() => {
+      vi.useRealTimers();
+    });
+
+    // afterEach ensures fake timers don't leak into sibling tests even when a
+    // test fails mid-run; afterAll alone would leave them active if an earlier
+    // test in this suite had installed vi.useFakeTimers() and then thrown.
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    afterAll(() => {
+      vi.useRealTimers();
+    });
+
+    it('context.close() is called when signal aborts before navigation resolves', async () => {
+      // Simulate: goto() hangs, caller aborts → onAbort fires → close() called.
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      const ac = new AbortController();
+
+      // close() resolves immediately so closeContextSafe settles fast.
+      ctx.close.mockResolvedValue(undefined);
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // goto() resolves after abort fires, simulating a late-completing navigation.
+        p.goto.mockImplementation(
+          () =>
+            new Promise<{ status: () => number }>((resolve) => {
+              // Abort first, then resolve goto on the next tick.
+              setImmediate(() => resolve({ status: () => 200 }));
+            }),
+        );
+        p.content.mockResolvedValue('<html><body>ok</body></html>');
+        p.url.mockReturnValue('https://example.com/');
+        ctx._pages.push(p);
+        return p;
+      });
+
+      // Abort synchronously so onAbort fires immediately.
+      ac.abort(new Error('subagent timeout'));
+
+      // renderHtml must still settle (pre-aborted short-circuit path).
+      await launcher
+        .renderHtml('https://example.com/', {
+          timeoutMs: 5000,
+          waitUntil: 'load',
+          signal: ac.signal,
+        })
+        .catch(() => undefined);
+
+      // context.close() must have been called (by closeContextSafe in pre-abort path).
+      expect(ctx.close).toHaveBeenCalled();
+    });
+
+    it('falls back to browser.process().kill("SIGKILL") when close() hangs', async () => {
+      // Simulate frozen Chromium: context.close() never resolves.
+      // We use fake timers so the 3 s CONTEXT_CLOSE_TIMEOUT_MS fires instantly.
+      vi.useFakeTimers();
+
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      // close() never resolves — the frozen-browser scenario.
+      ctx.close.mockReturnValue(new Promise<void>(() => { /* intentionally never resolves */ }));
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        // goto() rejects immediately so we reach the finally block quickly.
+        p.goto.mockRejectedValue(new Error('navigation failed'));
+        ctx._pages.push(p);
+        return p;
+      });
+
+      // Start the render. It will reach the finally block, call closeContextSafe,
+      // which races context.close() (hung) vs setTimeout(3000).
+      const renderPromise = launcher
+        .renderHtml('https://example.com/', { timeoutMs: 5000, waitUntil: 'load' })
+        .catch(() => undefined);
+
+      // Advance all timers (fires the 3 s closeContextSafe timeout).
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+
+      await renderPromise;
+
+      // The hung close() triggered the SIGKILL fallback.
+      expect(ctx.close).toHaveBeenCalled();
+      const stubProcess = currentStubBrowser.process() as { kill: ReturnType<typeof vi.fn> };
+      expect(stubProcess.kill).toHaveBeenCalledWith('SIGKILL');
+    });
+
+    it('does not kill the browser when close() resolves quickly', async () => {
+      // Happy path: close() resolves in time — no SIGKILL needed.
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+      ctx.close.mockResolvedValue(undefined);
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        p.goto.mockResolvedValue({ status: () => 200 });
+        p.content.mockResolvedValue('<html><body>ok</body></html>');
+        p.url.mockReturnValue('https://example.com/');
+        ctx._pages.push(p);
+        return p;
+      });
+
+      await launcher.renderHtml('https://example.com/', { timeoutMs: 5000, waitUntil: 'load' });
+
+      expect(ctx.close).toHaveBeenCalledTimes(1);
+      const stubProcess = currentStubBrowser.process() as { kill: ReturnType<typeof vi.fn> };
+      expect(stubProcess.kill).not.toHaveBeenCalled();
+    });
+
+    it('falls back gracefully when browser.process() returns null (CDP/remote browser)', async () => {
+      // CDP / remote browsers expose null from browser.process() — the fallback
+      // must not throw when it cannot SIGKILL.
+      vi.useFakeTimers();
+
+      currentStubBrowser.process.mockReturnValue(null);
+      const launcher = new BrowserLauncher(TEST_CONFIG);
+      const ctx = makeStubContext();
+      currentStubBrowser.newContext.mockResolvedValueOnce(ctx);
+
+      // close() hangs — triggers the timeout path.
+      ctx.close.mockReturnValue(new Promise<void>(() => { /* never resolves */ }));
+
+      ctx.newPage.mockImplementationOnce(async () => {
+        const p = makeStubPage();
+        p.goto.mockRejectedValue(new Error('navigation failed'));
+        ctx._pages.push(p);
+        return p;
+      });
+
+      const renderPromise = launcher
+        .renderHtml('https://example.com/', { timeoutMs: 5000, waitUntil: 'load' })
+        .catch(() => undefined);
+
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+
+      // Must resolve cleanly — no unhandled rejection when process() is null.
+      await renderPromise;
+
+      expect(ctx.close).toHaveBeenCalled();
     });
   });
 

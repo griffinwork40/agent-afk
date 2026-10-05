@@ -34,6 +34,7 @@
  */
 
 import type { ExtractedContent } from './types.js';
+import { applyDataUriTurndownRule, elideDataUriPayloads } from './extract-data-uri.js';
 
 /**
  * Below this many characters of extracted plain text, the scraper treats a
@@ -71,6 +72,11 @@ async function importExtractDeps() {
   // of these already, but the fallback path (whole-body conversion) needs its
   // own guard so we don't emit script bodies or style sheets as markdown.
   turndown.remove(['script', 'style', 'noscript', 'iframe']);
+
+  // Elide data: URI payloads before Turndown's default image rule fires, so
+  // enormous base64 blobs (e.g. GitHub's 404 SVG — 75 KB on one line) are
+  // replaced with a short marker rather than passed through verbatim. (#2579)
+  applyDataUriTurndownRule(turndown);
 
   return { JSDOM, Readability, turndown };
 }
@@ -132,7 +138,7 @@ export async function extractReadableMarkdown(html: string, url: string): Promis
   })();
 
   if (article && typeof article.content === 'string' && article.content.trim().length > 0) {
-    const markdown = tidyMarkdown(turndown.turndown(article.content));
+    const markdown = elideDataUriPayloads(tidyMarkdown(turndown.turndown(article.content)));
     const title = (article.title ?? '').trim() || docTitle;
     // article.length is Readability's own char count of the extracted text;
     // fall back to measuring textContent when it is absent.
@@ -147,7 +153,7 @@ export async function extractReadableMarkdown(html: string, url: string): Promis
   // gets *something*, and flag it so the scraper prefers a render result.
   const body = doc.body;
   const bodyHtml = body?.innerHTML ?? '';
-  const markdown = tidyMarkdown(turndown.turndown(bodyHtml));
+  const markdown = elideDataUriPayloads(tidyMarkdown(turndown.turndown(bodyHtml)));
   return {
     title: docTitle,
     markdown,

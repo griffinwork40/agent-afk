@@ -134,7 +134,8 @@ export function registerPluginCommand(program: Command, deps: PluginCommandDeps 
             cmdOpts.ref ? { ref: cmdOpts.ref } : {},
             moduleDeps,
           );
-          printOutcome(outcome, spinner);
+          spinner.stop();
+          logger.log(formatOutcome(outcome));
         } else {
           logger.log(palette.info('Updating all plugins…'));
           const outcomes = await updateAll(moduleDeps);
@@ -255,12 +256,4 @@ function formatOutcome(o: UpdateOutcome): string {
     case 'removed-by-marketplace':
       return `${palette.warning('!')} ${palette.bold(o.name)}: removed by marketplace "${o.marketplace}" — run "afk plugin remove ${o.name}" to clean up`;
   }
-}
-
-function printOutcome(o: UpdateOutcome, spinner: ReturnType<typeof ora>): void {
-  const line = formatOutcome(o);
-  if (o.status === 'updated') spinner.succeed(line);
-  else if (o.status === 'up-to-date') spinner.info(line);
-  else if (o.status === 'skipped-local' || o.status === 'skipped-marketplace') spinner.info(line);
-  else spinner.warn(line);
 }

@@ -12,6 +12,10 @@
  * (pre-Wave 1) still carry `outputUnavailable: true` — the `tool_result` record
  * (Wave 1+) provides real output and sets `outputUnavailable: false`.
  *
+ * Full tool output lives in the message journal, not the ledger. A clipped
+ * result is flagged `outputClipped: true`; the UI fetches the full text on
+ * demand from {@link toolResultPath} (`GET /api/sessions/:id/tool-results/:toolUseId`).
+ *
  * SSE frames from the stream have shape `{ record: LedgerRecordLike, replay: boolean }`.
  * `replay: true` means the record comes from the historical ledger tail;
  * `replay: false` means it arrived live during this stream session.
@@ -36,6 +40,12 @@ export type TranscriptItem =
       status: 'running' | 'ok' | 'error';
       output?: string;
       outputUnavailable?: boolean;
+      /**
+       * True when `output` is the ledger's clipped preview (it ends with the
+       * clip marker). The full result can be fetched on demand from
+       * {@link toolResultPath}; see web-server/routes.tool-results.ts.
+       */
+      outputClipped?: boolean;
       diff?: string;
       durationMs?: number;
     }
@@ -142,6 +152,58 @@ function num(v: unknown): number | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Tool results
+// ---------------------------------------------------------------------------
+
+/**
+ * Suffix `clip()` in agent/session-ledger-project.ts appends to a clipped
+ * ledger string. Duplicated as a literal (not imported) because this module
+ * is bundled into the browser dashboard and must stay free of Node imports.
+ */
+export const LEDGER_CLIP_MARKER = '… [truncated]';
+
+/** True when a ledger string was clipped by the ledger projector. */
+export function isClippedLedgerText(text: string): boolean {
+  return text.endsWith(LEDGER_CLIP_MARKER);
+}
+
+/**
+ * Path of the lazy full-tool-result endpoint for one call. Both ids are
+ * URI-encoded; the server validates them before reading anything.
+ */
+export function toolResultPath(sessionId: string, toolUseId: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolUseId)}`;
+}
+
+/**
+ * Wave 1+: a successful tool result was persisted (clipped). Patch the
+ * matching tool item in place and return `undefined`; with no match, emit a
+ * standalone notice (pre-Wave 1 ledger, or out-of-order replay without a
+ * toolUseId on the preceding tool record).
+ *
+ * Invariant: live SSE records stay small. The full result is NOT inlined
+ * here; `outputClipped` tells the UI to lazy-load it via {@link toolResultPath}.
+ */
+function applyToolResult(record: LedgerRecordLike, toolIndex?: ToolIndex): TranscriptItem | undefined {
+  const toolUseId = str(record['toolUseId']);
+  const content = str(record['content']) ?? str(record['output']) ?? '';
+  const existing = toolUseId !== undefined ? toolIndex?.get(toolUseId) : undefined;
+  if (existing === undefined) {
+    return { kind: 'notice', id: nextId('n'), text: `tool result: ${content.slice(0, 80)}` };
+  }
+  existing.output = content;
+  existing.outputUnavailable = false;
+  existing.outputClipped = isClippedLedgerText(content);
+  existing.status = 'ok';
+  const durationMs = num(record['durationMs']);
+  if (durationMs !== undefined) existing.durationMs = durationMs;
+  const diff = str(record['diff']);
+  if (diff !== undefined) existing.diff = diff;
+  // Mutation: callers must force a re-render (no new item is added).
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Core converter
 // ---------------------------------------------------------------------------
 
@@ -210,36 +272,8 @@ export function ledgerRecordToItem(
       return item;
     }
 
-    case 'tool_result': {
-      // Wave 1+: a successful tool result was persisted. Find the matching
-      // tool item in the index and update it with the real output.
-      const toolUseId = str(record['toolUseId']);
-      const content = str(record['content']) ?? str(record['output']) ?? '';
-      const durationMs = num(record['durationMs']);
-      const diff = str(record['diff']);
-
-      if (toolIndex !== undefined && toolUseId !== undefined) {
-        const existing = toolIndex.get(toolUseId);
-        if (existing !== undefined) {
-          existing.output = content;
-          existing.outputUnavailable = false;
-          existing.status = 'ok';
-          if (durationMs !== undefined) existing.durationMs = durationMs;
-          if (diff !== undefined) existing.diff = diff;
-          // Mutation triggers: callers must force a re-render. Return undefined
-          // so no duplicate item is added.
-          return undefined;
-        }
-      }
-
-      // No match — render as a standalone notice (pre-Wave 1 ledger or
-      // out-of-order replay without a toolUseId on the preceding tool record).
-      return {
-        kind: 'notice',
-        id: nextId('n'),
-        text: `tool result: ${content.slice(0, 80)}`,
-      };
-    }
+    case 'tool_result':
+      return applyToolResult(record, toolIndex);
 
     case 'tool_error': {
       // Contract: a `tool_error` record carries `content` but may lack `toolName`.

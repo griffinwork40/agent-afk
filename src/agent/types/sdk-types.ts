@@ -229,6 +229,13 @@ export type ElicitationRequest = {
   allowSkip?: boolean;
   allowCustom?: boolean;   // opt-in free-form entry for choice/multi_choice; see ask_question tool
   context?: string;
+  /**
+   * Set only by the AFK harness itself (never by MCP deserialization).
+   * Renderers use this to apply the relaxed gate-specific display rules
+   * (larger message cap, "AFK safety approval" banner) without being
+   * spoofable by an external MCP server claiming serverName 'agent-afk'.
+   */
+  _harnessInternal?: true;
 };
 
 export type ElicitationResult = {

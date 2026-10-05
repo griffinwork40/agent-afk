@@ -5,6 +5,7 @@ import { runSubagentDAG, type SubagentDAGNode } from './dag-subagent.js';
 import type { SubagentManager } from './subagent.js';
 import type { IAgentSession, Message } from './types.js';
 import { DelegationBudget } from './tools/delegation-budget.js';
+import { createMessageJournal } from './journal/index.js';
 
 vi.mock('../utils/debug.js', () => ({ debugLog: vi.fn() }));
 
@@ -989,5 +990,31 @@ describe('runSubagentDAG', () => {
       expect(result.failed).toHaveLength(0);
       expect(result.outputs['A']).toBe('ok');
     });
+  });
+});
+
+describe('runSubagentDAG message journal', () => {
+  it('forks each node with the parent journal view, never the parent journal as the child config', async () => {
+    const forkSubagent = vi.fn(async () => ({
+      id: 'node-A-1',
+      runToResult: vi.fn(async () => ({ id: 'node-A-1', status: 'succeeded', message: { role: 'assistant', content: 'ok', timestamp: new Date() } })),
+      teardown: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    }));
+    const manager = { forkSubagent } as unknown as SubagentManager;
+    const parentJournal = createMessageJournal({ getSessionId: () => 'root-sess' });
+    await runSubagentDAG({
+      manager,
+      parentSession: { sessionId: 'root-sess', abortSignal: new AbortController().signal, messageJournal: parentJournal },
+      nodes: [{ id: 'A', systemPrompt: 's', promptBuilder: () => 'p' }],
+      edges: [],
+    });
+    expect(forkSubagent).toHaveBeenCalledTimes(1);
+    const opts = (forkSubagent.mock.calls[0] as unknown as [{ parent: { sessionId?: string; messageJournal?: unknown }; config: { messageJournal?: unknown } }])[0];
+    // The parent VIEW carries the journal (fork-child-config derives
+    // forSubagent(childId) from it); the child config never gets it directly.
+    expect(opts.parent).toEqual({ sessionId: 'root-sess', messageJournal: parentJournal });
+    expect(opts.config.messageJournal).toBeUndefined();
+    await parentJournal.close();
   });
 });

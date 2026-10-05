@@ -33,8 +33,14 @@ import { ThrottleQueue } from '../throttle-queue.js';
 import { parseQuotaHeaders, recordQuotaSnapshot } from '../../../quota-cache.js';
 import { refreshClaudeCodeOauthToken } from '../../../auth/keychain.js';
 import type { AnthropicClientFactory } from '../provider-options.js';
-import { globalRateLimitBucket } from '../../shared/rate-limit-bucket.js';
+import { getRateLimitBucket } from '../../shared/rate-limit-bucket.registry.js';
 import { parseAnthropicRateLimitHeaders } from '../../shared/rate-limit-headers.js';
+import {
+  perMinuteFromRateLimit,
+  publishingGate,
+  publishUsage,
+  windowsFromQuotaSnapshot,
+} from '../../../usage/usage-ledger.js';
 
 export interface ClientSetupArgs {
   config: AgentConfig;
@@ -85,22 +91,30 @@ export function setUpQueryClient(args: ClientSetupArgs): ClientSetup {
     ? undefined
     : (headers: Headers): void => {
         const snapshot = parseQuotaHeaders(headers);
-        if (snapshot !== undefined) recordQuotaSnapshot(snapshot);
+        if (snapshot === undefined) return;
+        recordQuotaSnapshot(snapshot);
+        publishUsage({ v: 1, provider: 'anthropic', account: authMode, windows: windowsFromQuotaSnapshot(snapshot) });
       };
 
   // Rate-limit admission observer: captures per-minute RPM/ITPM/OTPM headers
-  // from every Anthropic response and feeds the process-wide admission bucket.
+  // from every Anthropic response and feeds this auth mode's admission bucket
+  // (keyed per provider+account so OpenAI headers never overwrite it).
   // Gated on !localMode — local shims have no meaningful per-minute limits
   // and should never be artificially throttled by the bucket.
+  const bucket = getRateLimitBucket('anthropic', authMode);
   const rateLimitObserver = localMode
     ? undefined
     : (headers: Headers): void => {
         const snapshot = parseAnthropicRateLimitHeaders(headers);
-        if (snapshot !== undefined) globalRateLimitBucket.update(snapshot);
+        if (snapshot === undefined) return;
+        bucket.update(snapshot);
+        publishUsage({ v: 1, provider: 'anthropic', account: authMode, perMinute: perMinuteFromRateLimit(snapshot, Date.now()) });
       };
 
   // Admission gate: skip in localMode — same rationale as rateLimitObserver.
-  const admissionGate = localMode ? undefined : globalRateLimitBucket;
+  // 429 freezes are mirrored into the cross-process usage ledger, where peer
+  // processes' buckets for the same key adopt them.
+  const admissionGate = localMode ? undefined : publishingGate(bucket, 'anthropic', authMode);
 
   const clientOpts = buildClientOptions(
     args.token,

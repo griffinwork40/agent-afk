@@ -555,21 +555,17 @@ export class McpManager {
     const tasks: Promise<void>[] = [];
     for (const [serverName, rec] of this.records) {
       if (!rec.client) continue;
-      const timeout = new Promise<void>((resolve) => {
-        const t = setTimeout(() => {
-          console.warn(`[mcp:${serverName}] disconnect timed out after 1s`);
-          resolve();
-        }, 1000);
-        t.unref();
-      });
       tasks.push(
-        Promise.race([
-          rec.client.disconnect().catch((err) => {
-            const msg = errorMessage(err);
-            console.warn(`[mcp:${serverName}] disconnect error: ${msg}`);
-          }),
-          timeout,
-        ]),
+        new Promise<void>((resolve) => {
+          const t = setTimeout(() => {
+            console.warn(`[mcp:${serverName}] disconnect timed out after 1s`);
+            resolve();
+          }, 1000);
+          t.unref();
+          rec.client!.disconnect().catch((err) => {
+            console.warn(`[mcp:${serverName}] disconnect error: ${errorMessage(err)}`);
+          }).finally(() => { clearTimeout(t); resolve(); });
+        }),
       );
     }
     await Promise.all(tasks);

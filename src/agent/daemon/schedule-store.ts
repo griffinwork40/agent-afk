@@ -16,6 +16,7 @@
 import {
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -23,10 +24,12 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
+import { expandCwd } from './cwd-validator.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
 import { errorMessage } from '../../utils/errors.js';
 
@@ -38,36 +41,107 @@ const LOCK_STALE_MS = 10_000;
 const LOCK_POLL_MS = 50;
 const LOCK_TIMEOUT_MS = 15_000;
 
+interface LockOwner {
+  pid: number;
+  token: string;
+}
+
+function writeLockFile(lockPath: string, owner: LockOwner): void {
+  const fd = openSync(lockPath, 'wx');
+  try {
+    writeSync(fd, JSON.stringify(owner));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readLockOwner(lockPath: string): LockOwner | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, 'utf-8')) as Partial<LockOwner>;
+    if (typeof parsed.pid === 'number' && typeof parsed.token === 'string') {
+      return { pid: parsed.pid, token: parsed.token };
+    }
+  } catch {
+    // Malformed or concurrently removed locks cannot be proven dead.
+  }
+  return undefined;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code !== 'ESRCH';
+  }
+}
+
+function sameOwner(a: LockOwner | undefined, b: LockOwner | undefined): boolean {
+  return a !== undefined && b !== undefined && a.pid === b.pid && a.token === b.token;
+}
+
+function tryReclaimDeadLock(lockPath: string, owner: LockOwner): void {
+  if (isProcessAlive(owner.pid)) return;
+  const claimPath = `${lockPath}.claim.${process.pid}.${randomBytes(4).toString('hex')}`;
+  try {
+    linkSync(lockPath, claimPath);
+    const lockStat = statSync(lockPath);
+    const claimStat = statSync(claimPath);
+    const sameFile = lockStat.dev === claimStat.dev && lockStat.ino === claimStat.ino;
+    if (sameFile && sameOwner(owner, readLockOwner(claimPath)) && !isProcessAlive(owner.pid)) {
+      unlinkSync(lockPath);
+    }
+  } catch {
+    // Another contender may have removed or replaced the lock. Retry acquisition.
+  } finally {
+    try { unlinkSync(claimPath); } catch { /* best effort */ }
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 /**
  * Run `fn` under an O_EXCL advisory lock on `storePath + ".lock"`.
- * Stale locks (older than LOCK_STALE_MS) are removed and retried.
+ * Stale locks are removed only when their recorded owner process is dead.
  * Throws if the lock cannot be acquired within LOCK_TIMEOUT_MS.
  */
 function withFileLock<T>(storePath: string, fn: () => T): T {
   const lp = `${storePath}.lock`;
   mkdirSync(dirname(lp), { recursive: true });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  // Acquire: open with O_EXCL — fails EEXIST if already held.
-  while (Date.now() < deadline) {
+  const owner: LockOwner = { pid: process.pid, token: randomBytes(8).toString('hex') };
+  let acquired = false;
+
+  while (!acquired) {
+    if (Date.now() >= deadline) throw new Error(`[schedule-store] lock timeout: ${lp}`);
     try {
-      closeSync(openSync(lp, 'wx'));
-      break; // lock acquired
+      writeLockFile(lp, owner);
+      acquired = true;
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code !== 'EEXIST') throw err;
-      // Remove stale lock left by a killed process.
+      const currentOwner = readLockOwner(lp);
       try {
-        if (Date.now() - statSync(lp).mtimeMs > LOCK_STALE_MS) unlinkSync(lp);
-      } catch { /* removed concurrently — retry */ }
+        if (currentOwner && Date.now() - statSync(lp).mtimeMs > LOCK_STALE_MS) {
+          tryReclaimDeadLock(lp, currentOwner);
+        }
+      } catch {
+        // Removed concurrently. Retry acquisition until the deadline.
+      }
       const wait = Math.min(LOCK_POLL_MS, deadline - Date.now());
-      if (wait <= 0) throw new Error(`[schedule-store] lock timeout: ${lp}`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, wait);
+      if (wait > 0) sleepSync(wait);
     }
   }
+
   try {
     return fn();
   } finally {
-    try { unlinkSync(lp); } catch { /* best effort */ }
+    if (sameOwner(owner, readLockOwner(lp))) {
+      try { unlinkSync(lp); } catch { /* best effort */ }
+    }
   }
 }
 
@@ -230,7 +304,10 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
 }
 
 /** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
-export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt'>>;
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd'>> & {
+  /** Set a new directory path, or pass `null`/`""` to clear the existing one. */
+  cwd?: string | null;
+};
 
 /**
  * Patch one or more fields on an existing schedule. Atomically loads,
@@ -266,9 +343,12 @@ export function updateSchedule(
       ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
       ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-      ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+      ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
       updatedAt: new Date().toISOString(),
     };
+    // cwd: null means "clear" — remove the per-task pinning entirely so the task
+    // falls back to the daemon-wide AFK_DAEMON_CWD default.
+    if (patch.cwd === null) delete updated.cwd;
     schedules[idx] = updated;
     saveSchedules(schedules, storePath);
     return updated;
@@ -330,6 +410,6 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
-    ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+    ...(config.cwd !== undefined ? { cwd: expandCwd(config.cwd) } : {}),
   };
 }

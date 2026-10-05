@@ -26,12 +26,9 @@
  * path.
  */
 
-import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
-import {
-  formatOutcome,
-  doneGlyph,
-} from './tool-lane-format.js';
+import { doneGlyph } from './tool-lane-format.js';
+import { pushOutcomeRows } from './tool-lane-outcome-rows.js';
 import type { ToolEntry, Entry, Glyphs } from './tool-lane-render.js';
 import {
   buildIndent,
@@ -39,7 +36,6 @@ import {
   colorizeIndent,
   getGlyphs,
   toolLaneWidth,
-  pushOutcomeLines,
 } from './tool-lane-render.js';
 import {
   addResultSummarySynthetic,
@@ -127,18 +123,13 @@ export function renderCompactFlushChildren(
       // Error child: emit the outcome row(s) for this tool entry.
       const entry = sibling.entry;
       if (entry.result) {
-        const headLine =
-          indentColored +
-          connector +
-          entry.prefix +
-          palette.dim(' — ') +
-          doneGlyph(entry.result.isError, entry.result.failureClass) +
-          ' ';
         const continuationIndent =
           indentColored + (isLast ? g.spineClosed : palette.dim(g.spine)) + '  ';
-        const outcomeBudget = Math.max(20, cols - displayWidth(stripAnsi(headLine)));
-        const outcomeText = formatOutcome(entry.result, homeDir, outcomeBudget, entry.toolName);
-        pushOutcomeLines(lines, headLine, outcomeText, continuationIndent, cols);
+        pushOutcomeRows(lines, {
+          lead: indentColored + connector,
+          label: entry.prefix,
+          sep: palette.dim(' — ') + doneGlyph(entry.result.isError, entry.result.failureClass) + ' ',
+        }, entry.result, { continuationIndent, cols, homeDir, toolName: entry.toolName });
       }
     }
   }

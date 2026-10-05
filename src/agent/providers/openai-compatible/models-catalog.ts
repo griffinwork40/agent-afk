@@ -40,7 +40,16 @@ export interface CatalogReaderDeps {
   readFile?: (path: string) => string | null;
 }
 
-/** Process-scope catalog cache. Populated once, reused across calls. */
+/**
+ * Process-scope catalog cache. Populated once on first call, reused for the
+ * lifetime of the process.
+ *
+ * Known staleness: if Codex rewrites `~/.codex/models_cache.json` while AFK
+ * is running (e.g. after a `codex refresh`) the cached map is NOT refreshed.
+ * In practice this window is harmless — fast-mode eligibility for the current
+ * model does not change mid-session — but tests should call `resetCatalogCache`
+ * between cases to start from a clean state.
+ */
 let catalogCache: Map<string, CatalogModel> | undefined;
 
 /** Test-only: clear the process-scope cache so tests start from a fresh state. */

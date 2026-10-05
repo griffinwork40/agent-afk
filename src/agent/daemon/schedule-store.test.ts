@@ -5,7 +5,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, isAbsolute } from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   slugify,
   resolveSlugCollision,
@@ -681,34 +683,107 @@ describe('schedule-store cwd field', () => {
     const task = toScheduledTask(loaded[0]!);
     expect('cwd' in task).toBe(false);
   });
+
+  it('updateSchedule with cwd: null clears a previously-set cwd', () => {
+    setup();
+    const config = addSchedule(
+      { name: 'Clear Cwd', command: '/c', cron: '0 2 * * *', enabled: true, cwd: realDir },
+      storePath,
+    );
+    expect(config.cwd).toBe(realDir);
+    const cleared = updateSchedule(config.id, { cwd: null }, storePath);
+    expect(cleared?.cwd).toBeUndefined();
+    expect('cwd' in (cleared ?? {})).toBe(false);
+    // Persisted correctly
+    const loaded = loadSchedules(storePath);
+    expect(loaded[0]?.cwd).toBeUndefined();
+  });
+
+  it('toScheduledTask expands tilde in cwd from hand-edited schedules', () => {
+    setup();
+    // Simulate a hand-edited schedules.json with a tilde path
+    const raw = JSON.stringify([
+      {
+        id: 'tilde-task',
+        name: 'Tilde',
+        command: '/t',
+        cron: '* * * * *',
+        enabled: true,
+        cwd: '~',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      },
+    ]);
+    writeFileSync(storePath, raw, 'utf-8');
+    const loaded = loadSchedules(storePath);
+    const task = toScheduledTask(loaded[0]!);
+    // Should be the expanded home directory, not the literal '~'
+    expect(task.cwd).not.toBe('~');
+    // Use path.isAbsolute instead of startsWith('/') so the assertion is
+    // platform-neutral (Windows absolute paths start with a drive letter).
+    expect(isAbsolute(task.cwd ?? '')).toBe(true);
+  });
 });
 
 // ── concurrent read-modify-write race (issue #2306) ──────────────────────────
 
+const here = dirname(fileURLToPath(import.meta.url));
+const scheduleStoreUrl = pathToFileURL(join(here, 'schedule-store.ts')).href;
+
+function waitForChild(scriptPath: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', 'tsx/esm', scriptPath, ...args], {
+      cwd: join(here, '..', '..', '..'),
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`schedule writer exited ${code ?? 'unknown'}: ${stderr}`));
+    });
+  });
+}
+
 describe('schedule-store concurrent mutation', () => {
-  it('addSchedule: concurrent writers preserve all additions', () => {
+  it('addSchedule: child-process writers preserve all additions', async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'schedule-store-race-'));
     const storePath = join(tmpDir, 'schedules.json');
+    const startPath = join(tmpDir, 'start');
+    const scriptPath = join(tmpDir, 'writer.mjs');
+    const workerCount = 6;
+    const perWorker = 15;
+    writeFileSync(scriptPath, `
+      import { existsSync } from 'node:fs';
+      import { addSchedule } from ${JSON.stringify(scheduleStoreUrl)};
+      const [storePath, startPath, worker, countRaw] = process.argv.slice(2);
+      const count = Number(countRaw);
+      while (!existsSync(startPath)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+      for (let i = 0; i < count; i++) {
+        addSchedule(
+          { name: \`Worker \${worker} Task \${i}\`, command: \`/cmd-\${worker}-\${i}\`, cron: '* * * * *', enabled: true },
+          storePath,
+        );
+      }
+    `, 'utf-8');
 
-    // Simulate N concurrent writers by interleaving synchronous calls in a
-    // tight loop — each call locks, reads the current state, appends, saves,
-    // and releases. Without the lock the last writer's read() would see stale
-    // state and the final file would contain fewer than N entries.
-    const N = 20;
-    for (let i = 0; i < N; i++) {
-      addSchedule(
-        { name: `Task ${i}`, command: `/cmd-${i}`, cron: '* * * * *', enabled: true },
-        storePath,
-      );
+    try {
+      const children = Array.from({ length: workerCount }, (_, i) =>
+        waitForChild(scriptPath, [storePath, startPath, String(i), String(perWorker)]));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      writeFileSync(startPath, 'go', 'utf-8');
+      await Promise.all(children);
+
+      const loaded = loadSchedules(storePath);
+      expect(loaded).toHaveLength(workerCount * perWorker);
+      const ids = loaded.map((s) => s.id);
+      expect(new Set(ids).size).toBe(workerCount * perWorker);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
     }
-
-    const loaded = loadSchedules(storePath);
-    expect(loaded).toHaveLength(N);
-    // Every id must be unique (slug-collision resolver must have fired correctly).
-    const ids = loaded.map((s) => s.id);
-    expect(new Set(ids).size).toBe(N);
-
-    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('removeSchedule + addSchedule concurrent: neither change is lost', () => {

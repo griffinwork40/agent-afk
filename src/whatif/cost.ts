@@ -7,9 +7,19 @@
  *
  * ## Estimation model (per episode × per sample)
  *
- * Agent model calls (×2 per episode per env):
+ * Agent model calls (×1 per episode per env):
  *   - Input: systemTokens (baseline or candidate) + 1 500 user/tool tokens.
- *   - Output: 600 tokens.
+ *   - Output: 800 tokens.
+ *
+ * History: the original formula counted ×2 per episode per env, which doubled
+ * every agent-call cost.  The pilot run (20260928-153056-015fbb, 52 traces,
+ * $6.21 actual) showed exactly 52 traces = 13 episodes × 2 envs × 2 samples,
+ * i.e. 1 call per (episode, env, sample).  The old multiplier 2×2×samples = 8
+ * should be 2×1×samples = 4, giving a corrected total of $6.01 (0.97×).
+ * Output raised from 600 to 800 to stay mildly above actual median (575) and
+ * cover variance from multi-tool episodes; combined ratio vs the pilot is ~1.00×.
+ * Provenance: src/whatif/run.verify.ts `runEpisodes` -- each EpTask calls
+ * runner.run() exactly once.
  *
  * Judge model calls (×1 per output, i.e. per episode × per sample × 2 envs):
  *   - Input: 2 000 tokens.  Output: 200 tokens.
@@ -112,21 +122,25 @@ export function estimateVerifyCost(input: VerifyCostInput): VerifyCostEstimate {
   const predictUsd = predictResult.usd;
 
   // ── per-episode-per-sample agent calls ──────────────────────────────────
-  // 2 agent calls per episode per env (baseline + candidate), repeated for
-  // each sample. Each call: systemTokens + 1500 user/tool in, 600 out.
-  const agentCallsPerEp = 2 * 2 * samples; // 2 envs × 2 calls × samples
+  // 1 agent call per episode per env (baseline + candidate), repeated for
+  // each sample.  Each call: systemTokens + 1 500 user/tool in, 800 out.
+  // Contract: runEpisodes() in run.verify.ts issues exactly one runner.run()
+  // per (episode, env, sample) tuple — one baseline call and one candidate
+  // call per (episode, sample) pair.
+  // 1 call per env = 2 calls per episode-sample pair (baseline + candidate).
+  const agentCallsPerEp = (1 + 1) * samples; // 1 baseline call + 1 candidate call × samples
   const totalAgentCalls = agentCallsPerEp * episodes;
 
   const agentBaselineIn = systemTokens.baseline + 1_500;
   const agentCandidateIn = systemTokens.candidate + 1_500;
-  const agentOut = 600;
+  const agentOut = 800;
 
   const agentBaselineResult = callCost(agentModel, agentBaselineIn, agentOut);
   const agentCandidateResult = callCost(agentModel, agentCandidateIn, agentOut);
 
-  // Each episode × sample spawns 2 baseline calls + 2 candidate calls.
+  // Each episode × sample spawns 1 baseline call + 1 candidate call.
   const agentUsdPerEpSample =
-    2 * agentBaselineResult.usd + 2 * agentCandidateResult.usd;
+    agentBaselineResult.usd + agentCandidateResult.usd;
   const agentUsdTotal = agentUsdPerEpSample * episodes * samples;
 
   // ── per-output judge calls ────────────────────────────────────────────────

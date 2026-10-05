@@ -16,15 +16,15 @@ import {
   getSchedule,
   loadSchedules,
   removeSchedule,
-  saveSchedules,
   toScheduledTask,
+  toggleScheduleEnabled,
   updateSchedule,
   type ScheduledTaskConfig,
 } from '../agent/daemon/schedule-store.js';
-import { validateScheduleCwd } from '../agent/daemon/cwd-validator.js';
 import { trySyncToDaemon, SYNC_FAILED_NOTE, parsePortFile } from '../agent/daemon/http-client.js';
 import { getTelemetryPath, getDaemonStateDir } from '../paths.js';
 import { sendJson } from './routes.js';
+import { parseCwdCreate, parseCwdUpdate } from './routes.schedules.cwd.js';
 import { join } from 'node:path';
 
 const VALID_TRIGGERS = new Set(['cron', 'sessionstart', 'both']);
@@ -110,21 +110,13 @@ export async function handleCreateSchedule(
   }
   const enabled = bool(body, 'enabled') ?? true;
 
-  // Validate optional per-task cwd.
-  const rawCwd = str(body, 'cwd');
-  let resolvedCwd: string | undefined;
-  if (rawCwd !== undefined) {
-    if (!rawCwd) {
-      sendJson(res, 400, { error: 'bad_request', message: 'cwd must be a non-empty string' });
-      return;
-    }
-    const cwdResult = validateScheduleCwd(rawCwd);
-    if (!cwdResult.ok) {
-      sendJson(res, 400, { error: 'bad_request', message: cwdResult.error });
-      return;
-    }
-    resolvedCwd = cwdResult.resolved;
+  // Validate optional per-task cwd. 400 when the key is present but not a string.
+  const cwdCreate = parseCwdCreate(body);
+  if (!cwdCreate.ok) {
+    sendJson(res, 400, { error: 'bad_request', message: cwdCreate.message });
+    return;
   }
+  const resolvedCwd = cwdCreate.resolved;
 
   const config = addSchedule({
     name,
@@ -210,20 +202,14 @@ export async function handleUpdateSchedule(
   }
 
   // Validate optional per-task cwd.
-  const rawCwd = str(body, 'cwd');
-  let resolvedCwd: string | undefined;
-  if (rawCwd !== undefined) {
-    if (!rawCwd) {
-      sendJson(res, 400, { error: 'bad_request', message: 'cwd must be a non-empty string' });
-      return;
-    }
-    const cwdResult = validateScheduleCwd(rawCwd);
-    if (!cwdResult.ok) {
-      sendJson(res, 400, { error: 'bad_request', message: cwdResult.error });
-      return;
-    }
-    resolvedCwd = cwdResult.resolved;
+  // null or "" means "unset" — clears the per-task cwd pin so the task falls
+  // back to the daemon-wide default. Any other non-string value is a 400.
+  const cwdUpdate = parseCwdUpdate(body);
+  if (!cwdUpdate.ok) {
+    sendJson(res, 400, { error: 'bad_request', message: cwdUpdate.message });
+    return;
   }
+  const resolvedCwd = cwdUpdate.resolved;
 
   const updated = updateSchedule(id, {
     ...(name !== undefined ? { name } : {}),
@@ -304,18 +290,18 @@ export async function handleToggleSchedule(
   }
 
   const newEnabled = !existing.enabled;
-  const schedules = loadSchedules();
-  const updated = schedules.map((s) =>
-    s.id === id ? { ...s, enabled: newEnabled, updatedAt: new Date().toISOString() } : s,
-  );
-  saveSchedules(updated);
+  const updated = toggleScheduleEnabled(id, newEnabled);
+  if (!updated) {
+    sendJson(res, 404, { error: 'not_found', message: `schedule ${id} not found` });
+    return;
+  }
 
   let sync;
   if (newEnabled) {
     sync = await trySyncToDaemon(
       'POST',
       '/tasks',
-      toScheduledTask({ ...existing, enabled: true }),
+      toScheduledTask(updated),
     );
   } else {
     sync = await trySyncToDaemon('DELETE', `/tasks/${id}`);

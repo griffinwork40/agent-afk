@@ -17,24 +17,40 @@
 
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { getWhatifDir } from '../paths.js';
 import { materializeSandboxes } from './sandbox.js';
 import { describeChange } from './operators/index.js';
 import { computeStructuralImpact } from './structural.js';
 import { normalizeSnapshot } from './structural.normalize.js';
-import { verifyShortfallLimits } from './run.limits.js';
+import { hookIsolationLimits, specTargetsHooksOrPlugins } from './run.limits.js';
+import { keepContextHooksInEpisode } from '../agent/whatif-episode-gate.js';
 import { trackRecordSummary } from './ledger.js';
-import { predictChanges } from './predict.js';
-import { collectRealTurns, syntheticEpisodes, loadSuiteEpisodes } from './episodes.js';
-import { estimateVerifyCost } from './cost.js';
+import { predictChanges, resolveMaxPredictions, DEFAULT_PROBES } from './predict.js';
+import { buildAndPersistVerifiedReport } from './run.report.js';
+import { cleanupOrRecord } from './kept-sandboxes.js';
+import { buildRepoManifest, pathExistsInCwd } from './repo-manifest.js';
+import { groundProbes, makeSetChecker } from './probe-grounding.js';
+import {
+  collectRealTurns,
+  syntheticEpisodes,
+  loadSuiteEpisodes,
+  type CorpusExclusions,
+} from './episodes.js';
 import { buildHeadline, standardLimits } from './report.js';
+import { mdeGateRefusedMessage } from './mde.js';
 import { persistRun } from './run.persist.js';
 import { verifyRun } from './run.verify.js';
+
+import { runVerifyPreflight, runBaselineSamplePhase } from './run.preflight.js';
+import { checkRedundancy, formatRedundancySection } from './redundancy.js';
+import { classifyQuestionFit } from './question-fit.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
   WhatifDeps,
   WhatifOptions,
+  WhatifProgress,
   WhatifReport,
 } from './types.js';
 
@@ -51,13 +67,50 @@ export class WhatifBudgetError extends Error {
   readonly maxUsd: number;
 
   constructor(estimateUsd: number, maxUsd: number) {
+    const ceil = (Math.ceil(estimateUsd * 100) / 100).toFixed(2);
     super(
       `whatif: estimated cost $${estimateUsd.toFixed(4)} exceeds --max-usd $${maxUsd.toFixed(4)}. ` +
-        `Increase --max-usd or reduce --turns/--samples to proceed.`,
+        `Raise the budget with --max-usd ${ceil}, or reduce scope with ` +
+        `--probes/--max-predictions/--samples/--turns.`,
     );
     this.name = 'WhatifBudgetError';
     this.estimateUsd = estimateUsd;
     this.maxUsd = maxUsd;
+  }
+}
+
+/**
+ * Thrown before running any episode when the run is underpowered (MDE exceeds
+ * the gate threshold) and `--force` was not passed.
+ *
+ * `episodesPerArm` is the minimum probe count per prediction (the unit that
+ * drives per-prediction power).
+ */
+export class WhatifMdeError extends Error {
+  readonly episodesPerArm: number;
+  readonly kind: 'mde' | 'headroom';
+  readonly predictionId?: string;
+  /**
+   * True when the refusal is backed by a MEASURED baseline-sample headroom
+   * check (as opposed to the analyst-estimate headroom gate or the generic MDE
+   * gate).  A measured refusal cannot be cleared by `--force`; the only
+   * override is `--no-baseline-sample`.  CLI entry points use this flag to
+   * decide whether to prompt or to print `--no-baseline-sample` advice
+   * directly (issue #2610).
+   */
+  readonly measured: boolean;
+
+  constructor(
+    minProbesPerPrediction: number,
+    message?: string,
+    opts?: { kind?: 'mde' | 'headroom'; predictionId?: string; measured?: boolean },
+  ) {
+    super(message ?? mdeGateRefusedMessage(minProbesPerPrediction));
+    this.name = 'WhatifMdeError';
+    this.episodesPerArm = minProbesPerPrediction;
+    this.kind = opts?.kind ?? 'mde';
+    this.predictionId = opts?.predictionId;
+    this.measured = opts?.measured ?? false;
   }
 }
 
@@ -70,6 +123,7 @@ interface PredictPhaseResult {
   predictions: import('./types.js').Prediction[];
   analystCostUsd: number;
   changeKinds: string[];
+  droppedProbes: import('./probe-grounding.js').DroppedProbe[];
 }
 
 /**
@@ -99,6 +153,21 @@ async function runPredictPhase(
     normalizeSnapshot(candidateSnap, candidate, real),
   );
 
+  // ── Redundancy preflight (#2414) ─────────────────────────────────────────
+  // Check added paragraphs against the baseline system prompt using
+  // deterministic token-set Jaccard similarity.  Warnings are surfaced via
+  // onProgress BEFORE the model call so a user can abort a paid run early.
+  const redundancyWarnings = checkRedundancy(structural.baseline.system, structural.systemDiff);
+  for (const w of redundancyWarnings) {
+    const sectionNote = w.sourceSection ? ` (§ ${w.sourceSection})` : '';
+    const scoreNote = ` [${(w.similarity * 100).toFixed(0)}% similar]`;
+    deps.onProgress?.({
+      stage: 'predict',
+      message: `[redundancy] Added paragraph may restate an existing rule${sectionNote}${scoreNote}`,
+    });
+  }
+  const redundancySection = formatRedundancySection(redundancyWarnings);
+
   deps.onProgress?.({ stage: 'predict', message: 'Generating predictions' });
 
   const changeKinds = spec.changes.map((c) => c.kind);
@@ -112,13 +181,30 @@ async function runPredictPhase(
     return result;
   };
 
-  const predictions = await predictChanges(
-    { spec, changeDescriptions, structural, trackRecord },
+  const repoManifest = await buildRepoManifest(options.realCwd);
+
+  const probesPerPrediction = options.probes ?? DEFAULT_PROBES;
+  const maxPredictions = resolveMaxPredictions(probesPerPrediction, options.maxPredictions);
+
+  const rawPredictions = await predictChanges(
+    {
+      spec, changeDescriptions, structural, trackRecord, repoManifest,
+      probesPerPrediction, maxPredictions,
+      ...(redundancySection !== undefined ? { redundancySection } : {}),
+    },
     wrappedComplete,
     options.analystModel,
   );
 
-  return { structural, predictions, analystCostUsd, changeKinds };
+  // Tracked-path set first (empty set outside git → pass-through), then the
+  // filesystem, so directories and untracked-but-real files are not dropped.
+  const tracked = makeSetChecker(repoManifest.allPaths);
+  const { predictions, droppedProbes } = groundProbes(
+    rawPredictions,
+    (p) => tracked(p) || pathExistsInCwd(options.realCwd, p),
+  );
+
+  return { structural, predictions, analystCostUsd, changeKinds, droppedProbes };
 }
 
 /**
@@ -127,31 +213,29 @@ async function runPredictPhase(
 async function collectVerifyEpisodes(
   options: WhatifOptions & { sessionsDir?: string },
   predictions: import('./types.js').Prediction[],
-): Promise<import('./types.js').Episode[]> {
+): Promise<{ episodes: import('./types.js').Episode[]; corpusExclusions: CorpusExclusions }> {
+  const corpusExclusions: CorpusExclusions = {
+    whatifSessions: 0, excludedSessionIds: 0,
+    nonStandaloneTurns: 0, whatifTopicTurns: 0,
+  };
   const realTurns = await collectRealTurns({
     limit: options.turns,
     sessionsDir: options.sessionsDir,
+    stats: corpusExclusions,
   });
-
   const synthetic = syntheticEpisodes(predictions);
-
   const suitesDir = path.join(options.realHome, 'whatif', 'suites');
   const suiteEps = await loadSuiteEpisodes(suitesDir).catch(() => []);
-
-  return [...realTurns, ...synthetic, ...suiteEps];
+  // Invariant: synthetic probe episodes MUST come before replay turns.
+  // run.verify.ts builds tasks in episode order and the budget stop drops the
+  // tail; if replay turns come first they consume budget that would otherwise
+  // score predictions (replay turns target no prediction after #2427).
+  return { episodes: [...synthetic, ...realTurns, ...suiteEps], corpusExclusions };
 }
 
 // ---------------------------------------------------------------------------
-// Slug helper
+// Run-dir helper
 // ---------------------------------------------------------------------------
-
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'run';
-}
 
 function dateStamp(now: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
@@ -165,6 +249,8 @@ function dateStamp(now: Date): string {
     pad(now.getSeconds())
   );
 }
+
+// Preflight helper and probe-count helper extracted to run.preflight.ts (#2511).
 
 // ---------------------------------------------------------------------------
 // runWhatif
@@ -186,9 +272,13 @@ export async function runWhatif(
 
   // ── a) Run directory ──────────────────────────────────────────────────────
 
+  // Run dir is a timestamp plus an opaque suffix — omitting the change title
+  // keeps the path opaque to the agent during an episode (issue #2425), and
+  // the suffix stops two runs started in the same second from colliding.
+  // The title is recorded in results.json so it is never lost.
   const runDir = path.join(
     getWhatifDir(),
-    `${dateStamp(now)}-${slugify(spec.title)}`,
+    `${dateStamp(now)}-${randomBytes(3).toString('hex')}`,
   );
   await fsp.mkdir(runDir, { recursive: true });
 
@@ -196,17 +286,26 @@ export async function runWhatif(
 
   // ── b) Sandboxes ──────────────────────────────────────────────────────────
 
+  // When the change spec directly targets hooks or plugins, keep context hooks
+  // on in both episode arms so the hooks under test actually register and can
+  // be observed.  Without this, both arms would run with SessionStart and
+  // UserPromptSubmit suppressed, making the experiment measure nothing.
+  // The manual AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 override takes the same path.
+  const autoKeepContextHooks =
+    specTargetsHooksOrPlugins(spec) || keepContextHooksInEpisode();
+
   const sandboxes = await materializeSandboxes({
     realHome,
     realCwd,
     runDir,
     spec,
-    baseLaunch: { model: options.agentModel, env: {} },
+    baseLaunch: {
+      model: options.agentModel,
+      env: autoKeepContextHooks ? { AFK_WHATIF_KEEP_CONTEXT_HOOKS: '1' } : {},
+    },
   });
 
   const { baseline, candidate } = sandboxes;
-
-  let allTraces: EpisodeTrace[] = [];
 
   const runnerOpts: RunnerOptions = {
     timeoutMs: options.episodeTimeoutMs,
@@ -214,67 +313,98 @@ export async function runWhatif(
     signal: deps.signal,
   };
 
+  let pendingReport: WhatifReport | undefined;
   try {
     // ── c+d) Snapshots + Predictions ─────────────────────────────────────
 
-    const { structural, predictions, analystCostUsd: predictCost, changeKinds } =
+    const { structural, predictions, analystCostUsd: predictCost, changeKinds, droppedProbes } =
       await runPredictPhase(baseline, candidate, spec, options, deps, runnerOpts);
 
     let analystCostUsd = predictCost;
 
+    // ── question-fit preflight (#2401) ────────────────────────────────────
+    // Deterministic: no model calls.  Emits a notice about which predictions
+    // the decision-only runner can and cannot confirm.  Shown on BOTH the
+    // predict-only path and the verify path so users understand the limitation
+    // before spending money on --verify.
+    const fitResult = classifyQuestionFit(predictions);
+    for (const line of fitResult.lines) {
+      deps.onProgress?.({ stage: 'preflight', message: line });
+    }
+
     // ── e) Predict-only path ──────────────────────────────────────────────
 
     if (!options.verify) {
-      const limits = standardLimits({ verified: false, judgeExternal: false });
+      const limits = [
+        ...standardLimits({ verified: false, judgeExternal: false }),
+        ...hookIsolationLimits({ keepContextHooks: autoKeepContextHooks, structural }),
+      ];
       const partialReport: Omit<WhatifReport, 'headline'> = {
         spec,
         structural,
         predictions,
+        questionFit: fitResult.level,
         costUsd: analystCostUsd,
         runDir,
         limits,
+        ...(droppedProbes.length > 0 ? { droppedProbes } : {}),
       };
       const headline = buildHeadline(partialReport);
-      const report: WhatifReport = { ...partialReport, headline };
+      pendingReport = { ...partialReport, headline };
 
-      await persistRun(runDir, report, []);
-      return report;
+      await persistRun(runDir, pendingReport, []);
+      return pendingReport;
     }
 
     // ── f) Verify phase ───────────────────────────────────────────────────
 
     deps.onProgress?.({ stage: 'episodes', message: 'Collecting episodes' });
 
-    const episodes = await collectVerifyEpisodes(options, predictions);
+    const { episodes, corpusExclusions } = await collectVerifyEpisodes(options, predictions);
 
     // Resolve judge BEFORE preflight estimate (so we know if it's external)
     const resolvedJudge = await deps.makeJudge(options.judge);
-    const crossCheckJudge = await deps.makeCrossCheckJudge().catch(() => undefined);
-
-    // Preflight cost estimate
-    const estimate = estimateVerifyCost({
-      episodes: episodes.length,
-      samples: options.samples,
-      agentModel: options.agentModel,
-      analystModel: options.analystModel,
-      systemTokens: {
-        baseline: structural.tokens.baseline,
-        candidate: structural.tokens.candidate,
-      },
-      judgeExternal: resolvedJudge.external,
+    const crossCheckJudge = await deps.makeCrossCheckJudge().catch((err: unknown) => {
+      console.warn(`[whatif/run] cross-check judge unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
     });
 
-    const totalEstimate = estimate.usd + analystCostUsd;
-    if (totalEstimate > options.maxUsd) {
-      await resolvedJudge.close?.();
-      await crossCheckJudge?.close?.();
-      throw new WhatifBudgetError(totalEstimate, options.maxUsd);
-    }
+    // Preflight: MDE gate + headroom gate + budget gate (includes sample cost #2511).
+    const { noBaselineSample } = await runVerifyPreflight({
+      episodes, predictions, structural, force: options.force ?? false,
+      samples: options.samples, agentModel: options.agentModel,
+      analystModel: options.analystModel, judgeExternal: resolvedJudge.external,
+      analystCostUsd, maxUsd: options.maxUsd,
+      noBaselineSample: options.noBaselineSample ?? false,
+      onProgress: deps.onProgress as ((p: { stage: 'preflight'; message: string }) => void) | undefined,
+      closeJudges: async () => { await resolvedJudge.close?.(); await crossCheckJudge?.close?.(); },
+    });
+
+    // Baseline-sample preflight (#2511). Extracted to runBaselineSamplePhase.
+    // NOTE: sample traces are NOT reused in the final verifyRun (keeps arms paired).
+    const baselineSampleResult = await runBaselineSamplePhase({
+      noBaselineSample,
+      predictions,
+      episodes,
+      baseline,
+      runner: deps.runner,
+      judge: resolvedJudge,
+      episodeTimeoutMs: options.episodeTimeoutMs,
+      maxTurns: options.maxTurns,
+      signal: deps.signal,
+      onProgress: deps.onProgress as ((p: WhatifProgress) => void) | undefined,
+      closeJudges: async () => {
+        await resolvedJudge.close?.();
+        await crossCheckJudge?.close?.();
+      },
+      runDir,
+    });
 
     deps.onProgress?.({ stage: 'run', message: 'Running episodes' });
 
     let verifyResult: Awaited<ReturnType<typeof verifyRun>>['verifyResult'] | undefined;
     let verifyTraces: EpisodeTrace[] = [];
+    let verifyJudgeResults: Awaited<ReturnType<typeof verifyRun>>['judgeResults'] | undefined;
     let verifyCost = 0;
     try {
       const out = await verifyRun({
@@ -301,44 +431,29 @@ export async function runWhatif(
       });
       verifyResult = out.verifyResult;
       verifyTraces = out.allTraces;
+      verifyJudgeResults = out.judgeResults;
       verifyCost = out.analystCostUsd;
     } finally {
       await resolvedJudge.close?.();
       await crossCheckJudge?.close?.();
     }
 
-    allTraces = verifyTraces;
     analystCostUsd += verifyCost;
 
-    const episodesCostUsd = verifyTraces.reduce((s, t) => s + t.costUsd, 0);
-    const totalCostUsd = analystCostUsd + episodesCostUsd;
+    if (!verifyResult) throw new Error('verifyRun did not return a verifyResult');
+    if (!verifyJudgeResults) throw new Error('verifyRun did not return judgeResults');
 
-    const limits = [
-      ...standardLimits({ verified: true, judgeExternal: resolvedJudge.external }),
-      ...verifyShortfallLimits(verifyResult!),
-    ];
-
-    const partialReport: Omit<WhatifReport, 'headline'> = {
-      spec,
-      structural,
-      predictions,
-      verify: verifyResult!,
-      costUsd: totalCostUsd,
-      runDir,
-      limits,
-    };
-    const headline = buildHeadline(partialReport);
-    const report: WhatifReport = { ...partialReport, headline };
-
-    await persistRun(runDir, report, allTraces);
-
-    return report;
+    pendingReport = await buildAndPersistVerifiedReport({
+      spec, structural, predictions, questionFit: fitResult.level, verifyResult, droppedProbes,
+      corpusExclusions, verifyTraces, analystCostUsd, runDir,
+      resolvedJudge, autoKeepContextHooks,
+      judgeResults: verifyJudgeResults,
+      ...(baselineSampleResult ? { baselineSamplePerPrediction: baselineSampleResult.perPrediction } : {}),
+    });
+    return pendingReport;
   } finally {
-    // Tear down sandboxes unless keepSandboxes
-    if (!options.keepSandboxes) {
-      await sandboxes.cleanup().catch(() => {
-        // Best-effort; do not mask the primary error
-      });
-    }
+    // Cleanup sandboxes or record their roots when keepSandboxes is set.
+    const kept = await cleanupOrRecord(runDir, sandboxes.roots, sandboxes.cleanup, options.keepSandboxes ?? false);
+    if (kept && pendingReport) pendingReport.keptSandboxes = kept;
   }
 }

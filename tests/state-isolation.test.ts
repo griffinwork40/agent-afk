@@ -18,10 +18,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { tmpdir, homedir } from 'os';
+import { tmpdir, homedir, userInfo } from 'os';
 import { join, sep } from 'path';
 import { realpathSync } from 'fs';
-import { SENTINEL_PREFIX } from '../src/__test-utils__/redirect-paths-env.js';
+import {
+  SENTINEL_PREFIX,
+  FAKE_USER_HOME_PREFIX,
+  FAKE_USER_HOME_ROOT,
+} from '../src/__test-utils__/redirect-paths-env.js';
 import {
   getAfkHome,
   getAfkStateDir,
@@ -50,6 +54,21 @@ describe('test-run state isolation (real ~/.afk must never be written)', () => {
     expect(afkHome).toContain(SENTINEL_PREFIX);
     expect(isUnderTmp(afkHome!)).toBe(true);
     expect(afkHome).not.toBe(REAL_AFK);
+  });
+
+  // #2905: security tests aim writes at ~/.ssh, ~/.aws and ~/Library/LaunchAgents
+  // and pass only if a guard refuses. os.homedir() must therefore be a
+  // throwaway dir so a guard miss can never touch real credentials.
+  it('os.homedir() is a throwaway dir, never the real account home', () => {
+    const home = homedir();
+    expect(home).toContain(FAKE_USER_HOME_PREFIX);
+    expect(home.startsWith(realpathSync(FAKE_USER_HOME_ROOT) + sep)).toBe(true);
+    expect(home).not.toBe(userInfo().homedir);
+    expect(home).not.toBe(process.env['AFK_HOME']);
+    // Outside tmp and realpath-canonical, like a real home: the security code
+    // exempts scratch roots and realpaths denylist entries.
+    expect(isUnderTmp(home)).toBe(false);
+    expect(realpathSync(home)).toBe(home);
   });
 
   it('AFK_STATE_DIR and AFK_FRAMEWORK_DIR do not leak in from the dev shell', () => {

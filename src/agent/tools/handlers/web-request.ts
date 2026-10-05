@@ -35,10 +35,9 @@ import {
   type RecordEffectFn,
   type DomainCheckFn,
 } from '../../../http-client/web-request.js';
-import { EgressBlockedError } from '../../../http-client/egress-guard.js';
 import type { EgressGuardOptions } from '../../../http-client/egress-guard.js';
 import { redactSecrets } from '../../redact-secrets.js';
-import { errorMessage } from '../../../utils/errors.js';
+import { extractEgressBlockedError, fetchFailedMessage } from '../../../utils/errors.js';
 import { forwardAbortSignal } from '../../../utils/abort.js';
 
 type FetchFn = typeof fetch;
@@ -296,11 +295,14 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
         if (ac.signal.aborted) {
           return { content: `web_request aborted: ${abortMessage()}`, isError: true };
         }
-        if (err instanceof EgressBlockedError) {
-          return { content: `web_request blocked: ${err.message}`, isError: true };
+        // Also handles connect-time blocks: undici wraps EgressBlockedError
+        // as TypeError('fetch failed', { cause: EgressBlockedError }).
+        const blocked = extractEgressBlockedError(err);
+        if (blocked !== null) {
+          return { content: `web_request blocked: ${blocked.message}`, isError: true };
         }
         const name = err instanceof Error && err.name === 'DomainPolicyError' ? 'blocked' : 'network error';
-        const msg = errorMessage(err);
+        const msg = fetchFailedMessage(err);
         return { content: `web_request ${name}: ${msg}`, isError: true };
       }
 

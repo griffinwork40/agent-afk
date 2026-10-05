@@ -20,7 +20,7 @@ import {
   vi,
   type MockInstance,
 } from 'vitest';
-import { runWhatif, WhatifBudgetError } from './run.js';
+import { runWhatif, WhatifBudgetError, WhatifMdeError } from './run.js';
 import type {
   AgentRunner,
   ChangeSpec,
@@ -132,7 +132,7 @@ function makeRunner(runFn?: MockInstance): AgentRunner {
  * first time called, then returns empty array for subsequent calls
  * (discover phase).
  */
-function makeFakeComplete(): CompleteFn {
+function makeFakeComplete(baselineEstimate?: number): CompleteFn {
   let calls = 0;
   return vi.fn(async () => {
     calls++;
@@ -147,6 +147,7 @@ function makeFakeComplete(): CompleteFn {
           reason: 'Candidate prompt instructs asking first',
           testQuestion: 'Does the response ask the user a clarifying question before using any tool?',
           probes: ['Write a file named hello.txt with content world'],
+          ...(baselineEstimate !== undefined ? { baselineEstimate } : {}),
         },
       ];
       return { text: JSON.stringify(preds), costUsd: 0.002 };
@@ -236,10 +237,14 @@ function makeOptions(overrides: Partial<WhatifOptions & { sessionsDir?: string }
     samples: 1,
     maxUsd: 10,
     judge: 'claude',
+    // These fixtures have 1 probe per prediction, so a measured baseline sample
+    // (#2511) would always refuse; sampling is covered in baseline-sample.test.ts.
+    noBaselineSample: true,
     concurrency: 2,
     maxTurns: 3,
     episodeTimeoutMs: 10_000,
     keepSandboxes: true, // keep so we don't need real sandbox teardown
+    force: true, // bypass MDE gate in existing tests (gate tested separately)
     sessionsDir,
     ...overrides,
   };
@@ -333,6 +338,13 @@ describe('runWhatif — verify path', () => {
     const vp1 = verify.predictions.find((vp) => vp.prediction.id === 'p1');
     expect(vp1).toBeDefined();
     expect(vp1!.verdict).toBe('confirmed');
+    // #2403: scored only on p1's own synthetic probe, not the replayed real
+    // turns; those appear as a separate background rate.
+    expect(vp1!.scope?.episodes.baseline).toEqual(['s1']);
+    expect(vp1!.scope?.episodes.candidate).toEqual(['s1']);
+    expect(vp1!.scope?.targetedEpisodes).toBe(1);
+    expect(vp1!.rates.n).toEqual({ baseline: 1, candidate: 1 });
+    expect(vp1!.scope?.background?.n.baseline).toBeGreaterThan(0);
 
     // Feature delta for 'Asked before acting' should be positive
     const askFeat = verify.features.find((f) => f.label === 'Asked before acting');
@@ -351,7 +363,10 @@ describe('runWhatif — verify path', () => {
       .filter(Boolean);
 
     expect(md).toContain('confirmed');
+    expect(md).toContain('Scored on');
+    expect(md).toContain('- p1: s1');
     expect(results).toHaveProperty('verify');
+    expect(results.verify.predictions[0].scope.episodes.candidate).toEqual(['s1']);
     expect(traces.length).toBeGreaterThan(0);
     // Each line must be valid JSON
     for (const line of traces) {
@@ -488,5 +503,215 @@ describe('WhatifBudgetError class', () => {
     expect(err.estimateUsd).toBe(0.5);
     expect(err.maxUsd).toBe(0.1);
     expect(err instanceof Error).toBe(true);
+  });
+
+  it('message mentions --max-usd with rounded-up estimate', () => {
+    const err = new WhatifBudgetError(1.234, 1.0);
+    // Should suggest --max-usd at least at the rounded-up estimate (cents)
+    expect(err.message).toContain('--max-usd 1.24');
+  });
+
+  it('message mentions --probes/--max-predictions/--samples/--turns as reduction options', () => {
+    const err = new WhatifBudgetError(5.0, 3.0);
+    expect(err.message).toContain('--probes');
+    expect(err.message).toContain('--max-predictions');
+    expect(err.message).toContain('--samples');
+    expect(err.message).toContain('--turns');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MDE gate
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — MDE gate', () => {
+  it('throws WhatifMdeError when underpowered and force is false', async () => {
+    // makeOptions uses force:true by default; explicitly set force:false here
+    const deps = makeDeps();
+    const options = makeOptions({ verify: true, maxUsd: 10, force: false });
+    // The gate now fires on per-prediction probe count (≤2 probes/prediction with the
+    // current cap), which is always underpowered for the 20pp threshold.
+    await expect(runWhatif(options, deps)).rejects.toBeInstanceOf(WhatifMdeError);
+    // runner.run must NOT have been called (gate fires before episodes run)
+    expect(deps.runner.run).not.toHaveBeenCalled();
+  });
+
+  it('WhatifMdeError carries per-prediction probe count as episodesPerArm', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: true, maxUsd: 10, force: false });
+    const err = await runWhatif(options, deps).catch((e) => e);
+    expect(err).toBeInstanceOf(WhatifMdeError);
+    // episodesPerArm now holds the per-prediction probe count (small: ≤2)
+    expect((err as WhatifMdeError).episodesPerArm).toBeGreaterThanOrEqual(0);
+    expect(err.message).toContain('--force');
+    expect(err.message).toContain('#2477');
+  });
+
+  it('proceeds (no throw) when force is true even with few probes per prediction', async () => {
+    const deps = makeDeps();
+    // force:true is set by makeOptions default; explicitly confirm here
+    const options = makeOptions({ verify: true, maxUsd: 10, force: true });
+    // Should not throw WhatifMdeError; may throw other errors (budget) but
+    // runner.run should be attempted
+    let threw = false;
+    try {
+      await runWhatif(options, deps);
+    } catch (err) {
+      // OK to throw something else (budget, runner error) — just not MdeError
+      if (err instanceof WhatifMdeError) threw = true;
+    }
+    expect(threw).toBe(false);
+  });
+});
+
+describe('runWhatif — headroom preflight (#2504)', () => {
+  it('prints the headroom warning even under --force, and still runs', async () => {
+    const deps = makeDeps({ complete: makeFakeComplete(0.97) });
+    // The analyst-estimate check applies only when the measured sample is off (#2511).
+    const options = makeOptions({ verify: true, maxUsd: 10, force: true, noBaselineSample: true });
+    let threw = false;
+    try {
+      await runWhatif(options, deps);
+    } catch (err) {
+      if (err instanceof WhatifMdeError) threw = true;
+    }
+    expect(threw).toBe(false);
+    const messages = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => (c[0] as { message?: string }).message ?? '');
+    expect(messages.some((m) => m.includes('baseline estimate 97%') && m.includes('headroom'))).toBe(true);
+    expect(deps.runner.run).toHaveBeenCalled();
+  });
+
+  it('prints no headroom warning when the analyst gives no estimate', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: true, maxUsd: 10, force: true });
+    await runWhatif(options, deps).catch(() => undefined);
+    const messages = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => (c[0] as { message?: string }).message ?? '');
+    expect(messages.some((m) => m.includes('baseline estimate'))).toBe(false);
+  });
+
+  it('WhatifMdeError constructor sets kind=headroom and predictionId for a headroom violation', () => {
+    // The headroom gate throws with the third opts argument.  Verify the
+    // constructor correctly populates the discriminating fields so catch
+    // handlers in whatif.ts can tell a headroom violation from a global MDE
+    // underpowered gate at runtime.
+    const err = new WhatifMdeError(1, 'headroom message', { kind: 'headroom', predictionId: 'p1' });
+    expect(err).toBeInstanceOf(WhatifMdeError);
+    expect(err.kind).toBe('headroom');
+    expect(err.predictionId).toBe('p1');
+    expect(err.episodesPerArm).toBe(1);
+    expect(err.message).toBe('headroom message');
+  });
+
+  it('WhatifMdeError constructor defaults kind to mde when opts is omitted', () => {
+    const err = new WhatifMdeError(2);
+    expect(err.kind).toBe('mde');
+    expect(err.predictionId).toBeUndefined();
+  });
+
+  it('throws WhatifMdeError (any kind) when force=false and a headroom violation exists', async () => {
+    // With current MAX_PROBES=12 cap, the global MDE gate (kind=mde) fires
+    // before the headroom gate because ≥99 probes/prediction are needed to
+    // achieve a powered run (mdeForN(99) ≈ 19.9pp ≤ 20pp threshold).  The
+    // headroom gate's kind=headroom discriminator is tested above at the unit
+    // level.  This integration test confirms that a headroom violation is
+    // still correctly refused with WhatifMdeError (and not silently ignored).
+    const deps = makeDeps({ complete: makeFakeComplete(0.97) });
+    const options = makeOptions({ verify: true, maxUsd: 10, force: false });
+    const err = await runWhatif(options, deps).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WhatifMdeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Synthetic episodes come first (#2477 step 1)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — synthetic episodes before replay turns', () => {
+  it('runner receives synthetic probe episodes before replay turns', async () => {
+    // Write real session turns so collectRealTurns finds something
+    await writeSession(sessionsDir, 'sess-order-001', [
+      'A real user prompt from the corpus',
+    ]);
+
+    const episodeOrder: Array<string | undefined> = [];
+    const deps = makeDeps({
+      runner: {
+        ...makeRunner(),
+        run: vi.fn(async (_env: Environment, ep: Episode, _s: number, _opts: RunnerOptions): Promise<EpisodeTrace> => {
+          episodeOrder.push(ep.targets);
+          return makeCandidateTrace(ep.id, _s);
+        }),
+        snapshot: makeRunner().snapshot,
+      },
+    });
+
+    const options = makeOptions({ verify: true, samples: 1, maxUsd: 10 });
+    try {
+      await runWhatif(options, deps);
+    } catch {
+      // May fail for budget / MDE reasons; we only care about the episode order
+    }
+
+    // All targeted episodes (ep.targets defined) should appear before
+    // non-targeted episodes (ep.targets undefined) in the run call sequence.
+    const firstUntaggedIdx = episodeOrder.findIndex((t) => t === undefined);
+    const lastTaggedIdx = episodeOrder.reduceRight(
+      (acc, t, idx) => (t !== undefined && acc === -1 ? idx : acc), -1,
+    );
+
+    // If both exist, tagged must come before first untagged
+    if (firstUntaggedIdx !== -1 && lastTaggedIdx !== -1) {
+      expect(lastTaggedIdx).toBeLessThan(firstUntaggedIdx);
+    }
+    // If no untagged episodes exist that's fine — synthetic-only run
+  });
+});
+
+// ---------------------------------------------------------------------------
+// keepSandboxes: sandboxes.json recording (#2478)
+// ---------------------------------------------------------------------------
+
+describe('runWhatif — keepSandboxes sandboxes.json', () => {
+  it('writes sandboxes.json to runDir and sets report.keptSandboxes when keepSandboxes is true', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: true });
+
+    const report = await runWhatif(options, deps);
+
+    // report.keptSandboxes must be set
+    expect(report.keptSandboxes).toBeDefined();
+    expect(typeof report.keptSandboxes!.baseline).toBe('string');
+    expect(typeof report.keptSandboxes!.candidate).toBe('string');
+
+    // sandboxes.json must exist in runDir (not inside either sandbox root)
+    const mappingPath = path.join(report.runDir, 'sandboxes.json');
+    const raw = await fsp.readFile(mappingPath, 'utf8');
+    const mapping = JSON.parse(raw) as { baseline: string; candidate: string };
+    expect(mapping.baseline).toBe(report.keptSandboxes!.baseline);
+    expect(mapping.candidate).toBe(report.keptSandboxes!.candidate);
+
+    // The mapping file must NOT live under either arm root
+    expect(mappingPath.startsWith(mapping.baseline)).toBe(false);
+    expect(mappingPath.startsWith(mapping.candidate)).toBe(false);
+
+    // Clean up kept sandbox roots (they live under os.tmpdir())
+    await fsp.rm(report.keptSandboxes!.baseline, { recursive: true, force: true });
+    await fsp.rm(report.keptSandboxes!.candidate, { recursive: true, force: true });
+  });
+
+  it('does not write sandboxes.json and keptSandboxes is absent when keepSandboxes is false', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false, keepSandboxes: false });
+
+    const report = await runWhatif(options, deps);
+
+    // report.keptSandboxes must be absent
+    expect(report.keptSandboxes).toBeUndefined();
+
+    // sandboxes.json must NOT exist in runDir
+    const mappingPath = path.join(report.runDir, 'sandboxes.json');
+    await expect(fsp.access(mappingPath)).rejects.toThrow();
   });
 });

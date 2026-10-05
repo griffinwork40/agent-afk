@@ -166,6 +166,23 @@ describe('OpenAI fast mode — ChatGPT subscription (Responses wire)', () => {
     expect(events.some((e) => e.type === 'error')).toBe(true);
   });
 
+  it('does NOT disable fast for a 400 that mentions "priority" but not service_tier', async () => {
+    installMock();
+    // A custom API whose 400 message says "priority" (unrelated field) must not
+    // trigger the service_tier latch — fast must stay on and the error propagates.
+    failFirstWith = Object.assign(
+      new Error('400 Unsupported value for priority field'),
+      { status: 400 },
+    );
+    const events = await collect(makeQuery({ fast: fastTier('on'), prompts: ['a', 'b'] }));
+    // The error propagates as a provider error event (not swallowed as a latch).
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    // Fast was NOT latched off: the second turn still carries service_tier.
+    expect(calls[1]!['service_tier']).toBe('priority');
+    // No "turned off" notice (that notice only fires on the service_tier latch).
+    expect(notices(events).some((n) => n.text.includes('turned off'))).toBe(false);
+  });
+
   it('reads /fast preference per turn (toggle takes effect on the next turn)', async () => {
     installMock();
     const controller = new FastModeController('off');

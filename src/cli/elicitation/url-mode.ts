@@ -12,7 +12,7 @@
  */
 
 import type { ElicitationRequest } from '../../agent/types/sdk-types.js';
-import { sanitizeSchemaString } from '../_lib/sanitize.js';
+import { sanitizeSchemaString, truncateMessageWithCount } from '../_lib/sanitize.js';
 import { palette } from '../palette.js';
 import type { ReplElicitationDeps } from './repl-shared.js';
 
@@ -29,7 +29,7 @@ export function renderUrlRequest(
   writer.line();
   writer.line(palette.warning('⚠ MCP elicitation'));
   writer.line(palette.dim('  server:  ') + palette.bold(sanitizeSchemaString(req.serverName, 64)));
-  writer.line(palette.dim('  message: ') + sanitizeSchemaString(req.message, 256));
+  writer.line(palette.dim('  message: ') + truncateMessageWithCount(req.message, 256));
   if (req.url) {
     writer.line(palette.dim('  url:     ') + palette.brand(sanitizeSchemaString(req.url, 512)));
   }

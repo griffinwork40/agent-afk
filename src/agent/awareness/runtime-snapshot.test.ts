@@ -61,6 +61,7 @@ function mkSource(overrides: {
     getTools: () => overrides.tools ?? mkTools(),
     getSubagents: () => overrides.subagents ?? mkSubs(),
     getWorkspace: () => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null }),
+    getUsage: () => [],
   };
 }
 
@@ -113,13 +114,16 @@ describe('buildRuntimeSnapshot', () => {
     expect(snap).toHaveProperty('subagents');
   });
 
-  it('view=all returns all four slices', () => {
+  it('view=all returns all four slices plus usage', () => {
     const source = mkSource();
     const snap = buildRuntimeSnapshot(source, 'all');
     expect(snap).toHaveProperty('self');
     expect(snap).toHaveProperty('tools');
     expect(snap).toHaveProperty('subagents');
     expect(snap).toHaveProperty('workspace');
+    // usage field is always present in view=all (may be empty array)
+    expect(snap).toHaveProperty('usage');
+    expect(Array.isArray(snap.usage)).toBe(true);
   });
 
   it('view=workspace returns only workspace', () => {
@@ -202,6 +206,8 @@ describe('buildRuntimeSnapshot', () => {
                 ],
         });
       },
+      getWorkspace: () => ({ branch: null, headSha: null, dirty: null, dirtyCount: null, remoteUrl: null }),
+      getUsage: () => [],
     };
     const snap1 = buildRuntimeSnapshot(source, 'subagents');
     expect(snap1.subagents?.active).toHaveLength(1);

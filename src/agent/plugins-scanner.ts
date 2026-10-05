@@ -17,9 +17,10 @@
  */
 
 import type { SdkPluginConfig } from './types/sdk-types.js';
+import { findPluginDirs, pluginManifestPath } from '../config/plugin-discovery.js';
 import type { SourceEnabledMap } from '../config/import-sources.js';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'fs';
-import { join, resolve as resolvePath } from 'path';
+import { join, resolve as resolvePath, sep } from 'path';
 import { getPluginsDir, getPluginsIndexPath } from '../paths.js';
 import { readIndex } from './plugins/index-store.js';
 
@@ -132,7 +133,14 @@ export function scanLocalPlugins(
   const indexPath = dir === getPluginsDir() ? getPluginsIndexPath() : join(dir, '.index.json');
   const index = readIndex(indexPath);
   const plugins: SdkPluginConfig[] = [];
-  walk(dir, dir, 0, plugins, new Set<string>(), index.plugins, trustAll, sourceEnabled);
+  if (trustAll) {
+    const seen = new Set<string>();
+    for (const plugin of findPluginDirs(dir)) {
+      walk(dir, plugin.path, 0, plugins, seen, index.plugins, true, sourceEnabled);
+    }
+  } else {
+    walk(dir, dir, 0, plugins, new Set<string>(), index.plugins, false, sourceEnabled);
+  }
   scanCache.set(cacheKey, plugins);
   return [...plugins];
 }
@@ -160,7 +168,7 @@ function walk(
   if (seen.has(seenKey)) return;
   seen.add(seenKey);
 
-  if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
+  if (existsSync(pluginManifestPath(dir))) {
     const key = indexKeyForPath(root, dir);
     if (key === null) {
       // Path that doesn't fit either layout — keep loading it (matches
@@ -182,15 +190,17 @@ function walk(
       // Cache-layout plugins must be explicitly installed (present + enabled in
       // AFK's own index).
       const entry = indexPlugins[key.key];
-      if (!entry || entry.enabled === false) return;
+      if (entry && entry.enabled !== false) {
+        pushPlugin(out, dir);
+        return;
+      }
+    } else {
+      // Flat layout: include unless explicitly disabled.
+      const entry = indexPlugins[key.key];
+      if (entry && entry.enabled === false) return;
       pushPlugin(out, dir);
       return;
     }
-    // Flat layout: include unless explicitly disabled.
-    const entry = indexPlugins[key.key];
-    if (entry && entry.enabled === false) return;
-    pushPlugin(out, dir);
-    return;
   }
 
   let entries: string[];
@@ -222,7 +232,7 @@ function walk(
  */
 function readPluginMain(dir: string): string | undefined {
   try {
-    const raw = readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf8');
+    const raw = readFileSync(pluginManifestPath(dir), 'utf8');
     const parsed: unknown = JSON.parse(raw);
     if (parsed !== null && typeof parsed === 'object' && 'main' in parsed) {
       const main = (parsed as { main?: unknown }).main;
@@ -283,18 +293,36 @@ export function indexKeyForPath(
   root: string,
   leaf: string,
 ): { layout: 'flat' | 'cache'; key: string } | null {
-  if (!leaf.startsWith(root)) return null;
-  const rel = leaf.slice(root.length).replace(/^[/\\]+/, '');
+  // Contract: resolve both paths through realpathSync before the startsWith
+  // check so that symlink aliasing (e.g. macOS /var/... → /private/var/...)
+  // never produces a false null when one side was realpath-resolved and the
+  // other was not. Fall back to raw strings when resolution fails (dangling
+  // symlink, missing path).
+  //
+  // Separate try/catch blocks so that a successful realpathSync(root) is kept
+  // even when realpathSync(leaf) throws (dangling leaf symlink). A single
+  // combined try/catch would discard the resolved root on a leaf failure,
+  // defeating the symlink-aliasing Contract above.
+  let resolvedRoot = root;
+  let resolvedLeaf = leaf;
+  try {
+    resolvedRoot = realpathSync(root);
+  } catch { /* keep raw root string when the path cannot be resolved */ }
+  try {
+    resolvedLeaf = realpathSync(leaf);
+  } catch { /* keep raw leaf string when the path cannot be resolved */ }
+  if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
+  const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;
   const segments = rel.split(/[/\\]/).filter((s) => s.length > 0);
   if (segments.length === 0) return null;
 
-  if (segments[0] === MARKETPLACE_CACHE_SEGMENT && segments.length >= 3) {
+  if (segments[0] === MARKETPLACE_CACHE_SEGMENT && segments.length >= 2) {
     const mp = segments[1];
     if (mp) {
       const marketplaceDir = join(root, MARKETPLACE_CACHE_SEGMENT, mp);
       const fromManifest = pluginNameFromMarketplace(marketplaceDir, leaf);
-      const pluginName = fromManifest ?? segments[2];
+      const pluginName = fromManifest ?? segments[2] ?? mp;
       if (pluginName) {
         return { layout: 'cache', key: `${mp}:${pluginName}` };
       }

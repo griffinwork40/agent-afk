@@ -47,7 +47,7 @@ import { NO_PROVENANCE_CACHE, type ProvenanceCache } from './provenance-cache.js
  *   maxTokens              cli/config/env-tier.ts:254-265  (gated: Number.isInteger)
  *   temperature            cli/config/env-tier.ts:268-272  (gated: Number.isFinite)
  *   systemPrompt           cli/config/env-tier.ts:275-276
- *   autoRouting.*          cli/config/env-tier.ts:279-281  (sets ALL FOUR at once)
+ *   autoRouting.*          cli/config/env-tier.ts:279-281  (sets interactive/chat/telegram)
  *   theme                  cli/theme.ts:136-146            (resolveTheme)
  *   interactive.thinkingUi cli/commands/interactive.ts:158 (resolveThinkingUi)
  *   interactive.suggestGhost cli/commands/interactive/repl-loop.ts:85
@@ -65,7 +65,6 @@ export const CONFIG_ENV_SHADOWS: Readonly<Record<string, readonly string[]>> = {
   'autoRouting.interactive': ['AFK_AUTO_ROUTING'],
   'autoRouting.chat': ['AFK_AUTO_ROUTING'],
   'autoRouting.telegram': ['AFK_AUTO_ROUTING'],
-  'autoRouting.daemon': ['AFK_AUTO_ROUTING'],
   theme: ['AFK_THEME'],
   'interactive.thinkingUi': ['AFK_THINKING_UI'],
   'interactive.suggestGhost': ['AFK_SUGGEST_GHOST'],

@@ -14,6 +14,7 @@ import {
 } from './message-row';
 import type { TranscriptItem } from '@/lib/ledger-adapter';
 import type { SessionTotals } from './session-meter';
+import { TranscriptSessionContext } from '@/hooks/use-full-tool-result';
 
 interface TranscriptViewProps {
   items: TranscriptItem[];
@@ -22,6 +23,8 @@ interface TranscriptViewProps {
   spineMode?: boolean;
   /** When true, the last assistant message is actively streaming. */
   turnActive?: boolean;
+  /** Session being rendered; enables lazy-loading full tool results. */
+  sessionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +97,15 @@ function renderTextItem(item: TranscriptItem, isStreaming = false): React.ReactN
 // ---------------------------------------------------------------------------
 
 /** Root transcript container. Maps TranscriptItem[] to per-kind components. */
-export function TranscriptView({ items, totals, spineMode = true, turnActive = false }: TranscriptViewProps) {
+export function TranscriptView({ sessionId, ...rest }: TranscriptViewProps) {
+  return (
+    <TranscriptSessionContext.Provider value={sessionId ?? null}>
+      <TranscriptBody {...rest} />
+    </TranscriptSessionContext.Provider>
+  );
+}
+
+function TranscriptBody({ items, totals, spineMode = true, turnActive = false }: Omit<TranscriptViewProps, 'sessionId'>) {
   const flatSlots = useMemo(() => groupItems(items), [items]);
   const spineSlots = useSpineSlots(items);
 

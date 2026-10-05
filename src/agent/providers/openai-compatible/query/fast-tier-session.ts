@@ -41,9 +41,14 @@ const CONFIRMED_FAST_TIERS = new Set(['priority', 'fast']);
  * A user-set OpenAI base URL (proxy / local runner) counts as a custom
  * endpoint and is excluded from fast mode. The first-party ChatGPT
  * subscription backend does NOT count, even though it has its own URL.
+ *
+ * Trailing slashes on the supplied URL are normalised before comparison so
+ * that `https://chatgpt.com/backend-api/codex/` is treated identically to
+ * the canonical form without a trailing slash.
  */
 export function isCustomOpenAIEndpoint(baseURL: string | undefined): boolean {
-  return baseURL !== undefined && baseURL !== CHATGPT_BACKEND_BASE_URL;
+  if (baseURL === undefined) return false;
+  return baseURL.replace(/\/+$/, '') !== CHATGPT_BACKEND_BASE_URL;
 }
 
 /** Options the provider threads into the query to enable fast mode. */
