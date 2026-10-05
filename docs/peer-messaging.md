@@ -229,7 +229,7 @@ Envelopes are recovered after a process crash that occurs between claim and inje
 
 **Delivery contract**: **at-least-once**. A crash between ack-write and turn-injection (ack exists, but model turn was never issued) will NOT recover the envelope — callers should deduplicate by `messageId` when this matters. A crash between claim and ack-write (no ack) WILL recover the envelope and re-deliver it. Rate-history and dedup guards count these copies once by message identity.
 
-**Retention**: ack markers in `delivered/acked/` are reaped with the whole session inbox directory by `sweepPeerInboxes` after 7 days of inactivity for dead sessions.
+**Retention**: delivered receipts in `delivered/` are pruned by `pruneDeliveredReceipts` once they are older than `DELIVERED_RECEIPT_MAX_AGE_MS` and either acknowledged or older than `UNACKED_RETENTION_MAX_AGE_MS`. Ack markers in `delivered/acked/` are not individually pruned; they are removed together with the whole session inbox directory by `sweepPeerInboxes` after 7 days of inactivity for dead sessions.
 
 ---
 

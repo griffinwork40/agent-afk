@@ -36,7 +36,10 @@ afterEach(async () => {
   else delete process.env['AFK_HOME'];
   delete process.env['AFK_STATE_DIR'];
   delete process.env['AFK_FRAMEWORK_DIR'];
-  await rm(tmpHome, { recursive: true, force: true });
+  // maxRetries guards against the Windows ENOTEMPTY race where a fire-and-
+  // forget writeInjectionAck promise creates a file inside delivered/acked/
+  // while rm is concurrently traversing the tree.
+  await rm(tmpHome, { recursive: true, force: true, maxRetries: 3 });
 });
 
 // ── helpers ─────────────────────────────────────────────────────────────────
