@@ -65,7 +65,12 @@ export const getFacetTool: AnthropicToolDef = {
           'Optional allowlist of top-level fields to include in the response. ' +
           'When omitted, all non-provenance fields are returned. When supplied, ' +
           'ONLY the listed fields are returned — including provenance fields if ' +
-          'you name them explicitly.',
+          'you name them explicitly.\n\n' +
+          'ADDITIVE CONTRACT: `session_cwd`, `is_current_session`, and ' +
+          '`cwd_mismatch` are always appended to the response regardless of ' +
+          'this allowlist. Strict-schema consumers that set ' +
+          '`additionalProperties: false` should allowlist these three fields ' +
+          'explicitly, or treat the response schema as open/additive.',
       },
     },
     required: [],
