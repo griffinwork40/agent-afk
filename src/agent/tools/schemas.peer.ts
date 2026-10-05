@@ -54,7 +54,7 @@ export const sendToSessionTool: AnthropicToolDef = {
     'prefer sessionId (names can be reused) and check resolvedTo in the result. ' +
     'Returns { status: "queued"|"refused", messageId?, reason?, detail?, resolvedTo?, targetState? }. ' +
     'refused is NOT fatal — inspect reason and detail to understand why ' +
-    '(e.g. "unknown-target", "ambiguous-target", "rate-limited", "hop-limit", "too-large", "duplicate", "inbound-off").',
+    '(e.g. "self", "unknown-target", "ambiguous-target", "dead-target", "no-receiver", "rate-limited", "hop-limit", "too-large", "duplicate", "inbound-off").',
   input_schema: {
     type: 'object',
     properties: {

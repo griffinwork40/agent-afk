@@ -106,6 +106,7 @@ Sends a message to another session.
 | `hop-limit` | Reply chain exceeded 6 hops (`PEER_MAX_HOPS`, `envelope.ts:26`) |
 | `rate-limited` | >10 messages/min to the same target (`guards.ts:48`) |
 | `duplicate` | Same body sent to same target within 60 s (`guards.ts:52`) |
+| `inbound-off` | Target session has disabled peer inbound (`guards.ts`) |
 
 ---
 

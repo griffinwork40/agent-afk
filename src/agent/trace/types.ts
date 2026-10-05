@@ -683,7 +683,7 @@ export interface PeerMessagePayload {
    * injected`. New code never emits `'delivered'`; it is retained only for
    * backward-compatible deserialization of historical trace files (see #2901).
    */
-  action: 'sent' | 'claimed' | 'injected' | /** @deprecated pre-#2810, never emitted by new code */ 'delivered' | 'held' | 'refused' | 'dropped' | 'reclaimed';
+  action: 'sent' | 'claimed' | 'injected' | /** Legacy value (pre-#2810); never emitted by new code — retained only for backward-compatible deserialization of historical trace files. */ 'delivered' | 'held' | 'refused' | 'dropped' | 'reclaimed';
   /** The stable message id (uuid). Absent when action is 'dropped' by a sweep. */
   messageId?: string;
   /** The OTHER session's id (sender when action is delivered/held/dropped; target when sent/refused). */
