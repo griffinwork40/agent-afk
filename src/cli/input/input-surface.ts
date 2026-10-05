@@ -536,6 +536,9 @@ export class InputSurface {
   async readLine(opts: InputSurfaceReadOpts): Promise<ReadWithAutocompleteResult> {
     if (this.compositor && this.compositor.isArmed()) {
       const compositor = this.compositor;
+      // Snapshot before the synchronous idle drain removes the FIFO head.
+      // Preserve provenance even for the final queued submission.
+      const queuedSubmission = compositor.hasPendingSubmission();
       return new Promise<ReadWithAutocompleteResult>((resolve, reject) => {
         // Store the reject so dispose() can abort this Promise if
         // the surface is torn down before the user presses Enter, and the
@@ -613,7 +616,7 @@ export class InputSurface {
           // model under a tall overlay (the "weird gaps" bug). See commit-block.ts.
           commitBlockAbove(compositor, echo.split('\n'));
 
-          resolve({ text: payload.text, attachments: [...payload.attachments] });
+          resolve({ text: payload.text, attachments: [...payload.attachments], queuedSubmission });
         };
         compositor.setOnSubmit(handler);
         // Rewind reload-for-edit: seed the editable buffer BEFORE flipping to

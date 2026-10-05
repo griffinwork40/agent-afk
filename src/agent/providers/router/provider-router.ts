@@ -155,6 +155,14 @@ export class ProviderRouter implements ProviderQuery {
    * supports it — preventing a model-swap from silently dropping steering.
    */
   private _beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * Stop-hook seam callback registered via `setBeforeTurnEnd()`. Stored here
+   * so it survives inner provider swaps: whenever `buildInner()` constructs a
+   * new active inner, we immediately forward the stored callback if the inner
+   * supports it — preventing a model-swap from silently dropping blocking-Stop
+   * continuation wiring.
+   */
+  private _beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
 
   constructor(args: ProviderRouterArgs, deps: ProviderRouterDeps) {
     this.outerIterator = args.prompt[Symbol.asyncIterator]();
@@ -264,6 +272,9 @@ export class ProviderRouter implements ProviderQuery {
     // when it does not implement `setBeforeNextRound` (the method is optional).
     if (this._beforeNextRound !== undefined) {
       query.setBeforeNextRound?.(this._beforeNextRound);
+    }
+    if (this._beforeTurnEnd !== undefined) {
+      query.setBeforeTurnEnd?.(this._beforeTurnEnd);
     }
     return {
       family: provider.name,
@@ -438,6 +449,16 @@ export class ProviderRouter implements ProviderQuery {
   setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
     this._beforeNextRound = cb;
     this.active?.query.setBeforeNextRound?.(cb);
+  }
+
+  /**
+   * Store and forward the stop-hook seam callback. Stored on `this` so it
+   * survives inner provider rebuilds (model swap); `buildInner()` forwards it
+   * onto every newly-constructed inner immediately after construction.
+   */
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this._beforeTurnEnd = cb;
+    this.active?.query.setBeforeTurnEnd?.(cb);
   }
 
   async setModel(model?: string): Promise<void> {

@@ -39,7 +39,6 @@ export function makeOrchestratorCtx(args: {
   coordinator: CommitCoordinator;
   stageTracker?: StageTrackerState;
   activeSkillName?: string;
-  skillIdentity?: import('./skill-identity-format.js').SkillIdentity;
   lastProgressByTask: Map<string, ProgressEvent>;
   sources?: ReadonlyMap<string, SourceState>;
   childActivity?: ChildActivityTracker;
@@ -47,7 +46,6 @@ export function makeOrchestratorCtx(args: {
 }): OrchestratorCtx {
   return {
     out: args.out,
-    ...(args.skillIdentity ? { skillIdentity: args.skillIdentity } : {}),
     isTTY: args.isTTY,
     compositor: args.compositor,
     overlayComposer: args.overlayComposer,

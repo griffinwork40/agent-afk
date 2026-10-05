@@ -46,9 +46,9 @@ function lastAssistantText(history: readonly Message[]): string {
  * - Enrichment (`terminalState`, `doneHasCorroboratingEvidence`,
  *   `doneEvidenceClassification`) is computed here from the real tool events,
  *   so every surface, the REPL included, gets identical values.
- * - A block is log-only (`onStopBlocked`); same-turn continuation is PR 2 and
- *   must live at the provider seam, because the session `done` event is the
- *   surface boundary.
+ * - A block is log-only (`onStopBlocked`); same-turn continuation is handled at
+ *   the provider seam (stop-hook-continuation.ts, PR #2740) and must live there,
+ *   because the session `done` event is the surface boundary.
  * - `AbortError` propagates from `dispatchStopHook`.
  */
 export async function dispatchTurnStop(p: TurnStopParams): Promise<void> {

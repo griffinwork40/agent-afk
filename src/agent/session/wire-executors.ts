@@ -193,7 +193,8 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const nestedCwdOpt = nestedCwd !== undefined ? { cwd: nestedCwd } : {};
   const traceOpt = traceWriter !== undefined ? { traceWriter } : {};
   const skillTraceOpt = skillTraceWriter !== undefined ? { traceWriter: skillTraceWriter } : {};
-  const apiKeyOpt = apiKey !== undefined ? { apiKey } : {};
+  const apiKeyOpt = apiKey !== undefined ? { apiKey } : {}; // used by skill/compose/agent executors below
+  const credentialOpt = apiKey !== undefined ? { parentCredential: { key: apiKey, sourceModel: managerParentModel } } : {}; // #2844 paired for rootManager
   const bgRegistryOpt = backgroundRegistry !== undefined ? { backgroundRegistry } : {};
   // Match loadAgentRegistry's default sink so plugin discovery remains audible
   // on non-interactive surfaces that do not provide a boot-warning collector.
@@ -225,8 +226,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   //    every depth-1 `agent`/`skill` fork on every surface able to publish but
   //    blind to what its siblings had already published.
   const rootManager = new SubagentManager({
-    ...apiKeyOpt,
-    parentModel: managerParentModel,
+    ...credentialOpt,
     ...baseUrlOpt,
     ...cwdOpt,
     ...traceOpt,

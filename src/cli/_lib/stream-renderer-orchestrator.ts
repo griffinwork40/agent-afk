@@ -76,10 +76,7 @@ const RATE_LIMIT_TASK_ID = '__rate_limit__';
  * (streamingMarkdown) in a reference object so the renderer can swap them
  * in/out without callback friction.
  */
-import { skillIdentityBanner, type SkillIdentity } from './skill-identity-format.js';
-
 export interface OrchestratorCtx {
-  skillIdentity?: SkillIdentity;
   out: Writer;
   isTTY: boolean;
   compositor: TerminalCompositor | null;
@@ -588,7 +585,6 @@ export function setComposedOverlay(ctx: OrchestratorCtx): void {
       ...formatProgressBanner(childBannerEvent(childBanner.stats), undefined, activity, undefined, runningCount),
     );
   }
-  const banner = skillIdentityBanner(ctx.skillIdentity, bannerLines, getTerminalWidth());
-  if (banner) parts.push(banner);
+  if (bannerLines.length > 0) parts.push(bannerLines.join('\n'));
   ctx.compositor.setOverlay(parts.join('\n'));
 }

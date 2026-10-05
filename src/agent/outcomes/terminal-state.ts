@@ -104,6 +104,9 @@ export function findTerminalStateHeadingOffset(text: string): number {
   for (let i = tail.length - 1; i >= 0; i--) {
     if (isFenced[tailStart + i]) continue;
     const line = tail[i] ?? '';
+    // Invariant: mirror the indent guard in parseTerminalState — a line
+    // indented 4+ spaces is a CommonMark indented code block, not a heading.
+    if (line.length - line.trimStart().length >= 4) continue;
     if (lineToKind(line)) {
       // Compute the character offset in the original text. Sum lengths of
       // all lines before `tailStart + i`, plus `tailStart + i` newlines.
@@ -213,6 +216,12 @@ export function parseTerminalState(text: string): TerminalState | null {
   for (let i = tail.length - 1; i >= 0; i--) {
     if (isFenced[tailOffset + i]) continue;
     const line = tail[i] ?? '';
+    // CommonMark §4.6: a line indented 4+ spaces is a literal indented code
+    // block, not a heading. lineToKind trims before matching, so without this
+    // guard "    Blocked" (4 spaces) would be treated as the Done/Blocked/…
+    // heading. fencedLines only tracks fenced (backtick/tilde) blocks, not
+    // indented code blocks, so we must guard here.
+    if (line.length - line.trimStart().length >= 4) continue;
     const k = lineToKind(line);
     if (k) {
       headingIdx = i;

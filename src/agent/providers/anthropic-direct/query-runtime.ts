@@ -166,6 +166,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly fastModeController?: import('../../fast-mode.js').FastModeController;
   /** Inter-round steering callback; set via setBeforeNextRound() from the subagent layer. */
   private beforeNextRound?: () => string | undefined;
+  /** Provider-side stop-hook seam; set via setBeforeTurnEnd() from AgentSession. */
+  private beforeTurnEnd?: (continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>;
 
   constructor(opts: AnthropicDirectQueryOptions) {
     this.initSessionId = opts.sessionId ?? randomUUID();
@@ -284,6 +286,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get throttleQueue() { return query.throttleQueue; },
       get fastModeController() { return query.fastModeController; },
       get beforeNextRound() { return query.beforeNextRound; },
+      get beforeTurnEnd() { return query.beforeTurnEnd; },
       get cwd() { return query._cwd; },
       composeSystem: () => query.composeSystem(),
       makeInterruptedTurnEvent: () => query.makeInterruptedTurnEvent(),
@@ -294,6 +297,11 @@ export class AnthropicDirectQuery implements ProviderQuery {
   /** Wire a steering callback for inter-round message injection. Called from the subagent layer. */
   setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
     this.beforeNextRound = cb;
+  }
+
+  /** Wire the provider-side stop-hook seam (issue #2714). Called from AgentSession.wireStopHook(). */
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this.beforeTurnEnd = cb;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {

@@ -27,7 +27,9 @@ describe('renderer skill identity', () => {
     expect(intros[0]![0]).toContain('args: src/index.ts');
     expect(intros[0]![0]).not.toContain('\x1b');
   });
-  it.each([20, 40, 80])('paints identity and stopping feedback at %i columns', async (width) => {
+  // Regression (#2895 duplicate preview): the identity is committed to
+  // scrollback once at arm and must never be repeated in the live overlay.
+  it.each([20, 40, 80])('commits identity once and keeps it out of live frames, with stopping feedback at %i columns', async (width) => {
     vi.spyOn(terminalSize, 'getTerminalWidth').mockReturnValue(width);
     const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
     const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
@@ -37,18 +39,18 @@ describe('renderer skill identity', () => {
     const renderer = new StreamRenderer({ out: writer(), skillIdentity: identity, compositor: compositor as unknown as TerminalCompositor, reducedMotion: true });
     try {
       await renderer.arm();
-      expect(compositor.setOverlay.mock.lastCall?.[0]).toContain('/review');
+      const intros = compositor.commitAbove.mock.calls.filter(([text]) => stripAnsi(String(text)).includes('/review'));
+      expect(intros).toHaveLength(1);
+      expect(stripAnsi(String(intros[0]![0]))).toContain('Check changes');
       renderer.process({ type: 'progress', progress: { taskId: 't', description: 'Working', totalTokens: 0, toolUses: 1, durationMs: 10 } });
-      expect(stripAnsi(compositor.setOverlay.mock.lastCall?.[0] ?? '')).toContain('/review');
       renderer.notifyFirstContent();
       await Promise.resolve();
-      expect(compositor.setOverlay.mock.lastCall?.[0]).toContain('/review');
       renderer.setSoftStopping(true);
       await Promise.resolve();
       const frame = String(compositor.setOverlay.mock.lastCall?.[0]);
-      expect(stripAnsi(frame)).toContain('/review');
       expect(stripAnsi(frame)).toContain('stopping…');
       for (const row of frame.split('\n')) expect(displayWidth(row)).toBeLessThanOrEqual(width);
+      for (const [overlay] of compositor.setOverlay.mock.calls) expect(stripAnsi(String(overlay))).not.toContain('/review');
     } finally {
       await renderer.dispose();
       if (stdoutTty) Object.defineProperty(process.stdout, 'isTTY', stdoutTty); else Reflect.deleteProperty(process.stdout, 'isTTY');

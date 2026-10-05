@@ -21,6 +21,17 @@
  * a pending file, the pending file is an orphan (crash residue) and should be
  * removed without consuming budget.
  *
+ * Injection-ack protocol (crash recovery): after a claimed envelope is
+ * successfully injected into a model turn, the receiver writes an ack marker
+ * to `delivered/acked/<file>` containing the owning sessionId. On restart,
+ * `recoverUnackedDelivered` scans `delivered/` for receipts that have no
+ * corresponding ack marker and moves them back to `pending/` so they are
+ * re-delivered. Recovery is scoped to the owning sessionId: receipts whose
+ * envelope `to` field does not match the calling sessionId are never reclaimed
+ * into an unrelated session. At-least-once delivery: a crash between ack-write
+ * and turn-injection may replay an already-injected message; callers should
+ * deduplicate by `messageId` when this matters.
+ *
  * File modes:
  *   - Directories: 0o700 (only the owning user can list/enter)
  *   - Files: 0o600 (only the owning user can read/write)
@@ -71,6 +82,7 @@ async function ensureInboxDirs(sessionId: string): Promise<void> {
   await Promise.all([
     mkdir(join(base, 'pending'), { recursive: true, mode: 0o700 }),
     mkdir(join(base, 'delivered'), { recursive: true, mode: 0o700 }),
+    mkdir(join(base, 'delivered', 'acked'), { recursive: true, mode: 0o700 }),
     mkdir(join(base, 'held'), { recursive: true, mode: 0o700 }),
   ]);
 }
@@ -376,7 +388,7 @@ export async function findDeliveredEnvelope(
     return null;
   }
   for (const file of files) {
-    if (!file.endsWith(`-${messageId}.json`)) continue;
+    if (file === 'acked' || !file.endsWith(`-${messageId}.json`)) continue;
     try {
       const raw = await readFile(join(dir, file), 'utf8');
       const env = parseEnvelope(raw);
@@ -386,6 +398,123 @@ export async function findDeliveredEnvelope(
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Injection-ack protocol (crash recovery)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a durable injection-ack marker after a claimed envelope has been
+ * successfully injected into a model turn.
+ *
+ * The marker is stored at `delivered/acked/<file>` with the owning sessionId
+ * as its content. This allows `recoverUnackedDelivered` on restart to
+ * distinguish injected messages from claimed-but-crashed ones.
+ *
+ * Never throws. Failures are silently swallowed so a write error during
+ * injection does not interrupt the model turn.
+ */
+export async function writeInjectionAck(sessionId: string, file: string): Promise<void> {
+  try {
+    const base = getPeerInboxDir(sessionId);
+    const ackedDir = join(base, 'delivered', 'acked');
+    await mkdir(ackedDir, { recursive: true, mode: 0o700 });
+    await atomicWriteFileAsync(join(ackedDir, file), sessionId, {
+      mode: 0o600,
+      mkdirp: false,
+    });
+  } catch {
+    // Best-effort: a missing ack will be recovered on next restart.
+  }
+}
+
+/**
+ * Recover claimed-but-uninjected envelopes for `sessionId` on process restart.
+ *
+ * Scans `delivered/` for receipt files that have no corresponding ack marker
+ * in `delivered/acked/`. For each such file, verifies that the envelope's
+ * `to` field matches `sessionId` (cross-session safety), then moves it back
+ * to `pending/` so it will be re-delivered on the next receiver poll.
+ *
+ * Returns the filenames of envelopes that were successfully reclaimed.
+ *
+ * Contract:
+ *   - Only reclaims envelopes whose `to` field equals `sessionId`; never
+ *     touches envelopes belonging to another session.
+ *   - Idempotent: a receipt already back in `pending/` is silently skipped.
+ *   - At-least-once: if a crash happened between ack-write and turn
+ *     injection, the ack may already exist and the envelope is NOT reclaimed,
+ *     so the duplicate is the caller's responsibility to deduplicate by
+ *     `messageId`.
+ *   - Never throws; partial progress is preserved.
+ */
+export async function recoverUnackedDelivered(sessionId: string): Promise<string[]> {
+  const base = getPeerInboxDir(sessionId);
+  const deliveredDir = join(base, 'delivered');
+  const ackedDir = join(base, 'delivered', 'acked');
+  const pendingDir = join(base, 'pending');
+  const recovered: string[] = [];
+
+  let deliveredFiles: string[];
+  try {
+    deliveredFiles = await readdir(deliveredDir);
+  } catch {
+    return []; // No delivered/ dir — nothing to recover.
+  }
+
+  // Build the ack set once.
+  let ackedFiles: Set<string>;
+  try {
+    ackedFiles = new Set(await readdir(ackedDir));
+  } catch {
+    ackedFiles = new Set();
+  }
+
+  for (const file of deliveredFiles) {
+    if (file.startsWith('.tmp-') || file === 'acked') continue;
+    // Skip receipts that have an ack marker — already injected.
+    if (ackedFiles.has(file)) continue;
+
+    // Parse the receipt to verify it belongs to this session.
+    let env: PeerEnvelope | null = null;
+    try {
+      const raw = await readFile(join(deliveredDir, file), 'utf8');
+      env = parseEnvelope(raw);
+    } catch {
+      // Unreadable receipt — skip; do not reclaim corrupt data.
+      continue;
+    }
+    if (env === null || env.to !== sessionId) continue;
+
+    // Ensure pending/ exists, then move receipt back.
+    try {
+      await mkdir(pendingDir, { recursive: true, mode: 0o700 });
+      // Before rename: if pending/<file> already exists, the process crashed
+      // between link and unlink during claim, leaving both copies. The pending
+      // copy is already queued for redelivery — just remove the duplicate
+      // delivered receipt instead of overwriting the pending entry.
+      try {
+        await stat(join(pendingDir, file));
+        // pending copy exists — remove the delivered duplicate
+        await unlink(join(deliveredDir, file)).catch(() => {});
+        recovered.push(file);
+        continue;
+      } catch {
+        // pending doesn't exist — proceed with rename
+      }
+      await rename(join(deliveredDir, file), join(pendingDir, file));
+      recovered.push(file);
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      // ENOENT: already gone (concurrent restart or prior recovery); skip.
+      if (e.code !== 'ENOENT') {
+        // Any other error: leave the file in place, do not corrupt state.
+      }
+    }
+  }
+
+  return recovered;
 }
 
 /**
