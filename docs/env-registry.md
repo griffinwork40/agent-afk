@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**213 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**215 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -223,6 +223,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `FORCE_COLOR` | string |  |  | `1` | Standard Node convention. Force-enable ANSI color output even when stdout is not a TTY. |
 | `HOME` | string |  |  |  | Standard Unix home directory. Used as the fallback when AFK_HOME is unset. |
 | `LOCALAPPDATA` | string |  |  |  | Windows %LOCALAPPDATA%. Used for browser credential denylist paths (Chrome, Firefox, Edge, etc.). |
+| `MSYSTEM` | string |  |  |  | Set by Git Bash environments (e.g. MINGW64). Signals that bash.exe is already on PATH in resolve-shell.ts. |
 | `NO_COLOR` | string |  |  | `1` | Standard convention (https://no-color.org). When set to any non-empty value, disables ANSI color output. |
 | `NO_UPDATE_NOTIFIER` | boolean |  |  |  | Disable the update-available notifier on CLI startup. Standard convention shared with many Node CLIs. |
 | `NODE_ENV` | string |  |  | `production` | Standard Node environment marker. test \| development \| production. Used by routing-telemetry.ts to suppress test-time writes. |
@@ -230,6 +231,7 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `PATH` | string |  |  |  | System PATH. Read for executable resolution (git, gh, etc.) in tool handlers. |
 | `SCRIPT` | string |  |  | `/tmp/typescript` | Set by script(1) on BSD/macOS/Linux to the typescript filename while a terminal session is being recorded. Presence of a non-empty value triggers capture-mode. |
 | `SHELL` | string |  |  | `/bin/zsh` | Standard POSIX env var pointing to the user's login shell binary. Used by shell-init and worktree commands to auto-detect the correct shell syntax for emitted wrapper code. |
+| `SystemRoot` | string |  |  |  | Windows system root directory (typically C:\Windows). Used to identify WSL bash.exe shim paths in resolve-shell.ts. |
 | `TMUX` | string |  |  | `/tmp/tmux-501/default,12345,0` | OS-level tmux session identifier. Set automatically by tmux to the socket path and session info (e.g. /tmp/tmux-501/default,12345,0) inside any tmux pane. Not set by AFK. Read by configureColor() to detect a tmux environment, and by peer messaging to derive a default session name (#S:#I); for truecolor support on Node ≤ 24, set FORCE_COLOR=3 in your shell or ~/.afk/config/afk.env. |
 | `TMUX_PANE` | string |  |  | `%0` | tmux pane identifier, set automatically by tmux inside any pane (e.g. %0). Used by AFK to target the correct pane when composing a tmux display-message label. |
 | `USER` | string |  |  |  | Unix login name of the current user. Used as a default approver identity in improve/approve. |
