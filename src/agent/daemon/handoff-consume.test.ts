@@ -8,13 +8,14 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, readdirSync, existsSync } from 'node:fs';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildHandoffResumeCommand, processAnsweredHandoffs } from './handoff-consume.js';
 import { writeHandoff, type HandoffRecord } from './handoff-store.js';
 import { listPending } from './queue-store.js';
+import { DEAD_LETTER_SUBDIR, claimRereadFailures } from './handoff-consume.dead-letter.js';
 
 // Suppress Telegram push calls that flow through cleanupHandoff → deleteHandoff.
 vi.mock('../../telegram/push.js', () => ({
@@ -256,5 +257,138 @@ describe('processAnsweredHandoffs', () => {
     const result = await processAnsweredHandoffs(queueDir, missing);
     expect(result.requeued).toBe(0);
     expect(result.cleaned).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Dead-letter: malformed/unsafe records
+  // -------------------------------------------------------------------------
+
+  it('moves a malformed JSON record to dead-letter/ and logs on first processAnsweredHandoffs call', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // Write a file with invalid JSON directly into the handoffs dir.
+    await writeFile(join(handoffsDir, 'q-malformed-fff.json'), '{ not valid json ]]', 'utf-8');
+
+    const result = await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    // The malformed record must not appear as requeued.
+    expect(result.requeued).toBe(0);
+
+    // The file must have been moved OUT of the hot dir.
+    expect(existsSync(join(handoffsDir, 'q-malformed-fff.json'))).toBe(false);
+
+    // The file must now live in dead-letter/.
+    const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
+    const deadFiles = readdirSync(deadLetterDir);
+    expect(deadFiles.some((f) => f.includes('q-malformed-fff'))).toBe(true);
+
+    // A message must have been logged to stderr.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('dead-lettered'),
+    );
+
+    errorSpy.mockRestore();
+  });
+
+  it('does NOT re-scan a dead-lettered malformed record on a second call', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await writeFile(join(handoffsDir, 'q-no-rescan-ggg.json'), '{ bad json }', 'utf-8');
+
+    // First call — moves to dead-letter/.
+    await processAnsweredHandoffs(queueDir, handoffsDir);
+    const firstCallCount = errorSpy.mock.calls.length;
+
+    // Second call — dead-letter/ is skipped (not a .json in the hot dir).
+    await processAnsweredHandoffs(queueDir, handoffsDir);
+    const secondCallCount = errorSpy.mock.calls.length;
+
+    // No additional dead-letter log on the second call.
+    expect(secondCallCount).toBe(firstCallCount);
+
+    errorSpy.mockRestore();
+  });
+
+  it('moves a record with an unsafe taskId to dead-letter/', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // Craft a record where the taskId fails assertSafeJobId (path-traversal chars).
+    const unsafeRecord = {
+      taskId: '../../../etc/passwd',
+      sessionId: 'sess-unsafe-001',
+      question: { type: 'text', message: 'unsafe?' },
+      requestType: 'ask_question',
+      createdAt: new Date().toISOString(),
+      status: 'answered',
+      answer: { action: 'accept', content: { value: 'yes' } },
+      answeredAt: new Date().toISOString(),
+      answerSource: 'telegram',
+      originalCommand: '/cmd',
+    };
+    // Write with a safe filename so readdir picks it up normally.
+    await writeFile(
+      join(handoffsDir, 'q-unsafe-taskid-hhh.json'),
+      JSON.stringify(unsafeRecord),
+      'utf-8',
+    );
+
+    await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    // Must be removed from the hot dir.
+    expect(existsSync(join(handoffsDir, 'q-unsafe-taskid-hhh.json'))).toBe(false);
+
+    // Must land in dead-letter/.
+    const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
+    const deadFiles = readdirSync(deadLetterDir);
+    expect(deadFiles.some((f) => f.includes('q-unsafe-taskid-hhh'))).toBe(true);
+
+    // Log must mention dead-lettered.
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('dead-lettered'));
+
+    errorSpy.mockRestore();
+  });
+
+  it('resets the claim re-read failure counter on a successful process', async () => {
+    // Pre-seed the counter to simulate prior failures, then verify a successful
+    // process clears it (so the counter does not accumulate across unrelated ticks).
+    const taskId = 'q-counter-reset-iii';
+    claimRereadFailures.set(taskId, 2); // simulate 2 prior failures
+
+    const record = makeAnsweredRecord({ taskId });
+    await writeHandoff(record, handoffsDir);
+
+    const result = await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    expect(result.requeued).toBe(1);
+    // Counter must be cleared after success.
+    expect(claimRereadFailures.has(taskId)).toBe(false);
+
+    claimRereadFailures.delete(taskId);
+  });
+
+  it('continues processing valid records alongside a malformed one', async () => {
+    // Write a corrupt JSON file.
+    await writeFile(join(handoffsDir, 'q-corrupt-mix-jjj.json'), '{ bad }', 'utf-8');
+
+    // Write a valid answered record.
+    const good = makeAnsweredRecord({ taskId: 'q-good-mix-kkk' });
+    await writeHandoff(good, handoffsDir);
+
+    const result = await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    // Valid record must be requeued.
+    expect(result.requeued).toBe(1);
+    expect(result.cleaned).toBe(1);
+    expect(listPending(queueDir)).toHaveLength(1);
+
+    // Corrupt record must be in dead-letter/.
+    const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
+    expect(existsSync(deadLetterDir)).toBe(true);
+    const deadFiles = readdirSync(deadLetterDir);
+    expect(deadFiles.some((f) => f.includes('q-corrupt-mix-jjj'))).toBe(true);
+
+    // Hot dir must only have the pending record (none here) and dead-letter/ dir.
+    const hotFiles = readdirSync(handoffsDir).filter((f) => f.endsWith('.json'));
+    expect(hotFiles).toHaveLength(0);
   });
 });
