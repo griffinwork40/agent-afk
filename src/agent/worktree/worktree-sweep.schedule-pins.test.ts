@@ -181,6 +181,14 @@ describe('resolveSchedulePins', () => {
     expect(result.notes.some((n) => n.includes('[WARN]') && n.includes('invalid JSON'))).toBe(true);
   });
 
+  it('returns a note (not a throw) when the schedules file is valid JSON but not an array', async () => {
+    writeFileSync(schedulesPath, JSON.stringify({ tasks: [{ id: 'x', cwd: tmpDir }] }), 'utf-8');
+
+    const result = await resolveSchedulePins([join(tmpDir, 'some-wt')], schedulesPath);
+    expect(result.pinnedByTask.size).toBe(0);
+    expect(result.notes.some((n) => n.includes('[WARN]'))).toBe(true);
+  });
+
   it('returns an info note (not a throw) when the schedules file is missing', async () => {
     const missingPath = join(tmpDir, 'nonexistent-schedules.json');
 

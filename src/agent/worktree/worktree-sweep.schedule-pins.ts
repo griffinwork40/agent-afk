@@ -60,7 +60,10 @@ async function loadRawSchedules(
     return undefined;
   }
   try {
-    return JSON.parse(raw) as ScheduledTaskConfig[];
+    const parsed: unknown = JSON.parse(raw);
+    // A non-array document is treated like any other invalid file: degrade,
+    // never throw (iterating a plain object would throw a TypeError).
+    return Array.isArray(parsed) ? (parsed as ScheduledTaskConfig[]) : undefined;
   } catch {
     return undefined;
   }
@@ -113,4 +116,39 @@ export async function resolveSchedulePins(
   }
 
   return { pinnedByTask, notes };
+}
+
+/**
+ * Sweep-side wrapper: resolve pins for every non-main, non-bare registered
+ * worktree and append any diagnostic notes to `warnings`. Never throws.
+ */
+export async function loadSchedulePinsForSweep(
+  entries: ReadonlyArray<{ path: string; isBare?: boolean }>,
+  warnings: string[],
+  schedulesPathOverride?: string,
+): Promise<SchedulePinResult> {
+  const mainPath = entries[0]?.path;
+  const paths = entries.filter((e) => !e.isBare && e.path !== mainPath).map((e) => e.path);
+  const pins = await resolveSchedulePins(paths, schedulesPathOverride);
+  for (const note of pins.notes) warnings.push(note);
+  return pins;
+}
+
+/**
+ * Apply the schedule pin to a classifier verdict: a pinned worktree that would
+ * otherwise be a removal candidate is reported as 'active' with an INFO note.
+ * 'active' and 'locked' verdicts are already safe and pass through unchanged.
+ */
+export function applySchedulePin<V extends string>(
+  verdict: V,
+  worktreePath: string,
+  pins: SchedulePinResult,
+  warnings: string[],
+): V | 'active' {
+  const taskId = pins.pinnedByTask.get(worktreePath);
+  if (taskId === undefined || verdict === 'active' || verdict === 'locked') return verdict;
+  warnings.push(
+    `[INFO] worktree schedule-pinned by task '${taskId}' (will not be reaped): ${worktreePath}`,
+  );
+  return 'active';
 }
