@@ -22,6 +22,7 @@ import { getDaemonStateDir } from '../paths.js';
 import { listenWithRecovery, closeServer } from './daemon.listen.js';
 import { errorMessage } from '../utils/errors.js';
 import { validateScheduleCwd } from './daemon/cwd-validator.js';
+import { getSchedule, toScheduledTask } from './daemon/schedule-store.js';
 
 export interface DaemonOptions {
   /** Port for the HTTP control surface. Defaults to 7777. */
@@ -361,24 +362,65 @@ async function handleRequestAsync(
     }
     const notifyChatRaw = obj['notifyChat'];
     const executorRaw = obj['executor'];
-    // Security: reject executor:"shell" over the unauthenticated HTTP control
-    // surface. Shell tasks must be created through the schedule store or CLI
-    // where operator intent is explicit. The live-sync path from create_schedule
-    // uses executor:"agent" (or omits the field); shell tasks land on next
-    // daemon restart via the store, not through this route.
+    const taskIdRaw = obj['taskId'] as string;
+
+    // Invariant: (security, #2300) executor:"shell" is blocked over the unauthenticated HTTP control
+    // surface UNLESS the request is a trusted in-process live-sync from a tool
+    // handler (create_schedule / update_schedule / cancel_schedule enable) that
+    // already wrote the task to the on-disk schedule store.  We verify trust by
+    // checking that (a) the taskId exists in the store as an enabled shell
+    // schedule, and (b) the incoming command / cron / trigger fields match what
+    // toScheduledTask() would produce for that store entry — so an untrusted
+    // caller cannot register an arbitrary shell command by guessing a stored id.
+    //
+    // The store is written before the HTTP POST in all tool-handler paths
+    // (addSchedule / updateSchedule both persist first, then call
+    // trySyncToDaemon), so by the time this handler runs the store entry is
+    // already present and up-to-date.  An untrusted caller can therefore only
+    // (re-)register a shell job the operator already persisted, i.e. exactly
+    // what the next daemon restart would load anyway; no new command can enter.
     if (executorRaw === 'shell') {
+      const storedConfig = getSchedule(taskIdRaw);
+      const canonical = storedConfig ? toScheduledTask(storedConfig) : undefined;
+      const trusted =
+        storedConfig !== undefined &&
+        storedConfig.enabled === true &&
+        storedConfig.executor === 'shell' &&
+        canonical !== undefined &&
+        canonical.command === (obj['command'] as string) &&
+        canonical.cronExpression === cronValue &&
+        (canonical.trigger ?? 'cron') === ((obj['trigger'] as TriggerMode | undefined) ?? 'cron') &&
+        canonical.notifyOn === (obj['notifyOn'] as ScheduledTask['notifyOn'] | undefined) &&
+        canonical.notifyChat ===
+          (typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
+            ? notifyChatRaw
+            : undefined) &&
+        canonical.cwd === cwd;
+      if (!trusted) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error:
+              'executor "shell" is not accepted over the HTTP control surface unless it ' +
+              'matches an enabled shell entry in the schedule store; create shell tasks ' +
+              'via the schedule store, CLI, or create_schedule instead',
+          }),
+        );
+        return;
+      }
+    } else if (executorRaw !== undefined && executorRaw !== 'agent') {
+      // Reject any other unknown executor value (e.g. "SHELL", "builtin", typos).
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
-          error:
-            'executor "shell" is not accepted over the HTTP control surface; ' +
-            'create shell tasks via the schedule store or CLI instead',
+          error: `executor "${String(executorRaw)}" is not a valid value; accepted values are "agent" and "shell"`,
         }),
       );
       return;
     }
+
     const task: ScheduledTask = {
-      taskId: obj['taskId'] as string,
+      taskId: taskIdRaw,
       command: obj['command'] as string,
       trigger: (obj['trigger'] as TriggerMode | undefined) ?? 'cron',
       cronExpression: cronValue,
@@ -388,7 +430,9 @@ async function handleRequestAsync(
       ...(typeof notifyChatRaw === 'number' || typeof notifyChatRaw === 'string'
         ? { notifyChat: notifyChatRaw }
         : {}),
-      ...(executorRaw === 'agent' ? { executor: executorRaw as TaskExecutor } : {}),
+      ...(executorRaw === 'agent' || executorRaw === 'shell'
+        ? { executor: executorRaw as TaskExecutor }
+        : {}),
       ...(cwd !== undefined ? { cwd } : {}),
     };
     try {
