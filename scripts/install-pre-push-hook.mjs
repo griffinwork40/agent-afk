@@ -155,7 +155,11 @@ function main() {
     return;
   }
 
-  const hooksDir = join(commonDir, 'hooks');
+  // Contract: commonDir from `git rev-parse --git-common-dir` may be a relative
+  // path (e.g. `.git` or `../../.git`) — it is relative to process.cwd(), NOT to
+  // topLevel. Resolve it against process.cwd() so that subdirectory invocations
+  // (e.g. from packages/app/ in a monorepo) point to the correct hooks directory.
+  const hooksDir = join(resolve(commonDir), 'hooks');
   const hookPath = join(hooksDir, 'pre-push');
   const content = launcherContent();
 

@@ -20,7 +20,8 @@ import { prependTurnInjections, autoResumeDirective } from './loop-iteration.inj
 import { drainLoopNotifications } from './loop-iteration.drain.js';
 import { handleShellPassthrough } from './loop-iteration.shell-branch.js';
 import { handleSlashCommand, runPluginPreflight } from './loop-iteration.slash-branch.js';
-import { dispatchUserPromptSubmit, dispatchStop } from './loop-iteration.hooks.js';
+import { dispatchUserPromptSubmit } from './loop-iteration.hooks.js';
+import { wireReplStopHook } from './loop-iteration.stop-wiring.js';
 import { runOneTurn } from './loop-iteration.turn-run.js';
 import { createVersionNotice } from './version-notice.js';
 import { setupPeerBoundary, drainAdmissionQueueFallback } from './loop-iteration.boundary.js';
@@ -72,7 +73,7 @@ export async function runInputLoop(
 
   // Slash-command submit queue: pre-seeded from ctx.initialInput when the
   // session was launched with a first-message argument. See original docs.
-  let seedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent' } | undefined =
+  let seedBuffer: { text: string; attachments: readonly ImageAttachment[]; echo?: 'normal' | 'silent'; queuedSubmission?: boolean } | undefined =
     ctx.initialInput !== undefined ? { text: ctx.initialInput, attachments: [] } : undefined;
 
   // Rewind reload-for-edit: `/rewind` returns a prefill payload; unlike
@@ -87,8 +88,15 @@ export async function runInputLoop(
   let pendingStopInjection: string | undefined;
   ctx.clearPendingStopInjection = () => { pendingStopInjection = undefined; };
 
+  // Wire session-layer Stop dispatch — see loop-iteration.stop-wiring.ts.
+  // Re-applied before EVERY turn (below) so /resume session swaps are covered.
+  const stopWiring = wireReplStopHook(
+    ctx, (text) => { pendingStopInjection = text; },
+  );
+
   // Peer inter-round boundary delivery — see loop-iteration.boundary.ts.
-  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier);
+  let queuedHumanTurn = false;
+  const { admissionQueue, reinstall: reinstallBoundary } = setupPeerBoundary(ctx, surface, peerNotifier, () => queuedHumanTurn);
   ctx.reinstallPeerBoundary = reinstallBoundary; // wired to onSwapped in bootstrap.ts
 
   const versionNotice = createVersionNotice();
@@ -109,6 +117,7 @@ export async function runInputLoop(
 
   while (true) {
     autoResumeCount = 0;
+    queuedHumanTurn = false;
 
     if (pendingInitMeta) {
       ctx.replRenderer.writeLine(pendingInitMeta);
@@ -147,6 +156,7 @@ export async function runInputLoop(
         });
         ctx.replRenderer.writeLine(echo);
       }
+      queuedHumanTurn = queued.queuedSubmission === true;
       text = queued.text.trim();
       attachments = queued.attachments as ReadWithAutocompleteResult['attachments'];
     } else {
@@ -162,6 +172,7 @@ export async function runInputLoop(
           ctx.statusLine.rearm();
         },
       });
+      queuedHumanTurn = result.queuedSubmission === true;
       text = result.text.trim();
       attachments = result.attachments;
     }
@@ -189,7 +200,7 @@ export async function runInputLoop(
       if (slashResult.action === 'exit') return;
       if (slashResult.action === 'continue') continue;
       if (slashResult.action === 'submit') {
-        seedBuffer = { text: slashResult.message, attachments: attachments ?? [] };
+        seedBuffer = { text: slashResult.message, attachments: attachments ?? [], queuedSubmission: queuedHumanTurn };
         ctx.statusLine.rearm(); continue;
       }
       if (slashResult.action === 'prefill') {
@@ -208,13 +219,16 @@ export async function runInputLoop(
     if (isPluginForward) runText = await runPluginPreflight(text, ctx);
 
     // Prepend shell/bg/peer injections, then any pending Stop correction.
-    runText = prependTurnInjections(runText, [footer.shellPassthrough, bgResultNotifier, peerNotifier]);
-    // Drain any admission-queue remainder not consumed by the boundary callback.
-    runText = drainAdmissionQueueFallback(runText, admissionQueue);
+    const deferPeers = queuedHumanTurn || (surface.getCompositor()?.hasPendingSubmission() ?? false);
+    runText = prependTurnInjections(runText, [footer.shellPassthrough, bgResultNotifier, ...(!deferPeers ? [peerNotifier] : [])]);
+    // The same human barrier covers peers already admitted but not delivered.
+    if (!deferPeers) runText = drainAdmissionQueueFallback(runText, admissionQueue);
     if (pendingStopInjection !== undefined) {
       runText = pendingStopInjection + '\n\n' + runText;
       pendingStopInjection = undefined;
     }
+    // Idempotent: covers a session swapped in since the last turn.
+    ctx.session.current.wireStopHook?.(stopWiring);
 
     // Pre-turn UserPromptSubmit hook.
     const ups = await dispatchUserPromptSubmit(runText, ctx);
@@ -225,15 +239,13 @@ export async function runInputLoop(
     // Contract: pass `text` (raw, pre-injection) as rawUserText so the presence
     // activity.promptHead records what the operator typed, never peer message
     // bodies or bg-subagent-result content that are prepended into `runText`.
-    const capture = await runOneTurn(
+    await runOneTurn(
       runText, attachments ?? [], ctx, turnState, footer,
       transcript, surface, installSoftStop, maxTurnsNum, autosaveState, text,
     );
 
-    // Post-turn Stop hook.
-    const stopInjection = await dispatchStop(
-      ctx, capture.kind, capture.doneHasEvidence, capture.doneClassification,
-    );
-    if (stopInjection !== undefined) pendingStopInjection = stopInjection;
+    // Stop is dispatched by the session layer (turn-stream-runner.ts) via
+    // wireStopHook(). The REPL no longer dispatches Stop itself. injectContext
+    // is routed into pendingStopInjection by the stopWiring callbacks above.
   }
 }

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { execFileSync, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { resolveShell } from '../src/utils/resolve-shell.js';
@@ -14,13 +14,56 @@ function shellPath(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
+/**
+ * Invariant: On Windows CI (github windows-2022), git is at
+ * C:\Program Files\Git\cmd\git.exe and `git --exec-path` returns something like
+ * C:\Program Files\Git\mingw64\libexec\git-core. bash.exe lives at
+ * C:\Program Files\Git\bin\bash.exe — reachable via ../../bin/bash.exe or
+ * ../../../bin/bash.exe relative to the exec-path. This avoids any platform-gated
+ * skip (R4) while still locating a POSIX shell on Windows.
+ */
+function findBashViaGit(): string | undefined {
+  try {
+    const execPath = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
+    for (const rel of ['../../bin/bash.exe', '../../../bin/bash.exe']) {
+      const candidate = path.resolve(execPath, rel);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch {
+    // git not available or exec-path failed
+  }
+  try {
+    // Derive from `where git` (Windows only — safe to call, throws on non-Windows)
+    const gitWhere = execFileSync('where', ['git'], { encoding: 'utf8' }).trim().split('\n')[0]?.trim();
+    if (gitWhere) {
+      const gitDir = path.dirname(gitWhere);
+      for (const rel of ['../bin/bash.exe', '../../bin/bash.exe']) {
+        const candidate = path.resolve(gitDir, rel);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  } catch {
+    // `where` is not available on non-Windows — ignore
+  }
+  return undefined;
+}
+
 function shellCommandArgs(command: string): { command: string; args: string[] } {
   const shell = resolveShell();
   if (shell.shell === true) return { command: 'sh', args: ['-c', command] };
   if (shell.shell.toLowerCase().endsWith('bash.exe') || shell.shell.toLowerCase().endsWith('/bash')) {
     return { command: shell.shell, args: [...(shell.args ?? ['-c']), command] };
   }
-  throw new Error('pre-push hook tests require a POSIX shell; Git Bash was not found on Windows');
+  // resolveShell() returned PowerShell — try harder to find bash via git --exec-path
+  const bash = findBashViaGit();
+  if (bash !== undefined) {
+    return { command: bash, args: ['-c', command] };
+  }
+  // No POSIX shell found — this should not happen on CI (Git Bash is always available)
+  throw new Error(
+    'pre-push hook tests require a POSIX shell; Git Bash was not found. ' +
+      'Install Git for Windows or run with Git Bash.',
+  );
 }
 
 function runHook(

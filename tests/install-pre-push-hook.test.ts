@@ -224,4 +224,27 @@ describe('install-pre-push-hook', () => {
     expect(result.stdout + result.stderr).toContain('nested under a different git toplevel');
     expect(fs.existsSync(hookPath(outer))).toBe(false);
   });
+
+  it('installs correctly when run from a subdirectory (relative --git-common-dir)', () => {
+    // Contract: `git rev-parse --git-common-dir` returns `.git` (relative) when git
+    // is run from the repo root. The installer must resolve it against topLevel so
+    // that a subdirectory invocation still reaches the correct hooks directory.
+    const dir = tmpRepo('subdir-install');
+    // Create a subdirectory inside the repo to serve as the cwd for the installer.
+    const subdir = path.join(dir, 'packages', 'app');
+    fs.mkdirSync(subdir, { recursive: true });
+
+    // Run installer with cwd = subdir (the installer is still at dir/scripts/…).
+    const result = runInstaller(subdir, {}, dir);
+    expect(result.code).toBe(0);
+
+    // The hook must appear in the canonical hooks dir of the repo root, not in a
+    // non-existent .git relative to the subdir.
+    const hp = hookPath(dir);
+    expect(fs.existsSync(hp)).toBe(true);
+
+    const content = fs.readFileSync(hp, 'utf8');
+    expect(content).toContain(MARKER);
+    expect(content).toContain('#!/bin/sh');
+  });
 });

@@ -100,15 +100,6 @@ export interface PathApprovalHookOptions {
    * provenance (`elicit:repl` vs. `elicit:telegram`). Static per session.
    */
   surface: PathApprovalSurface;
-  /**
-   * @deprecated (#528) — use `context.grantManager` (injected per-session by
-   * the dispatcher) instead. This field is ignored on any call that provides
-   * `context.grantManager`; it survives only as a test-only fallback so
-   * existing unit tests can still supply a mock grant manager without being
-   * rewritten to thread it through every `HookContext`. Production code must
-   * NOT pass this — the production path never falls back to it.
-   */
-  getGrantManager?: () => GrantManager | undefined;
 }
 
 /** Shared closure state between the Pre/Post hooks. */
@@ -207,14 +198,9 @@ async function preToolUseImpl(
   // the dispatcher uses on every handler call.
   //
   // The per-session dispatcher injects `context.grantManager` on every
-  // PreToolUse / PostToolUse call (#527) — this is now the PRIMARY source;
-  // the former process-global `pathApprovalGrantRef` fallback has been
-  // retired (#528). `opts.getGrantManager` survives only as a deprecated
-  // test-only fallback so existing unit tests need not be rewritten; it
-  // must NOT be populated by production code. Cache the resolved manager
-  // in state so the SessionEnd safety-net can reach it without a
-  // process-global ref.
-  const grantManager = context.grantManager ?? opts.getGrantManager?.();
+  // PreToolUse / PostToolUse call (#527). Cache the resolved manager in state
+  // so the SessionEnd safety-net can reach it without a process-global ref.
+  const grantManager = context.grantManager;
   if (!grantManager) {
     // Failsafe — no wired grant manager (headless, one-shot, daemon, or a
     // test dispatcher constructed without a provider). Skip the approval
@@ -279,11 +265,10 @@ async function preToolUseImpl(
   if (grants.resolveBase === undefined) return {};
 
   // (4) Confined session: reproduce the handler's containment verdict. Pass
-  // grants.resolveBase directly (no `?? cwd`); it is defined on this branch.
+  // grants.resolveBase directly; it is defined on this branch (checked above).
   const result = wouldBeRestricted(
     candidate,
     {
-      cwd,
       resolveBase: grants.resolveBase,
       readRoots: grants.readRoots,
       writeRoots: grants.writeRoots,
@@ -372,9 +357,8 @@ function postToolUseImpl(
   // Use the dispatcher-injected grant manager (same session as PreToolUse)
   // so the "Once"-grant revoke targets the manager the Pre check mutated.
   // Fall back to the closure-cached value so a PostToolUse dispatched without
-  // an injected provider (unit tests, SessionEnd) still finds the manager that
-  // was resolved when the Pre handler ran. The deprecated `opts.getGrantManager`
-  // is NOT consulted here — the cache always has priority.
+  // an injected provider (SessionEnd) still finds the manager that was resolved
+  // when the Pre handler ran.
   const grantManager = context.grantManager ?? state.lastSeenGrantManager;
   if (!grantManager) return {};
   const grants = grantManager.getGrants();
@@ -395,12 +379,11 @@ function postToolUseImpl(
   let onceKey: string | undefined;
   for (const [k, entry] of state.onceApproved) {
     if (entry.mode !== mode) continue;
-    // Re-derive the path using the stored cwd so we confirm this is the same
-    // logical path the Pre handler resolved.
+    // Re-derive the path using the stored capturedCwd so we confirm this is the
+    // same logical path the Pre handler resolved.
     const { resolved: reresolved } = wouldBeRestricted(
       candidate,
       {
-        cwd: entry.capturedCwd,
         resolveBase: grants.resolveBase ?? entry.capturedCwd,
         readRoots: grants.readRoots,
         writeRoots: grants.writeRoots,

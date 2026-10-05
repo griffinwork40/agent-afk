@@ -29,7 +29,7 @@
 import { watch, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { getPeerInboxDir } from '../../../paths.js';
-import { listHeld, releaseHeld, claimPending, reclaimDelivered, envelopeFilename } from '../../../agent/peer/inbox-store.js';
+import { listHeld, releaseHeld, claimPending, reclaimDelivered, envelopeFilename, writeInjectionAck, recoverUnackedDelivered } from '../../../agent/peer/inbox-store.js';
 import { resolvePeerInboundMode, type PeerInboundMode } from '../../../agent/peer/inbound-mode.js';
 import { createWakeBudget, type WakeBudget } from '../../../agent/peer/guards.js';
 import { renderPeerMessageBlock, type PeerEnvelope } from '../../../agent/peer/envelope.js';
@@ -179,9 +179,12 @@ export class PeerInboxNotifier {
     if (count <= 0 || this.buffer.length === 0) return '';
     const toConsume = this.buffer.splice(0, count);
     const text = toConsume.map(({ envelope }) => renderPeerMessageBlock(envelope)).join('\n') + '\n\n';
-    for (const { envelope } of toConsume) {
+    for (const { envelope, sessionId } of toConsume) {
       const bytes = Buffer.byteLength(envelope.body, 'utf8');
       void emitPeerMessage(this.resolveTraceWriter(), { action: 'injected', messageId: envelope.messageId, peer: envelope.from.id, bytes });
+      // Write injection-ack marker so recoverUnackedDelivered on restart will
+      // not re-queue this envelope. Fire-and-forget: never throws.
+      void writeInjectionAck(sessionId, envelopeFilename(envelope));
     }
     return text;
   }
@@ -410,6 +413,14 @@ export class PeerInboxNotifier {
     // Guard: disposed, re-keyed, OR a swap fired between the awaited mkdir and now.
     if (this.disposed || this.watchedId !== sessionId || !this.isCurrent(sessionId, startGen)) return;
     void this.advertise(sessionId, startGen);
+    // Recover any envelopes claimed before a prior crash that were never acked.
+    // Fire-and-forget: best-effort, never throws. Recovery moves them back to
+    // pending/ so the next scan picks them up for re-delivery.
+    void recoverUnackedDelivered(sessionId).then((recovered) => {
+      if (recovered.length > 0 && this.isCurrent(sessionId, startGen)) {
+        this.opts.writeLine(`↩ recovered ${recovered.length} unacked peer message(s) from prior crash`);
+      }
+    });
     const ac = new AbortController();
     this.watchAc = ac;
     const watchGen = this.generation;

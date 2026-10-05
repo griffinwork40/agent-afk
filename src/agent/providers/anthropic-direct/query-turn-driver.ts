@@ -60,6 +60,14 @@ export interface TurnDriverContext {
   /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
   readonly beforeNextRound: (() => string | undefined) | undefined;
   /**
+   * Provider-side stop-hook seam (issue #2714). Undefined when not wired.
+   * Called before `turn.completed` on natural turn ends; see RunTurnInput.beforeTurnEnd.
+   *
+   * Finding 3: optional second arg threads the just-finished assistant text so
+   * buildStopContext doesn't need to scan stale history.
+   */
+  readonly beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
+  /**
    * The session's configured working directory — `config.cwd || process.cwd()`.
    * Used instead of bare `process.cwd()` so daemon tasks whose `cwd` differs
    * from the daemon process's working directory report the correct path in
@@ -137,6 +145,7 @@ function buildTurnRunInput(
     ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
     ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
     ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),
+    ...(ctx.beforeTurnEnd ? { beforeTurnEnd: ctx.beforeTurnEnd } : {}),
     journalSync: ctx.state.journalSync,
     onUsageProgress: (usage) => { ctx.state.lastUsage = usage; },
   });

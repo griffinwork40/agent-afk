@@ -157,6 +157,8 @@ export class StreamRenderer {
    * source, so a single tracker is correct here.
    */
   private inFlightTools = new InFlightToolTracker();
+  /** Root-session-only tools; drives the wait_for hint (subagent waits never yield). */
+  private rootTools = new InFlightToolTracker();
 
   private disposed = false;
   /** Flash tracker for 150ms glyph pulses on tool completion. Null until arm(). */
@@ -206,13 +208,11 @@ export class StreamRenderer {
     // trailing suppressed run is summarized in the artifact rather than
     // silently dropped. See `dispose()`.
     this.out = this.captureMode ? makeDedupingLineWriter(opts.out, 2) : opts.out;
-    // Resolve thinking mode: explicit option wins; otherwise the deprecated
-    // `verbose` boolean maps to 'live' (true) or 'summary' (false/unset).
+    // Resolve thinking mode: explicit option wins; default is 'summary'.
     // In capture-mode, 'live' is downgraded to 'summary' so the captured
     // artifact records one collapsed summary per turn rather than N
     // overlay-paint frames mid-turn.
-    const requestedThinkingMode =
-      opts.thinkingMode ?? (opts.verbose === true ? 'live' : 'summary');
+    const requestedThinkingMode = opts.thinkingMode ?? 'summary';
     this.thinkingMode = this.captureMode && requestedThinkingMode === 'live'
       ? 'summary'
       : requestedThinkingMode;
@@ -371,7 +371,6 @@ export class StreamRenderer {
       lastProgressByTask: this.lastProgressByTask,
       sources: this.sources,
       childActivity: this.childActivity,
-      getSkillIdentity: () => this.skillIdentity.current,
       getInterrupting: () => this.interrupting,
       getSoftStopping: () => this.softStopping,
     });
@@ -396,8 +395,13 @@ export class StreamRenderer {
     // owns its own resize subscription; this covers the rest of the overlay
     // surface. Debounced + coalesced upstream by ResizeBus.
     this.resizeUnsub = subscribeToResize(this.overlayComposer, false);
+    // Invariant: the skill identity (/name, purpose, args) renders exactly
+    // once, as this durable scrollback introduction. The live progress banner
+    // must not repeat it: #2895 also prefixed the banner with the identity,
+    // which painted the same preview twice on every slash-skill dispatch
+    // (full preview directly beneath the intro, then `/name` above the
+    // activity rows).
     await this.skillIdentity.introduce(this.coordinator, compositor, this.out);
-    if (this.skillIdentity.current) this.overlayComposer.flush();
   }
 
   /**
@@ -559,7 +563,6 @@ export class StreamRenderer {
       childActivity: this.childActivity,
       ...(this.isTTY ? { stageTracker: this.stageTracker } : {}),
       ...(this.activeSkillName ? { activeSkillName: this.activeSkillName } : {}),
-      ...(this.skillIdentity.current ? { skillIdentity: this.skillIdentity.current } : {}),
       ...(this.smoke ? { thoughtHold: this.smoke.thoughtHold } : {}),
     });
   }
@@ -582,6 +585,7 @@ export class StreamRenderer {
       coordinator: this.coordinator,
       childActivity: this.childActivity,
       inFlightTools: this.inFlightTools,
+      rootTools: this.rootTools,
       sources: this.sources,
       subagentMarkdown: this.subagentMarkdown,
       lastProgressByTask: this.lastProgressByTask,
@@ -614,6 +618,10 @@ export class StreamRenderer {
     this.softStopping = false;
     this.interrupting = false;
     this.skillIdentity.clear();
+    // Clear the wait hint so an aborted/resumed turn cannot leave it stale on a
+    // borrowed compositor.
+    this.rootTools.reset();
+    this.compositor?.setRootWaitActive?.(false);
     const ctx: DisposeCtx = {
       out: this.out,
       isTTY: this.isTTY,

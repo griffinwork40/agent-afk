@@ -269,6 +269,7 @@ export type HookEventName =
   | 'PostToolUseFailure'
   | 'SessionStart'
   | 'SessionEnd'
+  | 'Stop'
   | 'SubagentStart'
   | 'SubagentStop';
 

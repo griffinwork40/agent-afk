@@ -78,8 +78,10 @@ function buildSkillForkManager(
   const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
   return new SubagentManager({
     parentAbortSignal: perPath.parentAbortSignal,
-    apiKey: perPath.apiKey,
-    parentModel: perPath.parentModel,
+    // #2844: pair the credential with its source model atomically.
+    ...(perPath.apiKey !== undefined
+      ? { parentCredential: { key: perPath.apiKey, sourceModel: perPath.parentModel } }
+      : {}),
     ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),

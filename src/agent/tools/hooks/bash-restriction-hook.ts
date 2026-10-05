@@ -133,13 +133,7 @@ export const SENSITIVE_PATH_SIGNAL =
   /\.ssh\b|\bid_rsa\b|\bid_ed25519\b|\.gnupg\b|\.aws\b|\.config[/\\]gh\b|\.config[/\\]gcloud\b|\.netrc\b|\.password-store\b|\.afk[/\\]config\b|\.npmrc\b|\.docker[/\\]config\.json\b|\.git-credentials\b|\.kube[/\\]config\b|Library[/\\]Application Support\b|[/\\]etc[/\\]shadow\b|[/\\]etc[/\\]sudoers\b|master\.passwd\b|Library[/\\]LaunchAgents\b|Library[/\\]LaunchDaemons\b|\.config[/\\]systemd\b|AppData[/\\]Roaming[/\\]Mozilla\b|AppData[/\\]Roaming[/\\]gcloud\b|AppData[/\\]Roaming[/\\]Docker\b|AppData[/\\]Local[/\\]Google[/\\]Chrome\b|AppData[/\\]Local[/\\]Chromium\b|AppData[/\\]Local[/\\]BraveSoftware\b|AppData[/\\]Local[/\\]Microsoft[/\\]Edge\b/i;
 
 export interface BashRestrictionHookOptions {
-  /**
-   * @deprecated (#528) — use `context.grantManager` (injected per-session by
-   * the dispatcher) instead. This field is a test-only fallback; production
-   * code must NOT populate it. Survives so existing unit tests need not be
-   * rewritten.
-   */
-  getGrantManager?: () => (import('../grant-manager.js').GrantManager | undefined);
+
   /**
    * When true, skip the interpreter-eval denylist (check 1 below). The
    * restricted-root substring check (check 2) is unaffected. Wired from
@@ -192,9 +186,7 @@ export function createBashRestrictionHook(opts: BashRestrictionHookOptions) {
     // forked child's restricted-root view is derived from ITS own grants, not
     // the top-level session's (#435/#514). The process-global ref has been
     // retired (#528); `context.grantManager` is the primary source.
-    // `opts.getGrantManager` is a deprecated test-only fallback (never used
-    // in production); see BashRestrictionHookOptions.getGrantManager JSDoc.
-    const grantManager = context.grantManager ?? opts.getGrantManager?.();
+    const grantManager = context.grantManager;
     const interactiveSurface = grantManager !== undefined;
 
     // Precompute the sensitive-path view ONCE — both checks below consume it.

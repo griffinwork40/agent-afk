@@ -57,7 +57,41 @@ every field in that object, which events carry which fields, and the contract fo
 |---|---|---|
 | `trigger` | `string \| null` | What caused the compaction: `"manual"` (`/compact` slash command) or `"auto"` (context-limit auto-compact). `null` when the trigger was not recorded. |
 
-### `Stop`, `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`
+### `Stop`
+
+| Field | Type | Description |
+|---|---|---|
+| `stop_hook_active` | `true \| false` | `true` when a previous Stop hook in this turn already triggered a same-turn continuation (i.e. `continuation > 0`); `false` on the first Stop dispatch of a turn. Use this to distinguish a re-entry Stop from the original one. |
+| `continuation` | `number` | 0-based index of this Stop dispatch within the current turn. `0` on the first dispatch, `1` on the first continuation, etc. Always present. |
+
+#### Blocking Stop hooks and same-turn continuation (issue #2714)
+
+When a `Stop` hook exits with `decision: "block"`, AFK appends the hook's
+`reason` as a user message and re-enters the model loop **in the same turn**
+(CC-compatible behaviour). This is called a *continuation*. The model responds,
+then Stop is dispatched again — with `continuation` incremented and
+`stopHookActive: true`.
+
+Continuations are capped by `AFK_STOP_HOOK_MAX_CONTINUATIONS` (default `2`).
+The cap is global across all hooks for that turn — two blocking hooks together
+consume from the same counter. When the cap is reached the block is treated as
+non-blocking and the turn ends normally. Two trace phase events mark this:
+
+| Phase | When |
+|---|---|
+| `stop_hook_continuation` | A Stop hook blocked; the continuation round begins. Metadata: `{ continuation: N, reasonHead: "…" }`. |
+| `stop_hook_cap_reached` | The cap was hit and the turn ended normally. Metadata: `{ cap: N }`. |
+
+Setting `AFK_STOP_HOOK_MAX_CONTINUATIONS=0` disables continuation entirely:
+blocks are logged only, matching pre-#2714 behaviour.
+
+**Why the session-layer Stop cannot double-fire:** the provider-side seam runs
+*before* `turn.completed` is emitted. The session-layer Stop dispatch in
+`turn-stream-runner.stop.ts` fires on the `done` event, which IS the surface
+boundary. Moving the seam to the provider layer ensures the surface never sees
+the completed turn until after all continuations have been resolved.
+
+### `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`
 
 No event-specific fields beyond the always-present set.
 

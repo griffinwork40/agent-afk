@@ -480,12 +480,11 @@ describe('patch_apply — _reread_warning on partial_failure (#2065)', () => {
 // ---------------------------------------------------------------------------
 describe('patch_apply handler — unconfined session (no cwd, empty writeRoots)', () => {
   // Context that mimics an unconfined subagent dispatched before the parent
-  // session's provider-assigned id is known: resolveBase and cwd are both
-  // undefined, but writeRoots is an EXPLICIT empty array (the result of
+  // session's provider-assigned id is known: resolveBase is undefined,
+  // but writeRoots is an EXPLICIT empty array (the result of
   // `ensureInitialized(undefined)` in the provider's grant state).
   const unconfinedCtx = () => ({
     resolveBase: undefined as string | undefined,
-    cwd: undefined as string | undefined,
     writeRoots: [] as string[],
     readRoots: [] as string[],
   });

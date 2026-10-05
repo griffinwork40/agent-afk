@@ -24,6 +24,7 @@
 import { extractRawToolInput } from './raw-input.js';
 import type { SubagentToolSummary, ToolEventInput } from './schema.js';
 import type { JournalBlock, JournalRecord, JournalResultPart } from '../journal/types.js';
+import { detectPrUrlFromEvents } from './derive.pr-detect.js';
 
 export interface JournalAdapterOptions {
   /**
@@ -152,6 +153,10 @@ export function journalRecordsToToolEvents(
  * Build a SubagentToolSummary from one subagent's journal records.
  * Only tool_use blocks contribute (not results) — we count calls, not
  * round trips. Uses first-seen dedup by toolUseId (same as parent path).
+ *
+ * Also detects PRs opened by the subagent (#2795 gap 6): converts the
+ * records to ToolEventInput[] (same path as the parent journal) and runs
+ * detectPrUrlFromEvents so the parent session can pick up the URL.
  */
 export function summarizeSubagentJournal(
   subagentId: string,
@@ -185,5 +190,16 @@ export function summarizeSubagentJournal(
     }
   }
 
-  return { subagent_id: subagentId, tool_calls: toolCalls, tool_errors: toolErrors, tool_counts: toolCounts };
+  // PR detection: convert records to ToolEventInput so detectPrUrlFromEvents
+  // can apply the same invocation rules as the parent path. (#2795 gap 6)
+  const events = journalRecordsToToolEvents(records);
+  const detectedPrUrl = detectPrUrlFromEvents(events);
+
+  return {
+    subagent_id: subagentId,
+    tool_calls: toolCalls,
+    tool_errors: toolErrors,
+    tool_counts: toolCounts,
+    ...(detectedPrUrl !== null ? { detected_pr_url: detectedPrUrl } : {}),
+  };
 }

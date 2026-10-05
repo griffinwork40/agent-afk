@@ -452,6 +452,62 @@ esac
     });
   });
 
+    it('Stop context includes stop_hook_active and continuation in stdin payload', async () => {
+      const scriptPath = join(tmp, 'check-stop-fields.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"stop_hook_active":true'*) ;;
+  *) echo "missing or wrong stop_hook_active in: $payload" >&2; exit 2 ;;
+esac
+case "$payload" in
+  *'"continuation":2'*) echo '{"decision":"approve"}' ;;
+  *) echo "missing or wrong continuation in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'Stop',
+        sessionId: 'test-session',
+        stopHookActive: true,
+        continuation: 2,
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('Stop context on first dispatch has stop_hook_active:false and continuation:0', async () => {
+      const scriptPath = join(tmp, 'check-stop-first.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"stop_hook_active":false'*) ;;
+  *) echo "missing or wrong stop_hook_active in: $payload" >&2; exit 2 ;;
+esac
+case "$payload" in
+  *'"continuation":0'*) echo '{"decision":"approve"}' ;;
+  *) echo "missing or wrong continuation in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'Stop',
+        sessionId: 'test-session',
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
   // ---------------------------------------------------------------------------
   // session_id in stdin payload — opts.sessionId is the source of truth
   // ---------------------------------------------------------------------------
