@@ -2,7 +2,8 @@
  * Tests for the peer inter-round boundary delivery wiring.
  *
  * Covers:
- *  - installPeerBoundary: human priority, peer fallback, barrier, compose
+ *  - installPeerBoundary: human queue never consumed (end-of-turn delivery),
+ *    human barrier holds peers, peer delivery, compose
  *  - reinstallPeerBoundary: clears queue and re-installs on new session
  *  - Fake provider integration: both Anthropic and OpenAI applyBeforeNextRound
  *  - REPL adapter integration: connected, not just isolated queue unit tests
@@ -128,6 +129,8 @@ function makeCompositor(queuedText?: string) {
     },
     _reservations: reservations,
     _dropped: dropped,
+    /** Simulate the compositor's end-of-turn `→ idle` drain of the queue. */
+    _clear: () => { payloads.splice(0); queuedText = undefined; },
   };
 }
 
@@ -208,7 +211,10 @@ describe('installPeerBoundary', () => {
     expect(result).toContain('peer message A');
   });
 
-  it('returns human text when only human messages are queued in compositor', () => {
+  it('never injects or consumes queued human text (it is delivered at end of turn)', () => {
+    // Regression: #2810 drained the human queue at every tool boundary, so a
+    // message typed during bash/compose landed mid-turn and the wait_for yield
+    // notice ("end your turn so the message is delivered") became false.
     const session = makeSession();
     const compositor = makeCompositor('user typed this');
     const peerNotifier = makePeerNotifier();
@@ -218,13 +224,17 @@ describe('installPeerBoundary', () => {
       peerNotifier: peerNotifier as never,
       admissionQueue,
     });
-    const result = session.invokeCallback();
-    expect(result).toBe('user typed this');
-    // Must have consumed from compositor (dropQueued called).
-    expect(compositor._dropped).toHaveLength(1);
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(session.invokeCallback()).toBeUndefined();
+    // Queue untouched: nothing dropped or left reserved, text still queued.
+    expect(compositor._dropped).toHaveLength(0);
+    expect(compositor._reservations.size).toBe(0);
+    expect(compositor.hasPendingSubmission()).toBe(true);
+    expect(compositor.peekQueuedText()?.text).toBe('user typed this');
+    expect(admissionQueue.pending).toBe(false);
   });
 
-  it('human text wins over peer text (barrier)', () => {
+  it('queued human text holds peers back at every boundary until the queue drains', () => {
     const session = makeSession();
     const compositor = makeCompositor('user typed this');
     const peerNotifier = makePeerNotifier(['peer message']);
@@ -234,16 +244,13 @@ describe('installPeerBoundary', () => {
       peerNotifier: peerNotifier as never,
       admissionQueue,
     });
-    const result = session.invokeCallback();
-    // Only human text returned first.
-    expect(result).toBe('user typed this');
-    expect(result).not.toContain('peer message');
-    // hasPendingSubmission=true blocked peer injection — peer stays in the
-    // notifier buffer (NOT drained into the admission queue). On the second
-    // invocation, the human queue is empty so the barrier lifts and peer
-    // is admitted from the notifier buffer.
-    const result2 = session.invokeCallback();
-    expect(result2).toContain('peer message');
+    // Barrier holds for as long as the human message is queued.
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(peerNotifier.hasPendingInjections()).toBe(true);
+    // End of turn: the compositor drains the human queue; the barrier lifts.
+    compositor._clear();
+    expect(session.invokeCallback()).toContain('peer message');
   });
 
   it('drain is idempotent — second call with empty queue returns undefined', () => {
@@ -337,7 +344,7 @@ describe('reinstallPeerBoundary', () => {
 // call the stored callback and inject the result into the message history.
 
 describe('Fake Anthropic provider integration', () => {
-  it('injects human queued message before next model request', () => {
+  it('does NOT inject a human queued message after a tool round (e.g. bash)', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('user mid-turn text');
@@ -350,19 +357,20 @@ describe('Fake Anthropic provider integration', () => {
       admissionQueue,
     });
 
-    // Simulate provider loop: tool batch completed, ask for steering text.
+    // Simulate provider loop: a bash tool batch completed, ask for steering text.
     const steeringText = session.invokeCallback();
-    expect(steeringText).toBe('user mid-turn text');
+    expect(steeringText).toBeUndefined();
 
-    // Simulate applyBeforeNextRound (Anthropic): push new user turn.
+    // Simulate applyBeforeNextRound (Anthropic): nothing is pushed.
     const messages: Array<{ role: string; content: unknown }> = [
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] },
     ];
     if (steeringText) {
       messages.push({ role: 'user', content: [{ type: 'text', text: steeringText }] });
     }
-    expect(messages).toHaveLength(2);
-    expect((messages[1]!.content as Array<{ type: string; text: string }>)[0]!.text).toBe('user mid-turn text');
+    expect(messages).toHaveLength(1);
+    // The message is still queued for the end-of-turn drain.
+    expect(compositor.peekQueuedText()?.text).toBe('user mid-turn text');
   });
 
   it('injects peer message when no human queued message', () => {
@@ -395,12 +403,12 @@ describe('Fake Anthropic provider integration', () => {
       admissionQueue,
     });
 
-    // First boundary: human wins.
+    // First boundary: human pending → nothing injected, peer held.
     const text1 = session.invokeCallback();
-    expect(text1).toBe('user typed something');
-    expect(text1).not.toContain('peer message X');
+    expect(text1).toBeUndefined();
 
-    // Second boundary: peer is now admitted (human queue empty).
+    // Turn ends, human queue drains; the next boundary admits the peer.
+    compositor._clear();
     const text2 = session.invokeCallback();
     expect(text2).toBeDefined();
     expect(text2).toContain('peer message X');
@@ -426,7 +434,7 @@ describe('Fake Anthropic provider integration', () => {
 });
 
 describe('Fake OpenAI provider integration', () => {
-  it('injects human message at tool boundary', () => {
+  it('does NOT inject a human message at a tool boundary', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('openai user queued msg');
@@ -441,17 +449,8 @@ describe('Fake OpenAI provider integration', () => {
 
     // Simulate OpenAI provider: it calls setBeforeNextRound callback.
     const steeringText = session.invokeCallback();
-    expect(steeringText).toBe('openai user queued msg');
-
-    // Simulate OpenAI applyBeforeNextRound: append to priorTurns.
-    const priorTurns: Array<{ role: string; content: unknown }> = [
-      { role: 'tool', content: 'tool result content' },
-    ];
-    if (steeringText) {
-      priorTurns.push({ role: 'user', content: steeringText });
-    }
-    expect(priorTurns).toHaveLength(2);
-    expect(priorTurns[1]!.content).toBe('openai user queued msg');
+    expect(steeringText).toBeUndefined();
+    expect(compositor.peekQueuedText()?.text).toBe('openai user queued msg');
   });
 
   it('peer message from notifier buffer injected for OpenAI path', () => {
@@ -637,19 +636,19 @@ describe('Human barrier — attachment blocking', () => {
       admissionQueue,
     });
 
-    // First boundary: hasPendingSubmission=true and peekQueuedText returns text.
-    // Human wins; peer waits in notifier buffer.
+    // First boundary: hasPendingSubmission=true. Nothing injected; the slash
+    // text stays queued for end of turn and the peer waits in the buffer.
     const first = session.invokeCallback();
-    expect(first).toBe('/model gpt-4');
-    expect(first).not.toContain('peer wants in');
+    expect(first).toBeUndefined();
+    expect(compositor.peekQueuedText()?.text).toBe('/model gpt-4');
 
-    // Second boundary: human queue empty (hasPendingSubmission=false);
-    // peer is admitted from the notifier buffer.
+    // Turn ends, human queue drains; peer is admitted from the notifier buffer.
+    compositor._clear();
     const second = session.invokeCallback();
     expect(second).toContain('peer wants in');
   });
 
-  it('compositor queue is consumed exactly once (no duplicate delivery)', () => {
+  it('compositor queue is never consumed by the boundary (no duplicate delivery)', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('exact-once-text');
@@ -662,16 +661,11 @@ describe('Human barrier — attachment blocking', () => {
       admissionQueue,
     });
 
-    const first = session.invokeCallback();
-    expect(first).toBe('exact-once-text');
-    // Consumed from compositor.
-    expect(compositor._dropped).toHaveLength(1);
-
-    // Second call: compositor is empty.
-    const second = session.invokeCallback();
-    expect(second).toBeUndefined();
-    // No second drop.
-    expect(compositor._dropped).toHaveLength(1);
+    // The end-of-turn drain is the only consumer, so it can never be delivered
+    // twice (once here, once as its own turn).
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(session.invokeCallback()).toBeUndefined();
+    expect(compositor._dropped).toHaveLength(0);
   });
 
   it('peer stays in notifier buffer after attachment barrier — delivered at next boundary once attachment is gone', () => {
@@ -920,10 +914,9 @@ describe('Data-loss regression — five near-64KiB messages delivered without lo
   });
 });
 
-// ── Slash / shell barrier: submitHuman is GATED (not unconditional) ───────────
+// ── Slash / shell barrier: human text is never admitted ──────────────────────
 // Verifies that /slash and !shell text in the compositor queue acts as a human
-// barrier (blocks peer) AND that the submitHuman call is only made when
-// hasPendingSubmission() is true — it is NOT called unconditionally.
+// barrier (blocks peer) AND that submitHuman is never called by the boundary.
 // Also verifies that slash/shell text does NOT appear when the compositor is
 // empty (no spurious injection).
 
@@ -942,14 +935,14 @@ describe('Slash and shell passthrough as human barriers', () => {
       admissionQueue,
     });
 
-    // First boundary: /slash command wins; peer is blocked.
+    // First boundary: /slash command pending; nothing injected, peer blocked.
     const result1 = session.invokeCallback();
-    expect(result1).toBe('/model gpt-4o');
-    expect(result1).not.toContain('peer while slash pending');
+    expect(result1).toBeUndefined();
     // Peer still buffered — not lost.
     expect(peerNotifier.hasPendingInjections()).toBe(true);
 
-    // Second boundary: slash is consumed; peer is now admitted.
+    // Turn ends and the slash command drains; peer is now admitted.
+    compositor._clear();
     const result2 = session.invokeCallback();
     expect(result2).toContain('peer while slash pending');
   });
@@ -968,13 +961,13 @@ describe('Slash and shell passthrough as human barriers', () => {
       admissionQueue,
     });
 
-    // First boundary: shell text wins.
+    // First boundary: shell text pending; nothing injected.
     const result1 = session.invokeCallback();
-    expect(result1).toBe('!ls -la');
-    expect(result1).not.toContain('peer while shell pending');
+    expect(result1).toBeUndefined();
     expect(peerNotifier.hasPendingInjections()).toBe(true);
 
-    // Second boundary: peer delivered.
+    // Turn ends and the shell text drains; peer delivered.
+    compositor._clear();
     const result2 = session.invokeCallback();
     expect(result2).toContain('peer while shell pending');
   });
@@ -1004,7 +997,7 @@ describe('Slash and shell passthrough as human barriers', () => {
     expect(result).toContain('only peer message');
   });
 
-  it('submitHuman is called ONLY when hasPendingSubmission=true and peekQueuedText returns text', () => {
+  it('submitHuman is NEVER called, even when queued human text is pending', () => {
     const admissionQueue = new AdmissionQueue();
     const session = makeSession();
     const compositor = makeCompositor('queued human text');
@@ -1019,9 +1012,8 @@ describe('Slash and shell passthrough as human barriers', () => {
     });
 
     session.invokeCallback();
-    // submitHuman called exactly once with the queued text.
-    expect(submitHumanSpy).toHaveBeenCalledTimes(1);
-    expect(submitHumanSpy).toHaveBeenCalledWith('queued human text');
+    // The boundary never admits human text; it is delivered at end of turn.
+    expect(submitHumanSpy).not.toHaveBeenCalled();
   });
 
   it('attachment barrier (hasPendingSubmission=true, peekQueuedText=undefined) does NOT call submitHuman', () => {
