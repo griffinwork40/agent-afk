@@ -23,8 +23,8 @@
  * branches/worktrees without the script are unaffected (the launcher exits 0).
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, join, normalize, resolve } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, normalize, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -81,29 +81,64 @@ function configuredHooksPath() {
 }
 
 /**
- * Normalise a filesystem path for comparison: resolve to real path, then
- * normalise separators. On Windows (case-insensitive FS), also lower-cases
- * the result so that paths differing only in case or in 8.3 vs long-name form
- * compare equal.
+ * Canonicalise a path for string comparison.
  *
- * Contract: on Windows, git rev-parse returns forward-slash paths (e.g.
- * `C:/Users/...`). Node's path.resolve() converts them to backslash but
- * realpathSync() may fail on raw forward-slash Windows paths. We normalise
- * to backslash BEFORE calling realpathSync so both sides receive the same
- * input format.
+ * Contract: uses `realpathSync.native` (GetFinalPathNameByHandle on Windows),
+ * NOT the JS `realpathSync`. The JS implementation only walks symlinks and
+ * leaves 8.3 short names untouched, so `C:\Users\RUNNER~1\...` (from
+ * os.tmpdir / import.meta.url) never matched git's long-form
+ * `C:/Users/runneradmin/...` and every Windows install was refused as
+ * "nested". The native call expands short names and fixes case; we still
+ * lower-case on win32 because NTFS is case-insensitive and drive letters vary.
  * @param {string} p
  * @returns {string}
  */
-function normalisedPath(p) {
-  // Normalise separators first so realpathSync receives a well-formed path
-  // on Windows regardless of whether git or Node produced the input.
-  const native = normalize(resolve(p));
+function canonicalPath(p) {
+  const native = resolve(p);
+  let real = native;
   try {
-    const real = realpathSync(native);
-    return process.platform === 'win32' ? normalize(real).toLowerCase() : normalize(real);
+    real = realpathSync.native(native);
   } catch {
-    return process.platform === 'win32' ? native.toLowerCase() : native;
+    try {
+      real = realpathSync(native);
+    } catch {
+      // Keep the resolved path; comparison degrades to lexical.
+    }
   }
+  const out = normalize(real);
+  return process.platform === 'win32' ? out.toLowerCase() : out;
+}
+
+/**
+ * Identity of a directory as dev+ino (bigint, so 64-bit NTFS file ids do not
+ * lose precision). Returns undefined when unavailable or zero.
+ * @param {string} p
+ * @returns {string | undefined}
+ */
+function dirIdentity(p) {
+  try {
+    const st = statSync(p, { bigint: true });
+    if (st.ino === 0n) return undefined;
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True when `a` and `b` name the same directory. Filesystem identity
+ * (dev+ino) is authoritative and immune to separator, case, short-name, and
+ * symlink differences; canonical path comparison is the fallback when stat
+ * cannot provide an identity.
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+function sameDirectory(a, b) {
+  const ia = dirIdentity(a);
+  const ib = dirIdentity(b);
+  if (ia !== undefined && ib !== undefined) return ia === ib;
+  return relative(canonicalPath(a), canonicalPath(b)) === '';
 }
 
 /**
@@ -115,7 +150,7 @@ function normalisedPath(p) {
 function installerBelongsToTopLevel(dir) {
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptDir);
-  return normalisedPath(packageRoot) === normalisedPath(dir);
+  return sameDirectory(packageRoot, dir);
 }
 
 // ── Launcher content ──────────────────────────────────────────────────────────
