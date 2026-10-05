@@ -214,6 +214,8 @@ function buildToolOutputEvent(
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
+      ...(event.incomplete === true && { incomplete: true }),
+      ...(event.incompleteReason !== undefined && { incompleteReason: event.incompleteReason }),
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,

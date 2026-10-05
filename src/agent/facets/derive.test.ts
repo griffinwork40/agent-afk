@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(7); // v7: added outcome_source, tool_errors_total, pr_url
+    expect(facet.facet_version).toBe(8); // v8: added compose_partial_nodes (#2970)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -1302,5 +1302,78 @@ describe('deriveSessionFacet', () => {
     const facet = deriveSessionFacet(oneAssistant('**Done** — all tasks finished.'));
     expect(facet.outcome).toBe('unknown'); // not 'fully_achieved'
     expect(facet.outcome_source).toBe('none');
+  });
+
+  // --- compose_partial_nodes (#2970) ---
+  describe('compose_partial_nodes', () => {
+    function sessionWithToolEvent(events: Array<{ toolName: string; toolUseId: string; incomplete?: boolean }>): StoredSessionInput {
+      return {
+        sessionId: 'partial-test',
+        model: 'haiku',
+        startedAt: 0,
+        savedAt: 1000,
+        totalTurns: 1,
+        turns: [{ toolEvents: events }],
+      };
+    }
+
+    it('is absent when no compose calls were made', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'bash', toolUseId: 'a' },
+      ]));
+      expect(facet.compose_partial_nodes).toBeUndefined();
+    });
+
+    it('is absent when compose ran cleanly (no incomplete flag)', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a' },
+      ]));
+      expect(facet.compose_partial_nodes).toBeUndefined();
+    });
+
+    it('counts 1 when a compose call carries incomplete: true (soft-deadline wind-down)', () => {
+      // Acceptance criterion (#2970): a compose call with one wound-down node
+      // shows compose_partial_nodes: 1 in the facet.
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(1);
+    });
+
+    it('counts multiple partial compose calls', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+        { toolName: 'compose', toolUseId: 'b' },
+        { toolName: 'compose', toolUseId: 'c', incomplete: true },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(2);
+    });
+
+    it('non-compose tools with incomplete: true do NOT count', () => {
+      // Only compose tool partials are tracked; agent/skill/etc are not.
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'agent', toolUseId: 'a', incomplete: true },
+        { toolName: 'compose', toolUseId: 'b', incomplete: true },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(1);
+    });
+
+    it('is schema-valid when populated', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+      ]));
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('a hard-failed compose call (isError:true) is not counted as partial', () => {
+      // node_timeout_ms goes to result.failed, making the compose result isError:true.
+      // The compose executor never sets incomplete: true when isError is true (only
+      // when result.partial is non-empty). Derive counts only compose events where
+      // ev.incomplete === true, so this is correctly absent.
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a' }, // isError not set; no incomplete
+      ]));
+      expect(facet.compose_partial_nodes).toBeUndefined();
+    });
   });
 });

@@ -98,6 +98,7 @@ export function journalRecordsToToolEvents(
   const toolUseCommand = new Map<string, string | undefined>(); // id → bash command summary
   const toolResultText = new Map<string, string>(); // id → result text
   const toolResultError = new Map<string, boolean>(); // id → isError
+  const toolResultIncomplete = new Map<string, true>(); // id → incomplete (#2970)
 
   for (const rec of records) {
     if (rec.kind !== 'append') continue;
@@ -122,6 +123,13 @@ export function journalRecordsToToolEvents(
         if (block.isError !== undefined) {
           toolResultError.set(block.toolUseId, block.isError);
         }
+        // #2970: incomplete written by future journal adapters once the
+        // compose-executor incomplete signal is plumbed to the journal write
+        // path. Old journal records that lack this field are read as absent
+        // (= not incomplete), which is the correct conservative default.
+        if (block.incomplete === true) {
+          toolResultIncomplete.set(block.toolUseId, true);
+        }
       }
     }
   }
@@ -135,6 +143,7 @@ export function journalRecordsToToolEvents(
     const input = toolUseCommand.get(id);
     const result = toolResultText.get(id);
     const isError = toolResultError.get(id);
+    const incomplete = toolResultIncomplete.get(id);
     const ev: ToolEventInput = {
       toolName,
       toolUseId: id,
@@ -142,6 +151,7 @@ export function journalRecordsToToolEvents(
       ...(inputRaw !== undefined ? { inputRaw } : {}),
       ...(result !== undefined ? { result } : {}),
       ...(isError !== undefined ? { isError } : {}),
+      ...(incomplete === true ? { incomplete: true } : {}),
     };
     events.push(ev);
   }
