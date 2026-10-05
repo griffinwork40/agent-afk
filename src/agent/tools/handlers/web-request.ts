@@ -178,6 +178,12 @@ export interface WebRequestHandlerOptions {
   domainCheck?: DomainCheckFn;
   /** Optional effect ledger hook (see #1412). */
   recordEffect?: RecordEffectFn;
+  /**
+   * Filesystem read seam for tests. Passed to loadDomainLists() so tests can
+   * inject a fake browser.json without touching the filesystem.
+   * Return `undefined` to simulate a missing file.
+   */
+  readFileSyncFn?: (path: string) => string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,16 +194,19 @@ export function createWebRequestHandler(opts: WebRequestHandlerOptions = {}): To
   const fetchFn: FetchFn = opts.fetchFn ?? globalThis.fetch;
   const envSource: NodeJS.ProcessEnv = opts.env ?? process.env;
 
-  // Resolve domain policy from env vars directly (#2881 fix): parse only the
-  // two domain-list vars, independent of unrelated browser config fields
-  // (backend, profile, browser.json) that used to cause silent fail-open.
+  // Resolve domain policy from env vars and browser.json (#2919 fix): merges
+  // both sources via loadDomainLists() so browser.json allowedDomains /
+  // blockedDomains are enforced even when env vars are unset. Does NOT call
+  // resolveBackend() or other unrelated validators (#2881).
   // If opts.domainCheck is supplied (tests), it takes precedence.
   async function resolveDomainCheck(): Promise<DomainCheckFn | undefined> {
     if (opts.domainCheck !== undefined) return opts.domainCheck;
     try {
-      const { parseDomainList, enforceDomainPolicy } = await import('../../../browser/config.js');
-      const allowedDomains = parseDomainList(envSource['AFK_BROWSER_ALLOWED_DOMAINS']);
-      const blockedDomains = parseDomainList(envSource['AFK_BROWSER_BLOCKED_DOMAINS']);
+      const { loadDomainLists, enforceDomainPolicy } = await import('../../../browser/config.js');
+      const { allowedDomains, blockedDomains } = loadDomainLists({
+        env: envSource,
+        readFileSync: opts.readFileSyncFn,
+      });
       if (allowedDomains.length === 0 && blockedDomains.length === 0) return undefined;
       const minimalConfig = {
         allowedDomains,

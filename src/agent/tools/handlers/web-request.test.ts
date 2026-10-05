@@ -348,6 +348,120 @@ describe('web_request handler — domain policy', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Domain policy from browser.json
+// ---------------------------------------------------------------------------
+
+describe('web_request handler — domain policy from browser.json', () => {
+  /** Build a minimal browser.json string with the given domain lists. */
+  const fakeBrowserJson = (domains: { allowedDomains?: string[]; blockedDomains?: string[] }) =>
+    JSON.stringify(domains);
+
+  /** Returns a readFileSyncFn that always yields `content` regardless of path. */
+  const makeReadFileSyncFn =
+    (content: string) =>
+    (_path: string): string | undefined =>
+      content;
+
+  /** readFileSyncFn that simulates a missing browser.json. */
+  const noFile = (_path: string): string | undefined => undefined;
+
+  it('blocks domain listed in browser.json blockedDomains (no env var set)', async () => {
+    let fetchCalled = false;
+    const fetchFn = makeFetch(() => {
+      fetchCalled = true;
+      return makeResponse({ body: 'should not reach here' });
+    });
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: {},
+      readFileSyncFn: makeReadFileSyncFn(
+        fakeBrowserJson({ blockedDomains: ['file-blocked.example.com'] }),
+      ),
+    });
+
+    const r = await handler(
+      { url: 'https://file-blocked.example.com/path', method: 'GET' },
+      signal(),
+    );
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/blocked/i);
+    expect(fetchCalled).toBe(false);
+  });
+
+  it('allows domain listed in browser.json allowedDomains only (no env var set)', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: 'ok', contentType: 'text/plain' }));
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: {},
+      readFileSyncFn: makeReadFileSyncFn(
+        fakeBrowserJson({ allowedDomains: ['allowed.example.com'] }),
+      ),
+    });
+
+    // allowed.example.com is in the allowlist — should pass
+    const rAllowed = await handler(
+      { url: 'https://allowed.example.com/path', method: 'GET' },
+      signal(),
+    );
+    expect(rAllowed.isError).toBeUndefined();
+
+    // other.example.com is NOT in the allowlist — should be blocked
+    const rOther = await handler(
+      { url: 'https://other.example.com/path', method: 'GET' },
+      signal(),
+    );
+    expect(rOther.isError).toBe(true);
+    expect(rOther.content).toMatch(/blocked/i);
+  });
+
+  // Regression test for #2881 applied to browser.json: AFK_BROWSER_BACKEND=bogus
+  // in env must NOT disable blockedDomains from browser.json. Previously,
+  // loadBrowserConfig() threw on the bad backend, and the catch block returned
+  // undefined, bypassing all domain enforcement. loadDomainLists() never calls
+  // resolveBackend(), so bad backend config is irrelevant.
+  it('browser.json blockedDomains enforced even when AFK_BROWSER_BACKEND=bogus (#2881 regression)', async () => {
+    let fetchCalled = false;
+    const fetchFn = makeFetch(() => {
+      fetchCalled = true;
+      return makeResponse({ body: 'should not reach here' });
+    });
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: { AFK_BROWSER_BACKEND: 'bogus' },
+      readFileSyncFn: makeReadFileSyncFn(
+        fakeBrowserJson({ blockedDomains: ['file-blocked-backend.example.com'] }),
+      ),
+    });
+
+    const r = await handler(
+      { url: 'https://file-blocked-backend.example.com/path', method: 'GET' },
+      signal(),
+    );
+
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/blocked/i);
+    expect(fetchCalled).toBe(false);
+  });
+
+  it('returns undefined policy (no blocking) when browser.json is absent and env vars are unset', async () => {
+    const fetchFn = makeFetch(() => makeResponse({ body: 'ok', contentType: 'text/plain' }));
+    const handler = createWebRequestHandler({
+      fetchFn,
+      lookupFn: publicLookup,
+      env: {},
+      readFileSyncFn: noFile,
+    });
+
+    const r = await handler({ url: 'https://example.com/', method: 'GET' }, signal());
+    expect(r.isError).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Secret redaction in response body
 // ---------------------------------------------------------------------------
 

@@ -251,13 +251,6 @@ describe('Gate 1 — CAN_USE_TOOL_PROVIDER_WIRING', () => {
 // ============================================================================
 
 describe('Gate 4 — WEB_REQUEST_DOMAIN_POLICY_PROD_PATH', () => {
-  beforeEach(() => {
-    // Prevent browser/config.js from reading a real browser.json by pointing
-    // AFK_BROWSER_CONFIG at a nonexistent path. The absence of the file causes
-    // loadBrowserConfig to use the env-derived base config only.
-    vi.stubEnv('AFK_BROWSER_CONFIG', '/nonexistent/afk-gate-liveness-browser.json');
-  });
-
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -275,10 +268,13 @@ describe('Gate 4 — WEB_REQUEST_DOMAIN_POLICY_PROD_PATH', () => {
       { address: '93.184.216.34' },
     ];
 
-    // NO domainCheck opt — exercises the lazy resolveDomainCheck() production path
+    // NO domainCheck opt — exercises the lazy resolveDomainCheck() production path.
+    // readFileSyncFn: () => undefined suppresses any real browser.json read so the
+    // test is isolated from whatever browser.json the developer may have configured.
     const handler = createWebRequestHandler({
       fetchFn: fetchSpy as typeof fetch,
       lookupFn: publicLookup,
+      readFileSyncFn: () => undefined,
       // domainCheck intentionally omitted — this is the production default path
     });
 
@@ -306,6 +302,7 @@ describe('Gate 4 — WEB_REQUEST_DOMAIN_POLICY_PROD_PATH', () => {
     const handler = createWebRequestHandler({
       fetchFn: fetchSpy as typeof fetch,
       lookupFn: publicLookup,
+      readFileSyncFn: () => undefined,
     });
 
     const result = await handler(

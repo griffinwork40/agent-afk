@@ -263,6 +263,91 @@ export function loadBrowserConfig(opts?: LoadBrowserConfigOptions): BrowserConfi
 }
 
 // ---------------------------------------------------------------------------
+// Domain list loader (for web_request and other non-browser consumers)
+// ---------------------------------------------------------------------------
+
+export interface LoadDomainListsOptions {
+  /** Override env source for tests. Defaults to importing from `../config/env.js`. */
+  env?: Record<string, string | undefined>;
+  /** Read filesystem when looking up browser.json. Defaults to defaultReadFileSync. */
+  readFileSync?: (path: string) => string | undefined;
+}
+
+/**
+ * Merge domain allow/block lists from browser.json and env vars.
+ *
+ * Contract: reads ONLY `allowedDomains` and `blockedDomains` from browser.json.
+ * Does NOT call resolveBackend(), assertSafeBrowserProfile(),
+ * resolveHeadlessDefault(), or any other validation that could throw on
+ * unrelated config fields. This is intentional — a bad AFK_BROWSER_BACKEND
+ * must not suppress domain enforcement (#2881).
+ *
+ * Merge semantics: env-var lists are ADDED to file lists (union, not
+ * replacement). Both are intentional configuration; neither overrides the other.
+ *
+ * If the JSON file is absent or has no domain keys, returns only env-derived
+ * lists. If the JSON file exists but is invalid JSON or not an object, throws.
+ */
+export function loadDomainLists(opts?: LoadDomainListsOptions): {
+  allowedDomains: readonly string[];
+  blockedDomains: readonly string[];
+} {
+  const envSource: Record<string, string | undefined> = opts?.env ?? defaultEnv;
+  const readFile = opts?.readFileSync ?? defaultReadFileSync;
+
+  // Parse env-var lists first — always present regardless of file state.
+  const envAllowed = parseDomainList(envSource['AFK_BROWSER_ALLOWED_DOMAINS']);
+  const envBlocked = parseDomainList(envSource['AFK_BROWSER_BLOCKED_DOMAINS']);
+
+  // Determine JSON config path: explicit env override, or default location.
+  const explicitPath = envSource['AFK_BROWSER_CONFIG'];
+  const candidatePath =
+    explicitPath !== undefined && explicitPath.trim() !== ''
+      ? explicitPath.trim()
+      : join(getAfkConfigDir(), 'browser.json');
+
+  const raw = readFile(candidatePath);
+  if (raw === undefined) {
+    // No JSON file present — return env-derived lists only.
+    return { allowedDomains: envAllowed, blockedDomains: envBlocked };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse browser config at ${candidatePath}: ${String(err)}`);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Browser config at ${candidatePath} must be a JSON object`);
+  }
+
+  const fileObj = parsed as Record<string, unknown>;
+
+  // Extract only domain lists from the file — ignore all other fields.
+  const fileAllowed: string[] = Array.isArray(fileObj['allowedDomains'])
+    ? (fileObj['allowedDomains'] as unknown[])
+        .filter((v): v is string => typeof v === 'string')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0)
+    : [];
+
+  const fileBlocked: string[] = Array.isArray(fileObj['blockedDomains'])
+    ? (fileObj['blockedDomains'] as unknown[])
+        .filter((v): v is string => typeof v === 'string')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0)
+    : [];
+
+  // Union: file + env (deduplicated via Set to avoid double-enforcement).
+  const mergedAllowed = [...new Set([...fileAllowed, ...envAllowed])];
+  const mergedBlocked = [...new Set([...fileBlocked, ...envBlocked])];
+
+  return { allowedDomains: mergedAllowed, blockedDomains: mergedBlocked };
+}
+
+// ---------------------------------------------------------------------------
 // Domain policy enforcement
 // ---------------------------------------------------------------------------
 
