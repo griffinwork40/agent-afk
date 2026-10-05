@@ -93,7 +93,7 @@ function countOccurrences(haystack: string, needle: string): number {
  */
 export async function validatePatchChanges(
   changes: PatchFileChange[],
-  resolveBase: string,
+  resolveBase: string | undefined,
   context?: ToolHandlerContext,
 ): Promise<ValidationResult> {
   const errors: ValidationError[] = [];

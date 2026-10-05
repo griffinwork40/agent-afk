@@ -14,10 +14,26 @@
  * Reaching into a private is the lesser evil against widening the class's
  * public surface purely for a test. What still is NOT covered is a real turn
  * streaming real provider events — that needs network.
+ *
+ * AFK_FRAMEWORK_PROMPT_FILE error-containment (#2388):
+ * `SessionOwner.create()` catches the throw from `resolveBaseSystemPrompt()`
+ * when `AFK_FRAMEWORK_PROMPT_FILE` is set to a bad path and re-throws an
+ * actionable message so the HTTP layer can 500 just that request. The test
+ * verifies (a) the rejection message is actionable and (b) no bundled-prompt
+ * fallback happens — the error propagates, not a silent success.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock shared-helpers BEFORE importing SessionOwner so the module resolution
+// is intercepted. The mock is controlled per-test via `vi.mocked`.
+vi.mock('../cli/shared-helpers.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../cli/shared-helpers.js')>();
+  return { ...actual };
+});
+
 import { SessionOwner } from './session-owner.js';
+import * as sharedHelpers from '../cli/shared-helpers.js';
 
 function freshOwner(): SessionOwner {
   return new SessionOwner({ model: 'test-model' });
@@ -190,5 +206,43 @@ describe('SessionOwner — reserveTurn / releaseTurn', () => {
     owner.reserveTurn('s3');         // simulate submitSkillMessage increment → count = 2
     owner.releaseTurn('s3');         // release reservation → count = 1
     expect(owner.isBusy('s3')).toBe(true); // real turn still in flight
+  });
+});
+
+/**
+ * Issue #2388 — AFK_FRAMEWORK_PROMPT_FILE error containment in create().
+ *
+ * When `resolveBaseSystemPrompt()` throws (bad path in env), `SessionOwner.create()`
+ * must surface an actionable rejection — NOT crash the server, NOT fall back to
+ * the bundled prompt. Other sessions must remain alive.
+ */
+describe('SessionOwner.create — bad AFK_FRAMEWORK_PROMPT_FILE (issue #2388)', () => {
+  beforeEach(() => {
+    vi.spyOn(sharedHelpers, 'resolveBaseSystemPrompt').mockImplementation(() => {
+      throw new Error('AFK_FRAMEWORK_PROMPT_FILE="/relative/path" must be an absolute path (got a relative path).');
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rejects create() with an actionable message', async () => {
+    const owner = new SessionOwner({ model: 'test-model' });
+    await expect(owner.create()).rejects.toThrow(/AFK_FRAMEWORK_PROMPT_FILE error/);
+  });
+
+  it('does not fall back silently (error propagates, not undefined)', async () => {
+    const owner = new SessionOwner({ model: 'test-model' });
+    // Must reject — a silent fallback would return a session, not throw.
+    const result = owner.create();
+    await expect(result).rejects.toThrow();
+  });
+
+  it('keeps the owner alive — owned set stays empty after the failure', async () => {
+    const owner = new SessionOwner({ model: 'test-model' });
+    await owner.create().catch(() => {});
+    expect(owner.owned.size).toBe(0);
+    expect(owner.list()).toEqual([]);
   });
 });

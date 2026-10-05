@@ -88,14 +88,31 @@ work.
 
 **Covered** by the best-effort scan:
 
-- Direct absolute path references (`/etc/hosts`, `/tmp/outside/x`).
+- Direct absolute path references (`/etc/hosts`, `/opt/outside/x`).
 - Home-relative references (`~/…` and a bare `~`), expanded to `os.homedir()`
   before the containment check.
 - Quoted path tokens and paths abutting common shell punctuation
   (`;`, `,`, `)`).
 - Paths glued to a leading redirection/pipe operator with no space
-  (`>/etc/passwd`, `>>~/.bashrc`, `2>/tmp/err`, `|/tmp/x`) — the leading
+  (`>/etc/passwd`, `>>~/.bashrc`, `2>/opt/err`, `|/opt/x`) — the leading
   operator run (and any fd prefix) is stripped before the containment check.
+
+**Deliberately exempt** (skipped before the containment check, so they neither
+warn nor consume the one-time latch; `src/agent/tools/handlers/bash-scan-exempt.ts`):
+
+- Device sinks/sources: `/dev/null`, `/dev/zero`, `/dev/std{in,out,err}`,
+  `/dev/tty`, `/dev/{u,}random`, `/dev/fd/<n>`. This is an explicit allowlist,
+  not the `/dev/` prefix, so block devices (`/dev/disk2`) are still flagged.
+- Shared scratch directories: `/tmp`, `/private/tmp`, `/var/tmp`, and
+  `os.tmpdir()` (plus its realpath). Paths are lexically normalized first, so
+  `/tmp/../etc/hosts` is still flagged.
+
+Rationale: these paths are outside every worktree but are not an
+"escape the worktree" risk, and in practice they produced nearly all of the
+scan's warnings (`2>/dev/null` alone appears in a large share of agent bash
+calls). Because the warning latches once per handler, a benign `/dev/null` hit
+also silenced any later genuine escape for the rest of the session. The
+exemption only suppresses the advisory; it grants the typed file tools nothing.
 
 **Not covered** (documented limitations — the reason this is advisory, not a
 boundary):

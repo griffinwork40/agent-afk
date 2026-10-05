@@ -17,6 +17,7 @@ import * as git from '../plugins/git.js';
 import {
   readIndex,
   upsertMarketplace,
+  isMarketplacePinnedRef,
   type MarketplaceIndexEntry,
   type PluginIndex,
 } from '../plugins/index-store.js';
@@ -99,15 +100,24 @@ export async function updateMarketplace(
   // remote-tracking branch.
   let pickedSemverTag = false;
   if (options.ref) {
+    // Caller explicitly re-pins — honour the new ref and mark it pinned.
     targetRef = options.ref;
   } else {
-    const tags = await git.listTags(dir, gitOpts);
-    const latest = pickLatestSemverTag(tags);
-    if (latest !== null) {
-      targetRef = latest;
-      pickedSemverTag = true;
+    const defaultBranch = await git.getDefaultBranch(dir, gitOpts);
+    if (isMarketplacePinnedRef(entry, defaultBranch) && entry.ref) {
+      // Stored ref was user-pinned: advance a branch pin to the remote tip;
+      // a SHA/tag pin stays put (isBranch will be false → up-to-date or tag).
+      targetRef = entry.ref;
     } else {
-      targetRef = entry.ref ?? (await git.getDefaultBranch(dir, gitOpts));
+      // Auto-picked: run the semver-tag picker as before.
+      const tags = await git.listTags(dir, gitOpts);
+      const latest = pickLatestSemverTag(tags);
+      if (latest !== null) {
+        targetRef = latest;
+        pickedSemverTag = true;
+      } else {
+        targetRef = entry.ref ?? defaultBranch;
+      }
     }
   }
 
@@ -133,6 +143,9 @@ export async function updateMarketplace(
   const upToDate = isBranch ? remoteSha === localSha : targetRef === entry.ref;
 
   if (upToDate) {
+    if (options.ref !== undefined) {
+      upsertMarketplace(name, { ...entry, ref: targetRef, commit: localSha, pinnedRef: true, updatedAt: now().toISOString() }, indexPath);
+    }
     return { name, status: 'up-to-date', ref: targetRef, commit: localSha };
   }
 
@@ -140,6 +153,17 @@ export async function updateMarketplace(
   // remote, not a user workspace. Discard any tracked-file drift so a dirty
   // cache (partial prior update, stray edit) can't wedge the checkout. Untracked
   // files survive --force, so locally-added content is preserved.
+  //
+  // Warn before the force so the user knows which local edits will be reset.
+  // `trackedChanges` returns [] on error, so a probe failure never blocks the
+  // checkout. Untracked files are excluded — they survive --force intact.
+  const dirty = await git.trackedChanges(dir, gitOpts);
+  if (dirty.length > 0) {
+    console.warn(
+      `[marketplace] updating "${name}": the following locally-edited tracked file(s) will be reset to the upstream version:\n` +
+        dirty.map((f) => `  ${f}`).join('\n'),
+    );
+  }
   await git.checkout(dir, isBranch ? remoteRef : pickedSemverTag ? `refs/tags/${targetRef}` : targetRef, { ...gitOpts, force: true });
   const commit = await git.getCommitSha(dir, gitOpts);
   const ts = now().toISOString();
@@ -148,6 +172,7 @@ export async function updateMarketplace(
     ref: targetRef,
     commit,
     updatedAt: ts,
+    ...(options.ref !== undefined ? { pinnedRef: true } : {}),
   };
   upsertMarketplace(name, updated, indexPath);
 

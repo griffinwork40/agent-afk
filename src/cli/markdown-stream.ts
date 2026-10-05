@@ -4,6 +4,7 @@ import type { OverlayComposer } from './_lib/overlay-composer.js';
 import { calculateContentWidth, calculateProseContentWidth, formatPendingBuffer, formatBlockForCommit, applyIndent, initLogUpdateModule, accumulateCommitted, scheduleWithThrottle, isInOpenCodeFence, isInOpenTable, pendingRowCap } from './markdown-stream-format.js';
 import { contentMargin } from './render/measure.js';
 import { SmokeReveal, isSmokeTextEnabled } from './smoke-reveal.js';
+import { detectReducedMotion } from './_lib/capture-mode.js';
 import {
   type InputBufferState,
   type LogUpdateFunction,
@@ -37,6 +38,12 @@ interface StreamingMarkdownRendererOptions {
    */
   bufferMs?: number;
   indent?: string;
+  /**
+   * Suppress the AFK_SMOKE_TEXT prose reveal. Defaults to
+   * `detectReducedMotion()` (AFK_REDUCED_MOTION=1), the same source the
+   * stream renderer uses to gate its tool-row and thought-summary fades.
+   */
+  reducedMotion?: boolean;
   /**
    * When provided: overlay routes through `compositor.setOverlay()`, scrollback
    * via `compositor.commitAbove()`. The compositor owns frame rendering via
@@ -134,7 +141,10 @@ export class StreamingMarkdownRenderer {
       this.resizeUnsub = ResizeBus.subscribe(() => this.scheduleRepaint());
       // Read once per renderer, like the other display settings: toggling
       // AFK_SMOKE_TEXT mid-session applies to the next renderer, not this one.
-      if (isSmokeTextEnabled()) this.smoke = new SmokeReveal(() => this.scheduleRepaint());
+      // Reduced motion wins: the smoke reveal is pure motion, so a user who
+      // asked for less of it gets plain text, same as the machine-status fades.
+      const reducedMotion = opts?.reducedMotion ?? detectReducedMotion();
+      if (isSmokeTextEnabled() && !reducedMotion) this.smoke = new SmokeReveal(() => this.scheduleRepaint());
     }
   }
 

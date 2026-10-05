@@ -2,11 +2,11 @@
 
 ## Current status
 
-agent-afk is developed primarily on macOS and Linux. Native Windows support
-is tracked in [#703](https://github.com/griffinwork40/agent-afk/issues/703)
-and is a work in progress — the test suite does not yet pass on Windows, and
-some features (service management, clipboard image paste) are unavailable on
-native Windows.
+agent-afk runs on Windows natively. The full unit suite gates every PR on
+`windows-2022` (assertions only; coverage floors are enforced on ubuntu because
+~110 platform-gated tests leave win32-skipped branches uncovered). Some features
+remain unimplemented on native Windows (service management, clipboard image
+paste); see the checklist below. Issue #703 is closed.
 
 The recommended path for Windows users today is **WSL2**, which provides full
 compatibility with zero workarounds.
@@ -39,7 +39,7 @@ nvm install 22
 
 # Install pnpm
 corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@11 --activate
 ```
 
 ### 3. Install agent-afk
@@ -101,9 +101,7 @@ The following areas are being addressed for native Windows compatibility:
 - [x] Editor settings discovery → Windows `%APPDATA%` paths for VS Code/Cursor
 - [x] Path handling → `path.sep`/`path.basename`/`path.join` throughout
 - [x] Env-var list separator → `;` on Windows (matching PATH convention)
-- [ ] Shell strategy → `cmd.exe` vs PowerShell vs WSL bash (decision pending)
+- [ ] Shell strategy → `cmd.exe` vs PowerShell vs WSL bash (decision pending; `pnpm test` currently uses bash via Git Bash)
 - [ ] Service layer → Windows service/Task Scheduler backend
 - [ ] Keychain/OAuth → Windows Credential Manager integration
-- [ ] Full test suite green on `windows-latest` CI
-
-Track progress in [#703](https://github.com/griffinwork40/agent-afk/issues/703).
+- [x] Unit test suite green on `windows-2022` CI (required gate, closes #703)

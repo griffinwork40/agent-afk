@@ -26,6 +26,7 @@ import {
 import { getTasksManager } from '../../slash/commands/tasks.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { truncateDisplayWidth, suffixDisplayWidth, previousGraphemeIndex } from '../../display.js';
+import { registerCleanup } from '../../../utils/cleanupRegistry.js';
 import type { SubagentManager } from '../../../agent/subagent.js';
 import type { TerminalCompositor } from '../../terminal-compositor.js';
 import type { OutputEvent } from '../../../agent/types/session-types.js';
@@ -36,6 +37,15 @@ const MAX_INPUT_BYTES = 8192;
 
 // The prompt prefix ("> ") occupies 2 visible columns.
 const PREFIX_WIDTH = 2;
+
+// DEC private mode sequences for the alternate screen buffer.
+// Teardown constant is declared before setup constant (ordered-sequence rule).
+//
+// Invariant: LEAVE_ALT_SCREEN must be written to stdout BEFORE every
+// compositor.resumeInput() call, or the compositor repaints into the alt
+// buffer and the main screen is never restored.
+const LEAVE_ALT_SCREEN = '\x1b[?1049l';
+const ENTER_ALT_SCREEN = '\x1b[?1049h';
 
 // FIX-1: Reentrancy guard — prevents double-Tab from launching two concurrent
 // task views, each installing their own stdin listener.
@@ -50,6 +60,176 @@ export interface MidTurnTaskViewOptions {
   manager: SubagentManager;
   /** The armed TerminalCompositor (for suspend/resume and stdout access). */
   compositor: TerminalCompositor;
+}
+
+// ---------------------------------------------------------------------------
+// Alt-screen lifecycle with signal-safe teardown
+// ---------------------------------------------------------------------------
+
+/**
+ * Enter the alternate screen buffer and register two complementary teardown
+ * guards so that LEAVE_ALT_SCREEN is always written on signal- or exit-driven
+ * teardown, not only on the normal Esc path.
+ *
+ * Returns `{ disarmCleanup, leaveAltScreen }`.  The normal exit path MUST call
+ * `disarmCleanup()` and then `leaveAltScreen()` — the same `fired` flag is
+ * shared by all three paths so LEAVE_ALT_SCREEN is written at most once no
+ * matter which path executes first.
+ *
+ * Invariant (cleanup ordering):
+ *   - The cleanup-registry function runs during runCleanupFunctions() called
+ *     by the signal handler (SIGTERM/SIGHUP after grace period) and by the
+ *     REPL's rl.on('close') path.  It writes LEAVE_ALT_SCREEN directly to
+ *     the compositor's stdout without touching resumeInput (the compositor is
+ *     already tearing down on that path).
+ *   - The process.on('exit') fallback fires synchronously on process.exit()
+ *     and catches any path that bypasses the cleanup registry (e.g. SIGINT
+ *     double-press in the interactive cleanup or an unhandled rejection).
+ *   - Both guards and the happy-path leaveAltScreen share the `fired` flag,
+ *     so the first writer wins and all subsequent calls are no-ops.
+ *
+ * Invariant (leave ordering inside leaveAltScreen):
+ *   1. stdout.write(LEAVE_ALT_SCREEN)  — escape the alt buffer FIRST
+ *   2. compositor.resumeInput()        — compositor may now repaint
+ *   3. compositor.repaint()            — force immediate redraw
+ *
+ * Teardown helper declared before launchMidTurnTaskView (ordered-sequence rule).
+ */
+function enterAltScreen(compositor: TerminalCompositor): {
+  disarmCleanup: () => void;
+  leaveAltScreen: () => void;
+} {
+  compositor.stdout.write(ENTER_ALT_SCREEN + '\x1b[2J\x1b[H');
+
+  // Invariant: `fired` is the single source of truth for whether LEAVE_ALT_SCREEN
+  // has been emitted.  All three paths (cleanup registry, process.exit guard, and
+  // the normal leaveAltScreen call) check and set this flag atomically.  The first
+  // path to run wins; the others are no-ops.  This makes writeLeave genuinely
+  // idempotent across all teardown routes, including the SIGTERM path described
+  // in interactive.cleanup.ts: runCleanupFunctions() fires the registry function,
+  // then process.exit(0) fires the still-registered 'exit' listener — without this
+  // flag the sequence writes LEAVE_ALT_SCREEN twice and corrupts the main screen.
+  let fired = false;
+  const writeLeave = (): void => {
+    if (fired) return;
+    fired = true;
+    compositor.stdout.write(LEAVE_ALT_SCREEN);
+  };
+
+  // One-shot process.on('exit') fallback: fires synchronously on any
+  // process.exit() call that bypasses the cleanup registry (e.g. SIGINT
+  // double-press timeout, unhandled rejection).  Removed on normal leave so
+  // no listener leaks across repeated opens.
+  process.on('exit', writeLeave);
+
+  // Cleanup-registry registration: runs during runCleanupFunctions() called
+  // by the signal handler grace-period timeout and by rl.on('close').
+  const unregisterCleanup = registerCleanup(async (): Promise<void> => {
+    writeLeave();
+  });
+
+  // disarmCleanup: removes both guards before the happy-path leaveAltScreen
+  // writes the sequence, so the guards cannot fire a redundant write afterward.
+  const disarmCleanup = (): void => {
+    unregisterCleanup();
+    process.removeListener('exit', writeLeave);
+  };
+
+  // leaveAltScreen: the normal exit path.  Uses the shared `fired` flag so a
+  // guard that races the normal path (e.g. a process.exit() arriving between
+  // disarmCleanup and leaveAltScreen) cannot produce a second write.
+  //
+  // Invariant (ordering): stdout.write(LEAVE_ALT_SCREEN) BEFORE resumeInput;
+  // otherwise the compositor repaints into the alt buffer on resumeInput.
+  const leaveAltScreen = (): void => {
+    writeLeave();
+    compositor.resumeInput();
+    compositor.repaint();
+  };
+
+  return { disarmCleanup, leaveAltScreen };
+}
+
+/**
+ * Consume the subagent's output stream and write each event to the alt-screen.
+ *
+ * Contract: content chunks are streaming token deltas (a few words each).
+ * Writing each chunk as its own line produces the one-word-per-line wrapping
+ * bug. Instead, content is buffered into the current line and flushed only when:
+ *   (a) the chunk contains a newline (model intended a line break), or
+ *   (b) a non-content event arrives (tool_use_detail, error, message).
+ * stream_retry discards the in-progress buffer WITHOUT flushing so stale
+ * content is never committed to the terminal. Swallows any iterator error so
+ * the caller's finally block always runs (Esc / abort / stream-end are all
+ * handled the same way by the caller).
+ */
+async function tailOutputStream(params: {
+  stream: AsyncIterable<OutputEvent>;
+  signal: AbortSignal;
+  stdout: NodeJS.WriteStream;
+  clamp: (s: string) => string;
+  renderPrompt: () => void;
+}): Promise<void> {
+  const { stream, signal, stdout, clamp, renderPrompt } = params;
+  let lineBuf = '';
+
+  // Invariant: lineBuf never contains \n -- segments are split before accumulation.
+  // `force` emits a blank line even when lineBuf is empty -- used for model-
+  // intended newlines so consecutive \n produce visible paragraph breaks.
+  const flushLineBuf = (force = false): void => {
+    if (!lineBuf && !force) return;
+    stdout.write(`\r\x1b[K${lineBuf}\n`);
+    lineBuf = '';
+    renderPrompt();
+  };
+
+  try {
+    for await (const event of stream) {
+      if (signal.aborted) break;
+
+      if (event.type === 'chunk' && event.chunk.type === 'content') {
+        const raw = stripEscapeSequences(event.chunk.content);
+        const segments = raw.split('\n');
+        for (let i = 0; i < segments.length; i++) {
+          lineBuf += segments[i]!;
+          // Flush on every embedded newline (all segments except the last).
+          // force=true preserves blank lines from consecutive \n.
+          if (i < segments.length - 1) flushLineBuf(true);
+        }
+        // Live preview: show the in-progress line on the prompt row so the
+        // user sees text accumulate in real time (overwritten by renderPrompt
+        // or the next flushLineBuf). \r\x1b[K clears the prompt line first.
+        if (lineBuf) {
+          stdout.write(`\r\x1b[K${clamp(lineBuf)}`);
+        }
+        continue;
+      }
+
+      // stream_retry: the model is re-streaming from scratch — discard the
+      // stale in-progress buffer WITHOUT flushing so the old content is not
+      // committed to the terminal. Matches the pattern in turn-handler.ts:455.
+      if (event.type === 'stream_retry') {
+        lineBuf = '';
+        stdout.write('\r\x1b[K');
+        renderPrompt();
+        continue;
+      }
+
+      // Non-content event: flush any buffered content first, then emit the
+      // event on its own line (tool badges, errors are discrete lines).
+      flushLineBuf();
+      const text = formatOutputEvent(event);
+      if (text !== null) {
+        stdout.write(`\r\x1b[K${clamp(text)}\n`);
+        renderPrompt();
+      }
+    }
+  } catch {
+    // Abort or stream error — exit cleanly.
+  } finally {
+    // Flush any trailing content that didn't end with a newline.
+    flushLineBuf();
+  }
 }
 
 /**
@@ -109,8 +289,11 @@ export async function launchMidTurnTaskView(
   // Item 1: re-enable raw mode after suspending so keystrokes arrive per-byte.
   try { process.stdin.setRawMode?.(true); } catch { /* non-TTY */ }
 
-  // Clear screen and render the task view header.
-  stdout.write('\x1b[2J\x1b[H'); // clear screen + cursor home
+  // Enter the alternate screen buffer (writes ENTER_ALT_SCREEN + clear/home)
+  // and register two teardown guards so LEAVE_ALT_SCREEN is written even on
+  // signal- or exit-driven teardown.  disarmCleanup() MUST be called on every
+  // normal exit path before leaveAltScreen() to prevent a double-leave.
+  const { disarmCleanup, leaveAltScreen } = enterAltScreen(compositor);
   const status = handle.status ?? 'running';
   stdout.write(clamp(renderTaskViewHeader(id, status, agentType)) + '\n\n');
 
@@ -145,8 +328,10 @@ export async function launchMidTurnTaskView(
     // Item 1: restore cooked mode before resuming compositor.
     try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
     midTurnViewActive = false;
-    compositor.resumeInput();
-    compositor.repaint();
+    // Disarm before leaveAltScreen so the cleanup guards do not emit a
+    // redundant LEAVE_ALT_SCREEN after the normal leave writes it.
+    disarmCleanup();
+    leaveAltScreen();
     return true;
   }
 
@@ -208,85 +393,37 @@ export async function launchMidTurnTaskView(
   stdout.write(clamp(palette.dim('  Type a message + Enter to send, Esc to return')) + '\n');
   renderPrompt();
 
-  // Contract: content chunks are streaming token deltas (a few words each).
-  // Writing each chunk as its own line produces the one-word-per-line wrapping
-  // bug. Instead, buffer content into the current line and flush only when:
-  //   (a) the chunk contains a newline (model intended a line break), or
-  //   (b) a non-content event arrives (tool_use_detail, error, message).
-  // The buffer is also flushed on stream end and on Esc exit.
-  let lineBuf = '';
-
-  // Invariant: lineBuf never contains \n -- segments are split before accumulation.
-  // `force` emits a blank line even when lineBuf is empty -- used for model-
-  // intended newlines so consecutive \n produce visible paragraph breaks.
-  const flushLineBuf = (force = false): void => {
-    if (!lineBuf && !force) return;
-    stdout.write(`\r\x1b[K${lineBuf}\n`);
-    lineBuf = '';
-    renderPrompt();
-  };
-
   try {
-    for await (const event of handle.session.getOutputStream() as AsyncIterable<OutputEvent>) {
-      if (signal.aborted) break;
-
-      // Content chunks: accumulate into lineBuf, flushing on embedded newlines.
-      if (event.type === 'chunk' && event.chunk.type === 'content') {
-        const raw = stripEscapeSequences(event.chunk.content);
-        const segments = raw.split('\n');
-        for (let i = 0; i < segments.length; i++) {
-          lineBuf += segments[i]!;
-          // Flush on every embedded newline (all segments except the last).
-          // force=true preserves blank lines from consecutive \n.
-          if (i < segments.length - 1) flushLineBuf(true);
-        }
-        // Live preview: show the in-progress line on the prompt row so the
-        // user sees text accumulate in real time (overwritten by renderPrompt
-        // or the next flushLineBuf). \r\x1b[K clears the prompt line first.
-        if (lineBuf) {
-          stdout.write(`\r\x1b[K${clamp(lineBuf)}`);
-        }
-        continue;
-      }
-
-      // stream_retry: the model is re-streaming from scratch — discard the
-      // stale in-progress buffer WITHOUT flushing so the old content is not
-      // committed to the terminal. Matches the pattern in turn-handler.ts:455.
-      // Erase the stale live-preview text and restore the input prompt.
-      if (event.type === 'stream_retry') {
-        lineBuf = '';
-        stdout.write('\r\x1b[K');
-        renderPrompt();
-        continue;
-      }
-
-      // Non-content event: flush any buffered content first, then emit the
-      // event on its own line (tool badges, errors are discrete lines).
-      flushLineBuf();
-      const text = formatOutputEvent(event);
-      if (text !== null) {
-        stdout.write(`\r\x1b[K${clamp(text)}\n`);
-        renderPrompt();
-      }
-    }
-  } catch {
-    // Abort or stream error — exit cleanly.
-  } finally {
-    // Flush any trailing content that didn't end with a newline.
-    flushLineBuf();
-    process.stdin.removeListener('data', onData);
+    await tailOutputStream({
+      stream: handle.session.getOutputStream() as AsyncIterable<OutputEvent>,
+      signal,
+      stdout,
+      clamp,
+      renderPrompt,
+    });
 
     if (!signal.aborted) {
+      // Invariant: remove the onData listener BEFORE waitForEsc() so keystrokes
+      // typed during the 'Press Esc to return.' pause do not mutate inputBuf or
+      // trigger renderPrompt.  waitForEsc() installs its own independent listener
+      // that only reacts to Esc.  The finally below keeps a harmless idempotent
+      // backstop for any path that bypasses this branch.
+      process.stdin.removeListener('data', onData);
       stdout.write('\r\x1b[K\n' + clamp(palette.dim('  Subagent completed. Press Esc to return.')) + '\n');
       await waitForEsc();
     }
-
+  } finally {
+    // Idempotent backstop: removeListener is a no-op when the listener is
+    // already gone (removed above on the completed path or never added).
+    process.stdin.removeListener('data', onData);
     // Item 1: restore cooked mode before handing terminal back to compositor.
     try { process.stdin.setRawMode?.(false); } catch { /* non-TTY */ }
     // FIX-1: Clear the reentrancy guard so a subsequent Tab is accepted.
     midTurnViewActive = false;
-    compositor.resumeInput();
-    compositor.repaint();
+    // Disarm before leaveAltScreen so the cleanup guards do not emit a
+    // redundant LEAVE_ALT_SCREEN after the normal leave writes it.
+    disarmCleanup();
+    leaveAltScreen();
   }
 
   return true;

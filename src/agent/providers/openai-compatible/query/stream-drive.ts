@@ -12,7 +12,12 @@
  * branch now just builds its request body and calls {@link driveStream}.
  *
  * Behavior is identical to the two former inline copies (retry counts, abort
- * checks, TTFB-once semantics, and the return shape are preserved verbatim).
+ * checks, TTFB-once semantics, and the return shape are preserved verbatim),
+ * with first-byte and stream-stall timeouts now wired (mirrors anthropic-direct).
+ *
+ * The function-body helpers (connection phase, stream-error classification,
+ * emit-and-sleep) live in the sibling files stream-drive.connection.ts,
+ * stream-drive.stream-error.ts, and stream-drive.retry.ts respectively.
  *
  * @module agent/providers/openai-compatible/query/stream-drive
  */
@@ -21,17 +26,22 @@ import type { ProviderEvent } from '../../../provider.js';
 import { emitSessionPhase } from '../../../trace/emit.js';
 import type { TraceSink } from '../../../trace/index.js';
 import { abortableStream } from '../../shared/abortable-stream.js';
-import { sleepWithAbort } from '../../shared/sleep-with-abort.js';
+import {
+  resolveTtfbTimeoutMs,
+} from '../../shared/first-byte-timeout.js';
+import {
+  resolveStallTimeoutMs,
+} from '../../shared/stream-stall-timeout.js';
+import { armAttemptTimeouts } from './stream-timeouts.js';
 import { createStreamState, isToolCallStop, type StreamState } from '../translate.js';
 import { StreamIncompleteError } from '../../../../utils/errors.js';
 import {
-  MAX_CONNECTION_RETRIES,
   MAX_STREAM_RETRIES,
   computeBackoffDelay,
-  isRetryableConnectionError,
-  isRetryableStreamError,
-  retryAfterDelayMs,
 } from './retry.js';
+import { runConnectionPhase } from './stream-drive.connection.js';
+import { emitAndSleepRetry } from './stream-drive.retry.js';
+import { classifyStreamError } from './stream-drive.stream-error.js';
 
 /** Result of a single model round-trip, consumed by the tool-loop orchestrator. */
 export interface IterationResult {
@@ -61,6 +71,16 @@ export interface StreamDriveContext {
   currentModel: string;
   /** Live liveness check — the query sets this true on close(). */
   isClosed: () => boolean;
+  /**
+   * Optional override for TTFB timeout ms (tests inject small values here).
+   * When undefined, resolved from AFK_MODEL_TTFB_TIMEOUT_MS env.
+   */
+  ttfbTimeoutMs?: number;
+  /**
+   * Optional override for stall timeout ms (tests inject small values here).
+   * When undefined, resolved from AFK_MODEL_STALL_TIMEOUT_MS env.
+   */
+  stallTimeoutMs?: number;
 }
 
 /**
@@ -68,199 +88,211 @@ export interface StreamDriveContext {
  * Yields the translated {@link ProviderEvent}s and returns the
  * {@link IterationResult} on clean completion, or `null` on abort / close /
  * surfaced error (after yielding the `error` event in the error case).
+ *
+ * First-byte (TTFB) and stream-stall watchdogs are armed per attempt, mirroring
+ * anthropic-direct/loop.ts. A TTFB timeout before any chunk is retryable (up to
+ * MAX_STREAM_RETRIES); a stall after content has been emitted is fatal (mirrors
+ * anthropic-direct — it is surfaced via stallTimeoutError).
+ *
+ * Connection phase: {@link runConnectionPhase} (stream-drive.connection.ts).
+ * Stream-error classification: {@link classifyStreamError} (stream-drive.stream-error.ts).
+ * Emit+sleep helper: {@link emitAndSleepRetry} (stream-drive.retry.ts).
  */
 export async function* driveStream<TEvent>(
   ctx: StreamDriveContext,
   strategy: StreamDriveStrategy<TEvent>,
 ): AsyncGenerator<ProviderEvent, IterationResult | null> {
+  const ttfbMs = ctx.ttfbTimeoutMs ?? resolveTtfbTimeoutMs();
+  const stallMs = ctx.stallTimeoutMs ?? resolveStallTimeoutMs();
+
   // Retry loop: connection-phase + mid-stream retry with exponential backoff.
-  // Mirrors the Anthropic provider's createWithRetry + overload retry pattern
-  // (see `anthropic-direct/loop.ts`). State is reset on each retry so the
-  // re-driven request starts from a clean slate.
   let streamRetries = 0;
   for (;;) {
     const state = createStreamState();
-
-    // Witness layer: stamp request-initiation time for model_ttfb below.
     const requestStartedAt = Date.now();
 
-    // ── Connection-phase retry ──────────────────────────────────────
-    let stream: AsyncIterable<TEvent>;
-    let connectionError: unknown = null;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        stream = await strategy.createStream(ctx.controller.signal);
-        break; // connection succeeded
-      } catch (err) {
-        if (ctx.controller.signal.aborted) return null;
-        if (isRetryableConnectionError(err) && attempt < MAX_CONNECTION_RETRIES) {
-          // Honor a server `retry-after` hint (clamped) over blind exponential
-          // backoff — the endpoint's own advised interval on a 429/503.
-          const hinted = retryAfterDelayMs(err);
-          const delay = hinted ?? computeBackoffDelay(attempt);
-          // Witness layer: record the wait so it is legible in `afk trace show`
-          // (mirrors retry-layer.ts's `rate_limit` phase). Fire-and-forget so
-          // trace latency never stalls the retry.
-          void emitSessionPhase(ctx.traceWriter, {
-            phase: 'rate_limit',
-            durationMs: delay,
-            resolvedModel: ctx.currentModel,
-            metadata: {
-              source: 'connection',
-              reason: hinted !== undefined ? 'retry-after' : 'backoff',
-              attempt,
-            },
-          });
-          await sleepWithAbort(delay, ctx.controller.signal);
-          if (ctx.controller.signal.aborted) return null;
+    // Arm TTFB + stall guards per attempt. Chain: turn → ttfb → stall.
+    const timeouts = armAttemptTimeouts(ctx.controller.signal, ttfbMs, stallMs);
+
+    let contentYieldedThisAttempt = false;
+
+    try {
+      // ── Connection phase ──────────────────────────────────────────────
+      // Item 2: pass timeouts.signal as the sleep signal so the TTFB watchdog
+      // can abort a long retry-after sleep and trigger the retryable TTFB path.
+      const conn = await runConnectionPhase(
+        strategy.createStream,
+        timeouts.signal,
+        ctx.controller.signal,
+        ctx.traceWriter,
+        ctx.currentModel,
+      );
+
+      if (!conn.ok) {
+        if (conn.error === 'aborted') return null;
+        // TTFB fired during connection: retryable if budget allows.
+        if (timeouts.ttfb.timedOut() && streamRetries < MAX_STREAM_RETRIES) {
+          streamRetries++;
+          yield { type: 'stream.retry', sessionId: ctx.initSessionId };
+          const delay = computeBackoffDelay(streamRetries - 1);
+          const userAborted = await emitAndSleepRetry(
+            ctx.traceWriter, ctx.currentModel, delay,
+            ctx.controller.signal, ctx.controller.signal,
+            { source: 'connection', reason: 'ttfb_timeout', attempt: streamRetries },
+          );
+          if (userAborted) return null;
           continue;
         }
-        connectionError = err;
-        break;
+        yield { type: 'error', error: strategy.clarifyError(conn.error) };
+        return null;
       }
-    }
 
-    if (connectionError !== null) {
-      yield { type: 'error', error: strategy.clarifyError(connectionError) };
-      return null;
-    }
+      // ── Mid-stream consumption with retry ───────────────────────────
+      let streamError: unknown = null;
+      let ttfbEmitted = false;
+      try {
+        // Race every stream pull against the turn signal so an ESC interrupt halts
+        // PROMPTLY (same event-loop turn) instead of waiting for the SDK's parked
+        // read to settle — mirrors anthropic-direct/loop.ts. This matters MORE on
+        // this wire: openai@6's SSE iterator SWALLOWS a mid-stream abort and ends
+        // cleanly (node_modules/openai/core/streaming.mjs — `if (isAbortError(e))
+        // return;`), so without the wrapper an interrupt not only lags behind the
+        // keypress but the clean end falls THROUGH to the stream-incomplete guard
+        // below and yields a spurious `error` event. `abortableStream` throws an
+        // AbortError the instant the signal fires; the catch's `aborted` branch
+        // then returns null and the caller emits exactly one terminal
+        // `turn.completed` (openai-compatible/query.ts:_runTurnInner) — no double
+        // terminal, no bogus error. Uses `timeouts.signal` — the user/turn
+        // interrupt chained with the TTFB + stall watchdogs, the same signal handed
+        // to `createStream` — so a watchdog abort also halts a parked pull promptly.
+        for await (const event of abortableStream(conn.stream, timeouts.signal)) {
+          if (ctx.isClosed()) return null;
+          // Raw chunk received — signal TTFB seen and advance stall watchdog.
+          if (!ttfbEmitted) timeouts.ttfb.firstByteSeen();
+          timeouts.stall.progress();
 
-    // ── Mid-stream consumption with retry ───────────────────────────
-    let streamError: unknown = null;
-    // Witness layer: emit model_ttfb exactly once per API call, on the first
-    // translated stream event. Reset per for(;;) iteration so each
-    // retry-driven call reports its own time-to-first-byte. Mirrors
-    // anthropic-direct/loop.ts:307–327.
-    let ttfbEmitted = false;
-    try {
-      // Race every stream pull against the turn signal so an ESC interrupt halts
-      // PROMPTLY (same event-loop turn) instead of waiting for the SDK's parked
-      // read to settle — mirrors anthropic-direct/loop.ts. This matters MORE on
-      // this wire: openai@6's SSE iterator SWALLOWS a mid-stream abort and ends
-      // cleanly (node_modules/openai/core/streaming.mjs — `if (isAbortError(e))
-      // return;`), so without the wrapper an interrupt not only lags behind the
-      // keypress but the clean end falls THROUGH to the stream-incomplete guard
-      // below and yields a spurious `error` event. `abortableStream` throws an
-      // AbortError the instant the signal fires; the catch's `aborted` branch
-      // then returns null and the caller emits exactly one terminal
-      // `turn.completed` (openai-compatible/query.ts:_runTurnInner) — no double
-      // terminal, no bogus error. Uses `controller.signal` (the user/turn
-      // interrupt) — the same signal handed to `createStream`.
-      for await (const event of abortableStream(stream!, ctx.controller.signal)) {
-        if (ctx.isClosed()) return null;
-        for (const ev of strategy.translate(event, state)) {
-          if (!ttfbEmitted) {
-            ttfbEmitted = true;
-            void emitSessionPhase(ctx.traceWriter, {
-              phase: 'model_ttfb',
-              durationMs: Date.now() - requestStartedAt,
-              resolvedModel: ctx.currentModel,
-            });
+          for (const ev of strategy.translate(event, state)) {
+            if (!ttfbEmitted) {
+              ttfbEmitted = true;
+              void emitSessionPhase(ctx.traceWriter, {
+                phase: 'model_ttfb',
+                durationMs: Date.now() - requestStartedAt,
+                resolvedModel: ctx.currentModel,
+              });
+            }
+            contentYieldedThisAttempt = true;
+            yield ev;
           }
-          yield ev;
+        }
+      } catch (err) {
+        // User interrupt check must use ctx.controller.signal (the TURN signal),
+        // NOT timeouts.signal — watchdog aborts propagate through timeouts.signal
+        // but not through ctx.controller.signal, keeping them distinguishable.
+        if (ctx.controller.signal.aborted) return null;
+
+        const { action, newStreamRetries } = classifyStreamError(
+          err,
+          contentYieldedThisAttempt,
+          streamRetries,
+          stallMs,
+          timeouts.stall.timedOut(),
+          timeouts.ttfb.timedOut(),
+          state.finishReason,
+          state.usage !== null,
+        );
+        streamRetries = newStreamRetries;
+
+        if (action.kind === 'retry') {
+          yield { type: 'stream.retry', sessionId: ctx.initSessionId };
+          const retryMeta: Record<string, string | number | boolean> = {
+            source: action.source,
+            reason: action.reason,
+            attempt: action.attempt,
+          };
+          if (action.errorCode !== undefined) retryMeta['errorCode'] = action.errorCode;
+          const userAborted = await emitAndSleepRetry(
+            ctx.traceWriter, ctx.currentModel, action.delay,
+            ctx.controller.signal, ctx.controller.signal,
+            retryMeta,
+          );
+          if (userAborted) return null;
+          continue;
+        }
+        if (action.kind === 'fatal') {
+          yield { type: 'error', error: action.error };
+          return null;
+        }
+        if (action.kind === 'accept') {
+          // P2: terminal finish_reason arrived before the transport dropped.
+          // The response is complete — fall through from the catch block into
+          // the post-loop path (streamError stays null, so the error guard below
+          // is a no-op) and return the accumulated state as a clean completion.
+          // The stream-incomplete guard is also a no-op because state.finishReason
+          // is non-null (that is the exact condition that produced AcceptAction).
+          //
+          // Emit an observability event so an accepted-after-drop turn is
+          // distinguishable from a clean finish in traces (#2780).
+          void emitSessionPhase(ctx.traceWriter, {
+            phase: 'stream_accepted_after_drop',
+            resolvedModel: ctx.currentModel,
+            metadata: { usageReceived: state.usage !== null },
+          });
+        } else {
+          // fall-through: treat as a surfaced stream error below
+          streamError = action.error;
         }
       }
-    } catch (err) {
-      if (ctx.controller.signal.aborted) return null;
-      if (isRetryableStreamError(err) && streamRetries < MAX_STREAM_RETRIES) {
-        streamRetries++;
-        yield { type: 'stream.retry', sessionId: ctx.initSessionId };
-        // Honor a server `retry-after` hint (clamped) over blind exponential
-        // backoff, same as the connection phase above.
-        const hinted = retryAfterDelayMs(err);
-        const delay = hinted ?? computeBackoffDelay(streamRetries - 1);
-        void emitSessionPhase(ctx.traceWriter, {
-          phase: 'rate_limit',
-          durationMs: delay,
-          resolvedModel: ctx.currentModel,
-          metadata: {
-            source: 'stream',
-            reason: hinted !== undefined ? 'retry-after' : 'backoff',
-            attempt: streamRetries,
-          },
-        });
-        await sleepWithAbort(delay, ctx.controller.signal);
-        if (ctx.controller.signal.aborted) return null;
-        continue; // retry the whole iteration
+
+      if (streamError !== null) {
+        yield { type: 'error', error: strategy.clarifyError(streamError) };
+        return null;
       }
-      streamError = err;
+
+      // Interrupt short-circuit: if the turn signal fired we are here because the
+      // stream ended on abort — return a clean null so the caller emits a single
+      // terminal `turn.completed`, NEVER an error. The `abortableStream` wrapper
+      // above normally throws an AbortError on interrupt (caught → the `aborted`
+      // branch returns null before we reach this point), so this is defense in
+      // depth: it guarantees an interrupt can never fall through to the
+      // stream-incomplete guard below and yield a spurious `error` event even if a
+      // future transport ends the pull cleanly on abort instead of rejecting.
+      if (ctx.controller.signal.aborted) return null;
+
+      const needsToolDispatch = isToolCallStop(state) && state.toolCallsByIndex.size > 0;
+
+      // Invariant: the stream iterator completed WITHOUT throwing but produced no
+      // DISPATCHABLE response AND no terminal finish_reason — the wire never
+      // signaled completion and nothing usable was generated (a stream cut off
+      // before the answer arrived, e.g. an intermediary closing the connection at a
+      // graceful boundary; a hard drop would have thrown and been surfaced above).
+      // Returning a clean completion here delivers an empty turn as success — a
+      // silent failure. Surface an error instead, mirroring anthropic-direct's
+      // stream-incomplete handling and the #628 "fail loudly, don't silently
+      // succeed" fix.
+      //
+      // Scope: NO VISIBLE ANSWER AND NO DISPATCHABLE TOOL CALL (with no
+      // finish_reason). This catches three truncation shapes:
+      //   1. truly-empty streams (no content at all);
+      //   2. reasoning-only cut-offs — reasoning deltas arrived but the stream was
+      //      cut before any visible answer (reasoningText > 0, assistantText empty);
+      //   3. cut-off / non-dispatchable partial tool calls — missing id or name.
+      if (state.finishReason === null && state.assistantText.length === 0 && !needsToolDispatch) {
+        yield {
+          type: 'error',
+          error: new StreamIncompleteError(
+            'the model stream ended without a finish_reason and without a ' +
+              'dispatchable response (no visible answer text and no complete tool ' +
+              'call): the response was empty or cut off before any usable content ' +
+              'arrived. The turn is incomplete.',
+          ),
+        };
+        return null;
+      }
+
+      return { state, events: [], text: state.assistantText, needsToolDispatch };
+    } finally {
+      // Dispose both handles on every exit path (normal, continue, throw).
+      timeouts.dispose();
     }
-
-    if (streamError !== null) {
-      yield { type: 'error', error: strategy.clarifyError(streamError) };
-      return null;
-    }
-
-    // Interrupt short-circuit: if the turn signal fired we are here because the
-    // stream ended on abort — return a clean null so the caller emits a single
-    // terminal `turn.completed`, NEVER an error. The `abortableStream` wrapper
-    // above normally throws an AbortError on interrupt (caught → the `aborted`
-    // branch returns null before we reach this point), so this is defense in
-    // depth: it guarantees an interrupt can never fall through to the
-    // stream-incomplete guard below and yield a spurious `error` event even if a
-    // future transport ends the pull cleanly on abort instead of rejecting.
-    if (ctx.controller.signal.aborted) return null;
-
-    // Tool-dispatch intent, computed once: the incomplete-stream guard below and
-    // the clean-completion return value both key off it. `isToolCallStop` is a
-    // pure read of the now-fully-accumulated `state`.
-    const needsToolDispatch = isToolCallStop(state) && state.toolCallsByIndex.size > 0;
-
-    // Invariant: the stream iterator completed WITHOUT throwing but produced no
-    // DISPATCHABLE response AND no terminal finish_reason — the wire never
-    // signaled completion and nothing usable was generated (a stream cut off
-    // before the answer arrived, e.g. an intermediary closing the connection at a
-    // graceful boundary; a hard drop would have thrown and been surfaced above).
-    // Returning a clean completion here delivers an empty turn as success — a
-    // silent failure. Surface an error instead, mirroring anthropic-direct's
-    // stream-incomplete handling and the #628 "fail loudly, don't silently
-    // succeed" fix.
-    //
-    // Scope: NO VISIBLE ANSWER AND NO DISPATCHABLE TOOL CALL (with no
-    // finish_reason). This catches three truncation shapes that all reduce to
-    // "empty turn presented as success":
-    //   1. truly-empty streams (no content at all);
-    //   2. reasoning-only cut-offs — reasoning deltas arrived but the stream was
-    //      cut before any visible answer (reasoningText > 0, assistantText empty);
-    //   3. cut-off / non-dispatchable partial tool calls — an accumulated call is
-    //      missing its id or name, so isToolCallStop() is false (see
-    //      translate.ts:218) and it can never round-trip.
-    // All three leave runTurn with text === '' and needsToolDispatch === false,
-    // so it would otherwise emit an empty assistant.message + turn.completed as a
-    // clean success — the exact silent-truncation failure this guard exists to
-    // prevent.
-    //
-    // We deliberately do NOT flag a clean end that produced VISIBLE TEXT or a
-    // DISPATCHABLE tool call but omitted finish_reason: some OpenAI-compatible
-    // endpoints (local MLX / llama.cpp shims) legitimately OMIT finish_reason on
-    // complete turns, so treating "usable content present + no finish_reason" as
-    // incomplete would false-positive real completions. finish_reason is not a
-    // reliable terminal signal on this wire (unlike anthropic-direct's
-    // protocol-guaranteed message_stop), so the content-present partial-truncation
-    // case still cannot be safely distinguished here and is left unflagged.
-    if (
-      state.finishReason === null &&
-      state.assistantText.length === 0 &&
-      !needsToolDispatch
-    ) {
-      yield {
-        type: 'error',
-        error: new StreamIncompleteError(
-          'the model stream ended without a finish_reason and without a ' +
-            'dispatchable response (no visible answer text and no complete tool ' +
-            'call): the response was empty or cut off before any usable content ' +
-            'arrived. The turn is incomplete.',
-        ),
-      };
-      return null;
-    }
-
-    // Clean completion — return the result.
-    return {
-      state,
-      events: [],
-      text: state.assistantText,
-      needsToolDispatch,
-    };
   }
 }

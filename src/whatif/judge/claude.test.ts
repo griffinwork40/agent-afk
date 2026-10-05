@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { createClaudeJudge } from './claude.js';
+import { INTERCEPTED_INTENT_RULE } from '../observability.js';
 import type { CompleteFn, JudgeInput } from '../types.js';
 
 const MODEL = 'claude-haiku-4-5-20250929';
@@ -57,6 +58,19 @@ describe('createClaudeJudge', () => {
     const judge = createClaudeJudge(makeFake('{}'), MODEL);
     expect(judge.name).toBe('claude');
     expect(judge.external).toBe(false);
+  });
+
+  it('system prompt contains the intercepted-intent rule', async () => {
+    // Capture what the complete function receives and verify the system prompt
+    // includes the INTERCEPTED_INTENT_RULE constant.
+    let capturedSystem = '';
+    const captureFn: CompleteFn = vi.fn().mockImplementation(async (req) => {
+      capturedSystem = req.system;
+      return { text: '{"p1":0.8}', costUsd: 0.001 };
+    });
+    const judge = createClaudeJudge(captureFn, MODEL);
+    await judge.grade(baseInput);
+    expect(capturedSystem).toContain(INTERCEPTED_INTENT_RULE);
   });
 
   it('handles non-finite values by defaulting to 0.5', async () => {

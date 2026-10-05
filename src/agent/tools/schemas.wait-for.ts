@@ -23,6 +23,11 @@ export const waitForTool: AnthropicToolDef = {
     '"command" — runs a shell command repeatedly; exit 0 signals the condition is met. ' +
     'The tool returns when the condition is met, the timeout elapses (status: timed_out), or ' +
     'the session is cancelled (status: cancelled). Timeout is NOT an error — the model can retry. ' +
+    'Each call waits at most 600000ms (10 min; default 120000ms = 2 min). Larger timeout_ms ' +
+    'values are capped and the result says so; to wait longer, call wait_for again. ' +
+    'In interactive sessions the wait also ends early when the user types a message ' +
+    '(status: yielded_to_user, not an error): end your turn so the user is heard, then re-issue ' +
+    'the wait if still needed. ' +
     'URL waits are SSRF-guarded: private/loopback/link-local/cloud-metadata targets are rejected. ' +
     'Use timeout_ms and poll_interval_ms to tune wait duration and check frequency.',
   input_schema: {

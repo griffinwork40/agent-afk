@@ -33,6 +33,13 @@ export interface OneShotInput {
   /** Caller-controlled cancellation. Aborts the in-flight request. */
   signal?: AbortSignal;
   /**
+   * Optional base URL override. When set, the Anthropic client is constructed
+   * with this endpoint instead of api.anthropic.com — used for local
+   * Anthropic-compatible servers or cross-provider compaction targets that
+   * supply a custom binding.baseUrl.
+   */
+  baseUrl?: string;
+  /**
    * Test/factory hook. When set, supplants the real `Anthropic` constructor.
    * The factory must return a SDK-compatible client; only `messages.create`
    * is exercised.
@@ -50,14 +57,14 @@ export interface OneShotInput {
  * retry policy.
  */
 export async function oneShotCompletion(input: OneShotInput): Promise<string> {
-  const { token, model, system, user, maxTokens = 64, signal, clientFactory } = input;
+  const { token, model, system, user, maxTokens = 64, signal, baseUrl, clientFactory } = input;
 
   if (!token) {
     throw new Error('oneShotCompletion: token required');
   }
 
   const mode = detectAuthMode(token);
-  const clientOpts = buildClientOptions(token, mode);
+  const clientOpts = buildClientOptions(token, mode, baseUrl);
   const client = clientFactory
     ? clientFactory(clientOpts)
     : new Anthropic(clientOpts);
@@ -88,8 +95,11 @@ export async function oneShotCompletion(input: OneShotInput): Promise<string> {
   // without it the API answers 429 rate_limit_error for every non-haiku model,
   // which made one-shot callers silently haiku-only under OAuth.
   const prefix = buildSystemPrefix(mode);
+  // buildSystemPrefix only ever returns text blocks; cast so the SDK's
+  // system param (string | TextBlockParam[]) is satisfied without the dead
+  // flatMap filter that would silently drop future non-text blocks.
   const systemParam = prefix
-    ? [...prefix.flatMap((b) => (b.type === 'text' ? [{ type: 'text' as const, text: b.text }] : [])), { type: 'text' as const, text: system }]
+    ? ([...prefix, { type: 'text' as const, text: system }] as Anthropic.Messages.TextBlockParam[])
     : system;
 
   const response = await client.messages.create(

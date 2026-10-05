@@ -21,7 +21,7 @@ import { BILLING_HEADER_TEXT } from './auth.js';
 // ---------------------------------------------------------------------------
 
 type MessagesCreateFn = (
-  params: { model: string; system: string; max_tokens: number; messages: unknown[] },
+  params: { model: string; system: string | Array<{ type: 'text'; text: string }>; max_tokens: number; messages: unknown[] },
   options?: { signal?: AbortSignal },
 ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
 

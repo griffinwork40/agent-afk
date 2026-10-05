@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import type { ToolHandlerContext } from '../types.js';
 import { createGlobHandler, globHandler } from './glob.js';
 import { splitAbsolutePattern } from './glob-absolute.js';
 
@@ -22,10 +23,13 @@ describe('splitAbsolutePattern', () => {
   it('splits at the first segment containing a metacharacter', () => {
     expect(splitAbsolutePattern('/tmp/repo/src/foo*')).toEqual({
       base: path.normalize('/tmp/repo/src'),
+      // pattern is always forward-slash: glob engines require '/' as separator.
       pattern: 'foo*',
     });
     expect(splitAbsolutePattern('/tmp/repo/**/*.ts')).toEqual({
       base: path.normalize('/tmp/repo'),
+      // pattern must never be path.normalize()'d — that would emit backslashes
+      // on Windows (e.g. '**\*.ts'), breaking the glob matcher (#703).
       pattern: '**/*.ts',
     });
   });
@@ -39,6 +43,31 @@ describe('splitAbsolutePattern', () => {
 
   it('handles a pattern directly under the filesystem root', () => {
     expect(splitAbsolutePattern('/*.txt')).toEqual({ base: path.normalize('/'), pattern: '*.txt' });
+  });
+
+  // The `C:` drive-letter branch of splitAbsolutePattern is unreachable on
+  // POSIX CI (path.isAbsolute('C:\\...') returns false there). Inject
+  // path.win32 so this branch can be tested portably.
+  it('handles a Windows drive-letter pattern via path.win32 injection', () => {
+    const result = splitAbsolutePattern('C:\\Users\\*', path.win32);
+    // base: ['C:', 'Users'] joined = 'C:/Users', not a bare drive letter, so
+    // no trailing slash is added; normalize produces 'C:\Users'.
+    expect(result).toEqual({
+      base: path.win32.normalize('C:/Users'),
+      // Production returns rest.join('/') without normalization — always a bare glob token.
+      pattern: '*',
+    });
+  });
+
+  it('handles a bare Windows drive root via path.win32 injection', () => {
+    // Pattern directly under C:\ — base = 'C:' (bare drive), so trailing
+    // slash is appended before normalize, yielding 'C:\'.
+    const result = splitAbsolutePattern('C:\\*', path.win32);
+    expect(result).toEqual({
+      base: path.win32.normalize('C:/'),
+      // Production returns rest.join('/') without normalization — always a bare glob token.
+      pattern: '*',
+    });
   });
 });
 
@@ -116,9 +145,11 @@ describe('glob handler — absolute patterns', () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'glob-outside-'));
     await fs.writeFile(path.join(outsideDir, 'secret.ts'), '');
     try {
-      // Simulate a confined session: readRoots only includes cwdDir
-      const context = { readRoots: [cwdDir], resolveBase: cwdDir, cwd: cwdDir };
-      const result = await handler({ pattern: `${outsideDir}/*.ts` }, signal(), context as any);
+      // Simulate a confined session: readRoots only includes cwdDir.
+      // Use an explicit ToolHandlerContext type so shape changes are caught
+      // at compile time rather than silently bypassing containment here.
+      const context: ToolHandlerContext = { readRoots: [cwdDir], resolveBase: cwdDir, cwd: cwdDir };
+      const result = await handler({ pattern: `${outsideDir}/*.ts` }, signal(), context);
       expect(result.isError).toBe(true);
     } finally {
       await fs.rm(outsideDir, { recursive: true, force: true });

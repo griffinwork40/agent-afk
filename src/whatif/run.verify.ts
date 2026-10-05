@@ -11,10 +11,13 @@
  */
 
 import { extractFeatures, featureIndicators, FEATURE_LABELS } from './observe.js';
-import { compareRates, verdictFor, predictionAccuracy, agreementRate } from './stats.js';
+import { compareRates, predictionAccuracy, agreementRate, applyAgreementDowngrade } from './stats.js';
+import { scorePrediction, scoresForQuestion, traceKey, type JudgeResults } from './run.verify.scoring.js';
 import { discoverDifferences, type OutputPair } from './discover.js';
 import { appendCalibration, type CalibrationRecord } from './ledger.js';
 import { BudgetTracker } from './cost.js';
+import { renderTrace } from './trace-render.js';
+import { buildFailedEpisodeRecords, detectArmImbalance } from './run.failures.js';
 import type {
   AgentRunner,
   CompleteFn,
@@ -30,32 +33,6 @@ import type {
   VerifyResult,
   WhatifProgress,
 } from './types.js';
-
-// ---------------------------------------------------------------------------
-// Output rendering (for judge input)
-// ---------------------------------------------------------------------------
-
-/** Truncate long input JSON to prevent judge overload. */
-function truncInput(v: unknown, maxChars: number): string {
-  const s = JSON.stringify(v) ?? '';
-  return s.length <= maxChars ? s : s.slice(0, maxChars) + '…[truncated]';
-}
-
-/**
- * Render an episode trace into a compact text for the judge.
- * Shows assistant text then a compact tool-request list.
- */
-function renderTrace(trace: EpisodeTrace): string {
-  const parts: string[] = [trace.text];
-  for (const t of trace.tools) {
-    if (t.verdict === 'recorded') {
-      parts.push(`[tool requested: ${t.tool} (not executed)] ${truncInput(t.input, 200)}`);
-    } else {
-      parts.push(`[tool used: ${t.tool}]`);
-    }
-  }
-  return parts.join('\n');
-}
 
 // ---------------------------------------------------------------------------
 // Cross-check sample indices
@@ -84,6 +61,8 @@ interface RunEpisodesResult {
   allTraces: EpisodeTrace[];
   truncatedByBudget: boolean;
   failedEpisodes: number;
+  /** Total traces attempted per arm (including failures), for imbalance rates. */
+  armTotals: { baseline: number; candidate: number };
 }
 
 interface EpTask {
@@ -113,6 +92,7 @@ async function runEpisodes(
   const allTraces: EpisodeTrace[] = [];
   let truncatedByBudget = false;
   let failedEpisodes = 0;
+  const armTotals = { baseline: 0, candidate: 0 };
 
   const taskList: EpTask[] = [];
   for (const ep of episodes) {
@@ -129,6 +109,7 @@ async function runEpisodes(
       const trace = await runner.run(task.env, task.ep, task.s, runnerOpts);
       allTraces.push(trace);
       budget.add(trace.costUsd);
+      armTotals[trace.env]++;
       if (trace.error) failedEpisodes++;
       if (budget.exceeded) truncatedByBudget = true;
       onProgress?.({ stage: 'run', message: `Episode ${task.ep.id}/${task.env.label} done`, done: allTraces.length, total });
@@ -158,7 +139,7 @@ async function runEpisodes(
   }
   await Promise.allSettled(inflight);
 
-  return { allTraces, truncatedByBudget, failedEpisodes };
+  return { allTraces, truncatedByBudget, failedEpisodes, armTotals };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +150,8 @@ interface GradeResult {
   judgeResults: Map<string, Record<string, number>>;
   crossCheckMainScores: number[];
   crossCheckCrossScores: number[];
+  /** Per-question cross-check score pairs, keyed by question id. */
+  crossCheckPerQuestion: Map<string, { main: number[]; cross: number[] }>;
   judgeFailures: number;
 }
 
@@ -190,11 +173,18 @@ async function gradeOutputs(
   const judgeResults = new Map<string, Record<string, number>>();
   const crossCheckMainScores: number[] = [];
   const crossCheckCrossScores: number[] = [];
+  const crossCheckPerQuestion = new Map<string, { main: number[]; cross: number[] }>();
   let judgeFailures = 0;
+
+  // Hoist cross-check set out of the per-trace closure; crossCheckIndices is
+  // a pure function of goodTraces.length so it is constant for this grading run.
+  const crossCheckSet = crossCheckJudge
+    ? new Set(crossCheckIndices(goodTraces.length, 3))
+    : null;
 
   async function judgeOne(trace: EpisodeTrace, idx: number): Promise<void> {
     if (signal?.aborted) return;
-    const key = `${trace.episodeId}:${trace.env}:${trace.sample}`;
+    const key = traceKey(trace);
     const input: JudgeInput = {
       prompt: episodes.find((e) => e.id === trace.episodeId)?.prompt ?? '',
       output: renderTrace(trace),
@@ -203,7 +193,7 @@ async function gradeOutputs(
     try {
       const result = await judge.grade(input, signal);
       judgeResults.set(key, result);
-      if (crossCheckJudge && crossCheckIndices(goodTraces.length, 3).includes(idx)) {
+      if (crossCheckJudge && crossCheckSet?.has(idx)) {
         try {
           const ccResult = await crossCheckJudge.grade(input, signal);
           for (const q of questions) {
@@ -212,6 +202,11 @@ async function gradeOutputs(
             if (main === undefined || cross === undefined) continue;
             crossCheckMainScores.push(main);
             crossCheckCrossScores.push(cross);
+            // Track per-question pairs for per-prediction agreement (#2413).
+            let entry = crossCheckPerQuestion.get(q.id);
+            if (!entry) { entry = { main: [], cross: [] }; crossCheckPerQuestion.set(q.id, entry); }
+            entry.main.push(main);
+            entry.cross.push(cross);
           }
         } catch { /* non-fatal */ }
       }
@@ -238,28 +233,14 @@ async function gradeOutputs(
   }
   await Promise.allSettled(running);
 
-  return { judgeResults, crossCheckMainScores, crossCheckCrossScores, judgeFailures };
+  return { judgeResults, crossCheckMainScores, crossCheckCrossScores, crossCheckPerQuestion, judgeFailures };
 }
 
 // ---------------------------------------------------------------------------
 // Stats computation
 // ---------------------------------------------------------------------------
 
-function scoresForQuestion(
-  qid: string,
-  env: 'baseline' | 'candidate',
-  goodTraces: EpisodeTrace[],
-  judgeResults: Map<string, Record<string, number>>,
-): number[] {
-  const scores: number[] = [];
-  for (const trace of goodTraces) {
-    if (trace.env !== env) continue;
-    const key = `${trace.episodeId}:${trace.env}:${trace.sample}`;
-    const res = judgeResults.get(key);
-    if (res !== undefined && res[qid] !== undefined) scores.push(res[qid]!);
-  }
-  return scores;
-}
+// Per-prediction episode scoping lives in ./run.verify.scoring.ts (#2403).
 
 // ---------------------------------------------------------------------------
 // Main export
@@ -293,6 +274,8 @@ export interface VerifyRunOutput {
   verifyResult: VerifyResult;
   allTraces: EpisodeTrace[];
   analystCostUsd: number;
+  /** Per-output judge grades keyed by {@link traceKey}. Used by persistGrades (#2477). */
+  judgeResults: JudgeResults;
 }
 
 /**
@@ -310,10 +293,21 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
 
   onProgress?.({ stage: 'run', message: `Running ${episodes.length} episodes × 2 envs × ${samples} samples` });
 
-  const { allTraces, truncatedByBudget, failedEpisodes } = await runEpisodes(
+  const { allTraces, truncatedByBudget, failedEpisodes, armTotals } = await runEpisodes(
     episodes, baseline, candidate, samples, concurrency, maxUsdRemaining,
     runner, runnerOpts, signal, onProgress,
   );
+
+  // Build per-failure records and detect arm imbalance (#2411).
+  // NOTE: Episode.targets is currently typed as a single string (not an array).
+  // This map stores the single target value per episode.  If targets ever
+  // becomes multi-valued, this will drop all but one target — update the map
+  // construction and FailedEpisodeRecord.probe accordingly.
+  const episodeTargets = new Map(
+    episodes.filter((e) => e.targets !== undefined).map((e) => [e.id, e.targets!]),
+  );
+  const failedEpisodeRecords = buildFailedEpisodeRecords(allTraces, episodeTargets);
+  const armImbalance = detectArmImbalance(failedEpisodeRecords, armTotals.baseline, armTotals.candidate);
 
   if (signal?.aborted) {
     const err = new Error('whatif aborted');
@@ -329,7 +323,7 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
 
   const predQuestions = predictions.map((p) => ({ id: p.id, question: p.testQuestion }));
 
-  const { judgeResults, crossCheckMainScores, crossCheckCrossScores, judgeFailures } = await gradeOutputs(
+  const { judgeResults, crossCheckMainScores, crossCheckCrossScores, crossCheckPerQuestion, judgeFailures } = await gradeOutputs(
     goodTraces, episodes, predQuestions, judge, crossCheckJudge, concurrency, signal, onProgress,
   );
 
@@ -355,7 +349,7 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
   if (discoveredQuestions.length > 0) {
     for (const trace of goodTraces) {
       if (signal?.aborted) break;
-      const key = `${trace.episodeId}:${trace.env}:${trace.sample}`;
+      const key = traceKey(trace);
       const existing = judgeResults.get(key) ?? {};
       const input: JudgeInput = {
         prompt: episodes.find((e) => e.id === trace.episodeId)?.prompt ?? '',
@@ -373,11 +367,16 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
 
   onProgress?.({ stage: 'report', message: 'Computing statistics' });
 
+  // Each prediction is scored on its own probes; other episodes are reported
+  // as a background rate, never pooled (#2403).
+  // After scoring, apply the per-prediction cross-check agreement downgrade
+  // (#2413): a decisive verdict (confirmed/refuted) is downgraded to unclear
+  // when the primary and cross-check judge disagree heavily on this question.
   const verifiedPredictions = predictions.map((p) => {
-    const bScores = scoresForQuestion(p.id, 'baseline', goodTraces, judgeResults);
-    const cScores = scoresForQuestion(p.id, 'candidate', goodTraces, judgeResults);
-    const rates = compareRates(bScores, cScores);
-    return { prediction: p, rates, verdict: verdictFor(p, rates) };
+    const vp = scorePrediction(p, episodes, goodTraces, judgeResults);
+    const ccEntry = crossCheckPerQuestion.get(p.id);
+    if (!ccEntry) return vp;
+    return applyAgreementDowngrade(vp, ccEntry.main, ccEntry.cross);
   });
 
   const verifiedDiscovered = discovered
@@ -401,13 +400,17 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
 
   // ── 5. Calibration ────────────────────────────────────────────────────────
 
-  const calibrationRecords: CalibrationRecord[] = verifiedPredictions.map(({ prediction, rates, verdict }) => ({
-    ts: new Date().toISOString(),
-    changeKinds,
-    prediction,
-    verdict,
-    delta: rates.delta,
-  }));
+  // Unobservable (downstream) predictions carry no evidence either way, so
+  // they never enter the track record (#2409).
+  const calibrationRecords: CalibrationRecord[] = verifiedPredictions
+    .filter((vp) => vp.verdict !== 'unobservable')
+    .map(({ prediction, rates, verdict }) => ({
+      ts: new Date().toISOString(),
+      changeKinds,
+      prediction,
+      verdict,
+      delta: rates.delta,
+    }));
 
   await appendCalibration(calibrationRecords, calibrationFile).catch(() => { /* non-fatal */ });
 
@@ -423,8 +426,11 @@ export async function verifyRun(input: VerifyRunInput): Promise<VerifyRunOutput>
       truncatedByBudget,
       failedEpisodes,
       judgeFailures,
+      failedEpisodeRecords,
+      ...(armImbalance !== undefined ? { armImbalance } : {}),
     },
     allTraces,
     analystCostUsd,
+    judgeResults,
   };
 }

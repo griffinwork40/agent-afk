@@ -23,6 +23,16 @@ import {
 } from '../nesting.js';
 import { SubagentExecutor } from '../subagent-executor.js';
 import type { SkillExecutorInternals } from './types.js';
+import type { MessageJournal } from '../../journal/types.js';
+
+/**
+ * Caller-owned mutable journal view for a skill fork (`buildForkedChildConfig`'s
+ * trailing `journalView`). It becomes the child SubagentExecutor's parent stub
+ * and the nested skill factory's journal view; the caller backfills
+ * `messageJournal` with the fork's OWN journal once the handle exists, so
+ * grandchildren journal via `forSubagent(grandchildId)` (never the parent's).
+ */
+export interface JournalParentHolder { messageJournal?: MessageJournal }
 
 /**
  * Wire a forked skill child for nested dispatch.
@@ -54,12 +64,12 @@ export function buildForkedChildConfig(
   // exact tool set (single source of truth — no post-fork provider override).
   // Undefined for the registry path (executeForkedRegistrySkill), which must
   // stay unchanged.
-  allowedTools?: string[],
+  allowedTools?: string[], journalView: JournalParentHolder = {},
 ): { childConfig: AgentConfig; childManager: SubagentManager | undefined } {
   const { ctx, currentCwd } = internals;
   const depth = ctx.depth ?? 0;
   const maxDepth = ctx.maxDepth ?? resolveMaxNestingDepth();
-  const childConfig: AgentConfig = { ...baseConfig };
+  const childConfig: AgentConfig = { ...baseConfig, depth: depth + 1, maxDepth }; // #2266
 
   // Invariant (single source of truth for effective allowlist):
   //   readOnly && allowedTools  → intersection(allowedTools, RECON_ALLOWED_TOOLS) + readOnlyBash
@@ -145,7 +155,7 @@ export function buildForkedChildConfig(
   });
   const childExecutor = new SubagentExecutor({
     subagentManager: childManager,
-    parentSession: createStubParentSession(signal),
+    parentSession: Object.assign(journalView, createStubParentSession(signal)),
     defaultConfig: {
       model: childConfig.model,
       apiKey: ctx.apiKey,
@@ -224,7 +234,7 @@ export function buildForkedChildConfig(
     ? ctx.childSkillExecutorFactory(
         depth + 1, maxDepth, signal, currentCwd,
         childReadScope,
-        baseConfig.skillDispatchName, // Fix A (#skill-recursion)
+        baseConfig.skillDispatchName, journalView, // Fix A (#skill-recursion); journal view
       )
     : undefined;
   // Pass `model` so the factory routes between AnthropicDirect /

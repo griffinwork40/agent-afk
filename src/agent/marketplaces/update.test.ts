@@ -345,3 +345,259 @@ describe('updateAllMarketplaces', () => {
     expect(results.every((r) => r.status === 'updated')).toBe(true);
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// pinnedRef tests (fix #2358)
+// ---------------------------------------------------------------------------
+
+describe('updateMarketplace — pinnedRef branch: bare update follows pin, ignores semver tags', () => {
+  it('uses entry.ref instead of semver tag when pinnedRef is true', async () => {
+    seedMarketplace('mp', { ref: 'afk', commit: 'old-afk', pinnedRef: true });
+    const dir = writeCatalog('mp', [{ name: 'sample-plugin', source: './plugins/sample-plugin' }]);
+    writePlugin(dir, './plugins/sample-plugin', '1.0.0');
+    const { runner, calls } = makeRunner(['v2.0.0'], 'old-afk', { afk: 'new-afk' });
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') {
+      expect(outcome.toRef).toBe('afk');
+      expect(outcome.commit).toBe('new-afk');
+    }
+    const checkout = calls.find((c) => c.includes('checkout'));
+    expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/afk');
+    expect(calls.some((c) => c.includes('checkout') && c.includes('v2.0.0'))).toBe(false);
+    const idx = readIndex(indexPath);
+    expect(idx.marketplaces['mp'].ref).toBe('afk');
+    expect(idx.marketplaces['mp'].pinnedRef).toBe(true);
+  });
+
+  it('reports up-to-date when pinned branch tip already matches local HEAD', async () => {
+    seedMarketplace('mp', { ref: 'afk', commit: 'same', pinnedRef: true });
+    writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    const { runner, calls } = makeRunner(['v2.0.0'], 'same', { afk: 'same' });
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date() },
+    );
+    expect(outcome.status).toBe('up-to-date');
+    expect(calls.some((c) => c.includes('checkout'))).toBe(false);
+  });
+});
+
+describe('updateMarketplace — unpinned (auto): semver tag picker still runs', () => {
+  it('auto-picks the latest tag when pinnedRef is false', async () => {
+    seedMarketplace('mp', { ref: 'v1.0.0', commit: 'old', pinnedRef: false });
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'new');
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+});
+
+describe('updateMarketplace — --ref on update re-pins', () => {
+  it('sets pinnedRef true when options.ref is supplied', async () => {
+    seedMarketplace('mp', { ref: 'v1.0.0', commit: 'old', pinnedRef: false });
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v1.0.0'], 'new', { afk: 'afk-sha' });
+    const outcome = await updateMarketplace(
+      'mp',
+      { ref: 'afk' },
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('afk');
+    const idx = readIndex(indexPath);
+    expect(idx.marketplaces['mp'].pinnedRef).toBe(true);
+    expect(idx.marketplaces['mp'].ref).toBe('afk');
+  });
+});
+
+describe('updateMarketplace — --ref on update when already at the tip', () => {
+  it('records the new ref so the next bare update follows the branch, not the latest tag', async () => {
+    seedMarketplace('mp', { ref: 'abcdef1234567890', commit: 'tip-sha', pinnedRef: false });
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v2.0.0'], 'tip-sha', { afk: 'tip-sha' });
+    const deps = { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') };
+
+    const pinned = await updateMarketplace('mp', { ref: 'afk' }, deps);
+    const bare = await updateMarketplace('mp', {}, deps);
+
+    expect(pinned.status).toBe('up-to-date');
+    expect(bare).toMatchObject({ status: 'up-to-date', ref: 'afk' });
+    expect(readIndex(indexPath).marketplaces['mp']).toMatchObject({ ref: 'afk', pinnedRef: true });
+  });
+});
+
+describe('updateMarketplace — legacy migration rule', () => {
+  it('treats a legacy entry with ref "afk" (non-semver, non-default) as pinned', async () => {
+    const entry: MarketplaceIndexEntry = {
+      source: 'owner/repo',
+      sourceType: 'github',
+      ref: 'afk',
+      commit: 'old-afk',
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    upsertMarketplace('mp', entry, indexPath);
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner, calls } = makeRunner(['v2.0.0'], 'old-afk', { afk: 'new-afk' });
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') {
+      expect(outcome.toRef).toBe('afk');
+      expect(outcome.commit).toBe('new-afk');
+    }
+    const checkout = calls.find((c) => c.includes('checkout'));
+    expect(checkout?.[checkout.length - 1]).toBe('refs/remotes/origin/afk');
+    expect(calls.some((c) => c.includes('checkout') && c.includes('v2.0.0'))).toBe(false);
+  });
+
+  it('treats a legacy entry with ref "v1.0.0" (semver) as auto-picked', async () => {
+    const entry: MarketplaceIndexEntry = {
+      source: 'owner/repo',
+      sourceType: 'github',
+      ref: 'v1.0.0',
+      commit: 'old',
+      installedAt: '2026-04-20T12:00:00Z',
+      updatedAt: '2026-04-20T12:00:00Z',
+    };
+    upsertMarketplace('mp', entry, indexPath);
+    const dir = writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+    writePlugin(dir, './plugins/p', '1.0.0');
+    const { runner } = makeRunner(['v2.0.0', 'v1.0.0'], 'new', {});
+    const outcome = await updateMarketplace(
+      'mp',
+      {},
+      { cacheDir, indexPath, gitRunner: runner, now: () => new Date('2026-05-01T00:00:00Z') },
+    );
+    expect(outcome.status).toBe('updated');
+    if (outcome.status === 'updated') expect(outcome.toRef).toBe('v2.0.0');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// trackedChanges warning before forced checkout (issue #2816)
+// ---------------------------------------------------------------------------
+
+describe('updateMarketplace — warns before discarding local edits', () => {
+  it('emits a warning naming locally-modified tracked files before --force checkout', async () => {
+    seedMarketplace('mp', { ref: 'main', commit: 'oldsha' });
+    writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+
+    // Runner that reports dirty tracked files via `git status --porcelain`
+    const { runner, calls } = makeRunner([], 'oldsha', { main: 'newsha' });
+    const statusRunner: GitRunner = async (args, cwd, env) => {
+      const a = Array.from(args);
+      if (a.includes('status') && a.includes('--porcelain')) {
+        // Simulate two locally-modified tracked files
+        return { stdout: ' M hooks/hooks.json\n M .claude-plugin/plugin.json\n', stderr: '' };
+      }
+      return runner(args, cwd, env);
+    };
+
+    const warnMessages: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+    try {
+      await updateMarketplace(
+        'mp',
+        {},
+        { cacheDir, indexPath, gitRunner: statusRunner, now: () => new Date('2026-05-01T00:00:00Z') },
+      );
+    } finally {
+      console.warn = origWarn;
+    }
+
+    // The warning must name the modified files
+    const warn = warnMessages.find((m) => m.includes('hooks/hooks.json'));
+    expect(warn).toBeDefined();
+    expect(warn).toContain('.claude-plugin/plugin.json');
+    // The checkout must still proceed (--force)
+    expect(calls.some((c) => c.includes('checkout') && c.includes('--force'))).toBe(true);
+  });
+
+  it('does not warn when there are no locally-modified tracked files', async () => {
+    seedMarketplace('mp', { ref: 'main', commit: 'oldsha' });
+    writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+
+    const { runner } = makeRunner([], 'oldsha', { main: 'newsha' });
+    const cleanRunner: GitRunner = async (args, cwd, env) => {
+      const a = Array.from(args);
+      if (a.includes('status') && a.includes('--porcelain')) {
+        // Untracked files only — should not trigger warning
+        return { stdout: '?? local-only.txt\n', stderr: '' };
+      }
+      return runner(args, cwd, env);
+    };
+
+    const warnMessages: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+    try {
+      await updateMarketplace(
+        'mp',
+        {},
+        { cacheDir, indexPath, gitRunner: cleanRunner, now: () => new Date('2026-05-01T00:00:00Z') },
+      );
+    } finally {
+      console.warn = origWarn;
+    }
+
+    const warn = warnMessages.find((m) => m.includes('locally-edited'));
+    expect(warn).toBeUndefined();
+  });
+
+  it('does not warn or fail when git status itself errors (fail-safe)', async () => {
+    seedMarketplace('mp', { ref: 'main', commit: 'oldsha' });
+    writeCatalog('mp', [{ name: 'p', source: './plugins/p' }]);
+
+    const { runner, calls } = makeRunner([], 'oldsha', { main: 'newsha' });
+    const errorRunner: GitRunner = async (args, cwd, env) => {
+      const a = Array.from(args);
+      if (a.includes('status')) throw new Error('git status failed');
+      return runner(args, cwd, env);
+    };
+
+    const warnMessages: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnMessages.push(args.join(' ')); };
+
+    try {
+      const outcome = await updateMarketplace(
+        'mp',
+        {},
+        { cacheDir, indexPath, gitRunner: errorRunner, now: () => new Date('2026-05-01T00:00:00Z') },
+      );
+      // Update should still succeed
+      expect(outcome.status).toBe('updated');
+    } finally {
+      console.warn = origWarn;
+    }
+
+    // No "locally-edited" warning — status errored so we skipped the probe
+    const warn = warnMessages.find((m) => m.includes('locally-edited'));
+    expect(warn).toBeUndefined();
+    // Checkout still ran with --force
+    expect(calls.some((c) => c.includes('checkout') && c.includes('--force'))).toBe(true);
+  });
+});

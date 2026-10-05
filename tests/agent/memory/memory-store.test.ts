@@ -4,7 +4,8 @@
  * Redirects memory dir to a tmpdir so tests never touch the real ~/.afk/.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import BetterSqlite3 from 'better-sqlite3';
 import { existsSync, readFileSync, mkdirSync, rmSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -389,7 +390,8 @@ describe('Access tracking (searchFacts)', () => {
 
     const fact = results[0]!;
     // The Fact interface does not include a `rank` field from FTS5.
-    // We check that the row round-trips through the returned array correctly.
+    // searchFacts must strip rank before returning — assert it is absent.
+    expect('rank' in fact).toBe(false);
     expect(typeof fact.id).toBe('number');
     expect(typeof fact.content).toBe('string');
     expect(typeof fact.access_count).toBe('number');
@@ -409,37 +411,33 @@ describe('Access tracking (searchFacts)', () => {
   });
 
   it('swallows a tracking failure without surfacing to the caller', () => {
-    const id = store.storeFact({
+    store.storeFact({
       category: 'convention',
       content: 'robust search test',
       source_surface: 'cli',
     });
 
-    // Close the underlying DB to force a write error on the tracking UPDATE.
-    store.close();
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
-    const db = new Database(`${tmpMemDir}/memory.db`);
-    // Re-open the store — it gets a fresh connection.
-    const store2 = new MemoryStore(tmpMemDir);
+    // Stub db.prepare so that the tracking UPDATE statement throws, while
+    // every other prepare call (the SELECT) works normally via the real DB.
+    const realDb = (store as unknown as { db: BetterSqlite3.Database }).db;
+    const realPrepare = realDb.prepare.bind(realDb);
+    vi.spyOn(realDb, 'prepare').mockImplementation((sql: string) => {
+      if (sql.trimStart().startsWith('UPDATE facts')) {
+        return {
+          run: () => { throw new Error('simulated tracking failure'); },
+        } as unknown as ReturnType<BetterSqlite3.Database['prepare']>;
+      }
+      return realPrepare(sql);
+    });
 
-    // Corrupt the tracking path by closing the store2 DB and attempting a
-    // search — the simplest portable way is to reopen without re-injecting
-    // errors, but we can verify the non-fatal contract by confirming search
-    // doesn't throw even under concurrent writes.
-    db.close();
-
-    // A fresh store on the same dir should search cleanly.
-    const store3 = new MemoryStore(tmpMemDir);
-    let results: ReturnType<typeof store3.searchFacts>;
+    // searchFacts must still return results and must not throw.
+    let results: ReturnType<typeof store.searchFacts>;
     expect(() => {
-      results = store3.searchFacts('robust search');
+      results = store.searchFacts('robust search');
     }).not.toThrow();
     expect(results!.length).toBe(1);
-    store2.close();
-    store3.close();
 
-    // Reopen for afterEach cleanup.
-    store = new MemoryStore(tmpMemDir);
+    vi.restoreAllMocks();
   });
 });
 

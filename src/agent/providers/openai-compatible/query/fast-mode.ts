@@ -24,7 +24,7 @@
  */
 
 import type { FastModeController, FastTurnDecision } from '../../../fast-mode.js';
-import { isCatalogModelPriorityEligible } from '../models-catalog.js';
+import { isCatalogModelPriorityEligible, type CatalogReaderDeps } from '../models-catalog.js';
 
 /**
  * Snapshot the fast-mode decision for the current turn.
@@ -40,14 +40,18 @@ import { isCatalogModelPriorityEligible } from '../models-catalog.js';
  * The `hasCustomEndpoint` parameter must be `false` for the ChatGPT-OAuth
  * backend (CHATGPT_BACKEND_BASE_URL) — that is a first-party endpoint, not
  * a user-set proxy. The caller is responsible for this distinction.
+ *
+ * The optional `catalogDeps` parameter is injected by tests to supply a
+ * mock catalog without touching the real `~/.codex/models_cache.json`.
  */
 export function snapshotFastDecision(
   controller: FastModeController | undefined,
   model: string,
   hasCustomEndpoint: boolean,
+  catalogDeps?: CatalogReaderDeps,
 ): FastTurnDecision | undefined {
   if (!controller) return undefined;
-  const catalogEligible = isCatalogModelPriorityEligible(model);
+  const catalogEligible = isCatalogModelPriorityEligible(model, catalogDeps);
   return controller.snapshotTurn({
     resolvedModelId: model,
     providerFamily: 'openai-compatible',
@@ -59,14 +63,16 @@ export function snapshotFastDecision(
 }
 
 /**
- * Detect whether an error is a 400 that mentions `service_tier` or `priority`.
+ * Detect whether an error is a 400 that explicitly names `service_tier`.
  *
  * Used to latch-disable fast mode for the rest of the session when the API
  * rejects the `service_tier` field with a deterministic client error.
  *
  * Contract: returns true ONLY for HTTP 400 whose message text contains
- * `service_tier` or `priority` (case-insensitive). Other 400s (e.g. a bad
- * model id, malformed body) must NOT trigger the latch.
+ * `service_tier` (case-insensitive). Matching on "priority" alone is
+ * intentionally excluded — a 400 about an unrelated "priority" field (e.g. a
+ * custom API with its own `priority` param) must NOT trigger the latch.
+ * Other 400s (e.g. a bad model id, malformed body) must NOT trigger the latch.
  */
 export function isFastModeServiceTierError(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false;
@@ -78,8 +84,7 @@ export function isFastModeServiceTierError(error: unknown): boolean {
     (typeof (e['error'] as Record<string, unknown> | undefined)?.['message'] === 'string'
       ? (e['error'] as Record<string, unknown>)['message']
       : '');
-  const lower = message.toLowerCase();
-  return lower.includes('service_tier') || lower.includes('priority');
+  return message.toLowerCase().includes('service_tier');
 }
 
 /**

@@ -18,7 +18,7 @@ import { resetSmokeToneCache } from './smoke-reveal.tones.js';
 const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, '');
 const hasSmoke = (s: string): boolean => SMOKE_GLYPHS.some((g) => stripAnsi(s).includes(g));
 
-function makeRenderer(): { r: StreamingMarkdownRenderer; overlays: string[]; commits: string[] } {
+function makeRenderer(opts: { reducedMotion?: boolean } = {}): { r: StreamingMarkdownRenderer; overlays: string[]; commits: string[] } {
   const overlays: string[] = [];
   const commits: string[] = [];
   const stub = {
@@ -32,7 +32,7 @@ function makeRenderer(): { r: StreamingMarkdownRenderer; overlays: string[]; com
   const out = new PassThrough();
   (out as unknown as { isTTY: boolean }).isTTY = true;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const r = new StreamingMarkdownRenderer({ out: out as any, compositor: stub as any });
+  const r = new StreamingMarkdownRenderer({ out: out as any, compositor: stub as any, ...opts });
   return { r, overlays, commits };
 }
 
@@ -43,6 +43,8 @@ beforeEach(() => {
   chalk.level = 3;
   resetSmokeToneCache();
   vi.stubEnv('AFK_PLAIN_OUTPUT', '');
+  // A developer's own AFK_REDUCED_MOTION=1 must not turn these tests off.
+  vi.stubEnv('AFK_REDUCED_MOTION', '');
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -255,5 +257,34 @@ describe('StreamingMarkdownRenderer with AFK_SMOKE_TEXT', () => {
     // flush() may clear the overlay once. No smoke frames may follow it.
     expect(overlays.slice(n).every((o) => !hasSmoke(o))).toBe(true);
     r.dispose();
+  });
+
+  it('stays off under AFK_REDUCED_MOTION=1, even with AFK_SMOKE_TEXT=1', async () => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    vi.stubEnv('AFK_REDUCED_MOTION', '1');
+    const { r, overlays } = makeRenderer();
+    r.push(TEXT);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(overlays.length).toBeGreaterThan(0);
+    expect(overlays.every((o) => !hasSmoke(o))).toBe(true);
+    expect(stripAnsi(overlays.at(-1) ?? '')).toContain('The quick brown fox');
+    await r.flush();
+  });
+
+  it('lets an explicit reducedMotion option override the environment either way', async () => {
+    vi.stubEnv('AFK_SMOKE_TEXT', '1');
+    vi.stubEnv('AFK_REDUCED_MOTION', '1');
+    const moving = makeRenderer({ reducedMotion: false });
+    moving.r.push(TEXT);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(hasSmoke(moving.overlays.at(-1) ?? '')).toBe(true);
+    await moving.r.flush();
+
+    vi.stubEnv('AFK_REDUCED_MOTION', '');
+    const still = makeRenderer({ reducedMotion: true });
+    still.r.push(TEXT);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(still.overlays.every((o) => !hasSmoke(o))).toBe(true);
+    await still.r.flush();
   });
 });

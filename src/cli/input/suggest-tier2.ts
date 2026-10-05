@@ -185,7 +185,6 @@ export function createTier2Runner(deps: Tier2Deps): Tier2Runner {
           model,
           maxTokens: 24,
           signal: controller.signal,
-          apiKey: ctx.apiKey,
           baseUrl: ctx.baseUrl,
         }).then((raw) => ({ ok: true as const, raw })),
         abortPromise.then(() => ({ ok: false as const })),

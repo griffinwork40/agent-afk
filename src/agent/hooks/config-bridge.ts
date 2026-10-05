@@ -19,13 +19,31 @@
 
 import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '../hooks.js';
 import type { LoadedHooksConfig } from './config-loader.js';
-import { compileMatcher } from './config-loader.js';
+import { compileMatcher, isPluginHookDisabled } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
-import { isWhatifEpisode } from '../whatif-episode-gate.js';
+import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
+import { resolveContextSessionId } from './hook-utils.js';
 
 export interface AgentConfigForBridge {
   cwd?: string;
   sessionId?: string;
+  /**
+   * Live getter for the current session's autosaved markdown transcript path.
+   *
+   * Called at hook-dispatch time (not registration time) so it reflects the
+   * current path even after a `/clear` rotation. Returns `null` when no
+   * transcript is available (daemon, `afk chat`, web, or REPL before the first
+   * turn completes). The resolved value is forwarded as `transcript_path` in
+   * the stdin payload sent to every shell hook command.
+   *
+   * Artifact chosen: `~/.afk/state/transcripts/<isoStamp>.md` — the REPL's
+   * per-session autosaved markdown transcript. It is written incrementally as
+   * turns complete, so it already contains prior conversation turns when any
+   * hook fires. Format: markdown with `## User` / `## Assistant` blocks
+   * separated by `---` dividers. A Claude-Code-compatible JSONL export is a
+   * possible follow-up.
+   */
+  getTranscriptPath?: () => string | null;
 }
 
 /**
@@ -47,15 +65,31 @@ export function loadAndRegisterConfigHooks(
 ): void {
   const agentCwd = agentConfig.cwd ?? process.cwd();
   const sessionId = agentConfig.sessionId;
+  const getTranscriptPath = agentConfig.getTranscriptPath;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
-  // Episode mode: allow only context-shaping hooks. Side-effect tails
-  // (notifications, external writes triggered by Stop/PostToolUse, etc.) must
-  // not fire during a sandboxed episode — the episode is a replay for observation,
-  // not a live session. SessionStart and UserPromptSubmit shape preamble/context,
-  // which IS necessary for the episode to see the correct prompt structure.
-  const episodeAllowedEvents = new Set<HarnessHookEvent>(['SessionStart', 'UserPromptSubmit']);
+  // Episode mode: disable the context-injecting events (SessionStart and
+  // UserPromptSubmit) by default so both the baseline and candidate arms see
+  // byte-identical first user messages.  Cwd- or recency-sensitive hooks
+  // (e.g. a plugin hook whose output depends on cwd and accumulated state)
+  // would otherwise inject arm-specific text that confounds every delta
+  // measurement.
+  //
+  // Tool-gating hooks (PreToolUse, PostToolUse, PostToolUseFailure, Stop, …)
+  // keep registering in episodes — they cannot inject context into the first
+  // user message and their presence makes the episode more realistic.
+  //
+  // Setting AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 (or auto-set by the harness when
+  // the change spec itself targets hooks or plugins) restores pre-fix behaviour
+  // so both arms can observe the hooks under test.
   const inEpisode = isWhatifEpisode();
+  const keepContextHooks = keepContextHooksInEpisode();
+
+  /** Events whose injectContext reaches the first user message of a session. */
+  const CONTEXT_INJECTING_EVENTS: ReadonlySet<HarnessHookEvent> = new Set([
+    'SessionStart',
+    'UserPromptSubmit',
+  ]);
 
   const validEvents: HarnessHookEvent[] = [
     'SessionStart',
@@ -95,10 +129,35 @@ export function loadAndRegisterConfigHooks(
     }
   }
 
+  // In episode mode (without opt-in), skip the context-injecting events only
+  // (SessionStart and UserPromptSubmit) and warn so the operator knows what
+  // was disabled.  Tool-gating events are unaffected and register below.
+  if (inEpisode && !keepContextHooks) {
+    const disabledHooks: string[] = [];
+    for (const event of CONTEXT_INJECTING_EVENTS) {
+      const groups = hookConfig.hooks[event];
+      if (groups === undefined) continue;
+      for (const group of groups) {
+        for (const hook of group.hooks) {
+          disabledHooks.push(`${event}: ${hook.command}`);
+        }
+      }
+    }
+    if (disabledHooks.length > 0) {
+      console.warn(
+        `[hooks] what-if episode: SessionStart and UserPromptSubmit hooks disabled so both arms` +
+          ` see identical first user messages (set AFK_WHATIF_KEEP_CONTEXT_HOOKS=1 to keep):\n` +
+          disabledHooks.map((s) => `  - ${s}`).join('\n'),
+      );
+    }
+    // Do NOT return here — tool-gating events (PreToolUse, PostToolUse, etc.)
+    // still need to register to preserve episode realism.
+  }
+
   for (const event of validEvents) {
-    // In episode mode, skip events that are pure side-effect tails. Only
-    // SessionStart and UserPromptSubmit may run (they shape context / preamble).
-    if (inEpisode && !episodeAllowedEvents.has(event)) continue;
+    // Episode mode without opt-in: skip context-injecting events to keep arms
+    // byte-identical on their first user message.
+    if (inEpisode && !keepContextHooks && CONTEXT_INJECTING_EVENTS.has(event)) continue;
 
     const groups = hookConfig.hooks[event];
     if (groups === undefined || groups.length === 0) continue;
@@ -109,13 +168,35 @@ export function loadAndRegisterConfigHooks(
       // loader, which only emits plugin-tier groups when it is set.
       if (group.tier !== 'plugin' && !userGlobalEnabled) continue;
 
+      // Per-hook disable: skip plugin groups that the user has listed in
+      // `disabledPluginHooks`. The check is at group level (event+matcher)
+      // so a single specifier can suppress an entire matcher group at once.
+      // Non-plugin groups are never subject to this gate (it applies only to
+      // plugin hooks; shell hooks have the enableShellHooks gate instead).
+      if (group.tier === 'plugin') {
+        const firstHook = group.hooks[0];
+        const pName = firstHook?.pluginName;
+        if (pName !== undefined &&
+            isPluginHookDisabled(hookConfig.disabledPluginHooks, pName, event, group.matcher)) {
+          console.warn(
+            `[hooks] plugin hook suppressed by disabledPluginHooks: plugin="${pName}" ` +
+              `event="${event}"` +
+              (group.matcher !== undefined ? ` matcher="${group.matcher}"` : ''),
+          );
+          continue;
+        }
+      }
+
       // Compile the matcher once per group — not per dispatch.
-      const matchFn = compileMatcher(group.matcher);
+      // Pass a warn sink so invalid regex patterns are surfaced via console.warn
+      // instead of silently falling back without any signal to the operator.
+      const matchFn = compileMatcher(group.matcher, (msg) => console.warn(`[hooks] ${msg}`));
 
       for (const hook of group.hooks) {
         const hookCommand = hook.command;
         const hookTimeoutMs = hook.timeoutMs;
         const hookPluginRoot = hook.pluginRoot;
+        const hookPluginName = hook.pluginName;
 
         const handler = async (context: HookContext): Promise<HookDecision> => {
           // For tool-scoped events, check the matcher against the tool name.
@@ -129,13 +210,27 @@ export function loadAndRegisterConfigHooks(
             }
           }
 
+          // Prefer the live event context.sessionId over the registration-time
+          // agentConfig.sessionId so REPL / `afk chat` hooks receive the
+          // provider-assigned id rather than undefined. Falls back to the
+          // registration-time id for events whose context type carries no
+          // sessionId (SubagentStart, SubagentStop).
+          const effectiveSessionId = resolveContextSessionId(context, sessionId);
+
+          // Resolve the live transcript path at dispatch time (not registration
+          // time) so rotations from /clear are captured automatically.
+          const transcriptPath = getTranscriptPath?.() ?? null;
+
           const result = await executeCommand({
             command: hookCommand,
             context,
             agentCwd,
-            sessionId,
+            sessionId: effectiveSessionId,
             timeoutMs: hookTimeoutMs,
+            transcriptPath,
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
+            ...(hookPluginName !== undefined ? { pluginName: hookPluginName } : {}),
+            ...(hookPluginName !== undefined ? { pluginHookEnv: hookConfig.pluginHookEnv } : {}),
           });
 
           return result.decision;

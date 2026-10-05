@@ -18,6 +18,7 @@ import * as git from './git.js';
 import {
   readIndex,
   upsertPlugin,
+  isPinnedRef,
   type PluginIndex,
   type PluginIndexEntry,
 } from './index-store.js';
@@ -171,15 +172,24 @@ export async function updatePlugin(
   // remote-tracking branch.
   let pickedSemverTag = false;
   if (options.ref) {
+    // Caller explicitly re-pins — honour the new ref and mark it pinned.
     targetRef = options.ref;
   } else {
-    const tags = await git.listTags(dir, gitOpts);
-    const latest = pickLatestSemverTag(tags);
-    if (latest !== null) {
-      targetRef = latest;
-      pickedSemverTag = true;
+    const defaultBranch = await git.getDefaultBranch(dir, gitOpts);
+    if (isPinnedRef(entry, defaultBranch) && entry.ref) {
+      // Stored ref was user-pinned: advance a branch pin to the remote tip;
+      // a SHA/tag pin stays put (isBranch will be false → up-to-date or tag).
+      targetRef = entry.ref;
     } else {
-      targetRef = entry.ref ?? (await git.getDefaultBranch(dir, gitOpts));
+      // Auto-picked: run the semver-tag picker as before.
+      const tags = await git.listTags(dir, gitOpts);
+      const latest = pickLatestSemverTag(tags);
+      if (latest !== null) {
+        targetRef = latest;
+        pickedSemverTag = true;
+      } else {
+        targetRef = entry.ref ?? defaultBranch;
+      }
     }
   }
 
@@ -205,6 +215,9 @@ export async function updatePlugin(
   const upToDate = isBranch ? remoteSha === localSha : targetRef === entry.ref;
 
   if (upToDate) {
+    if (options.ref !== undefined) {
+      upsertPlugin(name, { ...entry, ref: targetRef, commit: localSha, pinnedRef: true, updatedAt: now().toISOString() }, indexPath);
+    }
     return {
       name,
       status: 'up-to-date',
@@ -227,6 +240,7 @@ export async function updatePlugin(
     ref: targetRef,
     commit,
     updatedAt: ts,
+    ...(options.ref !== undefined ? { pinnedRef: true } : {}),
   };
   upsertPlugin(name, updated, indexPath);
   return { name, status: 'updated', fromRef: entry.ref, toRef: targetRef, commit, version };

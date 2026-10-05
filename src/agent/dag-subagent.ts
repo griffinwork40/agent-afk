@@ -14,6 +14,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import type { AgentModelInput, CanUseTool, IAgentSession } from './types.js';
 import type { ModelProvider } from './provider.js';
 import type { SubagentManager } from './subagent.js';
+import type { JournalParent } from './subagent/fork-types.js';
 import { runDAG, type DAGEdge, type DAGNode, type DAGRunResult } from './dag.js';
 import { attachSubagentContext, annotateIfIncomplete } from './subagent/result.js';
 import { TimeoutError, errorMessage } from '../utils/errors.js';
@@ -133,6 +134,23 @@ export interface SubagentDAGNode {
    */
   provider?: ModelProvider;
   /**
+   * This node's resolved nesting depth (`parent depth + 1`). When set,
+   * forwarded into the fork config so the identity preamble
+   * (`identity-preamble.ts`) can emit the correct at-cap / may-delegate line.
+   * Without it the preamble treats undefined depth as "below the cap" and
+   * may incorrectly tell a node at the cap that it may dispatch further
+   * (issue #2266). Set by the compose executor, which computes depth from its
+   * own context before building the node list.
+   */
+  depth?: number;
+  /**
+   * The dispatch cap threaded alongside {@link depth}. When set, forwarded into
+   * the fork config as `AgentConfig.maxDepth`. Defaults to
+   * `resolveMaxNestingDepth()` in the compose executor, matching the value the
+   * `compose` and `skill` executors use for their own depth-refusal gate.
+   */
+  maxDepth?: number;
+  /**
    * Optional async alternative to {@link promptBuilder}. When present, the DAG
    * executor awaits this function and uses its result as the node's prompt
    * instead of `promptBuilder`. Used by the compose executor to attach
@@ -166,7 +184,7 @@ export interface SubagentDAGNode {
 
 export interface SubagentDAGOptions {
   manager: SubagentManager;
-  parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'>;
+  parentSession: Pick<IAgentSession, 'sessionId' | 'abortSignal'> & JournalParent;
   nodes: SubagentDAGNode[];
   edges: DAGEdge[];
   failFast?: boolean;
@@ -243,6 +261,16 @@ function validateDagNodeRoots(spec: SubagentDAGNode): void {
   }
 }
 
+/**
+ * Run a subagent DAG by topologically ordering nodes and executing each in
+ * dependency order.
+ *
+ * Intentional omission: `nestedAgentAllowlist` is NOT forwarded to forked DAG
+ * nodes. DAG nodes are task-workers (INV-028), not scoped agents, so the
+ * allowlist concept does not apply — forwarding it would silently grant
+ * scope-narrowing semantics that only make sense on the agent-tool path.
+ * (#2848)
+ */
 export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRunResult> {
   const { manager, parentSession, nodes, edges, failFast, nodeTimeoutMs, delegationBudget, anchorCwd } = options;
   const signal = parentSession.abortSignal ?? new AbortController().signal;
@@ -330,7 +358,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
       let handle: Awaited<ReturnType<typeof manager.forkSubagent>>;
       try {
         handle = await manager.forkSubagent({
-          parent: { sessionId: parentSession.sessionId },
+          parent: { sessionId: parentSession.sessionId, messageJournal: parentSession.messageJournal },
           config: {
             model: spec.model ?? 'sonnet',
             systemPrompt: spec.systemPrompt,
@@ -363,7 +391,7 @@ export async function runSubagentDAG(options: SubagentDAGOptions): Promise<DAGRu
             // SMALLER binds, so take the min: deriving from the node timeout alone
             // would arm a deadline later than the fork budget that will actually
             // fire.
-            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}),
+            ...(softDeadlineForNode !== 0 ? { softDeadlineMs: softDeadlineForNode } : {}), depth: spec.depth, maxDepth: spec.maxDepth,
           },
           idPrefix: spec.idPrefix ?? `dag-${spec.id}`,
           ...(spec.outputSchema !== undefined ? { outputSchema: spec.outputSchema } : {}),

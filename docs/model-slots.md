@@ -15,8 +15,9 @@ select among (cheapest → most capable); the *bindings* are what you configure.
 
 ### afk.config.json
 
-Each slot accepts a bare id string, or an object with an optional custom `name`
-and optional per-slot provider credentials (`provider` / `baseUrl` / `apiKey`):
+Each slot accepts a bare id string, or an object with an optional custom `name`,
+optional per-slot provider credentials (`provider` / `baseUrl` / `apiKey`), and an
+optional `contextWindow` override (see below):
 
 ```jsonc
 {
@@ -32,7 +33,16 @@ and optional per-slot provider credentials (`provider` / `baseUrl` / `apiKey`):
       "apiKey": "local"
     },
     // Stage 2: hosted OpenAI with its own key, alongside Anthropic above.
-    "large":  { "id": "gpt-4.1", "provider": "openai", "apiKey": "sk-…" }
+    "large":  { "id": "gpt-4.1", "provider": "openai", "apiKey": "sk-…" },
+    // Stage 3: Cerebras paid tier — raises the context window from the
+    // conservative free-tier cap (64k) to the paid-tier cap (128k).
+    // baseUrl / apiKey live in AFK_MODEL_LOCAL_BASE_URL / _API_KEY (env-only).
+    "local":  {
+      "id": "qwen-3.8-27b",
+      "name": "cerebras",
+      "provider": "openai",
+      "contextWindow": 128000
+    }
   }
 }
 ```
@@ -42,6 +52,24 @@ Anthropic-routed tier, `baseUrl` is the Messages-API base; for an OpenAI-routed
 tier it is the Chat Completions base. A per-slot value wins over the
 corresponding global (`AFK_OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, …) for that
 tier only.
+
+#### `contextWindow` — per-slot context-window override
+
+An optional positive integer (tokens). When set, `contextLimitFor` and everything
+derived from it — the context-usage percentage on the status line, the
+auto-compaction trigger threshold, and the overflow pre-flight guard — use this
+value instead of the built-in table entry for the bound model id.
+
+**When to use:** providers whose context window depends on account tier. For
+example, Cerebras's `qwen-3.8-27b` ships a 64-65k window on the free tier and a
+128-131k window on paid plans. The built-in table pins the conservative free-tier
+value; paid users add `"contextWindow": 128000` to the slot object to unlock the
+larger window without touching the global table.
+
+**Constraints:** must be a positive integer ≤ 10,000,000. Invalid values (0,
+negative, non-integer, too large) are silently ignored at config load and rejected
+with a clear error at the `config_set` write path. Does **not** affect max output
+tokens — `maxOutputTokensFor` is a separate cap read from the provider API.
 
 ### Environment
 

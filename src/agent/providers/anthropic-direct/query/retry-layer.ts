@@ -53,6 +53,7 @@ import type { ProviderEvent } from '../../../provider.js';
 import { buildRequestHeaders } from '../auth.js';
 import { isExtendedCacheTtlActive } from '../cache-policy.js';
 import { loadClaudeCodeOauthToken, parseAccountIdentifier } from '../../../auth/keychain.js';
+import { setRefreshedClaudeCodeOauthToken } from '../../../auth/credential-resolver.js';
 import type { AnthropicClientLike, AuthMode, RunTurnInput } from '../types.js';
 import type { RetryTierContext, UsageLimitWaitResult } from './retry-context.js';
 import { turnWithAuthRetry } from './auth-retry-tier.js';
@@ -101,6 +102,20 @@ export interface RetryLayerOptions {
  */
 export class RetryLayer {
   private _client: Anthropic;
+  /**
+   * The OAuth token string the current `_client` was built with.
+   *
+   * `loadClaudeCodeOauthToken()` reads the credential STORE, which may already
+   * contain account B when `/reauth` runs (the user ran `claude login` before
+   * calling us). Comparing store-before vs store-after therefore yields
+   * `swapped: false` even when the live client is switching from A to B.
+   *
+   * Tracking the token we actually wired into `_client` at construction (and
+   * updating it on every client swap) lets `forceClientRefresh` compute
+   * `swapped` against the running client's credential, not the store's
+   * current value.
+   */
+  private _clientToken: string | undefined;
   private readonly _authMode: AuthMode;
   private readonly initSessionId: string;
   private readonly baseUrl?: string;
@@ -124,6 +139,16 @@ export class RetryLayer {
 
   constructor(opts: RetryLayerOptions) {
     this._client = opts.client;
+    // Snapshot the token the initial client was built with. If the
+    // constructor is called in OAuth mode the store holds the same value;
+    // in api-key mode it is undefined (no OAuth token).
+    //
+    // Invariant: the constructor and the `opts.client` build both run in the
+    // same synchronous frame, so `loadClaudeCodeOauthToken()` returns the same
+    // value that was used to construct `opts.client`. This is safe as long as
+    // the caller does not construct the client on one microtask and pass it here
+    // on a later one (i.e. construction must be synchronous and sequential).
+    this._clientToken = loadClaudeCodeOauthToken();
     this._authMode = opts.authMode;
     this.initSessionId = opts.initSessionId;
     this.baseUrl = opts.baseUrl;
@@ -150,7 +175,7 @@ export class RetryLayer {
    * the 1h-cache beta rather than reusing the original header map, so a replay
    * never asks for a TTL whose activating beta it dropped.
    */
-  private rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode'>): Record<string, string> {
+  private rotateHeaders(runInput: Pick<RunTurnInput, 'effort' | 'fastMode' | 'thinkingBlockBinding'>): Record<string, string> {
     return buildRequestHeaders(
       this._authMode,
       this.initSessionId,
@@ -158,6 +183,7 @@ export class RetryLayer {
       runInput.effort !== undefined,
       isExtendedCacheTtlActive({ ...(this.baseUrl !== undefined ? { baseUrl: this.baseUrl } : {}) }),
       runInput.fastMode === true,
+      runInput.thinkingBlockBinding !== undefined,
     );
   }
 
@@ -218,8 +244,10 @@ export class RetryLayer {
    *   - No `tokenRefresher` is wired (api-key mode, or local-server mode).
    *   - The refresher returned null (token read/refresh failed).
    *
-   * Returns `{ accountId, swapped }` on success, where `swapped` is `true`
-   * iff the new client's underlying token differs from the previous one.
+   * Returns `{ accountId, oldAccountId, swapped }` on success, where `swapped`
+   * is `true` iff the new client's underlying token differs from the previous
+   * one. `oldAccountId` is the account id parsed from the token the old client
+   * was built with (useful for the `/reauth` message "switched from X to Y").
    * Callers (e.g. `/reauth`) can use `swapped` to distinguish "now on a
    * different account" from "the existing token was already current".
    *
@@ -227,9 +255,14 @@ export class RetryLayer {
    * the 401 path uses, so a 401-driven refresh racing with an explicit
    * `/reauth` collapses to a single upstream call.
    */
-  async forceClientRefresh(): Promise<{ accountId: string; swapped: boolean } | null> {
+  async forceClientRefresh(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
     if (!this.tokenRefresher) return null;
-    const priorToken = loadClaudeCodeOauthToken();
+    // Capture the token the CURRENT CLIENT was built with. This is the correct
+    // baseline for "did we just swap accounts?". Reading loadClaudeCodeOauthToken()
+    // here instead would return the STORE's current value — which is already
+    // account B when the user ran `claude login` before calling `/reauth`,
+    // producing store-before === store-after and a false `swapped: false`.
+    const priorClientToken = this._clientToken;
 
     let newClient: Anthropic | null = null;
     try {
@@ -250,10 +283,28 @@ export class RetryLayer {
     if (!newClient) return null;
 
     this._client = newClient;
+    // Contract: `tokenRefresher` is expected to build its client from the same
+    // credential store that `loadClaudeCodeOauthToken()` reads. Therefore reading
+    // the store immediately after the refresher returns captures the token the new
+    // client was built with. If a future refresher implementation builds from a
+    // different source, `_clientToken` must be updated to match that source here.
     const newToken = loadClaudeCodeOauthToken();
+    // Update the tracked token to match what the new client was built with.
+    this._clientToken = newToken;
+    // Fix #2471 (resolver-cache fallback): when the live store is temporarily
+    // unreadable (write-back failed, keychain locked), `loadAnthropicCredential()`
+    // falls through to its process-local cache — which still held the boot-time
+    // token. Update the cache here so every subsequent resolver read returns the
+    // fresh account's token, not the boot-time one.
+    if (newToken) setRefreshedClaudeCodeOauthToken(newToken);
     return {
       accountId: parseAccountIdentifier(newToken ?? ''),
-      swapped: priorToken !== newToken,
+      // Skip parseAccountIdentifier when the prior token was nullish: passing ''
+      // returns the truthy sentinel 'token:(unknown)', which the caller must then
+      // special-case. Passing '' directly instead lets the caller distinguish
+      // "no prior account" from "account with undecodable token" cleanly.
+      oldAccountId: priorClientToken != null ? parseAccountIdentifier(priorClientToken) : '',
+      swapped: priorClientToken !== newToken,
     };
   }
 

@@ -3,22 +3,20 @@ import { abortFailureClass } from '../../../abort-reason.js';
 import { emitToolCall } from '../../../trace/emit.js';
 import type { TraceSink } from '../../../trace/index.js';
 import type { ProviderEvent } from '../../../provider.js';
-import { extractCaptureToolInput, extractRawToolInput } from '../../../facets/raw-input.js';
-import { env, isExplicitlyEnabled } from '../../../../config/env.js';
+import { extractRawToolInput } from '../../../facets/raw-input.js';
 import type { ToolDispatcher } from '../../anthropic-direct/tool-dispatcher.js';
 import type { ToolResult } from '../../anthropic-direct/types.js';
 import { DENIAL_BREAKER_FAILURE_CLASS } from '../../../tools/denial-circuit-breaker.js';
 import { summarizeToolInput } from '../../shared/tool-input-summary.js';
-import {
-  buildToolCallCompletedPayload,
-  buildToolCallStartedPayload,
-} from '../../shared/tool-call-trace.js';
+import { buildToolCallStartedPayload } from '../../shared/tool-call-trace.js';
 import { relayWhilePending } from '../../shared/event-relay.js';
+import { emitDispatchedToolOutputs } from './dispatch-append.emit.js';
 import type { OpenAIMessage } from '../messages.js';
 import type { StreamState } from '../translate.js';
 import { finalizedToolCalls } from '../translate.js';
 import {
   accumulatedToolCallsToToolCalls,
+  requiredArgToolsOf,
   assistantMessageWithToolCalls,
   toolImageFollowupMessage,
   toolResultsToMessages,
@@ -86,7 +84,7 @@ export async function* dispatchAndAppendToolCalls({
   for (const c of accumulated) {
     if (c.id.length === 0) c.id = randomUUID();
   }
-  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal);
+  const { calls, parseErrors } = accumulatedToolCallsToToolCalls(accumulated, signal, requiredArgToolsOf(toolDispatcher));
 
   // Witness layer: per-call start timestamps keyed by toolUseId so the
   // completed trace event carries an accurate durationMs. Mirrors
@@ -118,12 +116,6 @@ export async function* dispatchAndAppendToolCalls({
       toolName: call.name,
       toolInput: summarizeToolInput(call.name, call.input),
       toolInputRaw: extractRawToolInput(call.input),
-      // Intentionally broader than shouldCaptureSubagentOutput: isSubagentFork
-      // is not in scope here, so we populate toolInputCapture whenever the env
-      // var is set. The recorder null-gates at construction via
-      // shouldCaptureSubagentOutput, so this field is silently dropped for
-      // non-fork sessions. Wasted extractCaptureToolInput call only.
-      toolInputCapture: (env.AFK_CAPTURE_SUBAGENT_OUTPUT && isExplicitlyEnabled(env.AFK_CAPTURE_SUBAGENT_OUTPUT)) ? extractCaptureToolInput(call.input) : undefined,
       sessionId,
     };
   }
@@ -205,79 +197,16 @@ export async function* dispatchAndAppendToolCalls({
       }));
     }
 
-    for (let i = 0; i < calls.length; i++) {
-      const call = calls[i]!;
-      let result = dispatcherResults[i]!;
-      // Layer parse-error diagnostics in front of the dispatcher result —
-      // the model needs to know its arguments were malformed.
-      const parseErr = parseErrors.get(call.id);
-      if (parseErr !== undefined) {
-        result = {
-          content: `${parseErr}\n--\n${result.content}`,
-          isError: true,
-          ...(result.truncated === true ? { truncated: true } : {}),
-        };
-      }
-      results.push({ call, result });
-
-      // Witness layer: tool_call.completed pairs with the .started event
-      // emitted above. Payload built by the shared
-      // `buildToolCallCompletedPayload` (providers/shared/tool-call-trace.ts)
-      // so both providers construct this event identically. Fire-and-forget
-      // to keep the loop iteration cheap.
-      const startedAt = startTimes.get(call.id);
-      const durationMs = typeof startedAt === 'number' ? Date.now() - startedAt : 0;
-      const truncated = result.truncated === true || result.content.includes('[output truncated');
-      void emitToolCall(
-        traceWriter,
-        buildToolCallCompletedPayload({
-          toolUseId: call.id,
-          name: call.name,
-          result,
-          truncated,
-          durationMs,
-          subagentId,
-        }),
-      );
-
-      yield {
-        type: 'tool.output',
-        toolUseId: call.id,
-        toolName: call.name,
-        content: result.content,
-        ...(result.isError === true ? { isError: true } : {}),
-        ...(result.truncated === true ? { truncated: true } : {}),
-        ...(result.capturePath !== undefined ? { capturePath: result.capturePath } : {}),
-        ...(result.incomplete === true ? { incomplete: true } : {}),
-        ...(result.incompleteReason ? { incompleteReason: result.incompleteReason } : {}),
-        // Plumb concurrency-batch membership onto the render-facing event, not
-        // just the trace event above, so the TUI `∥i/N` badge works here too.
-        // Parity with anthropic-direct/loop.ts's tool.output yield — omitting it
-        // silently drops the badge for every openai-compatible session.
-        ...(typeof result.batchIndex === 'number' && typeof result.batchSize === 'number'
-          ? { batchIndex: result.batchIndex, batchSize: result.batchSize }
-          : {}),
-        // Carry WHY the call failed so the tool-lane can render a deliberate
-        // refusal neutrally instead of as a red ✗. Parity with
-        // anthropic-direct/loop/tool-results.ts — omitting it silently drops
-        // the benign-rejection glyph for every openai-compatible session.
-        ...(result.failureClass ? { failureClass: result.failureClass } : {}),
-        // Plumb tool-measured duration so the TUI outcome row can show `· Xs`.
-        // Prefer handler value (bash always sets result.durationMs), fall back
-        // to provider-side measurement for non-bash tools.
-        durationMs: result.durationMs !== undefined ? result.durationMs : durationMs,
-        ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
-        sessionId,
-      };
-      if (result.render?.diff) {
-        yield {
-          type: 'tool.diff',
-          toolUseId: call.id,
-          diff: result.render.diff,
-          sessionId,
-        };
-      }
-    }
+    yield* emitDispatchedToolOutputs({
+      calls,
+      dispatcherResults,
+      parseErrors,
+      startTimes,
+      traceWriter,
+      subagentId,
+      sessionId,
+      results,
+    });
   }
 
   // Append the assistant turn (with tool_calls) and the tool-result
@@ -286,13 +215,16 @@ export async function* dispatchAndAppendToolCalls({
   // precede the tool{} messages, and each tool{} must reference a
   // tool_call_id that exists in the assistant turn.
   //
-  // `state.reasoningText` is threaded in so DeepSeek-R1-class thinking-mode
-  // providers see the reasoning trace echoed back on the assistant turn —
-  // omitting it on those providers yields a 400 ("The `reasoning_content`
-  // in the thinking mode must be passed back to the API"). Empty text is
-  // a no-op for non-thinking providers (the field is omitted entirely).
+  // `state.reasoningText` is threaded in so thinking-mode providers see the
+  // reasoning trace echoed back on the assistant turn — omitting it yields a
+  // 400 ("The `reasoning_content` in the thinking mode must be passed back to
+  // the API" on DeepSeek-R1; "property is unsupported" on Cerebras). Empty
+  // text is a no-op for non-thinking providers (the field is omitted entirely).
+  // `state.reasoningField` preserves which wire key delivered the reasoning so
+  // the echo uses the same key (Cerebras uses `reasoning`; DeepSeek uses
+  // `reasoning_content`).
   priorTurns.push(
-    assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText) as unknown as OpenAIMessage,
+    assistantMessageWithToolCalls(state.assistantText, accumulated, state.reasoningText, state.reasoningField) as unknown as OpenAIMessage,
   );
   for (const m of toolResultsToMessages(results)) {
     priorTurns.push(m as unknown as OpenAIMessage);

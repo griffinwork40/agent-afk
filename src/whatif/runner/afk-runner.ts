@@ -89,8 +89,11 @@ function buildChatArgs(
   launch: Environment['launch'],
   extra: string[],
 ): { command: string; spawnArgs: string[] } {
+  // Use stream-json so the runner receives ALL assistant text (including
+  // narration between tool calls), not just the final message. The NDJSON
+  // output is parsed by accumulateStreamJson in afk-runner.run.ts.
   const chatArgs = [
-    '--format', 'json',
+    '--format', 'stream-json',
     '--max-turns', String(maxTurns),
     ...(launch.model ? ['--model', launch.model] : []),
     ...(launch.effort ? ['--effort', launch.effort] : []),

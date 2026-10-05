@@ -230,7 +230,8 @@ describe('loadPluginEntrypoints', () => {
       // propagate out of dispatch() as HookBlockedError or any other error.
       const throwingHandler = () => { throw new Error('plugin exploded'); };
       registerPluginHook('PostToolUse', throwingHandler);
-      const registry = createDefaultHookRegistry().registry;
+      const registry = createHookRegistry();
+      installPluginHooks(registry);
       const ctx: HookContext = { event: 'PostToolUse', toolName: 'bash', sessionId: 'test-session' };
       await expect(registry.dispatch(ctx)).resolves.not.toThrow();
     });
@@ -273,7 +274,8 @@ describe('loadPluginEntrypoints', () => {
         receivedSignal = signal;
         return {};
       });
-      const registry = createDefaultHookRegistry().registry;
+      const registry = createHookRegistry();
+      installPluginHooks(registry);
       const ctx: HookContext = { event: 'PostToolUse', toolName: 'bash', sessionId: 'test-session' };
       const ac = new AbortController();
       await registry.dispatch(ctx, ac.signal);

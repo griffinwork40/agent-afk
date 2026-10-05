@@ -11,6 +11,13 @@
  * surfaces via the optional `onError` callback so operators can surface it
  * out-of-band.
  *
+ * `dispatchStopHook` fires at the end of every top-level turn on every
+ * surface (REPL, Telegram, daemon/cron, one-shot chat). It is non-blocking:
+ * a `HookBlockedError` is caught and logged (block does NOT force REPL
+ * continuation — that is PR 2). The returned `injectContext` is queued for
+ * the next user message on surfaces that have one; on one-shot surfaces it
+ * is dropped with a `stop_inject_dropped` trace event.
+ *
  * Abort precedence: helpers forward the caller's {@link AbortSignal} to
  * the registry. Abort beats a block decision even mid-dispatch; see
  * `hook-registry.ts` for the invariant.
@@ -25,9 +32,11 @@ import type {
   HookRegistry,
   SessionEndContext,
   SessionStartContext,
+  StopContext,
 } from '../hooks.js';
-import { emitHookDecision } from '../trace/emit.js';
+import { emitHookDecision, emitSessionPhase } from '../trace/emit.js';
 import type { HookEventName, TraceSink } from '../trace/index.js';
+import { HookHandlerTimeoutError } from '../hook-registry.js';
 
 export interface SessionHookDispatchOptions {
   /** Abort signal forwarded to the registry; aborted signal short-circuits. */
@@ -123,5 +132,103 @@ export async function dispatchSessionEnd(
     }
     debugLog(`SessionEnd hook unexpected error: ${String(err)}`);
     options.onError?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+/** Per-handler timeout for the post-turn Stop notification (5s). Matches the
+ *  REPL's own STOP_HOOK_HANDLER_TIMEOUT_MS — Stop fires every turn, so a
+ *  notification hook must not stall it for the full registry default (30s). */
+const STOP_HOOK_HANDLER_TIMEOUT_MS = 5_000;
+
+export interface StopHookDispatchOptions extends SessionHookDispatchOptions {
+  /**
+   * Whether the calling surface has a next user message to deliver
+   * injectContext on. REPL and Telegram (per-chat session) supply `true`;
+   * one-shot surfaces (daemon/cron task, `afk chat`) supply `false` — they
+   * have no subsequent prompt, so injectContext must be dropped.
+   */
+  hasNextTurn: boolean;
+  /** Surface name for the `stop_inject_dropped` trace event. */
+  surface?: string;
+}
+
+export interface StopHookDispatchResult {
+  /** Merged injectContext from non-blocking Stop handlers, or undefined. */
+  injectContext?: string;
+  /** Whether a HookBlockedError was caught (block is logged, not thrown). */
+  wasBlocked?: boolean;
+  /** The blocking handler's reason, when it gave one. */
+  blockedReason?: string;
+  /** Whether the handler timed out (timeout is logged, not thrown). */
+  wasTimeout?: boolean;
+}
+
+/**
+ * Dispatch the Stop hook chain at the end of a top-level turn.
+ *
+ * Fires on EVERY top-level surface (REPL, Telegram, daemon/cron, one-shot
+ * chat). Subagent sessions are excluded by the caller (`parentSessionId`
+ * guard in turn-stream-runner.ts) — they get SubagentStop.
+ *
+ * Non-blocking by design: a `HookBlockedError` is caught and logged, and
+ * the `wasBlocked` flag is returned so REPL can render its dim notice line.
+ * A block does NOT force same-turn continuation today (PR 2 adds that).
+ *
+ * `AbortError` propagates — abort precedence is non-negotiable.
+ *
+ * `injectContext` delivery: returned to the caller when `hasNextTurn` is
+ * true; dropped with a `stop_inject_dropped` trace event when false (one-shot
+ * surfaces have no next prompt). Callers on surfaces with a next turn must
+ * stash the returned string and prepend it to the next user message.
+ */
+export async function dispatchStopHook(
+  registry: HookRegistry | undefined,
+  context: StopContext,
+  options: StopHookDispatchOptions,
+): Promise<StopHookDispatchResult> {
+  if (!registry) return {};
+  try {
+    const decision = await registry.dispatch(
+      context,
+      options.signal,
+      STOP_HOOK_HANDLER_TIMEOUT_MS,
+    );
+    await emitSessionHookDecision(options.traceWriter, 'Stop', { kind: 'decision', decision });
+
+    const raw = decision.injectContext;
+    const injectContext = raw && raw.trim().length > 0 ? raw : undefined;
+
+    if (injectContext !== undefined && !options.hasNextTurn) {
+      // One-shot surface: drop the injection and record the gap.
+      void emitSessionPhase(options.traceWriter, {
+        phase: 'stop_inject_dropped',
+        metadata: {
+          injectContextBytes: Buffer.byteLength(injectContext, 'utf8'),
+          ...(options.surface !== undefined ? { surface: options.surface } : {}),
+        },
+      });
+      debugLog('[stop hook] injectContext dropped — no next turn on this surface', {
+        sessionId: context.sessionId,
+        injectContextBytes: Buffer.byteLength(injectContext, 'utf8'),
+      });
+      return {};
+    }
+
+    return injectContext !== undefined ? { injectContext } : {};
+  } catch (err) {
+    if (err instanceof AbortError) throw err;
+    if (err instanceof HookHandlerTimeoutError) {
+      debugLog('[stop hook] handler timed out', { sessionId: context.sessionId });
+      return { wasTimeout: true };
+    }
+    if (err instanceof HookBlockedError) {
+      await emitSessionHookDecision(options.traceWriter, 'Stop', { kind: 'blocked', err });
+      debugLog('[stop hook] blocked: ' + (err.reason ?? 'no reason given'), {
+        sessionId: context.sessionId,
+      });
+      return { wasBlocked: true, ...(err.reason !== undefined ? { blockedReason: err.reason } : {}) };
+    }
+    debugLog('[stop hook] unexpected error: ' + String(err), { sessionId: context.sessionId });
+    return {};
   }
 }

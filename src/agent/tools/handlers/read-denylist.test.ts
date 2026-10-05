@@ -123,7 +123,7 @@ describe('isReadDenied — deliberate divergence from the write denylist', () =>
   });
 });
 
-// Windows: ~/Library/Application Support paths are macOS/POSIX-only
+// Windows: genuinely POSIX-only — ~/Library/Application Support paths are macOS/POSIX-only; no Windows browser secret path equivalents
 describe.skipIf(isWin32)('isReadDenied — reverse-gap closure: password-store + browser secret trees', () => {
   // These roots were bash-only (`builtinBashSensitiveRoots` in
   // bash-restriction-hook.ts) before this change: blocked for `cat`, wide open
@@ -261,8 +261,8 @@ describe('isReadDenied — built-in exception for ~/.afk/config/schedules.json',
 // arbitrary names like `github_key`, so a deny-glob would fail-open), but two
 // well-known NON-secret siblings are carved out as exact files so the agent can
 // do git/ssh host-alias work unconfined. Mirrors the mcp.json carve-out pattern.
-// Windows: os.homedir() may return an 8.3 short path while BUILTIN_READ_ALLOWLIST
-// uses safeRealpath (long path), causing path-form mismatches in the test fixture.
+// Windows: TODO needs native equivalent — homedir() 8.3 short-path vs safeRealpath long-path mismatch
+// causes path-form mismatches in the BUILTIN_READ_ALLOWLIST fixture on Windows.
 describe.skipIf(isWin32)('isReadDenied — built-in exceptions for ~/.ssh/config and ~/.ssh/known_hosts', () => {
   const sshConfig = join(homedir(), '.ssh', 'config');
   const knownHosts = join(homedir(), '.ssh', 'known_hosts');
@@ -344,7 +344,7 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     expect(basename(resolved)).toBe('mcp.json');
   });
 
-  // Windows: BUILTIN_READ_ALLOWLIST path form may differ from safeRealpath (8.3 vs long path mismatch).
+  // Windows: TODO needs native equivalent — BUILTIN_READ_ALLOWLIST path form may differ from safeRealpath (8.3 vs long path mismatch)
   it.skipIf(isWin32)('keeps every built-in exception inside its expected resolved parent', () => {
     // mcp.json lives inside ~/.afk/config; .ssh/config & known_hosts live
     // inside ~/.ssh. Each entry must resolve into the dir that floors it.
@@ -363,6 +363,7 @@ describe('read-denylist — exception entries dereference the dir chain, never t
     }
   });
 
+  // Windows: TODO needs native equivalent — path form mismatch (8.3 vs long path) affects BUILTIN_READ_ALLOWLIST lookups
   it.skipIf(isWin32)('a protected path is still denied when reached directly (the P1 regression)', () => {
     // Belt-and-braces on the real built-ins: whatever the exception list resolves
     // to, a direct credential read must never be admitted by it. The carve-out
@@ -444,7 +445,7 @@ describe('read-denylist — AFK_READ_DENYLIST extras', () => {
   // `<cwd>/~/x` that matches nothing — so before PR #734's review fix this
   // exact instruction silently protected no path on either surface. A plain
   // `resolve()` regression fails here rather than in an operator's session.
-  // Windows: tilde-expansion uses homedir() but comparison path may differ in path form (8.3 vs long).
+  // Windows: TODO needs native equivalent — tilde-expansion uses homedir() but path form may differ (8.3 vs long path)
   it.skipIf(isWin32)('expands a leading ~/ so the documented tilde-spelled entry actually denies', () => {
     process.env['AFK_READ_DENYLIST'] = '~/.afk/config/mcp.json';
     _resetReadDenylistCacheForTests();
@@ -455,6 +456,7 @@ describe('read-denylist — AFK_READ_DENYLIST extras', () => {
     expect(getReadDenylist().some((p) => p.includes('~'))).toBe(false);
   });
 
+  // Windows: TODO needs native equivalent — tilde-expansion uses homedir() but path form may differ (8.3 vs long path)
   it.skipIf(isWin32)('leaves ~user/ unexpanded (no portable home lookup) rather than guessing', () => {
     process.env['AFK_READ_DENYLIST'] = '~someone/.ssh';
     _resetReadDenylistCacheForTests();

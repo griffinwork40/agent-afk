@@ -52,6 +52,13 @@ import { env, isPlainOutputRequested } from '../config/env.js';
 import { isExplicitlyEnabled } from '../config/env-helpers.js';
 import { countVisible, segmentAnsi } from './smoke-reveal.ansi.js';
 import { smokeTone } from './smoke-reveal.tones.js';
+import {
+  SMOKE_GLYPH_LEVELS,
+  charLifetime,
+  easeOutCubic,
+  smokeGlyph,
+  smokeToneOffset,
+} from './smoke-reveal.frame.js';
 
 /** Total time from first speck to fully settled letter. */
 export const LIFETIME_MS = 320;
@@ -64,18 +71,12 @@ export const MAX_LAG_MS = 160;
 /** Settle-driver cadence, which matches the renderer's default throttle. */
 export const FRAME_MS = 33;
 /**
- * Smoke glyph ladder, faintest first: a lone braille speck, then braille
- * particles that grow denser. Chosen by rendering candidate ladders side by
- * side. Shade blocks (░▒) read as redaction bars, and plain dots read as a
- * loading ellipsis.
- *
- * Invariant: every glyph must be East-Asian-Width NEUTRAL/narrow, never
- * Ambiguous. An Ambiguous glyph (e.g. U+00B7 `·`) renders 2 columns on
- * terminals set to "ambiguous characters are double-width" (common in CJK
- * locales), which breaks the column-width invariant and can wrap a
- * full-width line mid-fade. Braille patterns are always 1 column.
+ * Every smoke glyph the reveal can draw, faintest density level first: a
+ * lone braille speck, then braille particles that grow denser. Each level
+ * has several same-density variants (see `SMOKE_GLYPH_LEVELS` in
+ * smoke-reveal.frame.ts, which also carries the narrow-width invariant).
  */
-export const SMOKE_GLYPHS: readonly string[] = ['⠁', '⠂', '⠢', '⠶'];
+export const SMOKE_GLYPHS: readonly string[] = SMOKE_GLYPH_LEVELS.flat();
 
 /** SGR reset. Clears the tail's original styling before a smoke glyph. */
 const RESET = '\u001b[0m';
@@ -99,27 +100,42 @@ export function isSmokeTextEnabled(): boolean {
   return chalk.level >= 2;
 }
 
-/** Render one character at `age` ms old. Assumes 0 <= age < LIFETIME_MS. */
-function renderAt(ch: string, age: number): string {
-  const f = age / LIFETIME_MS;
+/**
+ * Render one character at `age` ms old (`age >= 0`), or null once it has
+ * settled. `seed` is the character's stable identity: it picks the
+ * character's own fade length, particle shapes, and smoke tone (see
+ * smoke-reveal.frame.ts), so neighbouring letters condense out of ragged,
+ * drifting smoke rather than one uniform band.
+ */
+function renderAt(ch: string, age: number, seed: number): string | null {
+  const life = charLifetime(seed, LIFETIME_MS);
+  if (age >= life) return null;
+  const f = age / life;
   // Smoke phase: particles densify and brighten from 0.12 to 0.4 of the ramp.
   // Wide glyphs (CJK, emoji) keep their own character so the column count
   // never changes. Only narrow characters swap to a smoke glyph.
   if (f < GLYPH_PHASE && stringWidth(ch) === 1) {
     const p = f / GLYPH_PHASE;
-    const g = Math.min(SMOKE_GLYPHS.length - 1, Math.floor(p * SMOKE_GLYPHS.length));
-    return RESET + smokeTone(0.12 + 0.28 * p)(SMOKE_GLYPHS[g] ?? '⠁');
+    return RESET + smokeTone(0.12 + 0.28 * p + smokeToneOffset(seed))(smokeGlyph(p, seed));
   }
   // Letter phase: the real character fades up from dim to the settled tone,
-  // after which apply() stops styling it and its own markdown styling returns.
+  // eased out so it condenses quickly and then glides into its own styling,
+  // after which apply() stops styling it and its markdown styling returns.
   const p = f < GLYPH_PHASE ? 0 : (f - GLYPH_PHASE) / (1 - GLYPH_PHASE);
-  return RESET + smokeTone(0.4 + 0.6 * p)(ch);
+  return RESET + smokeTone(0.4 + 0.6 * easeOutCubic(p))(ch);
 }
 
 export class SmokeReveal {
   private bursts: Burst[] = [];
   private nextBirth = 0;
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * Reconciled characters recorded over this instance's life. The character
+   * `d` positions from the end has the stable identity `serial - 1 - d`: new
+   * text raises both `serial` and `d` by the same amount, and a commit
+   * removes text from the front without changing either.
+   */
+  private serial = 0;
   /** Visible count at the last walked apply(); null = no valid baseline. */
   private lastVisible: number | null = null;
   /** Raw visible characters recorded since the last walked apply(). */
@@ -172,14 +188,19 @@ export class SmokeReveal {
       const d = visible - 1 - idx;
       const birth = d >= recorded ? null : this.birthOf(d);
       idx++;
-      if (birth === null || t - birth >= LIFETIME_MS) {
+      if (birth === null) {
+        out += s.text;
+        continue;
+      }
+      const age = t - birth;
+      // Not revealed yet: hold the cell blank so layout never shifts.
+      const cell = age < 0 ? ' '.repeat(Math.max(1, stringWidth(s.text))) : renderAt(s.text, age, this.serial - 1 - d);
+      if (cell === null) {
         out += s.text;
         continue;
       }
       animating = true;
-      const age = t - birth;
-      // Not revealed yet: hold the cell blank so layout never shifts.
-      out += age < 0 ? ' '.repeat(Math.max(1, stringWidth(s.text))) : renderAt(s.text, age);
+      out += cell;
     }
     if (animating) this.armTick();
     return animating ? out + RESET : formatted;
@@ -224,6 +245,7 @@ export class SmokeReveal {
     const grown = this.lastVisible === null ? null : Math.max(0, visible - this.lastVisible);
     let excess = grown === null ? 0 : this.sinceApply - grown;
     this.lastVisible = visible;
+    this.serial += this.sinceApply;
     this.sinceApply = 0;
     for (let i = this.bursts.length - 1; i >= 0 && excess > 0; i--) {
       const b = this.bursts[i];
@@ -231,6 +253,7 @@ export class SmokeReveal {
       const take = Math.min(excess, b.count);
       b.count -= take;
       excess -= take;
+      this.serial -= take;
       if (b.count === 0) this.bursts.splice(i, 1);
     }
   }

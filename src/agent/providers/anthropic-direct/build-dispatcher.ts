@@ -52,6 +52,7 @@ import {
   type ToolPermissionConfig,
 } from '../../tools/permissions.js';
 import { pathContainmentBypassed } from '../../permission-policy.js';
+import { userAttentionFrom } from '../../tools/user-yield.js';
 
 /** Per-call options — the session-scoped half of the dispatcher inputs. */
 export interface BuildDispatcherOptions {
@@ -117,6 +118,13 @@ export interface BuildDispatcherOptions {
    * non-TTY surfaces and forked children (no overlay to repaint).
    */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Forwarded from AgentConfig so the REPL Ctrl+B handler and
+   * the per-query dispatcher share the same instance. Absent for headless
+   * surfaces and forked children.
+   */
+  detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
 }
 
 /**
@@ -342,9 +350,17 @@ export function buildDispatcher(
     readOnlyBash: deps.readOnlyBash,
     // #1430: PID registry — gates wait_for process condition to session-owned PIDs.
     ...(opts?.spawnedPidRegistry !== undefined ? { spawnedPidRegistry: opts.spawnedPidRegistry } : {}),
+    // Yield contract: the queued-message probe rides on planExitControls (the
+    // REPL installs it post-construction; top-level sessions only). Late-bound.
+    ...(planExitControls ? { userAttention: userAttentionFrom(planExitControls) } : {}),
     // #1506: Live bash output tail for REPL TUI progress display.
     ...(opts?.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: opts.bashOutputTailReporter }
+      : {}),
+    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding. Top-level
+    // REPL sessions only — absent for forks (no surface to inject results into).
+    ...(opts?.detachRegistry !== undefined
+      ? { detachRegistry: opts.detachRegistry }
       : {}),
   });
 }

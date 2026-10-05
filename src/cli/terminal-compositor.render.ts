@@ -161,26 +161,21 @@ export function renderInputLine(self: RenderHost): string {
       ghostSuffix = shellGhost !== null ? palette.meta(truncated) : palette.dim(truncated);
     }
   }
-  // Content centering (AFK_CENTER_CONTENT): prepend left margin so the input
-  // line floats at the same horizontal position as the tool-lane content.
-  //
   // Contract: the assembled line (margin + prompt + before + caret + after +
   // ghostSuffix + suffix) MUST fit within stdout.columns so CupFrameRenderer
   // never hard-wraps it. A wrap would push continuation text to column 0,
-  // visually breaking the centered layout and corrupting DECSTBM scroll-region
-  // row accounting (see issue #2167). Apply a margin-aware viewport clip so
-  // the visible buffer slice always fits within the available width.
+  // corrupting DECSTBM scroll-region row accounting (see issue #2167).
+  // clipInputViewport is unconditional: it handles both the centered case
+  // (margin > 0) and the non-centered case (margin === '') so a very long
+  // buffer never wraps even when AFK_CENTER_CONTENT is unset.
   const margin = contentMargin(cols);
-  if (margin.length > 0) {
-    const promptWidth = displayWidth(stripAnsi(self.promptTextFn(self.input.buffer)));
-    const availableWidth = Math.max(0, cols - margin.length - promptWidth);
-    const visibleLine = clipInputViewport(
-      rawBefore, before, caret, rawAfter, after, ghostSuffix, suffix,
-      shellMode, self.formatInputBuffer, availableWidth,
-    );
-    return margin + self.promptTextFn(self.input.buffer) + visibleLine;
-  }
-  return contentMargin(cols) + self.promptTextFn(self.input.buffer) + before + caret + after + ghostSuffix + suffix;
+  const promptWidth = displayWidth(stripAnsi(self.promptTextFn(self.input.buffer)));
+  const availableWidth = Math.max(0, cols - margin.length - promptWidth);
+  const visibleLine = clipInputViewport(
+    rawBefore, before, caret, rawAfter, after, ghostSuffix, suffix,
+    shellMode, self.formatInputBuffer, availableWidth,
+  );
+  return margin + self.promptTextFn(self.input.buffer) + visibleLine;
 }
 
 /**

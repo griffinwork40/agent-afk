@@ -9,6 +9,7 @@
  */
 
 import type { SubagentManager } from '../../subagent.js';
+import type { JournalParent } from '../../subagent/fork-types.js';
 import type { ReadScopeInputs } from '../../subagent-read-scope.js';
 import type { BackgroundAgentRegistry } from '../../background-registry.js';
 import type { ModelProvider } from '../../provider.js';
@@ -33,7 +34,10 @@ export interface SubagentExecutorContext {
     // dispatch SubagentStart/Stop (incl. the shadow-verify nudge) against it
     // and inherit it. Nested stub parents omit it, so depth-2+ forks stay
     // unhooked (no nudges injected into intermediate subagents).
-    Partial<Pick<IAgentSession, 'hookRegistry'>>;
+    Partial<Pick<IAgentSession, 'hookRegistry'>> &
+    // Optional: the parent's message journal; forks journal to its
+    // `forSubagent(id)` child. Stub parents omit it (child unjournaled).
+    JournalParent;
   /**
    * `systemPrompt` is the raw base prompt (pre-assembly), intentionally
    * excluding TOOL_SYSTEM_PROMPT and ROUTING_DIRECTIVE — subagents are task
@@ -88,6 +92,9 @@ export interface SubagentExecutorContext {
     inheritedCwd?: string,
     inheritedReadScope?: ReadScopeInputs,
     skillDispatchName?: string,
+    // Forking child's journal view (read lazily): nested skill forks journal
+    // via its `forSubagent(id)`. Absent → nested skill forks run unjournaled.
+    journalParent?: JournalParent,
   ) => SkillExecutor;
   /**
    * Nesting depth this executor sits at. **Required** — pass explicit `0`

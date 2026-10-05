@@ -1,0 +1,67 @@
+{
+  "_comment": "Test fixture from pilot run 20260928-153056-015fbb. Only episode ids, arms, sample P(yes) — no prompts or content. Used to verify sign-flip implementation reproduces the pilot's p=0.28.",
+  "pilotRunId": "20260928-153056-015fbb",
+  "predictionId": "p1",
+  "episodes": [
+    {
+      "id": "s1",
+      "baselineSamples": [0.94, 0.03],
+      "candidateSamples": [0.97, 0.96]
+    },
+    {
+      "id": "s2",
+      "baselineSamples": [0.04, 0.04],
+      "candidateSamples": [0.04, 0.04]
+    },
+    {
+      "id": "s3",
+      "baselineSamples": [0.06, 0.03],
+      "candidateSamples": []
+    },
+    {
+      "id": "s4",
+      "baselineSamples": [0.03, 0.04],
+      "candidateSamples": [0.03, 0.09]
+    },
+    {
+      "id": "s5",
+      "baselineSamples": [0.04, 0.03],
+      "candidateSamples": [0.03, 0.09]
+    },
+    {
+      "id": "s6",
+      "baselineSamples": [0.02, 0.02],
+      "candidateSamples": [0.02]
+    },
+    {
+      "id": "s7",
+      "baselineSamples": [0.03, 0.03],
+      "candidateSamples": [0.03, 0.03]
+    },
+    {
+      "id": "s8",
+      "baselineSamples": [0.03, 0.03],
+      "candidateSamples": [0.03]
+    },
+    {
+      "id": "s9",
+      "baselineSamples": [0.29, 0.05],
+      "candidateSamples": [0.03, 0.02]
+    },
+    {
+      "id": "s10",
+      "baselineSamples": [0.03, 0.04],
+      "candidateSamples": [0.04, 0.04]
+    },
+    {
+      "id": "s11",
+      "baselineSamples": [0.12, 0.04],
+      "candidateSamples": [0.98, 0.04]
+    },
+    {
+      "id": "s12",
+      "baselineSamples": [0.03, 0.63],
+      "candidateSamples": []
+    }
+  ]
+}

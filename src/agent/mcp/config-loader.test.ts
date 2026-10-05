@@ -446,6 +446,22 @@ describe('episode mode', () => {
     );
   });
 
+  it('allows MCP when AFK_WHATIF_ALLOW_MCP=yes is set alongside episode flag', () => {
+    // projectMcpOptIn accepts 1|true|yes|on; verify 'yes' is honoured.
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_ALLOW_MCP', 'yes');
+    const result = loadMcpConfig({ skipUserGlobal: true, pluginsRoot: null, skipProjectLocal: true });
+    expect(result.warnings.some((w) => /disabled inside a what-if episode/.test(w))).toBe(false);
+  });
+
+  it('allows MCP when AFK_WHATIF_ALLOW_MCP=on is set alongside episode flag', () => {
+    // projectMcpOptIn accepts 1|true|yes|on; verify 'on' is honoured.
+    vi.stubEnv('AFK_WHATIF_EPISODE', '1');
+    vi.stubEnv('AFK_WHATIF_ALLOW_MCP', 'on');
+    const result = loadMcpConfig({ skipUserGlobal: true, pluginsRoot: null, skipProjectLocal: true });
+    expect(result.warnings.some((w) => /disabled inside a what-if episode/.test(w))).toBe(false);
+  });
+
   it('outside episode: normal load proceeds', () => {
     vi.stubEnv('AFK_WHATIF_EPISODE', '');
     const result = loadMcpConfig({ skipUserGlobal: true, pluginsRoot: null, skipProjectLocal: true });
