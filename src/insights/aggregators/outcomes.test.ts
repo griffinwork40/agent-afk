@@ -101,10 +101,10 @@ describe('aggregateOutcomes', () => {
     const weeks = Object.values(result.byWeek);
     expect(weeks.length).toBe(1);
     expect(weeks[0]?.goodProven).toBe(1);
-    expect(weeks[0]?.goodPressumed).toBe(0);
+    expect(weeks[0]?.goodPresumed).toBe(0);
   });
 
-  it('counts settled succeeded with basis=no_bad_signals as goodPressumed', () => {
+  it('counts settled succeeded with basis=no_bad_signals as goodPresumed', () => {
     const settlesAt = new Date(Date.now() - 1000).toISOString();
     writeRecord('sess-presume', {
       state: 'settled',
@@ -114,11 +114,11 @@ describe('aggregateOutcomes', () => {
     });
     const result = aggregateOutcomes({ days: 30, outcomesDir: tmpDir });
     const weeks = Object.values(result.byWeek);
-    expect(weeks[0]?.goodPressumed).toBe(1);
+    expect(weeks[0]?.goodPresumed).toBe(1);
     expect(weeks[0]?.goodProven).toBe(0);
   });
 
-  it('counts settled succeeded with no basis as goodPressumed (pre-v2 records)', () => {
+  it('counts settled succeeded with no basis as goodPresumed (pre-v2 records)', () => {
     const settlesAt = new Date(Date.now() - 1000).toISOString();
     writeRecord('sess-legacy', {
       state: 'settled',
@@ -127,7 +127,7 @@ describe('aggregateOutcomes', () => {
     });
     const result = aggregateOutcomes({ days: 30, outcomesDir: tmpDir });
     const weeks = Object.values(result.byWeek);
-    expect(weeks[0]?.goodPressumed).toBe(1);
+    expect(weeks[0]?.goodPresumed).toBe(1);
   });
 
   it('counts failed as bad', () => {

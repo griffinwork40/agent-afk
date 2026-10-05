@@ -130,7 +130,7 @@ export interface RoutingAggregates {
 /** Per-ISO-week outcome counts (re-exported from outcomes aggregator). */
 export interface OutcomeWeekCounts {
   goodProven: number;
-  goodPressumed: number;
+  goodPresumed: number;
   bad: number;
   blocked: number;
   unknown: number;

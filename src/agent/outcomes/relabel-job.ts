@@ -145,6 +145,7 @@ async function runPrFate(
         lf: 'pr_fate',
         vote: -1,
         strength: 'strong',
+        severity: 'major' as const,
         evidence: `PR ${url} state=CLOSED (unmerged)`,
         observed_at: nowStr,
       });

@@ -24,7 +24,7 @@ export interface OutcomeWeekCounts {
   /** Count of succeeded records with basis='proven' */
   goodProven: number;
   /** Count of succeeded records with basis='no_bad_signals' or basis absent */
-  goodPressumed: number;
+  goodPresumed: number;
   /** Count of failed + interrupted records */
   bad: number;
   /** Count of blocked records */
@@ -52,7 +52,7 @@ export function zeroOutcomeAggregates(): OutcomeAggregates {
 }
 
 function zeroWeekCounts(): OutcomeWeekCounts {
-  return { goodProven: 0, goodPressumed: 0, bad: 0, blocked: 0, unknown: 0 };
+  return { goodProven: 0, goodPresumed: 0, bad: 0, blocked: 0, unknown: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ export function aggregateOutcomes(options: InsightsOptions & { outcomesDir?: str
           bucket.goodProven++;
         } else {
           // 'no_bad_signals' or absent (pre-v2 succeeded records count as presumed)
-          bucket.goodPressumed++;
+          bucket.goodPresumed++;
         }
       } else if (label === 'failed' || label === 'interrupted') {
         bucket.bad++;

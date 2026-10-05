@@ -147,7 +147,7 @@ function makeNonZeroAgg(): InsightAggregates {
     },
     outcomes: {
       byWeek: {
-        '2024-W01': { goodProven: 5, goodPressumed: 3, bad: 1, blocked: 0, unknown: 2 },
+        '2024-W01': { goodProven: 5, goodPresumed: 3, bad: 1, blocked: 0, unknown: 2 },
       },
       totalRecords: 11,
       parseErrors: 0,

@@ -42,11 +42,11 @@ export function renderOutcomes(agg: InsightAggregates): string {
   const rows = weeks.map((wk) => {
     const b = o.byWeek[wk];
     if (!b) return '';
-    const goodTotal = b.goodProven + b.goodPressumed;
+    const goodTotal = b.goodProven + b.goodPresumed;
     return `<tr>
       <td>${htmlEscape(wk)}</td>
       <td>${safeNum(b.goodProven)}</td>
-      <td>${safeNum(b.goodPressumed)}</td>
+      <td>${safeNum(b.goodPresumed)}</td>
       <td>${safeNum(goodTotal)}</td>
       <td>${safeNum(b.bad)}</td>
       <td>${safeNum(b.blocked)}</td>

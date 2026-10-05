@@ -152,7 +152,8 @@ export function lfReask(
 
   const { outcomesDir } = deps;
   const recentIds = listRecords(REASK_SCAN_LIMIT, outcomesDir);
-  const windowStart = Date.now() - REASK_WINDOW_MS;
+  const nowMs = Date.now();
+  const windowStart = nowMs - REASK_WINDOW_MS;
 
   for (const priorId of recentIds) {
     if (priorId === newSessionId) continue;
@@ -182,7 +183,7 @@ export function lfReask(
     if (similarity < REASK_THRESHOLD) continue;
 
     // Determine severity based on how soon after the prior session the reask arrived
-    const ageMs = Date.now() - mtime;
+    const ageMs = Math.max(0, nowMs - mtime);
     const isWithin30Min = ageMs <= REASK_MAJOR_WINDOW_MS;
     const severity = isWithin30Min ? ('major' as const) : ('minor' as const);
     const windowLabel = isWithin30Min ? 'within 30min' : 'within 24h';

@@ -16,7 +16,7 @@ import { z } from 'zod';
  * Severity tier for a vote. Describes the weight of a negative signal.
  *
  * Tier assignments (from combiner v2 spec):
- *   critical — explicit_feedback bad, pr_fate revert
+ *   critical — explicit_feedback bad, commit_survival revert
  *   major    — closure abort, error_tail, verification fail, cross_session_reask <30min
  *   minor    — cross_session_reask 30min-24h, in_session_correction, budget_cap, fix_of_fix
  *
