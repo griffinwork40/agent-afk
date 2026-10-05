@@ -64,6 +64,31 @@ export function makeBudgetSkipRecord(
 }
 
 /**
+ * Build a `status: 'skipped', skipReason: 'telemetry-unwritable'` telemetry
+ * record for an agent sessionstart task that was blocked because the telemetry
+ * file exists but is not writable (W_OK probe failed). Cooldown records cannot
+ * be saved in this state, so firing the task would cause it to re-fire on
+ * every daemon restart.
+ */
+export function makeTelemetryUnwritableSkipRecord(
+  task: ScheduledTask,
+  nowMs: number,
+  errorDescription: string,
+): TelemetryRecord {
+  return {
+    taskId: task.taskId,
+    command: redactInlineSecrets(task.command),
+    trigger: 'sessionstart',
+    ...(task.cronExpression !== undefined ? { cronExpression: task.cronExpression } : {}),
+    triggeredAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    status: 'skipped',
+    skipReason: 'telemetry-unwritable',
+    errorMessage: `Telemetry file not writable: ${errorDescription}`,
+  };
+}
+
+/**
  * Build a `status: 'skipped'` telemetry record for a `sessionstart` trigger
  * that was gated (e.g. cooldown). The `skipReason` comes from the gate
  * decision so callers don't need to reach into `GateDecision` themselves.
