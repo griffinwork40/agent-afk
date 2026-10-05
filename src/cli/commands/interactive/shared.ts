@@ -111,29 +111,40 @@ export function resolveResumeCwd(
 /**
  * Print a full conversation replay immediately after the resume banner, so a
  * human reorienting in a wiped terminal sees the entire prior exchange.
- * Delegates the per-turn rendering to `replayTurns` (turn-record-renderer.replay.ts).
+ *
+ * Source order: the message journal first (`replayJournal`,
+ * turn-record-renderer.replay.journal.ts), which re-renders the full
+ * conversation (markdown, tool calls, tool results, pre-compaction history,
+ * `/fork` parents) through the live StreamRenderer; the sidecar `turns[]`
+ * replay (`replayTurns`) only when there is no journal to render from. The
+ * sidecar user texts are passed as hints so the journal replay shows exactly
+ * what the human typed rather than harness-preamble-wrapped messages.
  *
  * Writer transport: caller passes `CompletionWriter` (mutable). At bootstrap
  * the writer is `console.log` (compositor not yet armed); at mid-session
  * /resume swap the writer is `compositor.commitAbove` (the persistent
- * compositor is armed). Reading `.fn` lazily on each line means a swap
- * mid-banner would still route correctly, though the banner runs synchronously
- * so this is purely defensive.
+ * compositor is armed). `.fn` is read lazily on each line, so a transport
+ * swap while the (now async) replay is running still routes correctly.
  *
- * Best-effort: returns silently when `stats.turns` is empty (legacy sidecars
- * from before turn-record persistence, or stored sessions with totalTurns > 0
- * but turns: []).
+ * Best-effort: returns silently when neither source has anything to show
+ * (legacy sidecars from before turn-record persistence with no journal).
  */
-export function printResumeBanner(stats: SessionStats, writer: CompletionWriter): void {
-  const turns = stats.turns;
-  if (turns.length === 0) return;
+export async function printResumeBanner(stats: SessionStats, writer: CompletionWriter): Promise<void> {
+  // Invariant: lazy import. shared.ts is imported by light commands (e.g.
+  // `afk whatif` takes REPL_SPINNER_OPTIONS from here); a static import would
+  // drag the whole StreamRenderer graph into their startup and module mocks.
+  const { loadReplayTurns, renderReplayTurns } = await import('./turn-record-renderer.replay.journal.js');
+  const journalTurns = loadReplayTurns(stats.sessionId, stats.turns.map((t) => t.user));
+  const count = journalTurns?.length ?? stats.turns.length;
+  if (count === 0) return;
 
   // Print a framed header, the full replay, then a closing footer. All
   // output routes through writer.fn so the compositor transport (commitAbove
   // at mid-session, console.log at bootstrap) is chosen by the caller — not
   // hard-coded here. See the docblock above for the transport rationale.
-  writer.fn(palette.dim(`  ─── Resuming session (${turns.length} turn${turns.length === 1 ? '' : 's'}) ───`));
-  replayTurns(turns, writer.fn);
+  writer.fn(palette.dim(`  ─── Resuming session (${count} turn${count === 1 ? '' : 's'}) ───`));
+  if (journalTurns) await renderReplayTurns(journalTurns, writer);
+  else replayTurns(stats.turns, writer.fn);
   writer.fn(palette.dim('  ─── End of history ───'));
 }
 
