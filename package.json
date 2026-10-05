@@ -1,6 +1,6 @@
 {
   "name": "agent-afk",
-  "version": "5.295.8",
+  "version": "5.299.2",
   "description": "Open-source coding-agent harness you can actually change — own the loop (prompts, gates, routing, skills, terminal states), use any model, run long tasks while you're away.",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -82,7 +82,9 @@
     "release": "node scripts/release.mjs",
     "release:dry": "node scripts/release.mjs --dry-run",
     "experiment:workspace": "tsx scripts/run-workspace-ab-test.ts",
-    "backfill:preexisting": "tsx scripts/backfill-preexisting-ledger.ts"
+    "backfill:preexisting": "tsx scripts/backfill-preexisting-ledger.ts",
+    "check:audits": "tsx scripts/check-audits.ts",
+    "prepare": "node scripts/install-pre-push-hook.mjs || true"
   },
   "keywords": [
     "ai-agent",

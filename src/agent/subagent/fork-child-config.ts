@@ -59,6 +59,13 @@ export interface AssembleChildConfigArgs<T> {
   parentSurface: Surface | undefined;
   parentCanUseTool: CanUseTool | undefined;
   /**
+   * The forking manager's own root session id (from the parent session's
+   * {@link AgentConfig.rootSessionId}). Undefined at depth 0 (top-level).
+   * Passed through so grandchild `inheritedParentFields` can inherit the
+   * REAL root id rather than the intermediate parent's id.
+   */
+  parentRootSessionId: string | undefined;
+  /**
    * The nested-dispatch allowlist for the CHILD being assembled. Derived from
    * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` (child-config.ts)
    * and threaded here via `ForkSubagentOptions.nestedAgentAllowlist` so the
@@ -70,6 +77,13 @@ export interface AssembleChildConfigArgs<T> {
    */
   nestedAgentAllowlist?: readonly string[];
 }
+
+/** The manager-owned parent fields every fork passes (`SubagentManager.parentForkFields`). */
+export type ParentForkFields = Pick<
+  AssembleChildConfigArgs<unknown>,
+  | 'parentCwd' | 'parentApiKey' | 'parentBaseUrl' | 'parentProvider'
+  | 'parentTraceWriter' | 'parentSurface' | 'parentCanUseTool' | 'parentRootSessionId'
+>;
 
 /**
  * Append the model-facing fork preambles to a fully resolved child config.
@@ -93,6 +107,23 @@ function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly
 }
 
 /**
+ * Resolve the `rootSessionId` to stamp on a forked child.
+ *
+ * For depth-1 children, `parentRootSessionId` is undefined (the manager's
+ * parent is a top-level session with no `rootSessionId`), so we fall back to
+ * `parentSessionId` — the root's own id. For depth-2+ children,
+ * `parentRootSessionId` is already the root's id, so we return it unchanged.
+ * Returns `{}` when neither value is defined (parent had no session id).
+ */
+function resolveRootSessionId(
+  parentRootSessionId: string | undefined,
+  parentSessionId: string | undefined,
+): { rootSessionId: string } | Record<never, never> {
+  const id = parentRootSessionId ?? parentSessionId;
+  return id !== undefined ? { rootSessionId: id } : {};
+}
+
+/**
  * Parent-derived fields the child inherits only when the caller's
  * `options.config` left them unset (awareness topology, cwd, read/write scope,
  * trace writer, surface, private temp dir). Extracted from {@link assembleChildConfig} verbatim;
@@ -109,6 +140,17 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
     // manager, so we leave them to the caller here.
     ...(args.options.config.parentSessionId === undefined && args.options.parent.sessionId !== undefined
       ? { parentSessionId: args.options.parent.sessionId }
+      : {}),
+    // Root session id: set once on depth-1 children (to the parent's sessionId),
+    // then inherited unchanged by all deeper descendants so grandchildren always
+    // point back to the depth-0 root — not their immediate parent. For depth-1
+    // children, args.parentRootSessionId is undefined, so we fall back to
+    // parent.sessionId. For depth-2+ children, args.parentRootSessionId is the
+    // root's id (threaded through the manager). Child-attribution credits
+    // commits/PRs to the root outcome record rather than to an intermediate
+    // session id that never writes a sidecar.
+    ...(args.options.config.rootSessionId === undefined
+      ? resolveRootSessionId(args.parentRootSessionId, args.options.parent.sessionId)
       : {}),
     ...(args.options.config.phaseRole === undefined && args.options.phaseRole !== undefined
       ? { phaseRole: args.options.phaseRole }

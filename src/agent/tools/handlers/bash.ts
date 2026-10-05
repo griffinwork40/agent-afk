@@ -74,8 +74,11 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
 }
 
 /**
- * Create a bash handler closed over the session's `permissionMode` and
- * optional working directory.
+ * Create a bash handler closed over the session's `_permissionMode` and
+ * optional working directory. The mode parameter is unused by the handler
+ * body (bypass/default differ only via hooks and `context.allowAll`); it is
+ * kept in the signature so callers stay positionally stable and mode-specific
+ * behaviour can be reintroduced without touching every call site.
  *
  * Using a factory (rather than reading `process.env`) eliminates the
  * process-global race when multiple concurrent sessions run in the same
@@ -92,11 +95,13 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  *
  * Security note: commands are passed to the OS shell via `shell: true`.
  * This means shell metacharacters (pipes, redirects, subshell expansions)
- * are interpreted. When the session runs in `bypassPermissions` mode the
- * agent can execute arbitrary shell commands without confirmation — a
- * full `execFile`-based refactor that disables the shell is tracked as a
- * separate work item. For now we emit a one-time warning at startup so the
- * risk surface is explicit in logs.
+ * are interpreted. When the session runs in `bypassPermissions` mode (the
+ * CLI default, see `DEFAULT_CLI_PERMISSION_MODE`) the agent can execute
+ * arbitrary shell commands without confirmation. That is the documented
+ * contract of bypass mode, so no per-session warning is emitted. Switching
+ * to `execFile` would NOT narrow this: agent commands need pipes/redirects,
+ * so any execFile form still ends up as `sh -c <command>`. Real containment
+ * would need an OS sandbox; see `docs/scoping/bash-execfile-migration.md`.
  *
  * Path containment (advisory-only): unlike the typed filesystem handlers,
  * which route every path through `resolveAndContain` and hard-reject writes
@@ -118,23 +123,10 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  * are documented in `docs/decisions/0001-bash-tool-path-containment.md`.
  */
 export function createBashHandler(
-  permissionMode: string,
+  _permissionMode: string,
   cwd?: string,
 ): ToolHandler {
-  let _shellModeWarned = false;
   let _pathEscapeWarned = false;
-
-  function warnIfBypassPermissions(): void {
-    if (_shellModeWarned) return;
-    if (permissionMode === 'bypassPermissions') {
-      _shellModeWarned = true;
-      console.warn(
-        '[security] bash handler: shell=true with bypassPermissions — ' +
-          'all shell metacharacters are interpreted without confirmation. ' +
-          'Migrate to execFile to eliminate this risk (tracked: C4).',
-      );
-    }
-  }
 
   /**
    * Best-effort, ADVISORY-ONLY containment scan (never blocks execution).
@@ -188,8 +180,6 @@ export function createBashHandler(
     if (signal.aborted) {
       return { content: 'Command aborted', isError: true };
     }
-
-    warnIfBypassPermissions();
 
     // Advisory-only containment scan (warn + telemetry, never blocks). Only
     // runs when a context is present — inline/back-compat calls without one

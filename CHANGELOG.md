@@ -11,6 +11,123 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.299.2] - 2026-10-05
+
+### Fixed
+- tighten replay-renderer test assertions per advisory review (#3013) (5eb61262)
+- harden /history test hygiene — 4 advisory findings from #3000 review (#3015) (96147112)
+
+## [5.299.1] - 2026-10-05
+
+### Fixed
+- resolveBinding promotes a raw slot id to the full slot binding (#3001) (1f211c21)
+- protect worktrees pinned by scheduled task cwd fields (#2996) (737f34b9)
+- close stale pending window after compact→preamble→provider_switch; add soft-truncate tests (#3002) (64da2894)
+- three small journal replay renderer defects (blank paragraph, overcount, TTY echo) (#2999) (1769b0b2)
+- drop stale hardcoded model list from ChatGPT backend 400 error (#2998) (20bbddd6)
+
+### Changed
+- cover /history journal-first path and flush-before-read (#3000) (70c9f939)
+
+## [5.299.0] - 2026-10-05
+
+### Added
+- combiner v2 with severity tiers and good-by-default (#2997) (db76e12a)
+
+## [5.298.2] - 2026-10-05
+
+### Fixed
+- skip sessionstart agent tasks and alert when telemetry file is not writable (#2974) (22f4fbc5)
+
+## [5.298.1] - 2026-10-05
+
+### Fixed
+- remove stale bypass-mode execFile warning (#2716) (a73ac02c)
+- stop SessionEnd hook classifying its own SPINE.md edits and the main checkout's stale diff (#2641) (6fbb9d98)
+- credit nested sub-agent commits to the root session (#2710) (698bdf4f)
+- get_facet cwd-aware 'latest'; add 'current'/'self'; add resolution fields (#2975) (1bd93f34)
+- quarantine unparseable pending/ peer envelopes to held/ (#2976) (8eb6408b)
+
+## [5.298.0] - 2026-10-05
+
+### Added
+- self-installing pre-push hook running CI audit gates (#2686) (9686172f)
+
+## [5.297.0] - 2026-10-05
+
+### Added
+- re-render resumed and forked sessions from the message journal (#2715) (fefcf386)
+
+## [5.296.9] - 2026-10-05
+
+### Fixed
+- dead-letter malformed handoff records instead of silently skipping forever (#2973) (403ef1a9)
+- address remaining advisory findings from 2026-09-29 pr-triage (#2731) (217ef7f5)
+
+## [5.296.8] - 2026-10-05
+
+### Changed
+- split memory-store and memory-tools under the 350-line ceiling (#832) (#2959) (e75edd2e)
+
+## [5.296.7] - 2026-10-05
+
+### Fixed
+- make dynamic .mjs import tests portable to Windows (#2730) (3ee6bc78)
+
+## [5.296.6] - 2026-10-05
+
+### Fixed
+- surface soft-deadline partial compose nodes in the facet (#2977) (d852cbb7)
+
+### Changed
+- split 4 files under the 350-line ceiling (#832) (#2962) (46a8b1a8)
+
+## [5.296.5] - 2026-10-05
+
+### Changed
+- split worktree-sweep, readonly-bash, receipt, path-approval-hook under the 350-line ceiling (#832) (#2965) (10818c08)
+
+## [5.296.4] - 2026-10-05
+
+### Fixed
+- add in-process cooldown fallback when alert state write fails (#2972) (ee31fa7d)
+
+### Changed
+- split chat.ts, farm.ts, interactive/worktree.ts under the 350-line ceiling (#832) (#2963) (5831eb62)
+
+## [5.296.3] - 2026-10-05
+
+### Changed
+- split message handler, session manager and farm callbacks under the 350-line ceiling (#832) (#2964) (e0c0087f)
+
+## [5.296.2] - 2026-10-05
+
+### Changed
+- split audit-sdk-dependency and audit-fit under the 350-line ceiling (#832) (#2960) (babec7ad)
+- regenerate env-registry var count after concurrent merges (#2969) (d2c7b1b7)
+
+## [5.296.1] - 2026-10-05
+
+### Changed
+- split eval-run/contracts, runner, and propose/template-engine under the 350-line ceiling (#832) (#2961) (6f01d6d2)
+
+## [5.296.0] - 2026-10-05
+
+### Added
+- export plugin userConfig options and data dir to plugin hooks (#2732) (2ddcab6d)
+- add soft-delete GC sweep for stale fact archive entries (#2733) (78d51225)
+- burn-rate projection for subscription-quota indicator (#2951) (ceaeda9c)
+
+### Fixed
+- restore context.cwd as deprecated alias of context.resolveBase (#2948) (f9963c36)
+- hoist wslPrefixes, document dirname assumption, add ordering comment (#2949) (caa6088d)
+- peer-messaging docs/schema polish (#2950) (6e807701)
+
+## [5.295.9] - 2026-10-05
+
+### Fixed
+- enforce domain policy independently of unrelated browser config fields (#2919) (5a4ee000)
+
 ## [5.295.8] - 2026-10-05
 
 ### Fixed

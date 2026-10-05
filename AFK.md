@@ -30,6 +30,7 @@ pnpm audit:funcsize:update                         # regenerate the function bas
 pnpm audit:module-state:check                      # CI gate: no module-scope singleton/process.on duplicated across a sibling family
 pnpm fix:pins:check                                # CI gate: SHA-256 pins for vendored agents + bundled skills (pnpm fix:pins to rewrite)
 pnpm audit:deps                                    # CI gate: pnpm audit --audit-level=critical --prod
+pnpm check:audits                                  # run all deterministic CI audit gates locally (full-scan; exit 0=pass, 1=some failed, 2=all failed→broken env)
 pnpm release                                       # release pipeline (scripts/release.mjs; --dry via release:dry)
 ```
 
@@ -42,6 +43,10 @@ pnpm dev                                     # tsx watch — live-reloads CLI
 afk chat "hi" / afk interactive / afk daemon # one-shot / REPL (alias: afk i) / cron headless runner
 pnpm telegram:start                          # Telegram bot
 ```
+
+### Pre-push hook
+
+`pnpm install` (via the `prepare` lifecycle script) installs a launcher at `.git/hooks/pre-push` (the git common dir, covering all worktrees). Before every push it runs `pnpm check:audits` — the same deterministic audit gates CI runs in the lint-build job. If the environment looks broken (node_modules missing or pnpm not on PATH) the hook exits 0 (fail-open). Bypass with `git push --no-verify`.
 
 ### Observability / tracing
 

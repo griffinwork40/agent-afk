@@ -23,3 +23,4 @@ export {
 } from './reader.js';
 export { findToolResultAsync } from './reader.async.js';
 export { forkJournal } from './fork.js';
+export { foldForDisplay, loadDisplayMessages } from './display-fold.js';

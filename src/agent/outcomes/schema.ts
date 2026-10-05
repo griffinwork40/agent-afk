@@ -12,10 +12,26 @@ import { z } from 'zod';
 // Vote record — one labeling-function's contribution
 // ---------------------------------------------------------------------------
 
+/**
+ * Severity tier for a vote. Describes the weight of a negative signal.
+ *
+ * Tier assignments (from combiner v2 spec):
+ *   critical — explicit_feedback bad, commit_survival revert
+ *   major    — closure abort, error_tail, verification fail, cross_session_reask <30min
+ *   minor    — cross_session_reask 30min-24h, in_session_correction, budget_cap, fix_of_fix
+ *
+ * When `severity` is absent (pre-v2 records) the combiner back-maps:
+ *   strong → major, weak → minor
+ */
+export const VoteSeveritySchema = z.enum(['critical', 'major', 'minor']);
+export type VoteSeverity = z.infer<typeof VoteSeveritySchema>;
+
 export const VoteSchema = z.object({
   lf: z.string(),
   vote: z.union([z.literal(1), z.literal(-1), z.literal(0)]),
   strength: z.enum(['strong', 'weak']),
+  /** Optional — absent in pre-v2 records; combiner back-maps via strength. */
+  severity: VoteSeveritySchema.optional(),
   evidence: z.string(),
   observed_at: z.string(),
 });
@@ -76,6 +92,13 @@ export const VerifiedOutcomeSchema = z.object({
    * cross_session_reask LF can filter to the same directory.
    */
   first_cwd: z.string().optional(),
+  /**
+   * How the label was established. 'proven' = strong positive/negative evidence;
+   * 'no_bad_signals' = good-by-default (no negatives, past settle window).
+   * Absent on pre-v2 records or when label is unknown/blocked.
+   * Used by KPI layer to separate proven-good from presumed-good counts.
+   */
+  basis: z.enum(['proven', 'no_bad_signals']).optional(),
 });
 
 export type VerifiedOutcome = z.infer<typeof VerifiedOutcomeSchema>;

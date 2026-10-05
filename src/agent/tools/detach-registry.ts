@@ -68,6 +68,14 @@ export interface DetachedToolResult {
   readonly exitCode?: number;
   /** Wall-clock duration of the underlying operation in milliseconds. */
   readonly durationMs: number;
+  /**
+   * `true` when the operation finished but delivered a partial result
+   * (compose: at least one node wound down at its soft deadline, #2970).
+   * Mirrors `ToolResult.incomplete`; absent for clean completions.
+   */
+  readonly incomplete?: boolean;
+  /** Reason code paired with `incomplete` (compose: `'compose_partial_nodes'`). */
+  readonly incompleteReason?: string;
 }
 
 /**

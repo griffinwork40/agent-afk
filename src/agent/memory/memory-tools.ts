@@ -4,6 +4,8 @@
  * Three tools for cross-session memory: memory_search (read-only fact lookup),
  * memory_update (write hot memory or facts), and procedure_write (write reusable procedures).
  *
+ * Input validation/parsing: memory-tools.input.ts
+ *
  * @module agent/memory/memory-tools
  */
 
@@ -18,11 +20,14 @@ import {
 } from './memory-evidence.js';
 import type {
   FactCategory,
-  MemoryUpdateAction,
-  MemoryUpdateTarget,
   MemorySearchResult,
 } from './types.js';
 import { errorMessage } from '../../utils/errors.js';
+import {
+  parseMemorySearchInput,
+  parseMemoryUpdateInput,
+  parseProcedureWriteInput,
+} from './memory-tools.input.js';
 
 /**
  * memory_search: Query the cross-session fact archive. Returns facts + procedures
@@ -218,10 +223,6 @@ export function createMemoryHandlers(
   sessionId?: string,
   surface?: string,
 ): Map<string, ToolHandler> {
-  // Closure captures the store reference. Handlers return raw JSON
-  // content for the model; per-tool display strings for the interactive
-  // tool-lane are derived by the registry in
-  // `src/agent/tools/render-registry.ts` from this content.
   const memorySearchHandler: ToolHandler = async (input: unknown) => {
     try {
       const parsed = parseMemorySearchInput(input);
@@ -262,9 +263,6 @@ export function createMemoryHandlers(
           usage: { tokens: usage.tokens, maxTokens: usage.maxTokens, pct: usage.pct },
         };
         if (usage.truncated) {
-          // Non-fatal overflow: saveHot kept the content and truncated the
-          // tail. Tell the agent so it moves detail to the fact archive
-          // rather than re-submitting an even larger blob.
           result['truncated'] = true;
           result['note'] =
             'Hot memory exceeded the ~1,500-token cap and was truncated from the end ' +
@@ -302,9 +300,6 @@ export function createMemoryHandlers(
           evidence,
         });
         const result: Record<string, unknown> = { id, action: 'set', target: 'fact' };
-        // Evidence gate (opt-in): a codebase fact stored without a citation is
-        // not rejected — it is stored and will be recalled as [unverified].
-        // Surface a warning so the agent can supply evidence next time.
         if (evidenceGateEnabled() && requiresEvidence(category) && !evidence) {
           result['warning'] = UNCITED_CODEBASE_FACT_WARNING;
         }
@@ -324,17 +319,9 @@ export function createMemoryHandlers(
             isError: true,
           };
         }
-        // Read the prior fact first so the gate can classify the *resolved*
-        // category/evidence for the write-time warning. supersedeFact re-reads
-        // it internally; this extra read is off the hot path (memory_update is
-        // a low-frequency tool) and returns null for a missing id — in which
-        // case supersedeFact throws the same "not found" error below.
         const prior = store.getFact(parsed.supersedes);
-        // evidence: `undefined` carries the prior citation forward; an explicit
-        // string replaces it (empty/whitespace normalizes to null = cleared).
         const freshEvidence =
           parsed.evidence === undefined ? undefined : normalizeEvidence(parsed.evidence);
-        // supersedeFact accepts category?: string, which is compatible with FactCategory | undefined.
         const newId = store.supersedeFact(
           parsed.supersedes,
           parsed.content,
@@ -347,12 +334,6 @@ export function createMemoryHandlers(
           target: 'fact',
           supersedes: parsed.supersedes,
         };
-        // Evidence gate (opt-in): mirror the `set` warning on the supersede
-        // path. supersede is the recommended way to update a fact, so an
-        // uncited codebase fact must nudge here too. The warning reflects the
-        // RESOLVED state after carry-forward: a fresh citation silences it; a
-        // carried-forward citation warns it may be stale; no citation at all
-        // warns it will be recalled as [unverified].
         if (evidenceGateEnabled()) {
           const resolvedCategory: FactCategory | undefined = parsed.category ?? prior?.category;
           if (resolvedCategory && requiresEvidence(resolvedCategory)) {
@@ -404,156 +385,4 @@ export function createMemoryHandlers(
     ['memory_update', memoryUpdateHandler],
     ['procedure_write', procedureWriteHandler],
   ]);
-}
-
-// ── Input parsing ──────────────────────────────────────────────────────────
-
-interface MemorySearchInput {
-  query: string;
-  category?: FactCategory;
-  since?: string;
-  limit?: number;
-}
-
-function parseMemorySearchInput(input: unknown): MemorySearchInput {
-  if (typeof input !== 'object' || input === null) {
-    throw new Error('Input must be an object');
-  }
-  const obj = input as Record<string, unknown>;
-
-  if (typeof obj['query'] !== 'string') {
-    throw new Error('query (string) is required');
-  }
-
-  const parsed: MemorySearchInput = {
-    query: obj['query'],
-  };
-
-  if (obj['category'] !== undefined) {
-    if (typeof obj['category'] !== 'string') {
-      throw new Error('category must be a string');
-    }
-    const validCategories: FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
-    if (!validCategories.includes(obj['category'] as FactCategory)) {
-      throw new Error(
-        `category must be one of: ${validCategories.join(', ')}`,
-      );
-    }
-    parsed.category = obj['category'] as FactCategory;
-  }
-
-  if (obj['since'] !== undefined) {
-    if (typeof obj['since'] !== 'string') {
-      throw new Error('since must be a string (ISO date)');
-    }
-    parsed.since = obj['since'];
-  }
-
-  if (obj['limit'] !== undefined) {
-    if (typeof obj['limit'] !== 'number' || obj['limit'] <= 0) {
-      throw new Error('limit must be a positive number');
-    }
-    parsed.limit = obj['limit'];
-  }
-
-  return parsed;
-}
-
-interface MemoryUpdateInput {
-  target: MemoryUpdateTarget;
-  action: MemoryUpdateAction;
-  content?: string;
-  category?: FactCategory;
-  evidence?: string;
-  supersedes?: number;
-  id?: number;
-}
-
-function parseMemoryUpdateInput(input: unknown): MemoryUpdateInput {
-  if (typeof input !== 'object' || input === null) {
-    throw new Error('Input must be an object');
-  }
-  const obj = input as Record<string, unknown>;
-
-  const validTargets: MemoryUpdateTarget[] = ['hot', 'fact'];
-  if (typeof obj['target'] !== 'string' || !validTargets.includes(obj['target'] as MemoryUpdateTarget)) {
-    throw new Error(`target must be one of: ${validTargets.join(', ')}`);
-  }
-
-  const validActions: MemoryUpdateAction[] = ['set', 'supersede', 'remove'];
-  if (typeof obj['action'] !== 'string' || !validActions.includes(obj['action'] as MemoryUpdateAction)) {
-    throw new Error(`action must be one of: ${validActions.join(', ')}`);
-  }
-
-  const parsed: MemoryUpdateInput = {
-    target: obj['target'] as MemoryUpdateTarget,
-    action: obj['action'] as MemoryUpdateAction,
-  };
-
-  if (obj['content'] !== undefined) {
-    if (typeof obj['content'] !== 'string') {
-      throw new Error('content must be a string');
-    }
-    parsed.content = obj['content'];
-  }
-
-  if (obj['category'] !== undefined) {
-    if (typeof obj['category'] !== 'string') {
-      throw new Error('category must be a string');
-    }
-    const validCategories: FactCategory[] = ['preference', 'convention', 'decision', 'learning'];
-    if (!validCategories.includes(obj['category'] as FactCategory)) {
-      throw new Error(
-        `category must be one of: ${validCategories.join(', ')}`,
-      );
-    }
-    parsed.category = obj['category'] as FactCategory;
-  }
-
-  if (obj['evidence'] !== undefined) {
-    if (typeof obj['evidence'] !== 'string') {
-      throw new Error('evidence must be a string');
-    }
-    parsed.evidence = obj['evidence'];
-  }
-
-  if (obj['supersedes'] !== undefined) {
-    if (typeof obj['supersedes'] !== 'number' || obj['supersedes'] <= 0) {
-      throw new Error('supersedes must be a positive fact ID');
-    }
-    parsed.supersedes = obj['supersedes'];
-  }
-
-  if (obj['id'] !== undefined) {
-    if (typeof obj['id'] !== 'number' || obj['id'] <= 0) {
-      throw new Error('id must be a positive fact ID');
-    }
-    parsed.id = obj['id'];
-  }
-
-  return parsed;
-}
-
-interface ProcedureWriteInput {
-  name: string;
-  content: string;
-}
-
-function parseProcedureWriteInput(input: unknown): ProcedureWriteInput {
-  if (typeof input !== 'object' || input === null) {
-    throw new Error('Input must be an object');
-  }
-  const obj = input as Record<string, unknown>;
-
-  if (typeof obj['name'] !== 'string') {
-    throw new Error('name (string) is required');
-  }
-  if (typeof obj['content'] !== 'string') {
-    throw new Error('content (string) is required');
-  }
-
-  return {
-    name: obj['name'],
-    content: obj['content'],
-  };
 }

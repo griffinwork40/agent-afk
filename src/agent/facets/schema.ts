@@ -33,8 +33,14 @@ import { z } from 'zod';
  * store.ts. Public consumers should filter on `facet_version >= 7` and inspect
  * `outcome_source`; headingless sessions now derive `outcome: 'unknown'`, and
  * single-line `**Done** — text` is no longer a terminal-state heading.
+ *
+ * v8 (#2970): added `compose_partial_nodes`, the number of compose CALLS in
+ * which at least one node succeeded with a partial result (soft-deadline
+ * wind-down, tool-use cap). Omitted when zero. Also added
+ * `incomplete?: boolean` to `ToolEventInputSchema` so the sidecar path
+ * carries the signal. On `facet_version >= 8` an absent field means zero.
  */
-export const FACET_VERSION = 7;
+export const FACET_VERSION = 8;
 
 // ---------------------------------------------------------------------------
 // Input: the subset of StoredSession the deriver reads (local, layering-safe)
@@ -49,6 +55,12 @@ export const ToolEventInputSchema = z
     inputRaw: z.string().optional(),
     result: z.string().optional(),
     isError: z.boolean().optional(),
+    /**
+     * `true` when this tool result is a subagent's partial answer (e.g.
+     * soft-deadline wind-down or tool-use cap on a compose node). Written since
+     * #2970; absent on older session records.
+     */
+    incomplete: z.boolean().optional(),
   })
   .passthrough();
 
@@ -317,6 +329,16 @@ export const SessionFacetSchema = z
     tool_error_categories: z.record(z.string(), z.number()),
     friction_counts: z.record(z.string(), z.number()),
     friction_detail: z.string(),
+    /**
+     * Number of compose CALLS in which at least one node succeeded with a
+     * partial result: soft-deadline wind-down, tool-use-iteration cap, or
+     * another incomplete stop reason (#2970). Such calls stay `isError: false`.
+     * It counts calls, not nodes; a per-node count is a follow-up. Added in v8
+     * and omitted when zero, so on `facet_version >= 8` absence means zero,
+     * while on older facets it means "not measured". Optional so old cached
+     * facets still validate.
+     */
+    compose_partial_nodes: z.number().int().optional(),
 
     // outcome / world changes
     outcome: FacetOutcomeSchema,

@@ -301,6 +301,40 @@ describe('lfReask store interaction', () => {
     expect(similarity).toBeLessThan(thr);
   });
 
+  it('assigns major severity when reask is within 30 minutes', async () => {
+    // Set up a prior session record that was written ~1 minute ago (well within 30min)
+    const { promptFingerprint: fp, lfReask: lf } = await import('./lf-reask.js');
+    const { writeRecord, readRecord } = await import('./store.js');
+
+    const sharedPrompt = 'deploy infrastructure terraform apply staging environment';
+
+    const priorTokens = fp(sharedPrompt);
+    const priorRecord = {
+      schema_version: 1 as const,
+      session_id: 'sess-reask-major',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'settled' as const,
+      settles_after: null,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+      first_prompt_tokens: priorTokens,
+      first_cwd: tmpDir,
+    };
+    writeRecord(priorRecord, tmpDir);
+
+    // Trigger reask from a "new" session (within 30min window — just written)
+    lf('sess-reask-major-new', sharedPrompt, tmpDir, new Date().toISOString(), { outcomesDir: tmpDir });
+
+    const updated = readRecord('sess-reask-major', tmpDir);
+    const reaskVote = updated?.votes.find((v) => v.lf === 'cross_session_reask');
+    expect(reaskVote).toBeDefined();
+    expect(reaskVote?.severity).toBe('major');
+  });
+
   it('does NOT match a legacy record that has only first_prompt (no tokens)', async () => {
     // A legacy record without first_prompt_tokens should be skipped by lfReask
     const { writeRecord } = await import('./store.js');

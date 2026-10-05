@@ -368,7 +368,7 @@ export function registerInteractiveCommand(program: Command): void {
           hintLine: startupHintLine(),
         }));
         if (bootPruneNotice !== undefined) console.log(palette.dim(`  ${bootPruneNotice}`));
-        if (ctx.resumeTarget) printResumeBanner(ctx.stats, ctx.completionWriter);
+        if (ctx.resumeTarget) await printResumeBanner(ctx.stats, ctx.completionWriter);
         printFirstRunBanner({ isTTY: Boolean(process.stdout.isTTY), isResume: ctx.resumeTarget !== undefined });
         drainBootWarnings(ctx.bootWarnings);
         console.log();

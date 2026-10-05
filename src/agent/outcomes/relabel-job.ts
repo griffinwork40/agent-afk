@@ -28,6 +28,7 @@
 import { existsSync } from 'node:fs';
 import type { Vote, VerifiedOutcome } from './schema.js';
 import { listRecords, readRecord, writeRecord, upsertVotes } from './store.js';
+import { combine } from './combine.js';
 import {
   lfCommitSurvival,
   realFetchPrState,
@@ -144,6 +145,7 @@ async function runPrFate(
         lf: 'pr_fate',
         vote: -1,
         strength: 'strong',
+        severity: 'major' as const,
         evidence: `PR ${url} state=CLOSED (unmerged)`,
         observed_at: nowStr,
       });
@@ -394,6 +396,117 @@ export async function runRelabelJob(
       else if (r.status === 'updated') result.updated++;
       else if (r.status === 'skipped') result.skipped++;
       else result.errors++;
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Backfill: rescore settled unknown records with combiner v2
+// ---------------------------------------------------------------------------
+
+export interface RescoreResult {
+  scanned: number;
+  relabeled: number;
+  skipped: number;
+  errors: number;
+}
+
+export interface RescoreOptions {
+  limit?: number;
+  dryRun?: boolean;
+  outcomesDir?: string;
+}
+
+/**
+ * Re-apply combiner v2 to settled records whose label is 'unknown'.
+ *
+ * This is the backfill for the 564 records produced by combiner v1 that could
+ * not be labeled because v1 required strong positive proof. Combiner v2 adds
+ * good-by-default (rules 6 and 7) which labels those as succeeded or still
+ * unknown based on the absence of negative votes.
+ *
+ * Safety properties:
+ *   - Only re-runs the combiner on existing votes — no remote probes.
+ *   - Preserves the existing history[] by appending a new entry on label change.
+ *   - Does NOT change state (remains settled).
+ *   - Opt-in only: only called when --rescore-settled is passed explicitly.
+ */
+export async function rescoreSettledUnknown(
+  opts: RescoreOptions = {},
+): Promise<RescoreResult> {
+  const limit = opts.limit ?? 200;
+  const dryRun = opts.dryRun ?? false;
+  const outcomesDir = opts.outcomesDir;
+
+  const result: RescoreResult = { scanned: 0, relabeled: 0, skipped: 0, errors: 0 };
+
+  let allIds: string[];
+  try {
+    allIds = listRecords(Number.POSITIVE_INFINITY, outcomesDir);
+  } catch {
+    return result;
+  }
+
+  // Filter to settled unknown records
+  const candidates: string[] = [];
+  for (const id of allIds) {
+    try {
+      const rec = readRecord(id, outcomesDir);
+      if (rec && rec.state === 'settled' && rec.label === 'unknown') {
+        candidates.push(id);
+      }
+      if (candidates.length >= limit) break;
+    } catch {
+      // skip unreadable
+    }
+  }
+  result.scanned = candidates.length;
+
+  const nowStr = new Date().toISOString();
+
+  for (const id of candidates) {
+    try {
+      const rec = readRecord(id, outcomesDir);
+      if (!rec || rec.state !== 'settled' || rec.label !== 'unknown') {
+        result.skipped++;
+        continue;
+      }
+
+      // Re-apply combiner v2 with settleWindowPassed=true (these are settled records)
+      const { label, confidence, basis } = combine({
+        votes: rec.votes,
+        selfReport: rec.self_report,
+        artifacts: rec.artifacts,
+        settleWindowPassed: true,
+      });
+
+      if (label === rec.label) {
+        result.skipped++;
+        continue;
+      }
+
+      if (dryRun) {
+        result.relabeled++;
+        continue;
+      }
+
+      // Write updated record with history entry
+      const updated: VerifiedOutcome = {
+        ...rec,
+        label,
+        confidence,
+        basis,
+        history: [
+          ...rec.history,
+          { at: nowStr, label, reason: 'rescore-settled: combiner v2 good-by-default' },
+        ],
+      };
+      writeRecord(updated, outcomesDir);
+      result.relabeled++;
+    } catch {
+      result.errors++;
     }
   }
 

@@ -34,8 +34,16 @@ import { listRecords, readRecord, upsertVotes } from './store.js';
 // Config
 // ---------------------------------------------------------------------------
 
-/** Maximum age of a prior session for it to be a reask candidate (30 min). */
-const REASK_WINDOW_MS = 30 * 60 * 1000;
+/**
+ * Maximum age of a prior session for it to be a reask candidate (24h).
+ * The window is split by severity:
+ *   0–30 min → major (was previously the only window)
+ *   30 min–24h → minor
+ */
+const REASK_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Boundary between major and minor severity (30 min). */
+const REASK_MAJOR_WINDOW_MS = 30 * 60 * 1000;
 
 /**
  * Normalized-token Jaccard similarity threshold.
@@ -125,32 +133,45 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  *
  * Called fire-and-forget at the end of `_runImmediatePass` in session-end-hook.
  */
+/** Injectable dependencies for lfReask — enables test isolation without FS mocking. */
+export interface LfReaskDeps {
+  outcomesDir?: string;
+}
+
 export function lfReask(
   newSessionId: string,
   newPrompt: string,
   newCwd: string | undefined,
   now: string,
+  deps: LfReaskDeps = {},
 ): void {
   if (!newCwd) return; // cwd required to scope the match
 
   const newTokens = new Set(promptFingerprint(newPrompt));
   if (newTokens.size === 0) return;
 
-  const recentIds = listRecords(REASK_SCAN_LIMIT);
-  const windowStart = Date.now() - REASK_WINDOW_MS;
+  const { outcomesDir } = deps;
+  const recentIds = listRecords(REASK_SCAN_LIMIT, outcomesDir);
+  const nowMs = Date.now();
+  const windowStart = nowMs - REASK_WINDOW_MS;
 
   for (const priorId of recentIds) {
     if (priorId === newSessionId) continue;
 
-    const record = readRecord(priorId);
+    const record = readRecord(priorId, outcomesDir);
     if (!record) continue;
     if (record.first_cwd !== newCwd) continue;
     const storedTokens = record.first_prompt_tokens;
     if (!storedTokens || storedTokens.length === 0) continue;
 
     // Check time window using the record file's mtime as a proxy for session end
+    // When outcomesDir is overridden, construct the record path accordingly.
+    let mtime: number;
     try {
-      const mtime = statSync(getOutcomeRecordPath(priorId)).mtimeMs;
+      const recordPath = outcomesDir
+        ? `${outcomesDir}/${priorId}.json`
+        : getOutcomeRecordPath(priorId);
+      mtime = statSync(recordPath).mtimeMs;
       if (mtime < windowStart) continue;
     } catch {
       continue; // file disappeared between list and stat
@@ -161,16 +182,23 @@ export function lfReask(
     const similarity = jaccardSimilarity(newTokens, priorTokens);
     if (similarity < REASK_THRESHOLD) continue;
 
+    // Determine severity based on how soon after the prior session the reask arrived
+    const ageMs = Math.max(0, nowMs - mtime);
+    const isWithin30Min = ageMs <= REASK_MAJOR_WINDOW_MS;
+    const severity = isWithin30Min ? ('major' as const) : ('minor' as const);
+    const windowLabel = isWithin30Min ? 'within 30min' : 'within 24h';
+
     // Match: upsert a weak -1 onto the prior session
     upsertVotes(priorId, [
       {
         lf: 'cross_session_reask',
         vote: -1,
         strength: 'weak',
-        evidence: `new session ${newSessionId} in same cwd within 30min (Jaccard=${similarity.toFixed(2)})`,
+        severity,
+        evidence: `new session ${newSessionId} in same cwd ${windowLabel} (Jaccard=${similarity.toFixed(2)})`,
         observed_at: now,
       },
-    ]);
+    ], undefined, { outcomesDir });
     // Only vote on the first match to avoid double-counting
     break;
   }

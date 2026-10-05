@@ -41,8 +41,18 @@ import type {
   SpineRelationItem,
 } from './spine-classifier.js';
 import { errorMessage } from '../../utils/errors.js';
-import { stripTrailingAnnotation, stripAnnotationLabelPlusSpace, REINFORCED_LABEL, WEAKENED_LABEL } from './spine-hook.annotations.js';
+import {
+  stripTrailingAnnotation,
+  stripAnnotationLabelPlusSpace,
+  REINFORCED_LABEL,
+  WEAKENED_LABEL,
+} from './spine-hook.annotations.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
+import {
+  getClassifiableDiff,
+  isDuplicateDiff,
+  persistDiffFingerprint,
+} from './spine-hook.diff.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -82,9 +92,24 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       // repo root, not a linked worktree's checkout path (#worktree-spine-bug).
       const repoRoot = resolveRepoRootSync({ cwd: _rootCwd, fallback: _rootCwd, mode: 'git-common-dir' });
 
-      // ── Git diff guard ────────────────────────────────────────────────
-      const diff = getGitDiff(repoRoot);
-      if (!diff.trim()) return {}; // empty diff — fast exit, zero cost
+      // ── Git diff (worktree-aware, SPINE-filtered) ─────────────────────
+      // History: the original hook ran `git diff HEAD` in the common-dir root,
+      // so every worktree session classified the MAIN checkout's stale staged
+      // files instead of its own changes. `getClassifiableDiff` uses
+      // `show-toplevel` from the session's own cwd so each worktree classifies
+      // only its own diff. SPINE.md edits are stripped before classification to
+      // break the self-reference loop (hook writes SPINE.md → next session sees
+      // it as a "change" → generates meta-invariants about SPINE.md hygiene).
+      const diffResult = getClassifiableDiff(_rootCwd, _rootCwd);
+      if (diffResult.skipped) return {}; // empty or SPINE-only diff — fast exit
+
+      // ── Duplicate-diff guard ──────────────────────────────────────────
+      // History: with 145 stale staged files in the main checkout, every session
+      // end re-classified the identical diff and fired repeated Telegram alerts.
+      // An unchanged fingerprint means we already handled this diff; skip.
+      if (isDuplicateDiff(diffResult.fingerprint, diffResult.worktreeRoot)) return {};
+
+      const diff = diffResult.diff;
 
       // ── Read current SPINE.md ─────────────────────────────────────────
       const currentDoc = readSpine(repoRoot);
@@ -94,7 +119,16 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
 
       // ── Run classifier ────────────────────────────────────────────────
       const result = await classifyDiff(diff, spineContent, signal);
-      if (!result.parsed || result.items.length === 0) return {};
+
+      // ── Persist successful empty classifications ──────────────────────
+      // Empty parsed results are fully handled here, so record the fingerprint.
+      // Non-empty results are recorded only after all apply/write work succeeds;
+      // otherwise a writeSpine failure would permanently suppress the same diff.
+      if (!result.parsed) return {};
+      if (result.items.length === 0) {
+        persistDiffFingerprint(diffResult.fingerprint, diffResult.worktreeRoot);
+        return {};
+      }
 
       // ── Apply items ───────────────────────────────────────────────────
       // v1 limitation: reuse the pre-classify snapshot. Concurrent sessions
@@ -204,6 +238,8 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       for (const contradiction of contradicts) {
         handleContradiction(contradiction, sessionId);
       }
+
+      persistDiffFingerprint(diffResult.fingerprint, diffResult.worktreeRoot);
     } catch (err) {
       // Best-effort: never block teardown, but log for debugging.
       try {
@@ -310,25 +346,6 @@ function applyAnnotation(
     current = next;
   }
   return current.slice(0, MAX_DESCRIPTION_LEN) + suffix;
-}
-
-function getGitDiff(repoRoot: string): string {
-  try {
-    // Use `git diff HEAD` (no commit ref) to capture uncommitted working-tree
-    // changes made during this session. If the session committed its changes,
-    // this returns empty (correct fast-exit for v1: committed work is visible
-    // in the next session's diff via HEAD~1 at that point). Using HEAD~1 would
-    // incorrectly re-classify the previous commit on sessions that commit nothing.
-    return execFileSync('git', ['diff', 'HEAD', '--unified=0'], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      maxBuffer: 2 * 1024 * 1024, // 2 MB cap
-    });
-  } catch {
-    // No commits yet or git error — treat as empty
-    return '';
-  }
 }
 
 function buildSpineText(doc: import('./spine-store.js').SpineDocument | null): string {

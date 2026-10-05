@@ -107,6 +107,13 @@ function extractFirstPrompt(
 // ---------------------------------------------------------------------------
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * No-artifact sessions are held provisional for 24h so that a cross_session_reask
+ * arriving later can still land a vote before the record is settled.
+ * Previously these were settled immediately, causing them to never be revisited
+ * by relabel-job.ts (which only processes provisional records).
+ */
+const NO_ARTIFACT_SETTLE_MS = 24 * 60 * 60 * 1000;
 
 export function createOutcomeSessionEndHook(): HookHandler {
   return (context) => {
@@ -183,10 +190,14 @@ async function _runImmediatePass(
   );
 
   // Determine state / settles_after
+  // No-artifact sessions are now written provisional with settles_after = 24h
+  // so relabel-job can apply combiner v2 good-by-default and late reask signals
+  // can still land before the record is settled (fixes the 'settled immediately'
+  // regression where 563/564 unknown records could never be revisited).
   const hasArtifacts = artifacts.commits.length > 0 || artifacts.prs.length > 0;
   const settlesAfter = hasArtifacts
     ? new Date(Date.now() + SEVEN_DAYS_MS).toISOString()
-    : null;
+    : new Date(Date.now() + NO_ARTIFACT_SETTLE_MS).toISOString();
 
   const sessionKind = detectSessionKind(turns);
   const firstPrompt = extractFirstPrompt(turns);
@@ -198,7 +209,7 @@ async function _runImmediatePass(
     session_id: sessionId,
     label: 'unknown',
     confidence: 0,
-    state: hasArtifacts ? 'provisional' : 'settled',
+    state: 'provisional',
     settles_after: settlesAfter,
     session_kind: sessionKind,
     self_report: selfReport,

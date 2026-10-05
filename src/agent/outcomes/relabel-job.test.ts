@@ -13,7 +13,7 @@ import { lfCi } from './lf-ci.js';
 import type { ExecFnCi } from './lf-ci.js';
 import { lfFixOfFix } from './lf-fof.js';
 import type { ExecFnFof } from './lf-fof.js';
-import { processRecord, runRelabelJob } from './relabel-job.js';
+import { processRecord, runRelabelJob, rescoreSettledUnknown } from './relabel-job.js';
 import type { RelabelDeps } from './relabel-job.js';
 import { writeRecord, readRecord } from './store.js';
 import type { VerifiedOutcome, Vote } from './schema.js';
@@ -544,5 +544,123 @@ describe('runRelabelJob', () => {
     });
 
     expect(result.scanned).toBe(0); // settled not counted
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rescoreSettledUnknown — backfill
+// ---------------------------------------------------------------------------
+
+describe('rescoreSettledUnknown', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'relabel-rescore-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeSettledUnknown(sessionId: string, extraVotes: Vote[] = []): VerifiedOutcome {
+    return {
+      schema_version: 1,
+      session_id: sessionId,
+      label: 'unknown',
+      confidence: 0,
+      state: 'settled',
+      settles_after: new Date(Date.now() - 1000).toISOString(),
+      session_kind: 'text',
+      self_report: 'done',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [
+        { lf: 'self_report', vote: 0, strength: 'weak', evidence: 'self_report=done', observed_at: NOW },
+        ...extraVotes,
+      ],
+      history: [],
+    };
+  }
+
+  it('relabels settled unknown with no negatives to succeeded (good-by-default)', async () => {
+    const id = 'rescore-no-neg-001';
+    writeRecord(makeSettledUnknown(id), tmpDir);
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    expect(result.scanned).toBe(1);
+    expect(result.relabeled).toBe(1);
+    expect(result.skipped).toBe(0);
+
+    const updated = readRecord(id, tmpDir);
+    expect(updated?.label).toBe('succeeded');
+    expect(updated?.basis).toBe('no_bad_signals');
+    expect(updated?.confidence).toBeGreaterThan(0);
+    // History appended
+    expect(updated?.history.length).toBeGreaterThan(0);
+    expect(updated?.history[0]?.reason).toContain('rescore-settled');
+  });
+
+  it('dry-run: does not write to disk', async () => {
+    const id = 'rescore-dry-001';
+    writeRecord(makeSettledUnknown(id), tmpDir);
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir, dryRun: true });
+    expect(result.relabeled).toBe(1);
+
+    const unchanged = readRecord(id, tmpDir);
+    expect(unchanged?.label).toBe('unknown'); // not written
+  });
+
+  it('skips settled records that are not unknown (not scanned)', async () => {
+    const id = 'rescore-not-unknown-001';
+    writeRecord(
+      makeSettledUnknown(id, [{ lf: 'verification', vote: 1, strength: 'strong', evidence: 'pass', observed_at: NOW }]),
+      tmpDir,
+    );
+    // Force-update to succeeded so label !== unknown
+    const rec = readRecord(id, tmpDir);
+    if (rec) writeRecord({ ...rec, label: 'succeeded' }, tmpDir);
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    // Not in candidates (filtered pre-scan) — scanned=0 and relabeled=0
+    expect(result.scanned).toBe(0);
+    expect(result.relabeled).toBe(0);
+  });
+
+  it('skips provisional records', async () => {
+    const id = 'rescore-prov-001';
+    writeRecord(
+      { ...makeSettledUnknown(id), state: 'provisional' },
+      tmpDir,
+    );
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir });
+    expect(result.scanned).toBe(0); // provisional filtered before scan
+    expect(result.relabeled).toBe(0);
+  });
+
+  it('preserves existing history entries and appends new one', async () => {
+    const id = 'rescore-history-001';
+    const rec = makeSettledUnknown(id);
+    writeRecord({
+      ...rec,
+      history: [{ at: '2024-01-01T00:00:00Z', label: 'unknown', reason: 'initial' }],
+    }, tmpDir);
+
+    await rescoreSettledUnknown({ outcomesDir: tmpDir });
+
+    const updated = readRecord(id, tmpDir);
+    expect(updated?.history.length).toBe(2);
+    expect(updated?.history[0]?.reason).toBe('initial');
+    expect(updated?.history[1]?.reason).toContain('rescore-settled');
+  });
+
+  it('respects limit', async () => {
+    for (let i = 1; i <= 5; i++) {
+      writeRecord(makeSettledUnknown(`rescore-limit-00${i}`), tmpDir);
+    }
+
+    const result = await rescoreSettledUnknown({ outcomesDir: tmpDir, limit: 2 });
+    expect(result.scanned).toBe(2);
+    expect(result.relabeled).toBeLessThanOrEqual(2);
   });
 });

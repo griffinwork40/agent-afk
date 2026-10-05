@@ -46,8 +46,9 @@ import {
   type FireOnTaskCompleteOptions,
 } from './scheduler.pull-tick.js';
 import { errorMessage } from '../../utils/errors.js';
-import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord } from './scheduler.overlap-guard.js';
+import { makeOverlapSkipRecord, makeSessionStartSkipRecord, makeBudgetSkipRecord, makeTelemetryUnwritableSkipRecord } from './scheduler.overlap-guard.js';
 import { BudgetAlertLatch, evaluateBudgetGate, formatBudgetSkipMessage, resolveDaemonUsageTarget } from './budget-gate.js';
+import { probeTelemetryWritable, TelemetryAlertLatch } from './telemetry-write-guard.js';
 
 
 export interface SchedulerOptions {
@@ -194,6 +195,8 @@ export class CronScheduler {
   private readonly inFlightTaskIds = new Set<string>();
   /** One Telegram alert per usage-budget episode (see BudgetAlertLatch). */
   private readonly budgetAlerts = new BudgetAlertLatch();
+  /** One Telegram alert per daemon process for a non-writable telemetry file. */
+  private readonly telemetryAlerts = new TelemetryAlertLatch();
   // TODO(#337-hook): hook-driven dequeue path will share isDequeuing mutex
 
   constructor(options: SchedulerOptions = {}) {
@@ -269,8 +272,31 @@ export class CronScheduler {
       .map((entry) => entry.task)
       .filter((task) => task.trigger === 'sessionstart' || task.trigger === 'both');
     const records: TelemetryRecord[] = [];
+
+    // Probe writability once for the whole fireOnStart call so we can send a
+    // single Telegram alert rather than one per task.
+    const writeError = probeTelemetryWritable(this.telemetryPath());
+    if (writeError !== null) {
+      void this.telemetryAlerts.notify(this.telemetryPath(), writeError);
+    }
+
     for (const task of eligible) {
+      // Agent tasks depend on the telemetry file to enforce the sessionstart
+      // cooldown. If the file is not writable the cooldown record cannot be
+      // saved, causing the task to re-fire on every daemon restart. Skip and
+      // record the reason. Shell and builtin tasks are exempt — they don't
+      // consume model quota and don't rely on the cooldown gate.
+      const isAgentTask = (task.executor ?? 'agent') === 'agent';
       const cooldownMs = task.debounceMs ?? this.defaultCooldownMs;
+      if (writeError !== null && isAgentTask && cooldownMs > 0) {
+        const skipRecord = makeTelemetryUnwritableSkipRecord(task, this.now(), writeError);
+        // Do NOT call writeTelemetry here — it calls appendFileSync to the same
+        // unwritable path, which would silently fail. Keep only the in-memory
+        // record and fire the completion callback directly for notifications.
+        records.push(skipRecord);
+        fireOnTaskComplete(skipRecord, { onTaskComplete: this.options.onTaskComplete }, task);
+        continue;
+      }
       const decision = evaluateSessionStartGates({
         taskId: task.taskId,
         cooldownMs,

@@ -52,6 +52,7 @@ vi.mock('./spine-store.js', () => ({
 // fs; the appendFileSync capture is used only in the pending-log describe block.
 
 const _capturedAppendCalls: Array<{ path: string; data: string }> = [];
+const _capturedWriteCalls: Array<{ path: string; data: string }> = [];
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -62,6 +63,12 @@ vi.mock('node:fs', async (importOriginal) => {
         _capturedAppendCalls.push({ path: String(path), data: String(data) });
       },
     ),
+    writeFileSync: vi.fn(
+      (path: import('node:fs').PathOrFileDescriptor, data: string | Uint8Array): void => {
+        _capturedWriteCalls.push({ path: String(path), data: String(data) });
+      },
+    ),
+    renameSync: vi.fn(),
     mkdirSync: vi.fn(),
   };
 });
@@ -1552,5 +1559,69 @@ describe('createSpineSessionEndHook — #2867 regressions', () => {
     const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
     expect(matches).toHaveLength(1);
     expect(writeSpine).toHaveBeenCalled();
+  });
+});
+
+
+// ── Fingerprint ordering regressions ─────────────────────────────────────────
+
+describe('createSpineSessionEndHook — fingerprint persistence ordering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
+    _capturedWriteCalls.length = 0;
+  });
+
+  it('persists fingerprint when classifier returns a parsed empty result', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    expect(_capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints'))).toBe(true);
+  });
+
+  it('does not persist fingerprint when writeSpine throws for a non-empty result', async () => {
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'new-addition',
+          prefix: 'INV',
+          description: 'All path helpers remain centralized',
+          rationale: 'Regression coverage',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const { writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(writeSpine).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    expect(_capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints'))).toBe(false);
   });
 });

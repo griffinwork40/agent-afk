@@ -63,7 +63,7 @@ describe('assertInsideSandbox', () => {
     );
   });
 
-  it('rejects a sibling-prefix path (old trailingSlash bug)', () => {
+  it('still rejects a sibling-prefix path on all platforms', () => {
     // home = tmp/home, evil = tmp/homeEvil
     // Old trailingSlash check: real.startsWith(home + '/') was safe but
     // if the slash was already present we'd check real.startsWith('/tmp/home/')

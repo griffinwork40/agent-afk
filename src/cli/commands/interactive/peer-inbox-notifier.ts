@@ -269,8 +269,11 @@ export class PeerInboxNotifier {
     const gen = this.generation;
     const wasEmpty = this.buffer.length === 0;
     let injected = 0;
-    for (const { file, envelope } of await listHeld(sessionId)) {
+    for (const held of await listHeld(sessionId)) {
       if (!this.isCurrent(sessionId, gen)) return 0; // swap fired mid-flight; discard
+      // Corrupt entries cannot be accepted (no parseable envelope); skip.
+      if (held.corrupt) continue;
+      const { file, envelope } = held;
       if (messageIds !== 'all' && !messageIds.has(envelope.messageId)) continue;
       const released = await releaseHeld(sessionId, file);
       if (!this.isCurrent(sessionId, gen)) return 0; // swap fired between release and claim
@@ -333,7 +336,13 @@ export class PeerInboxNotifier {
     });
     // Drop results if a swap fired while the async scan was in flight.
     if (!this.isCurrent(sessionId, gen)) return;
-    for (const h of held) this.noteHeld(h.envelope, h.reason);
+    for (const h of held) {
+      if (h.reason === 'corrupt') {
+        this.noteCorrupt(h.file);
+      } else {
+        this.noteHeld(h.envelope, h.reason);
+      }
+    }
     for (const e of claimed) this.accept(e, sessionId);
     if (wasEmpty && claimed.length > 0) this.fireInjectable();
   }
@@ -353,12 +362,32 @@ export class PeerInboxNotifier {
     void emitPeerMessage(this.resolveTraceWriter(), { action: 'claimed', messageId: e.messageId, peer: e.from.id, bytes });
   }
 
-  private noteHeld(e: PeerEnvelope, reason: HeldReason): void {
+  private noteHeld(e: PeerEnvelope, reason: Exclude<HeldReason, 'corrupt'>): void {
     const bytes = Buffer.byteLength(e.body, 'utf8');
     const why = reason === 'wake-budget' ? 'wake budget reached' : 'AFK_PEER_INBOUND=hold';
     this.opts.writeLine(palette.dim(`↘ peer message from ${safePeerSender(e.from)} held (${why}) · /inbox to review`));
     // resolveTraceWriter() reads live so mid-session resume is reflected.
     void emitPeerMessage(this.resolveTraceWriter(), { action: 'held', messageId: e.messageId, peer: e.from.id, bytes, reason });
+  }
+
+  /** Notify the operator when an unparseable or corrupt pending file is quarantined. */
+  private noteCorrupt(file: string): void {
+    // Strip control characters from the filename for safe terminal display.
+    // eslint-disable-next-line no-control-regex
+    const safeFile = file.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+    this.opts.writeLine(
+      palette.dim(`↘ peer message held (corrupt/unsupported format: ${safeFile}) · /inbox drop to remove`),
+    );
+    // Invariant: messageId and peer are unavailable here — the file is
+    // unparseable, so no structured envelope exists. peer is set to 'unknown'
+    // and bytes to 0 rather than omitting the trace event entirely, so the
+    // operator can see the quarantine in the trace even without a sender id.
+    void emitPeerMessage(this.resolveTraceWriter(), {
+      action: 'held',
+      peer: 'unknown',
+      bytes: 0,
+      reason: 'corrupt',
+    });
   }
 
   private fireInjectable(): void {

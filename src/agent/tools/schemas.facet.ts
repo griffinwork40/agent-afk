@@ -32,16 +32,31 @@ export const getFacetTool: AnthropicToolDef = {
     'schema-validated summary of what a session did. Defaults to the most recent session.\n\n' +
     'The response is a JSON object. Internal provenance fields (source_session_path, ' +
     'derived_at, facet_version, derived_from, source_session_mtime_ms) are excluded by ' +
-    'default; pass them in `fields` to include them explicitly.',
+    'default; pass them in `fields` to include them explicitly.\n\n' +
+    'Every response includes three resolution-context fields regardless of the `fields` ' +
+    'allowlist:\n' +
+    '  - `session_cwd` — the `cwd` recorded in the session sidecar (null for legacy ' +
+    'sidecars that predate the field).\n' +
+    '  - `is_current_session` — true when the resolved session is the caller\'s own ' +
+    'session (i.e. session id matches the dispatch context).\n' +
+    '  - `cwd_mismatch` — true when `session_cwd` differs from the caller\'s working ' +
+    'directory (signals a cross-cwd analysis that may be unintentional).',
   input_schema: {
     type: 'object',
     properties: {
       session: {
         type: 'string',
         description:
-          'Session ID, name, or "latest" (default). Resolves via the session sidecar ' +
-          'index — accepts the sidecar filename stem, the stored sessionId, or the ' +
-          'human-readable session name.',
+          'Session ID, name, or a special alias (default: "latest"). ' +
+          'Special values:\n' +
+          '  - "latest": the most recently modified sealed session whose sidecar cwd ' +
+          'matches the caller\'s working directory. Falls back to the global newest ' +
+          'session when no cwd match exists (cwd_mismatch will be true).\n' +
+          '  - "current" / "self": the session that invoked this tool call, resolved ' +
+          'from the dispatch context\'s session id. Falls back to "latest" semantics ' +
+          'when no context session id is available.\n' +
+          'Any other string is resolved via the session sidecar index: accepts the ' +
+          'sidecar filename stem, the stored sessionId, or the human-readable session name.',
       },
       fields: {
         type: 'array',

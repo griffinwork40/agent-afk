@@ -62,9 +62,38 @@ export type JournalBlock =
   | { type: 'thinking'; thinking: string; signature?: string; origin?: string }
   | { type: 'redacted_thinking'; data: string; origin?: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; toolUseId: string; isError?: boolean; content: JournalResultPart[] }
+  | {
+      type: 'tool_result';
+      toolUseId: string;
+      isError?: boolean;
+      /**
+       * True when the tool result carries a subagent's capped or wind-down
+       * partial answer. Mirrors `ToolResult.incomplete` / `ProviderEvent['tool.output'].incomplete`.
+       * Present only when true; absent for clean completions.
+       * Written since #2970; older journal files that lack this field are read as
+       * `undefined` (absent = not incomplete).
+       */
+      incomplete?: boolean;
+      content: JournalResultPart[];
+    }
   | { type: 'image'; source: JournalBinary }
   | { type: 'document'; source: JournalBinary; title?: string };
+
+/**
+ * Shared return-type alias for both the sync (`findToolResult` in reader.ts)
+ * and async (`findToolResultAsync` in reader.async.ts) tool-result lookup
+ * paths. Consumers that use either function should import this type to keep
+ * both sides in sync.
+ *
+ * @see findToolResult
+ * @see findToolResultAsync
+ */
+export interface ToolResultLookup {
+  /** Hydrated tool_result block. */
+  block: Extract<JournalBlock, { type: 'tool_result' }>;
+  /** Subagent id, when the result lives in a subagent journal. */
+  subagentId?: string;
+}
 
 export interface JournalMessage {
   role: 'user' | 'assistant';

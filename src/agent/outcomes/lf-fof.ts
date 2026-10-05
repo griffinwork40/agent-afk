@@ -105,6 +105,7 @@ export async function lfFixOfFix(
         lf: 'fix_of_fix',
         vote: -1,
         strength: 'weak',
+        severity: 'minor',
         evidence: `PR #${refPrNumber} in ${parsed.repo} references ${url} as a fix/regression within ${FIX_OF_FIX_WINDOW_DAYS} days`,
         observed_at: now,
       });

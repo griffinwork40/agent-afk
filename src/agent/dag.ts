@@ -83,6 +83,20 @@ export interface DAGRunResult {
   outputs: Record<string, unknown>;
   failed: Array<{ id: string; error: Error }>;
   skipped: string[];
+  /**
+   * Nodes that completed with `status: 'succeeded'` but produced only a
+   * partial result (e.g. soft-deadline wind-down, tool-use iteration cap).
+   * Their output is still in `outputs` (behaviour-preserving — downstream DAG
+   * nodes can use it), but callers like the compose executor can surface the
+   * partial status to the parent model and to the facet.
+   *
+   * Populated by layers above `runDAG` (e.g. `dag-subagent.ts`) that have
+   * domain knowledge of what "partial" means for a subagent result. The core
+   * DAG executor itself always returns an empty array here; it has no concept
+   * of partial outputs. Seeded by `runSubagentDAG` for nodes with an
+   * incomplete `stopReason` (e.g. `SOFT_DEADLINE_WIND_DOWN`).
+   */
+  partial: Array<{ id: string; stopReason: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +188,7 @@ export async function runDAG(
   signal: AbortSignal,
   options: DAGRunOptions = {},
 ): Promise<DAGRunResult> {
-  if (graph.nodes.length === 0) return { outputs: {}, failed: [], skipped: [] };
+  if (graph.nodes.length === 0) return { outputs: {}, failed: [], skipped: [], partial: [] };
 
   validateDAG(graph);
 
@@ -356,5 +370,5 @@ export async function runDAG(
     await clearCheckpoint(dagId).catch(() => { /* non-fatal */ });
   }
 
-  return { outputs, failed, skipped: Array.from(skipped) };
+  return { outputs, failed, skipped: Array.from(skipped), partial: [] };
 }

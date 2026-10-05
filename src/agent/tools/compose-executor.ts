@@ -24,6 +24,7 @@ import { providerForModel } from '../providers/index.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { applyParentCredentialFallback } from './child-credential.js';
 import { buildParentCredentialOpt } from './compose-executor.credential.js';
+import { partialNodeFlag } from './compose-executor.partial.js';
 
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
@@ -735,8 +736,7 @@ export class ComposeExecutor {
         ? `> [compose warnings]\n${allWarnings.map((w) => `> - ${w}`).join('\n')}\n\n`
         : '';
       const content = prependUsageNotice(usageNotice, warningPrefix + dagContent);
-      const hasFailures = result.failed.length > 0;
-      return { content, isError: hasFailures };
+      return { content, isError: result.failed.length > 0, ...partialNodeFlag(result.partial) };
     } catch (err) {
       // On any throw in the normal (non-detach) path, also deregister so
       // hasDetachable() returns false — parallel to Fix #2 for bash.
