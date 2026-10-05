@@ -373,13 +373,13 @@ export function resolveBinding(
   if (input === undefined) return { id: '' };
   const slot = slotForInput(input, bindings);
   if (slot) return bindings[slot];
+  const trimmed = input.trim().toLowerCase();
   // Fixed-id aliases (e.g. `fable` → claude-fable-5) are not tiers, so they
   // bypass slot bindings and resolve straight to their pinned wire id.
-  const directId = DIRECT_MODEL_ALIASES[input.trim().toLowerCase()];
+  const directId = DIRECT_MODEL_ALIASES[trimmed];
   if (directId) return { id: directId };
   // A raw id that matches a configured slot's own id carries that slot's
   // provider/baseUrl/apiKey. Prefer the first match in SLOT_NAMES order.
-  const trimmed = input.trim().toLowerCase();
   for (const s of SLOT_NAMES) {
     if (bindings[s].id.trim().toLowerCase() === trimmed && trimmed) return bindings[s];
   }

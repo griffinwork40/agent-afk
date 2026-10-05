@@ -28,7 +28,7 @@
  */
 
 import { providerForModel } from '../providers/index.js';
-import { getSlotBindings, slotForInput, type ModelSlots } from './model-slots.js';
+import { getSlotBindings, resolveBinding, SLOT_NAMES, type ModelSlots } from './model-slots.js';
 
 /** The session-config fields {@link applySlotCredentials} may mutate. */
 export interface SlotCredentialTarget {
@@ -49,10 +49,10 @@ export interface SlotCredentialTarget {
 /**
  * Apply the resolved model's per-slot credentials onto `config` in place.
  *
- * Near-no-op when `config.model` is not a configured slot (a raw id or `auto`):
- * only clears any inherited `forceChatgptOAuth` so it cannot leak across a
- * `/model` switch; those tiers are otherwise gated correctly upstream without
- * bindings. For a configured slot:
+ * Near-no-op when `config.model` is not a configured slot (a raw id or `auto`
+ * that does not match any slot's `id`): only clears any inherited OAuth flags so
+ * they cannot leak across a `/model` switch. For a configured slot (matched by
+ * tier name, custom name, OR raw id equal to a slot's configured `id`):
  *   - apiKey: the per-slot key when present; otherwise CLEARED for an OpenAI
  *     tier or a custom-`baseUrl` shim (so a global Anthropic credential can't
  *     leak onto it — see the #548 invariant in the module doc). An Anthropic
@@ -66,19 +66,31 @@ export interface SlotCredentialTarget {
  */
 export function applySlotCredentials(config: SlotCredentialTarget, bindings?: ModelSlots): void {
   const table = bindings ?? getSlotBindings();
-  const slot = slotForInput(config.model, table);
-  if (!slot) {
-    // Not a configured slot (raw id / `auto`): no per-slot force. Clear any
-    // inherited forced-OAuth so a raw id switched to from a chatgpt-oauth /
-    // xai-oauth startup slot doesn't keep forcing those tokens — `resolveInner`
-    // spreads a shared baseConfig for every /model target (#548).
+  // Contract: use resolveBinding (not slotForInput) so a raw id equal to a
+  // slot's configured `id` (e.g. "qwen-3.8-27b") is treated as that slot and
+  // receives its baseUrl/apiKey.  slotForInput only matches tier names and custom
+  // names, silently returning undefined for raw-id inputs — this PR fixed
+  // provider routing via resolveBinding but the credential path was still using
+  // the old lookup, causing applySlotCredentials to return early and never apply
+  // the slot's credentials for raw-id model inputs.
+  const binding = resolveBinding(config.model, table);
+  // A binding is a "configured slot" when it is the same object as one of the
+  // table's slot entries (resolveBinding returns bindings[s] by reference for
+  // both name-matched and raw-id-matched slots; bare passthroughs are new
+  // objects — { id: config.model } — and will not match).
+  const isConfiguredSlot = SLOT_NAMES.some(s => table[s] === binding);
+  if (!isConfiguredSlot) {
+    // Not a configured slot (raw id / `auto` that does not match any slot's
+    // id): no per-slot force.  Clear any inherited forced-OAuth so a raw id
+    // switched to from a chatgpt-oauth / xai-oauth startup slot doesn't keep
+    // forcing those tokens — `resolveInner` spreads a shared baseConfig for
+    // every /model target (#548).
     config.forceChatgptOAuth = false;
     config.forceXaiOAuth = false;
     config.forceXaiApiKey = false;
     config.xaiBaseUrl = undefined;
     return;
   }
-  const binding = table[slot];
 
   const route =
     binding.provider === 'anthropic'
