@@ -28,6 +28,12 @@ import { buildChatSession } from './chat.session-setup.js';
 import { readStdin, writeAndDrain } from './chat.stdin-stream.js';
 import { connectMcpForChat } from './chat.mcp-setup.js';
 import { runStreamJsonPath, renderTextResponse } from './chat.response-output.js';
+import type { MemoryStore } from '../../agent/memory/index.js';
+import type { StateStore } from '../../agent/state/state-store.js';
+import type { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
+import type { SubagentManager } from '../../agent/subagent.js';
+import type { ComposeExecutor } from '../../agent/tools/compose-executor.js';
+import type { McpManager } from '../../agent/mcp/index.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
@@ -155,13 +161,13 @@ export function registerChatCommand(program: Command): void {
       let encounteredError = false;
       let receiptTracePath: string | undefined;
       let teardownStores: {
-        sharedMemoryStore: import('../../agent/memory/index.js').MemoryStore;
-        sharedStateStore: import('../../agent/state/state-store.js').StateStore;
-        workspaceStore: import('../../agent/workspace/workspace-store.js').WorkspaceStore | undefined;
+        sharedMemoryStore: MemoryStore;
+        sharedStateStore: StateStore;
+        workspaceStore: WorkspaceStore | undefined;
       } | undefined;
-      let rootManagerRef: import('../../agent/subagent.js').SubagentManager | undefined;
-      let composeExecutorRef: import('../../agent/tools/compose-executor.js').ComposeExecutor | undefined;
-      let mcpManagerRef: import('../../agent/mcp/index.js').McpManager | undefined;
+      let rootManagerRef: SubagentManager | undefined;
+      let composeExecutorRef: ComposeExecutor | undefined;
+      let mcpManagerRef: McpManager | undefined;
 
       try {
         // Optional worktree isolation.
@@ -329,7 +335,6 @@ export function registerChatCommand(program: Command): void {
         }
 
         // text / json paths
-        spinner.succeed('Response received');
         await renderTextResponse({
           session,
           message,
@@ -340,6 +345,7 @@ export function registerChatCommand(program: Command): void {
           receiptSessionLabel,
           receiptTracePath,
           maybePublish,
+          spinner,
         });
 
       } catch (error) {

@@ -15,18 +15,7 @@ import { recordCdIntent, shellWrapperActive } from '../../../utils/cd-on-exit.js
 import { detectShellFromEnv } from '../shell-init.js';
 import type { ExecFileFn } from './worktree.js';
 import type { WorktreeDisposition } from './worktree-disposition.js';
-
-// ---------------------------------------------------------------------------
-// Internal error type guard
-// ---------------------------------------------------------------------------
-
-interface ExecError extends Error {
-  stderr?: string;
-}
-
-function isExecError(value: unknown): value is ExecError {
-  return value instanceof Error;
-}
+import { isExecError } from './worktree.errors.js';
 
 // ---------------------------------------------------------------------------
 // Cleanup parameters

@@ -19,6 +19,7 @@ import { writeAndDrain } from './chat.stdin-stream.js';
 import type { AgentSession } from '../../agent/session.js';
 import type { SessionStats } from '../slash/types.js';
 import type { AgentModelInput } from '../../agent/types.js';
+import type { Ora } from 'ora';
 
 // ---------------------------------------------------------------------------
 // Stream-JSON path
@@ -74,6 +75,7 @@ export interface TextResponseParams {
   receiptSessionLabel: string | undefined;
   receiptTracePath: string | undefined;
   maybePublish: (reviewText: string, errored: boolean) => Promise<void>;
+  spinner: Ora;
 }
 
 /**
@@ -91,9 +93,11 @@ export async function renderTextResponse(params: TextResponseParams): Promise<vo
     receiptSessionLabel,
     receiptTracePath,
     maybePublish,
+    spinner,
   } = params;
 
   const response = await session.sendMessage(message, { stream: streamFlag });
+  spinner.succeed('Response received');
 
   const responseMeta = session.getLastResponseMetadata();
   recordTurn(stats, message, response.content, responseMeta ?? undefined);

@@ -31,6 +31,7 @@ import {
   detectDefaultBaseRef,
 } from './worktree.refs.js';
 import { runWorktreeCleanup } from './worktree.cleanup.js';
+import { isExecError } from './worktree.errors.js';
 
 const execFileDefault = promisify(execFileCallback);
 
@@ -149,15 +150,6 @@ export function resolveBranchPrefix(override?: string): string {
     return validateBranchPrefix(envValue, 'AFK_WORKTREE_BRANCH_PREFIX');
   }
   return DEFAULT_BRANCH_PREFIX;
-}
-
-interface ExecError extends Error {
-  stderr?: string;
-  stdout?: string;
-}
-
-function isExecError(value: unknown): value is ExecError {
-  return value instanceof Error;
 }
 
 /**

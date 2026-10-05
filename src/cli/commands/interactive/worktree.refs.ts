@@ -7,19 +7,7 @@
  */
 
 import type { ExecFileFn } from './worktree.js';
-
-// ---------------------------------------------------------------------------
-// Internal error type guard (mirrors worktree.ts)
-// ---------------------------------------------------------------------------
-
-interface ExecError extends Error {
-  stderr?: string;
-  stdout?: string;
-}
-
-function isExecError(value: unknown): value is ExecError {
-  return value instanceof Error;
-}
+import { isExecError } from './worktree.errors.js';
 
 // ---------------------------------------------------------------------------
 // Remote fetch
