@@ -275,7 +275,7 @@ describe('install / uninstall I/O', () => {
     expect(existsSync(xmlPath)).toBe(true);
 
     const calls = mockExecFileSync.mock.calls.map((c) => (c[1] as string[]).join(' '));
-    expect(calls.some((a) => a.includes('/Create'))).toBe(true);
+    expect(calls.some((a) => a.includes('/Create') && a.includes('/F'))).toBe(true);
     expect(calls.some((a) => a.includes('/Run'))).toBe(true);
   });
 

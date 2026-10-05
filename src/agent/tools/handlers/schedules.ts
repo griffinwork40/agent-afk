@@ -196,17 +196,23 @@ export const updateScheduleHandler: ToolHandler = async (input, _signal) => {
   }
 
   // Validate per-task cwd when supplied.
+  // null or "" means "unset" — removes the per-task cwd so the task falls back
+  // to the daemon-wide default. A non-empty string is validated as a directory.
   const rawCwd = obj['cwd'];
-  let resolvedCwd: string | undefined;
+  let resolvedCwd: string | null | undefined;
   if (rawCwd !== undefined) {
-    if (typeof rawCwd !== 'string' || !rawCwd) {
-      return { content: 'Invalid input: cwd must be a non-empty string', isError: true };
+    if (rawCwd === null || rawCwd === '') {
+      // Explicit clear: remove the per-task cwd pin.
+      resolvedCwd = null;
+    } else if (typeof rawCwd !== 'string') {
+      return { content: 'Invalid input: cwd must be a string, null, or "" to clear', isError: true };
+    } else {
+      const cwdResult = validateScheduleCwd(rawCwd);
+      if (!cwdResult.ok) {
+        return { content: `Invalid input: ${cwdResult.error}`, isError: true };
+      }
+      resolvedCwd = cwdResult.resolved;
     }
-    const cwdResult = validateScheduleCwd(rawCwd);
-    if (!cwdResult.ok) {
-      return { content: `Invalid input: ${cwdResult.error}`, isError: true };
-    }
-    resolvedCwd = cwdResult.resolved;
   }
 
   // Build the patch from supplied fields only

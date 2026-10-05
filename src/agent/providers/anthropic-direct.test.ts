@@ -442,7 +442,7 @@ describe('AnthropicDirectProvider', () => {
     // because subscription-quota capture must keep working with tracing off
     // (see the install site in providers/anthropic-direct/index.ts). Asserting
     // the exact key set keeps this strict — an unintended third key still fails.
-    expect(Object.keys(ctorArg).sort()).toEqual(['authToken', 'fetch']);
+    expect(Object.keys(ctorArg).sort()).toEqual(['authToken', 'fetch', 'maxRetries']);
     expect(ctorArg['authToken']).toBe('sk-ant-oat01-test');
     expect(typeof ctorArg['fetch']).toBe('function');
     expect('apiKey' in ctorArg).toBe(false);
@@ -478,7 +478,7 @@ describe('AnthropicDirectProvider', () => {
     // Under API-key auth the quota headers never arrive, so the cache simply
     // stays empty and the status line draws no quota segment.
     const apiKeyCtorArg = anthropicCtorMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(Object.keys(apiKeyCtorArg).sort()).toEqual(['apiKey', 'fetch']);
+    expect(Object.keys(apiKeyCtorArg).sort()).toEqual(['apiKey', 'fetch', 'maxRetries']);
     expect(apiKeyCtorArg['apiKey']).toBe('sk-ant-api03-test');
     expect(typeof apiKeyCtorArg['fetch']).toBe('function');
 
@@ -524,6 +524,7 @@ describe('AnthropicDirectProvider', () => {
       expect(anthropicCtorMock.mock.calls[0]?.[0]).toEqual({
         apiKey: 'local',
         baseURL: 'http://127.0.0.1:8080',
+        maxRetries: 0,
       });
     });
 

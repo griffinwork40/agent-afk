@@ -43,7 +43,7 @@ describe('deriveSessionFacet', () => {
   it('produces a schema-valid facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
-    expect(facet.facet_version).toBe(5);
+    expect(facet.facet_version).toBe(8); // v8: added compose_partial_nodes (#2970)
     expect(facet.derived_from).toBe('afk-session');
   });
 
@@ -71,6 +71,23 @@ describe('deriveSessionFacet', () => {
     expect(facet.tool_error_categories).toEqual({ bash: 1 });
     expect(facet.friction_counts).toEqual({ bash: 1 });
     expect(facet.friction_detail).toBe('1 tool error(s): bash×1');
+  });
+
+  it('tool_errors_total = parent errors + subagent errors (#2777)', () => {
+    const facet = deriveSessionFacet(richSession(), {
+      subagentBreakdown: [
+        { subagent_id: 'sub-1', tool_calls: 5, tool_errors: 2, tool_counts: { bash: 5 } },
+        { subagent_id: 'sub-2', tool_calls: 3, tool_errors: 1, tool_counts: { read_file: 3 } },
+      ],
+    });
+    // parent tool_errors = 1 (from richSession), subagent = 2 + 1 = 3
+    expect(facet.tool_errors).toBe(1);
+    expect(facet.tool_errors_total).toBe(4);
+  });
+
+  it('tool_errors_total equals tool_errors when no subagent breakdown', () => {
+    const facet = deriveSessionFacet(richSession());
+    expect(facet.tool_errors_total).toBe(facet.tool_errors);
   });
 
   it('reconstructs subagent invocations and stamps not_persisted', () => {
@@ -104,9 +121,13 @@ describe('deriveSessionFacet', () => {
     expect(facet.evidence_pointers).toEqual(['/src/a.ts', '/src/b.ts']);
   });
 
-  it('classifies outcome and semantic fields for a completed session', () => {
+  it('classifies semantic fields for a completed session (no terminal heading → unknown)', () => {
+    // richSession last assistant is "You are welcome." — no terminal-state heading
+    // → outcome='unknown', outcome_source='none' (#2777)
     const facet = deriveSessionFacet(richSession());
-    expect(facet.outcome).toBe('fully_achieved');
+    expect(facet.outcome).toBe('unknown');
+    expect(facet.outcome_source).toBe('none');
+    // For 'unknown', primary_success uses the last-assistant fallback (not 'none')
     expect(facet.primary_success).toBe('You are welcome.');
     expect(facet.session_type).toBe('slash_command');
     expect(facet.goal_categories).toEqual({ slash_command: 1 });
@@ -137,10 +158,12 @@ describe('deriveSessionFacet', () => {
       turns: [],
     });
     expect(facet.outcome).toBe('aborted');
+    expect(facet.outcome_source).toBe('structural');
     expect(facet.primary_success).toBe('none');
     expect(facet.friction_detail).toBe('');
     expect(facet.friction_counts).toEqual({});
     expect(facet.tool_errors).toBe(0);
+    expect(facet.tool_errors_total).toBe(0);
     expect(facet.brief_summary).toBe('empty session');
     expect(facet.session_type).toBe('task');
   });
@@ -155,6 +178,7 @@ describe('deriveSessionFacet', () => {
       turns: [{ user: 'hi', assistant: '', timestamp: 1 }],
     });
     expect(facet.outcome).toBe('partially_achieved');
+    expect(facet.outcome_source).toBe('structural');
     expect(facet.primary_success).toBe('hi');
     expect(facet.assistant_message_count).toBe(0);
   });
@@ -548,11 +572,10 @@ describe('deriveSessionFacet', () => {
   // yield_tracking (#2016)
   it('yield_tracking: non-daemon sessions have is_scheduled_session=false and null pr fields', () => {
     const facet = deriveSessionFacet(richSession());
-    expect(facet.yield_tracking).toEqual({
-      is_scheduled_session: false,
-      produced_pr: null,
-      pr_merged: null,
-    });
+    expect(facet.yield_tracking.is_scheduled_session).toBe(false);
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_merged).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull(); // pr_url added v7 (#2777)
   });
 
   it('yield_tracking: daemon source sets is_scheduled_session=true', () => {
@@ -572,5 +595,785 @@ describe('deriveSessionFacet', () => {
   it('yield_tracking: schema-valid in the base facet', () => {
     const facet = deriveSessionFacet(richSession());
     expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+  });
+
+  // produced_pr detection from gh pr create output (#2777)
+  it('yield_tracking: detects produced_pr=true and pr_url from gh pr create bash result', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/42';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-detected',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'create a PR',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-1',
+          input: 'gh pr create --title "feat: add auth"',
+          result: `Creating pull request for main...\n${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+    expect(facet.yield_tracking.pr_merged).toBeNull(); // set async by probe
+  });
+
+  it('yield_tracking: no produced_pr when gh pr create has no URL in result', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-no-url',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'create a PR',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-1',
+          input: 'gh pr create --title "feat: add auth"',
+          result: 'error: not a git repository',
+          isError: true,
+        }],
+      }],
+    });
+    // isError=true → not detected
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // item 1: quoted search must NOT be detected as a gh pr create invocation
+  it('yield_tracking: rg search for "gh pr create" with PR URL in output is NOT detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/99';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-quoted-search',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'find gh pr create',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'search-1',
+          // A grep/rg command that CONTAINS "gh pr create" inside quotes is not an invocation
+          input: JSON.stringify({ command: 'rg -n "gh pr create" src' }),
+          result: `src/agent/facets/derive.ts:197: if (/gh pr create/.test(inputStr)) {\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    // The search command is not a `gh pr create` invocation — must not detect PR
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // item 1: real gh pr create invocation with a URL line is detected; last URL wins
+  it('yield_tracking: real gh pr create with two URL lines records the LAST one (#2781)', () => {
+    const url1 = 'https://github.com/owner/repo/pull/10';
+    const url2 = 'https://github.com/owner/repo/pull/11';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-last-url',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'create PRs',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-two',
+          input: JSON.stringify({ command: 'gh pr create --title "feat"' }),
+          result: `${url1}\n${url2}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(url2);
+  });
+
+  // item 5: truncated bash input ending in '…' with a bare-URL result is detected
+  it('yield_tracking: truncated bash input (ends in …) with bare PR URL result is detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/55';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-truncated',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'push and create PR',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-trunc',
+          // Truncated summary: the `gh pr create` part was cut off entirely
+          input: 'cd .afk-worktrees/feat-x && git push -u origin afk/feat-x && \u2026',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: truncated non-create input whose multi-line output has a URL line is NOT detected (#2781)', () => {
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-truncated-neg',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'look at notes',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-trunc-neg',
+          input: 'cd .afk-worktrees/feat-x && cat docs/notes/very-long-file-name.md \u2026',
+          result: 'See the earlier PR:\nhttps://github.com/other/repo/pull/9\nfor details.\n',
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url ?? null).toBeNull();
+  });
+
+  it('yield_tracking: env-prefixed gh pr create is detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/78';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-env-prefixed',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-env',
+          input: JSON.stringify({ command: 'GH_TOKEN=abc GH_REPO=owner/repo gh pr create --fill' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: gh pr create chained after git push is detected (#2781)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/77';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-chained',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'pr-chained',
+          input: JSON.stringify({ command: 'cd .afk-worktrees/x && git push && gh pr create --body-file /tmp/b.md' }),
+          result: `Warning: 1 uncommitted change\n${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  // ---------------------------------------------------------------------------
+  // #2795: detection gaps — quoted separators, $(), flattened multi-line
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: quoted "|" separator does NOT trigger false positive (#2795)', () => {
+    // rg "gh pr view|gh pr create " src — the | is inside quotes; stripping
+    // quoted spans must prevent it from being treated as a shell separator.
+    const prUrl = 'https://github.com/owner/repo/pull/99';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-quoted-pipe',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'search',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'q-pipe',
+          input: JSON.stringify({ command: 'rg "gh pr view|gh pr create " src' }),
+          // Even if the result happens to contain a URL line, no PR should be detected
+          result: `src/agent/facets/derive.ts:75:\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: $() subshell invocation is detected (#2795)', () => {
+    // PR=$(gh pr create --fill) — the open-paren before gh pr create is now
+    // recognized as a valid invocation boundary.
+    const prUrl = 'https://github.com/owner/repo/pull/101';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-subshell',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'sub-1',
+          input: JSON.stringify({ command: 'PR=$(gh pr create --fill) && echo $PR' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: bare ( subshell invocation is detected (#2795)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/102';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-bare-paren',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'sub-2',
+          input: JSON.stringify({ command: '(gh pr create --title "feat" --body "x")' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: flattened multi-line with bare PR URL result is detected (#2795)', () => {
+    // `git push\ngh pr create --fill` flattened by summarizeToolInput to a
+    // space-separated string with no shell separator before `gh`. When the
+    // result is a bare PR URL (gh pr create's stdout shape), it should be
+    // detected via the word-boundary fallback.
+    const prUrl = 'https://github.com/owner/repo/pull/103';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-flattened',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'flat-1',
+          // Stored as a summarized (flattened) input — no inputRaw — so detection
+          // must work on the flattened string.
+          input: 'git push gh pr create --fill',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: flattened multi-line with non-bare result is NOT detected (#2795)', () => {
+    // Word-boundary match only fires when the result is exclusively a PR URL.
+    // A multi-line result (e.g. push output + URL mixed with other text) must
+    // not be detected via the word-boundary path.
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-flattened-neg',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'flat-neg',
+          input: 'git push gh pr create --fill',
+          result: 'Pushing to origin...\nhttps://github.com/owner/repo/pull/104\nDone.\n',
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: journalEvents path detects PR from gh pr create (#2795 gap 5)', () => {
+    // No existing test drives PR detection through journalEvents (the production
+    // input shape for post-#2461 sessions). This drives the full path.
+    const prUrl = 'https://github.com/owner/repo/pull/200';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-journal',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 0,
+        turns: [],
+      },
+      {
+        journalEvents: [{
+          toolName: 'bash',
+          toolUseId: 'j-pr-1',
+          input: JSON.stringify({ command: 'gh pr create --fill --title "feat: new"' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: journalEvents path with $() subshell detects PR (#2795 gap 5)', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/201';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-journal-sub',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 0,
+        turns: [],
+      },
+      {
+        journalEvents: [{
+          toolName: 'bash',
+          toolUseId: 'j-sub-1',
+          input: JSON.stringify({ command: 'URL=$(gh pr create --fill) && echo $URL' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  // ---------------------------------------------------------------------------
+  // #2795 gap 6: PRs opened by subagents propagate to the parent facet
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: subagent-opened PR detected via subagentBreakdown (#2795 gap 6)', () => {
+    // A /ship subagent runs gh pr create; the parent never touches `gh`.
+    // The subagent breakdown carries detected_pr_url; derive must promote it.
+    const prUrl = 'https://github.com/owner/repo/pull/500';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-subagent',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: '/ship', assistant: 'Done.', timestamp: 1 }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'ship-worker',
+          tool_calls: 5,
+          tool_errors: 0,
+          tool_counts: { bash: 5 },
+          detected_pr_url: prUrl,
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: parent-opened PR takes precedence over subagent URL (#2795 gap 6)', () => {
+    // Both parent and subagent detect a PR; parent URL wins.
+    const parentUrl = 'https://github.com/owner/repo/pull/501';
+    const subUrl = 'https://github.com/owner/repo/pull/502';
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-both',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{
+          user: '/ship',
+          assistant: 'Done.',
+          timestamp: 1,
+          toolEvents: [{
+            toolName: 'bash',
+            toolUseId: 'parent-pr',
+            input: JSON.stringify({ command: 'gh pr create --fill' }),
+            result: `${parentUrl}\n`,
+            isError: false,
+          }],
+        }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'sub-ship',
+          tool_calls: 3,
+          tool_errors: 0,
+          tool_counts: { bash: 3 },
+          detected_pr_url: subUrl,
+        }],
+      },
+    );
+    // Parent URL should win
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(parentUrl);
+  });
+
+  it('yield_tracking: no subagent PR when detected_pr_url absent from breakdown (#2795 gap 6)', () => {
+    const facet = deriveSessionFacet(
+      {
+        sessionId: 'pr-sub-none',
+        model: 'sonnet',
+        startedAt: 0,
+        savedAt: 60_000,
+        totalTurns: 1,
+        turns: [{ user: '/deploy', assistant: 'Done.', timestamp: 1 }],
+      },
+      {
+        subagentBreakdown: [{
+          subagent_id: 'deploy-worker',
+          tool_calls: 3,
+          tool_errors: 0,
+          tool_counts: { bash: 3 },
+          // no detected_pr_url
+        }],
+      },
+    );
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #2834: $() inside double-quoted spans and GH_PR_CREATE_WORD_RE anchoring
+  // ---------------------------------------------------------------------------
+
+  it('yield_tracking: PR_URL="$(gh pr create --fill)" double-quoted command substitution is detected (#2834)', () => {
+    // stripQuotedSpans erases the entire "$(gh pr create --fill)" span, so the
+    // invocation RE must also be tested against the raw (unstripped) input.
+    const prUrl = 'https://github.com/owner/repo/pull/300';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-dq-subst',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'ship',
+        assistant: 'Done.',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'dq-sub-1',
+          input: JSON.stringify({ command: 'PR_URL="$(gh pr create --fill)" && echo "$PR_URL"' }),
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBe(true);
+    expect(facet.yield_tracking.pr_url).toBe(prUrl);
+  });
+
+  it('yield_tracking: quoted-separator rg search is NOT false-positive even with raw input test (#2834)', () => {
+    // Regression guard: testing raw input must not re-introduce the quoted-separator
+    // false positive that stripQuotedSpans was added to prevent.
+    // In raw form, 'rg "gh pr view|gh pr create" src' does NOT match INVOCATION_RE
+    // because `gh pr create"` ends with `"` (no trailing space or EOL) so the
+    // mandatory trailing `(?:[ \t]|$)` fails. Both raw and stripped paths must be false.
+    const prUrl = 'https://github.com/owner/repo/pull/301';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-dq-quoted-sep-guard',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'search',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'dq-sep-1',
+          input: JSON.stringify({ command: 'rg "gh pr view|gh pr create" src' }),
+          result: `src/agent/facets/derive.ts:90:\n${prUrl}`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  it('yield_tracking: path-prefixed gh (e.g. /usr/bin/gh pr create) is NOT detected by word-boundary fallback (#2834)', () => {
+    // GH_PR_CREATE_WORD_RE previously used \b which matched 'gh' after '/' (a
+    // non-word char). The lookbehind (?<![\\/\w-]) rejects it.
+    const prUrl = 'https://github.com/owner/repo/pull/302';
+    const facet = deriveSessionFacet({
+      sessionId: 'pr-path-prefix-guard',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{
+        user: 'check help',
+        assistant: 'ok',
+        timestamp: 1,
+        toolEvents: [{
+          toolName: 'bash',
+          toolUseId: 'path-gh-1',
+          // Flattened-style input (no inputRaw): the stored summary string
+          // happens to contain '/usr/local/bin/gh pr create' with no separator
+          // before 'gh'. WORD_RE fallback must NOT fire since gh follows '/'.
+          input: 'git push /usr/local/bin/gh pr create --fill',
+          result: `${prUrl}\n`,
+          isError: false,
+        }],
+      }],
+    });
+    expect(facet.yield_tracking.produced_pr).toBeNull();
+    expect(facet.yield_tracking.pr_url).toBeNull();
+  });
+
+  // outcome derived from terminal-state heading
+  function oneAssistant(assistant: string): StoredSessionInput {
+    return {
+      sessionId: 'ts-test',
+      model: 'sonnet',
+      startedAt: 0,
+      savedAt: 60_000,
+      totalTurns: 1,
+      turns: [{ user: 'do something', assistant, timestamp: 1 }],
+    };
+  }
+
+  // Helpers that produce the real END_OF_TURN_DIRECTIVE format:
+  // the state keyword on its own line, optionally followed by bullets.
+  function doneMsg(whatWasDone?: string): string {
+    const body = whatWasDone ? `\n- What was done: ${whatWasDone}` : '';
+    return `Work is complete.\n\n**Done**${body}`;
+  }
+
+  it('terminal-state: **Done** standalone heading -> fully_achieved, outcome_source=terminal_state', () => {
+    const facet = deriveSessionFacet(oneAssistant(doneMsg('all tasks finished')));
+    expect(facet.outcome).toBe('fully_achieved');
+    expect(facet.outcome_source).toBe('terminal_state');
+  });
+
+  it('terminal-state: primary_success uses whatWasDone when present', () => {
+    const facet = deriveSessionFacet(oneAssistant(doneMsg('implemented the auth module')));
+    expect(facet.outcome).toBe('fully_achieved');
+    expect(facet.primary_success).toBe('implemented the auth module');
+  });
+
+  it('terminal-state: primary_success falls back to lastAssistant when no whatWasDone bullet', () => {
+    // **Done** with no bullets — no whatWasDone parsed
+    const msg = 'Work complete.\n\n**Done**';
+    const facet = deriveSessionFacet(oneAssistant(msg));
+    expect(facet.outcome).toBe('fully_achieved');
+    // Falls back to the full last-assistant text
+    expect(facet.primary_success).toContain('Work complete.');
+  });
+
+  it('terminal-state: **Blocked** -> not_achieved, primary_success is none', () => {
+    const msg = 'Cannot proceed.\n\n**Blocked**\n- What blocks: waiting for credentials.';
+    const facet = deriveSessionFacet(oneAssistant(msg));
+    expect(facet.outcome).toBe('not_achieved');
+    expect(facet.outcome_source).toBe('terminal_state');
+    expect(facet.primary_success).toBe('none');
+  });
+
+  it('terminal-state: **Asking** -> partially_achieved', () => {
+    const msg = 'One question before continuing.\n\n**Asking**\n- Question: which approach?';
+    const facet = deriveSessionFacet(oneAssistant(msg));
+    expect(facet.outcome).toBe('partially_achieved');
+    expect(facet.outcome_source).toBe('terminal_state');
+  });
+
+  it('terminal-state: **Interrupted** -> aborted', () => {
+    const facet = deriveSessionFacet(oneAssistant('Stopping here.\n\n**Interrupted**'));
+    expect(facet.outcome).toBe('aborted');
+    expect(facet.outcome_source).toBe('terminal_state');
+  });
+
+  it('terminal-state: heading-style ### Blocked -> not_achieved', () => {
+    const facet = deriveSessionFacet(oneAssistant('Analysis done.\n\n### Blocked\n\nMissing API key.'));
+    expect(facet.outcome).toBe('not_achieved');
+    expect(facet.outcome_source).toBe('terminal_state');
+  });
+
+  it('terminal-state: heading-style ## Done -> fully_achieved', () => {
+    const facet = deriveSessionFacet(oneAssistant('## Done\n\nAll changes applied.'));
+    expect(facet.outcome).toBe('fully_achieved');
+    expect(facet.outcome_source).toBe('terminal_state');
+  });
+
+  it('terminal-state: last-marker-wins when multiple markers present', () => {
+    // First marker is Asking, last is Done — outcome should be fully_achieved
+    const msg = '**Asking**\n- Question: clarification needed.\n\nActually never mind.\n\n**Done**\n- What was done: completed.';
+    const facet = deriveSessionFacet(oneAssistant(msg));
+    expect(facet.outcome).toBe('fully_achieved');
+  });
+
+  it('terminal-state: no marker -> outcome is unknown (not fully_achieved) (#2777)', () => {
+    // #2777: non-empty assistant with no heading now yields 'unknown', not 'fully_achieved'.
+    // Only interactive surfaces (REPL/daemon) get the terminal-state directive injected;
+    // one-shot and subagent sessions produce headingless output → 'unknown'.
+    const facet = deriveSessionFacet(oneAssistant('Here is the result, no heading marker at all.'));
+    expect(facet.outcome).toBe('unknown');
+    expect(facet.outcome_source).toBe('none');
+    // primary_success still uses last-assistant fallback for 'unknown' (not 'none')
+    expect(facet.primary_success).toBe('Here is the result, no heading marker at all.');
+  });
+
+  it('terminal-state: zero-turn session stays aborted regardless', () => {
+    const facet = deriveSessionFacet({ sessionId: 'z', model: 'haiku', startedAt: 0, savedAt: 0, totalTurns: 0, turns: [] });
+    expect(facet.outcome).toBe('aborted');
+    expect(facet.outcome_source).toBe('structural');
+  });
+
+  it('terminal-state: empty assistant stays partially_achieved regardless', () => {
+    const facet = deriveSessionFacet(oneAssistant(''));
+    expect(facet.outcome).toBe('partially_achieved');
+    expect(facet.outcome_source).toBe('structural');
+  });
+
+  it('terminal-state: case-insensitive match (## done lowercase heading)', () => {
+    // The parser uses lineToKind which lower-cases the stripped line.
+    // A standalone ## done heading must resolve to 'done'.
+    const facet = deriveSessionFacet(oneAssistant('## done\n- What was done: lowercase variant'));
+    expect(facet.outcome).toBe('fully_achieved');
+    expect(facet.outcome_source).toBe('terminal_state');
+  });
+
+  it('terminal-state: inline **Done** — text style is not a valid heading (#2777)', () => {
+    // The old derive.ts TERMINAL_STATE_RE accepted "**Done** — text" as a single
+    // line. The shared parseTerminalState parser requires the heading line to be
+    // dominated by the keyword — "**Done** — all tasks finished." is not.
+    // This documents the intentional behavior change: inline-suffix style is rejected.
+    // The real END_OF_TURN_DIRECTIVE emits "**Done**" on its own line.
+    const facet = deriveSessionFacet(oneAssistant('**Done** — all tasks finished.'));
+    expect(facet.outcome).toBe('unknown'); // not 'fully_achieved'
+    expect(facet.outcome_source).toBe('none');
+  });
+
+  // --- compose_partial_nodes (#2970) ---
+  describe('compose_partial_nodes', () => {
+    function sessionWithToolEvent(events: Array<{ toolName: string; toolUseId: string; incomplete?: boolean }>): StoredSessionInput {
+      return {
+        sessionId: 'partial-test',
+        model: 'haiku',
+        startedAt: 0,
+        savedAt: 1000,
+        totalTurns: 1,
+        turns: [{ toolEvents: events }],
+      };
+    }
+
+    it('is absent when no compose calls were made', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'bash', toolUseId: 'a' },
+      ]));
+      expect(facet.compose_partial_nodes).toBeUndefined();
+    });
+
+    it('is absent when compose ran cleanly (no incomplete flag)', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a' },
+      ]));
+      expect(facet.compose_partial_nodes).toBeUndefined();
+    });
+
+    it('counts 1 when a compose call carries incomplete: true (soft-deadline wind-down)', () => {
+      // Acceptance criterion (#2970): a compose call with one wound-down node
+      // shows compose_partial_nodes: 1 in the facet.
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(1);
+    });
+
+    it('counts multiple partial compose calls', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+        { toolName: 'compose', toolUseId: 'b' },
+        { toolName: 'compose', toolUseId: 'c', incomplete: true },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(2);
+    });
+
+    it('non-compose tools with incomplete: true do NOT count', () => {
+      // Only compose tool partials are tracked; agent/skill/etc are not.
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'agent', toolUseId: 'a', incomplete: true },
+        { toolName: 'compose', toolUseId: 'b', incomplete: true },
+      ]));
+      expect(facet.compose_partial_nodes).toBe(1);
+    });
+
+    it('is schema-valid when populated', () => {
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', incomplete: true },
+      ]));
+      expect(SessionFacetSchema.safeParse(facet).success).toBe(true);
+    });
+
+    it('a hard-failed compose call (isError:true) is not counted as partial', () => {
+      // node_timeout_ms goes to result.failed, making the compose result isError:true.
+      // The compose executor never sets incomplete: true when isError is true (only
+      // when result.partial is non-empty). Derive counts only compose events where
+      // ev.incomplete === true, so this is correctly absent.
+      const facet = deriveSessionFacet(sessionWithToolEvent([
+        { toolName: 'compose', toolUseId: 'a', isError: true }, // hard failure; no incomplete
+      ]));
+      expect(facet.compose_partial_nodes).toBeUndefined();
+    });
   });
 });

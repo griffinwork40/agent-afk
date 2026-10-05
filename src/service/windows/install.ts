@@ -142,7 +142,7 @@ export function installWindowsTask(name: ServiceName, opts: WindowsInstallOption
   }
 
   try {
-    schtasks(['/Create', '/TN', label, '/XML', xmlPath]);
+    schtasks(['/Create', '/TN', label, '/XML', xmlPath, '/F']);
   } catch (err) {
     rmSync(xmlPath, { force: true });
     return { kind: 'failed', reason: `schtasks /Create failed: ${errorDetail(err)}` };

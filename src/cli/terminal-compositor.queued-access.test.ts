@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   peekQueuedText,
+  hasPendingSubmission,
   reserveQueued,
   releaseQueued,
   isQueuedReserved,
@@ -149,5 +150,47 @@ describe('dropQueued', () => {
     const snapshot = peekQueuedText(host([pasted]))!;
     expect(snapshot.text).toBe('  full secret text  ');
     expect(snapshot.preview).toBe('[Pasted text: 18 chars]');
+  });
+});
+
+describe('hasPendingSubmission (tool yield contract)', () => {
+  const image = { kind: 'image', mediaType: 'image/png', dataBase64: 'AAAA' } as never;
+
+  it('is false when nothing is queued', () => {
+    expect(hasPendingSubmission(host([]))).toBe(false);
+  });
+
+  it('is true for an ordinary text message', () => {
+    expect(hasPendingSubmission(host([payload('hey, actually')]))).toBe(true);
+  });
+
+  it('is true for an image-bearing message (unlike peekQueuedText)', () => {
+    const h = host([payload('look at this', [image])]);
+    expect(peekQueuedText(h)).toBeUndefined();
+    expect(hasPendingSubmission(h)).toBe(true);
+  });
+
+  it('is true for an image-only message with no text', () => {
+    expect(hasPendingSubmission(host([payload('', [image])]))).toBe(true);
+  });
+
+  it('is false for a whitespace-only message with no attachments', () => {
+    expect(hasPendingSubmission(host([payload('   \n ')]))).toBe(false);
+  });
+
+  it('ignores payloads a Ctrl+B flush has reserved', () => {
+    const p = payload('already flushed');
+    const h = host([p]);
+    reserveQueued(h, { text: p.text, preview: p.text, payloads: [p] });
+    expect(hasPendingSubmission(h)).toBe(false);
+    releaseQueued(h, { text: p.text, preview: p.text, payloads: [p] });
+    expect(hasPendingSubmission(h)).toBe(true);
+  });
+
+  it('never mutates the queue', () => {
+    const pending = [payload('keep me')];
+    const h = host(pending);
+    hasPendingSubmission(h);
+    expect(h.pendingSubmissions).toEqual([payload('keep me')]);
   });
 });

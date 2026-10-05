@@ -11,7 +11,7 @@
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { debugLog } from '../../utils/debug.js';
-import { StreamIncompleteError } from '../../utils/errors.js';
+import { StreamIncompleteError, TimeoutError } from '../../utils/errors.js';
 import type { OutputEvent, SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { dispatchSubagentStop } from '../subagent-hooks.js';
@@ -28,7 +28,7 @@ import {
   type SubagentResult,
   type SubagentStatus,
 } from './result.js';
-import { buildEmptyBufferError, synthesizeEmptyBufferPartial } from './empty-buffer-partial.js';
+import { buildEmptyBufferError, synthesizeEmptyBufferPartial, synthesizeTimeoutPartial } from './empty-buffer-partial.js';
 import type { SubagentHandleImpl } from './handle.js';
 
 /**
@@ -320,10 +320,23 @@ export async function runToResult<T>(
     // never got a chance to run. `partialOutput` is typed as `T | string`
     // on `SubagentResult` so this assignment is honest — no cast needed.
     if (handle._lastStreamedContent.length > 0) {
+      // Streamed text takes precedence; synthesizeTimeoutPartial only fires
+      // when the text buffer is empty — so the TimeoutError branch below is
+      // unreachable when _lastStreamedContent is non-empty.
       result.partialOutput = handle._lastStreamedContent;
     } else if (err instanceof StreamIncompleteError) {
       // Empty text buffer: synthesize partial from accumulated tool results.
       const p = synthesizeEmptyBufferPartial(handle.id, handle._currentTrace.toolResults);
+      if (p !== undefined) result.partialOutput = p;
+    } else if (err instanceof TimeoutError && result.status === 'failed') {
+      // OWN hard budget fired (a cascaded ancestor timeout classifies as
+      // 'cancelled' and is left unchanged): tell the parent how much evidence
+      // the incomplete run gathered instead of a bare timeout message.
+      const p = synthesizeTimeoutPartial(
+        handle.id,
+        handle._currentTrace.toolCalls,
+        handle._currentTrace.toolResults,
+      );
       if (p !== undefined) result.partialOutput = p;
     }
     return result;

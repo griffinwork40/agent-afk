@@ -11,8 +11,10 @@ import {
   ctx,
   makeTextStream,
   makeToolUseStream,
+  makeMultiToolUseStream,
   makeClient,
   makeDispatcher,
+  makeBatchDispatcher,
 } from './loop.test-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -471,6 +473,94 @@ describe('loop.ts runTurn — witness-layer tool_call emission', () => {
     expect('failureClass' in toolCalls[1].payload).toBe(false);
     expect('batchIndex' in toolCalls[1].payload).toBe(false);
     expect('batchSize' in toolCalls[1].payload).toBe(false);
+  });
+
+  // Issue #2249: per-call durationMs for parallel tool batches.
+  // In a parallel batch, each tool_call.completed event must carry the time
+  // for THAT call alone — not the whole batch's elapsed time. The fast call
+  // finishes ~5ms after start; the slow call ~80ms. If the bug were present
+  // both would show ~80ms (batch elapsed). The fix stamps completedAt per-call
+  // in the dispatcher so the emit site sees per-call elapsed time.
+  it('tool_call.completed durationMs reflects per-call time, not batch elapsed time', async () => {
+    const { InMemoryTraceWriter } = await import('../../trace/writer.js');
+    const writer = new InMemoryTraceWriter();
+
+    let callIdx = 0;
+    const streams = [
+      () => fromArray(makeMultiToolUseStream([
+        { id: 'tu_fast', name: 'glob', input: '{}' },
+        { id: 'tu_slow', name: 'grep', input: '{}' },
+      ])),
+      () => fromArray(makeTextStream('done', 'end_turn')),
+    ];
+    const client: AnthropicClientLike = {
+      messages: {
+        create: vi.fn(() => streams[callIdx++ % streams.length]!()),
+      },
+    };
+
+    // Batch dispatcher: fast call resolves in ~5ms, slow in ~80ms.
+    // We inject completedAt directly so the emit site can read it — this is
+    // what the real dispatcher.batch-process.ts now does (issue #2249 fix).
+    const batchDispatcher = makeBatchDispatcher(async (calls) => {
+      const results: ToolResult[] = [];
+      await Promise.all(calls.map(async (call, i) => {
+        const delay = i === 0 ? 5 : 80;
+        await new Promise<void>((r) => setTimeout(r, delay));
+        results[i] = { content: call.name === 'glob' ? 'fast' : 'slow', completedAt: Date.now() };
+      }));
+      return results;
+    });
+
+    const startBefore = Date.now();
+    await collect(
+      runTurn({
+        client,
+        messages: [{ role: 'user', content: 'search' }],
+        system: null,
+        tools: [
+          { name: 'glob', input_schema: { type: 'object' } },
+          { name: 'grep', input_schema: { type: 'object' } },
+        ],
+        toolDispatcher: batchDispatcher,
+        model: 'claude-test',
+        maxTokens: 1024,
+        headers: {},
+        signal: new AbortController().signal,
+        ctx,
+        traceWriter: writer,
+      }),
+    );
+    const batchDuration = Date.now() - startBefore;
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const completed = writer.events.filter(
+      (e) => e.kind === 'tool_call' && e.payload.phase === 'completed',
+    );
+    expect(completed).toHaveLength(2);
+
+    const fastEvent = completed.find(
+      (e) => e.kind === 'tool_call' && e.payload.phase === 'completed' && e.payload.name === 'glob',
+    );
+    const slowEvent = completed.find(
+      (e) => e.kind === 'tool_call' && e.payload.phase === 'completed' && e.payload.name === 'grep',
+    );
+    if (!fastEvent || fastEvent.kind !== 'tool_call' || fastEvent.payload.phase !== 'completed') {
+      throw new Error('fast event not found');
+    }
+    if (!slowEvent || slowEvent.kind !== 'tool_call' || slowEvent.payload.phase !== 'completed') {
+      throw new Error('slow event not found');
+    }
+
+    // Fast call should be well under the batch's total duration.
+    // Batch total ~80ms; fast call ~5ms. With #2249 fix: fast.durationMs << batch.
+    // Use generous threshold to avoid flakiness: fast < slow - 30ms.
+    expect(fastEvent.payload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(slowEvent.payload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(fastEvent.payload.durationMs).toBeLessThan(batchDuration - 10);
+    // Slow should be close to the full batch duration.
+    expect(slowEvent.payload.durationMs).toBeGreaterThan(fastEvent.payload.durationMs! + 30);
   });
 
   it('omits batchIndex and batchSize from tool_call.completed when only batchIndex is present (both-or-neither guard)', async () => {

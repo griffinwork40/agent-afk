@@ -298,6 +298,7 @@ async function collectWriterResults(
 // Benchmark scenarios
 // ---------------------------------------------------------------------------
 
+// Windows: genuinely POSIX-only — uses SIGKILL (process.kill with SIGKILL) to test trace durability under kill -9
 describe.skipIf(process.platform === 'win32')(
   'concurrent-emitter trace integrity (POSIX only)',
   () => {

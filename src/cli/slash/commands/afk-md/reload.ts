@@ -29,6 +29,17 @@ export interface ReloadOutcome {
   source: string;
   /** True when an env or JSON prompt override prevents AFK.md from contributing. */
   shadowed: boolean;
+  /**
+   * Set when `AFK_FRAMEWORK_PROMPT_FILE` points to a bad path.
+   *
+   * `loadSystemPrompt()` throws on an unreadable or relative override path
+   * rather than falling back to the bundled prompt — a silent fallback would
+   * turn a whatif A/B run into A/A. Here we catch that throw so a mid-session
+   * `/afk-md reload` does NOT crash the REPL. The prompt is left unchanged;
+   * the message is surfaced to the user so they can fix or unset the variable.
+   * No bundled-prompt fallback is performed.
+   */
+  frameworkPromptError?: string;
 }
 
 /**
@@ -75,8 +86,28 @@ export function applyReload(ctx: SlashContext, baselineTokens: number): ReloadOu
   _resetConfigCache();
 
   // Step 2 — re-derive the FULL composed prompt (framework + overlay).
+  //
+  // `resolveBaseSystemPrompt()` calls `loadSystemPrompt()` internally, which
+  // throws when AFK_FRAMEWORK_PROMPT_FILE is set to a bad path. We catch that
+  // here so a mid-session `/afk-md reload` does not crash the REPL. The prompt
+  // is left unchanged and the error is returned to the caller for display. No
+  // bundled-prompt fallback is performed — see `ReloadOutcome.frameworkPromptError`.
   const cwd = ctx.stats.cwd ?? process.cwd();
-  const { prompt: basePrompt, source } = resolveBaseSystemPrompt(cwd);
+  let basePrompt: string | undefined;
+  let source: string;
+  try {
+    ({ prompt: basePrompt, source } = resolveBaseSystemPrompt(cwd));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      applied: false,
+      tokens: 0,
+      delta: 0,
+      source: 'error',
+      shadowed: false,
+      frameworkPromptError: message,
+    };
+  }
   const config = loadConfig(undefined, cwd);
   const shadowed = source.includes('env:AFK_SYSTEM_PROMPT') || source.includes('file:');
   const loaded = shadowed ? null : loadAfkMd(cwd);

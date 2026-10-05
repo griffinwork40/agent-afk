@@ -22,11 +22,16 @@ import { detectTestResult } from './test-runner-detector.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import { describeSpawnCwdError, isSpawnEnoent } from '../../../utils/spawn-cwd-error.js';
 import { HARD_CAP_BYTES, MODEL_CAP_BYTES, headAndTail, capForModel, HARD_CAP_KILL_NOTE } from './_output-cap.js';
-import { extractCandidatePaths, wouldBeRestricted } from './_cwd-utils.js';
+import { wouldBeRestricted } from './_cwd-utils.js';
+import { scanCandidatePaths } from './bash-scan-exempt.js';
 import { killProcessGroup } from '../../../utils/kill-process-group.js';
 import { writeBashCapture } from './_bash-capture.js';
 import { resolveShell } from '../../../utils/resolve-shell.js';
 import { RollingTailBuffer } from './_rolling-tail.js';
+import { buildChildEnv } from './bash-env-scrub.js';
+import { interruptedBashResult } from './bash-interrupted.js';
+import { applyBashDetach, execOnDetach } from '../detach-bash.js';
+import type { OnDetachParams } from '../detach-bash.js';
 
 /**
  * Input shape for the bash tool (validated at runtime).
@@ -69,8 +74,11 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
 }
 
 /**
- * Create a bash handler closed over the session's `permissionMode` and
- * optional working directory.
+ * Create a bash handler closed over the session's `_permissionMode` and
+ * optional working directory. The mode parameter is unused by the handler
+ * body (bypass/default differ only via hooks and `context.allowAll`); it is
+ * kept in the signature so callers stay positionally stable and mode-specific
+ * behaviour can be reintroduced without touching every call site.
  *
  * Using a factory (rather than reading `process.env`) eliminates the
  * process-global race when multiple concurrent sessions run in the same
@@ -87,11 +95,13 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  *
  * Security note: commands are passed to the OS shell via `shell: true`.
  * This means shell metacharacters (pipes, redirects, subshell expansions)
- * are interpreted. When the session runs in `bypassPermissions` mode the
- * agent can execute arbitrary shell commands without confirmation — a
- * full `execFile`-based refactor that disables the shell is tracked as a
- * separate work item. For now we emit a one-time warning at startup so the
- * risk surface is explicit in logs.
+ * are interpreted. When the session runs in `bypassPermissions` mode (the
+ * CLI default, see `DEFAULT_CLI_PERMISSION_MODE`) the agent can execute
+ * arbitrary shell commands without confirmation. That is the documented
+ * contract of bypass mode, so no per-session warning is emitted. Switching
+ * to `execFile` would NOT narrow this: agent commands need pipes/redirects,
+ * so any execFile form still ends up as `sh -c <command>`. Real containment
+ * would need an OS sandbox; see `docs/scoping/bash-execfile-migration.md`.
  *
  * Path containment (advisory-only): unlike the typed filesystem handlers,
  * which route every path through `resolveAndContain` and hard-reject writes
@@ -105,29 +115,18 @@ function parseBashInput(input: unknown): { command: string; timeout_ms: number }
  * normally — it never refuses execution. Refusing would break the primary
  * human-driven `afk -w` worktree flow (a top-level bypass session legitimately
  * carries a non-empty `writeRoots`), and `wouldBeRestricted` already returns
- * not-restricted under `allowAll`, so bypass sessions produce no noise. The
+ * not-restricted under `allowAll`, so bypass sessions produce no noise. Device
+ * sinks (`/dev/null`, `/dev/stderr`, …) and shared scratch dirs (`/tmp`,
+ * `os.tmpdir()`) are skipped (`bash-scan-exempt.ts`). The
  * scan is deliberately not a shell parser: it does not catch `$()`, env-var
  * indirection, backticks, or globs. Rationale and the accepted threat model
  * are documented in `docs/decisions/0001-bash-tool-path-containment.md`.
  */
 export function createBashHandler(
-  permissionMode: string,
+  _permissionMode: string,
   cwd?: string,
 ): ToolHandler {
-  let _shellModeWarned = false;
   let _pathEscapeWarned = false;
-
-  function warnIfBypassPermissions(): void {
-    if (_shellModeWarned) return;
-    if (permissionMode === 'bypassPermissions') {
-      _shellModeWarned = true;
-      console.warn(
-        '[security] bash handler: shell=true with bypassPermissions — ' +
-          'all shell metacharacters are interpreted without confirmation. ' +
-          'Migrate to execFile to eliminate this risk (tracked: C4).',
-      );
-    }
-  }
 
   /**
    * Best-effort, ADVISORY-ONLY containment scan (never blocks execution).
@@ -146,22 +145,15 @@ export function createBashHandler(
    * normal. `wouldBeRestricted` short-circuits to not-restricted under
    * `allowAll` (bypass) and when no `resolveBase` is set (unconfined session),
    * so those sessions naturally produce zero warnings — intended, not
-   * special-cased here.
+   * special-cased here. Candidates come from `scanCandidatePaths`, which
+   * expands `~` and drops benign sinks/scratch dirs so they cannot consume
+   * the one-time latch.
    */
   function scanPathsBestEffort(command: string, context: ToolHandlerContext): void {
     if (_pathEscapeWarned) return; // one-time per handler instance
-    const fallbackBase = context.resolveBase ?? context.cwd ?? cwd;
-    const home = os.homedir();
+    const fallbackBase = context.resolveBase ?? cwd;
     const escaping: string[] = [];
-    for (const candidate of extractCandidatePaths(command)) {
-      // Expand ~ / ~/… to an absolute path so wouldBeRestricted does not
-      // anchor it to resolveBase and mis-resolve it as in-root.
-      const expanded =
-        candidate === '~'
-          ? home
-          : candidate.startsWith('~/')
-            ? home + candidate.slice(1)
-            : candidate;
+    for (const expanded of scanCandidatePaths(command, os.homedir())) {
       const verdict = wouldBeRestricted(expanded, context, 'write', fallbackBase);
       if (verdict.restricted) escaping.push(verdict.resolved);
     }
@@ -188,8 +180,6 @@ export function createBashHandler(
     if (signal.aborted) {
       return { content: 'Command aborted', isError: true };
     }
-
-    warnIfBypassPermissions();
 
     // Advisory-only containment scan (warn + telemetry, never blocks). Only
     // runs when a context is present — inline/back-compat calls without one
@@ -265,15 +255,16 @@ export function createBashHandler(
         stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
         // Effective cwd priority:
         // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-        // 2. context?.cwd — per-call override (back-compat)
-        // 3. factory-level cwd — session worktree isolation (from createBashHandler)
-        // Falls back to process.cwd() implicitly when all three are undefined.
-        ...((context?.resolveBase ?? context?.cwd ?? cwd) !== undefined
-          ? { cwd: context?.resolveBase ?? context?.cwd ?? cwd }
+        // 2. factory-level cwd — session worktree isolation (from createBashHandler)
+        // Falls back to process.cwd() implicitly when both are undefined.
+        ...((context?.resolveBase ?? cwd) !== undefined
+          ? { cwd: context?.resolveBase ?? cwd }
           : {}),
-        ...(context?.env !== undefined
-          ? { env: { ...process.env, ...context.env } }
-          : {}),
+        // Always scrub episode-revealing vars (issue #2425) regardless of
+        // whether context.env is set — both the inherit-process.env path
+        // (context.env undefined) and the explicit merge path must be clean.
+        // buildChildEnv also materializes the session's private TMPDIR.
+        env: buildChildEnv(context?.env),
       };
       const proc =
         shellResolution.shell === true
@@ -308,7 +299,8 @@ export function createBashHandler(
         if (proc.pid !== undefined) {
           killProcessGroup(proc.pid);
         }
-        settle({ content: `Command timed out after ${timeout_ms}ms`, isError: true, durationMs: Date.now() - startedAt });
+        deregisterOnClose?.(); // Fix #2: free registry slot on timeout kill path
+        settle(interruptedBashResult({ kind: 'timeout', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       }, timeout_ms);
   
       let stdout = '';
@@ -365,6 +357,7 @@ export function createBashHandler(
         // consumers (subagent traces, hooks) — they should not substring-scan.
         const content = headAndTail(combined, MODEL_CAP_BYTES) + HARD_CAP_KILL_NOTE;
         // SIGKILL path: middle bytes are unrecoverable — no capture file.
+        deregisterOnClose?.(); // Fix #2: free registry slot on overflow kill path
         settle({ content, truncated: true, durationMs: Date.now() - startedAt, ...(testResult !== undefined ? { testResult } : {}) });
       }
   
@@ -395,13 +388,27 @@ export function createBashHandler(
         maybeOverflow('stderr');
       });
   
+      // Fix #2: declared before abortHandler so the closure captures this by
+      // reference. Assigned inside the applyBashDetach block below when a
+      // detachRegistry is present. Every non-detach settle path (abort, timeout,
+      // overflow, normal close) calls deregisterOnClose?.() to remove the token
+      // from the registry — token.deliver() only runs on the detach path so
+      // we cannot rely on it for normal cleanup.
+      //
+      // Invariant: assigned synchronously before any event-loop ticks after
+      // proc.once / signal.addEventListener fire, so the closure always sees the
+      // assigned value when abortHandler or the close handler runs.
+      let deregisterOnClose: (() => void) | undefined;
+
       // Handle abort signal — resolve immediately, don't wait for streams.
       // S10: same process-group SIGKILL rationale as timeout path above.
+      // Fix #2: calls deregisterOnClose?.() to clean up the registry slot.
       const abortHandler = () => {
         if (proc.pid !== undefined) {
           killProcessGroup(proc.pid);
         }
-        settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
+        deregisterOnClose?.();
+        settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
       };
       signal.addEventListener('abort', abortHandler);
       // Close the TOCTOU window between the pre-flight `signal.aborted` check (top
@@ -413,14 +420,54 @@ export function createBashHandler(
       if (signal.aborted) {
         abortHandler();
       }
+
+      // Detach contract (#2542): when a detachRegistry is present, register
+      // this call so Ctrl+B can free the model's turn while the process keeps
+      // running. applyBashDetach installs a one-time listener on the token's
+      // detachSignal. When it fires, execOnDetach() (in detach-bash.ts) handles
+      // fixes #1 / #2 / #3 — extracted to keep createBashHandler in baseline.
+      if (context?.detachRegistry !== undefined && context.toolUseId !== undefined && !resolved) {
+        const toolUseId = context.toolUseId;
+        deregisterOnClose = () => context.detachRegistry!.deregister(toolUseId);
+        const resolvedRef = { value: resolved };
+        const deregisterOnCloseRef = { value: deregisterOnClose };
+        const detachParams: OnDetachParams = {
+          resolvedRef,
+          timeoutHandle,
+          signal,
+          abortHandler,
+          deregisterOnCloseRef,
+          clearTail: tailBuffer !== undefined ? () => tailBuffer.clear() : undefined,
+          getOutput: () => {
+            const combined = stripEscapeSequences((stdout + stderr).trimEnd());
+            return capForModel(combined).content;
+          },
+          proc,
+          startedAt,
+          resolve,
+        };
+        applyBashDetach(context.detachRegistry, toolUseId, command, (token, label) => {
+          execOnDetach(token, label, toolUseId, detachParams);
+          // Sync mutable refs back to handler locals after execOnDetach runs.
+          resolved = resolvedRef.value;
+          deregisterOnClose = deregisterOnCloseRef.value;
+        });
+      }
   
       // Normal completion — `close` fires after all stdio streams drain.
       proc.on('close', (code) => {
+        // Fix #2: deregisterOnClose is set when a detachRegistry is present.
+        // It is nulled out inside the onDetach callback (detach path owns cleanup).
+        // Here on the normal-close path, call it to free the registry slot.
+        // Safe to call unconditionally — deregister() is idempotent and
+        // deregisterOnClose is undefined on the detach path.
+        deregisterOnClose?.();
+
         // If the process was killed by our abort handler, `settle` already
         // ran (resolved=true) so this call is a no-op. Check anyway so the
         // branch is explicit: abort beats close.
         if (signal.aborted) {
-          settle({ content: 'Command aborted', isError: true, durationMs: Date.now() - startedAt });
+          settle(interruptedBashResult({ kind: 'aborted', stdout, stderr, startedAt, timeoutMs: timeout_ms, context }));
           return;
         }
   
@@ -483,7 +530,7 @@ export function createBashHandler(
         // When no explicit cwd was passed, spawn inherited the process cwd;
         // process.cwd() itself throws when that directory has been deleted,
         // which is the same masquerade — report it as such.
-        const effectiveCwd = context?.resolveBase ?? context?.cwd ?? cwd;
+        const effectiveCwd = context?.resolveBase ?? cwd;
         let message: string;
         if (effectiveCwd === undefined && isSpawnEnoent(err)) {
           try {

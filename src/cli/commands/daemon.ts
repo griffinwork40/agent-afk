@@ -26,6 +26,7 @@ import type { ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getModel, getThinking, getEffort, activateDumpPrompt } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
+import { appendBuiltinTasks } from './daemon-builtin-tasks.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
@@ -97,21 +98,30 @@ export function formatTaskCompletion(
   // ticks (a `Done` response), so the header swap can't collide with the
   // skipped/error icons.
   const downgraded = verifyDone === true && details.doneUnverified === true;
+  // Resolve response text before building the header so emptySuccess can
+  // influence the icon. Whitespace-only counts as empty.
+  const responseText = details.responseText ?? record.responseExcerpt;
+  const hasOutput = (responseText ?? '').trim().length > 0;
+  // Flag a success tick that produced no output — only when the downgraded
+  // header is not already active (the downgrade warning takes priority and
+  // already signals a problem to the operator).
+  const emptySuccess = record.status === 'success' && !downgraded && !hasOutput;
   const icon =
     record.status === 'success' ? '✅' : record.status === 'skipped' ? '⏭️' : '❌';
   const durationSec = (record.durationMs / 1000).toFixed(1);
   const header = downgraded
     ? `⚠️ Done (unverified) — daemon task: ${record.taskId} (${record.status})`
-    : `${icon} daemon task: ${record.taskId} (${record.status})`;
+    : emptySuccess
+      ? `⚠️ daemon task: ${record.taskId} (success, no output)`
+      : `${icon} daemon task: ${record.taskId} (${record.status})`;
   const lines = [
     header,
     `trigger=${record.trigger} duration=${durationSec}s`,
   ];
   if (record.skipReason) lines.push(`skipReason=${record.skipReason}`);
   if (record.errorMessage) lines.push(`error: ${record.errorMessage.slice(0, 400)}`);
-  const responseText = details.responseText ?? record.responseExcerpt;
-  if (responseText) {
-    lines.push('', responseText);
+  if (hasOutput) {
+    lines.push('', responseText as string);
   }
   if (downgraded) {
     lines.push('', DAEMON_DONE_UNVERIFIED_CAVEAT);
@@ -124,6 +134,59 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
   const v = parseTerminalState(responseText);
   return v !== null && v.kind === 'done' && !successfulToolNames.some((n) => DONE_EVIDENCE_TOOLS.has(n));
 };
+
+/** Guards against duplicate listener registration if called more than once. */
+let daemonCrashHandlersInstalled = false;
+
+/** Milliseconds to wait after firing the crash notification before exiting,
+ *  giving the fire-and-forget HTTP push a chance to flush.
+ *  Declared at module scope (mirrors entry.ts) so it is visible across the
+ *  whole module rather than being buried inside registerDaemonCrashHandlers. */
+const CRASH_EXIT_DELAY_MS = 200;
+
+/**
+ * Register uncaughtException / unhandledRejection process handlers that push a
+ * best-effort Telegram crash notice before exiting. Rate-limited to one push
+ * per 60 s to avoid crash-loop self-DOS. Exit is deferred by 200 ms so the
+ * fire-and-forget HTTP request has a chance to flush before the process
+ * terminates.
+ *
+ * Re-entry safe: a module-scoped flag prevents duplicate listener registration
+ * if this function is called more than once, mirroring entry.ts's
+ * crashHandlersInstalled pattern.
+ */
+function registerDaemonCrashHandlers(): void {
+  if (daemonCrashHandlersInstalled) return;
+  daemonCrashHandlersInstalled = true;
+
+  let lastCrashPushAt = 0;
+  const CRASH_PUSH_GUARD_MS = 60_000;
+  const notifyCrash = (kind: string, err: unknown): void => {
+    const nowMs = Date.now();
+    if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
+    lastCrashPushAt = nowMs;
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    void pushIfConfigured(
+      `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
+    ).catch((pushErr: unknown) => {
+      console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
+    });
+  };
+  process.on('uncaughtException', (err) => {
+    notifyCrash('uncaughtException', err);
+    // exitCode is set first so a natural (early) exit — before the timer fires
+    // — still reports code 1 to the supervisor. The unref'd timer fires if the
+    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
+  });
+  process.on('unhandledRejection', (err) => {
+    notifyCrash('unhandledRejection', err);
+    // Same rationale as uncaughtException above.
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
+  });
+}
 
 export function registerDaemonCommand(program: Command): void {
   program
@@ -212,22 +275,10 @@ export function registerDaemonCommand(program: Command): void {
         handleCommandError(err);
       }
 
-      const worktreePruneConfig = config.daemon?.worktreePrune;
-      const worktreePruneDisabled = env.AFK_WORKTREE_PRUNE_DISABLE === '1';
-      const WORKTREE_PRUNE_CRON = worktreePruneConfig?.cron ?? '0 4 * * *';
-
-      const worktreePruneTask: ScheduledTask = {
-        taskId: 'worktree-prune',
-        executor: 'builtin',
-        command: 'worktree-prune',
-        trigger: 'cron',
-        cronExpression: WORKTREE_PRUNE_CRON,
-      };
-
       // In pull mode, the task queue is file-driven — no ScheduledTask registered.
       // For other trigger modes, register the default task only when one is
       // actually configured: with an empty command the daemon runs just its
-      // persisted schedules + worktree-prune rather than fabricating a task.
+      // persisted schedules + builtins rather than fabricating a task.
       // (cron/both with an empty task already errored above.)
       const tasks: ScheduledTask[] = (trigger === 'pull' || command.trim() === '')
         ? []
@@ -237,9 +288,7 @@ export function registerDaemonCommand(program: Command): void {
             trigger,
             ...(options.cron !== undefined ? { cronExpression: options.cron } : {}),
           }];
-      if (!worktreePruneDisabled && worktreePruneConfig?.enabled !== false) {
-        tasks.push(worktreePruneTask);
-      }
+      const builtinInfo = appendBuiltinTasks(tasks, config, env);
 
       // Load persisted schedules from ~/.afk/config/schedules.json
       const persistedSchedules = loadSchedules();
@@ -251,31 +300,7 @@ export function registerDaemonCommand(program: Command): void {
 
       activateDumpPrompt(options.dumpPrompt);
 
-      // Crash-notification rate guard: at most one push per 60s, regardless
-      // of how many uncaught errors fire (prevents crash-loop self-DOS that
-      // would saturate Telegram's API rate limit and silence *all* future
-      // notifications from this bot).
-      let lastCrashPushAt = 0;
-      const CRASH_PUSH_GUARD_MS = 60_000;
-      const notifyCrash = (kind: string, err: unknown): void => {
-        const nowMs = Date.now();
-        if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
-        lastCrashPushAt = nowMs;
-        const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-        void pushIfConfigured(
-          `🛑 agent-afk daemon ${kind}\n${msg.slice(0, 500)}`,
-        ).catch((pushErr: unknown) => {
-          console.error('[daemon] crash notification push failed:', errorMessage(pushErr));
-        });
-      };
-      process.on('uncaughtException', (err) => {
-        notifyCrash('uncaughtException', err);
-        process.exit(1);
-      });
-      process.on('unhandledRejection', (err) => {
-        notifyCrash('unhandledRejection', err);
-        process.exit(1);
-      });
+      registerDaemonCrashHandlers();
 
       // Optional working-directory override for daemon-spawned sessions.
       // When set, every scheduled task's AgentSession (and its forked
@@ -393,8 +418,11 @@ export function registerDaemonCommand(program: Command): void {
         } else {
           console.log(palette.dim(`  task='${taskId}' command='${command}' trigger='${trigger}'${options.cron ? ` cron='${options.cron}'` : ''}`));
         }
-        if (tasks.length > 1) {
-          console.log(palette.meta(`  + built-in: worktree-prune (cron: ${WORKTREE_PRUNE_CRON})`));
+        if (builtinInfo.worktreePruneEnabled) {
+          console.log(palette.meta(`  + built-in: worktree-prune (cron: ${builtinInfo.worktreePruneCron})`));
+        }
+        if (builtinInfo.toolHealthEnabled) {
+          console.log(palette.meta(`  + built-in: tool-health (cron: ${builtinInfo.toolHealthCron})`));
         }
         console.log(palette.dim('  Press Ctrl+C to stop.'));
 

@@ -436,7 +436,7 @@ describe('FTS5 query safety', () => {
 
 describe('index directory permissions', () => {
   it('creates a fresh index dir with owner-only (0o700) permissions on POSIX', () => {
-    // POSIX file modes only; Windows has no equivalent.
+    // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; mode 0o700 assertion doesn't apply
     if (process.platform === 'win32') return;
     // Use a dir the test harness has NOT pre-created so the constructor's own
     // mkdir (with mode 0o700) is what sets the permissions we assert.

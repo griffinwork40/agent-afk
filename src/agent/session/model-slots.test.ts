@@ -3,17 +3,21 @@
  * @module agent/session/model-slots.test
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  _resetJsonStringSlotWarnings,
   CLAUDE_FABLE_5_ID,
+  CLAUDE_FABLE_5_1_ID,
   CLAUDE_HAIKU_ID,
   CLAUDE_OPUS_ID,
   CLAUDE_SONNET_ID,
   coerceSlotBindingInput,
   computeSlotBindings,
+  contextWindowOverrideFor,
   DEFAULT_SLOT_BINDINGS,
   DIRECT_MODEL_ALIASES,
   getSlotBindings,
+  MAX_CONTEXT_WINDOW_OVERRIDE,
   MODEL_ALIASES_HINT,
   OPENAI_MODEL_HINTS,
   parseModelsConfig,
@@ -26,7 +30,7 @@ import {
   unconfiguredSlotError,
   type ModelSlots,
 } from './model-slots.js';
-import { contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
+import { autoCompactLimitFor, contextLimitFor, maxOutputTokensFor } from '../model-limits.js';
 
 const ENV_KEYS = [
   'AFK_MODEL_LOCAL',
@@ -126,17 +130,18 @@ describe('resolveModelInput', () => {
   });
 });
 
-describe('Claude Fable 5 fixed-id alias', () => {
+describe('Claude Fable fixed-id alias', () => {
   it('exposes the canonical wire id via the direct-alias table', () => {
     expect(CLAUDE_FABLE_5_ID).toBe('claude-fable-5');
-    expect(DIRECT_MODEL_ALIASES['fable']).toBe('claude-fable-5');
+    expect(CLAUDE_FABLE_5_1_ID).toBe('claude-fable-5-1');
+    expect(DIRECT_MODEL_ALIASES['fable']).toBe('claude-fable-5-1');
   });
 
-  it('resolves the `fable` alias straight to claude-fable-5 (case-insensitive)', () => {
-    expect(resolveModelInput('fable')).toBe('claude-fable-5');
-    expect(resolveModelInput('FABLE')).toBe('claude-fable-5');
-    expect(resolveModelInput('  Fable  ')).toBe('claude-fable-5');
-    expect(resolveBinding('fable')).toEqual({ id: 'claude-fable-5' });
+  it('resolves the `fable` alias straight to claude-fable-5-1 (case-insensitive)', () => {
+    expect(resolveModelInput('fable')).toBe('claude-fable-5-1');
+    expect(resolveModelInput('FABLE')).toBe('claude-fable-5-1');
+    expect(resolveModelInput('  Fable  ')).toBe('claude-fable-5-1');
+    expect(resolveBinding('fable')).toEqual({ id: 'claude-fable-5-1' });
   });
 
   it('is NOT a capability tier — slotForInput never matches it', () => {
@@ -144,18 +149,20 @@ describe('Claude Fable 5 fixed-id alias', () => {
     expect(slotForInput('fable')).toBeUndefined();
   });
 
-  it('stays pinned to claude-fable-5 regardless of slot rebindings', () => {
+  it('stays pinned to claude-fable-5-1 regardless of slot rebindings', () => {
     // The direct alias bypasses slot bindings entirely: rebinding every tier to
-    // an OpenAI id must not drag `fable` off claude-fable-5.
+    // an OpenAI id must not drag `fable` off claude-fable-5-1.
     const rebound = makeSlots({ small: 'gpt-4o-mini', medium: 'gpt-4o', large: 'gpt-4o' });
-    expect(resolveModelInput('fable', rebound)).toBe('claude-fable-5');
+    expect(resolveModelInput('fable', rebound)).toBe('claude-fable-5-1');
   });
 
   it('reports the 1M context window and 128k max output', () => {
     expect(contextLimitFor('fable')).toBe(1_000_000);
     expect(contextLimitFor('claude-fable-5')).toBe(1_000_000);
+    expect(contextLimitFor('claude-fable-5-1')).toBe(1_000_000);
     expect(maxOutputTokensFor('fable')).toBe(128_000);
     expect(maxOutputTokensFor('claude-fable-5')).toBe(128_000);
+    expect(maxOutputTokensFor('claude-fable-5-1')).toBe(128_000);
   });
 });
 
@@ -422,6 +429,55 @@ describe('Stage 2: per-slot provider credentials', () => {
   });
 });
 
+// ── #2985: resolveBinding raw-id slot-id match ────────────────────────────────
+
+describe('resolveBinding — raw slot id match (#2985)', () => {
+  it('returns the full slot binding (including baseUrl/apiKey) when input equals a slot id', () => {
+    // The exact repro from #2985: model: "qwen-3.8-27b" must carry the local
+    // slot's endpoint and key, not fall through to the ambient credential.
+    const bindings = computeSlotBindings({
+      local: { id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai',
+               baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret' },
+    });
+    expect(resolveBinding('qwen-3.8-27b', bindings)).toEqual({
+      id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai',
+      baseUrl: 'https://api.cerebras.ai/v1', apiKey: 'csk-secret',
+    });
+  });
+
+  it('is case-insensitive for the slot id comparison', () => {
+    const bindings = computeSlotBindings({
+      small: { id: 'Qwen-3.8-27b', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
+    });
+    expect(resolveBinding('qwen-3.8-27b', bindings)).toMatchObject({ baseUrl: 'http://h/v1', apiKey: 'k' });
+    expect(resolveBinding('QWEN-3.8-27B', bindings)).toMatchObject({ baseUrl: 'http://h/v1', apiKey: 'k' });
+  });
+
+  it('prefers the first SLOT_NAMES match when multiple slots share the same id', () => {
+    // local is first in SLOT_NAMES order — it wins.
+    const bindings: ModelSlots = {
+      local: { id: 'shared-model', provider: 'anthropic', baseUrl: 'http://local/v1' },
+      small: { id: 'shared-model', provider: 'openai', baseUrl: 'http://small/v1' },
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    };
+    expect(resolveBinding('shared-model', bindings)).toMatchObject({ provider: 'anthropic', baseUrl: 'http://local/v1' });
+  });
+
+  it('still returns bare {id} for an id that matches no slot', () => {
+    const bindings = computeSlotBindings({
+      local: { id: 'qwen-3.8-27b', provider: 'openai', baseUrl: 'http://h/v1', apiKey: 'k' },
+    });
+    expect(resolveBinding('unrecognized-model-xyz', bindings)).toEqual({ id: 'unrecognized-model-xyz' });
+  });
+
+  it('does not match an empty slot id (unconfigured local default)', () => {
+    // The default local slot has id '' — an empty string must never match.
+    expect(resolveBinding('', getSlotBindings())).toEqual({ id: '' });
+    expect(resolveBinding('  ', getSlotBindings())).toEqual({ id: '  ' });
+  });
+});
+
 describe('coerceSlotBindingInput', () => {
   it('accepts a minimal object with just an id', () => {
     expect(coerceSlotBindingInput({ id: 'glm-5.2' })).toEqual({ ok: true, value: { id: 'glm-5.2' } });
@@ -476,5 +532,320 @@ describe('coerceSlotBindingInput', () => {
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toMatch(/shadow a built-in alias/);
     }
+  });
+});
+
+describe('parseModelsConfig — JSON-string-as-object recovery (read path)', () => {
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    _resetJsonStringSlotWarnings();
+    stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('recovers a JSON-encoded object string and returns a valid binding', () => {
+    // This is the exact shape observed in the operator's broken config.
+    const result = parseModelsConfig({
+      small: '{"id":"gpt-oss-120b","name":"Cerebras GPT-OSS 120B"}',
+    });
+    expect(result.small).toEqual({ id: 'gpt-oss-120b', name: 'Cerebras GPT-OSS 120B' });
+  });
+
+  it('emits a one-shot warning to stderr when recovering a JSON-string slot', () => {
+    parseModelsConfig({ small: '{"id":"gpt-oss-120b"}' });
+    expect(stderrWrite).toHaveBeenCalledOnce();
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).toMatch(/models\.small/);
+    expect(msg).toMatch(/recovered|JSON-encoded/);
+
+    // Second call for the same slot must NOT produce another warning.
+    parseModelsConfig({ small: '{"id":"gpt-oss-120b"}' });
+    expect(stderrWrite).toHaveBeenCalledOnce();
+  });
+
+  it('never echoes apiKey/baseUrl in the recovery warning and single-quotes the suggestion', () => {
+    const result = parseModelsConfig({
+      local:
+        '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai","baseUrl":"https://api.cerebras.ai/v1","apiKey":"csk-SECRET-should-not-print"}',
+    });
+    // JSON-string slots are agent-provenance: human-gated fields are discarded.
+    expect(result.local).toEqual({ id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai' });
+    expect(result.local?.apiKey).toBeUndefined();
+    expect(result.local?.baseUrl).toBeUndefined();
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).not.toContain('csk-SECRET-should-not-print');
+    expect(msg).not.toContain('api.cerebras.ai');
+    expect(msg).toContain(
+      `afk config set models.local '{"id":"qwen-3.8-27b","name":"cerebras","provider":"openai"}'`,
+    );
+    expect(msg).toContain('AFK_MODEL_LOCAL_BASE_URL');
+  });
+
+  it('does not let a legacy agent-written JSON string redirect traffic via baseUrl (human-gate bypass)', () => {
+    const result = parseModelsConfig({
+      small: '{"id":"x","baseUrl":"https://attacker.example"}',
+    });
+    expect(result.small).toEqual({ id: 'x' });
+    expect(result.small?.baseUrl).toBeUndefined();
+  });
+
+  it('hand-written OBJECT slots keep baseUrl/apiKey (lenient loader unchanged)', () => {
+    const result = parseModelsConfig({
+      local: { id: 'llama3.2:3b', baseUrl: 'http://localhost:11434/v1', apiKey: 'ollama' },
+    });
+    expect(result.local?.baseUrl).toBe('http://localhost:11434/v1');
+    expect(result.local?.apiKey).toBe('ollama');
+  });
+
+  it('drops a malformed {-prefixed string and falls back to undefined', () => {
+    const result = parseModelsConfig({ small: '{not valid json}' });
+    expect(result.small).toBeUndefined();
+  });
+
+  it('emits a drop warning for a malformed {-prefixed string', () => {
+    parseModelsConfig({ small: '{not valid json}' });
+    expect(stderrWrite).toHaveBeenCalledOnce();
+    const msg = String((stderrWrite.mock.calls[0] as [string])[0]);
+    expect(msg).toMatch(/models\.small/);
+    expect(msg).toMatch(/malformed|dropping/);
+  });
+
+  it('bare id strings are NOT affected by the JSON-string recovery path', () => {
+    const result = parseModelsConfig({ small: 'claude-haiku-4-5-20251001' });
+    expect(result.small).toEqual({ id: 'claude-haiku-4-5-20251001' });
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('object values are NOT affected by the JSON-string recovery path', () => {
+    const result = parseModelsConfig({ small: { id: 'gpt-4o-mini', provider: 'openai' } });
+    expect(result.small).toEqual({ id: 'gpt-4o-mini', provider: 'openai' });
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('recovered JSON-string object discards baseUrl on the read path (agent-provenance)', () => {
+    // A JSON-encoded STRING slot was historically writable by the agent-tier
+    // setter, so its human-gated fields must not be activated on recovery. Only
+    // hand-written OBJECT values keep the lenient baseUrl/apiKey handling.
+    const result = parseModelsConfig({
+      small: '{"id":"gpt-oss-120b","baseUrl":"http://localhost/v1"}',
+    });
+    expect(result.small).toEqual({ id: 'gpt-oss-120b' });
+  });
+});
+
+// ── contextWindow override ────────────────────────────────────────────────────
+
+describe('parseModelsConfig: contextWindow field', () => {
+  it('parses a valid contextWindow on an object binding', () => {
+    const out = parseModelsConfig({ local: { id: 'qwen-3.8-27b', contextWindow: 128_000 } });
+    expect(out.local).toEqual({ id: 'qwen-3.8-27b', contextWindow: 128_000 });
+  });
+
+  it('silently ignores a non-integer contextWindow', () => {
+    const out = parseModelsConfig({ local: { id: 'qwen-3.8-27b', contextWindow: 1.5 } });
+    expect(out.local).toEqual({ id: 'qwen-3.8-27b' });
+  });
+
+  it('silently ignores a zero or negative contextWindow', () => {
+    expect(parseModelsConfig({ local: { id: 'x', contextWindow: 0 } }).local).toEqual({ id: 'x' });
+    expect(parseModelsConfig({ local: { id: 'x', contextWindow: -100 } }).local).toEqual({ id: 'x' });
+  });
+
+  it('silently ignores an absurdly large contextWindow (> MAX_CONTEXT_WINDOW_OVERRIDE)', () => {
+    const tooLarge = MAX_CONTEXT_WINDOW_OVERRIDE + 1;
+    expect(parseModelsConfig({ local: { id: 'x', contextWindow: tooLarge } }).local).toEqual({ id: 'x' });
+  });
+
+  it('accepts MAX_CONTEXT_WINDOW_OVERRIDE exactly', () => {
+    const out = parseModelsConfig({ local: { id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE } });
+    expect(out.local?.contextWindow).toBe(MAX_CONTEXT_WINDOW_OVERRIDE);
+  });
+
+  it('ignores contextWindow on a bare-string binding (no object)', () => {
+    // Bare string bindings have no place to put contextWindow — they produce { id } only.
+    const out = parseModelsConfig({ local: 'qwen-3.8-27b' });
+    expect(out.local).toEqual({ id: 'qwen-3.8-27b' });
+  });
+});
+
+describe('computeSlotBindings: contextWindow propagation', () => {
+  it('carries contextWindow from file override into resolved bindings', () => {
+    const out = computeSlotBindings({ local: { id: 'qwen-3.8-27b', contextWindow: 128_000 } });
+    expect(out.local.contextWindow).toBe(128_000);
+  });
+
+  it('omits contextWindow when not set in file override', () => {
+    const out = computeSlotBindings({ local: { id: 'qwen-3.8-27b' } });
+    expect(out.local.contextWindow).toBeUndefined();
+  });
+});
+
+describe('coerceSlotBindingInput: contextWindow validation', () => {
+  it('accepts a valid positive integer contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'qwen-3.8-27b', contextWindow: 128_000 });
+    expect(res).toEqual({ ok: true, value: { id: 'qwen-3.8-27b', contextWindow: 128_000 } });
+  });
+
+  it('accepts contextWindow as a numeric string (coerced)', () => {
+    const res = coerceSlotBindingInput({ id: 'qwen-3.8-27b', contextWindow: '131072' });
+    expect(res).toEqual({ ok: true, value: { id: 'qwen-3.8-27b', contextWindow: 131_072 } });
+  });
+
+  it('rejects a non-integer contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: 1.5 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('rejects a zero contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: 0 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('rejects a negative contextWindow', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: -1 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('rejects a contextWindow exceeding MAX_CONTEXT_WINDOW_OVERRIDE', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE + 1 });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/contextWindow/);
+  });
+
+  it('accepts MAX_CONTEXT_WINDOW_OVERRIDE exactly', () => {
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE });
+    expect(res).toEqual({ ok: true, value: { id: 'x', contextWindow: MAX_CONTEXT_WINDOW_OVERRIDE } });
+  });
+
+  it('ignores an empty-string contextWindow (treated as absent)', () => {
+    // Empty string is the sentinel for "not provided" — treated as absent.
+    const res = coerceSlotBindingInput({ id: 'x', contextWindow: '' });
+    expect(res).toEqual({ ok: true, value: { id: 'x' } });
+  });
+
+  it('accepts contextWindow alongside provider and name', () => {
+    const res = coerceSlotBindingInput({
+      id: 'qwen-3.8-27b',
+      name: 'cerebras',
+      provider: 'openai',
+      contextWindow: 128_000,
+    });
+    expect(res).toEqual({
+      ok: true,
+      value: { id: 'qwen-3.8-27b', name: 'cerebras', provider: 'openai', contextWindow: 128_000 },
+    });
+  });
+});
+
+describe('contextWindowOverrideFor', () => {
+  afterEach(() => { resetSlotBindings(); });
+
+  it('returns undefined when no binding has a contextWindow', () => {
+    expect(contextWindowOverrideFor('qwen-3.8-27b')).toBeUndefined();
+  });
+
+  it('returns the override when the slot binding id matches the concrete id', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('qwen-3.8-27b')).toBe(128_000);
+  });
+
+  it('returns undefined when id does not match any binding', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(contextWindowOverrideFor('gpt-4o')).toBeUndefined();
+  });
+});
+
+describe('contextLimitFor + autoCompactLimitFor honour slot contextWindow override', () => {
+  afterEach(() => { resetSlotBindings(); });
+
+  it('uses slot contextWindow override via slot name (tier alias)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', name: 'cerebras', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // 'local' resolves to 'qwen-3.8-27b' which has a contextWindow override
+    expect(contextLimitFor('local')).toBe(128_000);
+    // custom name also works
+    expect(contextLimitFor('cerebras')).toBe(128_000);
+  });
+
+  it('uses slot contextWindow override via concrete id (the real provider path)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // Providers call contextLimitFor with the resolved concrete id — this is the real path.
+    expect(contextLimitFor('qwen-3.8-27b')).toBe(128_000);
+  });
+
+  it('autoCompactLimitFor also honours the override (without budget cap interference)', () => {
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // qwen-3.8-27b has no MODEL_AUTOCOMPACT_BUDGET entry → returns full window
+    expect(autoCompactLimitFor('qwen-3.8-27b')).toBe(128_000);
+  });
+
+  it('no override → contextLimitFor returns table/default value unchanged', () => {
+    // Ensure no stale bindings from prior tests.
+    resetSlotBindings();
+    // Without any override, a known openai-compatible model returns its table value.
+    expect(contextLimitFor('gpt-4o')).toBe(128_000);
+    // An HF-style org/model id routes to openai-compatible default (262144).
+    expect(contextLimitFor('Qwen/Qwen3-8B')).toBe(262_144);
+    // An id with no table entry and no openai-compatible prefix → Anthropic
+    // default (200k). (Not a Cerebras id: #2789 pins those in the table.)
+    expect(contextLimitFor('acme-unlisted-model')).toBe(200_000);
+  });
+
+  it('override wins over the built-in table for a known model id', () => {
+    setSlotBindings({
+      small: { id: 'gpt-4o', contextWindow: 200_000 },
+      local: DEFAULT_SLOT_BINDINGS.local,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    // gpt-4o is normally 128k in the table; override raises it to 200k.
+    expect(contextLimitFor('gpt-4o')).toBe(200_000);
+    expect(contextLimitFor('small')).toBe(200_000);
+  });
+
+  it('does not change maxOutputTokensFor (output cap is separate)', () => {
+    // Compare with/without the override rather than pinning a number, so this
+    // stays true whatever the table's output ceiling for the id is (#2789 pins
+    // a Cerebras-specific cap).
+    resetSlotBindings();
+    const without = maxOutputTokensFor('qwen-3.8-27b');
+    setSlotBindings({
+      local: { id: 'qwen-3.8-27b', contextWindow: 128_000 },
+      small: DEFAULT_SLOT_BINDINGS.small,
+      medium: DEFAULT_SLOT_BINDINGS.medium,
+      large: DEFAULT_SLOT_BINDINGS.large,
+    });
+    expect(maxOutputTokensFor('qwen-3.8-27b')).toBe(without);
   });
 });

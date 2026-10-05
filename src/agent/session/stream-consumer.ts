@@ -12,6 +12,7 @@
  */
 
 import type { ProviderEvent, ProviderUsage } from '../provider.js';
+import { recordToolOutput, recordToolUseStart, type ToolEventAccumulator } from './stream-consumer.tool-events.js';
 import type {
   Message,
   OutputEvent,
@@ -26,7 +27,7 @@ import { renderToolResult } from '../tools/render-registry.js';
 import { truncateContent } from './stream-consumer.preview.js';
 
 /** Callbacks the transform needs to produce side effects. */
-export type TransformDeps = {
+export type TransformDeps = ToolEventAccumulator & {
   conversationHistory: Message[];
   getSessionMetadata: () => SessionMetadata;
   setSessionMetadata: (updater: (prev: SessionMetadata) => SessionMetadata) => void;
@@ -49,16 +50,6 @@ export type TransformDeps = {
    * pass the same `deps` object across all calls within one session loop.
    */
   _runningCostUsd?: number;
-  /**
-   * Internal per-turn accumulator: names of tools whose `tool.output` event
-   * reported success (`isError !== true`), in observed order. Mutated on each
-   * `tool.output` event and drained onto `ResponseMetadata.successfulToolNames`
-   * at `turn.completed`. Fresh per turn because `buildTransformDeps()` returns a
-   * new object each turn (unlike `_runningCostUsd`, whose cross-turn persistence
-   * is a deliberate exception owned by the same one-deps-per-turn loop), so it
-   * cannot leak across turns.
-   */
-  _successfulToolNames?: string[];
   /**
    * Witness-layer trace writer. When provided, a `budget` event fires on
    * the same turn that crosses `maxBudgetUsd`, before `abortBudget` runs.
@@ -176,6 +167,20 @@ function buildToolOutputEvent(
     ? { failureClass: event.failureClass }
     : {};
 
+  // Plumb compose soft-deadline partial flag through to both return branches.
+  // A persisted-output compose result can still carry incomplete: true when one
+  // or more of its nodes hit the soft deadline; omitting it from the persisted
+  // branch would silently drop the partial signal and leave compose_partial_nodes
+  // un-counted in the facet for any compose whose output was large enough to
+  // spill to disk.
+  const incompletePassthrough =
+    event.incomplete === true
+      ? {
+          incomplete: true as const,
+          ...(event.incompleteReason !== undefined && { incompleteReason: event.incompleteReason }),
+        }
+      : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -191,6 +196,7 @@ function buildToolOutputEvent(
         ...displayPassthrough,
         ...batchPassthrough,
         ...failureClassPassthrough,
+        ...incompletePassthrough,
       },
     };
   }
@@ -223,10 +229,24 @@ function buildToolOutputEvent(
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
+      ...incompletePassthrough,
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,
     },
+  };
+}
+
+/** Map a provider `paused` event to the output-layer `paused` shape. */
+function mapPausedEvent(event: Extract<ProviderEvent, { type: 'paused' }>): Extract<OutputEvent, { type: 'paused' }> {
+  return {
+    type: 'paused', reason: event.reason,
+    ...(event.resetsAt !== undefined && { resetsAt: event.resetsAt }),
+    ...(event.accountId !== undefined && { accountId: event.accountId }),
+    ...(event.autoResume !== undefined && { autoResume: event.autoResume }),
+    ...(event.waitDeadline !== undefined && { waitDeadline: event.waitDeadline }),
+    ...(event.provider !== undefined && { provider: event.provider }),
+    ...(event.plan !== undefined && { plan: event.plan }),
   };
 }
 
@@ -312,6 +332,7 @@ export function transformProviderEvent(
       return null;
 
     case 'tool.use.start':
+      recordToolUseStart(deps, event);
       return {
         type: 'chunk',
         chunk: {
@@ -320,7 +341,6 @@ export function transformProviderEvent(
           toolName: event.toolName,
           toolInput: event.toolInput,
           toolInputRaw: event.toolInputRaw,
-          toolInputCapture: event.toolInputCapture,
           ...(event.pending ? { pending: true as const } : {}),
         },
       };
@@ -339,15 +359,9 @@ export function transformProviderEvent(
       };
 
     case 'tool.output': {
-      // Accumulate the name of every tool that reported success this turn, in
-      // observed order, so `turn.completed` can expose them on metadata for
-      // headless surfaces (the daemon) that never see the per-chunk stream.
-      // Policy-free: the allowlist of which tools count as evidence lives with
-      // the consumer (see `doneHasCorroboratingEvidence`), NOT here. A tool with
-      // no name (some OpenAI Codex synthesized events omit it) is skipped.
-      if (event.isError !== true && event.toolName) {
-        (deps._successfulToolNames ??= []).push(event.toolName);
-      }
+      // What ran this turn: names for the daemon Done probe, full events (with
+      // inputs) for Done-evidence classification. See stream-consumer.tool-events.ts.
+      recordToolOutput(deps, event);
       return buildToolOutputEvent(event);
     }
 
@@ -448,13 +462,7 @@ export function transformProviderEvent(
       return { type: 'error', error: event.error };
 
     case 'paused':
-      return {
-        type: 'paused',
-        reason: event.reason,
-        ...(event.resetsAt !== undefined ? { resetsAt: event.resetsAt } : {}),
-        ...(event.accountId !== undefined ? { accountId: event.accountId } : {}),
-        ...(event.autoResume !== undefined ? { autoResume: event.autoResume } : {}),
-      };
+      return mapPausedEvent(event);
 
     case 'resumed':
       return {

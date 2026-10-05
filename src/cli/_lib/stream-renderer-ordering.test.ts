@@ -10,13 +10,19 @@
  *   #3 – stuck paused state: checkPauseAnnotations runs forever — no bounded exit
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import type { Writer } from '../slash/types.js';
 import type {
   OutputEvent,
   SubagentProgressMeta,
 } from '../../agent/types.js';
 import type { ResponseMetadata } from '../../agent/types/message-types.js';
+
+// Load the renderer module graph once, outside any test's timeout. The first
+// cold import takes several seconds under load.
+beforeAll(async () => {
+  await import('./stream-renderer.js');
+}, 60_000);
 
 // ─── shared helpers ──────────────────────────────────────────────────────────
 

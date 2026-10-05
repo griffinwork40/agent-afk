@@ -6,11 +6,13 @@ import {
   clipboardWriteTool,
   clipboardReadTool,
 } from './schemas.js';
+import { sendToSessionTool } from './schemas.peer.js';
+import { updateScheduleTool } from './schemas.schedule.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 40 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(40);
+  it('contains exactly 43 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(43);
   });
 
   it('exports the expected tool names', () => {
@@ -28,6 +30,7 @@ describe('builtinToolSchemas', () => {
       'web_scrape',
       'web_request',
       'image_generate',
+      'image_edit',
       'create_schedule',
       'update_schedule',
       'list_schedules',
@@ -55,6 +58,8 @@ describe('builtinToolSchemas', () => {
       'json_query',
       'clipboard_write',
       'clipboard_read',
+      'list_sessions',
+      'send_to_session',
     ]);
   });
 
@@ -89,6 +94,7 @@ describe('builtinToolSchemas', () => {
       'test_run',
       'get_facet',
       'clipboard_read',
+      'list_sessions',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();
@@ -242,5 +248,31 @@ describe('getBackgroundJobHealthTool', () => {
 
   it('is included in BUILTIN_TOOL_NAMES', () => {
     expect(BUILTIN_TOOL_NAMES).toContain('get_background_job_health');
+  });
+});
+
+describe('sendToSessionTool description', () => {
+  it('retains the next-turn fallback clause for busy receivers (regression guard for #2950)', () => {
+    // #2907 added this clause; #2950 briefly trimmed it away. Keep it pinned.
+    expect(sendToSessionTool.description).toMatch(/next turn if no tool round remains/i);
+  });
+
+  it('documents the blocked predicates (turnState/blocked fields)', () => {
+    expect(sendToSessionTool.description).toMatch(/turnState.*blocked/);
+    expect(sendToSessionTool.description).toMatch(/blocked.*true/);
+  });
+
+  it('mentions read_witness for deeper per-turn detail', () => {
+    expect(sendToSessionTool.description).toMatch(/read_witness/);
+  });
+});
+
+describe('updateScheduleTool', () => {
+  it('cwd field type is an array containing both "string" and "null" so null is schema-valid', () => {
+    const props = updateScheduleTool.input_schema.properties as Record<string, { type: unknown }>;
+    const cwdType = props['cwd']?.type;
+    expect(Array.isArray(cwdType)).toBe(true);
+    expect(cwdType).toContain('string');
+    expect(cwdType).toContain('null');
   });
 });

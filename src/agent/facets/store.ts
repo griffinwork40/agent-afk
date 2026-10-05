@@ -15,8 +15,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'fs';
-import { basename, dirname, join } from 'path';
-import { getFacetCacheDir, getSessionsDir, validateSessionId } from '../../paths.js';
+import { basename, dirname, join, resolve } from 'path';
+import { getFacetCacheDir, getSessionJournalPath, getSessionsDir, getSubagentJournalPath, validateSessionId } from '../../paths.js';
+import { journalExists, listSubagentJournals, readJournalRecords } from '../journal/reader.js';
+import { isMessageJournalDisabled } from '../journal/noop.js';
+import { journalRecordsToToolEvents, summarizeSubagentJournal } from './journal-adapter.js';
 import { deriveSessionFacet } from './derive.js';
 import {
   FACET_VERSION,
@@ -24,6 +27,8 @@ import {
   StoredSessionInputSchema,
   type SessionFacet,
   type StoredSessionInput,
+  type SubagentToolSummary,
+  type ToolEventInput,
 } from './schema.js';
 
 export interface FacetStoreOptions {
@@ -84,10 +89,115 @@ function writeFacet(cachePath: string, facet: SessionFacet): void {
 
 /**
  * A cached facet is fresh iff it was produced by the current FACET_VERSION and
- * the session sidecar has not been modified since the facet was derived.
+ * neither the session sidecar nor any journal file is newer than the mtime
+ * recorded in the facet. `effectiveMtimeMs` is max(sidecar, journal mtimes).
  */
-function isFresh(cached: SessionFacet, sessionMtimeMs: number): boolean {
-  return cached.facet_version === FACET_VERSION && cached.source_session_mtime_ms === sessionMtimeMs;
+function isFresh(cached: SessionFacet, effectiveMtimeMs: number): boolean {
+  return cached.facet_version === FACET_VERSION && cached.source_session_mtime_ms === effectiveMtimeMs;
+}
+
+/**
+ * Safe mtime read — returns 0 on any error (missing path, permission error).
+ */
+function safeMtimeMs(path: string): number {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Attempt to read journal records for a session and return the derived events
+ * plus the max journal mtime (parent + subagent journals). Returns undefined
+ * when the journal is disabled, absent, or unreadable (safe fallback to
+ * sidecar). Never throws.
+ */
+function tryReadJournal(sessionId: string, sessionsDir: string): {
+  parentEvents: ToolEventInput[];
+  subagentBreakdown: SubagentToolSummary[];
+  journalMtimeMs: number;
+} | undefined {
+  try {
+    if (isMessageJournalDisabled()) return undefined;
+    // The journal reader always resolves under the default sessions dir. When a
+    // caller overrides `sessionsDir` (e.g. `afk insights --afk-home`), a journal
+    // found there would belong to a different home — use the sidecar instead.
+    if (resolve(sessionsDir) !== resolve(getSessionsDir())) return undefined;
+    if (!journalExists(sessionId)) return undefined;
+
+    const records = readJournalRecords(sessionId);
+    const parentEvents = journalRecordsToToolEvents(records);
+
+    // Subagent journals
+    const subagentIds = listSubagentJournals(sessionId);
+    const subagentBreakdown = subagentIds.map((subId) => {
+      const subRecords = readJournalRecords(sessionId, { subagentId: subId });
+      return summarizeSubagentJournal(subId, subRecords);
+    });
+
+    // Compute effective journal mtime: max of parent + all subagent journal files
+    let journalMtimeMs = safeMtimeMs(getSessionJournalPath(sessionId));
+    for (const subId of subagentIds) {
+      try {
+        const subPath = getSubagentJournalPath(sessionId, subId);
+        const subMtime = safeMtimeMs(subPath);
+        if (subMtime > journalMtimeMs) journalMtimeMs = subMtime;
+      } catch {
+        // ignore invalid subagent id
+      }
+    }
+
+    return { parentEvents, subagentBreakdown, journalMtimeMs };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Read a stale cached facet loosely — raw JSON without strict schema
+ * validation — so callers can extract fields that exist in old facet versions
+ * (e.g. v6) that predate required fields added in later versions. Returns null
+ * on missing file, parse error, or non-object JSON.
+ *
+ * Contract: callers must not assume the returned object matches SessionFacet —
+ * use only the specific fields they need and treat all others as potentially
+ * absent.
+ */
+function readCachedFacetLoose(cachePath: string): Record<string, unknown> | null {
+  if (!existsSync(cachePath)) return null;
+  try {
+    const raw: unknown = JSON.parse(readFileSync(cachePath, 'utf8'));
+    return raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract yield_tracking fields from a loosely-read cached facet. Returns null
+ * when the cached file has no yield_tracking or the fields are absent.
+ *
+ * Used by getOrDeriveFacet to carry forward yield_tracking on version bumps
+ * (#2777): the yield probe runs only at session end, so without this carry-
+ * forward a FACET_VERSION bump permanently erases existing produced_pr /
+ * pr_merged / pr_url data for all previously-probed sessions.
+ */
+function extractLooseYieldTracking(loose: Record<string, unknown> | null): {
+  produced_pr: boolean | null;
+  pr_merged: boolean | null;
+  pr_url: string | null | undefined;
+} | null {
+  if (!loose) return null;
+  const yt = loose['yield_tracking'];
+  if (!yt || typeof yt !== 'object') return null;
+  const obj = yt as Record<string, unknown>;
+  const produced_pr = typeof obj['produced_pr'] === 'boolean' ? obj['produced_pr'] : null;
+  const pr_merged = typeof obj['pr_merged'] === 'boolean' ? obj['pr_merged'] : null;
+  const pr_url = typeof obj['pr_url'] === 'string' ? obj['pr_url'] : null;
+  // Only return non-null result when at least one meaningful field is set
+  if (produced_pr === null && pr_merged === null && pr_url === null) return null;
+  return { produced_pr, pr_merged, pr_url };
 }
 
 /**
@@ -106,18 +216,60 @@ export function getOrDeriveFacet(
   const sessionMtimeMs = statSync(sessionPath).mtimeMs;
   const cachePath = cachePathFor(sessionId, cacheDir);
 
+  // Read journal once per session — never per-facet. Falls back to undefined
+  // (sidecar path) when the journal is absent, disabled, or unreadable.
+  const journalData = tryReadJournal(sessionId, sessionsDir);
+
+  // Effective mtime for staleness: max(sidecar, journal files) so a journal
+  // append after the sidecar is saved still triggers a re-derive.
+  const effectiveMtimeMs = journalData !== undefined
+    ? Math.max(sessionMtimeMs, journalData.journalMtimeMs)
+    : sessionMtimeMs;
+
   if (!options.force) {
     const cached = readCachedFacet(cachePath);
-    if (cached && isFresh(cached, sessionMtimeMs)) return cached;
+    if (cached && isFresh(cached, effectiveMtimeMs)) return cached;
   }
+
+  // Read the stale cached facet loosely (before re-derive) so we can carry
+  // forward yield_tracking fields. The yield probe runs asynchronously only at
+  // session end, so a version bump would otherwise permanently erase
+  // produced_pr / pr_merged / pr_url for all previously-probed sessions.
+  // Contract: only carry forward when the new derive left the field null (never
+  // downgrade a non-null value set by the probe) — see item 7 in #2777.
+  const staleCached = readCachedFacetLoose(cachePath);
+  const staleYield = extractLooseYieldTracking(staleCached);
 
   const session = loadStoredSession(sessionId, sessionsDir);
   if (!session) return undefined;
 
   const facet = deriveSessionFacet(session, {
     sourceSessionPath: sessionPath,
-    sourceSessionMtimeMs: sessionMtimeMs,
+    sourceSessionMtimeMs: effectiveMtimeMs,
+    ...(journalData !== undefined
+      ? {
+          journalEvents: journalData.parentEvents,
+          subagentBreakdown: journalData.subagentBreakdown,
+        }
+      : {}),
   });
+
+  // Carry forward yield fields that the new derivation left null (#2777).
+  // Contract: never downgrade — if derive already set produced_pr=true (from
+  // a detected gh pr create URL), keep that; only fill in from stale when null.
+  // Each field is filled independently, so a probed pr_merged survives even
+  // when the new derive itself detected the PR (produced_pr already true).
+  if (staleYield !== null) {
+    const yt = facet.yield_tracking;
+    const producedPr = yt.produced_pr ?? staleYield.produced_pr;
+    facet.yield_tracking = {
+      ...yt,
+      produced_pr: producedPr,
+      pr_merged: producedPr === true ? (yt.pr_merged ?? staleYield.pr_merged) : null,
+      pr_url: yt.pr_url ?? staleYield.pr_url ?? null,
+    };
+  }
+
   writeFacet(cachePath, facet);
   return facet;
 }

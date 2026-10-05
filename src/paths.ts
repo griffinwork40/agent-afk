@@ -105,12 +105,31 @@ export function getFacetCacheDir(): string {
   return join(getAgentFrameworkDir(), 'facets');
 }
 
-export function getSkillsDir(): string {
-  return join(getAfkHome(), 'skills');
+/**
+ * Directory for VerifiedOutcome JSON records (one per session id).
+ *
+ * Records live at ~/.afk/agent-framework/outcomes/<sessionId>.json and are
+ * written atomically via tmp+rename by src/agent/outcomes/store.ts.
+ * Never hand-join paths to this directory — always use this helper or
+ * getOutcomeRecordPath().
+ */
+export function getOutcomesDir(): string {
+  return join(getAgentFrameworkDir(), 'outcomes');
 }
 
-export function getPluginsDir(): string {
-  return join(getAfkHome(), 'plugins');
+/**
+ * Full path for a single VerifiedOutcome record.
+ *
+ * Callers are expected to validate the sessionId via validateSessionId()
+ * (re-exported from paths.witness.js) before calling this, consistent with
+ * the facet cache (cachePathFor) pattern.
+ */
+export function getOutcomeRecordPath(sessionId: string): string {
+  return join(getOutcomesDir(), `${sessionId}.json`);
+}
+
+export function getSkillsDir(): string {
+  return join(getAfkHome(), 'skills');
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +158,6 @@ export function getProjectSkillsDir(cwd: string = process.cwd()): string {
   return join(getProjectAfkDir(cwd), 'skills');
 }
 
-export function getProjectPluginsDir(cwd: string = process.cwd()): string {
-  return join(getProjectAfkDir(cwd), 'plugins');
-}
-
 /**
  * Project-scoped plans directory: `<cwd>/.afk/plans/`.
  *
@@ -158,38 +173,8 @@ export function getProjectPlansDir(cwd: string = process.cwd()): string {
   return join(cwd, '.afk', 'plans');
 }
 
-export function getPluginsIndexPath(): string {
-  return join(getPluginsDir(), '.index.json');
-}
-
 export function getSchedulesPath(): string {
   return join(getAfkConfigDir(), 'schedules.json');
-}
-
-/**
- * Marketplace cache root. Marketplaces clone into
- * `~/.afk/plugins/cache/<marketplace>/`, matching Claude Code's layout.
- */
-export function getMarketplaceCacheDir(): string {
-  return join(getPluginsDir(), 'cache');
-}
-
-/** Path to a specific marketplace's clone dir. */
-export function getMarketplaceDir(name: string): string {
-  return join(getMarketplaceCacheDir(), name);
-}
-
-/**
- * Bundled plugins shipped inside the compiled dist/ output.
- * Resolved relative to this module's location so it works from both
- * `src/` (dev via tsx) and `dist/` (built output).
- */
-export function getBundledPluginsDir(): string {
-  const thisFile = fileURLToPath(import.meta.url);
-  const thisDir = dirname(thisFile);
-  // In dist/: thisDir = <root>/dist  → bundled-plugins is a sibling
-  // In src/:  thisDir = <root>/src   → bundled-plugins is a sibling
-  return join(thisDir, 'bundled-plugins');
 }
 
 /**
@@ -338,14 +323,31 @@ export function getFarmDir(taskSlug: string): string {
 export {
   getBashCapturesDir,
   getInboundAttachmentsDir,
-  getPromptsDir,
   getReceiptsDir,
-  getSubagentOutputsDir,
   getTraceDir,
   getWitnessRoot,
   sessionLabelFromTracePath,
   validateSessionId,
 } from './paths.witness.js';
+
+export {
+  getSessionBlobsDir,
+  getSessionJournalPath,
+  getSubagentJournalPath,
+  getSubagentJournalsDir,
+} from './paths.journal.js';
+
+// Plugin-scope paths — whole concern extracted at the 350-code-line ceiling
+// (same pattern as paths.journal.ts above: paths.ts keeps its public surface).
+export {
+  getPluginsDir,
+  getProjectPluginsDir,
+  getPluginsIndexPath,
+  getPluginDataDir,
+  getMarketplaceCacheDir,
+  getMarketplaceDir,
+  getBundledPluginsDir,
+} from './paths.plugins.js';
 
 export function getDaemonStateDir(instanceId: string = 'default'): string {
   return join(getAfkStateDir(), 'daemon', `agent-afk@${instanceId}`);
@@ -573,6 +575,18 @@ export function getBgJobMeta(jobId: string): string {
   return join(getBgJobDir(jobId), 'meta.json');
 }
 
+/**
+ * JSON file holding the persisted final result body for a background job.
+ * Written by `markTerminal()` (via `BgJobLogWriter.writeResult()`) immediately
+ * when a job completes or fails so cross-session `/bgsub:join` calls can recover
+ * the synthesized output text even after the in-memory entry is TTL-evicted.
+ *
+ * @throws if `jobId` fails {@link assertSafeJobId}.
+ */
+export function getBgJobResult(jobId: string): string {
+  return join(getBgJobDir(jobId), 'result.json');
+}
+
 // ---------------------------------------------------------------------------
 // Subagent conversation logs — powers /tasks:view replay
 // ---------------------------------------------------------------------------
@@ -792,4 +806,9 @@ export function getEffectLedgerPath(): string {
 export function getWhatifDir(): string {
   return join(getAfkStateDir(), 'whatif');
 }
+
+// ---------------------------------------------------------------------------
+// Peer messaging inbox — extracted to paths.peer.ts for the 350-line ceiling.
+// ---------------------------------------------------------------------------
+export { getPeerInboxRoot, getPeerInboxDir } from './paths.peer.js';
 

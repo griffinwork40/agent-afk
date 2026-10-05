@@ -44,6 +44,11 @@
 
 import { palette } from './palette.js';
 import type { QuotaSnapshot } from '../agent/quota-cache.js';
+import { USAGE_STALE_AFTER_MS, type UsageRecord, WINDOW_KEYS } from '../agent/usage/usage-record.js';
+import {
+  computeBurnRate,
+  type WindowObservationSample,
+} from '../agent/usage/burn-rate.js';
 
 /** One rolling window's state, as observed from the response headers. */
 export interface QuotaWindowState {
@@ -51,6 +56,11 @@ export interface QuotaWindowState {
   readonly utilization: number;
   /** When the window rolls over, if the header carried a parseable deadline. */
   readonly resetsAt?: Date;
+  /**
+   * Bounded ring of recent binding-window snapshots (oldest-first), used by
+   * the burn-rate projector. Absent when no history is available.
+   */
+  readonly history?: readonly WindowObservationSample[];
 }
 
 /** Both rolling windows plus the observation timestamp, for staleness. */
@@ -98,6 +108,51 @@ export function quotaWindowsFromSnapshot(snapshot: QuotaSnapshot | undefined): Q
 }
 
 /**
+ * Build a {@link QuotaWindows} from a full {@link UsageRecord} (which carries
+ * the history ring). Use this instead of {@link quotaWindowsFromSnapshot} when
+ * the ledger record is available, so the burn-rate projector has history.
+ *
+ * Pulls history from the binding (highest-utilization) window's ring. Returns
+ * `undefined` when no window utilization is known.
+ */
+export function quotaWindowsFromRecord(record: UsageRecord | undefined): QuotaWindows | undefined {
+  if (record?.windows === undefined) return undefined;
+  const w = record.windows;
+  // Find binding window (highest utilization) to associate history with.
+  let bindingKey: typeof WINDOW_KEYS[number] | undefined;
+  let bindingUtil = -1;
+  for (const key of WINDOW_KEYS) {
+    const win = w[key];
+    if (win !== undefined && win.utilization > bindingUtil) {
+      bindingUtil = win.utilization;
+      bindingKey = key;
+    }
+  }
+  if (bindingKey === undefined) return undefined;
+  const history = w.history as WindowObservationSample[] | undefined;
+  const fiveHour = w.fiveHour !== undefined
+    ? {
+        utilization: w.fiveHour.utilization,
+        ...(w.fiveHour.resetsAt !== undefined ? { resetsAt: new Date(w.fiveHour.resetsAt) } : {}),
+        ...(bindingKey === 'fiveHour' && history !== undefined ? { history } : {}),
+      }
+    : undefined;
+  const sevenDay = w.sevenDay !== undefined
+    ? {
+        utilization: w.sevenDay.utilization,
+        ...(w.sevenDay.resetsAt !== undefined ? { resetsAt: new Date(w.sevenDay.resetsAt) } : {}),
+        ...(bindingKey === 'sevenDay' && history !== undefined ? { history } : {}),
+      }
+    : undefined;
+  if (fiveHour === undefined && sevenDay === undefined) return undefined;
+  return {
+    ...(fiveHour !== undefined ? { fiveHour } : {}),
+    ...(sevenDay !== undefined ? { sevenDay } : {}),
+    observedAt: new Date(w.observedAt),
+  };
+}
+
+/**
  * Worst-window severity. `calm` recedes, `caution` warns, `critical` demands
  * attention — and earns drop-last treatment from the status line.
  */
@@ -131,7 +186,7 @@ const CRITICAL_ABOVE = 0.8;
  * would keep the row alarmed for no reason, so it is marked rather than
  * silently trusted.
  */
-export const STALE_AFTER_MS = 10 * 60 * 1000;
+export const STALE_AFTER_MS = USAGE_STALE_AFTER_MS;
 
 /** Prefixes the reset countdown. Recessive tone: it is context for the number, not the signal. */
 const RESET_GLYPH = '⟳';
@@ -167,6 +222,13 @@ export function formatResetCountdown(msRemaining: number): string {
   if (days > 0) return `${days}d${hours}h`;
   if (hours > 0) return `${hours}h${minutes}m`;
   return `${minutes}m`;
+}
+
+/** Compact `cap in ~Xm` suffix rendered on the binding window when projectable. */
+function formatCapProjection(capsAtMs: number, now: Date): string {
+  const msLeft = capsAtMs - now.getTime();
+  if (msLeft <= 0) return '';
+  return ` cap ~${formatResetCountdown(msLeft)}`;
 }
 
 interface RenderedWindow {
@@ -228,6 +290,16 @@ export function formatQuotaIndicator(windows: QuotaWindows, now: Date = new Date
   // deadline that is actually load-bearing.
   const binding = severity === 'calm' ? undefined : bindingWindow(collected);
 
+  // Compute burn-rate projection for the binding window (if history present).
+  let capProjection: string | undefined;
+  if (binding !== undefined && binding.state.history !== undefined) {
+    const resetsAtMs = binding.state.resetsAt?.getTime();
+    const proj = computeBurnRate(binding.state.history, now.getTime(), resetsAtMs);
+    if (proj !== null) {
+      capProjection = formatCapProjection(proj.capsAtMs, now);
+    }
+  }
+
   const rendered = collected.map((w) => {
     const tone = toneFor(w.severity);
     const percent = `${Math.round(w.state.utilization * 100)}%`;
@@ -238,6 +310,10 @@ export function formatQuotaIndicator(windows: QuotaWindows, now: Date = new Date
       // utilization beside it is stale too — showing `⟳0m` would assert a
       // deadline that has passed. Omit rather than mislead.
       if (msLeft > 0) text += ` ${palette.meta(`${RESET_GLYPH}${formatResetCountdown(msLeft)}`)}`;
+    }
+    // Append burn-rate projection on the binding window when projectable.
+    if (w === binding && capProjection !== undefined && capProjection.length > 0) {
+      text += palette.meta(capProjection);
     }
     return text;
   });

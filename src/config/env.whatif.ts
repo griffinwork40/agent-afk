@@ -49,7 +49,7 @@ export const WHATIF_ENV_REGISTRY = [
   {
     name: 'AFK_WHATIF_ALLOW_MCP',
     description:
-      'When set to "1" or "true" inside a what-if episode (AFK_WHATIF_EPISODE=1), ' +
+      'When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), ' +
       'keep MCP servers enabled. By default, MCP servers are disabled inside episodes ' +
       'to prevent side effects from spawning external processes. Set this flag only ' +
       'when the change under test specifically concerns MCP server behaviour.',
@@ -57,6 +57,42 @@ export const WHATIF_ENV_REGISTRY = [
     required: false,
     default: '',
     example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_WHATIF_KEEP_CONTEXT_HOOKS',
+    description:
+      'When set to a truthy value (1/true/yes/on) inside a what-if episode (AFK_WHATIF_EPISODE=1), ' +
+      'keep SessionStart and UserPromptSubmit config/plugin hooks enabled. By default, these hooks ' +
+      'are disabled inside episodes so that both the baseline and candidate arms see byte-identical ' +
+      'first user messages, preventing cwd- or recency-sensitive hook output from confounding the ' +
+      'measured delta. Set this flag only when the change under test specifically concerns ' +
+      'context-injecting hook behaviour.',
+    type: 'boolean',
+    required: false,
+    default: '',
+    example: '1',
+    category: 'misc',
+  },
+  {
+    name: 'AFK_FRAMEWORK_PROMPT_FILE',
+    description:
+      'Absolute path to a replacement for the framework base system prompt ' +
+      '(`system-prompt.md`). When set, `loadSystemPrompt()` reads this file instead ' +
+      'of the bundled `system-prompt.md`. Unset = byte-identical default behaviour. ' +
+      'Fail-closed: a relative path or an unreadable file is a hard error with no ' +
+      'bundled-prompt fallback — a silent fallback would turn an A/B run into A/A. ' +
+      'This error reaches EVERY surface that builds a system prompt. At startup ' +
+      '(CLI, Telegram) it crashes the process with a clear message. Mid-session ' +
+      '(`/afk-md reload`) it surfaces an error and leaves the REPL usable. ' +
+      'Mid-server (`afk web` session-create) it rejects the request with an ' +
+      'actionable message and keeps other sessions running. ' +
+      'Use only with `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>` — ' +
+      'never set it persistently in `afk.env` (a stale value there blocks every ' +
+      'surface until removed).',
+    type: 'string',
+    required: false,
+    example: '/tmp/whatif-narration/system-prompt.narrate.md',
     category: 'misc',
   },
 ] as const satisfies readonly EnvVarMeta[];

@@ -280,7 +280,7 @@ function SessionContent({
     );
   }
   if (selectedSession && items.length > 0) {
-    return <TranscriptView items={items} totals={totals} turnActive={turnActive} />;
+    return <TranscriptView sessionId={selectedSession.id} items={items} totals={totals} turnActive={turnActive} />;
   }
   if (selectedSession) {
     return (

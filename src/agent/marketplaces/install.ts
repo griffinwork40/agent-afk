@@ -171,6 +171,7 @@ async function installGit(
       sourceType: parsed.type,
       ref,
       commit,
+      pinnedRef: options.ref !== undefined ? true : false,
       installedAt: ts,
       updatedAt: ts,
     };

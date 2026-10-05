@@ -17,6 +17,7 @@ import type {
 import type { HookRegistry } from '../hooks.js';
 import type { ModelProvider } from '../provider.js';
 import type { TraceSink } from '../trace/index.js';
+import type { JournalMessage, MessageJournal } from '../journal/types.js';
 import type { AgentModelInput } from './model-types.js';
 import type { ModelSlots } from '../session/model-slots.js';
 import type { CanUseTool, PermissionBubbler } from './permission-types.js';
@@ -97,6 +98,15 @@ export interface PlanExitControls {
    * {@link import('../../session/agent-session.js').AgentSession.setPlanExitQueueCheck}.
    */
   hasPendingUserMessage?: () => boolean;
+  /**
+   * Optional visible-plan-text gate, wired by `AgentSession` to its
+   * `PlanTextTracker`. Called by the `exit_plan_mode` handler before the
+   * approval picker: `'ok'` shows the picker, `'refuse'` returns a tool result
+   * telling the model to write its plan as visible text first, and `'warn'`
+   * (refusal budget spent) shows the picker with a warning. Absent means no
+   * gate (the picker always shows), which keeps custom bridges working.
+   */
+  checkPlanText?: () => 'ok' | 'refuse' | 'warn';
 }
 
 /** Agent session configuration */
@@ -427,6 +437,22 @@ export interface AgentConfig {
    */
   resumeHistory?: ResumeHistoryTurn[];
 
+  /**
+   * Full-fidelity conversation to seed on resume, folded + hydrated from the
+   * session's message journal (docs/message-journal.md). When present,
+   * providers seed from this and IGNORE {@link resumeHistory}; each provider
+   * converts it with its own `JournalAdapter.fromJournalMessages`.
+   */
+  resumeMessages?: JournalMessage[];
+
+  /**
+   * Durable message-journal sink for this session (or, on a subagent fork,
+   * the child's journal from `parent.forSubagent(id)`). Providers wrap it in
+   * a `JournalSync` and call `sync(messages)` at their commit points.
+   * Absent = journaling off (disabled, tests, one-shot callers).
+   */
+  messageJournal?: MessageJournal;
+
   /** Override or seed the SDK session ID */
   sessionId?: string;
 
@@ -515,6 +541,17 @@ export interface AgentConfig {
    * rolling tail of in-flight bash progress. REPL-only; absent for forks.
    */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). When present, each per-query dispatcher injects it into the
+   * context of every tool in DETACHABLE_TOOLS (currently bash only) so the REPL
+   * Ctrl+B handler and the dispatcher share the same instance. Absent for
+   * headless surfaces, subagent children, and one-shot CLI runs that have no
+   * REPL to inject the result into. The registry must be cancelled by session
+   * teardown via cancelAll() (Invariant:D3 — see detach-registry.ts).
+   */
+  detachRegistry?: import('../tools/detach-registry.js').DetachableToolRegistry;
 
   /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
@@ -682,6 +719,21 @@ export interface AgentConfig {
 
   /** Parent session ID when this session was forked as a subagent. */
   parentSessionId?: string;
+
+  /**
+   * Root session ID — the depth-0 session that owns the outcome record.
+   *
+   * Set once on a depth-1 child (to the root's sessionId) and inherited
+   * unchanged by all deeper descendants. A depth-1 child with no grandchildren
+   * sets this equal to `parentSessionId`; a grandchild's `rootSessionId` is
+   * its grandparent's id, not its immediate parent's. Child-attribution uses
+   * this to credit commit SHAs and PR URLs to the root record rather than to
+   * an intermediate session id that never writes a sidecar.
+   *
+   * Undefined on top-level (depth-0) sessions — `parentSessionId` is also
+   * undefined there, so hooks can treat both as the "no attribution" signal.
+   */
+  rootSessionId?: string;
 
   /**
    * This session's own subagent id when it was forked as a subagent — the

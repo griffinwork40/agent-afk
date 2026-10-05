@@ -57,10 +57,9 @@ describe('snapshotFastDecision', () => {
 
   it('uses catalog eligibility when catalog lists the model', () => {
     resetCatalogCache();
-    // Simulate catalog saying gpt-4o IS priority-eligible
-    // We can't easily inject deps into snapshotFastDecision without re-designing it,
-    // so we test the fallback path: a model in the fallback regex that the catalog
-    // doesn't know about returns from the regex path.
+    // The 4th parameter (`catalogDeps`) lets callers inject a fake catalog reader;
+    // this test exercises the regex fallback path for a model not in a catalog file.
+    // For catalog-injection tests, see the 'catalog-override path' cases below.
     const ctrl = new FastModeController('on');
     // gpt-5.5 is in the fallback regex
     const d = snapshotFastDecision(ctrl, 'gpt-5.5', false);

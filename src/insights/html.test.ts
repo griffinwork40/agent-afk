@@ -66,6 +66,11 @@ function makeZeroAgg(): InsightAggregates {
       avgComposeEdges: 0,
       overflowKills: {},
     },
+    outcomes: {
+      byWeek: {},
+      totalRecords: 0,
+      parseErrors: 0,
+    },
   };
 }
 
@@ -139,6 +144,13 @@ function makeNonZeroAgg(): InsightAggregates {
       avgComposeNodes: 4.2,
       avgComposeEdges: 3.8,
       overflowKills: { web_scrape: 2 },
+    },
+    outcomes: {
+      byWeek: {
+        '2024-W01': { goodProven: 5, goodPresumed: 3, bad: 1, blocked: 0, unknown: 2 },
+      },
+      totalRecords: 11,
+      parseErrors: 0,
     },
   };
 }

@@ -138,7 +138,7 @@ const compactCmd: SlashCommand = {
           // the transport stays disabled until restart. Name the recovery path —
           // the raw token alone tells an operator nothing actionable.
           ctx.out.warn(
-            'Summarization is unavailable on this backend — it refused the compaction request earlier this session. Start a new session, or set AFK_COMPACT_MODEL to a model this endpoint can serve.',
+            'Summarization is unavailable on this backend — it refused the compaction request earlier this session. Start a new session, or set AFK_COMPACT_MODEL to a model on a different provider (cross-provider compaction is supported).',
           );
         } else {
           ctx.out.info(`Nothing to compact (${reason}).`);

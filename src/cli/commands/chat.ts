@@ -1,129 +1,44 @@
 import { Command } from 'commander';
-import { palette } from '../palette.js';
 import ora from 'ora';
 import { handleCommandError } from '../errors/index.js';
 import * as path from 'node:path';
 import { existsSync } from 'node:fs';
-import { AgentSession } from '../../agent/session.js';
-import { createDefaultHookRegistry } from '../../agent/default-hook-registry.js';
-import { loadHooksConfig } from '../../agent/hooks/config-loader.js';
-import { MemoryStore, injectHotMemory, injectGoalPrompt } from '../../agent/memory/index.js';
-import { StateStore } from '../../agent/state/state-store.js';
-import { getStateDatabasePath } from '../../paths.js';
-import { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
-import { env } from '../../config/env.js';
-import { injectCompanionPrimer } from '../../agent/companion/index.js';
-import type { AgentModelInput, ThinkingConfig, EffortLevel } from '../../agent/types.js';
+import type { AgentSession } from '../../agent/session.js';
+import { wireOneShotChatSession } from './chat.session-wiring.js';
+import type { AgentModelInput } from '../../agent/types.js';
 import { unconfiguredSlotError } from '../../agent/session/model-slots.js';
-import { formatDuration } from '../format-utils.js';
-import { costTokenParts } from '../render/session-summary.js';
-import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, parseProvider, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, getDefaultSubagentModel, resolveBaseSystemPrompt, explicitProviderHints, activateDumpPrompt } from '../shared-helpers.js';
-import { topLevelSurfaceAllowedTools } from '../../agent/tools/top-level-allowlist.js';
+import { parseThinking, parseEffort, parseBudget, parseMaxOutputTokens, getApiKeyForModel, getModel, getThinking, getEffort, getMaxBudgetUsd, getTaskBudget, getMaxOutputTokens, getMaxToolUseIterations, resolveBaseSystemPrompt, explicitProviderHints, activateDumpPrompt } from '../shared-helpers.js';
 import { loadConfig } from '../config.js';
 import { applyTheme, resolveTheme, resolveThemeMode } from '../theme.js';
 import { applySharedChatOptions } from './shared-command-options.js';
 import { assembleSystemPrompt } from '../../agent/routing-directive.js';
-import { renderMarkdownToTerminal } from '../formatter.js';
-import { formatSubagentCompletion } from './interactive/progress-banner.js';
-import { wireExecutors } from '../../agent/session/wire-executors.js';
-import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
-import { AnthropicDirectProvider } from '../../agent/providers/anthropic-direct/index.js';
-import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
-import { receiptPathsFor } from '../../agent/trace/receipt.js';
 import { setupWorktree } from './interactive/worktree.js';
 import { resolveResumeTarget, resumeConfigFor } from '../resume-session.js';
 import { saveSession, findSession } from '../session-store.js';
-import { createSessionStats, recordTurn } from '../slash/session-stats.js';
+import { createSessionStats } from '../slash/session-stats.js';
 import { runReviewPostPublish, parsePostTargets, type PostTarget } from '../slash/_lib/review-post.js';
 import type { Writer } from '../slash/types.js';
 import { createStderrWriter } from '../slash/writer.js';
-import { McpManager, loadMcpConfig } from '../../agent/mcp/index.js';
-import { jsonDateReplacer } from '../json-date-replacer.js';
-import { loadImportFromConfig, resolveImportedRoots } from '../../config/import-sources.js';
-import { emitSessionPhase } from '../../agent/trace/emit.js';
 import { runNonInteractiveReconcile } from '../../agent/manifest/startup-reconcile.js';
 import { errorMessage } from '../../utils/errors.js';
-import { buildOneShotJsonOutput } from './chat.json-output.js';
+import { closeLazyBrowser } from './chat.browser-teardown.js';
+import { createDefaultTraceWriter } from '../../agent/trace/factory.js';
+import { receiptPathsFor } from '../../agent/trace/receipt.js';
+import { buildChatSession } from './chat.session-setup.js';
+import { readStdin, writeAndDrain } from './chat.stdin-stream.js';
+import { connectMcpForChat } from './chat.mcp-setup.js';
+import { runStreamJsonPath, renderTextResponse } from './chat.response-output.js';
+import type { MemoryStore } from '../../agent/memory/index.js';
+import type { StateStore } from '../../agent/state/state-store.js';
+import type { WorkspaceStore } from '../../agent/workspace/workspace-store.js';
+import type { SubagentManager } from '../../agent/subagent.js';
+import type { ComposeExecutor } from '../../agent/tools/compose-executor.js';
+import type { McpManager } from '../../agent/mcp/index.js';
 
 
 /** Loose UUID format check: 8-4-4-4-12 hex groups separated by dashes. */
 function isUuidShaped(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
-}
-
-/**
- * Read all of stdin until EOF and return the result trimmed of trailing
- * newlines. Resolves immediately when `process.stdin` has already ended.
- */
-const STDIN_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
-
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    // Invariant: if stdin already reached EOF before this call, `once('end')`
-    // will never re-fire and `resume()` is a no-op. Resolve synchronously with
-    // an empty payload rather than hanging the caller forever.
-    if (process.stdin.readableEnded) {
-      resolve('');
-      return;
-    }
-    // Capture the handler so end/error paths can remove it. Without the
-    // removeListener calls, repeated readStdin invocations leak listeners on
-    // the shared process.stdin object and trigger MaxListenersExceededWarning.
-    const onData = (chunk: Buffer): void => {
-      totalBytes += chunk.length;
-      if (totalBytes > STDIN_MAX_BYTES) {
-        process.stdin.destroy(new Error(`stdin exceeds ${STDIN_MAX_BYTES}-byte limit`));
-        return;
-      }
-      chunks.push(chunk);
-    };
-    process.stdin.on('data', onData);
-    process.stdin.once('end', () => {
-      process.stdin.removeListener('data', onData);
-      resolve(Buffer.concat(chunks).toString('utf-8').replace(/\n+$/, ''));
-    });
-    process.stdin.once('error', (err) => {
-      process.stdin.removeListener('data', onData);
-      reject(err);
-    });
-    // Resume the stream in case it is paused (common in tests).
-    process.stdin.resume();
-  });
-}
-
-/** Writes `chunk` to `stream`, honouring backpressure: if `write()` returns
- *  false (buffer full) the returned Promise resolves only after the `drain`
- *  event fires, pausing the caller until the consumer catches up. */
-function writeAndDrain(stream: NodeJS.WritableStream, chunk: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Invariant: settle exclusively via the write callback when `ok === true`.
-    // Resolving synchronously after stream.write() races the callback — when
-    // an EPIPE/stream-destroyed error fires on the callback, the Promise is
-    // already settled and `reject(err)` becomes a silent no-op, masking
-    // truncated NDJSON output with exit code 0.
-    const ok = stream.write(chunk, (err) => {
-      if (err) reject(err);
-      else if (ok) resolve();
-    });
-    if (!ok) {
-      // Backpressure path: pair drain + error listeners so a stream error
-      // before drain doesn't orphan the drain listener on process.stdout —
-      // orphans accumulate, eventually triggering MaxListenersExceededWarning
-      // and a process crash when an unhandled `error` event fires.
-      const onDrain = (): void => {
-        stream.removeListener('error', onError);
-        resolve();
-      };
-      const onError = (err: Error): void => {
-        stream.removeListener('drain', onDrain);
-        reject(err);
-      };
-      stream.once('drain', onDrain);
-      stream.once('error', onError);
-    }
-  });
 }
 
 export function registerChatCommand(program: Command): void {
@@ -196,13 +111,8 @@ export function registerChatCommand(program: Command): void {
         }
       }
 
-      // -----------------------------------------------------------------------
       // Parse --post targets up front so an unknown target warns before any
-      // agent/network work. parsePostTargets classifies the bare Commander value
-      // directly — no synthetic "--post …" flag string to reconstruct and re-parse;
-      // the actual publish runs after the turn completes (see maybePublish below). An
-      // all-unknown value yields zero targets → a no-op, not a hard error.
-      // -----------------------------------------------------------------------
+      // agent/network work.
       const postTargets: PostTarget[] = [];
       if (options.post !== undefined) {
         const parsedPost = parsePostTargets(options.post);
@@ -214,13 +124,10 @@ export function registerChatCommand(program: Command): void {
         }
       }
 
-      // -----------------------------------------------------------------------
       // Resolve message: positional arg, `-` (stdin), or piped stdin.
-      // -----------------------------------------------------------------------
       let message: string;
       const stdinIsPipe = !process.stdin.isTTY;
       if (rawMessage === '-') {
-        // Explicit stdin sentinel.
         if (!stdinIsPipe) {
           process.stderr.write('Error: no stdin available — pass a message or pipe one in\n');
           process.exitCode = 1;
@@ -228,12 +135,10 @@ export function registerChatCommand(program: Command): void {
         }
         message = await readStdin();
       } else if (rawMessage === undefined && stdinIsPipe) {
-        // Omitted arg + piped stdin → read from pipe.
         message = await readStdin();
       } else if (rawMessage !== undefined) {
         message = rawMessage;
       } else {
-        // No arg, no pipe — show usage hint.
         process.stderr.write('Error: missing message — pass a message argument or pipe via stdin\n');
         process.exitCode = 1;
         return;
@@ -248,38 +153,26 @@ export function registerChatCommand(program: Command): void {
       const spinner = ora('Initializing agent...').start();
 
       let session: AgentSession | null = null;
-      let sharedMemoryStore: MemoryStore | undefined, workspaceStore: WorkspaceStore | undefined;
-      let sharedStateStore: StateStore | undefined;
       let worktreeHandle: Awaited<ReturnType<typeof setupWorktree>> | undefined;
       let worktreeCwd: string | undefined;
-      let mcpManager: McpManager | undefined;
-      // Whether this run should persist a session sidecar on exit.
-      // True only when a session flag (--resume / --continue / --session-id) is set.
       let shouldPersist = false;
-      // The file-system id used as the sidecar filename (basename without .json).
       let persistId: string | undefined;
-      // Declared here (outside try) so catch/finally can access it for persistence.
       let stats = createSessionStats(options.model);
-      // Set true on any error path. Guards the finally-block saveSession call
-      // so a failed turn on a resumed session does not overwrite the sidecar
-      // with a misleading resume hint (stats.totalTurns is pre-seeded from the
-      // prior session and would otherwise trip the > 0 persistence check).
       let encounteredError = false;
-      // Hoisted out of the try so the finally block can surface the run-receipt
-      // path after session.close() (the trace const is block-scoped to try).
       let receiptTracePath: string | undefined;
+      let teardownStores: {
+        sharedMemoryStore: MemoryStore;
+        sharedStateStore: StateStore;
+        workspaceStore: WorkspaceStore | undefined;
+      } | undefined;
+      let rootManagerRef: SubagentManager | undefined;
+      let composeExecutorRef: ComposeExecutor | undefined;
+      let mcpManagerRef: McpManager | undefined;
 
       try {
-        // Optional worktree isolation. Mirrors `afk interactive -w`: the
-        // path becomes the session's `config.cwd`, so bash/grep tool calls
-        // and forked subagents all operate in the isolated working tree
-        // rather than the Node host's process.cwd(). Without this, two
-        // concurrent `afk chat -w` invocations would share a single git
-        // working tree and stash/checkout each other's state.
+        // Optional worktree isolation.
         if (options.worktree !== undefined) {
           try {
-            // `--worktree-base` (or AFK_WORKTREE_BASE, resolved downstream)
-            // bases the worktree on a ref like origin/main instead of HEAD.
             worktreeHandle = await setupWorktree(
               options.worktree,
               options.worktreeBase !== undefined ? { baseRef: options.worktreeBase } : undefined,
@@ -291,20 +184,13 @@ export function registerChatCommand(program: Command): void {
             handleCommandError(err);
           }
         }
-        // Parse thinking, effort, budget — shared-helpers.parseBudget throws
-        // on malformed input so the user sees a friendly error instead of a
-        // silent no-op.
-        let thinking: ThinkingConfig | undefined;
-        let effort: EffortLevel | undefined;
+
+        let thinking;
+        let effort;
         let maxBudgetUsd: number | undefined;
         let taskBudget: number | undefined;
         let maxOutputTokens: number | undefined;
-        // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so there
-        // is no explicit value to prefer here — this is purely the env default
-        // (unset/<=0 → undefined → unlimited, i.e. no behavior change). Rides on
-        // AgentConfig and hits both providers via resolveMaxToolIterations().
         let maxToolUseIterations: number | undefined;
-        let provider;
         try {
           thinking = parseThinking(options.thinking) ?? getThinking();
           effort = parseEffort(options.effort) ?? getEffort();
@@ -312,51 +198,28 @@ export function registerChatCommand(program: Command): void {
           taskBudget = parseBudget(options.taskBudget) ?? getTaskBudget();
           maxOutputTokens = parseMaxOutputTokens(options.maxOutputTokens) ?? getMaxOutputTokens();
           maxToolUseIterations = getMaxToolUseIterations();
-          // Will be wired with subagentExecutor below if anthropic-direct
-          provider = undefined;
         } catch (err) {
           spinner.fail('Invalid options');
           handleCommandError(err);
         }
 
-        // --- prompt-dump activation ---
         activateDumpPrompt(options.dumpPrompt, options.provider);
 
         const providerHints = explicitProviderHints(options.provider);
         const apiKey = getApiKeyForModel(getModel(), providerHints);
-        // System-prompt layering: the framework base (`system-prompt.md`)
-        // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
-        // is appended on top via resolveBaseSystemPrompt(), never substituted for
-        // the base. `source` is the layered provenance string surfaced by
-        // --dump-prompt (`framework`, `framework+afk-md:/path`, …).
         const { prompt: basePrompt, source: systemPromptSource } = resolveBaseSystemPrompt();
         const cliConfig = loadConfig();
-        // Apply the color theme (--theme flag > AFK_THEME env > config.theme >
-        // auto-detect > dark) before any markdown renders. index.ts already set
-        // the env/default baseline; this adds the config value, which index.ts
-        // could not see (config is not loaded that early).
         applyTheme(resolveTheme(resolveThemeMode(options.theme, cliConfig.theme)));
         const autoRouting = cliConfig.autoRouting?.chat ?? false;
         const systemPrompt = assembleSystemPrompt(basePrompt, autoRouting, 'one-shot');
 
-        // -----------------------------------------------------------------------
         // Resume / session-id resolution.
-        // resolveResumeTarget handles --resume + --continue logic; it throws on
-        // not-found when --resume is used and the id doesn't resolve.
-        // -----------------------------------------------------------------------
         let resumeConfig: ReturnType<typeof resumeConfigFor> = {};
         const resumeTarget = resolveResumeTarget({
           resume: options.resume,
           continue: options.continue,
         });
 
-        // Validate --resume not-found. resolveResumeTarget returns a shell
-        // { id, resumeId } without `stored` when the id wasn't found on disk.
-        // The bad id is run through JSON.stringify so control bytes in the
-        // user-supplied value surface as visible `\u001b` escapes rather
-        // than replaying live into the terminal. Hint points at the
-        // interactive surface where `/resume` lists saved sessions —
-        // there is no top-level `afk sessions` command.
         if (options.resume && resumeTarget && !resumeTarget.stored) {
           spinner.fail('Session not found');
           process.stderr.write(
@@ -373,29 +236,18 @@ export function registerChatCommand(program: Command): void {
           persistId = resumeTarget.id;
         }
 
-        // --session-id: create a new session with the user-supplied UUID.
         if (options.sessionId !== undefined) {
           resumeConfig = { sessionId: options.sessionId };
           shouldPersist = true;
           persistId = options.sessionId;
         }
 
-        // Resolve effective model (resume may carry a different model).
         const sessionModel = resumeTarget?.stored?.model ?? options.model;
-        // Fail fast on an unconfigured capability tier (e.g. `afk -m local` with
-        // no AFK_MODEL_LOCAL) before constructing the session — an empty id would
-        // otherwise reach the provider as an opaque error or a silent cloud call.
         const unconfiguredModel = unconfiguredSlotError(sessionModel);
-        if (unconfiguredModel) {
-          throw new Error(unconfiguredModel);
-        }
-        // Re-seed stats with the correct model and any stored history.
-        // `stats` was pre-declared outside the try block to be accessible in
-        // catch/finally; update it in place rather than re-assigning.
+        if (unconfiguredModel) throw new Error(unconfiguredModel);
+
         stats.model = sessionModel;
         if (resumeTarget?.stored) {
-          // Hydrate prior totals so the persisted sidecar carries cumulative
-          // stats, not just the new turn.
           stats.totalTurns = resumeTarget.stored.totalTurns;
           stats.totalCostUsd = resumeTarget.stored.totalCostUsd;
           stats.totalTokens = resumeTarget.stored.totalTokens;
@@ -408,236 +260,60 @@ export function registerChatCommand(program: Command): void {
           stats.sessionId = options.sessionId;
         }
 
-        let boundSession: AgentSession | undefined;
-
-        // Witness layer: open the trace BEFORE executors are constructed so
-        // SkillExecutor (and grandchild skill executors via the factory) can
-        // be wired with traceWriter. Without this, skill-forked subagents
-        // emit zero trace events and become undebuggable from disk. The
-        // factory returns null under AFK_TRACE_DISABLED=1.
-        //
-        // The trace path is intentionally not logged for the one-shot path
-        // to keep stdout clean for piping; operators inspect the file under
-        // ~/.afk/state/witness/ after the run.
+        // Witness layer: open the trace BEFORE executors so SkillExecutor
+        // and grandchild sessions inherit it.
         const trace = createDefaultTraceWriter();
         receiptTracePath = trace?.tracePath;
         const receiptSessionLabel = trace?.sessionLabel;
 
-        // The session is constructed after the executors, so the parent view
-        // they fork from reads through `boundSession` lazily.
-        const deferredParent = {
-          get sessionId() { return boundSession?.sessionId; },
-          getInputStreamRef() { return boundSession?.getInputStreamRef?.() ?? { pushUserMessage: () => {} }; },
-          get abortSignal() {
-            return boundSession?.abortSignal ?? new AbortController().signal;
-          },
-          // Live registry so forked subagents resolve it via forkSubagent's
-          // parent fallback (SubagentStart/Stop + shadow-verify nudge).
-          get hookRegistry() { return boundSession?.hookRegistry; },
+        mcpManagerRef = await connectMcpForChat({
+          worktreeCwd,
+          mcpConfigOverride: options.mcpConfig,
+          traceWriter: trace?.writer,
+        });
+
+        const built = await buildChatSession({
+          model: options.model,
+          sessionModel,
+          apiKey,
+          systemPrompt,
+          systemPromptSource,
+          basePrompt,
+          providerHints,
+          providerRaw: options.provider,
+          thinking,
+          effort,
+          maxBudgetUsd,
+          taskBudget,
+          maxOutputTokens,
+          maxToolUseIterations,
+          worktreeCwd,
+          traceWriter: trace?.writer,
+          mcpManager: mcpManagerRef,
+          resumeConfig,
+          permissionMode: cliConfig.permissionMode,
+          dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+          maxTurns: parseInt(options.maxTurns, 10),
+          temperature: cliConfig.temperature,
+          baseUrl: cliConfig.baseUrl,
+          openaiBaseUrl: cliConfig.openaiBaseUrl,
+          autoResumeOnUsageLimit: cliConfig.autoResumeOnUsageLimit,
+        });
+
+        session = built.session;
+        rootManagerRef = built.rootManager;
+        composeExecutorRef = built.composeExecutor;
+        teardownStores = {
+          sharedMemoryStore: built.sharedMemoryStore,
+          sharedStateStore: built.sharedStateStore,
+          workspaceStore: built.workspaceStore,
         };
 
-        // Invariant: ONE root manager per session, shared by all three
-        // executors. The trace writer is opened above so the manager and every
-        // executor inherit it — without it, skill-forked subagents emit zero
-        // trace events and become undebuggable from disk.
-        const { rootManager, subagentExecutor, skillExecutor, composeExecutor } = wireExecutors({
-          // Origin attribution: `afk chat` is a `cli` entrypoint.
-          surface: 'cli',
-          parentSession: deferredParent,
-          apiKey,
-          model: options.model,
-          // `apiKey` is getApiKey(), which keys off getModel() (AFK_MODEL), so
-          // the manager's credential-fallback provider must be derived from
-          // THAT model — not the possibly-overridden session model — or the
-          // fallback can cross the provider boundary.
-          managerParentModel: getModel(),
-          defaultSubagentModel: getDefaultSubagentModel(options.model),
-          resolveApiKeyForModel: getApiKeyForModel,
-          // Raw base prompt (pre-assembly): children and compose nodes stay
-          // task workers, without ROUTING_DIRECTIVE / TOOL_SYSTEM_PROMPT.
-          ...(basePrompt !== undefined ? { systemPrompt: basePrompt } : {}),
-          ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-          ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
-          // Worktree cwd propagates to every depth so forked bash/grep run in
-          // the isolated tree, not the Node host's process.cwd().
-          ...(worktreeCwd !== undefined ? { cwd: worktreeCwd, nestedCwd: worktreeCwd } : {}),
-          ...(trace?.writer !== undefined
-            ? { traceWriter: trace.writer, skillTraceWriter: trace.writer }
-            : {}),
-          // No backgroundRegistry on the one-shot chat path — background
-          // dispatch is interactive-only by contract.
-          ...(env.AFK_WORKSPACE_DISABLED !== '1' ? { workspaceStore: (workspaceStore = new WorkspaceStore()) } : {}),
-        });
-
-        sharedMemoryStore = new MemoryStore();
-        sharedStateStore = new StateStore(getStateDatabasePath());
-
-        {
-          const projectCwd = worktreeCwd ?? process.cwd();
-          const importedMcpConfigs = resolveImportedRoots(loadImportFromConfig())
-            .mcpConfigs.filter((c) => c.format === 'json')
-            .map((c) => c.source);
-          const loaded = loadMcpConfig({
-            cwd: projectCwd,
-            ...(importedMcpConfigs.length > 0 ? { importedMcpConfigs } : {}),
-            ...(options.mcpConfig !== undefined ? { cliOverride: options.mcpConfig } : {}),
-          });
-          const enabledCount = Object.values(loaded.mcpServers).filter((s) => !s.disabled).length;
-          if (enabledCount > 0) {
-            const mcpStartedAt = Date.now();
-            void emitSessionPhase(trace?.writer, {
-              phase: 'mcp_connect_start',
-              metadata: { serverCount: enabledCount },
-            });
-            try {
-              mcpManager = await McpManager.fromConfig(loaded.mcpServers, {
-                warnings: loaded.warnings,
-                serverLayers: loaded.serverLayers,
-                userAllowSecretEnv: loaded.userAllowSecretEnv,
-                ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}),
-              });
-            } finally {
-              void emitSessionPhase(trace?.writer, {
-                phase: 'mcp_connect_done',
-                durationMs: Date.now() - mcpStartedAt,
-                metadata: { serverCount: enabledCount },
-              });
-            }
-          } else if (loaded.warnings.length > 0) {
-            for (const w of loaded.warnings) {
-              process.stderr.write(`[mcp] ${w}\n`);
-            }
-          }
-        }
-
-        const mcpToolWireNames = mcpManager?.getMcpToolWireNames() ?? [];
-        provider = parseProvider(options.provider, {
-          subagentExecutor,
-          skillExecutor,
-          composeExecutor,
-          memoryStore: sharedMemoryStore,
-          stateStore: sharedStateStore,
-          model: String(options.model),
-          ...(cliConfig.openaiBaseUrl !== undefined ? { openaiBaseUrl: cliConfig.openaiBaseUrl } : {}),
-          ...(mcpManager !== undefined ? { mcpManager } : {}),
-        })
-          ?? new AnthropicDirectProvider({
-            permissions: {
-              allowedTools: topLevelSurfaceAllowedTools(mcpToolWireNames),
-            },
-            subagentExecutor,
-            skillExecutor,
-            composeExecutor,
-            memoryStore: sharedMemoryStore,
-            stateStore: sharedStateStore,
-            surface: 'cli',
-            ...(mcpManager !== undefined ? { mcpManager } : {}),
-          });
-
-
-        // Import any plugin JS entrypoints (manifest `main`) before constructing
-        // the session: the skill manifest is assembled synchronously in the
-        // AgentSession constructor, so a plugin's registerSkill() side-effects
-        // must already have run for its code-backed skills to appear. Idempotent
-        // + non-fatal; no-op without plugins.
-        await ensurePluginEntrypointsLoaded();
-
-        // Witness layer: `trace` was opened above (before executors) so
-        // SkillExecutor could be wired with traceWriter; reuse it here for
-        // the AgentSession.
-        session = new AgentSession(injectGoalPrompt(injectCompanionPrimer(injectHotMemory({
-          model: sessionModel,
-          // User-facing surface for trace `origin` attribution. One-shot
-          // `afk chat` is a CLI entrypoint → 'cli'.
-          surface: 'cli',
-          // Resolve the credential for the ACTUAL session model, not the
-          // env-derived default (`getApiKey()` keys off AFK_MODEL/CLAUDE_MODEL).
-          // Without this, `--model gpt-5.5` while CLAUDE_MODEL is a Claude id
-          // injects the Anthropic OAuth token into the OpenAI provider, which
-          // (a) leaks sk-ant-… to api.openai.com and (b) shadows Codex ChatGPT
-          // OAuth (resolveOpenAIAuth treats a non-empty config key as Tier 1).
-          // getApiKeyForModel routes via providerForModel → correct family
-          // (anti-leak invariant, credential-resolver.ts).
-          // Cascade-abort and drain in-flight children before the writer
-          // seals, so a wave still running when this session ends emits real
-          // `cancelled` rows instead of vanishing (#733).
-          drainSubagents: (reason) =>
-            rootManager.abortAllAndDrain('session_end', 'user_signal', undefined, reason === 'reset'),
-          // Resolve the credential for the ACTUAL session model + CLI
-          // `--provider` (if any). Without explicit hints, `--provider xai`
-          // with a Claude model injects Anthropic material into XaiProvider.
-          apiKey: getApiKeyForModel(sessionModel, providerHints),
-          maxTurns: parseInt(options.maxTurns, 10),
-          // One-shot `afk chat` is headless: no REPL/Telegram elicitation
-          // handler is installed, so ask_question can only auto-decline. Strip
-          // it so the model proceeds on an assumption instead of wasting a turn.
-          isNonInteractive: true,
-          // Permission mode: --dangerously-skip-permissions forces bypass; else
-          // the resolved afk.config.json `permissionMode` (loadConfig now always
-          // returns one — DEFAULT_CLI_PERMISSION_MODE = bypass for new installs,
-          // overridable by the config key). Always defined, so chat never falls
-          // through to the session-layer 'default'.
-          ...(options.dangerouslySkipPermissions
-            ? { permissionMode: 'bypassPermissions' as const }
-            : cliConfig.permissionMode !== undefined
-              ? { permissionMode: cliConfig.permissionMode }
-              : {}),
-          hookRegistry: createDefaultHookRegistry((info) => {
-            console.log(formatSubagentCompletion(info));
-          }, 'cli', sharedMemoryStore, undefined, loadHooksConfig({ cwd: worktreeCwd }), { cwd: worktreeCwd, ...(trace?.writer !== undefined ? { traceWriter: trace.writer } : {}) }).registry,
-          ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-          ...(systemPromptSource !== undefined ? { systemPromptSource } : {}),
-          ...(thinking !== undefined ? { thinking } : {}),
-          ...(effort !== undefined ? { effort } : {}),
-          ...(cliConfig.temperature !== undefined ? { temperature: cliConfig.temperature } : {}),
-          ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
-          ...(taskBudget !== undefined ? { taskBudget } : {}),
-          ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-          ...(maxToolUseIterations !== undefined ? { maxToolUseIterations } : {}),
-          ...(cliConfig.baseUrl !== undefined ? { baseUrl: cliConfig.baseUrl } : {}),
-          ...(trace ? { traceWriter: trace.writer } : {}),
-          ...(cliConfig.autoResumeOnUsageLimit !== undefined
-            ? { autoResumeOnUsageLimit: cliConfig.autoResumeOnUsageLimit }
-            : {}),
-          // Pipes worktree cwd to tool handlers (bash, glob, grep) so the
-          // shell commands the model spawns honor the isolated worktree.
-          ...(worktreeCwd !== undefined ? { cwd: worktreeCwd } : {}),
-          // Wire resume/session-id config when a session flag is set.
-          ...resumeConfig,
-          provider,
-        }))), trace?.writer);
-
-        boundSession = session;
-
-        // Wave-manifest reconciliation at one-shot chat startup: surface
-        // resumption offers for unfinished work. Non-interactive — requires
-        // AFK_WAVE_RESUME_UNATTENDED=1. Fire-and-forget.
-        runNonInteractiveReconcile(boundSession?.sessionId ?? '');
-
-        // Subagent-success rollup: wire both the root manager and the compose
-        // executor so all subagent token/cost data (including compose DAG nodes)
-        // accumulates into this session's session_sealed telemetry. Late-bound
-        // here because the session is constructed after the executors.
-        // Use a local const to give the TypeScript narrowing a stable reference
-        // (the outer `session` variable is `AgentSession | null`).
-        const wiredSession = session;
-        rootManager.setOnSubagentSucceeded((usage, costUsd) => {
-          wiredSession.recordSubagentCompletion(usage, costUsd);
-        });
-        composeExecutor.setOnSubagentSucceeded((usage, costUsd) => {
-          wiredSession.recordSubagentCompletion(usage, costUsd);
-        });
+        runNonInteractiveReconcile(session.sessionId ?? '');
+        wireOneShotChatSession(session, [rootManagerRef, composeExecutorRef]);
 
         spinner.text = 'Sending message...';
 
-        // ---------------------------------------------------------------------------
-        // Optional --post publish. Reuses the REPL's runReviewPostPublish so the
-        // GitHub/Telegram posting logic (markers, chunking, gh/Telegram auth) is
-        // never duplicated. Fail-soft by contract AND by an extra inner try/catch:
-        // a publish failure writes to stderr and is swallowed so it can never flip
-        // the command's exit code or corrupt stdout (NDJSON stays clean — the
-        // Writer is stderr-backed). No-op when no targets were requested.
-        // ---------------------------------------------------------------------------
         const maybePublish = async (reviewText: string, errored: boolean): Promise<void> => {
           if (postTargets.length === 0 || errored) return;
           const out: Writer = createStderrWriter();
@@ -648,102 +324,32 @@ export function registerChatCommand(program: Command): void {
               prRefFromArgs: options.postPr ?? null,
             });
           } catch (err) {
-            process.stderr.write(
-              `[--post] publish failed: ${errorMessage(err)}\n`,
-            );
+            process.stderr.write(`[--post] publish failed: ${errorMessage(err)}\n`);
           }
         };
 
-        // ---------------------------------------------------------------------------
-        // stream-json path — emits raw OutputEvent NDJSON on stdout for headless
-        // consumers. The spinner is stopped before entering the loop so its escape
-        // sequences do not corrupt the NDJSON stream on stdout.
-        // ---------------------------------------------------------------------------
         if (options.format === 'stream-json') {
           spinner.stop();
-
-          let streamAssistantText = '';
-          let streamErrored = false;
-          const stream = session.sendMessageStream(message);
-          for await (const event of stream) {
-            await writeAndDrain(process.stdout, JSON.stringify(event, jsonDateReplacer) + '\n');
-            if (event.type === 'chunk' && event.chunk.type === 'content') {
-              streamAssistantText += (event.chunk as { type: 'content'; content: string }).content;
-            }
-            if (event.type === 'done') {
-              // Fold the turn into stats before persistence.
-              recordTurn(stats, message, streamAssistantText, event.metadata);
-              // Capture SDK session id from done metadata when available.
-              if (event.metadata?.sessionId && !stats.sessionId) {
-                stats.sessionId = String(event.metadata.sessionId);
-              }
-            }
-            if (event.type === 'error') {
-              process.exitCode = 1;
-              streamErrored = true;
-              break;
-            }
-          }
-
-          await maybePublish(streamAssistantText, streamErrored);
+          await runStreamJsonPath({ session, message, stats, maybePublish });
           return;
         }
 
-        // Send message
-        const response = await session.sendMessage(message, {
-          stream: options.stream,
+        // text / json paths
+        await renderTextResponse({
+          session,
+          message,
+          stats,
+          sessionModel,
+          format: options.format,
+          streamFlag: options.stream,
+          receiptSessionLabel,
+          receiptTracePath,
+          maybePublish,
+          spinner,
         });
-
-        spinner.succeed('Response received');
-
-        // Fold the turn into stats (needed for persistence).
-        const responseMeta = session.getLastResponseMetadata();
-        recordTurn(stats, message, response.content, responseMeta ?? undefined);
-        if (responseMeta?.sessionId && !stats.sessionId) {
-          stats.sessionId = String(responseMeta.sessionId);
-        }
-
-        if (options.format === 'json') {
-          // Surface per-turn metadata in JSON output so headless runners can
-          // do budget bookkeeping and locate the witness trace without parsing
-          // human-readable lines or racing concurrent sessions via ls -t.
-          console.log(JSON.stringify(buildOneShotJsonOutput({
-            sessionModel,
-            responseContent: response.content,
-            responseTimestamp: response.timestamp,
-            responseMeta,
-            sessionId: stats.sessionId,
-            witnessLabel: receiptSessionLabel,
-            tracePath: receiptTracePath,
-          }), null, 2));
-        } else {
-          console.log(palette.heading('\n🤖 Claude:'));
-          console.log(renderMarkdownToTerminal(response.content));
-          // Turn summary
-          if (responseMeta) {
-            const chatParts: string[] = [];
-            if (responseMeta.durationMs) chatParts.push(formatDuration(responseMeta.durationMs));
-            const chatInputTokens = Number(responseMeta.usage?.['input_tokens'] ?? 0);
-            const chatOutputTokens = Number(responseMeta.usage?.['output_tokens'] ?? 0);
-            chatParts.push(...costTokenParts({
-              costUsd: responseMeta.totalCostUsd,
-              tokens: chatInputTokens + chatOutputTokens,
-              includeZeroCost: responseMeta.totalCostUsd !== undefined,
-            }));
-            if (chatParts.length > 0) {
-              console.log(palette.dim('  · ' + chatParts.join(' · ')));
-            }
-          }
-          console.log('');
-        }
-
-        await maybePublish(response.content, false);
 
       } catch (error) {
         encounteredError = true;
-        // Headless NDJSON consumers see EOF without an error signal otherwise —
-        // handleCommandError writes to stderr and process.exit()s synchronously,
-        // so emit the typed error line on stdout BEFORE delegating.
         if (options.format === 'stream-json') {
           const e = error instanceof Error ? error : new Error(String(error));
           try {
@@ -757,45 +363,32 @@ export function registerChatCommand(program: Command): void {
         spinner.fail('Failed to send message');
         handleCommandError(error);
       } finally {
-        // Persist the session sidecar on graceful exit when a session flag was set.
-        // Suppress on error — see encounteredError declaration above.
         if (shouldPersist && stats.totalTurns > 0 && !encounteredError) {
           try {
-            const savedPath = saveSession(stats, persistId);
-            // Derive the resume id from the saved path's basename.
+            const savedPath = saveSession(stats, persistId, { closeTime: true });
             const savedId = path.basename(savedPath, '.json') || persistId || stats.sessionId || 'unknown';
             process.stderr.write(`Continue with: afk chat <msg> --resume ${savedId}\n`);
           } catch { /* best-effort — don't mask the main error */ }
         }
         if (session) {
           await session.close();
-          // Best-effort run-receipt pointer on stderr (stdout stays pipe-clean
-          // for piping/JSON consumers). The SessionEnd hook wrote the receipt
-          // during close(); surface its path if the file is present.
           if (receiptTracePath !== undefined) {
             try {
               const { mdPath } = receiptPathsFor(receiptTracePath);
               if (existsSync(mdPath)) {
                 process.stderr.write(`Receipt: ${mdPath}\n`);
               }
-            } catch {
-              /* best-effort — never mask the run's real outcome */
-            }
+            } catch { /* best-effort — never mask the run's real outcome */ }
           }
         }
-        if (mcpManager) {
-          await mcpManager.disconnectAll();
+        if (mcpManagerRef) await mcpManagerRef.disconnectAll();
+        await closeLazyBrowser();
+        if (teardownStores) {
+          try { teardownStores.sharedMemoryStore?.close(); } catch {}
+          try { teardownStores.sharedStateStore?.close(); } catch {}
+          try { teardownStores.workspaceStore?.close(); } catch {}
         }
-        try { sharedMemoryStore?.close(); } catch {}
-        try { sharedStateStore?.close(); } catch {}
-        try { workspaceStore?.close(); } catch {}
-        // Worktree cleanup: session close must finish before
-        // `git worktree remove --force` so any active SQLite WAL / trace
-        // writer file handles on the worktree are flushed first.
-        // `cleanup()` is best-effort and never throws.
-        if (worktreeHandle !== undefined) {
-          await worktreeHandle.cleanup();
-        }
+        if (worktreeHandle !== undefined) await worktreeHandle.cleanup();
       }
     });
 }

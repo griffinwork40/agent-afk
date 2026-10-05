@@ -507,7 +507,7 @@ export function formatCompactNoop(reason: string): string {
   if (reason === 'history-too-short') return '📦 Not enough history to compact yet.';
   if (reason === 'not-supported') return "📦 Compaction isn't available for the current model.";
   if (reason === 'responses-compaction-unavailable') {
-    return '⚠️ Summarization is unavailable on this backend — it refused the compaction request earlier this session. Start a new session, or set AFK_COMPACT_MODEL to a model this endpoint can serve.';
+    return '⚠️ Summarization is unavailable on this backend — it refused the compaction request earlier this session. Start a new session, or set AFK_COMPACT_MODEL to a model on a different provider (cross-provider compaction is supported).';
   }
   if (reason.startsWith('summarization-failed')) {
     return `⚠️ Compaction failed: ${reason}. History unchanged.`;

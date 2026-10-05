@@ -582,3 +582,100 @@ describe('query() characterization (#824) — shared roots and grants', () => {
     expect(vi.mocked(gatherWorkspace)).toHaveBeenLastCalledWith('/checkout-b');
   });
 });
+
+// ITEM 2: thinking and effort re-resolve per-turn after a mid-session /model switch.
+//
+// The failure class: a query built for Sonnet with thinking:{type:'enabled', budget_tokens:N}
+// switches to Fable 5.1 mid-session. The old static getter would replay Sonnet's
+// {type:'enabled', budget_tokens} which Fable 5.1 rejects (adaptive-only). The per-turn
+// re-resolution must synthesize {type:'adaptive'} and re-resolve effort to 'high'.
+//
+// Verification strategy: two-turn promptStream; setModel() is called on the ProviderQuery
+// handle between the two turns (inside the promptStream generator, which runs concurrently
+// with the consumer). We check the second messages.create call's params.
+describe('query() characterization — ITEM 2: thinking/effort re-resolve on /model switch', () => {
+  beforeEach(() => {
+    messagesCreateMock.mockReset();
+    __setAnthropicClientFactory(null);
+    installFactory();
+  });
+
+  afterEach(() => {
+    __setAnthropicClientFactory(null);
+  });
+
+  it('re-resolves thinking to adaptive and effort to high after setModel("claude-fable-5-1") on a Sonnet session', async () => {
+    // Script: two turns, one text-only response each.
+    let callCount = 0;
+    messagesCreateMock.mockImplementation(() => {
+      callCount += 1;
+      return fromArray(makeTextStream('ok'));
+    });
+
+    // Build a two-message stream. After yielding the first message, we pause so
+    // the consumer can drive turn 1 and the mock can record that call. Then we
+    // yield the second message so turn 2 fires with the updated model.
+    let resolveFirstTurnDone!: () => void;
+    const firstTurnDone = new Promise<void>((res) => { resolveFirstTurnDone = res; });
+
+    // Reference to the query handle so the generator can call setModel().
+    let queryHandle: import('../../provider.js').ProviderQuery | null = null;
+
+    async function* twoTurnStream(): AsyncIterable<{ content: string }> {
+      yield { content: 'first message' };
+      // Wait until turn 1 is complete (one messages.create call recorded).
+      await firstTurnDone;
+      // Switch to Fable 5.1 before the second message triggers turn 2.
+      if (queryHandle) await queryHandle.setModel('claude-fable-5-1');
+      yield { content: 'second message' };
+    }
+
+    const provider = new AnthropicDirectProvider();
+    const query = provider.query({
+      prompt: twoTurnStream(),
+      config: {
+        ...BASE_CONFIG,
+        // Sonnet with explicit enabled thinking — this resolves to
+        // {type:'enabled', budget_tokens:N} at construction time.
+        thinking: { type: 'enabled' },
+        effort: undefined,
+      },
+    });
+    queryHandle = query;
+
+    // Collect while unblocking firstTurnDone once we see the first messages.create call.
+    const events: ProviderEvent[] = [];
+    const collectPromise = (async () => {
+      for await (const ev of query) {
+        events.push(ev);
+        // After the first turn.completed, unblock the stream generator.
+        if (ev.type === 'turn.completed' && callCount === 1) {
+          resolveFirstTurnDone();
+        }
+      }
+    })();
+    await collectPromise;
+
+    // Should have made exactly 2 messages.create calls (one per turn).
+    expect(callCount).toBe(2);
+
+    const firstCall = messagesCreateMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const secondCall = messagesCreateMock.mock.calls[1]?.[0] as Record<string, unknown>;
+
+    // Turn 1 (Sonnet): thinking should be the Sonnet-resolved form (enabled or adaptive
+    // — Sonnet 5 is adaptive-only, so resolveThinkingParam promotes to adaptive).
+    // The important invariant: it is NOT undefined.
+    expect(firstCall.thinking).toBeDefined();
+    expect(firstCall.model).toContain('sonnet');
+
+    // Turn 2 (Fable 5.1): model must be fable, thinking must be adaptive (not enabled),
+    // and effort must be 'high' (Fable 5.1's resolved default, not Sonnet's 'max').
+    expect(String(secondCall.model)).toContain('fable');
+    const t2thinking = secondCall.thinking as Record<string, unknown> | undefined;
+    expect(t2thinking).toBeDefined();
+    expect(t2thinking?.type).toBe('adaptive');
+    expect(t2thinking?.type).not.toBe('enabled'); // Must NOT replay Sonnet's enabled form
+    const t2effort = (secondCall.output_config as Record<string, unknown> | undefined)?.effort;
+    expect(t2effort).toBe('high'); // Fable 5.1 default, not Sonnet's 'max'
+  });
+});

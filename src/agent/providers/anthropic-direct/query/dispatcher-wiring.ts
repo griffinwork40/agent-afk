@@ -54,6 +54,7 @@ import { builtinToolSchemas } from '../../../tools/schemas.js';
 import { registerPresenceLifecycle, resolveTopLevelSessionId } from './presence-lifecycle.js';
 import type { BuildDispatcherOptions } from '../build-dispatcher.js';
 import type { RuntimeSubagents } from '../../../awareness/index.js';
+import { isWhatifEpisode } from '../../../whatif-episode-gate.js';
 
 export interface DispatcherWiringArgs {
   config: AgentConfig;
@@ -113,14 +114,30 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // handler-call time, so the assignment-before-use ordering below is safe.
   let queryDispatcher: ToolDispatcher;
 
+  // Invariant: resolve the session id FIRST — before building the awareness
+  // source — so `buildRuntimeStateSource` and the dispatcher both receive the
+  // same resolved id, not the resume-only `config.sessionId` that is absent on
+  // fresh telegram/daemon sessions (fix for #2353).
+  const resolvedSession = resolveTopLevelSessionId({
+    sessionId: config.sessionId,
+    resume: config.resume,
+    depth: config.depth,
+    parentSessionId: config.parentSessionId,
+    surface,
+    memoized: args.getMintedSessionId(),
+  });
+  args.setMintedSessionId(resolvedSession.memoized);
+
   // STEP 2 — build the source, capturing the binding above.
+  // Uses `resolvedSession.id` (not `config.sessionId`) so get_runtime_state
+  // reports the correct id even on fresh non-CLI sessions.
   const runtimeStateSource: RuntimeStateSource = buildRuntimeStateSource({
     surface,
     getCwd: args.getCwd,
     modelName: args.model,
     providerName: args.providerName,
     permissionMode: args.permissionMode,
-    ...(config.sessionId !== undefined ? { sessionId: config.sessionId } : {}),
+    ...(resolvedSession.id !== undefined ? { sessionId: resolvedSession.id } : {}),
     ...(config.parentSessionId !== undefined
       ? { parentSessionId: config.parentSessionId }
       : {}),
@@ -138,36 +155,25 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
     getSubagents: args.getSubagents,
   });
 
-  // Invariant: presence and query construction MUST use the same session id,
-  // because the Telegram watcher resolves a session's ledger path from the id
-  // in its presence file. Resolve once here — BEFORE the presence write — and
-  // reuse the result for `new AnthropicDirectQuery`, so the presence file, the
-  // `session.init` event, and the ledger directory cannot diverge. Reading
-  // `config.sessionId` alone is what broke this: it is set only under
-  // --resume, so fresh sessions advertised nothing at all.
-  const resolvedSession = resolveTopLevelSessionId({
-    sessionId: config.sessionId,
-    resume: config.resume,
-    depth: config.depth,
-    parentSessionId: config.parentSessionId,
-    surface,
-    memoized: args.getMintedSessionId(),
-  });
-  args.setMintedSessionId(resolvedSession.memoized);
-
-  args.setPresenceSessionId(
-    registerPresenceLifecycle({
-      depth: config.depth,
-      parentSessionId: config.parentSessionId,
-      sessionId: resolvedSession.id,
-      currentPresenceSessionId: args.getPresenceSessionId(),
-      runtimeStateSource,
-      surface,
-      cwd: config.cwd,
-      providerName: args.providerName,
-      model: args.model,
-    }),
-  );
+  // Gate the presence write on `shouldAdvertise` (CLI surface or explicit id).
+  // Non-CLI fresh sessions now receive a stable minted id above but do NOT
+  // write a presence file — preserving the pre-existing daemon stale-record
+  // and worktree-sweep invariants (see PRESENCE_ADVERTISE_SURFACES).
+  if (resolvedSession.shouldAdvertise) {
+    args.setPresenceSessionId(
+      registerPresenceLifecycle({
+        depth: config.depth,
+        parentSessionId: config.parentSessionId,
+        sessionId: resolvedSession.id,
+        currentPresenceSessionId: args.getPresenceSessionId(),
+        runtimeStateSource,
+        surface,
+        cwd: config.cwd,
+        providerName: args.providerName,
+        model: args.model,
+      }),
+    );
+  }
 
   // STEP 3 — assign. The source built in STEP 2 is handed to the dispatcher so
   // the `get_runtime_state` handler resolves against it.
@@ -180,6 +186,7 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.env !== undefined ? { env: config.env } : {}),
         sessionId: resolvedSession.id,
         parentSessionId: config.parentSessionId,
+        ...(config.rootSessionId !== undefined ? { rootSessionId: config.rootSessionId } : {}),
         ...(config.subagentId !== undefined ? { subagentId: config.subagentId } : {}),
         // Fork-scoped central output cap (#661): forwarded from the child
         // config that forkSubagent stamped, arming maxOutputBytes for forks
@@ -190,6 +197,11 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         traceWriter: config.traceWriter,
         ...(config.bashOutputTailReporter !== undefined
           ? { bashOutputTailReporter: config.bashOutputTailReporter }
+          : {}),
+        // #2542/#2735: Detach registry forwarded from AgentConfig so REPL
+        // Ctrl+B handler and this dispatcher share the same instance.
+        ...(config.detachRegistry !== undefined
+          ? { detachRegistry: config.detachRegistry }
           : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
@@ -219,6 +231,11 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
   // (elicitation-router.ts). Strip it so the model proceeds on an assumption
   // or emits Blocked rather than burning a turn on an unanswerable prompt.
   // Narrower than the skill-dispatch strip: `terminal_font_size` is retained.
+  // Exception: what-if episodes (#2600) keep `ask_question` so the gate can
+  // log it as 'executed' and observe.ts can measure firstAction='ask' /
+  // askedBeforeActing. The episode gate blocks it immediately with proceed-on-
+  // assumption guidance — the call is observable without being interactive.
+  const episodeMode = isWhatifEpisode();
   const toolDefs = config.isSkillDispatch
     ? baseToolDefs.filter(
         (t) =>
@@ -227,11 +244,18 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
           t.name !== 'clipboard_write' &&
           t.name !== 'clipboard_read',
       )
-    : config.isNonInteractive
+    : config.isNonInteractive && !episodeMode
       ? baseToolDefs.filter(
           (t) => t.name !== 'ask_question' && t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
         )
-      : baseToolDefs;
+      : config.isNonInteractive && episodeMode
+        // Episode mode: keep ask_question so the gate can log it as 'executed'.
+        // All remaining cases (interactive sessions, with or without episodeMode)
+        // fall through to baseToolDefs — interactive sessions keep all tools.
+        ? baseToolDefs.filter(
+            (t) => t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
+          )
+        : baseToolDefs;
 
   return {
     queryDispatcher,

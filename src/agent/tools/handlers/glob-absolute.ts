@@ -55,8 +55,10 @@ export function splitAbsolutePattern(
   // `['', 'tmp', 'x']` -> '/tmp/x'; `['C:', 'x']` -> 'C:/x'; `['']` -> '/'.
   const joined = baseSegments.join('/');
   const base = joined === '' || /^[A-Za-z]:$/.test(joined) ? `${joined}/` : joined;
-  // Use pathModule.normalize so the returned values use the injected
-  // module's separator (the win32 injection in tests exercises the drive-letter
-  // branch; production always gets the platform default `path`).
-  return { base: pathModule.normalize(base), pattern: pathModule.normalize(rest.join('/')) };
+  // Use pathModule.normalize for the base (filesystem path: platform-specific
+  // separator is correct for directory operations). The pattern is always
+  // returned with forward slashes — glob engines require '/' as the separator
+  // and pathModule.normalize would produce backslashes on Windows, breaking
+  // patterns like '**/*.ts' by emitting '**\*.ts'.
+  return { base: pathModule.normalize(base), pattern: rest.join('/') };
 }

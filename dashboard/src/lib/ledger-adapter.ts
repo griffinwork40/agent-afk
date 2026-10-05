@@ -25,4 +25,7 @@ export {
   ledgerRecordToItem,
   accumulateTotals,
   ledgerToItems,
+  isClippedLedgerText,
+  toolResultPath,
+  LEDGER_CLIP_MARKER,
 } from '../../../src/web-server/shared/ledger-adapter';

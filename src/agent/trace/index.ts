@@ -28,6 +28,7 @@ export type {
   BudgetPayload,
   ClaimPayload,
   QueuedUserMessagePayload,
+  PeerMessagePayload,
   ClosurePayload,
   ClosureReason,
   CompactionPayloadInput,
@@ -68,6 +69,7 @@ export {
   BudgetPayloadSchema,
   ClaimPayloadSchema,
   QueuedUserMessagePayloadSchema,
+  PeerMessagePayloadSchema,
   ClosurePayloadSchema,
   ClosureReasonSchema,
   CompactionPayloadInputSchema,
@@ -97,3 +99,5 @@ export {
 } from './writer.js';
 export type { NdjsonTraceWriterOptions, TraceSink, TraceWriter } from './writer.js';
 export { emitSessionIdAssigned } from '../session/session-id-trace.js';
+
+export { emitPeerMessage } from './emit.js';

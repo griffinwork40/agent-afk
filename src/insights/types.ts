@@ -57,6 +57,15 @@ export interface TraceAggregates {
   toolDurationsMs: Record<string, number>;
   /** key 1 = flat direct-child invocation count (depth tracking not yet implemented) */
   subagentForkDepths: Record<number, number>;
+  /**
+   * Total compaction events across the traced window.
+   *
+   * Upper bound: a single `trace.jsonl` contains events from the root session
+   * AND every descendant subagent. Because compaction events carry no
+   * `subagentId` field they cannot be attributed, so this count includes child
+   * compactions as well as root-session ones — treat it as an upper bound on
+   * root-session compactions, not an exact count.
+   */
   compactionCount: number;
   /** closure reason → count */
   closureReasons: Record<string, number>;
@@ -115,6 +124,26 @@ export interface RoutingAggregates {
 }
 
 // ---------------------------------------------------------------------------
+// OutcomeAggregates — derived from ~/.afk/agent-framework/outcomes/
+// ---------------------------------------------------------------------------
+
+/** Per-ISO-week outcome counts (re-exported from outcomes aggregator). */
+export interface OutcomeWeekCounts {
+  goodProven: number;
+  goodPresumed: number;
+  bad: number;
+  blocked: number;
+  unknown: number;
+}
+
+export interface OutcomeAggregates {
+  /** key: ISO week string 'YYYY-Www' */
+  byWeek: Record<string, OutcomeWeekCounts>;
+  totalRecords: number;
+  parseErrors: number;
+}
+
+// ---------------------------------------------------------------------------
 // InsightAggregates — full merged result
 // ---------------------------------------------------------------------------
 
@@ -126,6 +155,8 @@ export interface InsightAggregates {
   traces: TraceAggregates;
   daemon: DaemonAggregates;
   routing: RoutingAggregates;
+  /** Per-week outcome label counts (good-proven / good-presumed / bad / blocked / unknown). */
+  outcomes: OutcomeAggregates;
 }
 
 // ---------------------------------------------------------------------------

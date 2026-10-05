@@ -9,6 +9,7 @@
  */
 
 import { realpathSync, existsSync, mkdirSync } from 'node:fs';
+import { sep } from 'node:path';
 import type { Environment } from '../types.js';
 
 /**
@@ -42,6 +43,12 @@ export function assertInsideSandbox(dir: string, env: Environment): void {
   }
 }
 
+/**
+ * Append the platform separator to `p` if it does not already end with one.
+ * Using path.sep (not hardcoded '/') ensures correctness on Windows where
+ * realpathSync returns backslash-separated paths and startsWith('C:\\foo\\') must
+ * be used rather than startsWith('C:\\foo/').
+ */
 function trailingSlash(p: string): string {
-  return p.endsWith('/') ? p : p + '/';
+  return p.endsWith(sep) ? p : p + sep;
 }
