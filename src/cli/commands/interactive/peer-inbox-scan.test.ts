@@ -12,7 +12,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { scanPeerInbox, type HeldEntryCorrupt } from './peer-inbox-scan.js';
-import { writeEnvelope, listPending, listHeld } from '../../../agent/peer/inbox-store.js';
+import { writeEnvelope, listPending, listHeld, releaseHeld, claimPending } from '../../../agent/peer/inbox-store.js';
 import { createWakeBudget } from '../../../agent/peer/guards.js';
 import type { PeerEnvelope } from '../../../agent/peer/envelope.js';
 
@@ -291,6 +291,62 @@ describe('scanPeerInbox — orphan detection', () => {
     expect(heldFiles).toContain(file);
     const pendingAfter = await listPending(sessionId);
     expect(pendingAfter).toHaveLength(0);
+  });
+
+  it('orphan corrupt receipt is removed before holdPending so accept succeeds after two scans', async () => {
+    const sessionId = randomUUID();
+    const env = makeEnvelope(sessionId);
+    await writeEnvelope(env);
+
+    const { getPeerInboxDir } = await import('../../../paths.js');
+    const base = getPeerInboxDir(sessionId);
+    const files = await listPending(sessionId);
+    const file = files[0]!;
+
+    // Simulate crash-after-partial-copy: create a corrupt delivered receipt.
+    await mkdir(join(base, 'delivered'), { recursive: true, mode: 0o700 });
+    await writeFile(join(base, 'delivered', file), 'CORRUPT DATA', { mode: 0o600 });
+
+    const scanArgs = {
+      sessionId,
+      mode: 'accept' as const,
+      wakeBudget: unlimitedBudget(),
+      capacity: 10,
+    };
+
+    // First scan: orphan=corrupt path runs clearDeliveredReceipt then holdPending.
+    const first = await scanPeerInbox(scanArgs);
+    expect(first.claimed).toHaveLength(0);
+    expect(first.held).toHaveLength(1);
+    expect(first.held[0]?.reason).toBe('corrupt');
+
+    // After first scan: the corrupt delivered receipt must be GONE.
+    const { readdir, stat: fsStat } = await import('fs/promises');
+    const deliveredPath = join(base, 'delivered', file);
+    let receiptExists = true;
+    try { await fsStat(deliveredPath); } catch { receiptExists = false; }
+    expect(receiptExists).toBe(false); // corrupt receipt was unlinked
+
+    // The file is now in held/, not pending/.
+    const heldFiles = await readdir(join(base, 'held'));
+    expect(heldFiles).toContain(file);
+    expect(await listPending(sessionId)).toHaveLength(0);
+
+    // Second scan: pending/ is empty — nothing new is held (no loop).
+    const second = await scanPeerInbox(scanArgs);
+    expect(second.claimed).toHaveLength(0);
+    expect(second.held).toHaveLength(0);
+
+    // Simulate /inbox accept: releaseHeld (held/ → pending/) then claimPending.
+    // Without the fix, claimPending would return null (EEXIST from the stale
+    // receipt). With the fix, the receipt is gone and claim succeeds.
+    const released = await releaseHeld(sessionId, file);
+    expect(released).toBe(true);
+
+    const claimed = await claimPending(sessionId, file);
+    // Must return a non-null envelope — the accept loop is broken.
+    expect(claimed).not.toBeNull();
+    expect(claimed?.messageId).toBe(env.messageId);
   });
 });
 

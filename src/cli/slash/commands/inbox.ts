@@ -145,6 +145,14 @@ export const inboxCmd: SlashCommand = {
         ids = new Set(matched);
       }
 
+      // When every held entry is corrupt, forceAccept skips all of them and
+      // returns 0 — which would show the generic "may have already been claimed"
+      // warning. Detect this case early and give the operator a clearer message.
+      if (ids === 'all' && held.every((h) => h.corrupt)) {
+        ctx.out.warn('All held messages are corrupt and cannot be accepted. Use /inbox drop to remove them.');
+        return 'continue';
+      }
+
       const count = await notifierRef.forceAccept(ids);
       if (count === 0) {
         ctx.out.warn('No messages were accepted (may have already been claimed).');

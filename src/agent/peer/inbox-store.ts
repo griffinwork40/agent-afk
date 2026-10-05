@@ -199,41 +199,9 @@ export async function claimPending(
   }
 }
 
-/**
- * Check whether `file` in `pending/` is an orphan from a prior crash.
- *
- * An orphan is a pending entry whose delivered receipt already exists —
- * produced when a process dies after `link/copyFile` but before `unlink`.
- *
- * Returns:
- *   - `'valid'`   — receipt exists AND parses as a valid envelope; the pending
- *                   source was removed (callers must NOT spend wake budget).
- *   - `'corrupt'` — receipt exists but is unparseable (partial copy on crash);
- *                   pending source is left untouched (content must never be
- *                   destroyed on a bad receipt).
- *   - `'none'`    — no receipt; not an orphan, process normally.
- *
- * Never throws.
- */
-export async function checkOrphanPending(
-  sessionId: string,
-  file: string,
-): Promise<'valid' | 'corrupt' | 'none'> {
-  const base = getPeerInboxDir(sessionId);
-  const dst = join(base, 'delivered', file);
-  let raw: string;
-  try {
-    raw = await readFile(dst, 'utf8');
-  } catch {
-    return 'none'; // receipt absent — not an orphan
-  }
-  // Receipt exists. Try to parse it.
-  const env = parseEnvelope(raw);
-  if (env === null) return 'corrupt'; // do NOT delete pending — bad receipt
-  // Valid receipt: remove the orphaned pending source, ignore failures.
-  await unlink(join(base, 'pending', file)).catch(() => undefined);
-  return 'valid';
-}
+// Orphan detection and corrupt-receipt cleanup live in the sibling module
+// inbox-store.orphan.ts; re-exported here for backward compatibility.
+export { checkOrphanPending, clearDeliveredReceipt } from './inbox-store.orphan.js';
 
 /**
  * Read a pending envelope WITHOUT claiming it, so a receiver can decide

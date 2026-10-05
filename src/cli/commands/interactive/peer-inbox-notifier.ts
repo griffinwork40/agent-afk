@@ -378,6 +378,10 @@ export class PeerInboxNotifier {
     this.opts.writeLine(
       palette.dim(`↘ peer message held (corrupt/unsupported format: ${safeFile}) · /inbox drop to remove`),
     );
+    // Invariant: messageId and peer are unavailable here — the file is
+    // unparseable, so no structured envelope exists. peer is set to 'unknown'
+    // and bytes to 0 rather than omitting the trace event entirely, so the
+    // operator can see the quarantine in the trace even without a sender id.
     void emitPeerMessage(this.resolveTraceWriter(), {
       action: 'held',
       peer: 'unknown',

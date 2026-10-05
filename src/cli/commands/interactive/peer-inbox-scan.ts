@@ -34,6 +34,7 @@ import {
   claimPending,
   holdPending,
   checkOrphanPending,
+  clearDeliveredReceipt,
 } from '../../../agent/peer/inbox-store.js';
 import type { PeerInboundMode } from '../../../agent/peer/inbound-mode.js';
 import type { WakeBudget } from '../../../agent/peer/guards.js';
@@ -105,6 +106,14 @@ async function processPendingFile(
     const orphan = await checkOrphanPending(args.sessionId, file);
     if (orphan === 'valid') return;
     if (orphan === 'corrupt') {
+      // Invariant: unlink the corrupt delivered receipt BEFORE moving the
+      // pending file to held/. Without this, releaseHeld (held/ → pending/)
+      // followed by claimPending (link pending/ → delivered/) hits EEXIST
+      // forever because the stale corrupt receipt is still on disk — creating
+      // an infinite accept loop where every /inbox accept re-scans, finds the
+      // same corrupt orphan, and immediately re-holds it. Removing the receipt
+      // first lets a future claimPending create a fresh receipt successfully.
+      await clearDeliveredReceipt(args.sessionId, file);
       const moved = await holdPending(args.sessionId, file);
       if (moved) result.held.push({ reason: 'corrupt', file });
       return;
