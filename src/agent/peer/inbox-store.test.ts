@@ -393,6 +393,46 @@ describe('hold/listHeld/releaseHeld/dropHeld', () => {
     await expect(dropHeld(TARGET_ID, 'plain-name.json')).resolves.toBe(false);
   });
 
+  it('assertBareFilename: double-dots within a filename component are accepted', async () => {
+    // 'corrupt..json' and 'a..b.json' contain ".." as a substring but NOT as a
+    // bare path component — they must not be rejected (the bug was file.includes('..')).
+    const { peekPending, holdPending, dropHeld } = await getInboxStore();
+    await expect(peekPending(TARGET_ID, 'corrupt..json')).resolves.toBe('vanished');
+    await expect(peekPending(TARGET_ID, 'a..b.json')).resolves.toBe('vanished');
+    await expect(holdPending(TARGET_ID, 'corrupt..json')).resolves.toBe(false);
+    await expect(dropHeld(TARGET_ID, 'a..b.json')).resolves.toBe(false);
+  });
+
+  it('assertBareFilename: exact traversal components are still rejected', async () => {
+    // Bare '..' and '../x' must still throw — they are path traversal.
+    const { peekPending } = await getInboxStore();
+    await expect(peekPending(TARGET_ID, '..')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, '../x')).rejects.toThrow(/Invalid file/);
+    await expect(peekPending(TARGET_ID, 'a/b')).rejects.toThrow(/Invalid file/);
+  });
+
+  it('claimPending/releaseHeld/reclaimDelivered/writeInjectionAck reject traversal filenames', async () => {
+    // Verify the four functions newly guarded with assertBareFilename.
+    const { claimPending, releaseHeld, reclaimDelivered, writeInjectionAck } = await getInboxStore();
+    const traversalCases = ['..', '../etc', 'a/b', 'a\\b'];
+    for (const bad of traversalCases) {
+      await expect(claimPending(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+      await expect(releaseHeld(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+      await expect(reclaimDelivered(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+      await expect(writeInjectionAck(TARGET_ID, bad)).rejects.toThrow(/Invalid file/);
+    }
+  });
+
+  it('claimPending/releaseHeld/reclaimDelivered/writeInjectionAck accept double-dot filenames', async () => {
+    // 'corrupt..json' must be accepted by all four guarded functions — they should
+    // return false / resolve (not throw) for a missing-file bare name.
+    const { claimPending, releaseHeld, reclaimDelivered, writeInjectionAck } = await getInboxStore();
+    await expect(claimPending(TARGET_ID, 'corrupt..json')).resolves.toBeNull();
+    await expect(releaseHeld(TARGET_ID, 'corrupt..json')).resolves.toBe(false);
+    await expect(reclaimDelivered(TARGET_ID, 'corrupt..json')).resolves.toBe(false);
+    await expect(writeInjectionAck(TARGET_ID, 'corrupt..json')).resolves.toBeUndefined();
+  });
+
   it('listHeld returns { file, corrupt: true } for an unparseable held file', async () => {
     const { listHeld } = await getInboxStore();
     const heldDir = path.join(tmpDir, 'inbox', TARGET_ID, 'held');

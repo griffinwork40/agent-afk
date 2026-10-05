@@ -113,8 +113,8 @@ export function envelopeFilename(env: Pick<PeerEnvelope, 'ts' | 'messageId'>): s
 // ---------------------------------------------------------------------------
 
 /**
- * Validate that `file` is a bare filename — no path separators or `..`
- * traversal components.
+ * Validate that `file` is a bare filename — no path separators or `.`/`..`
+ * path components that would traverse out of the inbox directory.
  *
  * Parity with the `sessionId` guard in `paths.peer.ts:37`. Although `readdir`
  * on POSIX never yields entries containing `/`, and held/ files are written by
@@ -122,18 +122,21 @@ export function envelopeFilename(env: Pick<PeerEnvelope, 'ts' | 'messageId'>): s
  * matters: callers accept `file` values from the inbox UI and from test code,
  * so an accidental traversal is worth blocking explicitly.
  *
- * Rejects `/` and `\` (Windows path separator), the bare `..` component, and
- * any embedded `..` segment.
+ * Rejects `/` and `\` (Windows path separator), and exact `.` or `..` path
+ * components.  A double-dot WITHIN a name component (e.g. `corrupt..json` or
+ * `a..b.json`) is accepted — only the bare components `.` and `..` are path-
+ * traversal risks.
  *
- * @throws {Error} when `file` contains a path separator or traversal sequence.
+ * @throws {Error} when `file` contains a path separator or a traversal component.
  */
 function assertBareFilename(file: string): void {
-  if (
-    file.includes('/') ||
-    file.includes('\\') ||
-    file === '..' ||
-    file.includes('..')
-  ) {
+  if (file.includes('/') || file.includes('\\')) {
+    throw new Error(`Invalid file parameter for inbox operation: "${file}"`);
+  }
+  // Split on both separators to catch Windows-style paths and reject any
+  // component that is the bare `.` or `..` traversal token.
+  const components = file.split(/[/\\]/);
+  if (components.some((c) => c === '.' || c === '..')) {
     throw new Error(`Invalid file parameter for inbox operation: "${file}"`);
   }
 }
@@ -202,6 +205,7 @@ export async function claimPending(
   sessionId: string,
   file: string,
 ): Promise<PeerEnvelope | null> {
+  assertBareFilename(file);
   const base = getPeerInboxDir(sessionId);
   const src = join(base, 'pending', file);
   const dst = join(base, 'delivered', file);
@@ -353,6 +357,7 @@ export async function listHeld(sessionId: string): Promise<HeldEntry[]> {
  * next receiver poll. Returns `true` on success, `false` when not found.
  */
 export async function releaseHeld(sessionId: string, file: string): Promise<boolean> {
+  assertBareFilename(file);
   const base = getPeerInboxDir(sessionId);
   const src = join(base, 'held', file);
   const dst = join(base, 'pending', file);
@@ -407,6 +412,7 @@ export async function countPending(sessionId: string): Promise<number> {
  * `delivered/` (already consumed or double-reclaimed).
  */
 export async function reclaimDelivered(sessionId: string, file: string): Promise<boolean> {
+  assertBareFilename(file);
   const base = getPeerInboxDir(sessionId);
   const src = join(base, 'delivered', file);
   const dst = join(base, 'pending', file);
@@ -466,6 +472,7 @@ export async function findDeliveredEnvelope(
  * injection does not interrupt the model turn.
  */
 export async function writeInjectionAck(sessionId: string, file: string): Promise<void> {
+  assertBareFilename(file);
   try {
     const base = getPeerInboxDir(sessionId);
     const ackedDir = join(base, 'delivered', 'acked');
