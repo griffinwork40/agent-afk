@@ -108,6 +108,8 @@ const SHELL_TOOLS = new Set([
 export const SUBAGENT_TOOLS = new Set([
   'Agent', 'Task',
   'agent', 'cancel_background_job', 'send_message_to_agent', 'get_background_job_health',
+  // Peer-session tools — top-level only; same subagent bucket as send_message_to_agent.
+  'list_sessions', 'send_to_session',
 ]);
 export const SKILL_TOOLS = new Set([
   'Skill',
@@ -146,9 +148,10 @@ const WEB_TOOLS = new Set([
   'web_scrape',
   // web_request: structured HTTP tool (all methods, SSRF-guarded, #1413).
   'web_request',
-  // image_generate: outbound OpenAI Images API call — external HTTP, same
-  // conceptual shape as web_request (billing + network side effect).
+  // image_generate / image_edit: outbound OpenAI Images API calls — external HTTP,
+  // same conceptual shape as web_request (billing + network side effect).
   'image_generate',
+  'image_edit',
 ]);
 const BROWSER_TOOLS = new Set([
   // agent-afk native browser-control tools (src/browser/, src/agent/tools/handlers/browser-*.ts).

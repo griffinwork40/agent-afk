@@ -19,6 +19,7 @@ import {
   readdirSync,
   rmSync,
 } from 'node:fs';
+import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { join, resolve, tmpdir } from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
@@ -731,9 +732,7 @@ describe('materializeSandboxes: git worktrees', () => {
   });
 
   afterEach(async () => {
-    // Retry ENOTEMPTY: background git tooling (fsmonitor, git-ai, indexers) can
-    // still be writing into .git when a test finishes.
-    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    rmSyncRetry(root);
   });
 
   it('creates project worktrees for both envs; cleanup removes sandboxes', async () => {

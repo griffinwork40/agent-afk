@@ -10,8 +10,8 @@ import { updateScheduleTool } from './schemas.schedule.js';
 import { cancelBackgroundJobTool, sendMessageToAgentTool, getBackgroundJobHealthTool } from './schemas.orchestration.js';
 
 describe('builtinToolSchemas', () => {
-  it('contains exactly 40 tools', () => {
-    expect(builtinToolSchemas).toHaveLength(40);
+  it('contains exactly 43 tools', () => {
+    expect(builtinToolSchemas).toHaveLength(43);
   });
 
   it('exports the expected tool names', () => {
@@ -29,6 +29,7 @@ describe('builtinToolSchemas', () => {
       'web_scrape',
       'web_request',
       'image_generate',
+      'image_edit',
       'create_schedule',
       'update_schedule',
       'list_schedules',
@@ -56,6 +57,8 @@ describe('builtinToolSchemas', () => {
       'json_query',
       'clipboard_write',
       'clipboard_read',
+      'list_sessions',
+      'send_to_session',
     ]);
   });
 
@@ -90,6 +93,7 @@ describe('builtinToolSchemas', () => {
       'test_run',
       'get_facet',
       'clipboard_read',
+      'list_sessions',
     ]);
     for (const tool of builtinToolSchemas) {
       expect(tool.input_schema.required).toBeDefined();

@@ -34,6 +34,7 @@ import { Agent, fetch as undiciFetch } from 'undici';
 import { env } from '../config/env.js';
 import { retryFetch, type RetryFetchOptions } from './retryFetch.js';
 import type { FetchFn } from './types.js';
+import { createGuardedLookup } from './egress-guard.lookup.js';
 
 /**
  * Blocked IPv4 CIDRs. `0.0.0.0/8` (RFC1122 "this network") is included because
@@ -135,35 +136,27 @@ function isBlockedAddress(ip: string): boolean {
  * Undici resolves through this callback at socket-connect time. Classifying
  * all answers here closes the time-of-check/time-of-use gap that would exist
  * if fetch performed a second, unchecked DNS lookup after the preflight.
+ *
+ * History: the original inline hook called back with the single-address form
+ * regardless of `options.all`. On Node 24+, undici passes `{hints:1024,
+ * all:true}` (autoSelectFamily) and `net` throws ERR_INVALID_IP_ADDRESS when
+ * it receives a single-address reply for an all=true request. The hook is now
+ * built via `createGuardedLookup` in `egress-guard.lookup.ts`, which honours
+ * the `options.all` contract. Latent until PR #2697 moved production fetches
+ * onto npm undici's own fetch + this Agent.
  */
 const guardedDispatcher = new Agent({
   connect: {
-    lookup(hostname, _options, callback) {
-      void defaultLookup(hostname).then(
-        (records) => {
-          const blocked = records.find((record) => isBlockedAddress(record.address));
-          if (blocked !== undefined) {
-            callback(
-              new EgressBlockedError(
-                `refusing to connect to ${hostname} (resolved) — internal/private address ` +
-                  `${blocked.address} (loopback, link-local, cloud metadata, or RFC1918 space). ` +
-                  'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
-              ),
-              '',
-              0,
-            );
-            return;
-          }
-          const selected = records[0];
-          if (selected === undefined) {
-            callback(new Error(`DNS lookup returned no addresses for ${hostname}`), '', 0);
-            return;
-          }
-          callback(null, selected.address, isIP(selected.address));
-        },
-        (err: unknown) => callback(err as Error, '', 0),
-      );
-    },
+    lookup: createGuardedLookup({
+      lookupFn: defaultLookup,
+      isBlocked: isBlockedAddress,
+      makeBlockError: (hostname, blockedAddress) =>
+        new EgressBlockedError(
+          `refusing to connect to ${hostname} (resolved) — internal/private address ` +
+            `${blockedAddress} (loopback, link-local, cloud metadata, or RFC1918 space). ` +
+            'Set AFK_WEB_ALLOW_PRIVATE_HOSTS=1 to allow private-host access.',
+        ),
+    }),
   },
 });
 
@@ -303,6 +296,8 @@ export async function guardedFetch(
   //
   // Injected test fetches (fetchFn !== globalThis.fetch) bypass this path so
   // tests continue to control the full fetch seam without a real dispatcher.
+  // Invariant: fetchFn is immutable across hops — the useUndici hoist is safe
+  // because fetchFn is captured once from the caller and never reassigned.
   const useUndici =
     fetchFn === globalThis.fetch && !(opts.allowPrivateHosts ?? privateHostsAllowed());
 
@@ -317,6 +312,9 @@ export async function guardedFetch(
     // Use npm undici's own fetch (same package as the Agent) on the
     // production path, so both ends of the dispatcher protocol come from
     // the same copy of undici.  Fall back to the injected fetchFn otherwise.
+    // The double cast (as unknown as FetchFn) is needed because undici's fetch
+    // types `body` as `BodyInit | null` while the DOM spec adds `ReadableStream`;
+    // the runtime behaviour is identical — only the TS overload surface differs.
     const activeFetch: FetchFn = useUndici ? (undiciFetch as unknown as FetchFn) : fetchFn;
     const res = await retryFetch(activeFetch, target, requestInit, opts.retry ?? {});
     if (!REDIRECT_STATUS.has(res.status)) return res;

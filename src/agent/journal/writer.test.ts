@@ -152,6 +152,7 @@ describe('createMessageJournal', () => {
   });
 
   it('uses 0700 dirs and 0600 files', async () => {
+    // Windows: genuinely POSIX-only — NTFS has no POSIX permission bits; mode 0o700/0o600 assertions don't apply
     if (process.platform === 'win32') return;
     const j = createMessageJournal({ getSessionId: () => 'modes' });
     j.append(0, user('a'));

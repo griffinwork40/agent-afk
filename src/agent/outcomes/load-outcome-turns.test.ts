@@ -1,5 +1,5 @@
 /**
- * Hook-level tests for the journal fallback path.
+ * Hook-level tests for the journal fallback path and subagent artifact recovery.
  *
  * Verifies that when no sidecar exists but a journal is present, the outcome
  * hook produces real labeling votes rather than empty-turn results.
@@ -11,6 +11,10 @@
  *   - loadOutcomeTurns returns source:'sidecar' when sidecar exists
  *   - loadOutcomeTurns returns source:'journal' when only journal exists
  *   - loadOutcomeTurns returns source:'none' when neither exists
+ *   - recoverSubagentArtifacts collects commits/PRs from subagent journals (#2446)
+ *   - recoverSubagentArtifacts is empty when no subagent journals exist
+ *   - recoverSubagentArtifacts deduplicates artifacts across multiple children
+ *   - recoverSubagentArtifacts skips a corrupt subagent journal gracefully
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -39,6 +43,41 @@ function writeJournal(
       ts: Date.now(),
       kind: 'meta',
       sessionId,
+      writerId: 'test',
+    }),
+    ...messages.map((msg, index) =>
+      JSON.stringify({
+        v: 1,
+        ts: Date.now() + index,
+        kind: 'append',
+        index,
+        message: msg,
+      }),
+    ),
+  ];
+  writeFileSync(journalPath, records.join('\n') + '\n', 'utf8');
+}
+
+/**
+ * Write a subagent journal at `afkHome/state/sessions/<id>/subagents/<subId>.jsonl`.
+ */
+function writeSubagentJournal(
+  afkHome: string,
+  sessionId: string,
+  subagentId: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: unknown[] }>,
+): void {
+  const subDir = join(afkHome, 'state', 'sessions', sessionId, 'subagents');
+  mkdirSync(subDir, { recursive: true });
+  const journalPath = join(subDir, `${subagentId}.jsonl`);
+
+  const records: string[] = [
+    JSON.stringify({
+      v: 1,
+      ts: Date.now(),
+      kind: 'meta',
+      sessionId,
+      subagentId,
       writerId: 'test',
     }),
     ...messages.map((msg, index) =>
@@ -292,5 +331,157 @@ describe('sessionHistoryMessages — history, not the folded context', () => {
       rec(1, user('second')),
     ];
     expect(sessionHistoryMessages(records)).toHaveLength(2);
+  });
+});
+
+// ─── recoverSubagentArtifacts (#2446) ────────────────────────────────────────
+
+describe('recoverSubagentArtifacts — no subagent journals', () => {
+  it('returns empty artifacts when no subagents dir exists', async () => {
+    const { recoverSubagentArtifacts } = await import('./load-outcome-turns.js');
+    const sessionId = 'sess-no-subagents';
+    // No session dir at all — should not throw
+    const result = recoverSubagentArtifacts(sessionId);
+    expect(result.commits).toEqual([]);
+    expect(result.prs).toEqual([]);
+    expect(result.repo).toBeNull();
+  });
+
+  it('returns empty artifacts when subagents dir is empty', async () => {
+    const { recoverSubagentArtifacts } = await import('./load-outcome-turns.js');
+    const sessionId = 'sess-empty-subagents';
+    // Create a parent journal so the session dir exists, but no subagents
+    writeJournal(tmpDir, sessionId, [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+    ]);
+    const result = recoverSubagentArtifacts(sessionId);
+    expect(result.commits).toEqual([]);
+    expect(result.prs).toEqual([]);
+  });
+});
+
+describe('recoverSubagentArtifacts — collects child commits and PRs (#2446)', () => {
+  it('recovers a commit SHA from a single subagent journal', async () => {
+    const { recoverSubagentArtifacts } = await import('./load-outcome-turns.js');
+    const sessionId = 'sess-sub-commit';
+    writeSubagentJournal(tmpDir, sessionId, 'child-1', [
+      { role: 'user', content: [{ type: 'text', text: 'make a commit' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'tu-1', name: 'bash', input: { command: 'git commit -m "feat: x"' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            toolUseId: 'tu-1',
+            content: [{ type: 'text', text: '[main abc1234] feat: x' }],
+          },
+        ],
+      },
+    ]);
+    const result = recoverSubagentArtifacts(sessionId);
+    expect(result.commits).toContain('abc1234');
+    expect(result.prs).toEqual([]);
+  });
+
+  it('recovers a PR URL from a single subagent journal', async () => {
+    const { recoverSubagentArtifacts } = await import('./load-outcome-turns.js');
+    const sessionId = 'sess-sub-pr';
+    writeSubagentJournal(tmpDir, sessionId, 'child-pr', [
+      { role: 'user', content: [{ type: 'text', text: 'open a PR' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'tu-pr', name: 'bash', input: { command: 'gh pr create --title "feat" --body ""' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            toolUseId: 'tu-pr',
+            content: [{ type: 'text', text: 'https://github.com/org/repo/pull/42' }],
+          },
+        ],
+      },
+    ]);
+    const result = recoverSubagentArtifacts(sessionId);
+    expect(result.prs).toContain('https://github.com/org/repo/pull/42');
+  });
+
+  it('merges artifacts from multiple subagent journals without duplicates', async () => {
+    const { recoverSubagentArtifacts } = await import('./load-outcome-turns.js');
+    const sessionId = 'sess-multi-sub';
+
+    // Child A: one commit
+    writeSubagentJournal(tmpDir, sessionId, 'child-a', [
+      { role: 'user', content: [{ type: 'text', text: 'commit A' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu-a', name: 'bash', input: { command: 'git commit -m "feat: A"' } }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', toolUseId: 'tu-a', content: [{ type: 'text', text: '[main aaa1111] feat: A' }] }],
+      },
+    ]);
+
+    // Child B: a different commit + same commit as A (dedup test)
+    writeSubagentJournal(tmpDir, sessionId, 'child-b', [
+      { role: 'user', content: [{ type: 'text', text: 'commit B' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'tu-b1', name: 'bash', input: { command: 'git commit -m "feat: B"' } },
+          { type: 'tool_use', id: 'tu-b2', name: 'bash', input: { command: 'git commit -m "feat: dupe"' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', toolUseId: 'tu-b1', content: [{ type: 'text', text: '[main bbb2222] feat: B' }] },
+          { type: 'tool_result', toolUseId: 'tu-b2', content: [{ type: 'text', text: '[main aaa1111] feat: dupe' }] },
+        ],
+      },
+    ]);
+
+    const result = recoverSubagentArtifacts(sessionId);
+    expect(result.commits).toContain('aaa1111');
+    expect(result.commits).toContain('bbb2222');
+    // aaa1111 appeared in both children — must appear exactly once
+    expect(result.commits.filter((s) => s === 'aaa1111')).toHaveLength(1);
+  });
+
+  it('skips a corrupt subagent journal gracefully', async () => {
+    const { recoverSubagentArtifacts } = await import('./load-outcome-turns.js');
+    const sessionId = 'sess-corrupt-sub';
+
+    // Write a valid subagent journal
+    writeSubagentJournal(tmpDir, sessionId, 'child-good', [
+      { role: 'user', content: [{ type: 'text', text: 'commit' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tu-g', name: 'bash', input: { command: 'git commit -m "ok"' } }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', toolUseId: 'tu-g', content: [{ type: 'text', text: '[main ccc3333] ok' }] }],
+      },
+    ]);
+
+    // Write a corrupt subagent journal (invalid JSONL)
+    const subDir = join(tmpDir, 'state', 'sessions', sessionId, 'subagents');
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(subDir, 'child-bad.jsonl'), '{NOT VALID JSON\n', 'utf8');
+
+    // Should recover commits from the good child and skip the bad one
+    const result = recoverSubagentArtifacts(sessionId);
+    expect(result.commits).toContain('ccc3333');
+    // No throw: the corrupt journal was silently skipped
   });
 });

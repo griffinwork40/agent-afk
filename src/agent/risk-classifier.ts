@@ -159,6 +159,33 @@ const BASH_SAFE: readonly string[] = [
   'grep ',
   'echo ',
   'printf ',
+  // GitHub CLI read-only subcommands — commonly used by agents to poll CI/PR
+  // status without mutating anything. Only the read-access verbs (view, list,
+  // checks, status, diff) are safe-listed; mutating verbs (merge, create, edit,
+  // close, comment, review, approve) are NOT listed here and fall through to
+  // the default-medium rule.
+  // Matched by substring so `gh pr view --json` and `gh run list --limit 5`
+  // both hit the entry. The check order (high → medium → safe) means any
+  // command that ALSO contains a BASH_HIGH token (e.g. `| bash`) is gated
+  // before it ever reaches this table.
+  'gh pr view',
+  'gh pr list',
+  'gh pr checks',
+  'gh pr status',
+  'gh pr diff',
+  'gh run view',
+  'gh run list',
+  'gh issue view',
+  'gh issue list',
+  'gh issue status',
+  'gh repo view',
+  // curl/wget read-only HTTP probes — HEAD and spider modes are non-mutating
+  // and widely used in CI health checks. `-I` is the short form of --head.
+  'curl --head',
+  'curl -I ',
+  'curl -sI ',
+  'curl -si ',
+  'wget --spider',
 ];
 
 // ---------------------------------------------------------------------------

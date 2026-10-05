@@ -298,10 +298,19 @@ export function indexKeyForPath(
   // never produces a false null when one side was realpath-resolved and the
   // other was not. Fall back to raw strings when resolution fails (dangling
   // symlink, missing path).
+  //
+  // Separate try/catch blocks so that a successful realpathSync(root) is kept
+  // even when realpathSync(leaf) throws (dangling leaf symlink). A single
+  // combined try/catch would discard the resolved root on a leaf failure,
+  // defeating the symlink-aliasing Contract above.
   let resolvedRoot = root;
   let resolvedLeaf = leaf;
-  try { resolvedRoot = realpathSync(root); } catch { /* keep raw */ }
-  try { resolvedLeaf = realpathSync(leaf); } catch { /* keep raw */ }
+  try {
+    resolvedRoot = realpathSync(root);
+  } catch { /* keep raw root string when the path cannot be resolved */ }
+  try {
+    resolvedLeaf = realpathSync(leaf);
+  } catch { /* keep raw leaf string when the path cannot be resolved */ }
   if (!resolvedLeaf.startsWith(resolvedRoot + sep) && resolvedLeaf !== resolvedRoot) return null;
   const rel = resolvedLeaf.slice(resolvedRoot.length).replace(/^[/\\]+/, '');
   if (!rel) return null;

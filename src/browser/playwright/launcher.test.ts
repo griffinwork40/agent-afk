@@ -607,6 +607,13 @@ describe('BrowserLauncher', () => {
       vi.useRealTimers();
     });
 
+    // afterEach ensures fake timers don't leak into sibling tests even when a
+    // test fails mid-run; afterAll alone would leave them active if an earlier
+    // test in this suite had installed vi.useFakeTimers() and then thrown.
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     afterAll(() => {
       vi.useRealTimers();
     });

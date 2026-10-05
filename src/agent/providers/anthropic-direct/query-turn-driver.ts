@@ -47,6 +47,7 @@ export interface TurnDriverContext {
   readonly thinking: import('@anthropic-ai/sdk/resources').ThinkingConfigParam | undefined;
   readonly effort: import('../../types/sdk-types.js').EffortLevel | undefined;
   readonly temperature: number | undefined;
+  readonly thinkingBlockBinding: import('./types.js').RunTurnInput['thinkingBlockBinding'] | undefined;
   readonly baseUrl: string | undefined;
   readonly maxToolUseIterations: number | undefined;
   readonly softDeadlineMs: number | undefined;
@@ -58,6 +59,14 @@ export interface TurnDriverContext {
   readonly fastModeController: import('../../fast-mode.js').FastModeController | undefined;
   /** Inter-round steering callback; undefined when not wired (top-level or non-background sessions). */
   readonly beforeNextRound: (() => string | undefined) | undefined;
+  /**
+   * Provider-side stop-hook seam (issue #2714). Undefined when not wired.
+   * Called before `turn.completed` on natural turn ends; see RunTurnInput.beforeTurnEnd.
+   *
+   * Finding 3: optional second arg threads the just-finished assistant text so
+   * buildStopContext doesn't need to scan stale history.
+   */
+  readonly beforeTurnEnd: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined;
   /**
    * The session's configured working directory — `config.cwd || process.cwd()`.
    * Used instead of bare `process.cwd()` so daemon tasks whose `cwd` differs
@@ -95,6 +104,51 @@ function buildSessionInfo(ctx: TurnDriverContext): ProviderSessionInfo {
     apiKeySource: ctx.retry.authMode,
     version: 'anthropic-direct-v1',
   };
+}
+
+/**
+ * Build the immutable {@link RunTurnInput} for one user turn.
+ *
+ * Extracted from `driveTurns` to keep that generator under the function-size
+ * ceiling. Owns the `prepareTurnRequest` call and all the optional-field
+ * spread expansions — the shape is fixed for the lifetime of a single turn
+ * (headers, model, signal) so it is safe to snapshot once here.
+ */
+function buildTurnRunInput(
+  ctx: TurnDriverContext,
+  controller: ReturnType<typeof ctx.abort.begin>,
+  system: ReturnType<typeof ctx.composeSystem>,
+): ReturnType<typeof prepareTurnRequest> {
+  return prepareTurnRequest({
+    client: ctx.retry.client as unknown as AnthropicClientLike,
+    messages: ctx.state.messages,
+    system,
+    tools: ctx.state.currentPermissionMode === 'plan'
+      ? ctx.tools
+      : (ctx.tools?.filter((t) => t.name !== EXIT_PLAN_MODE_TOOL_NAME) ?? null),
+    toolDispatcher: ctx.state.toolDispatcher,
+    model: ctx.state.currentModel,
+    maxTokens: ctx.maxTokens,
+    signal: controller.signal,
+    authMode: ctx.retry.authMode,
+    sessionId: ctx.initSessionId,
+    requestId: randomUUID(),
+    ...(ctx.fastModeController ? { fastModeController: ctx.fastModeController } : {}),
+    ...(ctx.thinking !== undefined ? { thinking: ctx.thinking } : {}),
+    ...(ctx.effort !== undefined ? { effort: ctx.effort } : {}),
+    ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
+    ...(ctx.thinkingBlockBinding !== undefined ? { thinkingBlockBinding: ctx.thinkingBlockBinding } : {}),
+    ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
+    ...(ctx.maxToolUseIterations !== undefined ? { maxToolUseIterations: ctx.maxToolUseIterations } : {}),
+    ...(ctx.softDeadlineMs !== undefined ? { softDeadlineMs: ctx.softDeadlineMs } : {}),
+    ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
+    ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
+    ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
+    ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),
+    ...(ctx.beforeTurnEnd ? { beforeTurnEnd: ctx.beforeTurnEnd } : {}),
+    journalSync: ctx.state.journalSync,
+    onUsageProgress: (usage) => { ctx.state.lastUsage = usage; },
+  });
 }
 
 /** Drive the session: emit `session.init`, then loop user turns until closed. */
@@ -183,34 +237,9 @@ export async function* driveTurns(ctx: TurnDriverContext): AsyncGenerator<Provid
 
       // Snapshot preference + eligibility exactly once. The resulting headers
       // and body intent live on one immutable RunTurnInput for every round/retry.
-      const { decision: fastDecision, runInput } = prepareTurnRequest({
-        client: ctx.retry.client as unknown as AnthropicClientLike,
-        messages: ctx.state.messages,
-        system,
-        tools: ctx.state.currentPermissionMode === 'plan'
-          ? ctx.tools
-          : (ctx.tools?.filter((t) => t.name !== EXIT_PLAN_MODE_TOOL_NAME) ?? null),
-        toolDispatcher: ctx.state.toolDispatcher,
-        model: ctx.state.currentModel,
-        maxTokens: ctx.maxTokens,
-        signal: controller.signal,
-        authMode: ctx.retry.authMode,
-        sessionId: ctx.initSessionId,
-        requestId: randomUUID(),
-        ...(ctx.fastModeController ? { fastModeController: ctx.fastModeController } : {}),
-        ...(ctx.thinking !== undefined ? { thinking: ctx.thinking } : {}),
-        ...(ctx.effort !== undefined ? { effort: ctx.effort } : {}),
-        ...(ctx.temperature !== undefined ? { temperature: ctx.temperature } : {}),
-        ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
-        ...(ctx.maxToolUseIterations !== undefined ? { maxToolUseIterations: ctx.maxToolUseIterations } : {}),
-        ...(ctx.softDeadlineMs !== undefined ? { softDeadlineMs: ctx.softDeadlineMs } : {}),
-        ...(ctx.traceWriter ? { traceWriter: ctx.traceWriter } : {}),
-        ...(ctx.subagentId !== undefined ? { subagentId: ctx.subagentId } : {}),
-        ...(ctx.throttleQueue ? { throttleQueue: ctx.throttleQueue } : {}),
-        ...(ctx.beforeNextRound ? { beforeNextRound: ctx.beforeNextRound } : {}),
-        journalSync: ctx.state.journalSync,
-        onUsageProgress: (usage) => { ctx.state.lastUsage = usage; },
-      });
+      // Extracted to buildTurnRunInput() to keep driveTurns within the function-
+      // size ceiling while preserving the full spread-expansion logic.
+      const { decision: fastDecision, runInput } = buildTurnRunInput(ctx, controller, system);
 
       // Tracks whether THIS turn yielded a terminal event (`turn.completed`
       // → 'done', or `error`). The abort handling below synthesizes a

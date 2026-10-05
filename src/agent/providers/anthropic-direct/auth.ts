@@ -45,6 +45,9 @@ export const OAUTH_BETA_HEADER =
  */
 export const EFFORT_BETA_HEADER = 'effort-2025-11-24';
 
+/** Beta that makes dropped Fable 5.1 thinking blocks visible via input_transformations. */
+export const THINKING_BINDING_CONTROLS_BETA_HEADER = 'thinking-binding-controls-2026-08-01';
+
 /**
  * `User-Agent` value the CLI sends. The Anthropic API gates certain model
  * features (e.g. Claude Opus 5.5 on the Fast tier) behind a minimum Claude
@@ -79,16 +82,25 @@ export function detectAuthMode(token: string): AuthMode {
  * through it. Used to inject an observability wrapper (see
  * {@link makeTracingFetch}) that records 429/503/529 throttling into the
  * witness trace — otherwise the SDK's silent retry-after backoff is invisible.
+ *
+ * `maxRetries` is always 0: AFK's own retry layers (loop/round-retry.ts,
+ * loop/retry-budget.ts, query/retry-layer.ts) are the single, traced retry
+ * authority. The SDK default of 2 would silently stack under those loops —
+ * turning each failing call into up to 3× the attempts AFK believes it is
+ * making, with the SDK-level retries invisible in the witness trace
+ * (issue #2422). `oneshot.ts` also builds its client through this function, so
+ * it gets `maxRetries: 0` and, having no AFK retry wrapper, makes exactly one
+ * attempt; its callers own retry policy (see that module's JSDoc).
  */
 export function buildClientOptions(
   token: string,
   mode: AuthMode,
   baseUrl?: string,
   fetchImpl?: typeof fetch,
-): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch } {
+): ({ authToken: string } | { apiKey: string }) & { baseURL?: string; fetch?: typeof fetch; maxRetries: 0 } {
   const base = mode === 'oauth'
-    ? { authToken: token }
-    : { apiKey: token };
+    ? { authToken: token, maxRetries: 0 as const }
+    : { apiKey: token, maxRetries: 0 as const };
   const withBase = typeof baseUrl === 'string' && baseUrl.length > 0
     ? { ...base, baseURL: baseUrl }
     : base;
@@ -126,14 +138,17 @@ export function buildRequestHeaders(
   withEffort?: boolean,
   extendedCacheTtl?: boolean,
   withFast?: boolean,
+  withThinkingBindingControls?: boolean,
 ): Record<string, string> {
   const betaHeader = composeBetaHeader({
     oauthEntries: mode === 'oauth' ? OAUTH_BETA_HEADER.split(',') : [],
     effort: mode === 'oauth' && withEffort === true,
     extendedCacheTtl,
     fast: withFast,
+    thinkingBindingControls: withThinkingBindingControls,
     effortEntry: EFFORT_BETA_HEADER,
     extendedCacheEntry: EXTENDED_CACHE_TTL_BETA,
+    thinkingBindingControlsEntry: THINKING_BINDING_CONTROLS_BETA_HEADER,
   });
   if (mode !== 'oauth') return betaHeader ? { 'anthropic-beta': betaHeader } : {};
   return {

@@ -198,6 +198,11 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         ...(config.bashOutputTailReporter !== undefined
           ? { bashOutputTailReporter: config.bashOutputTailReporter }
           : {}),
+        // #2542/#2735: Detach registry forwarded from AgentConfig so REPL
+        // Ctrl+B handler and this dispatcher share the same instance.
+        ...(config.detachRegistry !== undefined
+          ? { detachRegistry: config.detachRegistry }
+          : {}),
         runtimeStateSource,
         hookRegistry: config.hookRegistry,
         planExitControls: config.planExitControls,
@@ -245,8 +250,8 @@ export function wireQueryDispatcher(args: DispatcherWiringArgs): DispatcherWirin
         )
       : config.isNonInteractive && episodeMode
         // Episode mode: keep ask_question so the gate can log it as 'executed'.
-        // The fourth arm (!isNonInteractive && episodeMode, or bare interactive)
-        // falls through to baseToolDefs — interactive sessions keep all tools.
+        // All remaining cases (interactive sessions, with or without episodeMode)
+        // fall through to baseToolDefs — interactive sessions keep all tools.
         ? baseToolDefs.filter(
             (t) => t.name !== 'clipboard_read' && t.name !== 'clipboard_write',
           )

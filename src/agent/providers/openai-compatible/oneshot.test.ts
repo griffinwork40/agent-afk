@@ -238,6 +238,24 @@ describe('oneShotChatCompletion', () => {
     expect(capturedSignal).toBe(controller.signal);
   });
 
+  it('forwards maxRetries: 0 to the client factory (SDK-level retries disabled)', async () => {
+    // PR #2702: AFK owns all retry logic; the SDK must never retry on its own.
+    // Verify that maxRetries: 0 is always forwarded to the clientFactory so the
+    // OpenAI SDK cannot introduce silent duplicate requests.
+    let capturedOpts: { apiKey: string; maxRetries?: number } | undefined;
+    await oneShotChatCompletion({
+      apiKey: 'sk-test',
+      model: 'gpt-4o-mini',
+      system: 'sys',
+      user: 'msg',
+      clientFactory: (opts) => {
+        capturedOpts = opts as typeof capturedOpts;
+        return makeClient(async () => ({ choices: [{ message: { content: 'ok' } }] }));
+      },
+    });
+    expect(capturedOpts?.maxRetries).toBe(0);
+  });
+
   it('forwards baseURL to the client factory', async () => {
     let capturedOpts: { apiKey: string; baseURL?: string } | undefined;
     await oneShotChatCompletion({

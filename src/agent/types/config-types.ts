@@ -543,6 +543,17 @@ export interface AgentConfig {
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
 
   /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). When present, each per-query dispatcher injects it into the
+   * context of every tool in DETACHABLE_TOOLS (currently bash only) so the REPL
+   * Ctrl+B handler and the dispatcher share the same instance. Absent for
+   * headless surfaces, subagent children, and one-shot CLI runs that have no
+   * REPL to inject the result into. The registry must be cancelled by session
+   * teardown via cancelAll() (Invariant:D3 — see detach-registry.ts).
+   */
+  detachRegistry?: import('../tools/detach-registry.js').DetachableToolRegistry;
+
+  /**
    * Cascade-abort and drain in-flight subagents before the trace writer is
    * sealed.
    *

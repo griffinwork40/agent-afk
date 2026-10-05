@@ -48,9 +48,11 @@ function makeSidecar(name: string, savedAtMs: number, backdateMtimeMs?: number):
 }
 
 describe('sweepSessionSidecars — age pass', () => {
-  it('evicts sidecars older than maxAgeDays and keeps recent ones', async () => {
+  it('evicts sidecars older than the 30-day default and keeps recent ones', async () => {
     const now = Date.now();
+    // 40 days old — beyond the 30-day default; must be evicted.
     const old = makeSidecar('old-session', now - 40 * DAY_MS);
+    // 2 days old — well within the 30-day window; must be kept.
     const fresh = makeSidecar('fresh-session', now - 2 * DAY_MS);
 
     const result = await sweepSessionSidecars({ root, force: true });
@@ -61,6 +63,61 @@ describe('sweepSessionSidecars — age pass', () => {
     expect(result.evictedAge).toBe(1);
     expect(result.evictedCount).toBe(0);
     expect(result.remaining).toBe(1);
+  });
+
+  it('evicts a 40-day-old sidecar under the 30-day default', async () => {
+    // 40 days exceeds the 30-day default; both must be evicted.
+    const now = Date.now();
+    const a = makeSidecar('forty-day', now - 40 * DAY_MS);
+    const b = makeSidecar('fifty-five-day', now - 55 * DAY_MS);
+
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    expect(existsSync(a)).toBe(false);
+    expect(existsSync(b)).toBe(false);
+    expect(result.evictedAge).toBe(2);
+    expect(result.evictedCount).toBe(0);
+    expect(result.remaining).toBe(0);
+  });
+
+  it('preserves a sidecar just inside the 30-day window (29 days old)', async () => {
+    // The age pass uses strict >, so a sidecar at 29 days is safely inside the
+    // 30-day default and must NOT be evicted. An exact 30-day fixture is
+    // timing-sensitive (the few ms between makeSidecar and the sweep can push
+    // it past the boundary), so we use 29 days for a stable test.
+    const now = Date.now();
+    const boundary = makeSidecar('boundary-session', now - 29 * DAY_MS);
+
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    expect(existsSync(boundary)).toBe(true);
+    expect(result.evictedAge).toBe(0);
+  });
+
+  it('evicts a sidecar at 31 days (just past the 30-day default boundary)', async () => {
+    const now = Date.now();
+    const past = makeSidecar('just-past', now - 31 * DAY_MS);
+    const within = makeSidecar('within-window', now - 29 * DAY_MS);
+
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    expect(existsSync(past)).toBe(false);
+    expect(existsSync(within)).toBe(true);
+    expect(result.evictedAge).toBe(1);
+  });
+
+  it('explicit 60-day override preserves a 40-day sidecar that the 30-day default would evict', async () => {
+    // Confirms the env override is honoured and differs from the 30-day default.
+    const now = Date.now();
+    const old = makeSidecar('forty-days', now - 40 * DAY_MS);
+    const fresh = makeSidecar('ten-days', now - 10 * DAY_MS);
+
+    process.env['AFK_SESSION_MAX_AGE_DAYS'] = '60';
+    const result = await sweepSessionSidecars({ root, force: true });
+
+    expect(existsSync(old)).toBe(true);
+    expect(existsSync(fresh)).toBe(true);
+    expect(result.evictedAge).toBe(0);
   });
 
   it('keeps everything when nothing exceeds the age bound', async () => {
@@ -118,7 +175,7 @@ describe('sweepSessionSidecars — grace window', () => {
 describe('sweepSessionSidecars — skips non-.json files and subdirectories', () => {
   it('ignores non-.json files in the sessions dir', async () => {
     const now = Date.now();
-    // Old .json sidecar — should be evicted.
+    // Old .json sidecar — should be evicted (40 days > 30-day default).
     const jsonPath = makeSidecar('old-session', now - 40 * DAY_MS);
     // A non-.json file — must not be touched.
     const txtPath = join(root, 'notes.txt');
@@ -173,7 +230,7 @@ describe('sweepSessionSidecars — corrupt JSON fallback', () => {
     // Write corrupt JSON.
     const path = join(root, 'corrupt-session.json');
     writeFileSync(path, '{not valid json!!!');
-    // Backdate mtime to look old.
+    // Backdate mtime past the 30-day default.
     const oldDate = new Date(now - 40 * DAY_MS);
     utimesSync(path, oldDate, oldDate);
 
@@ -187,7 +244,7 @@ describe('sweepSessionSidecars — corrupt JSON fallback', () => {
     const now = Date.now();
     const path = join(root, 'no-savedat.json');
     writeFileSync(path, JSON.stringify({ model: 'test', label: 'something' }));
-    // Backdate mtime to look old.
+    // Backdate mtime past the 30-day default.
     const oldDate = new Date(now - 40 * DAY_MS);
     utimesSync(path, oldDate, oldDate);
 
@@ -209,7 +266,7 @@ describe('sweepSessionSidecars — missing root', () => {
 describe('sweepSessionSidecars — activeSessionId exclusion (Item 4)', () => {
   it('skips the active session sidecar by identity', async () => {
     const now = Date.now();
-    // An old sidecar that would normally be evicted.
+    // An old sidecar that would normally be evicted (40 days > 30-day default).
     const oldPath = makeSidecar('old-session', now - 40 * DAY_MS);
     // The active session's sidecar — also old but must be excluded.
     const activeId = 'active-session-id';
@@ -288,7 +345,7 @@ describe('sweepSessionSidecars — unlink failure counter correctness (Item 1)',
 
   it('decrements evictedAge (not evictedCount) when an age-doomed unlink fails', async () => {
     const now = Date.now();
-    // Two very old sidecars — both will be age-doomed.
+    // Two very old sidecars (beyond the 30-day default) — both will be age-doomed.
     const target = makeSidecar('age-fail', now - 40 * DAY_MS);
     const other = makeSidecar('age-ok', now - 35 * DAY_MS);
 
@@ -311,8 +368,8 @@ describe('sweepSessionSidecars — unlink failure counter correctness (Item 1)',
 describe('sweepSessionSidecars — combined age + count eviction (Item 7)', () => {
   it('evicts some files by age and others by count in the same run', async () => {
     const now = Date.now();
-    // ancient → age-evicted.
-    const ancient = makeSidecar('ancient', now - 60 * DAY_MS);
+    // ancient → age-evicted (40 days > 30-day default).
+    const ancient = makeSidecar('ancient', now - 40 * DAY_MS);
     // old-a and old-b → count-evicted (survive age pass but over maxCount=1).
     const oldA = makeSidecar('old-a', now - 10 * DAY_MS);
     const oldB = makeSidecar('old-b', now - 5 * DAY_MS);

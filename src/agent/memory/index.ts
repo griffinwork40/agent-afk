@@ -13,6 +13,7 @@ export {
   createMemoryHandlers,
 } from './memory-tools.js';
 export type {
+  AccessStats,
   Fact,
   NewFact,
   FactCategory,

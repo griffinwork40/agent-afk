@@ -193,12 +193,12 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   const nestedCwdOpt = nestedCwd !== undefined ? { cwd: nestedCwd } : {};
   const traceOpt = traceWriter !== undefined ? { traceWriter } : {};
   const skillTraceOpt = skillTraceWriter !== undefined ? { traceWriter: skillTraceWriter } : {};
-  const apiKeyOpt = apiKey !== undefined ? { apiKey } : {};
+  const apiKeyOpt = apiKey !== undefined ? { apiKey } : {}; // used by skill/compose/agent executors below
+  const credentialOpt = apiKey !== undefined ? { parentCredential: { key: apiKey, sourceModel: managerParentModel } } : {}; // #2844 paired for rootManager
   const bgRegistryOpt = backgroundRegistry !== undefined ? { backgroundRegistry } : {};
   // Match loadAgentRegistry's default sink so plugin discovery remains audible
   // on non-interactive surfaces that do not provide a boot-warning collector.
-  const registryWarn =
-    agentRegistryWarn ?? ((message: string) => process.stderr.write(message + '\n'));
+  const registryWarn = agentRegistryWarn ?? ((message: string) => process.stderr.write(message + '\n'));
   // Session-static snapshot shared by all root executors and inherited by
   // descendants. Do not resolve inside execute(): sibling calls must not see
   // different caps if the process environment changes during the session.
@@ -226,8 +226,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
   //    every depth-1 `agent`/`skill` fork on every surface able to publish but
   //    blind to what its siblings had already published.
   const rootManager = new SubagentManager({
-    ...apiKeyOpt,
-    parentModel: managerParentModel,
+    ...credentialOpt,
     ...baseUrlOpt,
     ...cwdOpt,
     ...traceOpt,
@@ -346,6 +345,7 @@ export function wireExecutors(opts: WireExecutorsOptions): WiredExecutors {
     defaultModel: model,
     defaultSubagentModel,
     ...apiKeyOpt,
+    credentialModel: managerParentModel, // key's source model, not session routing model
     resolveApiKeyForModel,
     getReadScopeInputs: () => rootManager.getReadScopeInputs(),
     ...baseUrlOpt,

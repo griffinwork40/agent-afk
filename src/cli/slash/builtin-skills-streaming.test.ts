@@ -178,16 +178,15 @@ describe('builtin-skills streaming integration', () => {
     disposeSpy.mockRestore();
   });
 
-  it('verbose flag is read from env var (passed to renderer)', async () => {
+  it('AFK_SKILL_STREAM_VERBOSE env var enables live thinking mode in renderer', async () => {
     const { StreamRenderer } = await import('../_lib/stream-renderer.js');
 
     process.env['AFK_SKILL_STREAM_VERBOSE'] = '1';
-    const verbose = process.env['AFK_SKILL_STREAM_VERBOSE'] === '1';
     const { ctx } = makeCtx();
-    const r = new StreamRenderer({ out: ctx.out, verbose, forceNonTty: true });
-    // Indirect: just verifies construction succeeds with verbose true.
+    const r = new StreamRenderer({ out: ctx.out, thinkingMode: 'live', forceNonTty: true });
+    // Indirect: just verifies construction succeeds with thinkingMode: 'live'.
     await r.dispose();
-    expect(verbose).toBe(true);
+    expect(process.env['AFK_SKILL_STREAM_VERBOSE']).toBe('1');
   });
 
   it('does not emit Running/complete banner messages', async () => {

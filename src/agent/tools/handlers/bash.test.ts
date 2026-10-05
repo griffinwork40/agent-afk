@@ -139,9 +139,47 @@ describe('bashHandler', () => {
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe('Command aborted');
+      expect(result.content).toMatch(/^Command aborted after \d+\.\ds; no output was captured/);
       expect(result.content).not.toMatch(/exited with code/);
     });
+
+    // Mid-run kills (abort / timeout) keep the output produced before the kill
+    // so the model can tell how far a non-rolled-back command got.
+    // See bash-interrupted.ts.
+    it('abort mid-run returns the output produced before the kill', async () => {
+      const signal = createAbortableSignal(1500);
+      const result = await bashHandler(
+        { command: "printf 'step-1-done\\n'; sleep 60" },
+        signal,
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(
+        /^Command aborted after \d+\.\ds; the process was killed\. Output before the kill:\n/,
+      );
+      expect(result.content).toContain('step-1-done');
+    }, 15_000);
+
+    it('timeout returns the output produced before the kill', async () => {
+      const result = await bashHandler(
+        { command: "printf 'before-timeout\\n'; sleep 60", timeout_ms: 1500 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toMatch(/^Command timed out after 1500ms; the process was killed\./);
+      expect(result.content).toContain('before-timeout');
+    }, 15_000);
+
+    it('timeout with no output keeps the bare historical message', async () => {
+      const result = await bashHandler(
+        { command: 'sleep 60', timeout_ms: 300 },
+        createSignal(),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toBe('Command timed out after 300ms');
+    }, 15_000);
   });
 
   describe('input validation', () => {
@@ -271,7 +309,7 @@ describe('bashHandler', () => {
       const elapsed = Date.now() - start;
 
       expect(result.isError).toBe(true);
-      expect(result.content).toBe('Command aborted');
+      expect(result.content).toMatch(/^Command aborted/);
       // The fix kills the child immediately; without it, the result would only
       // arrive after `sleep 5` exits on its own (~5s) via the close handler.
       expect(elapsed).toBeLessThan(3000);
@@ -305,6 +343,7 @@ describe('bashHandler', () => {
   });
 
   describe('output truncation', () => {
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for large output generation (#703)
     it.skipIf(process.platform === 'win32')('truncates output at 100KB', async () => {
       // Generate ~110KB of output
       const largeLine = 'x'.repeat(110_000);
@@ -318,6 +357,7 @@ describe('bashHandler', () => {
       expect(result.content).toContain('truncated');
     });
 
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for large output generation (#703)
     it.skipIf(process.platform === 'win32')('includes a head+tail truncation notice when output exceeds the model cap', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
@@ -337,6 +377,7 @@ describe('bashHandler', () => {
     // marker vs hard-cap kill note), and handlers may emit the literal
     // string "truncated" in legitimate output (e.g. a log line about
     // database truncation). The structured flag is unambiguous.
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for large output generation (#703)
     it.skipIf(process.platform === 'win32')('sets ToolResult.truncated=true when output exceeds 100KB', async () => {
       const largeLine = 'x'.repeat(105_000);
       const result = await bashHandler(
@@ -348,6 +389,7 @@ describe('bashHandler', () => {
       expect(result.truncated).toBe(true);
     });
 
+    // Windows: genuinely POSIX-only — uses `printf` POSIX shell built-in for output generation (#703)
     it.skipIf(process.platform === 'win32')('does not truncate output under 100KB', async () => {
       const mediumLine = 'x'.repeat(50_000);
       const result = await bashHandler(
@@ -374,6 +416,7 @@ describe('bashHandler', () => {
     // only after waiting out the 15s sleep. NB: 'q'/'z' are the phase markers
     // because neither letter appears in the truncation marker text — 'b',
     // for one, collides with the word "bytes".
+    // Windows: genuinely POSIX-only — uses `head -c`, `/dev/zero`, and SIGKILL; no Windows equivalents (#703)
     it.skipIf(process.platform === 'win32')('mid-stream hard cap: SIGKILLs a runaway before it completes (V8 overflow guard)', async () => {
       // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
       const start = Date.now();
@@ -411,6 +454,7 @@ describe('bashHandler', () => {
     // long-running commands write progress to stderr (e.g. `find /` with
     // permission errors), so a stderr-only flood must also trigger the
     // mid-stream kill.
+    // Windows: genuinely POSIX-only — uses `head -c`, `/dev/zero`, stderr redirect `>&2` (#703)
     it.skipIf(process.platform === 'win32')('mid-stream hard cap: protects stderr from unbounded accumulation', async () => {
       // `head -c`, `/dev/zero`, and stderr redirect `>&2` are POSIX-only (#703)
       const start = Date.now();
@@ -478,7 +522,7 @@ describe('bashHandler', () => {
     });
   });
 
-  // Windows: pwd, cat, ls are POSIX-only shell commands
+  // Windows: genuinely POSIX-only — uses `pwd`, `cat`, `ls` POSIX-only shell commands (#703)
   describe.skipIf(isWin32)('cwd scoping', () => {
     // These tests guard the worktree-isolation invariant: a session
     // configured with `cwd` must spawn its shell commands in that
@@ -577,9 +621,9 @@ describe('bashHandler', () => {
     });
   });
 
-  // Windows: pwd is a POSIX-only shell command
-  describe.skipIf(isWin32)('context.cwd enforcement', () => {
-    it('runs command in context.cwd when set', async () => {
+  // Windows: genuinely POSIX-only — uses `pwd` POSIX-only shell command (#703)
+  describe.skipIf(isWin32)('resolveBase enforcement', () => {
+    it('runs command in resolveBase when set', async () => {
       const handler = createBashHandler('default');
       const dir = mkdtempSync(path.join(os.tmpdir(), 'afk-bash-cwd-'));
       // On macOS /var is a symlink to /private/var — resolve to the real path
@@ -589,7 +633,7 @@ describe('bashHandler', () => {
       const result = await handler(
         { command: 'pwd' },
         new AbortController().signal,
-        { cwd: dir },
+        { resolveBase: dir },
       );
 
       expect(result.isError).toBeFalsy();
@@ -700,7 +744,7 @@ describe('bashHandler', () => {
   });
 });
 
-// Windows: pwd, cat, ls are POSIX-only shell commands
+// Windows: genuinely POSIX-only — uses `pwd`, `cat`, `ls` POSIX-only shell commands (#703)
 describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;
@@ -716,7 +760,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
     try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it('without cwd: spawns in process.cwd() (legacy behavior)', async () => {
+  it('without resolveBase: spawns in process.cwd() (default behavior)', async () => {
     const handler = createBashHandler('default');
     const result = await handler({ command: 'pwd' }, createSignal());
     // No cwd opt → bash runs in process.cwd(), which is the test runner cwd.
@@ -724,7 +768,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
     expect(realpathSync(result.content.trim())).toBe(realpathSync(process.cwd()));
   });
 
-  it('with cwd: spawns in the configured directory', async () => {
+  it('with factory cwd: spawns in the configured directory', async () => {
     // Drop a sentinel file inside tmpDir so we can distinguish from process.cwd()
     await fs.writeFile(join(tmpDir, 'sentinel.txt'), 'hello', 'utf8');
     const handler = createBashHandler('default', tmpDir);
@@ -761,7 +805,7 @@ describe.skipIf(isWin32)('createBashHandler — cwd parameter', () => {
 // produce a large elapsed time). A handler that sends SIGKILL terminates it
 // promptly regardless of signal disposition.
 // ---------------------------------------------------------------------------
-// `trap '' TERM`, `kill -0`, and `sleep 9999 & echo $!; wait` are POSIX-only (#703)
+// Windows: genuinely POSIX-only — uses `trap '' TERM`, `kill -0`, `sleep 9999 & echo $!; wait` (#703)
 describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
   function createSignal(): AbortSignal {
     return new AbortController().signal;
@@ -785,7 +829,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     // Must complete quickly — SIGKILL terminates the process immediately;
     // SIGTERM would leave it running for up to 60s.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it('[abort path] terminates a SIGTERM-immune process when AbortSignal fires', async () => {
     const controller = new AbortController();
@@ -803,7 +847,7 @@ describe.skipIf(process.platform === 'win32')('bash SIGKILL — S10', () => {
     expect(result.content).toContain('aborted');
     // Same reasoning: SIGKILL terminates promptly; SIGTERM would not.
     expect(elapsed).toBeLessThan(2000);
-  }, { timeout: 5000 });
+  }, 5000);
 
   it(
     '[process-group kill] reaps descendant processes, not just the direct child',

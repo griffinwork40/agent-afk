@@ -124,6 +124,13 @@ export interface BuildDispatcherOptions {
    * non-TTY surfaces and forked children (no overlay to repaint).
    */
   bashOutputTailReporter?: (toolUseId: string) => (tail: string | undefined) => void;
+  /**
+   * Session-scoped detach registry for the Ctrl+B bash-backgrounding contract
+   * (#2542, #2735). Forwarded from AgentConfig so the REPL Ctrl+B handler and
+   * the per-query dispatcher share the same instance. Absent for headless
+   * surfaces and forked children.
+   */
+  detachRegistry?: import('../../tools/detach-registry.js').DetachableToolRegistry;
 }
 
 /**
@@ -356,6 +363,11 @@ export function buildDispatcher(
     // #1506: Live bash output tail for REPL TUI progress display.
     ...(opts?.bashOutputTailReporter !== undefined
       ? { bashOutputTailReporter: opts.bashOutputTailReporter }
+      : {}),
+    // #2542/#2735: Detach registry for Ctrl+B bash backgrounding. Top-level
+    // REPL sessions only — absent for forks (no surface to inject results into).
+    ...(opts?.detachRegistry !== undefined
+      ? { detachRegistry: opts.detachRegistry }
       : {}),
   });
 }
