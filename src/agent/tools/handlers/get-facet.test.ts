@@ -440,4 +440,40 @@ describe('getFacetHandler – "current" / "self" resolution', () => {
     const result = await getFacetHandler({ session: 'current' }, ABORT);
     expect(result.isError).toBe(true);
   });
+
+  it('"current" resolves correctly when SDK id differs from sidecar filename stem', async () => {
+    // Write a sidecar whose filename stem ('sess-current-sdk') differs from the
+    // stored sessionId field ('sdk-id-abc'). This simulates an SDK-assigned id.
+    const sidecarStem = 'sess-current-sdk';
+    const sdkId = 'sdk-id-abc';
+    const sidecar = {
+      sessionId: sdkId, // SDK-assigned id — differs from filename stem
+      model: 'claude-3-5-sonnet',
+      startedAt: Date.now() - 5000,
+      savedAt: Date.now(),
+      totalTurns: 1,
+      turns: [{ user: 'test', assistant: 'ok', toolEvents: [] }],
+    };
+    writeFileSync(
+      join(tmpRoot, 'state', 'sessions', `${sidecarStem}.json`),
+      JSON.stringify(sidecar),
+      'utf-8',
+    );
+
+    // Also write a decoy session that is globally newest so we know "latest"
+    // would NOT pick sess-current-sdk.
+    writeSession('sess-decoy');
+    const decoyPath = join(tmpRoot, 'state', 'sessions', 'sess-decoy.json');
+    utimesSync(decoyPath, new Date(), new Date());
+
+    // Caller presents the SDK id via context.sessionId.
+    const ctx: ToolHandlerContext = { sessionId: sdkId };
+    const result = await getFacetHandler({ session: 'current' }, ABORT, ctx);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    // Must resolve to the sidecar whose stored sessionId matches the SDK id.
+    expect(parsed['session_id']).toBe(sdkId);
+    // is_current_session must be true — it is the caller's own session.
+    expect(parsed['is_current_session']).toBe(true);
+  });
 });

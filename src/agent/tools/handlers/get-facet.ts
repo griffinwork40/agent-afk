@@ -45,7 +45,8 @@ interface SidecarCwdSlice {
 /**
  * Read the mtime and `cwd` field from a session sidecar in one pass.
  * Returns undefined when the file is unreadable or not valid JSON.
- * Only reads the object's top-level `cwd` key — does not deserialize turns.
+ * Parses the full sidecar JSON (which includes turns) but extracts only the
+ * top-level `cwd` key.
  */
 function readSidecarCwdSlice(path: string): SidecarCwdSlice | undefined {
   try {
@@ -63,16 +64,17 @@ function readSidecarCwdSlice(path: string): SidecarCwdSlice | undefined {
  * Resolve the `"latest"` session id, preferring sessions whose sidecar `cwd`
  * matches `callerCwd`. Falls back to the global newest when no match.
  *
- * Returns `{ id, cwdMatch }` — `cwdMatch` is true when the winner came from
- * the cwd-filtered pass.
+ * Returns `{ id, cwdMatch, cwd }` — `cwdMatch` is true when the winner came
+ * from the cwd-filtered pass. `cwd` is the winner's sidecar cwd so callers
+ * do not need to re-read the sidecar.
  */
 function resolveLatest(
   ids: string[],
   sessionsDir: string,
   callerCwd: string | undefined,
-): { id: string; cwdMatch: boolean } | undefined {
-  let bestGlobal: { id: string; mtimeMs: number } | undefined;
-  let bestCwd: { id: string; mtimeMs: number } | undefined;
+): { id: string; cwdMatch: boolean; cwd: string | undefined } | undefined {
+  let bestGlobal: { id: string; mtimeMs: number; cwd: string | undefined } | undefined;
+  let bestCwd: { id: string; mtimeMs: number; cwd: string | undefined } | undefined;
 
   for (const id of ids) {
     const slice = readSidecarCwdSlice(join(sessionsDir, `${id}.json`));
@@ -81,18 +83,18 @@ function resolveLatest(
     const { mtimeMs, cwd } = slice;
 
     if (!bestGlobal || mtimeMs > bestGlobal.mtimeMs) {
-      bestGlobal = { id, mtimeMs };
+      bestGlobal = { id, mtimeMs, cwd };
     }
 
     if (callerCwd !== undefined && cwd === callerCwd) {
       if (!bestCwd || mtimeMs > bestCwd.mtimeMs) {
-        bestCwd = { id, mtimeMs };
+        bestCwd = { id, mtimeMs, cwd };
       }
     }
   }
 
-  if (bestCwd) return { id: bestCwd.id, cwdMatch: true };
-  if (bestGlobal) return { id: bestGlobal.id, cwdMatch: false };
+  if (bestCwd) return { id: bestCwd.id, cwdMatch: true, cwd: bestCwd.cwd };
+  if (bestGlobal) return { id: bestGlobal.id, cwdMatch: false, cwd: bestGlobal.cwd };
   return undefined;
 }
 
@@ -110,13 +112,28 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
 
   let sessionId: string | undefined;
   let cwdMismatch = false;
+  // Track the cwd from the winning sidecar so we avoid a second read later.
+  // Only set when the session was resolved via resolveLatest.
+  let latestWinnerCwd: string | undefined;
+  // True when the session was resolved by name/id (explicit-id path), meaning
+  // we must call readSidecarCwdSlice once below to get the cwd.
+  let resolvedByName = false;
+  // True when the caller used "current"/"self" and provided a callerSessionId.
+  // In this case the resolved session IS the current session by definition,
+  // even if the sidecar filename stem differs from the SDK-assigned sessionId.
+  let isSelfResolution = false;
 
   const isSelfAlias = sessionArg === 'current' || sessionArg === 'self';
 
   if (isSelfAlias) {
     // Resolve to the caller's own session. Fall back to "latest" when context is absent.
     if (callerSessionId) {
-      sessionId = callerSessionId;
+      // Route through name resolver so an SDK id that differs from the sidecar
+      // filename stem still resolves correctly (Item 4).
+      const resolved = resolveSessionByName(callerSessionId);
+      sessionId = resolved?.sidecarId ?? callerSessionId;
+      resolvedByName = true;
+      isSelfResolution = true;
     } else {
       // No context — fall through to "latest" semantics.
       const ids = listSessionIds();
@@ -124,6 +141,7 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
         const sessionsDir = getSessionsDir();
         const winner = resolveLatest(ids, sessionsDir, callerCwd);
         sessionId = winner?.id;
+        latestWinnerCwd = winner?.cwd;
         cwdMismatch = winner ? !winner.cwdMatch : false;
       }
     }
@@ -133,11 +151,13 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
       const sessionsDir = getSessionsDir();
       const winner = resolveLatest(ids, sessionsDir, callerCwd);
       sessionId = winner?.id;
+      latestWinnerCwd = winner?.cwd;
       cwdMismatch = winner ? !winner.cwdMatch : false;
     }
   } else {
     const resolved = resolveSessionByName(sessionArg);
     sessionId = resolved?.sidecarId;
+    resolvedByName = true;
   }
 
   if (!sessionId) {
@@ -153,27 +173,35 @@ export const getFacetHandler: ToolHandler = async (input, _signal, context) => {
   // existing facet fields. Absent means no record yet (not an error).
   const outcomeRecord = readRecord(sessionId);
 
-  // Read session_cwd from the raw sidecar (not in the facet schema).
+  // Read session_cwd from the sidecar. For the "latest" and isSelfAlias-fallback
+  // paths the cwd was already extracted by resolveLatest (no second read).
+  // For the explicit-id path (resolveSessionByName) we call readSidecarCwdSlice
+  // once here.
   let sessionCwd: string | undefined;
-  try {
+  if (resolvedByName) {
     const sessionsDir = getSessionsDir();
-    const rawSidecar: unknown = JSON.parse(
-      readFileSync(join(sessionsDir, `${sessionId}.json`), 'utf-8'),
-    );
-    if (typeof rawSidecar === 'object' && rawSidecar !== null) {
-      const c = (rawSidecar as Record<string, unknown>)['cwd'];
-      if (typeof c === 'string') sessionCwd = c;
-    }
-  } catch {
-    /* sidecar unreadable — sessionCwd stays undefined */
+    const slice = readSidecarCwdSlice(join(sessionsDir, `${sessionId}.json`));
+    sessionCwd = slice?.cwd;
+  } else {
+    sessionCwd = latestWinnerCwd;
   }
 
-  const isCurrentSession = callerSessionId !== undefined && sessionId === callerSessionId;
+  // is_current_session: true when the resolved session is the caller's own.
+  // For "current"/"self" with a known callerSessionId this is true by definition
+  // (the SDK id may differ from the sidecar filename stem, so we cannot compare
+  // sessionId === callerSessionId directly in that case — Item 4).
+  // For all other paths, compare sessionId against callerSessionId directly.
+  const isCurrentSession =
+    isSelfResolution ||
+    (callerSessionId !== undefined && sessionId === callerSessionId);
 
   // When no callerCwd is available, cwd_mismatch stays false (not a cross-cwd call).
+  // When callerCwd is set but sessionCwd is unknown, also stays false (Item 3).
   if (callerCwd !== undefined && sessionCwd !== undefined) {
     cwdMismatch = sessionCwd !== callerCwd;
   } else if (callerCwd === undefined) {
+    cwdMismatch = false;
+  } else if (sessionCwd === undefined) {
     cwdMismatch = false;
   }
 
