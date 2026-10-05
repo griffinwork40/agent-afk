@@ -391,4 +391,37 @@ describe('processAnsweredHandoffs', () => {
     const hotFiles = readdirSync(handoffsDir).filter((f) => f.endsWith('.json'));
     expect(hotFiles).toHaveLength(0);
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 1 readFile failure logging
+  // -------------------------------------------------------------------------
+
+  it('logs to stderr when readFile fails with EACCES instead of skipping silently', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    // Write a valid answered record so it appears in readdir.
+    const record = makeAnsweredRecord({ taskId: 'q-eacces-lll' });
+    await writeHandoff(record, handoffsDir);
+
+    // Make the file unreadable.
+    const filePath = join(handoffsDir, 'q-eacces-lll.json');
+    const { chmodSync } = await import('node:fs');
+    chmodSync(filePath, 0o000);
+
+    const result = await processAnsweredHandoffs(queueDir, handoffsDir);
+
+    // Restore permissions for cleanup.
+    chmodSync(filePath, 0o644);
+
+    // The unreadable file must not be requeued.
+    expect(result.requeued).toBe(0);
+
+    // A log message must have been emitted.
+    const logged = errorSpy.mock.calls.some((c) =>
+      String(c[0]).includes('readFile failed'),
+    );
+    expect(logged).toBe(true);
+
+    errorSpy.mockRestore();
+  });
 });

@@ -12,7 +12,7 @@
  * @module agent/daemon/handoff-consume.dead-letter
  */
 
-import { mkdir, rename } from 'node:fs/promises';
+import { mkdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { errorMessage } from '../../utils/errors.js';
@@ -42,6 +42,8 @@ export const MAX_CLAIM_REREAD_FAILURES = 3;
  * strings (validated by assertSafeJobId before insertion). The map grows by at
  * most one entry per distinct persistently-unreadable claimed file and is
  * cleared once the file is successfully dead-lettered or processes successfully.
+ *
+ * @internal -- exported for test access only
  */
 export const claimRereadFailures: Map<string, number> = new Map();
 
@@ -72,6 +74,11 @@ export async function deadLetterHandoffFile(
   const deadLetterDir = join(handoffsDir, DEAD_LETTER_SUBDIR);
   try {
     await mkdir(deadLetterDir, { recursive: true });
+    // Invariant: `displayName` is used unredacted in the destination path
+    // (same as quarantinePoisonEntry in queue-store.ts, which uses the raw
+    // `filename` from readdir). Redaction is applied only to log output, not
+    // to filesystem paths, so the operator can correlate the dead-letter file
+    // with the original filename on disk.
     let dest = join(deadLetterDir, displayName);
     try {
       await rename(srcPath, dest);
@@ -86,10 +93,22 @@ export async function deadLetterHandoffFile(
       `[daemon] handoff-consume: dead-lettered malformed record ${redactedName} → ${DEAD_LETTER_SUBDIR}/ (${reason})`,
     );
   } catch (moveErr) {
+    // Invariant: mirrors quarantinePoisonEntry (queue-store.ts ~line 287).
+    // Last resort: if we cannot move it aside, unlink so the sweep unblocks
+    // rather than re-processing the file every ~30s tick forever.
     const moveReason = redactInlineSecrets(errorMessage(moveErr));
     // eslint-disable-next-line no-console
     console.error(
-      `[daemon] handoff-consume: failed to dead-letter ${redactedName}; leaving in place (${moveReason})`,
+      `[daemon] handoff-consume: failed to dead-letter ${redactedName}; removing to unblock sweep (${moveReason})`,
     );
+    try {
+      await unlink(srcPath);
+    } catch (unlinkErr) {
+      const unlinkReason = redactInlineSecrets(errorMessage(unlinkErr));
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] handoff-consume: could not remove unquarantinable entry ${redactedName}; will retry next sweep (${unlinkReason})`,
+      );
+    }
   }
 }

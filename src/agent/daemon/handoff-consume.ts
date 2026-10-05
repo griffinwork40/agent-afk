@@ -138,8 +138,14 @@ async function listAnsweredHandoffs(
     let raw: string;
     try {
       raw = await readFile(fullPath, 'utf-8');
-    } catch {
-      continue; // Transient I/O error — skip silently.
+    } catch (readErr) {
+      const redactedName = redactInlineSecrets(filename);
+      const reason = redactInlineSecrets(errorMessage(readErr));
+      // eslint-disable-next-line no-console
+      console.error(
+        `[daemon] handoff-consume: readFile failed for ${redactedName} (${reason}); skipping this tick`,
+      );
+      continue;
     }
 
     // Phase 2: parse JSON. A SyntaxError here means the file is persistently
