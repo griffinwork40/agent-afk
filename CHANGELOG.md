@@ -11,6 +11,21 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.295.9] - 2026-10-05
+
+### Fixed
+- enforce domain policy independently of unrelated browser config fields (#2919) (5a4ee000)
+
+## [5.295.8] - 2026-10-05
+
+### Fixed
+- replace wall-clock budget with ordering probe in 'returns immediately' test (#2947) (6dfbe3ae)
+
+## [5.295.7] - 2026-10-05
+
+### Fixed
+- deliver queued user messages at end of turn, not between tool rounds (#2956) (66f8e7da)
+
 ## [5.295.6] - 2026-10-05
 
 ### Added

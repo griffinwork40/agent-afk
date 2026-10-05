@@ -4,8 +4,10 @@
  * A yieldable tool stops early when the operator has typed a message while it
  * is running, and tells the model to end its turn so the queued message is
  * delivered. This exists because a top-level REPL message typed mid-turn is
- * delivered at END OF TURN, not between tool rounds (the mid-turn
- * `setBeforeNextRound` hook is only wired for subagents), so a tool that
+ * delivered at END OF TURN, not between tool rounds (the root REPL's
+ * `setBeforeNextRound` hook delivers peer messages only and never consumes
+ * the human queue; see `cli/commands/interactive/loop-iteration.boundary.ts`),
+ * so a tool that
  * merely returns early would leave the message stranded while the model keeps
  * working.
  *

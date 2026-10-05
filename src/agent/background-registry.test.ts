@@ -175,19 +175,31 @@ describe('BackgroundAgentRegistry', () => {
 
   it('returns immediately — does NOT block on terminal state', async () => {
     const handle = createStubHandle('sub-1');
-    const before = Date.now();
-    registry.register({ handle, prompt: 'p', model: 'sonnet' });
-    const after = Date.now();
-    // 2000ms ceiling: register() must not await async terminal-state resolution.
-    // The loose bound tolerates the synchronous mkdirSync in BgJobLogWriter's
-    // constructor, which can take ~150-200ms on Windows CI (slow temp-dir I/O),
-    // while still catching any true blocking-on-terminal-state regression (which
-    // would require awaiting async operations and would take seconds).
-    // The behavioral invariant — that register() does not await termination — is
-    // captured by the status assertion below.
-    expect(after - before).toBeLessThan(2000);
-    // No terminal state yet
+
+    // Ordering probe: register() must return before the job's terminal-state
+    // settles. We verify this deterministically — without any wall-clock
+    // budget — by racing the join() promise against an already-resolved
+    // sentinel. If register() blocked until terminal state the join() would
+    // resolve first; but because register() is synchronous and terminal state
+    // has not yet been fired, join() is still pending and the sentinel wins.
+    const job = registry.register({ handle, prompt: 'p', model: 'sonnet' });
+
+    // Job must be in running state immediately after register() returns.
     expect(registry.list()[0]?.status).toBe('running');
+
+    // Race: an already-resolved promise vs. join() which is pending because no
+    // terminal event has fired yet. The sentinel MUST win — if join() settled
+    // first it would mean register() had already driven the job to a terminal
+    // state, contradicting the non-blocking contract.
+    const SENTINEL = 'sentinel';
+    const winner = await Promise.race([
+      registry.join(job.jobId).then(() => 'join'),
+      Promise.resolve(SENTINEL),
+    ]);
+    expect(winner).toBe(SENTINEL);
+
+    // Clean up: fire terminal so the dangling join() settles and doesn't leak.
+    handle.__fireTerminal(successResult('sub-1', 'done'));
   });
 
   it('join() resolves with the completed result and emits .completed + .joined', async () => {
