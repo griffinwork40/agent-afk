@@ -118,6 +118,8 @@ describe('Stop hook -- trust-gate suppression', () => {
       },
       userGlobalEnabled: false,
       allowProjectHooks: false,
+      pluginHooksEnabled: false,
+      pluginHookEnv: {},
       sources: [],
       warnings: [],
     };
@@ -142,6 +144,8 @@ describe('Stop hook -- trust-gate suppression', () => {
       },
       userGlobalEnabled: true,
       allowProjectHooks: false,
+      pluginHooksEnabled: false,
+      pluginHookEnv: {},
       sources: [],
       warnings: [],
     };

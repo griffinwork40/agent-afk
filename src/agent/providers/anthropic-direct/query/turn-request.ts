@@ -22,6 +22,7 @@ export interface TurnRequestInput {
   thinking?: RunTurnInput['thinking'];
   effort?: RunTurnInput['effort'];
   temperature?: number;
+  thinkingBlockBinding?: RunTurnInput['thinkingBlockBinding'];
   maxToolUseIterations?: number;
   softDeadlineMs?: number;
   traceWriter?: RunTurnInput['traceWriter'];
@@ -51,6 +52,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
     input.effort !== undefined,
     isExtendedCacheTtlActive(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
     fast,
+    input.thinkingBlockBinding !== undefined,
   );
   return {
     decision,
@@ -68,6 +70,7 @@ export function prepareTurnRequest(input: TurnRequestInput): {
       ...(input.thinking !== undefined ? { thinking: input.thinking } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+      ...(input.thinkingBlockBinding !== undefined ? { thinkingBlockBinding: input.thinkingBlockBinding } : {}),
       ...(fast ? { fastMode: true } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.maxToolUseIterations !== undefined ? { maxToolUseIterations: input.maxToolUseIterations } : {}),

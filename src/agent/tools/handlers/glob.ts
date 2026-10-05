@@ -109,7 +109,11 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 /** Thrown out of the walk when the tool call's AbortSignal fires. */
-class GlobAbortedError extends Error {}
+class GlobAbortedError extends Error {
+  constructor() {
+    super('glob walk aborted');
+  }
+}
 
 /**
  * Recursively collect files matching a glob pattern.
@@ -195,13 +199,36 @@ async function collectMatches(dir: string, pattern: string, signal?: AbortSignal
       // default-pruned dirs (DEFAULT_PRUNE_DIRS) unless the caller
       // named them literally in the pattern. The search root itself is
       // never pruned here (it is walked directly, not as a child entry).
+      //
+      // Invariant: withFileTypes Dirents report symlinks as symlinks, never as
+      // directories, so isDirectory() is never true for a symlink — the guard
+      // below enforces this assumption explicitly so a future Node change or
+      // test double cannot silently violate it.
       if (entry.isDirectory()) {
+        if (entry.isSymbolicLink()) {
+          // This branch should be unreachable: withFileTypes Dirents cannot be
+          // both isDirectory() and isSymbolicLink() simultaneously on any
+          // supported Node version. If somehow reached, recursing would derive
+          // a wrong canonical path (join(realPath, name) skips the symlink
+          // target), so we skip safely rather than mis-classify.
+          // Note: this guard does NOT replace the denylist check at the real
+          // prune site (~line 182 above, DEFAULT_PRUNE_DIRS). Do not remove
+          // that check thinking this guard covers it — it does not.
+          continue;
+        }
         if (DEFAULT_PRUNE_DIRS.has(entry.name) && !literalSegments.has(entry.name)) {
           continue;
         }
         // Schedule the child readdir ahead of the walk so I/O runs in
         // parallel with the rest of this loop. The walker will await it
         // via ra.get() when recursion actually begins.
+        //
+        // Intentional fast-path guard: the abort and cap checks here
+        // duplicate the identical checks at the top of walk(), but they
+        // avoid enqueuing a readdir that walk() would immediately discard
+        // (abort) or never consume (cap hit). Reads already in flight from
+        // prior schedule() calls complete normally — the consumer (walk)
+        // re-checks abort/cap before acting on any result, so that is safe.
         if (!signal?.aborted && matches.length < maxResults) {
           ra.schedule(entryPath);
         }
@@ -268,11 +295,10 @@ export function createGlobHandler(cwd?: string): ToolHandler {
   const rawPattern = obj.pattern;
   // Effective cwd priority:
   // 1. context?.resolveBase — permission-system anchor (from dispatcher)
-  // 2. context?.cwd — per-call back-compat alias
-  // 3. factory-level cwd — session worktree isolation
-  // 4. process.cwd() fallback
+  // 2. factory-level cwd — session worktree isolation
+  // 3. process.cwd() fallback
   const explicitPath = obj.path !== undefined && obj.path !== null;
-  let rawPath = obj.path ?? context?.resolveBase ?? context?.cwd ?? cwd ?? process.cwd();
+  let rawPath = obj.path ?? context?.resolveBase ?? cwd ?? process.cwd();
 
   // Validate required field
   if (typeof rawPattern !== 'string') {

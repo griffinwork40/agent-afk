@@ -100,7 +100,21 @@ export class SessionOwner {
     const model = request.model ?? this.options.model;
     const apiKey = getApiKeyForModel(model);
 
-    const { prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd);
+    // `resolveBaseSystemPrompt()` calls `loadSystemPrompt()` which throws when
+    // AFK_FRAMEWORK_PROMPT_FILE is set to a bad path. Catch here so a stale
+    // value in afk.env cannot crash a mid-server session-create request while
+    // other sessions stay alive. No bundled-prompt fallback is performed.
+    let rawPrompt: string | undefined;
+    let rawPromptSource: string | undefined;
+    try {
+      ({ prompt: rawPrompt, source: rawPromptSource } = resolveBaseSystemPrompt(cwd));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Session creation failed: AFK_FRAMEWORK_PROMPT_FILE error: ${message}. ` +
+          'Unset or fix AFK_FRAMEWORK_PROMPT_FILE to create new sessions.',
+      );
+    }
 
     // Full executor + trace + MCP wiring (mirrors REPL/Telegram Anthropic).
     const wiring = await wireWebSession({

@@ -41,7 +41,12 @@ import type {
   SpineRelationItem,
 } from './spine-classifier.js';
 import { errorMessage } from '../../utils/errors.js';
-import { stripAnyStatusAnnotation } from './spine-hook.annotations.js';
+import {
+  stripTrailingAnnotation,
+  stripAnnotationLabelPlusSpace,
+  REINFORCED_LABEL,
+  WEAKENED_LABEL,
+} from './spine-hook.annotations.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
 import {
   getClassifiableDiff,
@@ -102,7 +107,7 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       // History: with 145 stale staged files in the main checkout, every session
       // end re-classified the identical diff and fired repeated Telegram alerts.
       // An unchanged fingerprint means we already handled this diff; skip.
-      if (isDuplicateDiff(diffResult.fingerprint, repoRoot)) return {};
+      if (isDuplicateDiff(diffResult.fingerprint, diffResult.worktreeRoot)) return {};
 
       const diff = diffResult.diff;
 
@@ -115,17 +120,15 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       // ── Run classifier ────────────────────────────────────────────────
       const result = await classifyDiff(diff, spineContent, signal);
 
-      // ── Persist fingerprint after a parsed result ─────────────────────
-      // We persist when the classifier returned a parsed result (even zero items)
-      // so an empty-classified diff is not re-classified on every future session.
-      // Parse failures are NOT persisted: an unparsed response may indicate a
-      // transient LLM error or truncated output — re-classifying it is safer
-      // than permanently skipping a diff we may not have fully processed.
-      if (result.parsed) {
-        persistDiffFingerprint(diffResult.fingerprint, repoRoot);
+      // ── Persist successful empty classifications ──────────────────────
+      // Empty parsed results are fully handled here, so record the fingerprint.
+      // Non-empty results are recorded only after all apply/write work succeeds;
+      // otherwise a writeSpine failure would permanently suppress the same diff.
+      if (!result.parsed) return {};
+      if (result.items.length === 0) {
+        persistDiffFingerprint(diffResult.fingerprint, diffResult.worktreeRoot);
+        return {};
       }
-
-      if (result.items.length === 0) return {};
 
       // ── Apply items ───────────────────────────────────────────────────
       // v1 limitation: reuse the pre-classify snapshot. Concurrent sessions
@@ -151,15 +154,9 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           // Auto-write: no human review needed
           const existing = findEntry(doc, item.existingId);
           if (existing) {
-            // Append a parenthetical note without creating a new entry (IDs stable).
-            // stripAnyStatusAnnotation collapses ALL existing reinforce/weaken
-            // annotations before the new one is appended — preventing chains like
-            // "(partially weakened D) (reinforced D)" when the two alternate.
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (reinforced ${isoDate})`;
-            const baseDescription = stripAnyStatusAnnotation(existing.description)
-              .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
-            const newDescription = baseDescription + suffix;
+            const newDescription = applyAnnotation(existing.description, suffix, REINFORCED_LABEL);
             if (newDescription !== existing.description) {
               existing.description = newDescription;
               dirty = true;
@@ -190,11 +187,7 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
           if (existing) {
             const isoDate = new Date().toISOString().slice(0, 10);
             const suffix = ` (partially weakened ${isoDate})`;
-            // Strip ANY pre-existing status annotation before appending the new
-            // one — same chain-prevention guard as the strengthens branch above.
-            const baseDescription = stripAnyStatusAnnotation(existing.description)
-              .slice(0, MAX_DESCRIPTION_LEN - suffix.length);
-            const newDescription = baseDescription + suffix;
+            const newDescription = applyAnnotation(existing.description, suffix, WEAKENED_LABEL);
             if (newDescription !== existing.description) {
               existing.description = newDescription;
               dirty = true;
@@ -245,6 +238,8 @@ export function createSpineSessionEndHook(options: SpineHookOptions = {}): HookH
       for (const contradiction of contradicts) {
         handleContradiction(contradiction, sessionId);
       }
+
+      persistDiffFingerprint(diffResult.fingerprint, diffResult.worktreeRoot);
     } catch (err) {
       // Best-effort: never block teardown, but log for debugging.
       try {
@@ -307,6 +302,51 @@ function handleContradiction(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Strip all existing annotation fragments from `description`, then append
+ * `suffix` (the new annotation) outside the `MAX_DESCRIPTION_LEN` body cap.
+ *
+ * Handles two bug classes (#2867) and a third (#2921):
+ * - Bug 1: the suffix is placed outside the body cap so it never eats body text.
+ * - Bug 2: dangling `" (label "` fragments (label + trailing space, no date) left
+ *   by the old 120-char truncation are removed via `stripAnnotationLabelPlusSpace`.
+ * - Bug 3 (#2921): same-label stacks (`base (reinforced D1) (reinforced D2)`) left
+ *   a buried stale annotation because a single primaryLabel pass only removed the
+ *   outermost entry. Fix: loop both passes until the description stops changing
+ *   (bounded to MAX_STRIP_ITERATIONS to prevent runaway on pathological input).
+ *
+ * Invariant: the loop terminates in at most MAX_STRIP_ITERATIONS rounds because
+ * each iteration that makes progress removes at least one `" ("` token, and the
+ * description is finite.
+ */
+// Contract: must be > the maximum realistic annotation depth (same-day re-fires,
+// cross-label transitions). 20 is far above any observed real-world depth.
+const MAX_STRIP_ITERATIONS = 20;
+
+function applyAnnotation(
+  description: string,
+  suffix: string,
+  primaryLabel: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL,
+): string {
+  const otherLabel = primaryLabel === REINFORCED_LABEL ? WEAKENED_LABEL : REINFORCED_LABEL;
+  let current = description;
+  for (let i = 0; i < MAX_STRIP_ITERATIONS; i++) {
+    const next = stripAnnotationLabelPlusSpace(
+      stripAnnotationLabelPlusSpace(
+        stripTrailingAnnotation(
+          stripTrailingAnnotation(current, primaryLabel),
+          otherLabel,
+        ),
+        primaryLabel,
+      ),
+      otherLabel,
+    );
+    if (next === current) break;
+    current = next;
+  }
+  return current.slice(0, MAX_DESCRIPTION_LEN) + suffix;
+}
 
 function buildSpineText(doc: import('./spine-store.js').SpineDocument | null): string {
   if (!doc) return '';

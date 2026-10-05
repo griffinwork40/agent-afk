@@ -256,6 +256,43 @@ describe('emitForkStarted', () => {
     expect(payload?.resolvedAgentType).toBe('research-agent');
   });
 
+  it('records the effective tool-round budget from childConfig, including 0 (unbounded)', () => {
+    for (const budget of [50, 0]) {
+      vi.mocked(emitSubagentLifecycle).mockClear();
+      emitForkStarted({
+        effectiveTraceWriter: undefined,
+        id: 'c',
+        parentSessionId: 'p',
+        rootId: 'r',
+        effectiveChildModel: 'sonnet',
+        childConfig: { maxToolUseIterations: budget },
+        promptHead: undefined,
+        effectiveAgentType: undefined,
+        effectiveResolvedAgentType: undefined,
+      });
+
+      const payload = vi.mocked(emitSubagentLifecycle).mock.calls[0]?.[1];
+      expect(payload).toHaveProperty('maxToolUseIterations', budget);
+    }
+  });
+
+  it('omits maxToolUseIterations when childConfig carries no budget', () => {
+    emitForkStarted({
+      effectiveTraceWriter: undefined,
+      id: 'c',
+      parentSessionId: 'p',
+      rootId: 'r',
+      effectiveChildModel: 'sonnet',
+      childConfig: {},
+      promptHead: undefined,
+      effectiveAgentType: undefined,
+      effectiveResolvedAgentType: undefined,
+    });
+
+    const payload = vi.mocked(emitSubagentLifecycle).mock.calls[0]?.[1];
+    expect(payload).not.toHaveProperty('maxToolUseIterations');
+  });
+
   it('includes allowedTools from childConfig.tools when set', () => {
     emitForkStarted({
       effectiveTraceWriter: undefined,
@@ -401,6 +438,20 @@ describe('assembleChildConfig', () => {
       options: { parent: { sessionId: 'p' }, config: { isNonInteractive: false }, agentType: 't' },
     }));
     expect(vi.mocked(injectSubagentIdentityPreamble).mock.calls[0]?.[0]?.isNonInteractive).toBe(false);
+  });
+
+  it('passes nestedAgentAllowlist as the second argument to the identity injector', () => {
+    vi.mocked(injectSubagentIdentityPreamble).mockClear();
+    assembleChildConfig(makeArgs({
+      options: {
+        parent: { sessionId: 'p' },
+        config: { systemPrompt: 'TASK' },
+        agentType: 't',
+      },
+      nestedAgentAllowlist: ['git-investigator'],
+    }));
+    const calls = vi.mocked(injectSubagentIdentityPreamble).mock.calls;
+    expect(calls[0]?.[1]).toEqual(['git-investigator']);
   });
 
   it('runs the identity injector before the budget preamble, feeding its output forward', () => {

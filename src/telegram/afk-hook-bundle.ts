@@ -32,6 +32,8 @@ import { loadHooksConfig } from '../agent/hooks/config-loader.js';
 import type { MemoryStore } from '../agent/memory/index.js';
 import type { AgentSession } from '../agent/session.js';
 import type { TraceWriter } from '../agent/trace/index.js';
+import { createTerminalStateGate } from '../agent/terminal-state-gate.js';
+import { loadConfig } from '../cli/config.js';
 
 export interface TelegramAfkHookBundleParams {
   /** Shared cross-session memory store (3rd positional arg of the registry). */
@@ -58,13 +60,14 @@ export function createTelegramAfkHookBundle(
   params: TelegramAfkHookBundleParams,
 ): DefaultHookRegistryResult {
   const { memoryStore, getSession, cwd, traceWriter } = params;
-  return createDefaultHookRegistry(
+  const getPermissionMode = () => getSession()?.getSessionMetadata().permissionMode ?? 'default';
+  const result = createDefaultHookRegistry(
     undefined,
     'telegram',
     memoryStore,
     // Live getter: registers the afk-mode gate AND tracks `/afk on`; falls back
     // to the fully-contained 'default' until the session is late-bound.
-    () => getSession()?.getSessionMetadata().permissionMode ?? 'default',
+    getPermissionMode,
     loadHooksConfig(cwd !== undefined && cwd.length > 0 ? { cwd } : {}),
     {
       cwd: cwd !== undefined && cwd.length > 0 ? cwd : undefined,
@@ -74,4 +77,20 @@ export function createTelegramAfkHookBundle(
     },
     () => cwd,
   );
+
+  // Register the terminal-state gate on the Telegram surface. Autonomous-only
+  // (mirrors the REPL's bootstrap-hooks.ts registration). The gate fires only
+  // when `/afk on` is active AND `enforceDoneEvidence` is true in afk.config.json.
+  //
+  // Permission mode on Telegram: 'default' unless `/afk on` → 'autonomous'.
+  // The gate is autonomous-only so it is inert during normal Telegram use.
+  result.registry.register(
+    'Stop',
+    createTerminalStateGate({
+      getPermissionMode,
+      isEnabled: () => loadConfig().enforceDoneEvidence === true,
+    }),
+  );
+
+  return result;
 }

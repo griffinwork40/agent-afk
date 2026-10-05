@@ -153,13 +153,21 @@ describe('extractReadableMarkdown — Readability.parse() throws (safeExtract ca
 // ---------------------------------------------------------------------------
 
 describe('buildElisionMarker', () => {
-  it('preserves the MIME type and reports payload length', () => {
+  it('preserves the MIME type and reports UTF-8 byte count', () => {
     const marker = buildElisionMarker('image/svg+xml;base64', 'abc123');
     expect(marker).toBe('data:image/svg+xml;base64,\u2026elided 6 bytes');
   });
 
   it('works for non-base64 URIs (plain-text payloads)', () => {
     const marker = buildElisionMarker('text/plain', 'hello');
+    expect(marker).toBe('data:text/plain,\u2026elided 5 bytes');
+  });
+
+  it('reports UTF-8 byte count, not char count, for multi-byte payloads', () => {
+    // 'café' is 4 chars but 5 UTF-8 bytes (the é encodes to 2 bytes).
+    // This exercises the bytes-vs-chars distinction — ASCII-only fixtures
+    // produce identical counts and cannot catch a chars regression.
+    const marker = buildElisionMarker('text/plain', 'caf\u00e9');
     expect(marker).toBe('data:text/plain,\u2026elided 5 bytes');
   });
 });
@@ -235,8 +243,9 @@ describe('extractReadableMarkdown — data: URI elision (integration)', () => {
     expect(out.markdown).toContain('A diagram');
   });
 
-  it('produces byte-identical output for pages without data: URIs', async () => {
-    // Pages with no data: URIs must come out exactly the same.
+  it('produces deterministic output for pages without data: URIs (no-op fast-path)', async () => {
+    // Pages with no data: URIs must come out exactly the same (exercises the
+    // fast-path and confirms the elision post-pass is a true no-op here).
     const html = `<!DOCTYPE html><html><head><title>Clean Page</title></head><body>
       <article>
         <h1>No data URIs here</h1>

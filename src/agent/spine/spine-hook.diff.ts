@@ -14,7 +14,7 @@
  *  3. Fingerprinting the filtered diff with SHA-256 so a repeated identical
  *     diff (e.g. the main checkout's 145 stale staged files lingering across
  *     multiple unrelated sessions) is classified at most once, keyed by the
- *     repo root so concurrent worktrees / different repos don't evict each
+ *     worktree root so linked worktrees / different repos don't evict each
  *     other's fingerprints.
  *
  * @module agent/spine/spine-hook.diff
@@ -22,9 +22,9 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { getSpineDiffFingerprintPath } from '../../paths.js';
+import { getSpineDiffFingerprintPath } from '../../paths.spine.js';
 import { resolveRepoRootSync } from '../../utils/git.js';
 
 // ---------------------------------------------------------------------------
@@ -37,12 +37,15 @@ import { resolveRepoRootSync } from '../../utils/git.js';
  * Contract:
  *  - `diff` is the filtered, classifier-ready diff string.
  *  - `fingerprint` is its SHA-256 hex digest (of the raw filtered bytes).
+ *  - `worktreeRoot` is the git worktree toplevel used for diff acquisition and
+ *    fingerprint-key scoping.
  *  - `skipped` is true when the filtered diff is empty (SPINE-only changes or
  *    nothing at all) — the hook must fast-exit without calling the classifier.
  */
 export interface DiffResult {
   diff: string;
   fingerprint: string;
+  worktreeRoot: string;
   skipped: boolean;
 }
 
@@ -73,33 +76,32 @@ export function getClassifiableDiff(
 
   const rawDiff = fetchRawDiff(worktreeRoot);
   if (!rawDiff.trim()) {
-    return { diff: '', fingerprint: '', skipped: true };
+    return { diff: '', fingerprint: '', worktreeRoot, skipped: true };
   }
 
   const filtered = filterSpineEdits(rawDiff);
   if (!filtered.trim()) {
-    return { diff: '', fingerprint: '', skipped: true };
+    return { diff: '', fingerprint: '', worktreeRoot, skipped: true };
   }
 
   const fingerprint = sha256hex(filtered);
-  return { diff: filtered, fingerprint, skipped: false };
+  return { diff: filtered, fingerprint, worktreeRoot, skipped: false };
 }
 
 /**
  * Return true when `fingerprint` matches the last-persisted diff fingerprint
- * for `repoRoot`.
+ * for `worktreeRoot`.
  *
- * Each repo root is keyed independently in the fingerprint map so concurrent
- * worktrees (e.g. goblin-portal and agent-afk both using SPINE) do not evict
- * each other's fingerprints.
+ * Each worktree root is keyed independently in the fingerprint map so linked
+ * worktrees of the same repository do not evict each other's fingerprints.
  *
  * An identical fingerprint means this exact diff has already been classified;
  * the hook should skip the classifier call and return early.
  */
-export function isDuplicateDiff(fingerprint: string, repoRoot: string): boolean {
+export function isDuplicateDiff(fingerprint: string, worktreeRoot: string): boolean {
   try {
     const map = readFingerprintMap();
-    const key = rootKey(repoRoot);
+    const key = rootKey(worktreeRoot);
     return map[key] === fingerprint;
   } catch {
     // File does not exist yet — first run, not a duplicate.
@@ -108,7 +110,7 @@ export function isDuplicateDiff(fingerprint: string, repoRoot: string): boolean 
 }
 
 /**
- * Persist `fingerprint` as the last-classified diff fingerprint for `repoRoot`.
+ * Persist `fingerprint` as the last-classified diff fingerprint for `worktreeRoot`.
  *
  * The fingerprint map is keyed by a short hash of the repo root, so each project
  * has exactly one entry and the file stays well under 1 KB even across many repos.
@@ -116,13 +118,15 @@ export function isDuplicateDiff(fingerprint: string, repoRoot: string): boolean 
  * Best-effort — never throws; a failed write just means the next session may
  * re-classify the same diff once more, which is safe.
  */
-export function persistDiffFingerprint(fingerprint: string, repoRoot: string): void {
+export function persistDiffFingerprint(fingerprint: string, worktreeRoot: string): void {
   try {
     const p = getSpineDiffFingerprintPath();
     mkdirSync(dirname(p), { recursive: true });
     const map = readFingerprintMap();
-    map[rootKey(repoRoot)] = fingerprint;
-    writeFileSync(p, JSON.stringify(map) + '\n', 'utf-8');
+    map[rootKey(worktreeRoot)] = fingerprint;
+    const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, JSON.stringify(map) + '\n', 'utf-8');
+    renameSync(tmp, p);
   } catch {
     // Best-effort — fingerprint is an optimisation, not a correctness requirement.
   }
@@ -133,14 +137,14 @@ export function persistDiffFingerprint(fingerprint: string, repoRoot: string): v
 // ---------------------------------------------------------------------------
 
 /**
- * Derive a short stable key for a repo root path.
+ * Derive a short stable key for a worktree root path.
  *
- * Uses the first 16 hex characters of sha256(repoRoot) — collision probability
+ * Uses the first 16 hex characters of sha256(worktreeRoot) — collision probability
  * is negligible for the ≤10 repos a typical AFK user works with, and the key
  * is short enough that the JSON file stays well under 1 KB.
  */
-function rootKey(repoRoot: string): string {
-  return sha256hex(repoRoot).slice(0, 16);
+function rootKey(worktreeRoot: string): string {
+  return sha256hex(worktreeRoot).slice(0, 16);
 }
 
 /** Read the persisted fingerprint map, returning {} on any error. */
@@ -149,7 +153,11 @@ function readFingerprintMap(): Record<string, string> {
     const raw = readFileSync(getSpineDiffFingerprintPath(), 'utf-8');
     const parsed = JSON.parse(raw) as unknown;
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, string>;
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, string] =>
+          typeof entry[1] === 'string',
+        ),
+      );
     }
     return {};
   } catch {
@@ -199,7 +207,7 @@ function filterSpineEdits(diff: string): string {
 
   for (const line of lines) {
     if (line.startsWith('diff --git ')) {
-      skippingHunk = SPINE_FILES.some((f) => line.includes(`b/${f}`));
+      skippingHunk = SPINE_FILES.some((f) => line === `diff --git a/${f} b/${f}`);
     }
     if (!skippingHunk) out.push(line);
   }

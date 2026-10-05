@@ -670,7 +670,7 @@ describe('discoverPluginHooksConfigs', () => {
   it('finds <plugin>/hooks/hooks.json in flat layout with pluginRoot', () => {
     const pluginDir = makePlugin(root, 'my-plugin', true);
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
     ]);
   });
 
@@ -680,7 +680,7 @@ describe('discoverPluginHooksConfigs', () => {
     const pluginDir = makePlugin(join(root, 'cache', 'mp1'), 'plugin-a', true);
     writeIndex(root, { 'mp1:plugin-a': { enabled: true } });
     expect(discoverPluginHooksConfigs(root)).toEqual([
-      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir },
+      { path: join(pluginDir, 'hooks', 'hooks.json'), pluginRoot: pluginDir, pluginName: null },
     ]);
   });
 
@@ -832,5 +832,236 @@ describe('loadHooksConfig — plugin hooks gate', () => {
     const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
     expect(result.hooks.SessionStart).toBeUndefined();
     expect(result.warnings.some((w) => /unsupported hook type "http"/.test(w))).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // pluginName threading: plugin hooks carry the manifest name (#2459)
+  // -----------------------------------------------------------------------
+
+  it('plugin hook carries pluginName from the manifest when the manifest has a name', () => {
+    const pluginDir = join(pluginsDir, 'demo-plugin');
+    // Overwrite the blank manifest written by beforeEach with a named one.
+    writeFileSync(
+      join(pluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'claude-jev-afk', version: '1.0.0' }),
+      'utf-8',
+    );
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    const hook = result.hooks.SessionStart?.[0]?.hooks[0];
+    expect(hook).toBeDefined();
+    expect(hook!.pluginName).toBe('claude-jev-afk');
+  });
+
+  it('plugin hook has pluginName=undefined when manifest has no name field', () => {
+    // The blank manifest `{}` written by beforeEach has no `name` field.
+    writeUserGlobalConfig({ enablePluginHooks: true });
+    const result = loadHooksConfig({ cwd: projectCwd, pluginsDir });
+    const hook = result.hooks.SessionStart?.[0]?.hooks[0];
+    expect(hook).toBeDefined();
+    // readPluginManifest returns null for a missing name → not set on the hook.
+    expect(hook!.pluginName).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pluginHookEnv parsing (issue #2459)
+// ---------------------------------------------------------------------------
+
+describe('loadHooksConfig — pluginHookEnv parsing', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    afkHome = join(tmp, 'afk-home-phe');
+    projectCwd = join(tmp, 'project-phe');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  function writeUserGlobalConfig(body: unknown): void {
+    writeFileSync(join(afkHome, 'config', 'afk.config.json'), JSON.stringify(body), 'utf-8');
+  }
+
+  it('pluginHookEnv defaults to {} when not set', () => {
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv).toEqual({});
+  });
+
+  it('pluginHookEnv is parsed from user-global afk.config.json', () => {
+    writeUserGlobalConfig({
+      pluginHookEnv: { 'claude-jev-afk': ['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY'] },
+    });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv['claude-jev-afk']).toEqual(['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY']);
+  });
+
+  it('pluginHookEnv from project-local file is ignored (security gate)', () => {
+    // Only user-global files supply pluginHookEnv — a project-local
+    // afk.config.json must NOT be able to grant secrets to plugin hooks.
+    writeFileSync(
+      join(projectCwd, 'afk.config.json'),
+      JSON.stringify({ pluginHookEnv: { 'evil-plugin': ['ANTHROPIC_API_KEY'] } }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv).toEqual({});
+  });
+
+  it('malformed pluginHookEnv (not an object) emits a warning and uses {}', () => {
+    writeUserGlobalConfig({ pluginHookEnv: ['not', 'an', 'object'] });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv).toEqual({});
+    expect(result.warnings.some((w) => w.includes('"pluginHookEnv" must be an object'))).toBe(true);
+  });
+
+  it('malformed per-plugin entry (not an array) emits a warning and skips that plugin', () => {
+    writeUserGlobalConfig({ pluginHookEnv: { 'good-plugin': ['MY_KEY'], 'bad-plugin': 'not-an-array' } });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.pluginHookEnv['good-plugin']).toEqual(['MY_KEY']);
+    expect(result.pluginHookEnv['bad-plugin']).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('pluginHookEnv["bad-plugin"]'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disabledPluginHooks parsing (issue #2816)
+// ---------------------------------------------------------------------------
+
+describe('loadHooksConfig — disabledPluginHooks parsing', () => {
+  let afkHome: string;
+  let projectCwd: string;
+  let originalAfkHome: string | undefined;
+
+  beforeEach(() => {
+    afkHome = join(tmp, 'afk-home-dph');
+    projectCwd = join(tmp, 'project-dph');
+    mkdirSync(join(afkHome, 'config'), { recursive: true });
+    mkdirSync(projectCwd, { recursive: true });
+    originalAfkHome = process.env['AFK_HOME'];
+    process.env['AFK_HOME'] = afkHome;
+  });
+
+  afterEach(() => {
+    if (originalAfkHome === undefined) delete process.env['AFK_HOME'];
+    else process.env['AFK_HOME'] = originalAfkHome;
+  });
+
+  function writeUserGlobalConfig(body: unknown): void {
+    writeFileSync(join(afkHome, 'config', 'afk.config.json'), JSON.stringify(body), 'utf-8');
+  }
+
+  it('disabledPluginHooks defaults to {} when not set', () => {
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks).toEqual({});
+  });
+
+  it('disabledPluginHooks is parsed from user-global afk.config.json', () => {
+    writeUserGlobalConfig({
+      disabledPluginHooks: { 'claude-jev-afk': ['PreToolUse:/^agent$/'] },
+    });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks['claude-jev-afk']).toEqual(['PreToolUse:/^agent$/']);
+  });
+
+  it('disabledPluginHooks from project-local file is ignored (security gate)', () => {
+    writeFileSync(
+      join(projectCwd, 'afk.config.json'),
+      JSON.stringify({ disabledPluginHooks: { 'evil-plugin': ['PreToolUse'] } }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks).toEqual({});
+  });
+
+  it('malformed disabledPluginHooks (not an object) emits a warning and uses {}', () => {
+    writeUserGlobalConfig({ disabledPluginHooks: ['not', 'an', 'object'] });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks).toEqual({});
+    expect(result.warnings.some((w) => w.includes('"disabledPluginHooks" must be an object'))).toBe(true);
+  });
+
+  it('malformed per-plugin entry (not an array) emits a warning and skips that entry', () => {
+    writeUserGlobalConfig({
+      disabledPluginHooks: { 'good-plugin': ['PreToolUse'], 'bad-plugin': 'not-an-array' },
+    });
+    const result = loadHooksConfig({ cwd: projectCwd });
+    expect(result.disabledPluginHooks['good-plugin']).toEqual(['PreToolUse']);
+    expect(result.disabledPluginHooks['bad-plugin']).toBeUndefined();
+    expect(result.warnings.some((w) => w.includes('disabledPluginHooks["bad-plugin"]'))).toBe(true);
+  });
+
+  it('multiple user-global layers union their specifiers (no duplicates)', () => {
+    // Layer 0: afk.config.json
+    writeUserGlobalConfig({
+      disabledPluginHooks: { 'my-plugin': ['PreToolUse', 'SessionStart'] },
+    });
+    // Layer 1: settings.json — adds another specifier for the same plugin
+    writeFileSync(
+      join(afkHome, 'config', 'settings.json'),
+      JSON.stringify({ disabledPluginHooks: { 'my-plugin': ['PreToolUse', 'PostToolUse'] } }),
+      'utf-8',
+    );
+    const result = loadHooksConfig({ cwd: projectCwd });
+    // Union: PreToolUse appears in both layers but should appear only once.
+    expect(result.disabledPluginHooks['my-plugin']?.sort()).toEqual(
+      ['PostToolUse', 'PreToolUse', 'SessionStart'].sort(),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isPluginHookDisabled helper (issue #2816)
+// ---------------------------------------------------------------------------
+
+import { isPluginHookDisabled } from './config-loader.js';
+
+describe('isPluginHookDisabled', () => {
+  it('returns false when the plugin has no disabled specs', () => {
+    expect(isPluginHookDisabled({}, 'my-plugin', 'PreToolUse', undefined)).toBe(false);
+  });
+
+  it('returns false when specifiers are for a different plugin', () => {
+    const map = { 'other-plugin': ['PreToolUse'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(false);
+  });
+
+  it('"<Event>" form suppresses all groups for that event', () => {
+    const map = { 'my-plugin': ['PreToolUse'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '/^agent$/')).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'SessionStart', undefined)).toBe(false);
+  });
+
+  it('"<Event>:<matcher>" form suppresses only the matching group', () => {
+    const map = { 'my-plugin': ['PreToolUse:/^agent$/'] };
+    // Exact matcher match
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '/^agent$/')).toBe(true);
+    // Different matcher → not suppressed
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '*')).toBe(false);
+    // No matcher (undefined) → not suppressed
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(false);
+    // Different event → not suppressed
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PostToolUse', '/^agent$/')).toBe(false);
+  });
+
+  it('undefined matcher matches the specifier "<Event>:undefined"', () => {
+    const map = { 'my-plugin': ['PreToolUse:undefined'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', undefined)).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', 'bash')).toBe(false);
+  });
+
+  it('returns true for the first matching specifier in a list', () => {
+    const map = { 'my-plugin': ['SessionStart', 'PreToolUse:/^agent$/'] };
+    expect(isPluginHookDisabled(map, 'my-plugin', 'SessionStart', undefined)).toBe(true);
+    expect(isPluginHookDisabled(map, 'my-plugin', 'PreToolUse', '/^agent$/')).toBe(true);
   });
 });

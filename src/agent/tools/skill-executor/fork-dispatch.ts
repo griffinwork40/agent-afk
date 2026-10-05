@@ -12,6 +12,8 @@
  * @module agent/tools/skill-executor/fork-dispatch
  */
 
+import { withSkillIdentity } from './fork-identity.js';
+import type { SkillIdentity } from '../../types/skill-identity.js';
 import { SubagentManager } from '../../subagent.js';
 import { resolveChildManagerReadRoots } from '../../subagent-read-scope.js';
 import { appendInjectContext } from '../subagent/inject-context.js';
@@ -68,18 +70,22 @@ function buildSkillForkManager(
     // the fork-time credential fallback (see SubagentManager.parentProvider).
     parentModel: string;
     parentAbortSignal: AbortSignal;
+    callId: string;
+    identity: SkillIdentity;
   },
 ): SubagentManager {
   const { ctx, currentCwd } = internals;
   const childReadRoots = resolveChildManagerReadRoots(ctx.getReadScopeInputs?.(), currentCwd);
   return new SubagentManager({
     parentAbortSignal: perPath.parentAbortSignal,
-    apiKey: perPath.apiKey,
-    parentModel: perPath.parentModel,
+    // #2844: pair the credential with its source model atomically.
+    ...(perPath.apiKey !== undefined
+      ? { parentCredential: { key: perPath.apiKey, sourceModel: perPath.parentModel } }
+      : {}),
     ...(ctx.baseUrl !== undefined ? { baseUrl: ctx.baseUrl } : {}),
     ...(ctx.traceWriter !== undefined ? { traceWriter: ctx.traceWriter } : {}),
     ...(ctx.surface !== undefined ? { surface: ctx.surface } : {}),
-    progressSink: getCurrentSink(),
+    progressSink: withSkillIdentity(getCurrentSink(), perPath.callId, perPath.identity),
     ...(currentCwd !== undefined ? { cwd: currentCwd } : {}),
     ...(childReadRoots !== undefined ? { parentReadRoots: childReadRoots } : {}),
     ...(ctx.workspaceStore !== undefined ? { workspaceStore: ctx.workspaceStore } : {}),
@@ -90,6 +96,7 @@ export async function executeForkedRegistrySkill(
   internals: SkillExecutorInternals,
   skill: {
     name: string;
+    description?: string;
     context?: 'inline' | 'fork' | 'load';
     model?: string;
     readOnly?: boolean;
@@ -147,6 +154,8 @@ export async function executeForkedRegistrySkill(
   const manager = buildSkillForkManager(internals, {
     apiKey: skillChildApiKey,
     parentModel: skillChildModel,
+    callId: call.id,
+    identity: { name: skill.name, ...(skill.description ? { purpose: skill.description } : {}), ...(args ? { arguments: args } : {}) },
     parentAbortSignal: call.signal,
   });
 
@@ -213,6 +222,7 @@ export async function executePluginSkill(
   // Per-skill model override from the SKILL.md `model:` frontmatter field.
   // Threaded from `pluginSkill.model` at the call site (skill-executor.ts).
   model?: string,
+  description?: string,
 ): Promise<ToolResult> {
   const { ctx } = internals;
   if (call.signal.aborted) {
@@ -248,6 +258,8 @@ export async function executePluginSkill(
   const manager = buildSkillForkManager(internals, {
     apiKey: pluginChildApiKey,
     parentModel: pluginChildModel,
+    callId: call.id,
+    identity: { name: skillName, ...(description ? { purpose: description } : {}), ...(args ? { arguments: args } : {}) },
     parentAbortSignal: call.signal,
   });
 
@@ -390,6 +402,11 @@ export async function runForkedSkillToResult(
     // entry as a child of THIS skill's tool-lane entry rather than at root.
     // Mirrors `ComposeExecutor` (compose-executor.ts:227-232); paired with
     // `'skill'` in NESTING_TOOLS so the renderer recurses into the children.
+    // Intentional: `nestedAgentAllowlist` is NOT forwarded here. Skill forks are
+    // not user-defined scoped agents (they carry no `Agent(x)` grant from a type
+    // definition), so there is no caller-supplied allowlist to propagate. The
+    // executor still enforces any allowlist the skill child's own session carries;
+    // omitting it here is correct, not a gap. (#2848)
     handle = await manager.forkSubagent({
       parent: internals.ctx.parentSession,
       config: childConfig,

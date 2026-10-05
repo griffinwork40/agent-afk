@@ -69,7 +69,7 @@ import { runShellTask } from './shell-task.js';
 import { parseTerminalState } from '../../cli/commands/interactive/terminal-state.js';
 import { DONE_EVIDENCE_TOOLS } from '../../cli/commands/interactive/afk-push.js';
 import { getTraceDir, getDaemonStateDir } from '../../paths.js';
-import { daemonDefaultCwd } from './session-spawn.js';
+import { daemonDefaultCwd, _resetDaemonDefaultCwdCache } from './session-spawn.js';
 import { AgentSession } from '../session/agent-session.js';
 import { McpManager } from '../mcp/index.js';
 import type { AgentConfig } from '../types.js';
@@ -103,6 +103,10 @@ afterEach(() => {
   else process.env['AFK_ALLOW_PROJECT_MCP'] = savedAllowProjectMcp;
   if (isolatedAfkHome !== undefined) rmSync(isolatedAfkHome, { recursive: true, force: true });
   isolatedAfkHome = undefined;
+  // Reset the daemonDefaultCwd memo so each test gets a fresh resolution
+  // against the new isolatedAfkHome. Without this, the memoized value from a
+  // prior test (pointing at a deleted temp dir) would be returned.
+  _resetDaemonDefaultCwdCache();
 });
 
 /**
@@ -736,7 +740,7 @@ describe('CronScheduler — MCP fixture wiring', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -814,7 +818,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 
   it(
@@ -883,7 +887,7 @@ describe('CronScheduler — spawnSession error-path cleanup (#247)', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -958,7 +962,7 @@ describe('CronScheduler — mcp_connect_* trace phases', () => {
         rmSync(dir, { recursive: true, force: true });
       }
     },
-    { timeout: 15_000 },
+    15_000,
   );
 });
 
@@ -1155,6 +1159,45 @@ describe('CronScheduler — per-task cwd', () => {
     expect(statSync(result).isDirectory()).toBe(true);
   });
 
+  it('daemonDefaultCwd() warns exactly once and does not retry mkdir on persistent failure', () => {
+    // Simulate a persistent mkdirSync failure by pointing AFK_HOME at a plain
+    // FILE — mkdirSync({ recursive: true }) throws ENOTDIR because a regular
+    // file blocks one of the ancestor path segments.
+    // The warning must fire on the first call only; subsequent calls must use
+    // the memoized fallback without re-running mkdirSync.
+    const fileAsHome = join(dir, 'fake-home-file');
+    writeFileSync(fileAsHome, '');
+    const envKey = 'AFK_HOME';
+    const prior = process.env[envKey];
+    process.env[envKey] = fileAsHome;
+    _resetDaemonDefaultCwdCache();
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const first = daemonDefaultCwd();
+      const second = daemonDefaultCwd();
+      const third = daemonDefaultCwd();
+
+      // All calls must return os.tmpdir() as the fallback.
+      expect(first).toBe(tmpdir());
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+
+      // console.warn must have fired exactly once with the AFK_STATE_DIR / AFK_HOME hint.
+      const warnCalls = warnSpy.mock.calls.filter((args) =>
+        String(args[0]).includes('daemonDefaultCwd'),
+      );
+      expect(warnCalls).toHaveLength(1);
+      expect(String(warnCalls[0]![0])).toMatch(/AFK_STATE_DIR \(or AFK_HOME\)/);
+    } finally {
+      warnSpy.mockRestore();
+      if (prior === undefined) delete process.env[envKey];
+      else process.env[envKey] = prior;
+      _resetDaemonDefaultCwdCache();
+    }
+  });
+
   it('produces an error telemetry record when task.cwd has vanished', async () => {
     // Create a dir, register a task pointing to it, then remove the dir.
     const vanishingDir = join(dir, 'vanishing');
@@ -1267,6 +1310,7 @@ describe('CronScheduler — overlap guard (#2299)', () => {
     let sessionCallCount = 0;
     const scheduler = new CronScheduler({
       telemetryPath,
+      budgetGate: async () => ({ skip: false }),
       sessionFactory: () => {
         sessionCallCount += 1;
         return {

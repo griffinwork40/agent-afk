@@ -22,6 +22,10 @@
  *   T15 — Anthropic binding with baseUrl → oneShotCompletion receives baseUrl.
  *   T16 — Raw grok-* (no explicit slot provider) → forceMode undefined (not forced apikey).
  *   T17 — xai-oauth target → OAuth refresh called before resolveXaiAuth.
+ *   T18 — Missing Anthropic credential → throws /No Anthropic credential/.
+ *   T19 — Ambient Anthropic credential is used when no custom baseUrl is configured;
+ *          custom non-Anthropic baseUrl without apiKey rejects; trailing-dot FQDN passes.
+ *   T20 — Secret redaction: failure message is redacted and truncated before logging.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveCrossProviderSummarize, __resetCrossProviderWarnState } from './compact-summarizer.js';
@@ -32,6 +36,7 @@ import * as xaiAuth from '../xai/auth.js';
 import * as xaiEndpoints from '../xai/endpoints.js';
 import * as xaiOauth from '../xai/oauth.js';
 import * as credentialResolver from '../../auth/credential-resolver.js';
+import * as modelSlots from '../../session/model-slots.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -760,5 +765,189 @@ describe('T17: xai-oauth target runs OAuth refresh before resolveXaiAuth', () =>
 
     await expect(summarize('transcript')).rejects.toThrow(/expired and refresh failed/);
     expect(oneShot).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T18: Missing Anthropic credential → throws /No Anthropic credential/
+// (advisory finding from #2560 — test-coverage gap)
+// ---------------------------------------------------------------------------
+
+describe('T18: missing Anthropic credential throws', () => {
+  it('throws when loadAnthropicCredential returns undefined and no binding.apiKey', async () => {
+    const key = makeSessionKey();
+    vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue(undefined);
+
+    const sessionFn = makeSessionFn();
+    const summarize = resolveCrossProviderSummarize(
+      'openai-compatible',
+      sessionFn,
+      'claude-haiku-4-5-20251001',
+      key,
+    );
+
+    await expect(summarize('transcript')).rejects.toThrow(/No Anthropic credential/);
+    expect(sessionFn).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T19: Ambient Anthropic credential is used when no custom baseUrl is configured
+// (advisory finding from #2560 — ambient credential + user-configurable baseUrl)
+// ---------------------------------------------------------------------------
+
+describe('T19: ambient Anthropic credential is used when no custom baseUrl is configured', () => {
+  it('uses the ambient credential and calls oneShotCompletion without a baseUrl', async () => {
+    // When no custom baseUrl is present (resolveBinding returns {}), the ambient
+    // credential path must run cleanly — the guard must NOT block the common case.
+    const key = makeSessionKey();
+    const oneShotAnthropic = vi
+      .spyOn(anthropicOneshot, 'oneShotCompletion')
+      .mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
+
+    const sessionFn = makeSessionFn();
+    const summarize = resolveCrossProviderSummarize(
+      'openai-compatible',
+      sessionFn,
+      'claude-haiku-4-5-20251001',
+      key,
+    );
+
+    // With no custom baseUrl (slot lookup gives {}), the ambient credential path runs fine.
+    await expect(summarize('transcript')).resolves.toBe(FOREIGN_RESULT);
+    expect(oneShotAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'sk-ant-ambient' }),
+    );
+    // Confirm oneShotCompletion was called WITHOUT a baseUrl (no custom host → safe).
+    const callArg = (oneShotAnthropic.mock.calls[0] as [Record<string, unknown>] | undefined)?.[0];
+    expect(callArg?.['baseUrl']).toBeUndefined();
+  });
+
+  it('rejects when resolveBinding returns a non-Anthropic baseUrl with no apiKey', async () => {
+    // Guard: when binding.baseUrl is a non-Anthropic host and no explicit apiKey
+    // is provided, summarizeViaAnthropic must throw rather than forwarding the
+    // ambient Anthropic credential to an untrusted endpoint.
+    const key = makeSessionKey();
+    vi.spyOn(anthropicOneshot, 'oneShotCompletion').mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
+    // Inject a custom non-Anthropic baseUrl into the binding without an apiKey.
+    vi.spyOn(modelSlots, 'resolveBinding').mockReturnValue({
+      id: 'claude-haiku-4-5-20251001',
+      baseUrl: 'https://my-proxy.example.com',
+    });
+
+    const sessionFn = makeSessionFn();
+    const summarize = resolveCrossProviderSummarize(
+      'openai-compatible',
+      sessionFn,
+      'claude-haiku-4-5-20251001',
+      key,
+    );
+
+    await expect(summarize('transcript')).rejects.toThrow(/explicit apiKey/);
+    // The ambient credential must never have been used.
+    expect(anthropicOneshot.oneShotCompletion).not.toHaveBeenCalled();
+  });
+
+  it('succeeds when the baseUrl is the canonical Anthropic host with a trailing dot', async () => {
+    // Trailing-dot FQDNs (e.g. 'https://api.anthropic.com./v1') are valid DNS
+    // notation. Node's URL parser keeps the dot in `hostname`, so without
+    // normalisation the host would be misidentified as custom and the guard
+    // would throw. Verify the strip-trailing-dot normalisation works.
+    const key = makeSessionKey();
+    const oneShotAnthropic = vi
+      .spyOn(anthropicOneshot, 'oneShotCompletion')
+      .mockResolvedValue(FOREIGN_RESULT);
+    vi.spyOn(credentialResolver, 'loadAnthropicCredential').mockReturnValue('sk-ant-ambient');
+    vi.spyOn(modelSlots, 'resolveBinding').mockReturnValue({
+      id: 'claude-haiku-4-5-20251001',
+      baseUrl: 'https://api.anthropic.com./v1',
+    });
+
+    const sessionFn = makeSessionFn();
+    const summarize = resolveCrossProviderSummarize(
+      'openai-compatible',
+      sessionFn,
+      'claude-haiku-4-5-20251001',
+      key,
+    );
+
+    // Should NOT throw — trailing-dot hostname is treated as the canonical host.
+    await expect(summarize('transcript')).resolves.toBe(FOREIGN_RESULT);
+    expect(oneShotAnthropic).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'sk-ant-ambient' }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T20: Failure warning redacts secrets from err.message before logging
+// (advisory finding from #2560 — security: err.message logged unsanitized)
+// ---------------------------------------------------------------------------
+
+describe('T20: failure warning redacts secrets in err.message', () => {
+  it('does not log a raw API key that appears in the error message', async () => {
+    const key = makeSessionKey();
+    // Simulate an SDK error that leaks a partial key in its message body,
+    // as OpenAI and Anthropic SDKs sometimes do in 401 responses.
+    const leakyError = new Error(
+      'Incorrect API key provided: sk-ant-api03-AAABBBCCCDDDEEE. ' +
+      'You can find your API key at https://platform.anthropic.com.',
+    );
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(leakyError);
+    vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
+      apiKey: 'sk-key',
+      source: 'env',
+    });
+
+    const sessionFn = makeSessionFn();
+    const resolved = resolveCrossProviderSummarize('anthropic-direct', sessionFn, 'gpt-4o', key);
+
+    await expect(resolved('transcript')).rejects.toThrow(leakyError.message);
+
+    // The failure warning must NOT contain the raw sk-ant-* fragment.
+    const failureWarn = warnSpy.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes('summarization failed'),
+    );
+    expect(failureWarn).toBeDefined();
+    const warnText = String(failureWarn![0]);
+    expect(warnText).not.toMatch(/sk-ant-api03/);
+    expect(warnText).toMatch(/\[REDACTED\]/);
+  });
+
+  it('truncates extremely long error messages to 200 chars in the warning', async () => {
+    const key = makeSessionKey();
+    // Build a long error message that won't be swallowed by redactSecrets itself.
+    // Using a repeated phrase with spaces (which break the 32-char contiguous run
+    // rule) so the message survives redaction and the 200-char truncation is
+    // the only thing shortening it.
+    const phrase = 'network error: ';
+    const longMsg = phrase.repeat(40); // 600 chars, but broken into short runs
+    const longError = new Error(longMsg);
+    vi.spyOn(openaiOneshot, 'oneShotChatCompletion').mockRejectedValue(longError);
+    vi.spyOn(openaiAuth, 'resolveOpenAIAuth').mockReturnValue({
+      apiKey: 'sk-key',
+      source: 'env',
+    });
+
+    const sessionFn = makeSessionFn();
+    const resolved = resolveCrossProviderSummarize('anthropic-direct', sessionFn, 'gpt-4o', key);
+    await expect(resolved('transcript')).rejects.toThrow(longMsg);
+
+    const failureWarn = warnSpy.mock.calls.find((c: unknown[]) =>
+      String(c[0]).includes('summarization failed'),
+    );
+    expect(failureWarn).toBeDefined();
+    const warnText = String(failureWarn![0]);
+    // After "failed for provider/model: " the logged portion is bounded to 200 chars.
+    // Extract that portion by splitting on the known prefix pattern.
+    const afterPrefix = warnText.split(/failed for [^:]+: /)[1] ?? '';
+    // The logged portion must not exceed 200 chars (from err.message) before the
+    // ". History unchanged…" suffix.
+    const loggedErrPart = afterPrefix.split('. History unchanged')[0] ?? '';
+    expect(loggedErrPart.length).toBeLessThanOrEqual(200);
+    // And it must contain the beginning of the original message (not empty).
+    expect(loggedErrPart.startsWith(phrase)).toBe(true);
   });
 });

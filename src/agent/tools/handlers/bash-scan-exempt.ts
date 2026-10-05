@@ -79,7 +79,7 @@ export function _resetScanExemptCacheForTests(): void {
  * Invariant: a candidate beginning with `/` is a POSIX path even on win32 —
  * the bash tool runs Git Bash / MSYS there, where `/dev/null` and `/tmp` are
  * real. Host `path.resolve` would turn `/dev/null` into `D:\dev\null`, which
- * never matches {@link DEVICE_SINKS} or the POSIX scratch roots, so every
+ * never matches `DEVICE_SINKS` or the POSIX scratch roots, so every
  * `2>/dev/null` fired the advisory again (issue #703 Windows leg). Native
  * win32 paths (`C:\…`) keep host semantics so they still match `os.tmpdir()`.
  */

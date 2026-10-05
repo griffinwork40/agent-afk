@@ -213,7 +213,8 @@ Under the hood:
    - `src/telegram.ts` → `dist/telegram.mjs`
    - `src/index.ts` → `dist/index.mjs`
 3. Post-process: shebang injection + chmod +x on `cli.mjs` and `telegram.mjs`.
-4. `scripts/postinstall.mjs` is **not** copied into `dist/`; the `postinstall` lifecycle script runs it in place, and it ships via its own `package.json#files` entry.
+4. `scripts/postinstall.mjs` is **not** copied into `dist/` — the `postinstall` lifecycle script runs it in place from the source tree.
+   It ships to npm consumers via its own `package.json#files` entry (not as part of `dist/`).
 5. `package.json#bin.afk` → `dist/cli.mjs` matches the esbuild output.
 6. `package.json#files` whitelists what ships: `dist/`, `scripts/postinstall.mjs`, `NOTICE`, and the demo asset. The whitelist overrides `.npmignore`, which otherwise excludes `scripts/`; everything else under source, tests, scripts, and prompts stays out.
 

@@ -379,6 +379,37 @@ describe('repairOrphanToolCalls — undefined tool_call_id preservation (#2438)'
     expect(out[3]).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
     expect(out[4]).toMatchObject({ role: 'tool', tool_call_id: 'c2', content: INTERRUPTED });
   });
+
+  it('handles reversed interleaving: correlated result arrives before the Ollama-style result', () => {
+    // Reversed emit order from the previous test:
+    // Shape: [user, assistant{c1,c2}, toolResult(c1), ollamaTool]
+    //
+    // The repair function always emits undefined-id (Ollama-style) messages
+    // BEFORE the id-correlated results, regardless of their original order in
+    // the run. So both this test and the previous one produce the same output
+    // ordering: [user, assistant, ollamaTool, c1_real, c2_synthetic].
+    // This exercises the code path where the correlated result is encountered
+    // before the Ollama-style message in the input, confirming emit-order
+    // stability.
+    const ollamaTool: OpenAIMessage = { role: 'tool', content: 'ollama result' };
+    const msgs = [
+      userMsg(),
+      assistantWithCalls('c1', 'c2'),
+      toolResult('c1'),    // real result for c1 arrives first in input
+      ollamaTool,          // undefined tool_call_id — must be preserved
+      // c2 missing — will get a synthetic
+    ];
+    const out = repairOrphanToolCalls(msgs);
+
+    // Resulting array: [user, assistant, ollamaTool, c1_real, c2_synthetic]
+    // (Ollama-style messages are always emitted before id-correlated ones.)
+    expect(out).toHaveLength(5);
+    expect(out[0]).toEqual(userMsg());
+    expect(out[1]).toEqual(msgs[1]);
+    expect(out[2]).toEqual(ollamaTool);
+    expect(out[3]).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
+    expect(out[4]).toMatchObject({ role: 'tool', tool_call_id: 'c2', content: INTERRUPTED });
+  });
 });
 
 // ─── Integration test — repairOrphanToolCalls fires in the outgoing request ──

@@ -78,9 +78,11 @@ export function normalizeTokens(text: string): Set<string> {
 /**
  * Build a prompt fingerprint: deduplicated, sorted, capped token list.
  *
- * Takes normalized tokens in first-appearance order (preserving diversity),
- * deduplicates, keeps at most FINGERPRINT_MAX_TOKENS, then sorts the result
- * so the stored array is deterministic regardless of input order.
+ * Collects ALL unique qualifying tokens first, sorts them lexicographically,
+ * then slices to at most FINGERPRINT_MAX_TOKENS. Sorting before slicing
+ * ensures that two prompts containing the same vocabulary (but with tokens
+ * appearing in different order) always produce the same fingerprint, which
+ * gives correct Jaccard recall for cross_session_reask (issue #2561).
  *
  * The fingerprint is stored in `first_prompt_tokens`; raw prompt text is
  * never persisted (issue #2449).
@@ -90,15 +92,12 @@ export function promptFingerprint(text: string): string[] {
     .toLowerCase()
     .match(/[a-z0-9]+/g) ?? [];
   const seen = new Set<string>();
-  const ordered: string[] = [];
   for (const t of tokens) {
     if (t.length >= 2 && !STOP_WORDS.has(t) && !seen.has(t)) {
       seen.add(t);
-      ordered.push(t);
-      if (ordered.length >= FINGERPRINT_MAX_TOKENS) break;
     }
   }
-  return ordered.slice().sort();
+  return Array.from(seen).sort().slice(0, FINGERPRINT_MAX_TOKENS);
 }
 
 /**

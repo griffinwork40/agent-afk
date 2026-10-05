@@ -65,6 +65,28 @@ export const SessionPhaseNameSchema = z.enum([
   // Many-image dimension guard replacement. See SessionPhaseName JSDoc in
   // types.ts — metadata carries degradedCount, threshold, maxDimension.
   'many_image_degraded',
+  // Mid-stream transport drop accepted as clean completion (#2780).
+  // See SessionPhaseName JSDoc in types.ts for the full contract.
+  'stream_accepted_after_drop',
+  // Connection-phase network retry. See SessionPhaseName JSDoc in types.ts.
+  'connection_retry',
+  'usage_notice',
+  // Per-session tool-degradation signal (#2774). Emitted at most once per
+  // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
+  // metadata: { tool, errorHead, errorCount, callCount }
+  'tool_degraded',
+  // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
+  // See SessionPhaseName JSDoc in types.session-phase.ts for the full rationale.
+  'stop_inject_dropped',
+  // A blocking Stop hook triggered a same-turn continuation round. Emitted
+  // once per continuation. `metadata` carries `continuation` (1-based count)
+  // and `reasonHead` (first ≤200 chars of the blocking reason, passed through
+  // redactSecrets). See SessionPhaseName JSDoc in types.ts.
+  'stop_hook_continuation',
+  // The per-turn same-turn continuation cap was reached; the turn ends
+  // normally. `metadata` carries `cap` (the configured ceiling). See
+  // SessionPhaseName JSDoc in types.ts.
+  'stop_hook_cap_reached',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

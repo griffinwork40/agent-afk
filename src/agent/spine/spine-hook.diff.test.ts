@@ -42,6 +42,10 @@ vi.mock('node:fs', async (importOriginal) => {
         _mockFsStore[String(path)] = data;
       },
     ),
+    renameSync: vi.fn((oldPath: string, newPath: string): void => {
+      _mockFsStore[String(newPath)] = _mockFsStore[String(oldPath)] ?? '';
+      delete _mockFsStore[String(oldPath)];
+    }),
     mkdirSync: vi.fn(),
   };
 });
@@ -262,3 +266,38 @@ describe('isDuplicateDiff / persistDiffFingerprint — outcome C: stale diff ded
 // (Tested indirectly via getClassifiableDiff being exercised by the hook tests;
 //  direct tests for the behaviour are in spine-hook.test.ts cross-annotation
 //  describe block below.)
+
+describe('isDuplicateDiff / persistDiffFingerprint — linked worktree scope', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
+  });
+
+  it('keys fingerprints by exact worktree root, not a shared common-dir root', () => {
+    const worktreeA = '/repo/.afk-worktrees/a';
+    const worktreeB = '/repo/.afk-worktrees/b';
+
+    persistDiffFingerprint('fingerprint-a', worktreeA);
+    persistDiffFingerprint('fingerprint-b', worktreeB);
+
+    expect(isDuplicateDiff('fingerprint-a', worktreeA)).toBe(true);
+    expect(isDuplicateDiff('fingerprint-b', worktreeB)).toBe(true);
+    expect(isDuplicateDiff('fingerprint-b', worktreeA)).toBe(false);
+  });
+
+  it('filters non-string values from the fingerprint map before writing', () => {
+    persistDiffFingerprint('seed', '/repo/seed');
+    const path = Object.keys(_mockFsStore).find((key) => key.endsWith('spine-diff-fingerprints.json'))!;
+    _mockFsStore[path] = JSON.stringify({ keep: 'abc', drop: 123 }) + '\n';
+
+    persistDiffFingerprint('next', '/repo/worktree');
+
+    const updatedPath = Object.keys(_mockFsStore)
+      .filter((key) => key.endsWith('spine-diff-fingerprints.json'))
+      .sort((a, b) => _mockFsStore[a]!.includes('next') ? -1 : _mockFsStore[b]!.includes('next') ? 1 : 0)[0]!;
+    const parsed = JSON.parse(_mockFsStore[updatedPath]!) as Record<string, unknown>;
+    expect(parsed['keep']).toBe('abc');
+    expect(parsed['drop']).toBeUndefined();
+    expect(Object.values(parsed)).toContain('next');
+  });
+});

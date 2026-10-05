@@ -47,7 +47,8 @@ export { readRecord, writeRecord, listRecords, upsertVotes, appendArtifacts } fr
 
 export { createOutcomeSessionEndHook } from './session-end-hook.js';
 export { createChildAttributionHook } from './child-attribution.js';
-export { lfReask, normalizeTokens, jaccardSimilarity, REASK_THRESHOLD, promptFingerprint, FINGERPRINT_MAX_TOKENS } from './lf-reask.js';
+// promptFingerprint/FINGERPRINT_MAX_TOKENS are internal to lf-reask.ts/session-end-hook.ts (issue #2561).
+export { lfReask, normalizeTokens, jaccardSimilarity, REASK_THRESHOLD } from './lf-reask.js';
 
 export type { ExecFnCi } from './lf-ci.js';
 export { lfCi, realExecFnCi } from './lf-ci.js';

@@ -19,6 +19,7 @@ import {
   readdirSync,
   rmSync,
 } from 'node:fs';
+import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { join, resolve, tmpdir } from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
@@ -731,7 +732,7 @@ describe('materializeSandboxes: git worktrees', () => {
   });
 
   afterEach(async () => {
-    rmSync(root, { recursive: true, force: true });
+    rmSyncRetry(root);
   });
 
   it('creates project worktrees for both envs; cleanup removes sandboxes', async () => {

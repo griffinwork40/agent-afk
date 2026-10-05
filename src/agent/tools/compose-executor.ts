@@ -9,8 +9,7 @@
  * @module agent/tools/compose-executor
  */
 
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
-import { join } from 'path';
+
 import {
   buildWaveUnit,
   createManifest,
@@ -24,7 +23,8 @@ import { resolveChildModel } from '../subagent/resolve-child-model.js';
 import { providerForModel } from '../providers/index.js';
 import { resolveCredentialForModel } from '../auth/credential-resolver.js';
 import { applyParentCredentialFallback } from './child-credential.js';
-import type { DAGRunResult } from '../dag.js';
+import { buildParentCredentialOpt } from './compose-executor.credential.js';
+
 import type { AgentModelInput, IAgentSession } from '../types.js';
 import type { Surface } from '../awareness/types.js';
 import type { WorkspaceStore } from '../workspace/index.js';
@@ -32,19 +32,29 @@ import type { TraceSink } from '../trace/index.js';
 import type { ToolCall, ToolResult } from './types.js';
 import { appendRoutingDecision } from '../routing-telemetry.js';
 import { deriveOrigin, actorFromDepth } from '../session/session-identity.js';
-import type { SubagentExecutionError } from '../subagent/result.js';
+
 import type { SubagentProgressSink } from '../types/session-types.js';
 import { getCurrentSink } from '../_lib/skill-sink-channel.js';
 import { resolveMaxNestingDepth } from './nesting.js';
 import { resolveComposeNodeProvider } from './compose-node-provider.js';
 import { resolveComposeNodeAgent } from './compose-agent-resolve.js';
 import { buildComposeMaxDepthRefusal } from './skill-depth-message.js';
-import { getSessionsDir } from '../../paths.js';
+import {
+  formatDAGResult,
+  formatTruncationWarning,
+  cleanupComposeSpills,
+} from './compose-executor.format.js';
+// Re-export for callers that import cleanupComposeSpills from compose-executor.ts
+// (test files, and any surface that predates the format-module extraction).
+export { cleanupComposeSpills };
 import { errorMessage } from '../../utils/errors.js';
 import { resolveSubagentAttachments } from './subagent/attachment-resolve.js';
 import { inboundAttachmentRegistry as defaultInboundAttachmentRegistry } from '../content/attachment-registry.js';
 import type { InboundAttachmentReader } from '../content/attachment-registry.js';
 import type { AgentRegistry } from '../agents/index.js';
+import type { DetachableToolRegistry } from './detach-registry.js';
+import { raceComposeDetach } from './detach-compose.js';
+import { evaluateDispatchUsageForModel, prependUsageNotice } from './usage-notice.js';
 export interface ComposeExecutorContext {
   // NOTE: compose nodes are NOT wired for the parent-registry fallback. The
   // DAG executor (dag-subagent.ts) forks each node with `parent: { sessionId }`
@@ -198,160 +208,27 @@ export interface ComposeExecutorContext {
     usage: import('../subagent/result.js').SubagentTrace['usage'],
     costUsd: number | undefined,
   ) => void;
+  /**
+   * Contract: the model that {@link ComposeExecutorContext.apiKey} was resolved
+   * FROM. Distinct from `defaultModel` when the session was launched with an
+   * explicit `--model` override: e.g. `AFK_MODEL=claude-opus-5-5` (Anthropic,
+   * credential source) + `--model gpt-6.1-sol` (OpenAI, session model). The
+   * per-call {@link SubagentManager} derives its `parentProvider` from
+   * `parentModel` — if that is `gpt-6.1-sol`, the provider resolves to
+   * `openai-compatible` and `sameCredentialFamily` returns true for OpenAI
+   * child nodes, causing the Anthropic `sk-ant-…` token to be forwarded (401).
+   *
+   * Setting `parentModel` to `credentialModel` instead keeps the provider gate
+   * aligned with the actual credential shape. Falls back to `defaultModel` when
+   * absent (back-compat: callers that do not supply this field are unaffected).
+   *
+   * Invariant: only the key's SOURCE model — never the session's routing model
+   * — must be used as `parentModel` for the compose SubagentManager.
+   */
+  credentialModel?: AgentModelInput;
 }
 
-const MAX_NODE_OUTPUT_CHARS = 8_000;
-const MAX_ERROR_CHARS = 500;
-const MAX_PARTIAL_FINDINGS_CHARS = 4_000;
 
-function formatPartialFindings(partial: unknown): string | undefined {
-  if (partial === undefined || partial === null) return undefined;
-  const raw = typeof partial === 'string' ? partial : JSON.stringify(partial);
-  if (raw.length === 0) return undefined;
-  return raw.length > MAX_PARTIAL_FINDINGS_CHARS
-    ? raw.slice(0, MAX_PARTIAL_FINDINGS_CHARS) + '\n… (truncated)'
-    : raw;
-}
-
-/**
- * Per-node truncation event surfaced from `formatDAGResult`. The executor
- * turns each into a `parseWarnings` line so the parent model receives a
- * structured signal that data was lost, plus the spill path it can
- * `read_file` to recover the full output across turns.
- */
-export interface TruncationEvent {
-  nodeId: string;
-  emittedChars: number;
-  totalChars: number;
-  /** Absolute path where the full raw output was spilled, or undefined if
-   *  the spill write failed. The truncation warning still fires either way. */
-  spillPath?: string;
-}
-
-/**
- * Write the full pre-truncation node output to disk so the parent can
- * retrieve it later via `read_file`. Best-effort: failures are swallowed
- * and the caller continues without a spill path. Layout:
- *   <sessions>/<sessionId>/compose/<callId>/<nodeId>.txt
- *
- * `callId` (the compose tool_use_id) namespaces concurrent or sequential
- * compose calls within one session so repeated node IDs cannot clobber.
- */
-function spillNodeOutput(
-  sessionId: string,
-  callId: string,
-  nodeId: string,
-  raw: string,
-): string | undefined {
-  try {
-    const dir = join(getSessionsDir(), sessionId, 'compose', callId);
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${nodeId}.txt`);
-    writeFileSync(path, raw, 'utf8');
-    return path;
-  } catch {
-    // Spill is best-effort. The truncation warning still fires without a
-    // path; the parent loses the recovery option but not the signal.
-    return undefined;
-  }
-}
-
-interface FormatDAGResultOptions {
-  sessionId: string;
-  callId: string;
-}
-
-interface FormatDAGResultReturn {
-  content: string;
-  truncations: TruncationEvent[];
-}
-
-function formatDAGResult(
-  result: DAGRunResult,
-  opts: FormatDAGResultOptions,
-): FormatDAGResultReturn {
-  const sections: string[] = [];
-  const truncations: TruncationEvent[] = [];
-
-  for (const [id, output] of Object.entries(result.outputs)) {
-    const raw = typeof output === 'string'
-      ? output
-      : output !== undefined && output !== null
-        ? JSON.stringify(output)
-        : '(no output)';
-    let content: string;
-    if (raw.length > MAX_NODE_OUTPUT_CHARS) {
-      // Spill BEFORE slicing so the path is known when we build the marker.
-      // Spill is best-effort; truncation marker still includes the path
-      // hint when the write succeeded so the model can recover the full
-      // text by calling `read_file` on it.
-      const spillPath = spillNodeOutput(opts.sessionId, opts.callId, id, raw);
-      truncations.push({
-        nodeId: id,
-        emittedChars: MAX_NODE_OUTPUT_CHARS,
-        totalChars: raw.length,
-        ...(spillPath !== undefined ? { spillPath } : {}),
-      });
-      const marker = spillPath !== undefined
-        ? `\n… (truncated at ${MAX_NODE_OUTPUT_CHARS} / ${raw.length} chars — full output at ${spillPath})`
-        : `\n… (truncated at ${MAX_NODE_OUTPUT_CHARS} / ${raw.length} chars)`;
-      content = raw.slice(0, MAX_NODE_OUTPUT_CHARS) + marker;
-    } else {
-      content = raw;
-    }
-    sections.push(`## ${id}\n${content}`);
-  }
-
-  if (result.failed.length > 0) {
-    for (const f of result.failed) {
-      const msg = f.error.message.length > MAX_ERROR_CHARS
-        ? f.error.message.slice(0, MAX_ERROR_CHARS) + '… (truncated)'
-        : f.error.message;
-      // Attached by `dag-subagent.ts` via `attachSubagentContext` so the
-      // assistant text the failed child managed to stream before erroring
-      // survives the DAG's `{ id, error }` lossy contract.
-      const partial = formatPartialFindings(
-        (f.error as SubagentExecutionError).partialOutput,
-      );
-      const body = partial
-        ? `${msg}\n\n### Partial findings before failure:\n${partial}`
-        : msg;
-      sections.push(`## ${f.id} [FAILED]\n${body}`);
-    }
-  }
-
-  if (result.skipped.length > 0) {
-    sections.push(`## Skipped\n${result.skipped.join(', ')}`);
-  }
-
-  return { content: sections.join('\n\n'), truncations };
-}
-
-/**
- * Remove the entire compose spill directory for a session. Called from the
- * SessionEnd hook so spill files are reclaimed when the session ends cleanly.
- * Best-effort: a missing directory or fs error is swallowed (the session is
- * ending; nothing useful can be done with a cleanup failure beyond a log
- * line, which would only add noise). Crashed sessions leak files — that is
- * a known gap; no daemon GC job exists today.
- */
-export function cleanupComposeSpills(sessionId: string): void {
-  if (!sessionId) return;
-  try {
-    const dir = join(getSessionsDir(), sessionId, 'compose');
-    rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // see docstring — swallowed by design
-  }
-}
-
-function formatTruncationWarning(t: TruncationEvent): string {
-  const base =
-    `node "${t.nodeId}" output truncated: emitted ${t.emittedChars} of ${t.totalChars} chars`;
-  return t.spillPath !== undefined
-    ? `${base}; full output at ${t.spillPath} (use read_file to retrieve)`
-    : `${base}; full output unavailable (spill write failed)`;
-}
 
 export class ComposeExecutor {
   // Current worktree cwd. Seeded from ctx.cwd; updated by setCwd when the
@@ -401,7 +278,16 @@ export class ComposeExecutor {
     this.ctx.onSubagentSucceeded = cb;
   }
 
-  async execute(call: ToolCall): Promise<ToolResult> {
+  /**
+   * Execute a compose DAG call.
+   *
+   * @param call           The tool call from the dispatcher.
+   * @param detachRegistry Optional detach registry for Ctrl+B support (#2542).
+   *   When present, the executor registers its in-flight DAG so Ctrl+B can
+   *   free the model's turn while the DAG keeps running. Absent on headless
+   *   surfaces where no REPL can inject the late result.
+   */
+  async execute(call: ToolCall, detachRegistry?: DetachableToolRegistry): Promise<ToolResult> {
     if (call.signal.aborted) {
       return { content: 'Compose tool call aborted', isError: true };
     }
@@ -477,6 +363,10 @@ export class ComposeExecutor {
     // much work it had done, and `isError` then failed the whole compose call,
     // discarding healthy siblings too.
     const maxToolRoundsPerNode = parsed.max_tool_rounds_per_node;
+
+    // Usage notice: evaluate quota at compose-wave start (observer-only, no blocking).
+    const usageNotice = await evaluateDispatchUsageForModel(this.ctx.defaultModel, this.ctx.traceWriter);
+
     let manager: SubagentManager;
     // Resolve the ambient sink when an event is delivered (rather than when
     // the manager is constructed), while preserving compose's historical
@@ -500,11 +390,9 @@ export class ComposeExecutor {
     );
     manager = new SubagentManager({
       parentAbortSignal: call.signal,
-      apiKey: this.ctx.apiKey,
-      // `this.ctx.apiKey` is the parent credential (resolved for
-      // `this.ctx.defaultModel`), so that model is the provider source of truth
-      // for the fork-time credential fallback (see SubagentManager.parentProvider).
-      parentModel: this.ctx.defaultModel,
+      // #2844: pair credential with its source model (credentialModel, not defaultModel) so provider can't mismatch.
+      // Built only when a real source model is known; see compose-executor.credential.ts.
+      ...buildParentCredentialOpt(this.ctx.apiKey, this.ctx.credentialModel ?? this.ctx.defaultModel),
       // Keep ambient rendering failures isolated from node execution. The
       // forwarding sink resolves the ambient sink per event, so sinks
       // installed after manager construction are still observed.
@@ -549,6 +437,13 @@ export class ComposeExecutor {
       node_count: parsed.nodes.length,
       edge_count: parsed.edges?.length ?? 0,
     }).catch(() => {});
+
+    // Detach state: declared OUTSIDE the try block so the finally clause can
+    // read detachedRef.value to skip manager.teardownAll() on the detach path
+    // (the continuation Promise handles it).
+    // Ordered-operation constraint: detachedRef must be initialized before any
+    // await so the finally clause never sees an uninitialized reference.
+    const detachedRef = { value: false };
 
     try {
       // Render hints for the CLI tool-lane: each spawned subagent passes
@@ -603,8 +498,7 @@ export class ComposeExecutor {
           defaultSubagentModel: this.ctx.defaultSubagentModel,
           defaultModel: this.ctx.defaultModel,
         });
-        const nodeProvider = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined);
-        const nodeIsOpenAI = nodeProvider === 'openai-compatible';
+        const nodeIsOpenAI = providerForModel(typeof nodeModel === 'string' ? nodeModel : undefined) === 'openai-compatible';
         // Invariant: resolve credentials fresh per-node at fork time, matching
         // the agent tool path (child-config.ts:302-308). ctx.apiKey is a fallback
         // only when fresh resolution returns empty (expired keychain token).
@@ -737,57 +631,9 @@ export class ComposeExecutor {
 
       // Wave manifest: create before the DAG starts so a crash mid-run leaves
       // a recoverable record. Only for ≥2 nodes (no manifest for solo dispatch).
-      let composeWaveId: string | undefined;
-      if (dagNodes.length >= 2) {
-        if ((this.ctx.depth ?? 0) === 0) {
-        try {
-          const manifestUnits = parsed.nodes.map((n) => {
-            // Per-node cwd overrides the parent session's cwd for the manifest,
-            // so crash-recovery records the correct working directory per node.
-            const effectiveCwd = n.cwd ?? this.currentCwd;
-            // Named-agent model default: same precedence logic as dagNodes
-            // above (call-site > definition > compose default). Required so
-            // crash-recovery manifests record the same effective model that
-            // the DAG node would actually use.
-            const manifestNamedAgent = n.agent_type !== undefined
-              ? this.ctx.agentRegistry?.get(n.agent_type)
-              : undefined;
-            const rawManifestDefModel = manifestNamedAgent?.definition.model;
-            const manifestDefinitionModel = rawManifestDefModel === 'inherit'
-              ? this.ctx.defaultModel
-              : rawManifestDefModel;
-            return buildWaveUnit({
-              id: n.id,
-              prompt: n.prompt,
-              cwd: effectiveCwd,
-              model: resolveChildModel({
-                callSiteModel: n.model ?? manifestDefinitionModel,
-                defaultSubagentModel: this.ctx.defaultSubagentModel,
-                defaultModel: this.ctx.defaultModel,
-              }),
-            });
-          });
-          // Build upstream-id map from edges: for each node, list its upstream deps.
-          const upstreamMap = new Map<string, string[]>();
-          for (const node of parsed.nodes) upstreamMap.set(node.id, []);
-          for (const edge of parsed.edges ?? []) {
-            const list = upstreamMap.get(edge.to);
-            if (list !== undefined) list.push(edge.from);
-          }
-          for (const unit of manifestUnits) {
-            unit.upstreamIds = upstreamMap.get(unit.id) ?? [];
-          }
-          composeWaveId = createManifest({
-            source: 'compose-dag',
-            parentSessionId: this.ctx.parentSession.sessionId ?? '',
-            traceLabel: null,
-            units: manifestUnits,
-          });
-        } catch {
-          // Fire-and-forget: manifest errors must never abort a compose wave.
-        }
-        } // end depth === 0 guard
-      }
+      // Extracted to buildWaveManifest() to keep execute() within the funcsize
+      // baseline (the inline block grew execute() above the 487-line baseline).
+      const composeWaveId = this.buildWaveManifest(parsed, dagNodes.length);
 
       // Invariant: SubagentDAGOptions exposes no maxConcurrency field, so the
       // model-facing compose tool has no way to widen its own fan-out — width is
@@ -800,20 +646,37 @@ export class ComposeExecutor {
       const dagEdges = failedNodeIds.size > 0
         ? (parsed.edges ?? []).filter((e) => !failedNodeIds.has(e.from) && !failedNodeIds.has(e.to))
         : (parsed.edges ?? []);
-      const dagResult = await runSubagentDAG({
+
+      // Build the DAG promise — not yet awaited so the detach contract can race it.
+      // Detach contract (#2542): DAG anchored to ctx.parentSession.abortSignal (not
+      // call.signal) so it outlives the turn after detach (Invariant:D3).
+      const dagPromise = runSubagentDAG({
         manager,
         parentSession: this.ctx.parentSession,
         nodes: dagNodes,
         edges: dagEdges,
         failFast: parsed.fail_fast,
         nodeTimeoutMs: parsed.node_timeout_ms,
-        // Item 2: thread the budget so every DAG node is counted individually.
         ...(this.ctx.delegationBudget !== undefined ? { delegationBudget: this.ctx.delegationBudget } : {}),
-        // Anchor isolated worktrees to the compose executor's current cwd so
-        // nodes with isolation:"worktree" create their worktrees relative to
-        // the git repo that owns this session, not process.cwd().
         ...(this.currentCwd !== undefined ? { anchorCwd: this.currentCwd } : {}),
       });
+      // raceComposeDetach registers with the detach registry, races the DAG, and
+      // either returns a detach placeholder (Ctrl+B path) or the normal DAG result.
+      // When detachRegistry is absent it returns { kind: 'normal', dagResult } immediately.
+      const nodeIds = dagNodes.map((n) => n.id);
+      const spillSessionId = this.ctx.parentSession.sessionId ?? 'unknown-session';
+      const outcome = detachRegistry !== undefined && call.id
+        ? await raceComposeDetach({
+            dagPromise, nodeIds, toolUseId: call.id, attachmentErrors, startedAt,
+            formatResult: (r) => formatDAGResult(r, { sessionId: spillSessionId, callId: call.id }).content,
+            teardown: () => manager.teardownAll(),
+            detachRegistry,
+            onDetach: () => { detachedRef.value = true; },
+          })
+        : { kind: 'normal' as const, dagResult: await dagPromise };
+      if (outcome.kind === 'detached') return outcome.placeholder;
+      const dagResult = outcome.dagResult;
+
       // Merge pre-failed attachment-error nodes into the DAG result so they
       // appear in the formatted output alongside runtime failures. Prepend so
       // failed-resolution nodes are listed before any runtime-failed nodes.
@@ -855,7 +718,7 @@ export class ComposeExecutor {
       // Fall back to a stable placeholder when the parent has no sessionId
       // yet (e.g. tests, or early-turn compose calls before the SDK assigns
       // one). Spill files still land in a predictable per-call directory.
-      const spillSessionId = this.ctx.parentSession.sessionId ?? 'unknown-session';
+      // spillSessionId declared above for the detach path; reuse it here.
       const { content: dagContent, truncations } = formatDAGResult(result, {
         sessionId: spillSessionId,
         callId: call.id,
@@ -871,10 +734,13 @@ export class ComposeExecutor {
       const warningPrefix = allWarnings.length > 0
         ? `> [compose warnings]\n${allWarnings.map((w) => `> - ${w}`).join('\n')}\n\n`
         : '';
-      const content = warningPrefix + dagContent;
+      const content = prependUsageNotice(usageNotice, warningPrefix + dagContent);
       const hasFailures = result.failed.length > 0;
       return { content, isError: hasFailures };
     } catch (err) {
+      // On any throw in the normal (non-detach) path, also deregister so
+      // hasDetachable() returns false — parallel to Fix #2 for bash.
+      if (detachRegistry !== undefined && call.id) detachRegistry.deregister(call.id);
       const message = errorMessage(err);
       void appendRoutingDecision({
         ...identity,
@@ -885,7 +751,80 @@ export class ComposeExecutor {
       }).catch(() => {});
       return { content: `Compose execution error: ${message}`, isError: true };
     } finally {
-      await manager.teardownAll();
+      // The detach path's continuation manages its own teardownAll; skip here
+      // to avoid racing with it (teardownAll on a detached manager is idempotent
+      // but the double-teardown is confusing in traces). detachedRef.value is
+      // true only when the detach path returned early above.
+      if (!detachedRef.value) {
+        await manager.teardownAll();
+      }
+    }
+  }
+
+  /**
+   * Build and register a wave-manifest for crash-recovery. Called from
+   * `execute()` when ≥2 DAG nodes are present and depth is 0.
+   *
+   * Extracted from `execute()` to keep it within the funcsize baseline
+   * (Invariant: baselined functions may shrink but never grow).
+   *
+   * @param parsed       Validated compose input (nodes + edges).
+   * @param dagNodeCount Number of runnable (non-attachment-error) DAG nodes.
+   * @returns The new wave-manifest id, or `undefined` when the conditions for
+   *   manifest creation are not met (solo dispatch, non-zero depth, or any
+   *   manifest write error — manifest errors must never abort a compose wave).
+   */
+  private buildWaveManifest(
+    parsed: ComposeInput,
+    dagNodeCount: number,
+  ): string | undefined {
+    // No manifest for solo dispatch or subagent-depth compose calls.
+    if (dagNodeCount < 2 || (this.ctx.depth ?? 0) !== 0) return undefined;
+    try {
+      const manifestUnits = parsed.nodes.map((n) => {
+        // Per-node cwd overrides the parent session's cwd for the manifest,
+        // so crash-recovery records the correct working directory per node.
+        const effectiveCwd = n.cwd ?? this.currentCwd;
+        // Named-agent model default: same precedence logic as dagNodes above
+        // (call-site > definition > compose default). Required so crash-recovery
+        // manifests record the same effective model the DAG node would use.
+        const manifestNamedAgent = n.agent_type !== undefined
+          ? this.ctx.agentRegistry?.get(n.agent_type)
+          : undefined;
+        const rawManifestDefModel = manifestNamedAgent?.definition.model;
+        const manifestDefinitionModel = rawManifestDefModel === 'inherit'
+          ? this.ctx.defaultModel
+          : rawManifestDefModel;
+        return buildWaveUnit({
+          id: n.id,
+          prompt: n.prompt,
+          cwd: effectiveCwd,
+          model: resolveChildModel({
+            callSiteModel: n.model ?? manifestDefinitionModel,
+            defaultSubagentModel: this.ctx.defaultSubagentModel,
+            defaultModel: this.ctx.defaultModel,
+          }),
+        });
+      });
+      // Build upstream-id map from edges: for each node, list its upstream deps.
+      const upstreamMap = new Map<string, string[]>();
+      for (const node of parsed.nodes) upstreamMap.set(node.id, []);
+      for (const edge of parsed.edges ?? []) {
+        const list = upstreamMap.get(edge.to);
+        if (list !== undefined) list.push(edge.from);
+      }
+      for (const unit of manifestUnits) {
+        unit.upstreamIds = upstreamMap.get(unit.id) ?? [];
+      }
+      return createManifest({
+        source: 'compose-dag',
+        parentSessionId: this.ctx.parentSession.sessionId ?? '',
+        traceLabel: null,
+        units: manifestUnits,
+      });
+    } catch {
+      // Fire-and-forget: manifest errors must never abort a compose wave.
+      return undefined;
     }
   }
 }

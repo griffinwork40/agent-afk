@@ -198,3 +198,114 @@ describe('confirmSpec', () => {
     expect(result).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// MDE-error handling — issue #2610
+// ---------------------------------------------------------------------------
+
+import { runWhatif } from '../../whatif/run.js';
+
+/**
+ * Build a minimal WhatifMdeError-shaped error without importing the real class
+ * (which has heavy transitive dependencies).
+ */
+function makeMdeErr(opts: { measured?: boolean; kind?: 'mde' | 'headroom'; msg?: string }) {
+  const err = new Error(opts.msg ?? 'whatif: run is underpowered — headroom too small');
+  err.name = 'WhatifMdeError';
+  Object.assign(err, {
+    episodesPerArm: 6,
+    kind: opts.kind ?? 'mde',
+    measured: opts.measured ?? false,
+  });
+  return err;
+}
+
+describe('registerWhatifCommand — MDE error (#2610)', () => {
+  /**
+   * Intercept process.exit by setting process.exitCode instead of throwing,
+   * so the MDE-error path's `process.exit(2)` is captured without propagating
+   * into Commander's outer try-catch (which would re-call handleCommandError
+   * and overwrite the exit code with 1).
+   */
+  let originalExit: typeof process.exit;
+  let exitCodeCaptured: number | undefined;
+  let stderrLines: string[];
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    exitCodeCaptured = undefined;
+    stderrLines = [];
+    originalExit = process.exit;
+    // Use a no-throw stub: record the first exit code but do not throw,
+    // so the MDE exit(2) does not cascade into the outer handleCommandError.
+    process.exit = ((code?: number) => {
+      exitCodeCaptured ??= code ?? 0;
+      // Throwing a special sentinel that propagates up but is distinguishable.
+      throw new Error(`__EXIT__:${code ?? 0}`);
+    }) as typeof process.exit;
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
+      stderrLines.push(String(chunk));
+      return true;
+    });
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    process.exit = originalExit;
+    stderrSpy.mockRestore();
+  });
+
+  /** Run parseAsync and swallow any __EXIT__ sentinel; other errors re-throw. */
+  async function parseAndCatch(program: Command, args: string[]): Promise<void> {
+    try {
+      await program.parseAsync(args);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.startsWith('__EXIT__:')) throw err;
+    }
+  }
+
+  it('--yes --force exits 2 without prompting for a non-measured headroom MDE error', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: false, kind: 'headroom' }));
+    const program = buildProgram();
+    await parseAndCatch(program, ['node', 'afk', 'whatif', '--append', 'x', '--verify', '--yes', '--force']);
+    // First exit code emitted by the MDE handler must be 2.
+    expect(exitCodeCaptured).toBe(2);
+    // Must not have prompted ("Proceed anyway?" should be absent from stderr)
+    expect(stderrLines.join('')).not.toContain('Proceed anyway?');
+  });
+
+  it('--yes exits 2 without prompting for a non-measured MDE error', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: false, kind: 'mde' }));
+    const program = buildProgram();
+    await parseAndCatch(program, ['node', 'afk', 'whatif', '--append', 'x', '--verify', '--yes']);
+    expect(exitCodeCaptured).toBe(2);
+    expect(stderrLines.join('')).not.toContain('Proceed anyway?');
+  });
+
+  it('exits 2 without prompting for a measured refusal (non-interactive)', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: true, kind: 'headroom' }));
+    const program = buildProgram();
+    await parseAndCatch(program, ['node', 'afk', 'whatif', '--append', 'x', '--verify']);
+    expect(exitCodeCaptured).toBe(2);
+    expect(stderrLines.join('')).not.toContain('Proceed anyway?');
+  });
+
+  it('includes --no-baseline-sample advice in the error message for a measured refusal', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(
+      makeMdeErr({ measured: true, kind: 'headroom', msg: 'Prediction p1 headroom 5pp < MDE 15pp' }),
+    );
+    const program = buildProgram();
+    await parseAndCatch(program, ['node', 'afk', 'whatif', '--append', 'x', '--verify']);
+    expect(stderrLines.join('')).toContain('--no-baseline-sample');
+  });
+
+  it('never retries with force=true for a measured refusal (non-interactive)', async () => {
+    const measuredErr = makeMdeErr({ measured: true, kind: 'headroom' });
+    vi.mocked(runWhatif).mockRejectedValueOnce(measuredErr);
+    const program = buildProgram();
+    await parseAndCatch(program, ['node', 'afk', 'whatif', '--append', 'x', '--verify']);
+    // runWhatif should have been called exactly once — no retry.
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
+});

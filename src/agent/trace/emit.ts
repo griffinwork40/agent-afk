@@ -38,6 +38,7 @@ import type {
   ClosurePayload,
   CompactionPayloadInput,
   HookDecisionPayload,
+  PeerMessagePayload,
   QueuedUserMessagePayload,
   SessionPhasePayload,
   SubagentLifecyclePayload,
@@ -100,6 +101,9 @@ export const emitBrowserEvent = (w: TraceSink | undefined, p: BrowserEventPayloa
 
 export const emitQueuedUserMessage = (w: TraceSink | undefined, p: QueuedUserMessagePayload) =>
   emitTrace(w, 'queued_user_message', p);
+
+export const emitPeerMessage = (w: TraceSink | undefined, p: PeerMessagePayload) =>
+  emitTrace(w, 'peer_message', p);
 
 export const emitSessionPhase = (w: TraceSink | undefined, p: SessionPhasePayload) =>
   emitTrace(w, 'session_phase', p);

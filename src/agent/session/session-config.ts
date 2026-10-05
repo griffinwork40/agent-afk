@@ -85,7 +85,7 @@ export function setCwd(cwd: string, deps: ConfigDeps): void {
 }
 
 /** Trigger a provider credential refresh. Returns null if unsupported. */
-export async function reauth(deps: ConfigDeps): Promise<{ accountId: string; swapped: boolean } | null> {
+export async function reauth(deps: ConfigDeps): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
   return (await deps.getProviderQuery().reauth?.()) ?? null;
 }
 

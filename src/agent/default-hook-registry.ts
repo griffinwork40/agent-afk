@@ -17,7 +17,7 @@ import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
 import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
-import { cleanupComposeSpills } from './tools/compose-executor.js';
+import { cleanupComposeSpills } from './tools/compose-executor.format.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
 import { createPreexistingLedgerHook } from './preexisting-ledger/session-end-hook.js';
@@ -181,7 +181,7 @@ export function createDefaultHookRegistry(
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -400,8 +400,7 @@ export function createDefaultHookRegistry(
       console.warn(`[hooks] ${warning}`);
     }
     loadAndRegisterConfigHooks(registry, hookConfig, {
-      cwd: agentOptions?.cwd,
-      sessionId: agentOptions?.sessionId,
+      cwd: agentOptions?.cwd, sessionId: agentOptions?.sessionId, getTranscriptPath: agentOptions?.getTranscriptPath,
     });
   }
 

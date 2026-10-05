@@ -15,7 +15,7 @@
 | Frame renderer | `cup-frame-renderer.ts` (348 LOC) | Positions each line with absolute CUP (`\x1b[row;1H`) so no trailing `\n` is ever emitted in a live frame — fixes the "compositor drift / jumping" bug that `log-update`'s trailing newline caused (cup-frame-renderer.ts:6-30). |
 | Escape constants | `cup-frame-renderer.escapes.ts` | `SYNC_START` / `SYNC_END` (synchronized-output, xterm/iTerm2/Apple Terminal), `CURSOR_HIDE/SHOW`, `CUP`, `ERASE_LINE`. |
 | Status line | `status-line.ts` | Reserves the last terminal row via `DECSTBM` scroll region; repaints with raw ANSI. |
-| Overlay composition | `src/cli/_lib/overlay-composer.ts` | Single `setOverlay` owner with a fixed z-order (stage-rail → thinking → markdown-pending → tool-lane → progress-banner). Replaced 15+ racing direct `setOverlay` call sites. |
+| Overlay composition | `src/cli/_lib/overlay-composer.ts` | Single `setOverlay` owner with a fixed z-order (thought-summary → thinking-live → markdown-pending → tool-lane → progress-banner → interrupt; source of truth: `src/cli/_lib/stream-renderer.ts`, the `new OverlayComposer(...)` call). The stage rail is a reserved footer row (`LoopStageBar`), not an overlay slot. Running subagents appear only as tool-lane Agent rows; the separate `subagent-status` stack was removed. Replaced 15+ racing direct `setOverlay` call sites. |
 
 **Alt-screen:** None. The REPL preserves scrollback. `DECSTBM` reserves one row (status bar) and optionally additional rows (footer subsystems — verdict ledger, stage bar, mascot bar). Content committed above the live frame is archived to scrollback via `buildScrollbackArchiveEscape` (auto-wrap + `\n` at the bottom margin).
 

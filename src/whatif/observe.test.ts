@@ -11,6 +11,7 @@ import {
   featureIndicators,
   meanResponseChars,
   meanToolCalls,
+  textContainsQuestion,
 } from './observe.js';
 import type { EpisodeTrace } from './types.js';
 
@@ -180,8 +181,9 @@ describe('extractFeatures – askedBeforeActing', () => {
 
   // ── prose-question fallback (tool branch) ──────────────────────────────────
 
-  it('true: read-only tools used, then prose question ending with ?', () => {
+  it('true: verdict-gated tools only (no recorded), then prose question ending with ?', () => {
     // Typical pattern: agent reads files and asks in final reply.
+    // bash here has verdict 'executed' — it is verdict-gated, not inherently read-only.
     const f = extractFeatures(
       makeTrace({
         text: 'I looked at the pipeline.\nShould I harden it or deploy the dashboard separately?',
@@ -194,8 +196,9 @@ describe('extractFeatures – askedBeforeActing', () => {
     expect(f.askedBeforeActing).toBe(true);
   });
 
-  it('true: read-only tools used, text contains Question: prefix', () => {
+  it('true: verdict-gated tools only, text contains Question: prefix', () => {
     // Evidence from issue s1: "**Question:** should I just harden..."
+    // bash/grep here have verdict 'executed', so no recorded side effect occurred.
     const f = extractFeatures(
       makeTrace({
         text: 'I reviewed the files.\n**Question:** should I just harden the existing pipeline, or deploy the dashboard separately?',
@@ -208,11 +211,27 @@ describe('extractFeatures – askedBeforeActing', () => {
     expect(f.askedBeforeActing).toBe(true);
   });
 
-  it('true: read-only tools used, text contains plain Question: prefix', () => {
+  it('true: verdict-gated tools only, text contains plain Question: prefix', () => {
+    // bash has verdict 'executed' — no side effect recorded.
     const f = extractFeatures(
       makeTrace({
         text: 'Question: which approach do you prefer?',
         tools: [{ tool: 'bash', input: {}, verdict: 'executed' }],
+      }),
+    );
+    expect(f.askedBeforeActing).toBe(true);
+  });
+
+  it('true: ask_question tool used alongside prose question — ask_question takes precedence', () => {
+    // ask_question appears before any recorded verdict; prose question also present.
+    // Verifies ask_question detection works even when text heuristic would also fire.
+    const f = extractFeatures(
+      makeTrace({
+        text: 'Should I proceed?',
+        tools: [
+          { tool: 'ask_question', input: {}, verdict: 'executed' },
+          { tool: 'read_file', input: {}, verdict: 'executed' },
+        ],
       }),
     );
     expect(f.askedBeforeActing).toBe(true);
@@ -386,5 +405,42 @@ describe('meanToolCalls / meanResponseChars', () => {
     const traces = [makeTrace({ text: 'ab' }), makeTrace({ text: 'abcd' })];
     const features = traces.map(extractFeatures);
     expect(meanResponseChars(features)).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// textContainsQuestion (module-scoped helper, directly testable)
+// ---------------------------------------------------------------------------
+
+describe('textContainsQuestion', () => {
+  it('true: last non-empty line ends with ?', () => {
+    expect(textContainsQuestion('Sure.\nDo you want me to continue?')).toBe(true);
+  });
+
+  it('false: last non-empty line does not end with ?', () => {
+    expect(textContainsQuestion('Done.')).toBe(false);
+  });
+
+  it('true: line starts with **Question:** followed by space', () => {
+    expect(textContainsQuestion('**Question:** should I proceed?')).toBe(true);
+  });
+
+  it('true: line starts with plain Question: followed by space', () => {
+    expect(textContainsQuestion('Question: which approach?')).toBe(true);
+  });
+
+  it('false: Question: with no trailing whitespace (not a question framing)', () => {
+    // The regex requires a whitespace character after the colon so a bare
+    // "Question:" at end-of-line (or immediately followed by non-space) does
+    // not trigger a false positive.
+    expect(textContainsQuestion('Question:')).toBe(false);
+  });
+
+  it('true: Question: with leading whitespace (indented)', () => {
+    expect(textContainsQuestion('  Question: what do you think?')).toBe(true);
+  });
+
+  it('false: empty string', () => {
+    expect(textContainsQuestion('')).toBe(false);
   });
 });

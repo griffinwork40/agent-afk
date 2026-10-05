@@ -22,8 +22,10 @@ function installedPlugins(root: string): DetectedAsset[] | undefined {
     for (const entries of Object.values(registry.plugins)) {
       for (const entry of entries) {
         if (entry.scope !== 'user' && entry.scope !== 'managed') continue;
-        const name = manifestName(entry.installPath);
-        if (name === null) continue;
+        // Resolve realpath BEFORE manifestName so that a dangling symlink or
+        // deleted installPath is caught and skipped — otherwise manifestName()
+        // would fail first (returning null) and the realpathSync guard would
+        // never be reached for that entry.
         let realPath: string;
         try {
           realPath = realpathSync(entry.installPath);
@@ -31,8 +33,10 @@ function installedPlugins(root: string): DetectedAsset[] | undefined {
           continue; // dangling symlink or deleted path — skip this entry, keep processing others
         }
         if (seen.has(realPath)) continue;
+        const name = manifestName(realPath);
+        if (name === null) continue;
         seen.add(realPath);
-        assets.push({ name, path: entry.installPath });
+        assets.push({ name, path: realPath });
         break;
       }
     }

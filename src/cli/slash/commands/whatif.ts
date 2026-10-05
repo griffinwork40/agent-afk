@@ -41,7 +41,11 @@ import type { WhatifReport } from '../../../whatif/types.js';
 // ---------------------------------------------------------------------------
 // Budget error guard
 // ---------------------------------------------------------------------------
-import type { WhatifBudgetError as WhatifBudgetErrorType } from '../../../whatif/run.js';
+import type {
+  WhatifBudgetError as WhatifBudgetErrorType,
+  WhatifMdeError as WhatifMdeErrorType,
+} from '../../../whatif/run.js';
+import { decideMdeAction } from '../../commands/whatif.mde-handler.js';
 
 function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
   return (
@@ -49,6 +53,10 @@ function isBudgetError(err: unknown): err is WhatifBudgetErrorType {
     'estimateUsd' in err &&
     'maxUsd' in err
   );
+}
+
+function isMdeError(err: unknown): err is WhatifMdeErrorType {
+  return err instanceof Error && err.name === 'WhatifMdeError';
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +214,15 @@ async function handleWhatif(ctx: SlashContext, args: string): Promise<void> {
           `limit $${be.maxUsd.toFixed(2)}. ` +
           `Raise the cap with --max-usd ${Math.ceil(be.estimateUsd * 1.5)}.`,
       );
+      return;
+    }
+
+    if (isMdeError(err)) {
+      const me = err as WhatifMdeErrorType;
+      // The REPL has no TTY readline elicitation — always treat as non-interactive.
+      // The slash handler cannot prompt; it must refuse with advice.
+      const action = decideMdeAction(me, parsed.yes, false /* not interactive */);
+      ctx.out.error(action.kind === 'refuse' ? action.message : action.detail);
       return;
     }
 

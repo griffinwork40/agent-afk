@@ -109,6 +109,30 @@ describe('glob walker: canonical-path denylist (#2543)', () => {
     expect(result.content).toContain('alias.md');
     expect(result.content).toContain('target.md');
   });
+
+  it('hardlink into denied directory is visible (hardlinks are not covered by the denylist contract)', async () => {
+    // A hardlink shares an inode with the original file but appears under an
+    // ordinary filename — Dirent.isSymbolicLink() returns false, so the walker
+    // takes the canonical-path fast path (join(realPath, name)).  That derived
+    // path is inside `root`, not inside `secret`, so the denylist cannot catch
+    // it.  This test pins the known behavior: hardlinks into denied directories
+    // are NOT blocked by the current implementation.  If the contract ever
+    // expands to cover hardlinks (e.g. via inode comparison), update this test.
+    const secret = path.join(outside, 'secret');
+    await fs.mkdir(secret);
+    const original = path.join(secret, 'private.ts');
+    await fs.writeFile(original, 'secret');
+    // Create a hardlink inside `root` pointing to the same inode.
+    const hardlink = path.join(root, 'hardlink.ts');
+    await fs.link(original, hardlink);
+    denyRoots(secret);
+
+    const result = await createGlobHandler(root)({ pattern: '*.ts' }, signal());
+
+    // The hardlink appears under root/ and is not blocked — document this.
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('hardlink.ts');
+  });
 });
 
 describe('glob walker: abort signal (#2543)', () => {

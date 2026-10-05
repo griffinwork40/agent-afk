@@ -205,7 +205,7 @@ export async function runBaselineSamplePhase(
     if (result.firstTrip) {
       await persistRefusal(runDir, result, predictions);
       const { fullRunProbes, message, predictionId } = result.firstTrip;
-      throw new WhatifMdeError(fullRunProbes, message, { kind: 'headroom', predictionId });
+      throw new WhatifMdeError(fullRunProbes, message, { kind: 'headroom', predictionId, measured: true });
     }
     return result;
   } catch (sampleErr) {

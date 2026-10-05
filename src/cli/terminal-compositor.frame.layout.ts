@@ -187,6 +187,21 @@ export function hiddenIndicatorGutter(
  * @param hasHintRow      Whether the hint slot is occupied (even when empty-string).
  * @param rows            `stdout.rows` (terminal height).
  * @param scrollRegion    Optional bg-status-bar guard for DECSTBM reservation.
+ * @param bandReserveRows Optional number of overlay budget rows to withhold for
+ *                        the committed band. Default 0 (no reserve). See
+ *                        {@link contentHugBandReserve} for the content-hug
+ *                        computation.
+ *
+ * Invariant (band reserve): when the overlay grows tall in content-hug mode
+ * the hugging frame rises over the committed band. Covered band rows are
+ * archived to scrollback and retained hidden as the archived prefix (the
+ * archive-and-retain invariant in terminal-compositor.content-hug.ts), so they
+ * are off screen until the overlay shrinks. Reducing overlayBudget by `bandReserveRows` shortens
+ * trimmedOverlay and therefore the frame, keeping the newest band rows —
+ * including the prompt echo — on screen.
+ *
+ * Known limit: band rows older than the reserve still scroll into history
+ * during a sufficiently long fan-out whose overlay exceeds (avail - reserve).
  */
 export function computeViewportLayout(
   chrome: ChromeRows,
@@ -194,6 +209,7 @@ export function computeViewportLayout(
   hasHintRow: boolean,
   rows: number,
   scrollRegion: CompositorScrollRegionGuard | undefined,
+  bandReserveRows = 0,
 ): ViewportLayout {
   const { overlayLines, spinnerRow, tipRow, attachmentRow } = chrome;
   // Invariant: the bg status bar (when active) owns rows (rows-extraRows)..(rows-1).
@@ -210,7 +226,11 @@ export function computeViewportLayout(
   const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
     + (attachmentRow ? 1 : 0) + gapRows + dropdownLength
     + (hasHintRow ? 1 : 0) + 1; // +1 for the input line
-  const overlayBudget = Math.max(0, maxLines - fixedRows);
+  const avail = Math.max(0, maxLines - fixedRows);
+  // Clamp so the reserve never consumes all available rows — at least 1 overlay
+  // row must remain available (prevents an empty frame when the overlay is active).
+  const reserve = Math.min(Math.max(0, bandReserveRows), Math.max(0, avail - 1));
+  const overlayBudget = avail - reserve;
   const trimmedOverlay = overlayLines.length > overlayBudget
     ? truncateOverlayPreservingHead(overlayLines, overlayBudget)
     : overlayLines;
@@ -226,12 +246,18 @@ export function computeViewportLayout(
  *
  * Picker rows replace the input cluster (dropdown + hint + input line), so
  * `fixedRows` is calculated differently from {@link computeViewportLayout}.
+ *
+ * @param bandReserveRows Optional number of overlay budget rows to withhold for
+ *                        the committed band. Default 0. See
+ *                        {@link contentHugBandReserve} and the Invariant on
+ *                        {@link computeViewportLayout} for rationale.
  */
 export function computePickerViewportLayout(
   chrome: ChromeRows,
   pickerRowCount: number,
   rows: number,
   scrollRegion: CompositorScrollRegionGuard | undefined,
+  bandReserveRows = 0,
 ): Omit<ViewportLayout, 'gapRows'> {
   const { overlayLines, spinnerRow, tipRow, attachmentRow } = chrome;
   const extraRows = scrollRegion?.getExtraRows() ?? 0;
@@ -241,7 +267,9 @@ export function computePickerViewportLayout(
   const gapRows = hasContentAboveInput ? 1 : 0;
   const fixedRows = (spinnerRow ? 1 : 0) + (tipRow ? 1 : 0)
     + (attachmentRow ? 1 : 0) + gapRows + pickerRowCount;
-  const overlayBudget = Math.max(0, maxLines - fixedRows);
+  const avail = Math.max(0, maxLines - fixedRows);
+  const reserve = Math.min(Math.max(0, bandReserveRows), Math.max(0, avail - 1));
+  const overlayBudget = avail - reserve;
   const trimmedOverlay = overlayLines.length > overlayBudget
     ? truncateOverlayPreservingHead(overlayLines, overlayBudget)
     : overlayLines;

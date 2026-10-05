@@ -44,6 +44,7 @@ import { verifyRun } from './run.verify.js';
 
 import { runVerifyPreflight, runBaselineSamplePhase } from './run.preflight.js';
 import { checkRedundancy, formatRedundancySection } from './redundancy.js';
+import { classifyQuestionFit } from './question-fit.js';
 import type {
   EpisodeTrace,
   RunnerOptions,
@@ -89,17 +90,27 @@ export class WhatifMdeError extends Error {
   readonly episodesPerArm: number;
   readonly kind: 'mde' | 'headroom';
   readonly predictionId?: string;
+  /**
+   * True when the refusal is backed by a MEASURED baseline-sample headroom
+   * check (as opposed to the analyst-estimate headroom gate or the generic MDE
+   * gate).  A measured refusal cannot be cleared by `--force`; the only
+   * override is `--no-baseline-sample`.  CLI entry points use this flag to
+   * decide whether to prompt or to print `--no-baseline-sample` advice
+   * directly (issue #2610).
+   */
+  readonly measured: boolean;
 
   constructor(
     minProbesPerPrediction: number,
     message?: string,
-    opts?: { kind?: 'mde' | 'headroom'; predictionId?: string },
+    opts?: { kind?: 'mde' | 'headroom'; predictionId?: string; measured?: boolean },
   ) {
     super(message ?? mdeGateRefusedMessage(minProbesPerPrediction));
     this.name = 'WhatifMdeError';
     this.episodesPerArm = minProbesPerPrediction;
     this.kind = opts?.kind ?? 'mde';
     this.predictionId = opts?.predictionId;
+    this.measured = opts?.measured ?? false;
   }
 }
 
@@ -311,6 +322,16 @@ export async function runWhatif(
 
     let analystCostUsd = predictCost;
 
+    // ── question-fit preflight (#2401) ────────────────────────────────────
+    // Deterministic: no model calls.  Emits a notice about which predictions
+    // the decision-only runner can and cannot confirm.  Shown on BOTH the
+    // predict-only path and the verify path so users understand the limitation
+    // before spending money on --verify.
+    const fitResult = classifyQuestionFit(predictions);
+    for (const line of fitResult.lines) {
+      deps.onProgress?.({ stage: 'preflight', message: line });
+    }
+
     // ── e) Predict-only path ──────────────────────────────────────────────
 
     if (!options.verify) {
@@ -322,6 +343,7 @@ export async function runWhatif(
         spec,
         structural,
         predictions,
+        questionFit: fitResult.level,
         costUsd: analystCostUsd,
         runDir,
         limits,
@@ -422,7 +444,7 @@ export async function runWhatif(
     if (!verifyJudgeResults) throw new Error('verifyRun did not return judgeResults');
 
     pendingReport = await buildAndPersistVerifiedReport({
-      spec, structural, predictions, verifyResult, droppedProbes,
+      spec, structural, predictions, questionFit: fitResult.level, verifyResult, droppedProbes,
       corpusExclusions, verifyTraces, analystCostUsd, runDir,
       resolvedJudge, autoKeepContextHooks,
       judgeResults: verifyJudgeResults,

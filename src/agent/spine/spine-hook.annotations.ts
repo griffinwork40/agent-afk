@@ -18,11 +18,22 @@ export const WEAKENED_LABEL = 'partially weakened';
  * characters before it is treated as a truncated annotation. Two characters
  * (` (re`, ` (pa`) matches the prior behaviour and keeps legitimate trailing
  * parentheticals like ` (r` or ` (p` intact.
+ *
+ * The 2-char threshold is intentional: it is the shortest prefix that both
+ * labels share exclusively with each other (`re` / `pa`). A 1-char prefix
+ * would be ambiguous; keeping it at 2 means a real description ending in
+ * exactly ` (r` or ` (p` is preserved, while ` (re` or ` (pa` is stripped.
  */
 const MIN_LABEL_CHARS = 2;
 
-/** A complete date plus closing paren, used as the template for date prefixes. */
-const DATE_TEMPLATE = /^\d{0,4}(?:-\d{0,2}(?:-\d{0,2}\)?)?)?$/;
+/**
+ * Matches the text that may follow the full label: a space then a prefix of
+ * `YYYY-MM-DD)`. The year group requires at least one digit (`\d{1,4}`) so
+ * that a description truncated at exactly `label + " "` (space present, no
+ * date at all) does NOT match this template and therefore passes through the
+ * `rest.startsWith(' ')` guard without being mis-stripped.
+ */
+const DATE_TEMPLATE = /^\d{1,4}(?:-\d{0,2}(?:-\d{0,2}\)?)?)?$/;
 
 /**
  * Strip a complete or truncated ` (<label> YYYY-MM-DD)` annotation from the end
@@ -31,8 +42,16 @@ const DATE_TEMPLATE = /^\d{0,4}(?:-\d{0,2}(?:-\d{0,2}\)?)?)?$/;
  *
  * Contract: matching is character-exact against `label`, so every truncation
  * point is recognised, not just word or chunk boundaries.
+ *
+ * NOTE: This function intentionally does NOT strip the form `label + " "` (full
+ * label followed by a single space, no date digits) to avoid false positives
+ * against legitimate trailing parentheticals like `(reinforced by review)`. Use
+ * `stripAnnotationLabelPlusSpace` for that specific truncation shape.
  */
-export function stripTrailingAnnotation(description: string, label: string): string {
+export function stripTrailingAnnotation(
+  description: string,
+  label: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL,
+): string {
   const open = description.lastIndexOf(' (');
   if (open === -1) return description;
   const tail = description.slice(open + 2); // text after " ("
@@ -41,28 +60,30 @@ export function stripTrailingAnnotation(description: string, label: string): str
 }
 
 /**
- * Strip ALL trailing status annotations of either kind from `description`,
- * collapsing chains like `(partially weakened D) (reinforced D) (partially
- * weakened D)` down to the bare base text.
+ * Strip the specific `" (<label> "` (label + single trailing space, no date)
+ * fragment that the old 120-char truncation left on disk (#2867 Bug 2).
  *
- * The hook previously stripped only the annotation for the label it was
- * about to append, so alternating reinforce/weaken cycles accumulated chains.
- * This function loops until neither label matches — guaranteeing a clean base
- * regardless of how many stacked annotations exist on disk.
+ * `stripTrailingAnnotation` deliberately preserves this form because
+ * DATE_TEMPLATE requires at least one date digit, but after stripping a
+ * stacked annotation the dangling `" (label "` tail can remain undetected.
+ * This helper catches exactly that shape — it is intentionally narrower than
+ * `stripTrailingAnnotation` so it does not widen the false-positive window.
+ *
+ * Only the exact literal `" (<label> "` tail (label length + two chars: `" "` and
+ * trailing space) is recognised — no shorter or longer forms.
  */
-export function stripAnyStatusAnnotation(description: string): string {
-  let current = description;
-  for (;;) {
-    const stripped = stripTrailingAnnotation(
-      stripTrailingAnnotation(current, REINFORCED_LABEL),
-      WEAKENED_LABEL,
-    );
-    if (stripped === current) return current;
-    current = stripped;
+export function stripAnnotationLabelPlusSpace(
+  description: string,
+  label: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL,
+): string {
+  const fragment = ` (${label} `;
+  if (description.endsWith(fragment)) {
+    return description.slice(0, description.length - fragment.length);
   }
+  return description;
 }
 
-function isAnnotationPrefix(tail: string, label: string): boolean {
+function isAnnotationPrefix(tail: string, label: typeof REINFORCED_LABEL | typeof WEAKENED_LABEL): boolean {
   if (tail.length <= label.length) {
     return tail.length >= MIN_LABEL_CHARS && label.startsWith(tail);
   }

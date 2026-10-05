@@ -34,6 +34,7 @@ import {
   oneShotChatCompletion,
   oneShotResponses,
 } from '../openai-compatible/oneshot.js';
+import { redactSecrets } from '../../redact-secrets.js';
 import { resolveOpenAIAuth } from '../openai-compatible/auth.js';
 import {
   buildChatGptOAuthHeaders,
@@ -208,7 +209,12 @@ function buildForeignSummarize(
       const warnedFailure = getOrCreateSet(warnedFailureBySession, sessionKey);
       if (!warnedFailure.has(targetModel)) {
         warnedFailure.add(targetModel);
-        const msg = err instanceof Error ? err.message : String(err);
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        // Redact before logging: provider SDK errors (e.g. OpenAI 401) can
+        // echo partial API keys in the message body. Redact the full string
+        // first so a secret straddling the 200-char boundary is never logged
+        // unredacted, then truncate to 200 chars for display.
+        const msg = redactSecrets(rawMsg).slice(0, 200);
         // eslint-disable-next-line no-console
         console.warn(
           `[afk/compact] Cross-provider summarization failed for ${targetProvider}/${targetModel}: ` +
@@ -230,6 +236,20 @@ export function __resetCrossProviderWarnState(): void {}
 // Per-provider one-shot helpers
 // ---------------------------------------------------------------------------
 
+/** True when `url` routes to Anthropic's own API host. */
+function isAnthropicApiHost(url: string): boolean {
+  try {
+    // Normalize a trailing-dot FQDN (e.g. 'api.anthropic.com.') — Node's URL
+    // parser keeps the dot in `hostname`, so without this strip the canonical
+    // host would be misidentified as a custom host and the ambient-credential
+    // guard would throw erroneously.
+    const { hostname } = new URL(url);
+    return hostname.replace(/\.$/, '') === 'api.anthropic.com';
+  } catch {
+    return false;
+  }
+}
+
 async function summarizeViaAnthropic(
   model: string,
   binding: ForeignBinding,
@@ -237,12 +257,31 @@ async function summarizeViaAnthropic(
   user: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  const token = binding.apiKey ?? loadAnthropicCredential();
-  if (!token) {
-    throw new Error(
-      `[afk/compact] No Anthropic credential for cross-provider compaction. ` +
-      `Set ANTHROPIC_API_KEY or authenticate via Claude Code.`,
-    );
+  // Security: when a custom baseUrl is set and it does NOT point to
+  // api.anthropic.com, require an explicit binding.apiKey rather than falling
+  // back to the ambient credential. Sending the ambient Anthropic key to a
+  // user-configurable endpoint would allow a misconfigured (or malicious) URL
+  // to exfiltrate the credential. An explicit apiKey in the binding opts in
+  // knowingly; the ambient fallback is only safe for the canonical host.
+  const hasCustomHost = !!binding.baseUrl && !isAnthropicApiHost(binding.baseUrl);
+  let token: string | undefined;
+  if (hasCustomHost) {
+    token = binding.apiKey;
+    if (!token) {
+      throw new Error(
+        `[afk/compact] A custom Anthropic baseUrl (${binding.baseUrl}) was set but no ` +
+        `explicit apiKey was provided. Set an explicit apiKey in the binding to prevent ` +
+        `the ambient Anthropic credential from being sent to a non-Anthropic host.`,
+      );
+    }
+  } else {
+    token = binding.apiKey ?? loadAnthropicCredential();
+    if (!token) {
+      throw new Error(
+        `[afk/compact] No Anthropic credential for cross-provider compaction. ` +
+        `Set ANTHROPIC_API_KEY or authenticate via Claude Code.`,
+      );
+    }
   }
   return oneShotCompletion({
     token,
@@ -320,10 +359,12 @@ async function summarizeViaChatGptOAuth(
   signal?: AbortSignal,
 ): Promise<string> {
   const headers = buildChatGptOAuthHeaders(accountId);
+  // Contract: maxRetries: 0 — AFK owns retries via withTransientRetry.
   const client = new OpenAI({
     apiKey,
     baseURL: CHATGPT_BACKEND_BASE_URL,
     defaultHeaders: headers,
+    maxRetries: 0,
   });
   return oneShotResponses({
     client,

@@ -231,6 +231,63 @@ describe('/whatif slash command', () => {
     const result = await whatifCmd.handler(ctx, '--append "Always ask." --yes');
     expect(result).toBe('continue');
   });
+
+  // -------------------------------------------------------------------------
+  // MDE error handling — issue #2610
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build a minimal WhatifMdeError-shaped error without importing run.ts.
+   */
+  function makeMdeErr(opts: { measured?: boolean; kind?: 'mde' | 'headroom'; msg?: string }) {
+    const err = new Error(opts.msg ?? 'whatif: run is underpowered — headroom too small');
+    err.name = 'WhatifMdeError';
+    Object.assign(err, {
+      episodesPerArm: 6,
+      kind: opts.kind ?? 'mde',
+      measured: opts.measured ?? false,
+    });
+    return err;
+  }
+
+  it('emits error for a headroom MDE refusal with --yes --force (never prompts)', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: false, kind: 'headroom' }));
+    const { ctx, errors } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "x" --verify --yes --force');
+    // Must have emitted an error (not silently passed)
+    expect(errors.length).toBeGreaterThan(0);
+    // runWhatif called exactly once — no retry with force
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits error for a measured refusal with --no-baseline-sample advice', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(
+      makeMdeErr({
+        measured: true,
+        kind: 'headroom',
+        msg: 'Prediction p1 headroom 5pp < MDE 15pp',
+      }),
+    );
+    const { ctx, errors } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "x" --verify --yes');
+    expect(errors.some((e) => e.includes('--no-baseline-sample'))).toBe(true);
+  });
+
+  it('never retries with force for a measured refusal', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: true, kind: 'headroom' }));
+    const { ctx } = makeCtx();
+    await whatifCmd.handler(ctx, '--append "x" --verify --yes');
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits error message for non-measured MDE refusal without --yes (non-interactive slash)', async () => {
+    vi.mocked(runWhatif).mockRejectedValueOnce(makeMdeErr({ measured: false, kind: 'mde' }));
+    const { ctx, errors } = makeCtx();
+    // No --yes, no TTY in slash context — should refuse (non-interactive path)
+    await whatifCmd.handler(ctx, '--append "x" --verify');
+    expect(errors.length).toBeGreaterThan(0);
+    expect(vi.mocked(runWhatif)).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

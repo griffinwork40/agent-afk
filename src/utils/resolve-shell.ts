@@ -34,8 +34,73 @@ const GIT_BASH_PATHS: readonly string[] = [
 ];
 
 /**
+ * Path segment prefixes that identify WSL / Windows-App-Execution-Alias
+ * bash.exe copies that are NOT Git Bash.  Comparisons are case-insensitive
+ * because Windows paths are case-insensitive.
+ *
+ * - `%SystemRoot%\System32` holds the old WSL 1 bash.exe shim.
+ * - `%LOCALAPPDATA%\Microsoft\WindowsApps` holds the WSL App Execution Alias
+ *   (an exe placeholder that redirects into WSL).
+ *
+ * We derive these from env vars at call time rather than hard-coding
+ * `C:\Windows` so they work on machines with non-default Windows roots and
+ * so tests can inject arbitrary values.
+ */
+function wslPrefixes(): readonly string[] {
+  const sysroot = (process.env['SystemRoot'] ?? 'C:\\Windows').toLowerCase();
+  const localAppData = (process.env['LOCALAPPDATA'] ?? '').toLowerCase();
+  const prefixes = [`${sysroot}\\system32`];
+  if (localAppData) {
+    prefixes.push(`${localAppData}\\microsoft\\windowsapps`);
+  }
+  return prefixes;
+}
+
+/**
+ * Return true when `candidate` is a WSL-owned bash.exe that should be skipped.
+ * Matching is prefix-based and case-insensitive.
+ *
+ * Invariant: each prefix is compared with a trailing backslash so that a
+ * sibling directory sharing the same base (e.g. System32Git) is NOT
+ * misclassified.  The trailing separator is appended inside this function so
+ * callers never need to think about it.
+ */
+function isWslBash(candidate: string): boolean {
+  const lower = candidate.toLowerCase();
+  return wslPrefixes().some((prefix) => lower.startsWith(prefix + '\\'));
+}
+
+/**
+ * Try to locate bash.exe by finding `git.exe` on PATH and resolving the
+ * sibling `bin\bash.exe`.  Git for Windows always ships bash.exe alongside
+ * git.exe, so `<git-root>\cmd\git.exe` → `<git-root>\bin\bash.exe`.
+ *
+ * This catches non-standard Git installs (e.g. bundled under %LOCALAPPDATA%)
+ * that are not covered by the hard-coded Program Files paths.
+ *
+ * @returns Absolute path to bash.exe derived from git.exe, or `undefined`.
+ */
+function findGitBashViaGitExe(): string | undefined {
+  const pathDirs = (process.env['PATH'] ?? '').split(';');
+  for (const dir of pathDirs) {
+    const gitExe = win32.join(dir, 'git.exe');
+    if (!existsSync(gitExe)) continue;
+    // Git for Windows layout: <root>\cmd\git.exe  →  <root>\bin\bash.exe
+    const gitRoot = win32.dirname(win32.dirname(gitExe));
+    const candidate = win32.join(gitRoot, 'bin', 'bash.exe');
+    if (!isWslBash(candidate) && existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
  * Locate `bash.exe` on Windows by checking `MSYSTEM`, known install paths,
- * and then every directory in `%PATH%`.
+ * a `git.exe`-derived path, and then every directory in `%PATH%` (excluding
+ * WSL-owned bash.exe copies).
+ *
+ * Candidates under `%SystemRoot%\System32` and
+ * `%LOCALAPPDATA%\Microsoft\WindowsApps` are always skipped because those
+ * paths host the WSL bash shim / App Execution Alias, not Git Bash.
  *
  * @returns Absolute path to bash.exe, or `undefined` if not found.
  */
@@ -47,7 +112,7 @@ function findGitBashOnWindows(): string | undefined {
     const pathDirs = (process.env['PATH'] ?? '').split(';');
     for (const dir of pathDirs) {
       const candidate = win32.join(dir, 'bash.exe');
-      if (existsSync(candidate)) return candidate;
+      if (!isWslBash(candidate) && existsSync(candidate)) return candidate;
     }
   }
 
@@ -56,11 +121,16 @@ function findGitBashOnWindows(): string | undefined {
     if (existsSync(p)) return p;
   }
 
-  // Last resort: scan PATH.
+  // Derive from git.exe on PATH — catches non-standard install locations
+  // (e.g. %LOCALAPPDATA%\Programs\Git) before falling back to a raw PATH scan.
+  const viaGit = findGitBashViaGitExe();
+  if (viaGit !== undefined) return viaGit;
+
+  // Last resort: scan PATH, skipping WSL-owned bash.exe copies.
   const pathDirs = (process.env['PATH'] ?? '').split(';');
   for (const dir of pathDirs) {
     const candidate = win32.join(dir, 'bash.exe');
-    if (existsSync(candidate)) return candidate;
+    if (!isWslBash(candidate) && existsSync(candidate)) return candidate;
   }
 
   return undefined;

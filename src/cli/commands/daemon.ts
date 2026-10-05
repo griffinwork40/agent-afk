@@ -26,6 +26,7 @@ import type { ThinkingConfig, EffortLevel } from '../../agent/types.js';
 import type { ScheduledTask } from '../../agent/daemon/triggers.js';
 import { parseThinking, parseEffort, getApiKey, getModel, getThinking, getEffort, activateDumpPrompt } from '../shared-helpers.js';
 import { loadSchedules, toScheduledTask } from '../../agent/daemon/schedule-store.js';
+import { appendBuiltinTasks } from './daemon-builtin-tasks.js';
 import { ensurePluginEntrypointsLoaded } from '../../agent/tools/skill-bridge.js';
 import { providerForModel } from '../../agent/providers/index.js';
 import { buildDaemonSessionFactory } from './daemon-session-factory.js';
@@ -137,6 +138,12 @@ const isDoneUnverified = ({ responseText, successfulToolNames }: { responseText:
 /** Guards against duplicate listener registration if called more than once. */
 let daemonCrashHandlersInstalled = false;
 
+/** Milliseconds to wait after firing the crash notification before exiting,
+ *  giving the fire-and-forget HTTP push a chance to flush.
+ *  Declared at module scope (mirrors entry.ts) so it is visible across the
+ *  whole module rather than being buried inside registerDaemonCrashHandlers. */
+const CRASH_EXIT_DELAY_MS = 200;
+
 /**
  * Register uncaughtException / unhandledRejection process handlers that push a
  * best-effort Telegram crash notice before exiting. Rate-limited to one push
@@ -154,7 +161,6 @@ function registerDaemonCrashHandlers(): void {
 
   let lastCrashPushAt = 0;
   const CRASH_PUSH_GUARD_MS = 60_000;
-  const CRASH_EXIT_DELAY_MS = 200;
   const notifyCrash = (kind: string, err: unknown): void => {
     const nowMs = Date.now();
     if (nowMs - lastCrashPushAt < CRASH_PUSH_GUARD_MS) return;
@@ -168,10 +174,16 @@ function registerDaemonCrashHandlers(): void {
   };
   process.on('uncaughtException', (err) => {
     notifyCrash('uncaughtException', err);
+    // exitCode is set first so a natural (early) exit — before the timer fires
+    // — still reports code 1 to the supervisor. The unref'd timer fires if the
+    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
   process.on('unhandledRejection', (err) => {
     notifyCrash('unhandledRejection', err);
+    // Same rationale as uncaughtException above.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
 }
@@ -263,22 +275,10 @@ export function registerDaemonCommand(program: Command): void {
         handleCommandError(err);
       }
 
-      const worktreePruneConfig = config.daemon?.worktreePrune;
-      const worktreePruneDisabled = env.AFK_WORKTREE_PRUNE_DISABLE === '1';
-      const WORKTREE_PRUNE_CRON = worktreePruneConfig?.cron ?? '0 4 * * *';
-
-      const worktreePruneTask: ScheduledTask = {
-        taskId: 'worktree-prune',
-        executor: 'builtin',
-        command: 'worktree-prune',
-        trigger: 'cron',
-        cronExpression: WORKTREE_PRUNE_CRON,
-      };
-
       // In pull mode, the task queue is file-driven — no ScheduledTask registered.
       // For other trigger modes, register the default task only when one is
       // actually configured: with an empty command the daemon runs just its
-      // persisted schedules + worktree-prune rather than fabricating a task.
+      // persisted schedules + builtins rather than fabricating a task.
       // (cron/both with an empty task already errored above.)
       const tasks: ScheduledTask[] = (trigger === 'pull' || command.trim() === '')
         ? []
@@ -288,9 +288,7 @@ export function registerDaemonCommand(program: Command): void {
             trigger,
             ...(options.cron !== undefined ? { cronExpression: options.cron } : {}),
           }];
-      if (!worktreePruneDisabled && worktreePruneConfig?.enabled !== false) {
-        tasks.push(worktreePruneTask);
-      }
+      const builtinInfo = appendBuiltinTasks(tasks, config, env);
 
       // Load persisted schedules from ~/.afk/config/schedules.json
       const persistedSchedules = loadSchedules();
@@ -420,8 +418,11 @@ export function registerDaemonCommand(program: Command): void {
         } else {
           console.log(palette.dim(`  task='${taskId}' command='${command}' trigger='${trigger}'${options.cron ? ` cron='${options.cron}'` : ''}`));
         }
-        if (tasks.length > 1) {
-          console.log(palette.meta(`  + built-in: worktree-prune (cron: ${WORKTREE_PRUNE_CRON})`));
+        if (builtinInfo.worktreePruneEnabled) {
+          console.log(palette.meta(`  + built-in: worktree-prune (cron: ${builtinInfo.worktreePruneCron})`));
+        }
+        if (builtinInfo.toolHealthEnabled) {
+          console.log(palette.meta(`  + built-in: tool-health (cron: ${builtinInfo.toolHealthCron})`));
         }
         console.log(palette.dim('  Press Ctrl+C to stop.'));
 

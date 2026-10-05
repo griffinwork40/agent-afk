@@ -19,7 +19,7 @@
 
 import type { HookRegistry, HookContext, HookDecision, HarnessHookEvent } from '../hooks.js';
 import type { LoadedHooksConfig } from './config-loader.js';
-import { compileMatcher } from './config-loader.js';
+import { compileMatcher, isPluginHookDisabled } from './config-loader.js';
 import { executeCommand } from './command-executor.js';
 import { isWhatifEpisode, keepContextHooksInEpisode } from '../whatif-episode-gate.js';
 import { resolveContextSessionId } from './hook-utils.js';
@@ -27,6 +27,23 @@ import { resolveContextSessionId } from './hook-utils.js';
 export interface AgentConfigForBridge {
   cwd?: string;
   sessionId?: string;
+  /**
+   * Live getter for the current session's autosaved markdown transcript path.
+   *
+   * Called at hook-dispatch time (not registration time) so it reflects the
+   * current path even after a `/clear` rotation. Returns `null` when no
+   * transcript is available (daemon, `afk chat`, web, or REPL before the first
+   * turn completes). The resolved value is forwarded as `transcript_path` in
+   * the stdin payload sent to every shell hook command.
+   *
+   * Artifact chosen: `~/.afk/state/transcripts/<isoStamp>.md` — the REPL's
+   * per-session autosaved markdown transcript. It is written incrementally as
+   * turns complete, so it already contains prior conversation turns when any
+   * hook fires. Format: markdown with `## User` / `## Assistant` blocks
+   * separated by `---` dividers. A Claude-Code-compatible JSONL export is a
+   * possible follow-up.
+   */
+  getTranscriptPath?: () => string | null;
 }
 
 /**
@@ -48,6 +65,7 @@ export function loadAndRegisterConfigHooks(
 ): void {
   const agentCwd = agentConfig.cwd ?? process.cwd();
   const sessionId = agentConfig.sessionId;
+  const getTranscriptPath = agentConfig.getTranscriptPath;
   const userGlobalEnabled = hookConfig.userGlobalEnabled;
 
   // Episode mode: disable the context-injecting events (SessionStart and
@@ -150,6 +168,25 @@ export function loadAndRegisterConfigHooks(
       // loader, which only emits plugin-tier groups when it is set.
       if (group.tier !== 'plugin' && !userGlobalEnabled) continue;
 
+      // Per-hook disable: skip plugin groups that the user has listed in
+      // `disabledPluginHooks`. The check is at group level (event+matcher)
+      // so a single specifier can suppress an entire matcher group at once.
+      // Non-plugin groups are never subject to this gate (it applies only to
+      // plugin hooks; shell hooks have the enableShellHooks gate instead).
+      if (group.tier === 'plugin') {
+        const firstHook = group.hooks[0];
+        const pName = firstHook?.pluginName;
+        if (pName !== undefined &&
+            isPluginHookDisabled(hookConfig.disabledPluginHooks, pName, event, group.matcher)) {
+          console.warn(
+            `[hooks] plugin hook suppressed by disabledPluginHooks: plugin="${pName}" ` +
+              `event="${event}"` +
+              (group.matcher !== undefined ? ` matcher="${group.matcher}"` : ''),
+          );
+          continue;
+        }
+      }
+
       // Compile the matcher once per group — not per dispatch.
       // Pass a warn sink so invalid regex patterns are surfaced via console.warn
       // instead of silently falling back without any signal to the operator.
@@ -159,6 +196,7 @@ export function loadAndRegisterConfigHooks(
         const hookCommand = hook.command;
         const hookTimeoutMs = hook.timeoutMs;
         const hookPluginRoot = hook.pluginRoot;
+        const hookPluginName = hook.pluginName;
 
         const handler = async (context: HookContext): Promise<HookDecision> => {
           // For tool-scoped events, check the matcher against the tool name.
@@ -179,13 +217,20 @@ export function loadAndRegisterConfigHooks(
           // sessionId (SubagentStart, SubagentStop).
           const effectiveSessionId = resolveContextSessionId(context, sessionId);
 
+          // Resolve the live transcript path at dispatch time (not registration
+          // time) so rotations from /clear are captured automatically.
+          const transcriptPath = getTranscriptPath?.() ?? null;
+
           const result = await executeCommand({
             command: hookCommand,
             context,
             agentCwd,
             sessionId: effectiveSessionId,
             timeoutMs: hookTimeoutMs,
+            transcriptPath,
             ...(hookPluginRoot !== undefined ? { pluginRoot: hookPluginRoot } : {}),
+            ...(hookPluginName !== undefined ? { pluginName: hookPluginName } : {}),
+            ...(hookPluginName !== undefined ? { pluginHookEnv: hookConfig.pluginHookEnv } : {}),
           });
 
           return result.decision;

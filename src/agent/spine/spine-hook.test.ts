@@ -10,9 +10,14 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // ── Mock the classifier so no real LLM calls happen ─────────────────────────
 
+// MAX_DESCRIPTION_LEN is inlined here as the real production value (300).
+// vi.mock factories are hoisted before module initialisation, so we cannot
+// reference a module-level const from the factory. The inline literal must
+// match spine-classifier.ts:MAX_DESCRIPTION_LEN — if that value changes,
+// update this mock and the test body constant below.
 vi.mock('./spine-classifier.js', () => ({
   classifyDiff: vi.fn().mockResolvedValue({ items: [], rawOutput: '', parsed: true }),
-  MAX_DESCRIPTION_LEN: 120,
+  MAX_DESCRIPTION_LEN: 300, // must equal spine-classifier.ts:MAX_DESCRIPTION_LEN
 }));
 
 // ── Mock Telegram push so no real network calls happen ───────────────────────
@@ -58,13 +63,12 @@ vi.mock('node:fs', async (importOriginal) => {
         _capturedAppendCalls.push({ path: String(path), data: String(data) });
       },
     ),
-    // Capture writeFileSync calls (used by persistDiffFingerprint)
     writeFileSync: vi.fn(
       (path: import('node:fs').PathOrFileDescriptor, data: string | Uint8Array): void => {
         _capturedWriteCalls.push({ path: String(path), data: String(data) });
       },
     ),
-    // readFileSync: passthrough — fingerprint file won't exist in tests, returns ENOENT
+    renameSync: vi.fn(),
     mkdirSync: vi.fn(),
   };
 });
@@ -73,6 +77,12 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { createSpineSessionEndHook } from './spine-hook.js';
 import type { HookContext } from '../hooks.js';
+
+// Mirror of the production constant — kept in sync manually so truncation
+// tests exercise the actual production length, not a stale fixture value.
+// If spine-classifier.ts:MAX_DESCRIPTION_LEN changes, update BOTH the mock
+// factory above and this constant.
+const MAX_DESCRIPTION_LEN = 300; // must equal spine-classifier.ts:MAX_DESCRIPTION_LEN
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -102,6 +112,22 @@ function makeSessionEndContext(
       : {}),
   };
 }
+
+// ── Drift guard ───────────────────────────────────────────────────────────────
+// Verify that the local MAX_DESCRIPTION_LEN constant (used in the mock factory
+// above and in truncation tests below) matches the mocked export value.
+// The vi.mock factory above must also set MAX_DESCRIPTION_LEN to the same
+// value as spine-classifier.ts:MAX_DESCRIPTION_LEN — update all three sites
+// together if the production value changes.
+describe('MAX_DESCRIPTION_LEN drift guard', () => {
+  it('local MAX_DESCRIPTION_LEN matches the mocked spine-classifier export', async () => {
+    // Import the (mocked) module — the mock factory hard-codes the same
+    // value as the production export. This test fails fast if either the
+    // local const or the mock factory value is updated without the other.
+    const mocked = await import('./spine-classifier.js');
+    expect(MAX_DESCRIPTION_LEN).toBe(mocked.MAX_DESCRIPTION_LEN);
+  });
+});
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -543,18 +569,24 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     expect(writeSpine).toHaveBeenCalled();
   });
 
-  it('truncation resilience: long base description still produces exactly one annotation ≤ 120 chars', async () => {
+  it('truncation resilience: long base — body stays ≤ MAX_DESCRIPTION_LEN, suffix is outside the cap (#2867 Bug 1)', async () => {
+    // Bug 1 fix: the suffix is appended OUTSIDE the MAX_DESCRIPTION_LEN cap so
+    // that annotations never consume body text. Total length may exceed the cap
+    // by exactly suffix.length — that is intentional and correct.
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    // 97 chars base — after appending ` (reinforced 2026-09-14)` (25 chars) = 122, gets sliced to 120
-    // The closing paren is cut off, leaving ` (reinforced 2026-09-14` at the tail
-    const longBase = 'A'.repeat(97);
     const yesterday = '2026-09-14';
-    // Simulate a previously-truncated description (missing closing paren)
-    const truncatedDesc = (longBase + ` (reinforced ${yesterday}`).slice(0, 120);
-    expect(truncatedDesc).toHaveLength(120);
-    expect(truncatedDesc.endsWith(')')).toBe(false); // confirm truncation scenario
+    // Build a base whose body exactly fills MAX_DESCRIPTION_LEN after stripping
+    // the old annotation. The old (truncated) description simulates what the
+    // previous buggy behaviour would write: body cut to fit inside the cap.
+    const todaySuffix = ` (reinforced ${new Date().toISOString().slice(0, 10)})`;
+    const longBase = 'A'.repeat(MAX_DESCRIPTION_LEN); // full-length body
+    // Simulate a previously-truncated description: body was cut by suffix.length
+    const oldSuffix = ` (reinforced ${yesterday})`;
+    const truncatedBody = longBase.slice(0, MAX_DESCRIPTION_LEN - oldSuffix.length);
+    const truncatedDesc = truncatedBody + oldSuffix;
+    expect(truncatedDesc).toHaveLength(MAX_DESCRIPTION_LEN);
 
     const mockEntry = {
       id: 'INV-001',
@@ -578,12 +610,18 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    // Result must be ≤ MAX_DESCRIPTION_LEN (120)
-    expect(mockEntry.description.length).toBeLessThanOrEqual(120);
-    // Must contain today's annotation (even if itself truncated)
-    expect(mockEntry.description).toMatch(/\(reinforced /);
+    // Body (without the suffix) must be ≤ MAX_DESCRIPTION_LEN — the suffix is outside the cap
+    const desc = mockEntry.description;
+    const suffixStart = desc.lastIndexOf(' (reinforced ');
+    const bodyPart = suffixStart >= 0 ? desc.slice(0, suffixStart) : desc;
+    expect(bodyPart.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LEN);
+    // Full annotation must be present and complete (closing paren not cut off)
+    expect(desc).toMatch(/\(reinforced \d{4}-\d{2}-\d{2}\)$/);
     // Must NOT still contain the old date
-    expect(mockEntry.description).not.toContain(yesterday);
+    expect(desc).not.toContain(yesterday);
+    // Exactly one annotation
+    const matches = desc.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
     expect(writeSpine).toHaveBeenCalled();
   });
 
@@ -771,16 +809,20 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     expect(writeSpine).toHaveBeenCalled();
   });
 
-  it('truncation resilience: long base description still produces exactly one annotation ≤ 120 chars', async () => {
+  it('truncation resilience: long base — body stays ≤ MAX_DESCRIPTION_LEN, suffix is outside the cap (#2867 Bug 1)', async () => {
+    // Bug 1 fix: the suffix is appended OUTSIDE the MAX_DESCRIPTION_LEN cap so
+    // that annotations never consume body text. Total length may exceed the cap
+    // by exactly suffix.length — that is intentional and correct.
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    // 89 chars base — after appending ` (partially weakened 2026-09-14)` (32 chars) = 121, sliced to 120
-    const longBase = 'B'.repeat(89);
     const yesterday = '2026-09-14';
-    const truncatedDesc = (longBase + ` (partially weakened ${yesterday}`).slice(0, 120);
-    expect(truncatedDesc).toHaveLength(120);
-    expect(truncatedDesc.endsWith(')')).toBe(false); // confirm truncation
+    // Simulate a previously-truncated description: body was cut by suffix.length
+    const oldSuffix = ` (partially weakened ${yesterday})`;
+    const longBase = 'B'.repeat(MAX_DESCRIPTION_LEN); // full-length body
+    const truncatedBody = longBase.slice(0, MAX_DESCRIPTION_LEN - oldSuffix.length);
+    const truncatedDesc = truncatedBody + oldSuffix;
+    expect(truncatedDesc).toHaveLength(MAX_DESCRIPTION_LEN);
 
     const mockEntry = {
       id: 'INV-001',
@@ -804,9 +846,18 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    expect(mockEntry.description.length).toBeLessThanOrEqual(120);
-    expect(mockEntry.description).toMatch(/\(partially weakened /);
-    expect(mockEntry.description).not.toContain(yesterday);
+    // Body (without the suffix) must be ≤ MAX_DESCRIPTION_LEN — the suffix is outside the cap
+    const desc = mockEntry.description;
+    const suffixStart = desc.lastIndexOf(' (partially weakened ');
+    const bodyPart = suffixStart >= 0 ? desc.slice(0, suffixStart) : desc;
+    expect(bodyPart.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LEN);
+    // Full annotation must be present and complete (closing paren not cut off)
+    expect(desc).toMatch(/\(partially weakened \d{4}-\d{2}-\d{2}\)$/);
+    // Must NOT still contain the old date
+    expect(desc).not.toContain(yesterday);
+    // Exactly one annotation
+    const matches = desc.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
     expect(writeSpine).toHaveBeenCalled();
   });
 
@@ -1104,32 +1155,29 @@ describe('createSpineSessionEndHook — pending-log writes', () => {
   });
 });
 
-// ── Cross-annotation chain tests (outcome D) ──────────────────────────────────
-// Verify that applying "reinforce" after "weaken" (and vice versa) strips the
-// OTHER annotation, not just its own kind — preventing chains like:
-//   "(partially weakened DATE) (reinforced DATE) (partially weakened DATE)".
+// ── Regression tests for #2867 ────────────────────────────────────────────────
 
-describe('createSpineSessionEndHook — cross-annotation chain prevention (outcome D)', () => {
+describe('createSpineSessionEndHook — #2867 regressions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
   });
 
-  it('reinforce after weaken: strips "(partially weakened DATE)" before appending "(reinforced DATE)"', async () => {
+  it('#2867 Bug 1 (strengthens): annotating N times never changes body text', async () => {
+    // The body must be preserved at MAX_DESCRIPTION_LEN; the suffix must live
+    // outside the cap. Repeated annotations must not shorten the body.
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = '2026-09-14';
-    // Entry already has a "weakened" annotation from a previous session
-    const weakenedDesc = `All env vars go through env.ts (partially weakened ${yesterday})`;
+    // Body that exactly fills MAX_DESCRIPTION_LEN chars
+    const body = 'X'.repeat(MAX_DESCRIPTION_LEN);
 
     const mockEntry = {
       id: 'INV-001',
       date: '2026-09-01',
       sessionId: 'old-session',
-      description: weakenedDesc,
+      description: body,
     };
 
     const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
@@ -1147,9 +1195,9 @@ describe('createSpineSessionEndHook — cross-annotation chain prevention (outco
         {
           label: 'strengthens',
           existingId: 'INV-001',
-          existingDescription: weakenedDesc,
-          description: 'Pattern confirmed again',
-          rationale: 'See src/config/env.ts',
+          existingDescription: body,
+          description: 'More evidence',
+          rationale: 'See tests',
         },
       ],
       rawOutput: '[]',
@@ -1157,32 +1205,37 @@ describe('createSpineSessionEndHook — cross-annotation chain prevention (outco
     });
 
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
-    await hook(makeSessionEndContext());
 
-    // Must NOT contain "partially weakened" any more
-    expect(mockEntry.description).not.toContain('partially weakened');
-    // Must contain today's reinforcement
-    expect(mockEntry.description).toContain(`(reinforced ${today})`);
-    // Exactly one annotation total
-    const annotations = mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
-    expect(annotations).toHaveLength(1);
+    // Fire once
+    await hook(makeSessionEndContext());
+    const afterFirst = mockEntry.description;
+
+    // Fire again (description now includes annotation)
+    await hook(makeSessionEndContext());
+    const afterSecond = mockEntry.description;
+
+    // Body must not shrink across invocations
+    const bodyAfterFirst = afterFirst.slice(0, afterFirst.lastIndexOf(' (reinforced '));
+    const bodyAfterSecond = afterSecond.slice(0, afterSecond.lastIndexOf(' (reinforced '));
+    expect(bodyAfterFirst).toBe(body);
+    expect(bodyAfterSecond).toBe(body);
+    // Exactly one annotation each time
+    expect((afterFirst.match(/\(reinforced /g) ?? []).length).toBe(1);
+    expect((afterSecond.match(/\(reinforced /g) ?? []).length).toBe(1);
     expect(writeSpine).toHaveBeenCalled();
   });
 
-  it('weaken after reinforce: strips "(reinforced DATE)" before appending "(partially weakened DATE)"', async () => {
+  it('#2867 Bug 1 (weakens): annotating N times never changes body text', async () => {
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = '2026-09-14';
-    // Entry already has a "reinforced" annotation from a previous session
-    const reinforcedDesc = `All env vars go through env.ts (reinforced ${yesterday})`;
+    const body = 'Y'.repeat(MAX_DESCRIPTION_LEN);
 
     const mockEntry = {
       id: 'INV-001',
       date: '2026-09-01',
       sessionId: 'old-session',
-      description: reinforcedDesc,
+      description: body,
     };
 
     const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
@@ -1200,8 +1253,184 @@ describe('createSpineSessionEndHook — cross-annotation chain prevention (outco
         {
           label: 'weakens',
           existingId: 'INV-001',
-          existingDescription: reinforcedDesc,
-          description: 'Exception found in legacy module',
+          existingDescription: body,
+          description: 'Counter-evidence',
+          rationale: 'See logs',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+
+    await hook(makeSessionEndContext());
+    const afterFirst = mockEntry.description;
+
+    await hook(makeSessionEndContext());
+    const afterSecond = mockEntry.description;
+
+    const bodyAfterFirst = afterFirst.slice(0, afterFirst.lastIndexOf(' (partially weakened '));
+    const bodyAfterSecond = afterSecond.slice(0, afterSecond.lastIndexOf(' (partially weakened '));
+    expect(bodyAfterFirst).toBe(body);
+    expect(bodyAfterSecond).toBe(body);
+    expect((afterFirst.match(/\(partially weakened /g) ?? []).length).toBe(1);
+    expect((afterSecond.match(/\(partially weakened /g) ?? []).length).toBe(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('#2867 Bug 2: dangling "(partially weakened " fragment is cleaned up when reinforcing', async () => {
+    // Reproduces the INV-004 shape from the issue:
+    // "...(SPINE.md created in this session). (partially weakened  (reinforced 2026-10-03)"
+    // The "partially weakened " fragment (no date digits) was left by the old 120-char truncation.
+    // Applying reinforced should strip both the old reinforced annotation AND the dangling weakened fragment.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    // Fragment: "(partially weakened " with no date — truncated at exactly label + space
+    const base = 'SPINE.md created in this session.';
+    // The dangling weakened fragment that isAnnotationPrefix deliberately does NOT strip
+    // (no date digits present), plus a stacked reinforced annotation from the previous fix
+    const fragmentDesc = `${base} (partially weakened  (reinforced 2026-10-03)`;
+
+    const mockEntry = {
+      id: 'INV-004',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: fragmentDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-004',
+          existingDescription: fragmentDesc,
+          description: 'Still valid',
+          rationale: 'See session log',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // The dangling "(partially weakened " fragment must be gone
+    expect(mockEntry.description).not.toContain('(partially weakened ');
+    // A fresh complete reinforced annotation must be present
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    // Exactly one reinforced annotation
+    const matches = mockEntry.description.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  // ── #2921: same-label stacks and reverse-order cross-label stacks ────────────
+
+  it('#2921: same-label stack — buried stale annotation is fully stripped before appending', async () => {
+    // Regression: `base (reinforced D1) (reinforced D2)` → only D2 was stripped,
+    // leaving D1 buried. The loop fix in applyAnnotation strips until stable.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    // Two stacked reinforced annotations — both must be gone after one more fire.
+    const base = 'Body text';
+    const stackedDesc = `${base} (reinforced 2026-10-01) (reinforced 2026-10-02)`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: stackedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-001',
+          existingDescription: stackedDesc,
+          description: 'Still confirmed',
+          rationale: 'See session log',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Both stale annotations must be gone; exactly one fresh one remains
+    expect(mockEntry.description).not.toContain('2026-10-01');
+    expect(mockEntry.description).not.toContain('2026-10-02');
+    expect(mockEntry.description).toContain(`(reinforced ${today})`);
+    const matches = mockEntry.description.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    // Body text must be intact
+    expect(mockEntry.description.startsWith(base)).toBe(true);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('#2921: reverse-order cross-label stack — buried reinforced annotation cleared when weakening', async () => {
+    // `base (reinforced D1) (partially weakened D2)` while applying 'weakens':
+    // the primary-label (weakened) pass strips D2, then otherLabel (reinforced)
+    // pass must strip D1 in a subsequent loop iteration.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const base = 'All env vars go through env.ts';
+    const crossDesc = `${base} (reinforced 2026-10-01) (partially weakened 2026-10-02)`;
+
+    const mockEntry = {
+      id: 'INV-001',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: crossDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'INV-001',
+          existingDescription: crossDesc,
+          description: 'Counter-evidence found',
           rationale: 'See legacy.ts',
         },
       ],
@@ -1212,31 +1441,140 @@ describe('createSpineSessionEndHook — cross-annotation chain prevention (outco
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    // Must NOT contain "reinforced" any more
-    expect(mockEntry.description).not.toContain('reinforced');
-    // Must contain today's weakening
+    // Both stale annotations cleared
+    expect(mockEntry.description).not.toContain('2026-10-01');
+    expect(mockEntry.description).not.toContain('2026-10-02');
     expect(mockEntry.description).toContain(`(partially weakened ${today})`);
-    // Exactly one annotation total
-    const annotations = mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
-    expect(annotations).toHaveLength(1);
+    const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
+    // Body text must be intact
+    expect(mockEntry.description.startsWith(base)).toBe(true);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('#2921: body text is preserved through multi-annotation stripping', async () => {
+    // Verifies that the loop does not inadvertently eat body content — the body
+    // portion before the first annotation must equal the original body exactly.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const body = 'Important invariant: no side effects in pure functions.';
+    const stackedDesc = `${body} (reinforced 2026-09-28) (reinforced 2026-10-01)`;
+
+    const mockEntry = {
+      id: 'INV-002',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: stackedDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'strengthens',
+          existingId: 'INV-002',
+          existingDescription: stackedDesc,
+          description: 'Still holds',
+          rationale: 'Checked again',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // Body must be byte-for-byte identical to the original
+    const desc = mockEntry.description;
+    const annotationStart = desc.lastIndexOf(' (reinforced ');
+    const bodyPart = annotationStart >= 0 ? desc.slice(0, annotationStart) : desc;
+    expect(bodyPart).toBe(body);
+    expect(desc).toContain(`(reinforced ${today})`);
+    const matches = desc.match(/\(reinforced /g) ?? [];
+    expect(matches).toHaveLength(1);
+    expect(writeSpine).toHaveBeenCalled();
+  });
+
+  it('#2867 Bug 2: dangling "(reinforced " fragment is cleaned up when weakening', async () => {
+    // Mirror of the above: a truncated "(reinforced " fragment survives when
+    // the label switches from strengthens to weakens.
+    await setupDiffMock();
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const today = new Date().toISOString().slice(0, 10);
+    const base = 'All env vars go through env.ts';
+    // Dangling reinforced fragment with no date (truncated before date digits)
+    const fragmentDesc = `${base} (reinforced  (partially weakened 2026-10-01)`;
+
+    const mockEntry = {
+      id: 'TST-002',
+      date: '2026-09-01',
+      sessionId: 'old-session',
+      description: fragmentDesc,
+    };
+
+    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [mockEntry] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(findEntry).mockReturnValue(mockEntry);
+    vi.mocked(classifyDiff).mockResolvedValue({
+      items: [
+        {
+          label: 'weakens',
+          existingId: 'TST-002',
+          existingDescription: fragmentDesc,
+          description: 'Still slightly weakened',
+          rationale: 'See legacy.ts',
+        },
+      ],
+      rawOutput: '[]',
+      parsed: true,
+    });
+
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    // The dangling "(reinforced " fragment must be gone
+    expect(mockEntry.description).not.toContain('(reinforced ');
+    // A fresh complete weakened annotation must be present
+    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
+    const matches = mockEntry.description.match(/\(partially weakened /g) ?? [];
+    expect(matches).toHaveLength(1);
     expect(writeSpine).toHaveBeenCalled();
   });
 });
 
-// ── Fingerprint persist on zero-item result (finding fix) ─────────────────────
-// Verify that a parsed-but-empty classifier result DOES persist the fingerprint,
-// so an empty-classified diff is not re-classified on every future session end.
 
-describe('createSpineSessionEndHook — fingerprint persisted on zero-item parse', () => {
+// ── Fingerprint ordering regressions ─────────────────────────────────────────
+
+describe('createSpineSessionEndHook — fingerprint persistence ordering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
+    _capturedWriteCalls.length = 0;
   });
 
-  it('calls writeFileSync (fingerprint) even when classifier returns empty items', async () => {
+  it('persists fingerprint when classifier returns a parsed empty result', async () => {
     await setupDiffMock();
-    _capturedWriteCalls.length = 0;
 
     const { classifyDiff } = await import('./spine-classifier.js');
     vi.mocked(classifyDiff).mockResolvedValue({
@@ -1248,75 +1586,42 @@ describe('createSpineSessionEndHook — fingerprint persisted on zero-item parse
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    // At least one writeFileSync call must target the fingerprint map path
-    const fingerprintWrite = _capturedWriteCalls.find(
-      (c) => c.path.includes('spine-diff-fingerprints'),
-    );
-    expect(fingerprintWrite).toBeDefined();
-  });
-});
-
-// ── Chain-on-disk collapse after next write ───────────────────────────────────
-// Verify that an entry with a chain like "(partially weakened D) (reinforced D)"
-// already on disk gets collapsed to exactly one annotation on the next hook fire.
-
-describe('createSpineSessionEndHook — chain on disk collapses to one annotation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
-    _capturedAppendCalls.length = 0;
-    _capturedWriteCalls.length = 0;
+    expect(_capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints'))).toBe(true);
   });
 
-  it('collapses existing chain on disk to exactly one annotation after next write', async () => {
+  it('does not persist fingerprint when writeSpine throws for a non-empty result', async () => {
     await setupDiffMock();
 
     const { classifyDiff } = await import('./spine-classifier.js');
-    const today = new Date().toISOString().slice(0, 10);
-    // Simulates a description that has accumulated a chain from previous alternating sessions
-    const chainedDesc =
-      'All env vars go through env.ts (partially weakened 2026-09-14) (reinforced 2026-09-20)';
-
-    const mockEntry = {
-      id: 'INV-001',
-      date: '2026-09-01',
-      sessionId: 'old-session',
-      description: chainedDesc,
-    };
-
-    const { findEntry, writeSpine, readSpine } = await import('./spine-store.js');
-    vi.mocked(readSpine).mockReturnValue({
-      sections: [
-        { name: 'Invariants', prefix: 'INV', entries: [mockEntry] },
-        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
-        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
-      ],
-      trailer: '',
-    });
-    vi.mocked(findEntry).mockReturnValue(mockEntry);
     vi.mocked(classifyDiff).mockResolvedValue({
       items: [
         {
-          label: 'weakens',
-          existingId: 'INV-001',
-          existingDescription: chainedDesc,
-          description: 'Another exception found',
-          rationale: 'legacy2.ts',
+          label: 'new-addition',
+          prefix: 'INV',
+          description: 'All path helpers remain centralized',
+          rationale: 'Regression coverage',
         },
       ],
       rawOutput: '[]',
       parsed: true,
     });
 
+    const { writeSpine, readSpine } = await import('./spine-store.js');
+    vi.mocked(readSpine).mockReturnValue({
+      sections: [
+        { name: 'Invariants', prefix: 'INV', entries: [] },
+        { name: 'Explicitly Rejected Patterns', prefix: 'REJ', entries: [] },
+        { name: 'Taste Calls Made', prefix: 'TST', entries: [] },
+      ],
+      trailer: '',
+    });
+    vi.mocked(writeSpine).mockImplementation(() => {
+      throw new Error('disk full');
+    });
+
     const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
     await hook(makeSessionEndContext());
 
-    // The description must now have exactly ONE annotation
-    const annotations =
-      mockEntry.description.match(/\((reinforced|partially weakened)/g) ?? [];
-    expect(annotations).toHaveLength(1);
-    // And it must be today's weakening
-    expect(mockEntry.description).toContain(`(partially weakened ${today})`);
-    expect(writeSpine).toHaveBeenCalled();
+    expect(_capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints'))).toBe(false);
   });
 });

@@ -2,20 +2,21 @@
  * Tool handler for writing files.
  *
  * Validates input, creates parent directories recursively, and writes content
- * to the filesystem. Returns a success message with byte count or an error result.
+ * to the filesystem atomically (see write-file.atomic.ts). Returns a success
+ * message with byte count or an error result.
  *
  * @module agent/tools/handlers/write-file
  */
 
 import { env } from '../../../config/env.js';
-import { readFile, writeFile, mkdir, stat } from 'fs/promises';
-import { dirname } from 'path';
+import { readFile, stat } from 'fs/promises';
 import type { ToolHandler, ToolHandlerContext } from '../types.js';
 import { assertNotDenylisted } from './write-denylist.js';
 import { resolveAndContain } from './_cwd-utils.js';
 import { fsErrorToToolResult } from './_fs-error.js';
 import { computeLineDiff, type DiffPayload } from '../../../utils/diff.js';
 import { errorMessage } from '../../../utils/errors.js';
+import { commitFileWrite, WriteAbortedUntouchedError } from './write-file.atomic.js';
 
 /**
  * Input shape for the write_file tool (validated at runtime).
@@ -81,6 +82,23 @@ const writeFileImpl = async (
     return { content: errorMessage(err), isError: true };
   }
 
+  // A containment rejection of the resolved symlink target (see below) must
+  // surface exactly like the up-front containment check above.
+  let containmentErr: unknown;
+  // Re-check the path the bytes actually land on. Both checks above validate
+  // the link's own spelling; a DANGLING link inside a root can point outside
+  // it (or at a denylisted path), and commitFileWrite would follow it and
+  // mkdirp/write there. Runs before any mkdir/temp/write.
+  const validateTarget = (target: string): void => {
+    try {
+      resolveAndContain(target, context, 'write', cwd);
+    } catch (err) {
+      containmentErr = err;
+      throw err;
+    }
+    assertNotDenylisted(target, 'write_file');
+  };
+
   try {
     assertNotDenylisted(file_path, 'write_file');
 
@@ -138,9 +156,10 @@ const writeFileImpl = async (
       }
     }
 
-    const parentDir = dirname(file_path);
-    await mkdir(parentDir, { recursive: true });
-    await writeFile(file_path, content, { signal });
+    // Atomic temp+rename: an abort or crash leaves the old file intact, never a
+    // truncated one. Follows symlinks (re-validating the resolved target) and
+    // preserves the existing mode.
+    await commitFileWrite(file_path, content, signal, validateTarget);
 
     let diff: DiffPayload | null = null;
     // Binary guard: skip diff for content containing null bytes.
@@ -165,6 +184,14 @@ const writeFileImpl = async (
       ...(diff ? { render: { diff } } : {}),
     };
   } catch (err) {
+    if (err !== undefined && err === containmentErr) {
+      return { content: errorMessage(err), isError: true };
+    }
+    // Only commitFileWrite can prove the target untouched; a bare
+    // `signal.aborted` cannot (an in-place write may have failed partway).
+    if (err instanceof WriteAbortedUntouchedError) {
+      return { content: `Aborted; ${file_path} was not modified`, isError: true };
+    }
     const known = fsErrorToToolResult(err, file_path);
     if (known) return known;
     if (err instanceof Error) {

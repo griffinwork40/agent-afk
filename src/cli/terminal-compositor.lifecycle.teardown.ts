@@ -25,8 +25,10 @@
  * every row is written to scrollback exactly once.
  */
 
-import { scrollbackFlushLines, buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
+import { buildScrollbackArchiveEscape, eraseAndPaintRow } from './terminal-compositor.scrollback.js';
+import { flushLinesSkippingArchived } from './terminal-compositor.band-archived-prefix.js';
 import { cup } from './cup-frame-renderer.escapes.js';
+import { contentMargin } from './render/measure.js';
 import type { LifecycleHost } from './terminal-compositor.lifecycle.js';
 
 /**
@@ -104,7 +106,8 @@ export function endTurnFlush(self: LifecycleHost): void {
   // as soft-wrappable logical lines via the shared archive path. `scrollbackFlushLines`
   // with count === bandLen emits the whole band; `buildScrollbackArchiveEscape`
   // paints it top-aligned at anchorFloor and scrolls it into scrollback.
-  const allLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, bandLen);
+  // The archived prefix (content-hug) is already in scrollback: skip it.
+  const allLines = flushLinesSkippingArchived(self.committedBand, self.committedBandMeta, bandLen, self.committedBandArchivedPrefix);
   const archiveEscape = buildScrollbackArchiveEscape(allLines, anchorFloor, rows, cols);
   if (archiveEscape.length > 0) {
     const write = (): void => { self.stdout.write(archiveEscape); };
@@ -161,7 +164,8 @@ export function flushPendingCommittedBand(self: LifecycleHost): void {
   const rows = Math.max(1, self.stdout.rows ?? 24);
   const cols = Math.max(1, self.stdout.columns ?? 80);
   const anchorFloor = Math.max(self.anchorRow ?? 1, 1);
-  const archiveLines = scrollbackFlushLines(self.committedBand, self.committedBandMeta, pendingCount);
+  // Pending archived-prefix rows (content-hug) are already in scrollback: skip them.
+  const archiveLines = flushLinesSkippingArchived(self.committedBand, self.committedBandMeta, pendingCount, self.committedBandArchivedPrefix);
   const escape = buildScrollbackArchiveEscape(archiveLines, anchorFloor, rows, cols);
   if (escape.length === 0) return;
   const write = (): void => {
@@ -201,9 +205,19 @@ export function appendLinesAtCursor(
   self: LifecycleHost,
 ): void {
   if (lines.length === 0) return;
+  // Content centering (AFK_CENTER_CONTENT): apply the same left margin that
+  // buildScrollbackArchiveEscape applies on the normal archive path — a non-empty
+  // pad is prepended to every non-empty line so archived rows are left-aligned at
+  // the same horizontal offset as the live centered frame. The band stores raw
+  // (unpadded) content; padding is applied at emit time only, matching the
+  // behaviour of commitPhase3Band, commitPhase3Hold, and the scrollback archive.
+  const pad = contentMargin();
+  const paddedLines = pad
+    ? lines.map((l) => (l !== '' ? pad + l : l))
+    : lines;
   // Invariant: CUP to R col 1 first so that if the owner left the cursor
   // mid-line the \r\n sequence starts cleanly at the row boundary.
-  const payload = cup(Math.max(1, cursorRow), 1) + lines.join('\r\n') + '\r\n';
+  const payload = cup(Math.max(1, cursorRow), 1) + paddedLines.join('\r\n') + '\r\n';
   const write = (): void => {
     self.stdout.write(payload);
   };

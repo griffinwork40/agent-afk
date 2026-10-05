@@ -54,7 +54,8 @@ describe('splitAbsolutePattern', () => {
     // no trailing slash is added; normalize produces 'C:\Users'.
     expect(result).toEqual({
       base: path.win32.normalize('C:/Users'),
-      pattern: path.win32.normalize('*'),
+      // Production returns rest.join('/') without normalization — always a bare glob token.
+      pattern: '*',
     });
   });
 
@@ -64,7 +65,8 @@ describe('splitAbsolutePattern', () => {
     const result = splitAbsolutePattern('C:\\*', path.win32);
     expect(result).toEqual({
       base: path.win32.normalize('C:/'),
-      pattern: path.win32.normalize('*'),
+      // Production returns rest.join('/') without normalization — always a bare glob token.
+      pattern: '*',
     });
   });
 });

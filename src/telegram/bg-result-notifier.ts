@@ -73,8 +73,19 @@ export class TelegramBgResultNotifier {
   private pendingInjections: BackgroundJob[] = [];
   /** Route key this notifier is registered under, when bound to a chat. */
   private readonly routeKey: string | undefined;
+  /**
+   * Set to `true` by {@link dispose}. Guards the deferred microtask body so
+   * that a push enqueued via `queueMicrotask` before `dispose()` runs does not
+   * fire after teardown — i.e. covers the window where `settled` fires and
+   * `dispose()` is called in the same synchronous frame.
+   */
+  private disposed = false;
 
   private readonly onSettled = (job: BackgroundJob): void => {
+    // Early-exit guard: if dispose() already ran, neither push nor injection
+    // is meaningful — the session is torn down.
+    if (this.disposed) return;
+
     // Skip cancelled jobs — same as the REPL notifier contract.
     if (job.status === 'cancelled') return;
 
@@ -85,6 +96,10 @@ export class TelegramBgResultNotifier {
     // 16KB bodies synchronously on the event loop — formatting and push both
     // happen off the current synchronous call frame.
     queueMicrotask(() => {
+      // Guard: if dispose() ran in the same synchronous frame as the settled
+      // event (before this microtask ran), skip the push — the session is
+      // already torn down and there is no valid operator to notify.
+      if (this.disposed) return;
       void pushIfConfigured(formatNotification(job), {
         target: this.chatId,
         ...(this.threadId !== undefined ? { messageThreadId: this.threadId } : {}),
@@ -132,14 +147,26 @@ export class TelegramBgResultNotifier {
     return jobs.map((j) => buildBgResultInjection(j)).join('\n') + '\n';
   }
 
-  /** Unsubscribe from the registry and drop the route registration. Idempotent. */
+  /**
+   * Unsubscribe from the registry and drop the route registration. Idempotent.
+   *
+   * Jobs still in `pendingInjections` at teardown have completed (and were push-
+   * notified) but were never drained into a model turn — the session ended before
+   * another message arrived. They are NOT marked delivered in the witness trace
+   * because `drainInjections()` was never called; the operator received a push
+   * notification and can use `/bgsub:join` to replay the result in the next
+   * session. Calling `markDelivered()` here would mislabel them as having been
+   * injected into model context when they were not.
+   */
   dispose(): void {
+    this.disposed = true;
     this.registry.off('settled', this.onSettled);
     if (this.routeKey !== undefined) unregisterBgInjectionSource(this.routeKey, this);
-    // Mark any buffered-but-undrained jobs delivered so the witness trace
-    // accounts for them. dispose() is called at session teardown — drainInjections()
-    // will not be called afterward, so this is the only accounting opportunity.
-    for (const job of this.pendingInjections) this.registry.markDelivered(job.jobId);
+    // Do NOT call markDelivered() for undrained jobs. drainInjections() was never
+    // called, so these results were never surfaced to the model. Silently
+    // discarding them here (without a witness event) is the correct behavior —
+    // the witness trace remains accurate: no 'delivered' event fires for a job
+    // that was never actually injected into model context.
     this.pendingInjections = [];
   }
 }

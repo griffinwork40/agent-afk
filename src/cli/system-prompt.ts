@@ -13,10 +13,20 @@ import { loadConfig } from './config.js';
  * can A/B test framework prompt edits without touching the checked-in file.
  * Unset = the bundled prompt, byte-identical to prior behaviour.
  *
- * Contract: an unreadable override path THROWS. Silently running with the
- * bundled prompt would make an A/B run measure nothing, and running with no
- * framework base at all would measure something worse; failing loudly is the
- * only outcome that cannot be mistaken for a valid experiment.
+ * **Fail-closed contract:** a relative path or an unreadable file **throws**.
+ * Silently running with the bundled prompt would turn an A/B run into A/A and
+ * measure nothing. There is no fallback — the loud failure is the point.
+ *
+ * **Reach:** this throw propagates to every surface that builds a system prompt:
+ *   - Startup (CLI, Telegram) — the process crashes with a clear message. ✓ acceptable.
+ *   - Mid-session `/afk-md reload` — caught by `applyReload()`, surfaced as
+ *     an error line; the REPL stays alive, the prompt is unchanged.
+ *   - Mid-server `afk web` session-create — caught by `SessionOwner.create()`,
+ *     re-thrown as an actionable message; the request fails, other sessions live.
+ *
+ * **Recommendation:** only ever set this variable transiently via
+ * `afk whatif --env AFK_FRAMEWORK_PROMPT_FILE=<path>`. A value persisted in
+ * `~/.afk/config/afk.env` blocks every surface until removed.
  */
 export function loadSystemPrompt(): string | undefined {
   const override = env.AFK_FRAMEWORK_PROMPT_FILE?.trim();

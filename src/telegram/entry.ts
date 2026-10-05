@@ -88,10 +88,16 @@ export function installCrashHandlers(): void {
   };
   process.on('uncaughtException', (err) => {
     notifyCrash('uncaughtException', err);
+    // exitCode is set first so a natural (early) exit — before the timer fires
+    // — still reports code 1 to the supervisor. The unref'd timer fires if the
+    // in-flight push keeps the event loop alive past CRASH_EXIT_DELAY_MS.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
   process.on('unhandledRejection', (err) => {
     notifyCrash('unhandledRejection', err);
+    // Same rationale as uncaughtException above.
+    process.exitCode = 1;
     setTimeout(() => process.exit(1), CRASH_EXIT_DELAY_MS).unref();
   });
 }

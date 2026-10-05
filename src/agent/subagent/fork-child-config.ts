@@ -33,6 +33,8 @@ import { injectWorkspacePreamble } from '../workspace/index.js';
 import type { WorkspaceStore } from '../workspace/workspace-store.js';
 import { DENY_ELICITATION, SUBAGENT_DEFAULT_MAX_TOOL_USE_ITERATIONS } from './constants.js';
 import { resolveSoftDeadlineMs } from '../providers/shared/soft-deadline.js';
+import { childTmpEnvPatch } from '../session/session-tmpdir.js';
+import { resolveChildAutoResume } from './usage-limit-park-policy.js';
 
 export interface AssembleChildConfigArgs<T> {
   options: ForkSubagentOptions<T>;
@@ -48,12 +50,25 @@ export interface AssembleChildConfigArgs<T> {
   workspaceStore?: WorkspaceStore;
   // Manager-level inherited values
   parentCwd: string | undefined;
-  parentApiKey: string | undefined;
+  // Fix #2471: a getter lets forkSubagent read the live credential at fork
+  // time instead of the boot-time snapshot captured by SubagentManager.
+  parentApiKey: (() => string | undefined) | undefined;
   parentBaseUrl: string | undefined;
   parentProvider: BundledProviderName | undefined;
   parentTraceWriter: TraceSink | undefined;
   parentSurface: Surface | undefined;
   parentCanUseTool: CanUseTool | undefined;
+  /**
+   * The nested-dispatch allowlist for the CHILD being assembled. Derived from
+   * `resolvedAccess.nestedAgentTypes` in `buildChildConfig` (child-config.ts)
+   * and threaded here via `ForkSubagentOptions.nestedAgentAllowlist` so the
+   * identity preamble can name the allowed types — the same value the child's
+   * executor will enforce at every nested dispatch attempt.
+   *
+   * Undefined = unscoped child (no restriction emitted in the preamble).
+   * Empty array = deny-all (preamble says dispatch is forbidden).
+   */
+  nestedAgentAllowlist?: readonly string[];
 }
 
 /**
@@ -68,15 +83,19 @@ export interface AssembleChildConfigArgs<T> {
  * the last of the fork-injected sections, not the final section of the assembled
  * system prompt. It likewise
  * reads the final resolved `maxToolUseIterations`.
+ *
+ * @param nestedAgentAllowlist - Forwarded from {@link AssembleChildConfigArgs}
+ *   to {@link injectSubagentIdentityPreamble} so the child's preamble names
+ *   the types it may dispatch. Single source: same value the executor enforces.
  */
-function applyForkPreambles(config: AgentConfig): AgentConfig {
-  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config));
+function applyForkPreambles(config: AgentConfig, nestedAgentAllowlist?: readonly string[]): AgentConfig {
+  return injectToolBudgetPreamble(injectSubagentIdentityPreamble(config, nestedAgentAllowlist));
 }
 
 /**
  * Parent-derived fields the child inherits only when the caller's
  * `options.config` left them unset (awareness topology, cwd, read/write scope,
- * trace writer, surface). Extracted from {@link assembleChildConfig} verbatim;
+ * trace writer, surface, private temp dir). Extracted from {@link assembleChildConfig} verbatim;
  * spread AFTER `...options.config` there, so explicit caller values still win.
  */
 function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<AgentConfig> {
@@ -124,6 +143,12 @@ function inheritedParentFields<T>(args: AssembleChildConfigArgs<T>): Partial<Age
     ...(args.options.config.surface === undefined && args.parentSurface !== undefined
       ? { surface: args.parentSurface }
       : {}),
+    // Private temp dir (session-tmpdir.ts): a fresh TMPDIR/TMP/TEMP nested
+    // under the dispatching session's dir, merged over the caller's env so
+    // `PLUGIN_ROOT` (skill forks) survives. Never the parent's or a sibling's
+    // dir, so a child's `rm -rf "$TMPDIR"/tmp.*` cannot reach theirs. A
+    // caller-chosen (unregistered) TMPDIR wins, like the fields above.
+    ...childTmpEnvPatch(args.options.config.env, args.id),
   };
 }
 
@@ -155,11 +180,15 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     effectiveChildModel,
     effectiveTimeoutMs,
     childController,
-    parentApiKey,
+    parentApiKey: parentApiKeyGetter,
     parentBaseUrl,
     parentProvider,
     parentCanUseTool,
   } = args;
+  // Resolve at fork time so a mid-session /reauth or hot-swap is visible to
+  // every child forked after it (fix #2471). The getter is undefined for
+  // callers that never supplied an apiKey; otherwise it is called once here.
+  const parentApiKey = parentApiKeyGetter?.();
 
   // Query the shared workspace for entries relevant to this child's task
   // and inject them as a system-prompt preamble so the child sees sibling
@@ -282,17 +311,15 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     // too short to split. An explicit caller `softDeadlineMs` wins via `??`,
     // including `0` to opt out.
     softDeadlineMs: options.config.softDeadlineMs ?? resolveSoftDeadlineMs(effectiveTimeoutMs),
-    // External constraint (anti-hang, sibling of the cap above): a fork that
-    // hits an OAuth usage-limit 429 otherwise auto-pauses and silently polls
-    // for reset — up to two hours (retry-layer.ts) — with no subagent-level
-    // pause UI, so the parent just looks frozen. A fork has no human to wait
-    // for: fail fast with the classified usage-limit error (the provider
-    // still emits the `paused` event first, then surfaces the error), and
-    // let the PARENT decide whether to retry, reroute to another model, or
-    // surface the pause to its own operator. Callers may opt a child back
-    // into auto-resume with an explicit `autoResumeOnUsageLimit: true`
-    // (e.g. unattended daemon flows that prefer waiting over failing).
-    autoResumeOnUsageLimit: options.config.autoResumeOnUsageLimit ?? false,
+    // Opt-in park-and-wait on OAuth usage-limit 429 (see usage-limit-park-policy.ts
+    // for precedence rules). Precedence: explicit caller value > env var
+    // AFK_SUBAGENT_AUTO_RESUME_ON_USAGE_LIMIT (ignored on the daemon surface,
+    // where no human can switch accounts) > false. When false a fork fails fast
+    // so the parent can decide: retry, reroute, or surface the pause itself.
+    autoResumeOnUsageLimit: resolveChildAutoResume(
+      options.config.autoResumeOnUsageLimit,
+      options.config.surface ?? args.parentSurface,
+    ),
     ...inheritedParentFields(args),
     // Invariant (message journal): a fork resumes the PARENT's session id, so
     // a journal keyed by session id would write the parent's `journal.jsonl`.
@@ -335,7 +362,7 @@ export function assembleChildConfig<T>(args: AssembleChildConfigArgs<T>): AgentC
     ...(options.phaseRole === 'read-only'
       ? { provider: buildPhaseRestrictedProvider('read-only', effectiveChildModel) }
       : {}),
-  });
+  }, args.nestedAgentAllowlist);
 
   return args.workspaceStore
     ? injectWorkspacePreamble(assembled, workspaceEntries)
