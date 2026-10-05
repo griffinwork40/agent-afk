@@ -210,6 +210,7 @@ export function loadAndRegisterConfigHooks(
         const hookTimeoutMs = hook.timeoutMs;
         const hookPluginRoot = hook.pluginRoot;
         const hookPluginName = hook.pluginName;
+        const hookPluginKey = hook.pluginKey;
 
         const handler = async (context: HookContext): Promise<HookDecision> => {
           // For tool-scoped events, check the matcher against the tool name.
@@ -239,13 +240,15 @@ export function loadAndRegisterConfigHooks(
           // available in the hook subprocess.
           let resolvedPluginKey: string | undefined;
           let resolvedPluginOptions: Record<string, string> | undefined;
-          if (hookPluginName !== undefined) {
-            // The index key is the plugin name (manifest name or dir name).
-            // readIndex is fast (in-memory read of a small JSON file).
+          if (hookPluginKey !== undefined) {
+            // The index key is the install key, not the manifest name. Marketplace
+            // installs use `<marketplace>:<plugin>` and aliased flat installs use
+            // the directory/alias key, so manifest-name lookup can miss or leak a
+            // same-named plugin's options and data directory.
             const idx = readIndex();
-            const idxEntry = idx.plugins[hookPluginName];
+            const idxEntry = idx.plugins[hookPluginKey];
             if (idxEntry !== undefined) {
-              resolvedPluginKey = hookPluginName;
+              resolvedPluginKey = hookPluginKey;
               resolvedPluginOptions = idxEntry.options;
             }
           }

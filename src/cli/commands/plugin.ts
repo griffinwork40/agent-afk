@@ -31,6 +31,7 @@ import { parseSource } from '../../agent/plugins/source.js';
 import { installFromMarketplace } from '../../agent/marketplaces/resolve.js';
 import { getPluginsDir, getPluginsIndexPath } from '../../paths.js';
 import { readUserConfigSchema, validateOptionKey, type UserConfigSchema } from '../../agent/plugins/plugin-user-config.js';
+import { resolvePluginSourceDir } from '../../agent/marketplaces/resolve.js';
 
 /**
  * Injection points for tests. Defaults to real implementations calling into
@@ -255,7 +256,7 @@ function runPluginConfig(opts: PluginConfigRunOpts): void {
       process.exitCode = 1;
       return;
     }
-    const pluginDir = `${pluginsDir}/${name}`;
+    const pluginDir = resolvePluginConfigDir(name, entry, pluginsDir);
     let schema;
     try {
       schema = readUserConfigSchema(pluginDir);
@@ -282,6 +283,8 @@ function runPluginConfig(opts: PluginConfigRunOpts): void {
       return;
     }
     if (unset) {
+      const validResult = validateOptionKey(key, schema);
+      if (validResult !== 'ok') { logger.error(palette.error(validResult)); process.exitCode = 1; return; }
       unsetPluginOption(name, key, indexPath);
       logger.log(palette.success(`Unset ${name}.${key}`));
       return;
@@ -298,6 +301,17 @@ function runPluginConfig(opts: PluginConfigRunOpts): void {
   } catch (err) {
     handleCommandError(err);
   }
+}
+
+
+function resolvePluginConfigDir(name: string, entry: PluginIndex['plugins'][string], pluginsDir: string): string {
+  if (entry.sourceType === 'marketplace' && entry.marketplace !== undefined) {
+    const pluginName = name.startsWith(`${entry.marketplace}:`)
+      ? name.slice(entry.marketplace.length + 1)
+      : name;
+    return resolvePluginSourceDir(`${pluginsDir}/cache/${entry.marketplace}`, `./plugins/${pluginName}`);
+  }
+  return `${pluginsDir}/${name}`;
 }
 
 function renderPluginConfig(

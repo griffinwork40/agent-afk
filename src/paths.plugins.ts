@@ -23,25 +23,24 @@ export function getPluginsIndexPath(): string {
 }
 
 /**
- * Per-plugin writable data directory: `~/.afk/plugins/data/<sanitisedKey>/`.
+ * Per-plugin writable data directory: `~/.afk/plugin-data/<encodedKey>/`.
  *
  * This is AFK's equivalent of Claude Code's `CLAUDE_PLUGIN_DATA` env var — a
  * stable, plugin-private directory for logs, caches, and any persistent state
  * the plugin's hook scripts need to write.
  *
  * The `pluginKey` argument is the index key (e.g. `"my-plugin"` or
- * `"marketplace:my-plugin"`). Colons and other filesystem-unsafe characters
- * are replaced with `__` so the resulting directory name is unambiguous and
- * portable across POSIX and Windows. Keys that sanitise to `.`, `..`, or
- * empty are normalised to `__` to prevent directory traversal.
+ * `"marketplace:my-plugin"`). It is percent-encoded with a fixed prefix so the
+ * mapping is injective (`foo:bar` and `foo__bar` cannot collide) and the data
+ * namespace cannot overlap the installed-plugin namespace.
  *
- * The directory is NOT created here — it is created lazily (mode 0o700) by
- * `ensurePluginDataDir` in `src/agent/hooks/command-executor.ts` at hook-
- * dispatch time so callers that only need the path pay no I/O cost.
+ * The directory is NOT created here — it is created lazily (mode 0o700) by the
+ * hook executor at dispatch time so callers that only need the path pay no I/O
+ * cost.
  */
 export function getPluginDataDir(pluginKey: string): string {
-  const safe = pluginKey.replace(/[^A-Za-z0-9._-]+/g, '__') || '__';
-  return join(getPluginsDir(), 'data', /^\.{1,2}$/.test(safe) ? '__' : safe);
+  const safe = `p-${encodeURIComponent(pluginKey)}`;
+  return join(getAfkHome(), 'plugin-data', safe);
 }
 
 /**
