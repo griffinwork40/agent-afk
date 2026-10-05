@@ -76,6 +76,18 @@ function writePendingSource(filename: string): void {
   fs.writeFileSync(path.join(pendingDir(), filename), '{}', { mode: 0o600 });
 }
 
+/**
+ * Write an injection-ack marker to `delivered/acked/<filename>`, simulating
+ * a message that was successfully injected into a model turn. Receipts without
+ * an ack marker are retained by `pruneDeliveredReceipts` as potential crash
+ * residue (per Finding 3 / `UNACKED_RETENTION_MAX_AGE_MS`).
+ */
+function writeAckMarker(filename: string): void {
+  const ackedDir = path.join(deliveredDir(), 'acked');
+  fs.mkdirSync(ackedDir, { recursive: true });
+  fs.writeFileSync(path.join(ackedDir, filename), SESSION_ID, { mode: 0o600 });
+}
+
 // ---------------------------------------------------------------------------
 // Import the module under test. Dynamically imported so env isolation applies.
 // ---------------------------------------------------------------------------
@@ -137,7 +149,10 @@ describe('pruneDeliveredReceipts — old receipt pruned', () => {
 
     const nowMs = 10_000_000;
     const staleAge = DELIVERED_RECEIPT_MAX_AGE_MS + 1_000;
-    writeDeliveredReceipt('msg-stale', '2026-10-01T00:00:00.001Z', nowMs - staleAge);
+    const filename = writeDeliveredReceipt('msg-stale', '2026-10-01T00:00:00.001Z', nowMs - staleAge);
+    // Write ack marker: this receipt was successfully injected, so it is safe
+    // to prune once it exceeds the age threshold.
+    writeAckMarker(filename);
 
     const result = await pruneDeliveredReceipts({
       sessionId: SESSION_ID,
@@ -150,7 +165,9 @@ describe('pruneDeliveredReceipts — old receipt pruned', () => {
     expect(result.pruned).toBe(1);
     expect(result.skippedFresh).toBe(0);
     expect(result.skippedHasPending).toBe(0);
-    expect(fs.readdirSync(deliveredDir())).toHaveLength(0);
+    expect(result.skippedUnacked).toBe(0);
+    // Only the acked/ subdir remains (the receipt file was pruned).
+    expect(fs.readdirSync(deliveredDir()).filter(f => f !== 'acked')).toHaveLength(0);
   });
 });
 
@@ -222,8 +239,10 @@ describe('pruneDeliveredReceipts — mixed batch', () => {
     const staleAge = DELIVERED_RECEIPT_MAX_AGE_MS + 1_000;
     const freshAge = DELIVERED_RECEIPT_MAX_AGE_MS / 2;
 
-    // (1) stale + no pending source → should be pruned
-    writeDeliveredReceipt('msg-gone', '2026-10-01T00:00:00.010Z', nowMs - staleAge);
+    // (1) stale + acked + no pending source → should be pruned
+    const goneFilename = writeDeliveredReceipt('msg-gone', '2026-10-01T00:00:00.010Z', nowMs - staleAge);
+    // Write ack marker so the retention sweep treats this as safely delivered.
+    writeAckMarker(goneFilename);
 
     // (2) stale + has pending source → must be kept (claim-authority invariant)
     const pendingFilename = writeDeliveredReceipt(
@@ -245,8 +264,9 @@ describe('pruneDeliveredReceipts — mixed batch', () => {
     expect(result.pruned).toBe(1);
     expect(result.skippedHasPending).toBe(1);
     expect(result.skippedFresh).toBe(1);
+    expect(result.skippedUnacked).toBe(0);
 
-    const remaining = fs.readdirSync(deliveredDir()).sort();
+    const remaining = fs.readdirSync(deliveredDir()).filter(f => f !== 'acked').sort();
     expect(remaining).toHaveLength(2);
     // The pruned file is gone; the other two remain.
     expect(remaining.every((f) => !f.includes('msg-gone'))).toBe(true);

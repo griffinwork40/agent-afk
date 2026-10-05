@@ -213,7 +213,27 @@ export type SessionPhaseName =
   // dispatch or isError. A later daemon builtin (PR 3) counts these across
   // sessions and pushes a Telegram alert.
   // metadata: { tool, errorHead, errorCount, callCount }
-  | 'tool_degraded';
+  | 'tool_degraded'
+  // Stop-hook injectContext was returned on a one-shot surface (daemon/cron task,
+  // `afk chat`) that has no next user turn. The context is dropped — delivery
+  // requires a subsequent prompt, which never arrives. Emitted by the session-
+  // layer Stop dispatch (turn-stream-runner.ts) so the gap is visible in the
+  // trace. `metadata` carries `injectContextBytes` (byte length of the dropped
+  // string) and `surface` (the session's origin surface).
+  | 'stop_inject_dropped'
+  // A blocking Stop hook triggered a same-turn continuation round (issue #2714).
+  // Emitted once per continuation at the provider seam (turn-terminal.ts /
+  // openai turn-driver.ts) before the framework user message is pushed and the
+  // model loop re-runs. `metadata` carries `continuation` (1-based round index
+  // within the turn) and `reasonHead` (first ≤200 chars of the block reason,
+  // passed through redactSecrets). PURE OBSERVABILITY — the round already
+  // ran; this event makes the continuation visible in the trace.
+  | 'stop_hook_continuation'
+  // The per-turn same-turn continuation cap (AFK_STOP_HOOK_MAX_CONTINUATIONS)
+  // was reached; the turn ends normally without another model round.
+  // `metadata` carries `cap` (the configured ceiling value). Distinct from
+  // `stop_hook_continuation` — that fires per-round; this fires once at cap.
+  | 'stop_hook_cap_reached';
 
 export interface SessionPhasePayload {
   /** Which lifecycle milestone this record marks. */

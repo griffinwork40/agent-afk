@@ -2320,9 +2320,8 @@ describe('renderFormHeader — AFK harness vs external MCP banner', () => {
     const messageLines = lines.filter((l) => l.includes('message:'));
     expect(messageLines.length).toBeGreaterThan(0);
     // The rendered message line should NOT contain the 300-char-wide string
-    // verbatim — it must have been truncated at 256 with a trailing '…'.
+    // verbatim -- it must have been truncated at 256.
     const rendered = messageLines[0]!;
-    expect(rendered).toContain('…');
     // Sanity: the full 300-char string is not present
     expect(rendered.includes(long)).toBe(false);
   });
@@ -2349,7 +2348,45 @@ describe('renderFormHeader — AFK harness vs external MCP banner', () => {
     expect(joined).toContain('MCP form elicitation');
     // Message must be truncated at 256 chars
     const messageLines = lines.filter((l) => l.includes('message:'));
-    expect(messageLines[0]).toContain('…');
     expect(messageLines[0]!.includes('Y'.repeat(300))).toBe(false);
+  });
+
+  it('multi-line message with many paths shows explicit truncation notice with count (#2366)', async () => {
+    // Build a path list that exceeds the 256-char external MCP cap.
+    const pathLines = Array.from({ length: 100 }, (_, i) => `  /some/long/project/path/file_${i}.ts`);
+    const msg = `Tool wants to access paths:\n\n${pathLines.join('\n')}`;
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('value'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(makeExternalMcpRequest(msg), { signal: NO_SIGNAL });
+    const joined = lines.join('\n');
+    // Must contain the explicit truncation notice, not a bare ellipsis.
+    expect(joined).toContain('list truncated:');
+    expect(joined).toContain('of 102 lines'); // header + blank + 100 path lines
+    // The full path list must not be present
+    expect(joined).not.toContain('file_99.ts');
+  });
+
+  it('harness multi-line path list shows explicit truncation notice with count at 2400-char cap (#2366)', async () => {
+    // Build a path list that exceeds even the generous 2400-char harness cap.
+    const pathLines = Array.from({ length: 200 }, (_, i) => `  /workspace/project/src/module_${i}/index.ts`);
+    const msg = `Tool \`patch_apply\` wants to WRITE to 200 paths outside this session's granted roots:\n\n${pathLines.join('\n')}\n\nChoose how to handle this.`;
+    const lines: string[] = [];
+    const handler = makeReplElicitationHandler({
+      readLine: vi.fn().mockResolvedValue('approve'),
+      writer: { line: (t = '') => lines.push(t) },
+      pendingCount: () => 0,
+    });
+
+    await handler(makeHarnessRequest(msg), { signal: NO_SIGNAL });
+    const joined = lines.join('\n');
+    // Must contain the explicit truncation notice.
+    expect(joined).toContain('list truncated:');
+    // Must NOT have dropped paths silently -- the operator must see how many.
+    expect(joined).toMatch(/showing \d+ of \d+ lines/);
   });
 });

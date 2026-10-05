@@ -75,6 +75,18 @@ export const SessionPhaseNameSchema = z.enum([
   // (tool, errorHead) per session. See SessionPhaseName JSDoc in types.ts.
   // metadata: { tool, errorHead, errorCount, callCount }
   'tool_degraded',
+  // Stop-hook injectContext dropped on one-shot surfaces (no next user turn).
+  // See SessionPhaseName JSDoc in types.session-phase.ts for the full rationale.
+  'stop_inject_dropped',
+  // A blocking Stop hook triggered a same-turn continuation round. Emitted
+  // once per continuation. `metadata` carries `continuation` (1-based count)
+  // and `reasonHead` (first ≤200 chars of the blocking reason, passed through
+  // redactSecrets). See SessionPhaseName JSDoc in types.ts.
+  'stop_hook_continuation',
+  // The per-turn same-turn continuation cap was reached; the turn ends
+  // normally. `metadata` carries `cap` (the configured ceiling). See
+  // SessionPhaseName JSDoc in types.ts.
+  'stop_hook_cap_reached',
 ]);
 
 export const SessionPhasePayloadSchema = z.object({

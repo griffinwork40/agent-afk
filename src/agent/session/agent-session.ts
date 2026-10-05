@@ -52,6 +52,7 @@ import { QueryInputStream } from './input-iterable.js';
 import { LedgerLifecycle } from './ledger-lifecycle.js';
 import { PlanExitBridge } from './plan-exit-bridge.js';
 import type { ElicitationRequest } from '../types/sdk-types.js';
+import type { StopWiring } from '../types/session-types.js';
 import { resolveModelId } from './model-resolution.js';
 import { deriveOrigin, deriveActor } from './session-identity.js';
 import { scheduleTopLevelHousekeeping, wireAbortSignal } from './session-setup.js';
@@ -69,6 +70,7 @@ import * as compact from './session-compact.js';
 import * as ss from './session-send.js';
 import * as sc from './session-config.js';
 import { toModelInfo, toAgentInfo, toContextUsageResponse, toMcpServerStatus } from './provider-type-mappers.js';
+import { applyStopHookWiring } from './agent-session.stop-hook-wiring.js';
 
 
 export class AgentSession implements IAgentSession {
@@ -79,6 +81,7 @@ export class AgentSession implements IAgentSession {
    */
   private readonly ownedTraceWriter: TraceWriter | undefined;
   private config: AgentConfig;
+  private stopWiring: StopWiring | undefined;
   /**
    * Plan-mode-exit state machine: the pending implement-turn seed, the captured
    * pre-plan mode to restore, and the transient Shift+Tab ring-gesture memory.
@@ -253,6 +256,8 @@ export class AgentSession implements IAgentSession {
       getProviderQuery: () => this.providerQuery,
       getLedgerMetadata: () => this.stateManager.getSessionMetadata(),
       observeProviderEvent: (e) => this.planExit.planText.observe(e),
+      // Read lazily: surfaces call wireStopHook() after construction.
+      getStopWiring: () => this.stopWiring,
     });
 
     const initializer = new ProviderInitializer(
@@ -328,6 +333,20 @@ export class AgentSession implements IAgentSession {
 
   setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
     ss.setBeforeNextRound(cb, this.makeSendDeps());
+  }
+
+  /**
+   * Wire (or re-wire) this surface's Stop-hook delivery callbacks. Until a
+   * surface calls this, the session layer does not dispatch Stop at all.
+   * Read on every turn end, so calling it after construction is safe.
+   *
+   * Also wires the provider-side stop-hook seam (issue #2714) so blocking Stop
+   * hooks can trigger same-turn continuations. Body extracted to
+   * {@link agent-session.stop-hook-wiring} to keep this file under the ceiling.
+   */
+  wireStopHook(wiring: StopWiring): void {
+    this.stopWiring = wiring;
+    applyStopHookWiring(this.stopWiring, () => this.config, () => this.stateManager.getSessionId(), () => this.abortController.signal, () => this.conversationHistory, () => this.runner.getActiveTurnToolEvents(), this.providerQuery);
   }
 
   /**

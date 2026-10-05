@@ -11,6 +11,99 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.295.6] - 2026-10-05
+
+### Added
+- record thumbs reactions as /good and /bad feedback (#2646) (90c9bb06)
+
+### Fixed
+- explicit truncation notice with line count on both Telegram and REPL (#2642) (0fb04855)
+- render the skill identity preview once per dispatch (#2915) (9bc80faa)
+
+## [5.295.5] - 2026-10-05
+
+### Changed
+- drop the spinner to 4 Hz after a 2 s warm-up and skip identical frames (#2946) (1e43fa75)
+
+## [5.295.4] - 2026-10-05
+
+### Fixed
+- recover claimed-but-uninjected peer envelopes after crash (#2924) (4c199481)
+
+## [5.295.3] - 2026-10-05
+
+### Added
+- blocking Stop hook continues the turn with a hard cap (#2740) (082b7609)
+
+### Fixed
+- introduce parentCredential to atomically pair key+sourceModel (#2928) (86ebeab6)
+- preserve body text when annotating; strip dangling label fragments (#2921) (cec37cf8)
+
+### Changed
+- rebuild parseSelfReport on parseTerminalState (#2922) (23b9194e)
+
+## [5.295.2] - 2026-10-05
+
+### Fixed
+- anchor breaking-change footer grep to line start (#2918) (598406db)
+- unref poller and exit on stdin close in test-server-dynamic fixture (#2917) (68e536a7)
+- pick most-representative verb for mixed parallel tool waves (#2920) (2a87e812)
+
+## [5.295.1] - 2026-10-04
+
+### Fixed
+- root session dirs at /tmp on darwin to fix sun_path EINVAL (#2942) (aa759578)
+- patch prod-path SSRF advisories (fast-uri, MCP SDK stack) (#2943) (92e65c4c)
+
+## [5.295.0] - 2026-10-04
+
+### Added
+- fire Stop on every top-level surface from the session layer (#2713) (ab6a3bc7)
+
+## [5.294.0] - 2026-10-04
+
+### Added
+- hint that a queued message stops a running wait_for (#2926) (58d369d6)
+
+### Fixed
+- add subagent PR detection (gap 6) and refactor detection to shared module (#2925) (634be66d)
+- surface Responses-API overload shapes as retryable errors (#2923) (aa724051)
+- tell the model its timeout limit and when a value was clamped (#2927) (d8c08dc1)
+
+### Changed
+- make the dynamic MCP fixture exit on stdin EOF (removes 10s vitest teardown stall) (#2930) (9c899d20)
+
+## [5.293.1] - 2026-10-04
+
+### Added
+- detach in-flight compose with Ctrl+B (#2746) (5b6e5510)
+
+### Fixed
+- skip WSL bash.exe in findGitBashOnWindows; derive from git.exe (#2763) (4deddfe0)
+- correct stale delivery-timing text and add sender rules (#2907) (616a9a05)
+
+### Changed
+- remove internal @deprecated items (#2748) (9d2cf2f3)
+
+## [5.293.0] - 2026-10-04
+
+### Fixed
+- SIGTERM tracked stdio servers at process exit so stubborn servers are never orphaned (#2931) (7f904dff)
+- wire DetachableToolRegistry at REPL bootstrap so Ctrl+B works on bash (#2753) (26064ba9)
+
+### Changed
+- regenerate env-registry after per-session TMPDIR change (#2929) (a57839af)
+- regenerate env-registry after #2747 merge (212 vars) (#2916) (8c1ab0ea)
+
+## [5.292.3] - 2026-10-04
+
+### Added
+- per-session and per-subagent private TMPDIR for spawned shells (#2747) (824f383d)
+
+### Fixed
+- settle post-detach deliver() on bounded timer when close never arrives (#2743) (7366139d)
+- newest explicit feedback vote wins (#2751) (00ccaa24)
+
 ## [5.292.2] - 2026-10-04
 
 ### Fixed
