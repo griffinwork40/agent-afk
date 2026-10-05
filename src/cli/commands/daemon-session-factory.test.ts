@@ -15,8 +15,9 @@
  * unknown-cast — the same pattern used in `parse-provider-agent-tool.test.ts`.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
+import { rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildDaemonSessionFactory, type BuildDaemonSessionFactoryOpts, type DaemonSessionFactory } from './daemon-session-factory.js';
@@ -344,5 +345,106 @@ describe('buildDaemonSessionFactory — per-task cwd wiring', () => {
       expect((exec as Ctx).ctx?.parentSession?.messageJournal).toBe(session.messageJournal);
     }
     void session.close().catch(() => undefined);
+  });
+});
+
+describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
+  // Verifies AFK_MAX_BUDGET_USD is honored by daemon sessions so the budget
+  // knob is not silently ignored on unattended surfaces.
+  let tmpAfkHome: string;
+
+  beforeAll(() => {
+    tmpAfkHome = mkdtempSync(join(tmpdir(), 'dsf-budget-'));
+    process.env['AFK_HOME'] = tmpAfkHome;
+  });
+
+  afterAll(async () => {
+    // Close all SQLite handles (kv.db, memory.db) opened by factory.dispose()
+    // and closeStore() BEFORE removing the temp dir. On Windows an open handle
+    // causes rmSync / fs.rm to fail with EBUSY.
+    await releaseOwnedHandles();
+    delete process.env['AFK_HOME'];
+    // Belt-and-braces: retries cover any residual async flush on Windows.
+    await rm(tmpAfkHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  it('forwards config.maxBudgetUsd when already set (e.g. by session-spawn.ts)', () => {
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig({ maxBudgetUsd: 7.5 })));
+    const internals = session as unknown as { config?: AgentConfig };
+    expect(internals.config?.maxBudgetUsd).toBe(7.5);
+    void session.close().catch(() => undefined);
+  });
+
+  it('reads AFK_MAX_BUDGET_USD from env when config.maxBudgetUsd is absent', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '3.00';
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBe(3);
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is unset (uncapped)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      delete process.env[key];
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+    } finally {
+      if (original !== undefined) process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is empty string (not a $0 hard-stop)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '';
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined and warns when AFK_MAX_BUDGET_USD is malformed (does not throw)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env[key] = 'unlimited';
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      // Must not throw even with a malformed env value
+      session = trackSession(factory(makeConfig()));
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+      // A warning must have been emitted
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+      vi.restoreAllMocks();
+    }
   });
 });

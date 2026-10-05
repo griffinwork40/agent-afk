@@ -68,6 +68,8 @@ vi.mock('../shared-helpers.js', () => ({
   getDefaultSubagentModel: vi.fn(() => 'sonnet'),
   // Opt-in top-level tool-round ceiling reader; undefined = unlimited (default).
   getMaxToolUseIterations: vi.fn(() => undefined),
+  // Opt-in budget cap; undefined = uncapped (default, AFK_MAX_BUDGET_USD unset).
+  getMaxBudgetUsd: vi.fn(() => undefined),
   activateDumpPrompt: vi.fn(),
 }));
 

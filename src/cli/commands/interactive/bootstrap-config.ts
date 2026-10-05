@@ -2,7 +2,7 @@ import { unconfiguredSlotError } from '../../../agent/session/model-slots.js';
 import type { ThinkingConfig, EffortLevel, AgentConfig } from '../../../agent/types.js';
 import {
   parseThinking, parseEffort, parseMaxOutputTokens, getThinking, getEffort,
-  getMaxOutputTokens, getMaxToolUseIterations, resolveBaseSystemPrompt,
+  getMaxOutputTokens, getMaxToolUseIterations, getMaxBudgetUsd, resolveBaseSystemPrompt,
 } from '../../shared-helpers.js';
 import { loadConfig, type CliConfig } from '../../config.js';
 import { assembleSystemPrompt } from '../../../agent/routing-directive.js';
@@ -21,6 +21,8 @@ export interface BootstrapConfig {
   effort: EffortLevel | undefined;
   maxOutputTokens: number | undefined;
   maxToolUseIterations: number | undefined;
+  /** Session-wide USD budget ceiling from `AFK_MAX_BUDGET_USD`. `undefined` = uncapped. */
+  maxBudgetUsd: number | undefined;
   basePrompt: string | undefined;
   systemPrompt: string | undefined;
   systemPromptSource: string | undefined;
@@ -73,6 +75,10 @@ export function resolveBootstrapConfig(
   // Opt-in top-level tool-use-round ceiling. No CLI flag exists, so this is the
   // env default only (unset/<=0 → undefined → unlimited; no behavior change).
   const maxToolUseIterations = getMaxToolUseIterations();
+  // Session-wide USD budget ceiling. No CLI flag on the REPL, so this is the
+  // env default only (AFK_MAX_BUDGET_USD unset → undefined → uncapped; no
+  // behavior change for operators who have not set the variable).
+  const maxBudgetUsd = getMaxBudgetUsd();
 
   // System-prompt layering: the framework base (`system-prompt.md`)
   // is unconditional; the operator overlay (env → afk.config.json → AFK.md)
@@ -93,6 +99,7 @@ export function resolveBootstrapConfig(
     effort,
     maxOutputTokens,
     maxToolUseIterations,
+    maxBudgetUsd,
     basePrompt,
     systemPrompt,
     systemPromptSource,

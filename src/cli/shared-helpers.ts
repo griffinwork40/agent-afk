@@ -192,9 +192,14 @@ export function getEffort(): EffortLevel | undefined {
 }
 
 /**
- * Parse a USD budget value from a CLI flag or env var. Accepts positive or
- * zero numbers (zero is a meaningful hard-stop sentinel — every dollar is
- * over budget). Rejects negatives, non-numeric strings, and NaN.
+ * Parse a USD budget value from a CLI flag. Accepts positive or zero numbers
+ * (zero is a meaningful hard-stop sentinel — every dollar is over budget).
+ * Rejects negatives, non-numeric strings, and NaN.
+ *
+ * Intended for CLI flag values supplied by the user at the command line —
+ * throws on any invalid input so the CLI can surface a clear error message.
+ * For env-var reads (where a malformed value should warn and fall back to
+ * `undefined` rather than crash the process), use {@link parseBudgetEnv}.
  *
  * The returned number is fed to the SDK as `options.maxBudgetUsd` /
  * `options.taskBudget` — see `buildQueryOptions`.
@@ -215,11 +220,51 @@ export function parseBudget(raw: string | undefined): number | undefined {
 }
 
 /**
+ * Parse a USD budget value from an environment variable. Safe variant of
+ * {@link parseBudget} designed for env-var reads where a malformed value must
+ * never crash the process (REPL, Telegram, daemon, daemon-session-factory).
+ *
+ * Differences from `parseBudget`:
+ *   - Empty string or whitespace-only: treated as **unset** → returns `undefined`
+ *     (spec: `AFK_MAX_BUDGET_USD=` must not act as a $0 hard-stop).
+ *   - Malformed / negative / NaN: emits a `console.warn` with context and
+ *     returns `undefined` (uncapped) instead of throwing.
+ *   - `undefined` input: returns `undefined` (unchanged).
+ *   - Valid non-negative number: returns the parsed value exactly as `parseBudget` would.
+ */
+export function parseBudgetEnv(raw: string | undefined, varName: string): number | undefined {
+  if (raw === undefined) return undefined;
+  // Treat empty / whitespace-only as unset — `AFK_MAX_BUDGET_USD=` must not
+  // be a $0 hard-stop; the operator just cleared the variable.
+  if (raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    console.warn(
+      `[afk] ${varName}=${JSON.stringify(raw)} is not a valid number — ignoring (budget uncapped). ` +
+      `Set ${varName} to a non-negative number or leave it unset.`,
+    );
+    return undefined;
+  }
+  if (parsed < 0) {
+    console.warn(
+      `[afk] ${varName}=${JSON.stringify(raw)} is negative — ignoring (budget uncapped). ` +
+      `Set ${varName} to a non-negative number or leave it unset.`,
+    );
+    return undefined;
+  }
+  return parsed;
+}
+
+/**
  * Read session-wide budget ceiling from environment.
- * Surfaces any parse error the caller can translate into a friendly message.
+ *
+ * Uses the safe env-var parser: empty/whitespace → `undefined` (uncapped),
+ * malformed → warns once to stderr and returns `undefined` (uncapped). Never
+ * throws, so REPL, Telegram, daemon, and daemon-session-factory startups are
+ * not aborted by a stale or misconfigured `AFK_MAX_BUDGET_USD`.
  */
 export function getMaxBudgetUsd(): number | undefined {
-  return parseBudget(env.AFK_MAX_BUDGET_USD);
+  return parseBudgetEnv(env.AFK_MAX_BUDGET_USD, 'AFK_MAX_BUDGET_USD');
 }
 
 /** Read per-task budget hint from environment. */
