@@ -103,6 +103,28 @@ describe('sweepMemoryGc — disabled by default', () => {
 });
 
 // ---------------------------------------------------------------------------
+// AFK_MEMORY_GC_MIN_AGE_DAYS env path
+// ---------------------------------------------------------------------------
+
+describe('sweepMemoryGc — AFK_MEMORY_GC_MIN_AGE_DAYS env override', () => {
+  it('uses AFK_MEMORY_GC_MIN_AGE_DAYS when no options.minAgeDays is given', async () => {
+    // Set a very short age threshold via env.
+    vi.stubEnv('AFK_MEMORY_GC_MIN_AGE_DAYS', '5');
+
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Env-driven GC threshold test.',
+      source_surface: 'cli',
+    });
+    // Backdate to 10 days ago — older than env threshold of 5.
+    backdateFactSync(id, daysAgo(10));
+
+    const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
+    expect(result.archived).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Eligibility selection
 // ---------------------------------------------------------------------------
 
@@ -309,7 +331,7 @@ describe('sweepMemoryGc — throttle: at most once per interval', () => {
 // ---------------------------------------------------------------------------
 
 describe('sweepMemoryGc — never throws', () => {
-  it('returns a zero result when the DB does not exist (no-db)', async () => {
+  it('returns skipped with skipReason=no-db when the DB does not exist', async () => {
     const emptyDir = join(
       tmpdir(),
       `afk-mem-gc-nodb-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -317,7 +339,8 @@ describe('sweepMemoryGc — never throws', () => {
     mkdirSync(emptyDir, { recursive: true });
     try {
       const result = await sweepMemoryGc({ memoryDir: emptyDir, force: true });
-      // Must NOT throw; zero result or 'no-db' skip are both fine.
+      expect(result.skipped).toBe(true);
+      expect(result.skipReason).toBe('no-db');
       expect(result.archived).toBe(0);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
@@ -331,6 +354,24 @@ describe('sweepMemoryGc — never throws', () => {
         force: true,
       }),
     ).resolves.toBeDefined();
+  });
+
+  it('populates the error field when the DB is corrupt', async () => {
+    const corruptDir = join(
+      tmpdir(),
+      `afk-mem-gc-corrupt-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(corruptDir, { recursive: true });
+    // Write invalid data as memory.db — better-sqlite3 will reject it.
+    writeFileSync(join(corruptDir, 'memory.db'), 'not a sqlite database');
+    try {
+      const result = await sweepMemoryGc({ memoryDir: corruptDir, force: true });
+      expect(result.archived).toBe(0);
+      expect(result.error).toBeDefined();
+      expect(typeof result.error).toBe('string');
+    } finally {
+      rmSync(corruptDir, { recursive: true, force: true });
+    }
   });
 });
 

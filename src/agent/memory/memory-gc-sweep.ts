@@ -35,6 +35,7 @@
  */
 
 import Database from 'better-sqlite3';
+import { existsSync } from 'node:fs';
 import { stat, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { env } from '../../config/env.js';
@@ -121,6 +122,8 @@ export interface MemoryGcSweepResult {
   candidates: number;
   /** Number of facts soft-deleted (superseded_by set to GC_SUPERSEDED_SENTINEL). */
   archived: number;
+  /** Set when the sweep encountered an error (swallowed to never fail session start). */
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +198,14 @@ export async function sweepMemoryGc(
 
     const { placeholders, values: excludedValues } = buildExcludedFilter();
 
-    // Open read-write; fail cleanly if DB doesn't exist yet.
+    // Fail cleanly if the DB doesn't exist yet — without fileMustExist the
+    // constructor silently creates an empty file, making this noop path
+    // unreachable and leaving behind an artifact.
+    if (!existsSync(dbPath)) return noop('no-db');
+
     let db: InstanceType<typeof Database>;
     try {
-      db = new Database(dbPath);
+      db = new Database(dbPath, { fileMustExist: true });
     } catch {
       return noop('no-db');
     }
@@ -206,53 +213,36 @@ export async function sweepMemoryGc(
     try {
       db.pragma('busy_timeout = 5000');
 
-      // Identify eligible facts (read pass).
-      const candidates = db
+      // Single-pass soft-delete: UPDATE directly with the eligibility predicate.
+      // A separate SELECT + UPDATE would be redundant and can diverge under
+      // concurrent access (the SELECT snapshot could include rows that another
+      // process superseded between the read and write).
+      const info = db
         .prepare(
-          `SELECT id
-             FROM facts
+          `UPDATE facts
+              SET superseded_by = id
             WHERE access_count = 0
               AND created_at < ?
               AND superseded_by IS NULL
-              AND category NOT IN (${placeholders})
-            ORDER BY created_at ASC`,
+              AND category NOT IN (${placeholders})`,
         )
-        .all(cutoff, ...excludedValues) as Array<{ id: number }>;
+        .run(cutoff, ...excludedValues);
 
-      if (candidates.length === 0) {
-        await touchStamp(dir, now);
-        return { skipped: false, candidates: 0, archived: 0 };
-      }
-
-      // Soft-delete pass: mark each candidate as self-referential (superseded_by = id).
-      // Self-referencing passes the REFERENCES facts(id) FK constraint enforced by
-      // better-sqlite3 by default, yet is unambiguous as a GC sentinel (no normal
-      // supersede chain ever produces superseded_by = id). Wrapped in a transaction
-      // so either all rows are archived or none are.
-      const archiveStmt = db.prepare(
-        'UPDATE facts SET superseded_by = id WHERE id = ? AND superseded_by IS NULL',
-      );
-      const archiveMany = db.transaction(
-        (rows: Array<{ id: number }>) => {
-          let count = 0;
-          for (const row of rows) {
-            const info = archiveStmt.run(row.id);
-            count += info.changes;
-          }
-          return count;
-        },
-      );
-
-      const archived = archiveMany(candidates) as number;
+      const archived = info.changes;
 
       await touchStamp(dir, now);
-      return { skipped: false, candidates: candidates.length, archived };
+      return { skipped: false, candidates: archived, archived };
     } finally {
       db.close();
     }
-  } catch {
+  } catch (err) {
     // Swallow all errors — GC must never fail session construction.
-    return { skipped: false, candidates: 0, archived: 0 };
+    return {
+      skipped: false,
+      candidates: 0,
+      archived: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
