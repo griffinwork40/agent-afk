@@ -20,14 +20,19 @@ vi.mock('../../../agent/subscription-usage.js', () => ({
   fetchSubscriptionUsage: vi.fn(),
 }));
 
-// /history delegates to replayTurns — spy on it so tests can assert call args.
-// vi.mock factories are hoisted to the top of the file, so we use vi.hoisted()
-// to lift the stub declaration above the hoist boundary as well.
-const { mockReplayTurns } = vi.hoisted(() => ({
+// /history delegates to replayTurns (sidecar path) and replayJournal
+// (journal-first path) — spy on both so tests can assert branch selection and
+// call ordering.  vi.mock factories are hoisted to the top of the file, so we
+// use vi.hoisted() to lift the stub declarations above the hoist boundary too.
+const { mockReplayTurns, mockReplayJournal } = vi.hoisted(() => ({
   mockReplayTurns: vi.fn<typeof import('../../commands/interactive/turn-record-renderer.replay.js').replayTurns>(),
+  mockReplayJournal: vi.fn<typeof import('../../commands/interactive/turn-record-renderer.replay.journal.js').replayJournal>(),
 }));
 vi.mock('../../commands/interactive/turn-record-renderer.replay.js', () => ({
   replayTurns: mockReplayTurns,
+}));
+vi.mock('../../commands/interactive/turn-record-renderer.replay.journal.js', () => ({
+  replayJournal: mockReplayJournal,
 }));
 
 import { infoCommands } from './info.js';
@@ -326,7 +331,13 @@ const historyCmd = infoCommands.find((c) => c.name === '/history')!;
 describe('/history', () => {
   beforeEach(() => {
     mockReplayTurns.mockReset();
+    // Default: journal has nothing → fall through to sidecar path, so the
+    // existing sidecar tests work without changes.
+    mockReplayJournal.mockReset();
+    mockReplayJournal.mockResolvedValue(null);
   });
+
+  // ── sidecar-path tests (journal returns null → sidecar fallback) ──────────
 
   it('shows an info message when there are no turns', async () => {
     const { ctx, lines } = makeCtx(false);
@@ -365,5 +376,108 @@ describe('/history', () => {
     expect(mockReplayTurns).toHaveBeenCalledOnce();
     const [, , calledOpts] = mockReplayTurns.mock.calls[0]!;
     expect(calledOpts?.maxTurns).toBe(2);
+  });
+
+  // ── journal-first path tests ───────────────────────────────────────────────
+
+  it('uses the journal when replayJournal returns a count, skipping replayTurns', async () => {
+    // Journal has 3 turns rendered — sidecar must not be consulted.
+    mockReplayJournal.mockResolvedValue(3);
+    const { ctx } = makeCtx(false);
+    const turns = [
+      { user: 'hello', assistant: 'hi' },
+      { user: 'question', assistant: 'answer' },
+      { user: 'bye', assistant: 'farewell' },
+    ] as import('../types.js').TurnRecord[];
+    ctx.stats.turns = turns;
+    await historyCmd.handler(ctx, '');
+    expect(mockReplayJournal).toHaveBeenCalledOnce();
+    expect(mockReplayTurns).not.toHaveBeenCalled();
+  });
+
+  it('forwards maxTurns to replayJournal when a numeric arg is given', async () => {
+    mockReplayJournal.mockResolvedValue(2);
+    const { ctx } = makeCtx(false);
+    ctx.stats.turns = [
+      { user: 'a', assistant: '1' },
+      { user: 'b', assistant: '2' },
+      { user: 'c', assistant: '3' },
+    ] as import('../types.js').TurnRecord[];
+    await historyCmd.handler(ctx, '2');
+    expect(mockReplayJournal).toHaveBeenCalledOnce();
+    const [, , opts] = mockReplayJournal.mock.calls[0]!;
+    expect(opts?.maxTurns).toBe(2);
+    expect(mockReplayTurns).not.toHaveBeenCalled();
+  });
+
+  it('passes sidecar user texts as hints to replayJournal', async () => {
+    mockReplayJournal.mockResolvedValue(2);
+    const { ctx } = makeCtx(false);
+    ctx.stats.turns = [
+      { user: 'hello', assistant: 'hi' },
+      { user: 'bye', assistant: 'farewell' },
+    ] as import('../types.js').TurnRecord[];
+    await historyCmd.handler(ctx, '');
+    expect(mockReplayJournal).toHaveBeenCalledOnce();
+    const [, , opts] = mockReplayJournal.mock.calls[0]!;
+    expect(opts?.hints).toEqual(['hello', 'bye']);
+  });
+
+  // ── flush-before-read ordering ────────────────────────────────────────────
+
+  it('flushes the live journal before calling replayJournal', async () => {
+    // Arrange: flush resolves asynchronously; we track call order.
+    const order: string[] = [];
+    let releaseFlush!: () => void;
+    const flush = vi.fn(
+      () => new Promise<void>((resolve) => { releaseFlush = () => { order.push('flushed'); resolve(); }; }),
+    );
+    mockReplayJournal.mockImplementation(() => { order.push('replayJournal'); return Promise.resolve(1); });
+
+    const { ctx } = makeCtx(false);
+    (ctx.session.current as unknown as { messageJournal: unknown }).messageJournal = { flush };
+
+    const done = historyCmd.handler(ctx, '');
+    // Yield once — replayJournal must NOT have been called yet (still awaiting flush).
+    await Promise.resolve();
+    expect(mockReplayJournal).not.toHaveBeenCalled();
+
+    releaseFlush();
+    await done;
+
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['flushed', 'replayJournal']);
+  });
+
+  it('still replays when the flush rejects (failed flush is non-fatal)', async () => {
+    mockReplayJournal.mockResolvedValue(2);
+    const { ctx } = makeCtx(false);
+    (ctx.session.current as unknown as { messageJournal: unknown }).messageJournal = {
+      flush: () => Promise.reject(new Error('disk error')),
+    };
+    ctx.stats.turns = [
+      { user: 'a', assistant: '1' },
+      { user: 'b', assistant: '2' },
+    ] as import('../types.js').TurnRecord[];
+
+    await expect(historyCmd.handler(ctx, '')).resolves.toBe('continue');
+    expect(mockReplayJournal).toHaveBeenCalledOnce();
+    expect(mockReplayTurns).not.toHaveBeenCalled();
+  });
+
+  // ── journal has content but turns[] is empty (c0251df0 regression guard) ──
+
+  it('does NOT print "No conversation history yet" when journal has content but turns[] is empty', async () => {
+    // Reproduces the pre-fix behaviour: a resumed session may have journal
+    // content but an empty sidecar turns[] (the sidecar only tracks turns from
+    // the current session start, not replayed history). The journal-first path
+    // must satisfy the command — no fallback to the empty-turns message.
+    mockReplayJournal.mockResolvedValue(5);
+    const { ctx, lines } = makeCtx(false);
+    ctx.stats.turns = []; // sidecar is empty, journal has 5 turns
+    await historyCmd.handler(ctx, '');
+    expect(lines.join('\n')).not.toMatch(/No conversation history yet/);
+    expect(mockReplayJournal).toHaveBeenCalledOnce();
+    expect(mockReplayTurns).not.toHaveBeenCalled();
   });
 });
