@@ -162,5 +162,23 @@ export function finalizeTelegramSession(
   seedPersistedGrants(provider);
   wiring.bindSession(session);
 
+  // Wire session-layer Stop dispatch. Telegram sessions are persistent per-chat
+  // so `getHasNextTurn` is always true — the next user message delivers the
+  // correction. `onStopInjectContext` queues the string via
+  // `queueFrameworkContext` so it rides the next outbound user turn, mirroring
+  // the REPL's `pendingStopInjection` delivery path.
+  //
+  // Permission mode: Telegram sessions run in 'default' or 'autonomous' (AFK)
+  // depending on whether `/afk on` is active. The terminal-state gate is
+  // autonomous-only, so it fires only when AFK mode is on. Shell hooks are off
+  // unless `enableShellHooks` is true in afk.config.json.
+  session.wireStopHook?.({
+    getHasNextTurn: () => true,
+    onStopInjectContext: (text) => { session.queueFrameworkContext(text); },
+    // Blocked/timeout notices: Telegram does not render dim lines; swallow silently.
+    onStopBlocked: () => undefined,
+    onStopTimeout: () => undefined,
+  });
+
   return session;
 }

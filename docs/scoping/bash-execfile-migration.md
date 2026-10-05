@@ -1,6 +1,6 @@
 # Scoping: bash tool `execFile` migration (C4)
 
-Status: **Scoping only — no implementation.**
+Status: **Option 3 (remove `warnIfBypassPermissions` entirely) implemented in #2716.**
 Prepared: 2026-09-30
 
 ---
@@ -64,7 +64,7 @@ resolution; C4 work items therefore have their primary deliverable behind them.
 
 **Key file:line citations:**
 - `src/agent/tools/handlers/bash.ts:90–96` — JSDoc describing the gap and deferral
-- `src/agent/tools/handlers/bash.ts:126–134` — `warnIfBypassPermissions()` emitting the C4 warning
+- `src/agent/tools/handlers/bash.ts` — `warnIfBypassPermissions()` removed in #2716 (Option 3)
 - `src/agent/tools/handlers/bash.ts:169` — path-escape advisory warn
 - `docs/decisions/0001-bash-tool-path-containment.md:5` — C4 canonical reference
 - `docs/decisions/0001-bash-tool-path-containment.md:66` — "execFile/sandbox remains deferred"
@@ -328,28 +328,14 @@ model's contract is `execFile(shell, ['-c', command])` — which is identical
 in security properties to `spawn(command, { shell: true })`.** A "real"
 `execFile` with argv-only parsing would break virtually all agent commands.
 
-### Recommended first PR
+### First PR (implemented)
 
-**Title:** `fix(bash): correct misleading execFile warning copy (C4 follow-on)`
+**PR #2716:** `fix(bash): remove stale bypass-mode execFile warning`
 
-**Scope:**
-1. `src/agent/tools/handlers/bash.ts:129–134` — rewrite `warnIfBypassPermissions` body  
-   - Remove the sentence "Migrate to execFile to eliminate this risk"  
-   - Replace with accurate text:  
-     "Shell metacharacters are interpreted without confirmation.  
-     Use `bash-restriction-hook` for path-based gating, or run inside  
-     an OS-level sandbox (see `docs/decisions/0001-bash-tool-path-containment.md`)  
-     for hard containment."
-2. `src/agent/tools/handlers/bash.ts:90–96` JSDoc — replace "(tracked C4)" with  
-   "(see `docs/decisions/0001-bash-tool-path-containment.md`; issue #354 closed)"  
-   to remove the dangling tracker reference
-3. Optional: remove or demote `warnIfBypassPermissions` entirely, since  
-   `bypassPermissions` is the **default** CLI mode and the one-time warn fires  
-   for every standard user session — adding noise without actionable guidance
-
-**Files touched:** `bash.ts` only. No test changes. No gate changes.
-**Risk:** Zero — comment/string changes only.
-**Review:** ~1 hour.
+**Implemented Option 3:** `warnIfBypassPermissions()` removed entirely from
+`bash.ts`. `bypassPermissions` is the default CLI mode, so the one-time warn
+was firing for all standard user sessions without actionable guidance.
+Unresolved question 1 is resolved: the warning was removed.
 
 ### Sequenced follow-ons (priority order)
 
@@ -387,9 +373,8 @@ The threat model assessment follows directly from the ADR and issue #354.
 
 ## Unresolved questions
 
-1. Should `warnIfBypassPermissions` be entirely removed (bypass is the default
-   mode — the warning fires for all standard users) or kept with accurate copy?
-   This depends on whether the team wants any runtime signal at all.
+1. ~~Should `warnIfBypassPermissions` be entirely removed?~~ Resolved by #2716:
+   removed entirely (Option 3).
 2. Does the team want to track the OS-sandbox option formally in a new issue,
    or leave it as a docs reference?
 

@@ -60,6 +60,18 @@ export interface PtyExpect {
   /** Substrings that MUST NOT appear anywhere in the buffer. */
   absent?: string[];
   /**
+   * Content-hug only. Discount the one sanctioned duplicate before the
+   * exactlyOnce / absent / order checks: rows a tall overlay covered are in
+   * scrollback AND re-shown on screen after the collapse (archived prefix,
+   * src/cli/terminal-compositor.band-archived-prefix.ts), so the longest
+   * scrollback TAIL equal to the viewport's FIRST rows is counted once. A
+   * duplicate anywhere else (inside scrollback, or not at the seam) still
+   * fails. A real pty cannot expose compositor state, so this is the
+   * structural form of src/cli/_lib/testing/scrollback-seam.ts, which unit
+   * tests use to pin the overlap to the compositor-reported row count.
+   */
+  seamOverlap?: boolean;
+  /**
    * Max run of consecutive blank rows between the first content row and the
    * live frame in the viewport. One blank is the legit rhythm separator; a
    * larger run is the "void" regression. Default (undefined) = not checked.
@@ -254,6 +266,20 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
       maxViewportBlankRun: 1,
     },
+    // content-hug: rows covered by the held overlay are archived AND re-shown
+    // after it clears (archived prefix), so they also sit at the scrollback
+    // tail; seamOverlap discounts exactly that overlap.
+    hugExpect: {
+      inScrollback: ['TOOL_OUTPUT_00', 'TOOL_OUTPUT_01'],
+      inViewport: ['Done (114 tools)'],
+      seamOverlap: true,
+      exactlyOnce: [
+        'TOOL_OUTPUT_00', 'TOOL_OUTPUT_05', 'TOOL_OUTPUT_11', 'TOOL_OUTPUT_17',
+        'Done (114 tools)', 'STATUSMODELXYZ',
+      ],
+      contentAnchors: ['TOOL_OUTPUT_17', 'Done (114 tools)'],
+      maxViewportBlankRun: 1,
+    },
   },
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -295,6 +321,24 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       ],
       maxViewportBlankRun: 1,
       order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-06', 'BODY-TAIL-ROW']],
+    },
+    // content-hug archives rows the tall overlay covers as soon as they are
+    // covered (no history hole mid-turn) and RETAINS them as the archived
+    // prefix, so the collapse re-shows the whole report on screen (no blank
+    // gap below the prompt). The covered rows are therefore also at the tail
+    // of scrollback until new output displaces them: seamOverlap discounts
+    // exactly that overlap; everything else stays exactly-once, in order.
+    hugExpect: {
+      inViewport: ['HEADER-MARKER', 'PROSE-01', 'PROSE-06', 'BODY-TAIL-ROW', 'pass cwd to scheduler'],
+      seamOverlap: true,
+      exactlyOnce: [
+        'HEADER-MARKER', 'PROSE-01', 'PROSE-03', 'PROSE-06',
+        'BODY-TAIL-ROW', 'pass cwd to scheduler', 'thread cwd through daemon',
+        'Nature',
+      ],
+      maxViewportBlankRun: 1,
+      contentAnchors: ['BODY-TAIL-ROW'],
+      order: [['HEADER-MARKER', 'PROSE-01'], ['PROSE-01', 'PROSE-06'], ['PROSE-06', 'BODY-TAIL-ROW']],
     },
   },
 
@@ -663,20 +707,10 @@ export const SCENARIOS: Record<string, PtyScenario> = {
       // overflow)` (physical rows) makes this measure 4 and fail.
       logicalSpan: { from: 'LOGSTART', to: 'LOGEND', maxNonWrappedRows: 1 },
     },
-    // content-hug hides growth-covered rows as pending rather than evicting
-    // them (terminal-compositor.content-hug.ts), so the eviction precondition
-    // never occurs: the whole run stays on screen, exactly once, in order, with
-    // no blank void before the frame. (On-screen band rows ARE rejoined on a
-    // widen since #2228 fixed reflowBandSplit to re-wrap from logicalText when
-    // meta is present; the rejoin property is still asserted in scrollback here
-    // because this scenario's line reaches scrollback via eviction.)
-    hugExpect: {
-      inViewport: ['LOGSTART', 'FILLER_09'],
-      exactlyOnce: ['LOGSTART', 'LOGEND', 'FILLER_00', 'FILLER_09'],
-      order: [['LOGEND', 'FILLER_00'], ['FILLER_00', 'FILLER_09']],
-      maxViewportBlankRun: 0,
-      contentAnchors: ['FILLER_09'],
-    },
+    // No hugExpect: since the 2026-10-02 no-history-hole change content-hug
+    // evicts growth-covered rows to scrollback exactly like bottom-pinned (it
+    // used to hide them as pending), so both modes share the eviction
+    // precondition and the soft-wrap rejoin assertion above.
   },
 
   // ─────────────────────────────────────────────────────────────────────────

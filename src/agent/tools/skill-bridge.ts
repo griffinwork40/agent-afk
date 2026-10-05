@@ -53,6 +53,7 @@ import {
   readSourceEnabledState,
 } from '../../config/import-sources.js';
 import { errorMessage } from '../../utils/errors.js';
+import { loadJsonConfig } from '../../cli/config/json-tier.js';
 
 export interface SkillManifestEntry {
   name: string;
@@ -60,6 +61,15 @@ export interface SkillManifestEntry {
   source: 'builtin' | 'user' | 'project' | 'plugin' | 'imported' | 'command';
   argumentHint?: string;
   whenToUse?: string;
+  /**
+   * When `true`, this entry is hidden from the model-facing manifest.
+   * Set by: SKILL.md `disable-model-invocation: true` frontmatter (Claude Code
+   * parity) or when the skill name matches an entry in `skills.hidden` from
+   * `afk.config.json`. `collectSkillEntries()` propagates this flag so non-model
+   * consumers (`/skills`, `afk skill list`) can mark entries as "hidden" in their
+   * listing without repeating the config-read logic.
+   */
+  disableModelInvocation?: boolean;
 }
 
 /**
@@ -110,7 +120,14 @@ export function buildSkillManifest(
   // collectSkillEntries — same split the excludeName filter above uses — so
   // every non-model consumer (slash-command router, `/skills`, `afk skill
   // list`) still sees the complete set and commands stay fully invocable.
-  const entries = named.filter((e) => e.source !== 'command');
+  //
+  // Invariant: skills marked `disableModelInvocation` (either via SKILL.md
+  // `disable-model-invocation: true` frontmatter or via `skills.hidden` in
+  // afk.config.json) are also excluded here — they must be slash-invocable by
+  // users but invisible to the model's menu. The `disableModelInvocation` flag
+  // is already set on entries by `collectSkillEntries`; it is filtered here
+  // so the slash-command router and `/skills` still see and can invoke them.
+  const entries = named.filter((e) => e.source !== 'command' && !e.disableModelInvocation);
   if (entries.length === 0) return '';
 
   const lines: string[] = [];
@@ -177,6 +194,55 @@ function discoverPluginSkillsAndCommands(pluginPath: string, knownToolNames: Rea
 }
 
 /**
+ * Check whether a skill name is in the operator-configured `skills.hidden`
+ * list. Matching is bidirectional:
+ *   - Bare config entry "forge" hides qualified skill "awa-dev:forge" (suffix
+ *     match from the skill side).
+ *   - Qualified config entry "awa-dev:qualify" hides bare skill "qualify"
+ *     (the plugin prefixed its entry, but discovery registered the skill bare).
+ *
+ * Contract: this function is called from `collectSkillEntries` to annotate
+ * entries with `disableModelInvocation`; the actual filtering happens in
+ * `buildSkillManifest` (model-facing boundary only).
+ */
+function isHiddenByConfig(skillName: string, hiddenNames: ReadonlySet<string>): boolean {
+  if (hiddenNames.size === 0) return false;
+  // Exact match (bare entry matches bare skill; qualified entry matches qualified skill).
+  if (hiddenNames.has(skillName)) return true;
+  if (skillName.includes(':')) {
+    // Skill is qualified (e.g. "awa-dev:qualify"):
+    //   - bare entry "qualify" hides it (suffix match from skill side).
+    const bare = skillName.split(':').pop()!;
+    if (hiddenNames.has(bare)) return true;
+  } else {
+    // Skill is bare (e.g. "qualify"):
+    //   - qualified entry "awa-dev:qualify" in the config must also hide it
+    //     (the plugin prefixed its entry, but discovery registered the skill bare).
+    for (const entry of hiddenNames) {
+      if (entry.includes(':') && entry.split(':').pop() === skillName) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Read the `skills.hidden` list from `afk.config.json`. Returns an empty Set
+ * when the key is absent or malformed (fail-open: do not hide skills on config
+ * errors — failing closed here would make skills silently disappear on any
+ * config parse error, which is a worse outcome than showing them).
+ */
+function readHiddenSkillNames(): ReadonlySet<string> {
+  try {
+    const { config } = loadJsonConfig();
+    const hidden = config.skills?.hidden;
+    if (!Array.isArray(hidden) || hidden.length === 0) return new Set();
+    return new Set(hidden);
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * Collect all skill entries from registry + plugins.
  */
 export function collectSkillEntries(
@@ -192,6 +258,10 @@ export function collectSkillEntries(
   // slash commands, the model could dispatch via the `skill` tool while end
   // users can't invoke directly — a worse failure mode than a clean split.
   const internalUnlocked = env.AFK_INTERNAL === '1';
+
+  // Operator-configured hidden-skill list. Read once per call (the config is a
+  // small JSON file; perf is negligible vs. the skill-dir scan that follows).
+  const hiddenNames = readHiddenSkillNames();
 
   // Resolve imported roots once — reused for both the skill-root scan loop
   // (step 1) and the plugin-config expansion (step 3). Avoids duplicate
@@ -237,7 +307,8 @@ export function collectSkillEntries(
   for (const name of listSkills()) {
     const skill = getSkill(name);
     if (!isSkillVisible(skill, internalUnlocked)) continue;
-    entries.push({
+    const dmi = skill.disableModelInvocation === true || isHiddenByConfig(name, hiddenNames);
+    const entry: SkillManifestEntry = {
       name,
       description: skill.description,
       source:
@@ -250,7 +321,9 @@ export function collectSkillEntries(
               : 'builtin',
       argumentHint: skill.argumentHint,
       whenToUse: skill.whenToUse,
-    });
+    };
+    if (dmi) entry.disableModelInvocation = true;
+    entries.push(entry);
     seen.add(name);
     if (name.includes(':')) seen.add(name.split(':').pop()!); // bare name for plugin-walk dedup
   }
@@ -272,13 +345,16 @@ export function collectSkillEntries(
     for (const skill of skills) {
       if (!skill.name || seen.has(skill.name)) continue;
       if (!isSkillVisible({ audience: skill.audience }, internalUnlocked)) continue;
-      entries.push({
+      const dmi = skill.disableModelInvocation === true || isHiddenByConfig(skill.name, hiddenNames);
+      const entry: SkillManifestEntry = {
         name: skill.name,
         description: skill.description ?? `Skill from plugin at ${plugin.path}`,
         source: skill.origin === 'command' ? 'command' : 'plugin',
         argumentHint: skill.argumentHint,
         whenToUse: skill.whenToUse,
-      });
+      };
+      if (dmi) entry.disableModelInvocation = true;
+      entries.push(entry);
       seen.add(skill.name);
     }
   }

@@ -106,6 +106,7 @@ describe('ungatedSensitiveRoot (#852)', () => {
     });
   });
 
+  // Windows: genuinely POSIX-only — symlinks to /etc require POSIX paths; Windows symlinks require elevation/Developer Mode
   it.skipIf(process.platform === 'win32')('resolves symlinks before judging (a link INTO an ancestor is still rejected)', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'afk852-'));
     const link = path.join(dir, 'link');

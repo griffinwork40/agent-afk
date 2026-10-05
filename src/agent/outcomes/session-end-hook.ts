@@ -5,6 +5,8 @@
  * for a root (non-forked) session:
  *   1. Loads the session turns (sidecar first, then journal fallback via loadOutcomeTurns).
  *   2. Recovers artifacts (commit SHAs, PR URLs, repo) from tool result previews.
+ *      When the journal was the turn source (or exists alongside the sidecar),
+ *      also walks subagents/*.jsonl for child commits and PRs (#2446).
  *   3. Runs all immediate LFs (closure, error_tail, verification,
  *      in_session_correction, self_report). Closure info is read from
  *      context.tracePath when available.
@@ -12,6 +14,12 @@
  *      when artifacts present) or settled immediately otherwise.
  *   5. Stores first_prompt_tokens / first_cwd for cross_session_reask lookups.
  *      Raw prompt text is never written to disk (issue #2449).
+ *
+ * Child artifact attribution:
+ *   - Primary: `recoverSubagentArtifacts` walks subagents/*.jsonl when a journal
+ *     is present (covers all nesting depths via full tool results).
+ *   - Fallback: the PostToolUse child-attribution hook remains active for
+ *     sessions with no journal (old sessions, disabled journal).
  *
  * Fire-and-forget: never throws into or delays teardown.
  *
@@ -21,12 +29,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { HookHandler } from '../hooks.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
-import { loadOutcomeTurns } from './load-outcome-turns.js';
+import { loadOutcomeTurns, recoverSubagentArtifacts } from './load-outcome-turns.js';
 import { recoverArtifacts } from './artifacts.js';
+import { journalExists } from '../journal/reader.js';
 import { runImmediateLFs, type ClosureInfo } from './lf-immediate.js';
 import { upsertVotes } from './store.js';
 import { lfReask, promptFingerprint } from './lf-reask.js';
 import type { VerifiedOutcome } from './schema.js';
+import type { Artifacts } from './schema.js';
 
 // ---------------------------------------------------------------------------
 // Closure reader — synchronous, reads tracePath written by the trace layer
@@ -112,6 +122,35 @@ export function createOutcomeSessionEndHook(): HookHandler {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Artifact merge helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge `extra` artifacts into `base` without duplicating commits or PRs.
+ * Mutates `base` in place and returns it.
+ */
+function mergeArtifacts(base: Artifacts, extra: Artifacts): Artifacts {
+  const seenCommits = new Set(base.commits);
+  for (const sha of extra.commits) {
+    if (!seenCommits.has(sha)) {
+      seenCommits.add(sha);
+      base.commits.push(sha);
+    }
+  }
+  const seenPrs = new Set(base.prs);
+  for (const url of extra.prs) {
+    if (!seenPrs.has(url)) {
+      seenPrs.add(url);
+      base.prs.push(url);
+    }
+  }
+  if (base.repo === null && extra.repo !== null) {
+    base.repo = extra.repo;
+  }
+  return base;
+}
+
 async function _runImmediatePass(
   sessionId: string,
   tracePath: string | undefined,
@@ -119,10 +158,20 @@ async function _runImmediatePass(
 ): Promise<void> {
   // Load session turns — sidecar first, journal fallback for scheduled/daemon
   // sessions that never write a sidecar (see load-outcome-turns.ts).
-  const { turns } = loadOutcomeTurns(sessionId);
+  const { turns, source } = loadOutcomeTurns(sessionId);
 
-  // Recover artifacts and run LFs
+  // Recover artifacts from the main session turns.
   const artifacts = recoverArtifacts(turns);
+
+  // When a journal is present (either as primary source or alongside the
+  // sidecar), also walk subagents/*.jsonl to collect child commits/PRs.
+  // This is the primary child-attribution path for journal-enabled sessions
+  // (#2446); the PostToolUse hook remains the fallback for journal-absent runs.
+  const hasJournal = source === 'journal' || journalExists(sessionId);
+  if (hasJournal) {
+    mergeArtifacts(artifacts, recoverSubagentArtifacts(sessionId));
+  }
+
   const now = new Date().toISOString();
   const closure = closureFromTrace(tracePath);
 

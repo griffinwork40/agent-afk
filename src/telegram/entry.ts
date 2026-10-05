@@ -60,14 +60,6 @@ let crashHandlersInstalled = false;
 const CRASH_EXIT_DELAY_MS = 200;
 
 /**
- * Set before the deferred exit timer so service supervisors (launchd
- * KeepAlive / systemd Restart=on-failure) see a non-zero code even when the
- * timer fires before any in-flight Telegram push keeps the event loop alive.
- * The timer is .unref()'d so the process can exit earlier (on its own) if
- * the push never fires — exitCode ensures that natural exit is also code 1.
- */
-
-/**
  * Reset the re-entry guard. Exported for testing only — do not call in
  * production code.
  *

@@ -1,10 +1,16 @@
 /**
- * Outcome turn loader — sidecar with journal fallback.
+ * Outcome turn loader — sidecar with journal fallback; subagent artifact recovery.
  *
  * `loadOutcomeTurns(sessionId)` is the single entry point that session-end-hook.ts
  * uses to obtain a Turn[] for labeling. It tries the session sidecar first
  * (fast, already-structured), then falls back to the message journal when the
  * sidecar is absent or empty.
+ *
+ * `recoverSubagentArtifacts(sessionId)` walks every subagent journal under
+ * `sessions/<id>/subagents/*.jsonl` and returns the merged artifact set
+ * (commit SHAs + PR URLs) found in child tool results. This is the primary
+ * path for child artifact attribution when a journal is present, replacing the
+ * PostToolUse hook for sessions that land journal entries.
  *
  * Error posture: never throws. Any failure (missing sidecar, unreadable
  * journal, malformed records) degrades to `{ turns: [], source: 'none' }` so
@@ -16,10 +22,12 @@
  */
 
 import { loadStoredSession } from '../facets/store.js';
-import { readJournalRecords, hydrateMessages } from '../journal/reader.js';
+import { readJournalRecords, hydrateMessages, listSubagentJournals } from '../journal/reader.js';
 import type { JournalMessage, JournalRecord } from '../journal/types.js';
 import { journalMessagesToTurns } from './journal-turns.js';
+import { recoverArtifacts } from './artifacts.js';
 import type { Turn } from './artifacts.js';
+import type { Artifacts } from './schema.js';
 
 export type OutcomeTurnsSource = 'sidecar' | 'journal' | 'none';
 
@@ -69,6 +77,71 @@ export function loadOutcomeTurns(sessionId: string): OutcomeTurnsResult {
     return { turns: [], source: 'none' };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Subagent artifact recovery from child journals
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk every subagent journal under `sessions/<id>/subagents/*.jsonl` and
+ * return the merged Artifacts found in child tool results.
+ *
+ * This is the primary child-attribution path when the session has a message
+ * journal. It covers all nesting depths — each subagent journal records the
+ * child's own tool results, so grandchild commits/PRs appear in the child's
+ * subagent journal and the child's journal is under the root session's
+ * subagents/ dir.
+ *
+ * Error posture: never throws. A failing subagent journal is skipped silently.
+ * The existing PostToolUse child-attribution hook remains active as a fallback
+ * for sessions where the journal is absent or disabled.
+ */
+export function recoverSubagentArtifacts(sessionId: string): Artifacts {
+  const merged: Artifacts = { commits: [], prs: [], repo: null };
+  const seenCommits = new Set<string>();
+  const seenPrs = new Set<string>();
+
+  let subagentIds: string[];
+  try {
+    subagentIds = listSubagentJournals(sessionId);
+  } catch {
+    return merged;
+  }
+
+  for (const subagentId of subagentIds) {
+    try {
+      const records = readJournalRecords(sessionId, { subagentId });
+      const messages = sessionHistoryMessages(records);
+      if (messages.length === 0) continue;
+      const turns = journalMessagesToTurns(hydrateMessages(messages));
+      const childArtifacts = recoverArtifacts(turns);
+      for (const sha of childArtifacts.commits) {
+        if (!seenCommits.has(sha)) {
+          seenCommits.add(sha);
+          merged.commits.push(sha);
+        }
+      }
+      for (const url of childArtifacts.prs) {
+        if (!seenPrs.has(url)) {
+          seenPrs.add(url);
+          merged.prs.push(url);
+        }
+      }
+      if (merged.repo === null && childArtifacts.repo !== null) {
+        merged.repo = childArtifacts.repo;
+      }
+    } catch {
+      // Skip this subagent journal — never propagate into the hook's
+      // fire-and-forget context.
+    }
+  }
+
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// History message extraction
+// ---------------------------------------------------------------------------
 
 /**
  * Invariant: outcome labeling needs everything the session DID, not what the

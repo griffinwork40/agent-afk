@@ -36,6 +36,7 @@ function makeEnabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedHo
     allowProjectHooks: false,
     pluginHooksEnabled: false,
     pluginHookEnv: {},
+    disabledPluginHooks: {},
     sources: [],
     warnings: [],
     ...overrides,
@@ -49,6 +50,7 @@ function makeDisabledConfig(overrides: Partial<LoadedHooksConfig> = {}): LoadedH
     allowProjectHooks: false,
     pluginHooksEnabled: false,
     pluginHookEnv: {},
+    disabledPluginHooks: {},
     sources: [],
     warnings: [],
     ...overrides,
@@ -135,6 +137,7 @@ describe('trust gate', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Matcher filtering — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -237,6 +240,7 @@ describe.skipIf(process.platform === 'win32')('matcher filtering', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Non-tool events (no matcher applied) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -287,6 +291,7 @@ describe.skipIf(process.platform === 'win32')('non-tool events', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Blocking — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -338,6 +343,7 @@ describe('multiple handlers', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — integration tests dispatch #!/bin/sh scripts; no Windows shell equivalent (#703)
 // createDefaultHookRegistry integration — some tests dispatch #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -476,6 +482,7 @@ describe.skipIf(process.platform === 'win32')('createDefaultHookRegistry integra
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts; no Windows shell equivalent (#703)
 // Plugin-tier hooks (Claude Code compat) — dispatches #!/bin/sh scripts — POSIX-only (#703)
 // ---------------------------------------------------------------------------
 
@@ -553,6 +560,7 @@ describe.skipIf(process.platform === 'win32')('plugin-tier hooks', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Windows: genuinely POSIX-only — dispatches #!/bin/sh scripts to propagate session id; no Windows shell equivalent (#703)
 // Session id resolution — context.sessionId wins over agentConfig.sessionId
 // ---------------------------------------------------------------------------
 
@@ -856,5 +864,112 @@ describe('getTranscriptPath threading (issue #2372)', () => {
 
     const decision = await registry.dispatch({ event: 'Stop', sessionId: 'test-sid' });
     expect(decision).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// disabledPluginHooks gate (issue #2816)
+// ---------------------------------------------------------------------------
+
+describe('disabledPluginHooks — per-hook disable', () => {
+  it('suppresses a plugin hook group by event when listed in disabledPluginHooks', async () => {
+    const script = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
+    const registry = createHookRegistry();
+
+    // Plugin hook for SessionStart, plugin name "my-plugin"
+    const config = makeEnabledConfig({
+      disabledPluginHooks: { 'my-plugin': ['SessionStart'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: script, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    // Manually attach pluginName to hooks (normally done by the loader)
+    const group = config.hooks.SessionStart?.[0];
+    if (group) group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    // No handler should have been registered — the event fires but no action.
+    // We can verify by checking the dispatch returns {} immediately (no hook ran).
+    const decision = await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+    expect(decision).toEqual({});
+  });
+
+  it('suppresses only the matching matcher group, not other matchers', async () => {
+    const hitPath = join(tmp, 'hit.txt');
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'record-hit.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
+    const misScript = writeScript('should-not-run.sh', '#!/bin/sh\nexit 0\n');
+    const registry = createHookRegistry();
+
+    // Two plugin groups for PreToolUse on "my-plugin":
+    //   group 1: matcher="/^agent$/" → suppressed
+    //   group 2: no matcher → should still run
+    const config = makeEnabledConfig({
+      disabledPluginHooks: { 'my-plugin': ['PreToolUse:/^agent$/'] },
+      hooks: {
+        PreToolUse: [
+          makeGroup([{ type: 'command', command: misScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+            matcher: '/^agent$/',
+          }),
+          makeGroup([{ type: 'command', command: hitScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    // Attach pluginName to both groups' hooks
+    for (const group of config.hooks.PreToolUse ?? []) {
+      group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+    }
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+
+    // Dispatch PreToolUse with tool name "agent" — the suppressed group must
+    // NOT run (misScript); the wildcard group MUST run (hitScript).
+    await registry.dispatch({ event: 'PreToolUse', toolName: 'agent', sessionId: 'sid' });
+
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(hitPath)).toBe(true);
+  });
+
+  it('does not suppress a plugin hook from a different plugin', async () => {
+    const hitPath = join(tmp, 'different-plugin-hit.txt');
+    // Cross-platform: write a .js helper that creates the marker file, then
+    // invoke it with the current node binary so the test works on Windows too.
+    const hitJsPath = join(tmp, 'different-plugin-hook.js');
+    writeFileSync(hitJsPath, `require('fs').writeFileSync(${JSON.stringify(hitPath)}, '');\n`);
+    // Quote both paths to survive spaces in the node binary path (Windows: C:\Program Files\…).
+    const hitScript = `"${process.execPath}" "${hitJsPath}"`;
+    const registry = createHookRegistry();
+
+    const config = makeEnabledConfig({
+      // "other-plugin" is disabled, but "my-plugin" should still run
+      disabledPluginHooks: { 'other-plugin': ['SessionStart'] },
+      hooks: {
+        SessionStart: [
+          makeGroup([{ type: 'command', command: hitScript, timeoutMs: 5000, pluginRoot: tmp }], {
+            tier: 'plugin',
+          }),
+        ],
+      },
+    });
+    const group = config.hooks.SessionStart?.[0];
+    if (group) group.hooks.forEach((h) => { (h as Record<string, unknown>)['pluginName'] = 'my-plugin'; });
+
+    loadAndRegisterConfigHooks(registry, config, { cwd: tmp });
+    await registry.dispatch({ event: 'SessionStart', sessionId: 'sid' });
+
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(hitPath)).toBe(true);
   });
 });

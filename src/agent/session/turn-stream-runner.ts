@@ -31,6 +31,9 @@ import type {
 } from '../types.js';
 import type { ProviderQuery, ProviderEvent } from '../provider.js';
 import type { Message } from '../types.js';
+import type { ToolEventMin } from '../done-evidence.js';
+import { dispatchTurnStop } from './turn-stream-runner.stop.js';
+import type { StopWiring } from '../types/session-types.js';
 
 /**
  * Context bag passed to {@link TurnStreamRunner} at construction.
@@ -69,6 +72,12 @@ export interface TurnRunnerDeps {
    * (`PlanTextTracker.observe`); must be synchronous and must not throw.
    */
   observeProviderEvent?: (event: ProviderEvent) => void;
+  /**
+   * The surface's CURRENT Stop wiring, read at every turn end (surfaces wire
+   * after construction). `undefined` means the surface has not opted in and
+   * Stop is not dispatched.
+   */
+  getStopWiring?: () => StopWiring | undefined;
 }
 
 /**
@@ -78,9 +87,28 @@ export interface TurnRunnerDeps {
  */
 export class TurnStreamRunner {
   private readonly deps: TurnRunnerDeps;
+  /**
+   * Mutable ref to the active turn's `TransformDeps`. Set when a turn starts,
+   * cleared when it ends. Exposed via `getActiveTurnToolEvents()` so the
+   * `beforeTurnEnd` provider seam (issue #2714) can read the tool events the
+   * session has already accumulated for the in-flight turn.
+   *
+   * Ordering invariant: the provider calls `beforeTurnEnd` AFTER all tool
+   * output events for the turn have been yielded (tool rounds complete before
+   * the model emits its final `end_turn`). The session processes those tool
+   * events via `transformProviderEvent` before the provider yields
+   * `turn.completed`, so `_activeDeps._turnToolEvents` is fully populated by
+   * the time the provider calls this seam.
+   */
+  private _activeDeps: TransformDeps | null = null;
 
   constructor(deps: TurnRunnerDeps) {
     this.deps = deps;
+  }
+
+  /** Return the current turn's accumulated tool events, or [] when no turn is active. */
+  getActiveTurnToolEvents(): readonly ToolEventMin[] {
+    return (this._activeDeps as { _turnToolEvents?: ToolEventMin[] } | null)?._turnToolEvents ?? [];
   }
 
   /** Pre-turn guard: throws when the session cannot accept a new message. */
@@ -229,6 +257,14 @@ export class TurnStreamRunner {
     this.deps.incInboundMessageCount();
 
     const deps = this.buildTransformDeps();
+    // Expose this turn's deps via _activeDeps so the beforeTurnEnd provider
+    // seam can read _turnToolEvents (stop-hook-continuation rule, issue #2714).
+    this._activeDeps = deps;
+
+    // Finding 2: reset the per-turn runtime flag so the guard below
+    // correctly distinguishes "seam fired this turn" from a prior turn.
+    const wiring = this.deps.getStopWiring?.();
+    if (wiring) wiring.stopDispatchedBySeam = false;
 
     try {
       while (true) {
@@ -244,6 +280,35 @@ export class TurnStreamRunner {
             // A completed turn clears a prior error so the seal status
             // reflects the FINAL turn's outcome, not any earlier error.
             this.deps.accounting.clearProviderError();
+
+            // Contract: Stop fires exactly once per top-level turn, from the
+            // session layer, so every surface (REPL, Telegram, daemon/cron,
+            // chat) gets it. It runs BEFORE `done` is yielded, so a surface
+            // never finalizes a turn whose Stop hooks are still running; the
+            // wait is bounded by STOP_HOOK_HANDLER_TIMEOUT_MS. Forks and
+            // un-wired surfaces are no-ops inside dispatchTurnStop.
+            //
+            // Finding 2: when the provider exposes setBeforeTurnEnd AND stop
+            // wiring is active, the provider seam (stop-hook-continuation.ts)
+            // already dispatched Stop BEFORE turn.completed was yielded —
+            // dispatching it again here would fire Stop twice per turn.
+            // Skip dispatchTurnStop in that case.
+            // Finding 2: use the runtime flag set by buildBeforeTurnEnd
+            // when the seam actually fired this turn. The old static check
+            // (`setBeforeTurnEnd !== undefined`) wrongly suppressed dispatch
+            // when the provider exposed the seam but it never ran.
+            const seamAlreadyDispatched =
+              this.deps.getStopWiring?.()?.stopDispatchedBySeam === true;
+            if (!seamAlreadyDispatched) {
+              await dispatchTurnStop({
+                config: this.deps.getConfig(),
+                wiring: this.deps.getStopWiring?.(),
+                sessionId: this.deps.getSessionId(),
+                signal: this.deps.getAbortController().signal,
+                conversationHistory: this.deps.conversationHistory,
+                toolEvents: deps._turnToolEvents ?? [],
+              });
+            }
           } else if (output.type === 'error') {
             // Terminal-cause flag: a per-turn provider error must flip the
             // eventual clean close from `succeeded` to `failed`.
@@ -256,6 +321,8 @@ export class TurnStreamRunner {
         }
       }
     } finally {
+      // Clear the active deps ref when the turn ends (clean, abort, or error).
+      this._activeDeps = null;
       // Invariant: `finally` is the ONLY path an aborted or timed-out child
       // takes — closing the generator runs it while `break` does not reach it.
       if (this.deps.getState() === 'streaming') {

@@ -57,6 +57,15 @@ export interface TraceAggregates {
   toolDurationsMs: Record<string, number>;
   /** key 1 = flat direct-child invocation count (depth tracking not yet implemented) */
   subagentForkDepths: Record<number, number>;
+  /**
+   * Total compaction events across the traced window.
+   *
+   * Upper bound: a single `trace.jsonl` contains events from the root session
+   * AND every descendant subagent. Because compaction events carry no
+   * `subagentId` field they cannot be attributed, so this count includes child
+   * compactions as well as root-session ones — treat it as an upper bound on
+   * root-session compactions, not an exact count.
+   */
   compactionCount: number;
   /** closure reason → count */
   closureReasons: Record<string, number>;

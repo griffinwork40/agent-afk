@@ -27,6 +27,8 @@
  * @module agent/awareness/types
  */
 
+import type { CompactUsageEntry } from '../usage/usage-formatter.js';
+
 /**
  * Coarse-grained execution surface. Distinct from `PromptSurface`
  * (`routing-directive.ts`), which controls END_OF_TURN_DIRECTIVE injection.
@@ -165,12 +167,21 @@ export interface RuntimeWorkspace {
   remoteUrl: string | null;
 }
 
+/**
+ * Compact usage entry for one provider/account in `get_runtime_state`. Built
+ * by the shared formatter (`agent/usage/usage-formatter.ts`); full detail is
+ * available via `afk usage`.
+ */
+export type RuntimeUsageEntry = CompactUsageEntry;
+
 /** The full runtime snapshot (view='all'). Individual views return subsets. */
 export interface RuntimeSnapshot {
   self: RuntimeSelf;
   tools: RuntimeTools;
   subagents: RuntimeSubagents;
   workspace: RuntimeWorkspace;
+  /** Compact usage summary — present in view='all' and the future view='usage'. */
+  usage?: RuntimeUsageEntry[];
 }
 
 /** Discriminator for `get_runtime_state.input.view`. */
@@ -194,4 +205,10 @@ export interface RuntimeStateSource {
    * baseline.
    */
   getWorkspace(): RuntimeWorkspace;
+  /**
+   * Returns compact usage entries for every provider/account in the shared
+   * usage ledger (plus this process's quota cache). No network call. Empty
+   * when nothing has been observed.
+   */
+  getUsage(): RuntimeUsageEntry[];
 }

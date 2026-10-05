@@ -54,8 +54,12 @@ const ASK_TOOL = 'ask_question';
  * Two patterns are recognised:
  *   1. The last non-empty line ends with `?`.
  *   2. Any line starts with `Question:` or `**Question:**` (with optional
- *      surrounding whitespace), followed by at least one whitespace character —
- *      this prevents matching a bare `*Question:*` markdown bold span.
+ *      surrounding whitespace), followed by at least one whitespace character.
+ *      Note: the regex `(\*{1,2})?Question:\*{0,2}\s` also matches a
+ *      single-star `*Question:* text` form (one leading star, one trailing
+ *      star, then space). This is an intentional residual match — the
+ *      single-star form is close enough to a real question framing that
+ *      treating it as a positive is the safe default.
  *
  * Exported so it can be tested in isolation.
  */
@@ -65,7 +69,7 @@ export function textContainsQuestion(t: string): boolean {
   const lastLine = nonEmpty[nonEmpty.length - 1] ?? '';
   if (lastLine.trim().endsWith('?')) return true;
   // Require at least one whitespace after the colon to avoid matching
-  // a bare `*Question:*` bullet marker.
+  // a bare `*Question:*` bullet marker with no text following.
   return lines.some((l) => /^\s*(\*{1,2})?Question:\*{0,2}\s/.test(l));
 }
 

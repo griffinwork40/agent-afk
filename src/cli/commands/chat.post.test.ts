@@ -24,16 +24,20 @@ async function* makeStream(events: OutputEvent[]): AsyncIterable<OutputEvent> {
 }
 
 /** A fresh AgentSession mock implementation whose text turn returns `content`. */
+// Returned as a `function` (not an arrow) because it is invoked with `new`:
+// Vitest 4 constructs mocks called with `new`, and arrows are not constructors.
 function sessionImpl(content: string) {
-  return () => ({
-    close: vi.fn().mockResolvedValue(undefined),
-    sendMessage: vi.fn().mockResolvedValue({ content, timestamp: new Date() }),
-    sendMessageStream: vi.fn().mockReturnValue(makeStream([{ type: 'done' }])),
-    getLastResponseMetadata: vi.fn().mockReturnValue(null),
-    getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
-    sessionId: 'mock-session-id',
-    abortSignal: new AbortController().signal,
-  });
+  return function () {
+    return {
+      close: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ content, timestamp: new Date() }),
+      sendMessageStream: vi.fn().mockReturnValue(makeStream([{ type: 'done' }])),
+      getLastResponseMetadata: vi.fn().mockReturnValue(null),
+      getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
+      sessionId: 'mock-session-id',
+      abortSignal: new AbortController().signal,
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +94,7 @@ vi.mock('../../agent/default-hook-registry.js', () => ({
 }));
 
 vi.mock('../../agent/memory/index.js', () => ({
-  MemoryStore: vi.fn(() => ({ close: vi.fn() })),
+  MemoryStore: vi.fn(function () { return { close: vi.fn() }; }),
   injectHotMemory: (c: unknown) => c,
   injectGoalPrompt: (config: unknown) => config,
   MEMORY_TOOL_NAMES: [],
@@ -109,11 +113,11 @@ vi.mock('../../agent/subagent.js', () => {
 });
 
 vi.mock('../../agent/tools/subagent-executor.js', () => ({
-  SubagentExecutor: vi.fn().mockImplementation(() => ({})),
+  SubagentExecutor: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/skill-executor.js', () => ({
-  SkillExecutor: vi.fn().mockImplementation(() => ({})),
+  SkillExecutor: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 vi.mock('../../agent/tools/compose-executor.js', () => {
@@ -132,7 +136,7 @@ vi.mock('../../agent/tools/nesting.js', () => ({
 }));
 
 vi.mock('../../agent/providers/anthropic-direct/index.js', () => ({
-  AnthropicDirectProvider: vi.fn().mockImplementation(() => ({})),
+  AnthropicDirectProvider: vi.fn().mockImplementation(function () { return {}; }),
 }));
 
 // The dispatcher (pulled in transitively via the anthropic-direct provider)
@@ -351,7 +355,7 @@ describe('afk chat — --post headless publishing', () => {
   });
 
   it('publishes the accumulated text on the stream-json path', async () => {
-    vi.mocked(AgentSession).mockImplementationOnce(() => ({
+    vi.mocked(AgentSession).mockImplementationOnce(function () { return {
       close: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockResolvedValue({ content: 'unused', timestamp: new Date() }),
       sendMessageStream: vi.fn().mockReturnValue(
@@ -365,7 +369,7 @@ describe('afk chat — --post headless publishing', () => {
       getInputStreamRef: vi.fn().mockReturnValue({ pushUserMessage: vi.fn() }),
       sessionId: 'mock-session-id',
       abortSignal: new AbortController().signal,
-    }));
+    }; });
 
     await captureStdout(() => runChat('review it', '--format', 'stream-json', '--post', 'github'));
 

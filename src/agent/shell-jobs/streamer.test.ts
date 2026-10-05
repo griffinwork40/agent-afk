@@ -21,6 +21,7 @@ describe('startShell', () => {
     expect(result.truncated).toBe(false);
   });
 
+  // Windows: genuinely POSIX-only — stderr redirect `1>&2` is a POSIX shell feature (#703)
   it.skipIf(process.platform === 'win32')('captures stderr alongside stdout', async () => {
     // stderr redirect `1>&2` is a POSIX shell feature — POSIX-only (#703)
     const handle = startShell({
@@ -33,7 +34,7 @@ describe('startShell', () => {
     expect(result.displayCaptured).toContain('err');
   });
 
-  // Windows: semicolon command separator and echo are POSIX shell conventions
+  // Windows: genuinely POSIX-only — semicolon command separator and echo are POSIX shell conventions (#703)
   it.skipIf(isWin32)('streams chunks via onChunk before the promise settles', async () => {
     const chunks: Array<{ text: string; stream: 'stdout' | 'stderr' }> = [];
     const handle = startShell({
@@ -50,7 +51,7 @@ describe('startShell', () => {
     expect(combined).toContain('second');
   });
 
-  // Windows: `exit 7` in cmd.exe closes the shell process but exit codes differ
+  // Windows: genuinely POSIX-only — `exit 7` in cmd.exe closes the shell process differently; POSIX exit code semantics (#703)
   it.skipIf(isWin32)('reports nonzero exit code with errorReason=nonzero-exit', async () => {
     const handle = startShell({
       command: 'exit 7',
@@ -62,6 +63,7 @@ describe('startShell', () => {
     expect(result.errorMessage).toContain('7');
   });
 
+  // Windows: genuinely POSIX-only — `kill -9 $$` uses POSIX signals; Windows processes don't receive SIGKILL (#703)
   it.skipIf(process.platform === 'win32')('reports signal-killed when the process dies from an unrequested signal', async () => {
     // `kill -9 $$` is a POSIX signal command — POSIX-only (#703)
     // `kill -9 $$` makes the spawned shell SIGKILL itself: `close` fires with
@@ -79,6 +81,7 @@ describe('startShell', () => {
     expect(result.errorMessage).toMatch(/signal/i);
   });
 
+  // Windows: genuinely POSIX-only — uses `pwd` and `/tmp` which are POSIX-only shell commands (#703)
   it.skipIf(process.platform === 'win32')('honours cwd', async () => {
     // `/tmp` is a POSIX path — POSIX-only (#703)
     const handle = startShell({
@@ -92,7 +95,7 @@ describe('startShell', () => {
     expect(result.displayCaptured).toMatch(/(^|\/)tmp/);
   });
 
-  // Windows: POSIX double-quoted env var expansion ($VAR) not supported in cmd.exe
+  // Windows: genuinely POSIX-only — POSIX double-quoted env var expansion ($VAR) not supported in cmd.exe (#703)
   it.skipIf(isWin32)('honours an extra env entry', async () => {
     const handle = startShell({
       command: 'echo "$AFK_SHELL_TEST"',
@@ -137,6 +140,7 @@ describe('startShell', () => {
     expect(result.errorMessage).toContain('killed');
   });
 
+  // Windows: genuinely POSIX-only — `printf '\033[...]'` uses POSIX printf escape syntax (#703)
   it.skipIf(process.platform === 'win32')('strips ANSI escape sequences from the model buffer only', async () => {
     // `printf '\033[...]'` uses POSIX printf escape syntax — POSIX-only (#703)
     // Build the ESC sequence at runtime so the source file stays printable.
@@ -152,6 +156,7 @@ describe('startShell', () => {
     expect(result.modelCaptured).toBe('red\n');
   });
 
+  // Windows: genuinely POSIX-only — uses `yes` and `head -c`, which are POSIX-only commands (#703)
   it.skipIf(process.platform === 'win32')('caps captured output at maxBytes and marks truncated', async () => {
     // `yes hello | head -c 5000` uses POSIX `yes` and `head -c` — POSIX-only (#703)
     // Emit ~5000 bytes with a 1000-byte cap.
@@ -194,6 +199,7 @@ describe('startShell', () => {
     expect(result.errorReason).toBe('nonzero-exit');
   });
 
+  // Windows: genuinely POSIX-only — uses `yes` (POSIX infinite-output command) to trigger overflow kill (#703)
   it.skipIf(process.platform === 'win32')('kills the child and reports errorReason=overflow when the cap is crossed mid-run (L2)', async () => {
     // `yes` is a POSIX command — POSIX-only (#703)
     // A long-running flood (cap crossed BEFORE the child would exit on its
