@@ -50,14 +50,30 @@ vi.mock('./spine-store.js', () => ({
 // ── Mock node:fs to capture pending-log writes without touching real disk ─────
 // The passthrough preserves real behaviour for tests that do not care about
 // fs; the appendFileSync capture is used only in the pending-log describe block.
+//
+// _mockFsStore provides an in-memory backing store so writeFileSync / renameSync
+// round-trips are visible to readFileSync in the same test run — required by the
+// duplicate-fingerprint hook-level test, which seeds via persistDiffFingerprint
+// then fires the hook and expects classifyDiff to be skipped.
 
 const _capturedAppendCalls: Array<{ path: string; data: string }> = [];
 const _capturedWriteCalls: Array<{ path: string; data: string }> = [];
+const _mockFsStore: Record<string, string> = {};
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return {
     ...actual,
+    readFileSync: vi.fn(
+      (path: import('node:fs').PathOrFileDescriptor, _encoding?: unknown): string => {
+        const key = String(path);
+        if (key in _mockFsStore) return _mockFsStore[key]!;
+        // Fall through to ENOENT so callers that expect a missing file still get one.
+        throw Object.assign(new Error(`ENOENT: no such file or directory, open '${key}'`), {
+          code: 'ENOENT',
+        });
+      },
+    ),
     appendFileSync: vi.fn(
       (path: import('node:fs').PathOrFileDescriptor, data: string | Uint8Array): void => {
         _capturedAppendCalls.push({ path: String(path), data: String(data) });
@@ -65,10 +81,17 @@ vi.mock('node:fs', async (importOriginal) => {
     ),
     writeFileSync: vi.fn(
       (path: import('node:fs').PathOrFileDescriptor, data: string | Uint8Array): void => {
-        _capturedWriteCalls.push({ path: String(path), data: String(data) });
+        const key = String(path);
+        _capturedWriteCalls.push({ path: key, data: String(data) });
+        _mockFsStore[key] = String(data);
       },
     ),
-    renameSync: vi.fn(),
+    renameSync: vi.fn((oldPath: string, newPath: string): void => {
+      if (String(oldPath) in _mockFsStore) {
+        _mockFsStore[String(newPath)] = _mockFsStore[String(oldPath)]!;
+        delete _mockFsStore[String(oldPath)];
+      }
+    }),
     mkdirSync: vi.fn(),
   };
 });
@@ -76,6 +99,7 @@ vi.mock('node:fs', async (importOriginal) => {
 // ── Import after mocks ────────────────────────────────────────────────────────
 
 import { createSpineSessionEndHook } from './spine-hook.js';
+import { persistDiffFingerprint } from './spine-hook.diff.js';
 import type { HookContext } from '../hooks.js';
 
 // Mirror of the production constant — kept in sync manually so truncation
@@ -135,6 +159,7 @@ describe('createSpineSessionEndHook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   it('returns {} for non-SessionEnd events', async () => {
@@ -220,6 +245,7 @@ describe('createSpineSessionEndHook — label branches', () => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   it('new-addition: calls addEntry and writeSpine', async () => {
@@ -467,6 +493,7 @@ describe('createSpineSessionEndHook — idempotency guard (strengthens)', () => 
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   function makeStrengthensMock(existingDescription: string) {
@@ -711,6 +738,7 @@ describe('createSpineSessionEndHook — idempotency guard (weakens)', () => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   function makeWeakensMock(existingDescription: string) {
@@ -953,6 +981,7 @@ describe('createSpineSessionEndHook — pending-log writes', () => {
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     // Clear the capture array for each test.
     _capturedAppendCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   it('strengthens-unresolved: logs to pending.jsonl with type="strengthens-unresolved"', async () => {
@@ -1162,6 +1191,7 @@ describe('createSpineSessionEndHook — #2867 regressions', () => {
     vi.clearAllMocks();
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   it('#2867 Bug 1 (strengthens): annotating N times never changes body text', async () => {
@@ -1571,6 +1601,7 @@ describe('createSpineSessionEndHook — fingerprint persistence ordering', () =>
     delete process.env['AFK_DISABLE_SPINE_UPDATE'];
     _capturedAppendCalls.length = 0;
     _capturedWriteCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => { delete _mockFsStore[k]; });
   });
 
   it('persists fingerprint when classifier returns a parsed empty result', async () => {
@@ -1623,5 +1654,76 @@ describe('createSpineSessionEndHook — fingerprint persistence ordering', () =>
     await hook(makeSessionEndContext());
 
     expect(_capturedWriteCalls.some((call) => call.path.includes('spine-diff-fingerprints'))).toBe(false);
+  });
+});
+
+
+// ── Hook-level duplicate-fingerprint test ─────────────────────────────────────
+// Covers the integration gap noted in issue #2995 (advisory finding from #2641):
+// isDuplicateDiff / persistDiffFingerprint were only unit-tested in isolation;
+// no hook-level test verified that a pre-seeded fingerprint causes the hook to
+// skip classifyDiff entirely.
+//
+// How it works:
+//  1. setupDiffMock seeds execFileSync so the hook sees the default diff content.
+//  2. persistDiffFingerprint is called with the fingerprint that getClassifiableDiff
+//     will compute for that diff and the worktreeRoot the hook will derive
+//     ("/fake/repo/.git" — what `git rev-parse --show-toplevel` returns via the mock).
+//  3. The hook is fired; because isDuplicateDiff finds a matching entry in the
+//     in-memory store (_mockFsStore), it returns early without calling classifyDiff.
+//
+// Contract: the worktreeRoot used in the seed call MUST match what resolveRepoRootSync
+// returns in show-toplevel mode for the test setup (/fake/repo/.git).  If the mock
+// setup ever changes the rev-parse return value, update WORKTREE_ROOT below to match.
+
+describe('createSpineSessionEndHook — duplicate-fingerprint skips classifyDiff', () => {
+  // The worktreeRoot that getClassifiableDiff resolves via show-toplevel in the
+  // existing setupDiffMock (execFileSync returns "/fake/repo/.git" for all rev-parse).
+  const WORKTREE_ROOT = '/fake/repo/.git';
+  // The SHA-256 fingerprint of the default diff used by setupDiffMock.
+  // Computed from sha256hex(filterSpineEdits(diffContent)) where diffContent is
+  // the setupDiffMock default: 'diff --git a/foo.ts b/foo.ts\n+const x = 1;'.
+  // Kept as a literal so the test is self-contained and does not re-import internals.
+  const KNOWN_FINGERPRINT = '98cf6d2f4b3776cf347aeb188907e5df8c96a74ce0199e94d46ca83224d8d405';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env['AFK_DISABLE_SPINE_UPDATE'];
+    _capturedAppendCalls.length = 0;
+    _capturedWriteCalls.length = 0;
+    Object.keys(_mockFsStore).forEach((k) => {
+      delete _mockFsStore[k];
+    });
+  });
+
+  it('does not call classifyDiff when the diff fingerprint matches the persisted one', async () => {
+    await setupDiffMock();
+
+    // Seed the fingerprint store via the exported helper so the hook's
+    // isDuplicateDiff check resolves true on the first call.
+    persistDiffFingerprint(KNOWN_FINGERPRINT, WORKTREE_ROOT);
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    expect(classifyDiff).not.toHaveBeenCalled();
+  });
+
+  it('does call classifyDiff when the fingerprint does not match (dedup guard)', async () => {
+    // This test validates the inverse: when the stored fingerprint is different,
+    // the hook proceeds to classification.  It also serves as the red-light check
+    // that the skip logic is actually wired — removing isDuplicateDiff from the
+    // hook would cause the previous test to fail.
+    await setupDiffMock();
+
+    // Seed a DIFFERENT fingerprint so isDuplicateDiff returns false.
+    persistDiffFingerprint('0000000000000000000000000000000000000000000000000000000000000000', WORKTREE_ROOT);
+
+    const { classifyDiff } = await import('./spine-classifier.js');
+    const hook = createSpineSessionEndHook({ repoRoot: '/fake/repo' });
+    await hook(makeSessionEndContext());
+
+    expect(classifyDiff).toHaveBeenCalled();
   });
 });
