@@ -230,9 +230,18 @@ export interface SubagentExecutorContext {
   parentModel?: AgentModelInput;
   /**
    * Root (depth-0) session id, forwarded from the root session and threaded
-   * unchanged through every depth. Undefined at depth-0. Threaded into
+   * unchanged through every depth. Always undefined at depth-0 (the root
+   * session has no ancestor to inherit from). Threaded into
    * {@link BuildChildConfigArgs.parentRootSessionId} so the grandchild manager
    * can seed depth-2+ forks with the real root id for child-attribution.
+   *
+   * Future-proofing note: compose executors run exclusively at depth 0 today
+   * (compose is excluded from {@link CHILD_ALLOWED_TOOLS}), so this field is
+   * never set on a compose-owned executor context — compose DAG nodes are
+   * depth-1 forks whose attribution falls back to `parentSessionId` via
+   * `resolveRootSessionId`. If compose is ever permitted at depth > 0, this
+   * field should be threaded into the compose {@link SubagentManager}
+   * alongside the other inherited parent fields.
    */
   parentRootSessionId?: string;
 }

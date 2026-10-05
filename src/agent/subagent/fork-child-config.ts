@@ -60,9 +60,15 @@ export interface AssembleChildConfigArgs<T> {
   parentCanUseTool: CanUseTool | undefined;
   /**
    * The forking manager's own root session id (from the parent session's
-   * {@link AgentConfig.rootSessionId}). Undefined at depth 0 (top-level).
-   * Passed through so grandchild `inheritedParentFields` can inherit the
-   * REAL root id rather than the intermediate parent's id.
+   * {@link AgentConfig.rootSessionId}). The depth-0 session id when known;
+   * undefined only when the parent has no session id. Passed through so
+   * grandchild `inheritedParentFields` can inherit the REAL root id rather
+   * than the intermediate parent's id.
+   *
+   * Note: at depth 0 the parent session carries no `rootSessionId` of its own,
+   * so this field is undefined for depth-1 forks — but `resolveRootSessionId`
+   * compensates by falling back to `parentSessionId` (the root's own id), so
+   * depth-1 children are always stamped correctly.
    */
   parentRootSessionId: string | undefined;
   /**
