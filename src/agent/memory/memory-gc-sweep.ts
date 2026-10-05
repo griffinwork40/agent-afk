@@ -14,16 +14,17 @@
  *   explicit opt-in keeps the blast radius zero for unaffected users while
  *   letting power users or CI jobs activate it.
  *
- * • SOFT-DELETE only. Eligible rows have their superseded_by set to -1
- *   (a sentinel value that is not a valid fact id). The rows stay in the
- *   database and are excluded from search results by the existing
- *   `superseded_by IS NULL` filter. A future hard-delete pass can target
- *   the sentinel when recovery is no longer needed.
+ * • SOFT-DELETE only. Eligible rows have their superseded_by set to their
+ *   own id (self-reference sentinel). The rows stay in the database and are
+ *   excluded from search results by the existing `superseded_by IS NULL`
+ *   filter. A future hard-delete pass can target `superseded_by = id` when
+ *   recovery is no longer needed.
  *
- * • Conservative eligibility. A fact must clear ALL three gates:
- *     1. access_count = 0  (never retrieved since creation)
+ * • Conservative eligibility. A fact must clear ALL four gates:
+ *     1. access_count = 0  (never retrieved since tracking started)
  *     2. created_at  older than AFK_MEMORY_GC_MIN_AGE_DAYS (default 90)
- *     3. category NOT IN the excluded set (preference is always excluded)
+ *     3. created_at  on/after MEMORY_ACCESS_TRACKING_STARTED_AT
+ *     4. category NOT IN the excluded set (preference is always excluded)
  *
  * • Self-throttled by a stamp file (same pattern as witness-sweep.ts).
  *   Default cadence: at most once every 24 hours.
@@ -66,6 +67,14 @@ export const MEMORY_GC_SWEEP_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
  * timer so a short-lived process never waits for it.
  */
 export const MEMORY_GC_SWEEP_START_DELAY_MS = 7_000;
+
+/**
+ * Access counts were added to the schema earlier, but reads only started
+ * updating access_count/last_accessed on 2026-09-23. Older rows with
+ * access_count = 0 are therefore unknown, not proven unused, so the GC age
+ * window is floored at this tracking epoch.
+ */
+export const MEMORY_ACCESS_TRACKING_STARTED_AT = '2026-09-23T00:00:00.000Z';
 
 /**
  * Soft-delete strategy: each archived row receives `superseded_by = id`
@@ -119,7 +128,7 @@ export interface MemoryGcSweepResult {
   skipReason?: 'disabled' | 'too-soon' | 'no-db';
   /** Number of facts examined as candidates. */
   candidates: number;
-  /** Number of facts soft-deleted (superseded_by set to GC_SUPERSEDED_SENTINEL). */
+  /** Number of facts soft-deleted (superseded_by set to the fact's own id). */
   archived: number;
 }
 
@@ -206,47 +215,35 @@ export async function sweepMemoryGc(
     try {
       db.pragma('busy_timeout = 5000');
 
-      // Identify eligible facts (read pass).
-      const candidates = db
-        .prepare(
-          `SELECT id
-             FROM facts
-            WHERE access_count = 0
+      const eligibleWhere = `access_count = 0
+              AND created_at >= ?
               AND created_at < ?
               AND superseded_by IS NULL
-              AND category NOT IN (${placeholders})
-            ORDER BY created_at ASC`,
-        )
-        .all(cutoff, ...excludedValues) as Array<{ id: number }>;
+              AND category NOT IN (${placeholders})`;
+      const eligibilityParams = [MEMORY_ACCESS_TRACKING_STARTED_AT, cutoff, ...excludedValues];
 
-      if (candidates.length === 0) {
-        await touchStamp(dir, now);
-        return { skipped: false, candidates: 0, archived: 0 };
-      }
+      const archiveEligible = db.transaction(() => {
+        const candidateCount = (db
+          .prepare(`SELECT COUNT(*) AS count FROM facts WHERE ${eligibleWhere}`)
+          .get(...eligibilityParams) as { count: number }).count;
 
-      // Soft-delete pass: mark each candidate as self-referential (superseded_by = id).
-      // Self-referencing passes the REFERENCES facts(id) FK constraint enforced by
-      // better-sqlite3 by default, yet is unambiguous as a GC sentinel (no normal
-      // supersede chain ever produces superseded_by = id). Wrapped in a transaction
-      // so either all rows are archived or none are.
-      const archiveStmt = db.prepare(
-        'UPDATE facts SET superseded_by = id WHERE id = ? AND superseded_by IS NULL',
-      );
-      const archiveMany = db.transaction(
-        (rows: Array<{ id: number }>) => {
-          let count = 0;
-          for (const row of rows) {
-            const info = archiveStmt.run(row.id);
-            count += info.changes;
-          }
-          return count;
-        },
-      );
+        // Invariant: candidate selection and archival share this transaction and
+        // eligibility predicate, so a fact accessed by another process before the
+        // write lock is taken no longer satisfies access_count = 0 at update time.
+        const info = db
+          .prepare(`UPDATE facts SET superseded_by = id WHERE ${eligibleWhere}`)
+          .run(...eligibilityParams);
 
-      const archived = archiveMany(candidates) as number;
+        return { candidates: candidateCount, archived: info.changes };
+      });
+
+      const { candidates, archived } = archiveEligible() as {
+        candidates: number;
+        archived: number;
+      };
 
       await touchStamp(dir, now);
-      return { skipped: false, candidates: candidates.length, archived };
+      return { skipped: false, candidates, archived };
     } finally {
       db.close();
     }

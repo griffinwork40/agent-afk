@@ -2,7 +2,7 @@
 
 Generated from `src/config/env.ts`. Do not edit by hand — run `pnpm scan:env` after changing the registry source.
 
-**213 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
+**215 vars** across 13 categories. Every `process.env[...]` read in `src/` outside `src/config/env.ts` is a CI failure (enforced by `pnpm audit:env:check`).
 
 To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV_REGISTRY`), then run `pnpm scan:env`.
 
@@ -257,6 +257,8 @@ To add a var: edit `src/config/env.ts` (add a getter on `env` + an entry in `ENV
 | `AFK_IMAGE_SESSION_LIMIT` | string |  |  |  | Maximum number of images the image_generate tool may produce per session. Prevents runaway spend in autonomous loops. Default: 10. |
 | `AFK_LEASE_TTL_MS` | number |  |  | `600000` | Lease TTL in milliseconds for durable task execution (issue #1411). A leased task whose lease expires before it completes is recovered and re-enqueued (or dead-lettered if maxAttempts is exhausted). Default: 600000 (10 minutes). |
 | `AFK_MEMORY_EVIDENCE_GATE` | boolean |  | `1` | `0` | Evidence gate for durable memory writes. When enabled, a codebase fact (memory_update category "convention") stored without an evidence citation is recalled as [unverified], and memory_search results carry a verification verdict. User preferences and agent reflections are never gated. On by default. Set to 0 to disable. |
+| `AFK_MEMORY_GC_MIN_AGE_DAYS` | number |  | `90` | `60` | Minimum age in days for a never-accessed fact to become a GC candidate. Only meaningful when AFK_MEMORY_GC_SWEEP_ENABLE=1. Default 90 (three months). Must be a positive number; invalid values fall back to the default. |
+| `AFK_MEMORY_GC_SWEEP_ENABLE` | boolean |  | `0` | `1` | Enable the periodic soft-delete GC sweep for the fact archive. When set to 1, never-accessed facts older than AFK_MEMORY_GC_MIN_AGE_DAYS are marked superseded (soft-deleted) at most once every 24 hours at session start. Off by default — enable only when archive noise becomes measurable. "preference" facts are always excluded regardless of this setting. |
 | `AFK_NOTIFY` | boolean |  |  | `1` | Emit a desktop completion notification (OSC 9) on turn completion, for terminals that map OSC 9 to system notifications (iTerm2, kitty, WezTerm). Opt-in and off by default (intrusive). 1 = on. TTY-only. |
 | `AFK_PEER_INBOUND` | string |  | `accept` | `hold` | How this REPL session handles incoming peer messages. 'accept' (default) delivers messages to the model at the next idle turn. 'hold' writes them to held/ for /inbox review. 'off' ignores incoming messages. Invalid values fall back to 'accept' with a one-time warning emitted via debugLog (visible under AFK_DEBUG=1). |
 | `AFK_PEER_POLL_MS` | number |  | `1000` | `2000` | Polling interval in milliseconds for the peer inbox notifier when fs.watch is unavailable or unreliable. Default 1000. |

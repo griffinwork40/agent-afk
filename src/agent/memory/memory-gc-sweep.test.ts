@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import BetterSqlite3 from 'better-sqlite3';
@@ -16,6 +16,7 @@ import { MemoryStore } from './memory-store.js';
 import {
   sweepMemoryGc,
   MEMORY_GC_MIN_AGE_DAYS_DEFAULT,
+  MEMORY_ACCESS_TRACKING_STARTED_AT,
   GC_EXCLUDED_CATEGORIES,
 } from './memory-gc-sweep.js';
 
@@ -48,6 +49,12 @@ function setAccessCount(factId: number, count: number): void {
   db.close();
 }
 
+function trackingDatePlusDays(days: number): string {
+  return new Date(
+    Date.parse(MEMORY_ACCESS_TRACKING_STARTED_AT) + days * 24 * 60 * 60 * 1000,
+  ).toISOString();
+}
+
 /** Read superseded_by for a fact directly. */
 function readSupersededBy(factId: number): number | null {
   const db = new BetterSqlite3(join(tmpDir, 'memory.db'), { readonly: true });
@@ -59,6 +66,9 @@ function readSupersededBy(factId: number): number | null {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2027-01-15T00:00:00.000Z'));
+
   tmpDir = join(
     tmpdir(),
     `afk-mem-gc-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -73,6 +83,7 @@ afterEach(() => {
   store.close();
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 // ---------------------------------------------------------------------------
@@ -161,6 +172,44 @@ describe('sweepMemoryGc — eligibility: never-accessed + old enough', () => {
 
     expect(result.candidates).toBe(0);
     expect(result.archived).toBe(0);
+  });
+
+  it('does NOT archive pre-tracking facts with zero access_count', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Legacy fact predating access tracking.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, '2026-09-22T23:59:59.000Z');
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: 1,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(0);
+    expect(result.archived).toBe(0);
+    expect(readSupersededBy(id)).toBeNull();
+  });
+
+  it('measures age from the access-tracking epoch for post-tracking facts', async () => {
+    const id = store.storeFact({
+      category: 'decision',
+      content: 'Tracked-era fact old enough to archive.',
+      source_surface: 'cli',
+    });
+    backdateFactSync(id, trackingDatePlusDays(1));
+
+    const result = await sweepMemoryGc({
+      memoryDir: tmpDir,
+      minAgeDays: 1,
+      force: true,
+    });
+
+    expect(result.candidates).toBe(1);
+    expect(result.archived).toBe(1);
+    expect(readSupersededBy(id)).toBe(id);
   });
 });
 
@@ -283,7 +332,9 @@ describe('sweepMemoryGc — soft-delete: rows are recoverable', () => {
 describe('sweepMemoryGc — throttle: at most once per interval', () => {
   it('skips when stamp is fresh (force=false)', async () => {
     // Write a stamp that looks recent.
-    writeFileSync(join(tmpDir, '.last-gc-sweep'), new Date().toISOString());
+    const stampPath = join(tmpDir, '.last-gc-sweep');
+    writeFileSync(stampPath, new Date().toISOString());
+    utimesSync(stampPath, new Date(), new Date());
 
     const result = await sweepMemoryGc({ memoryDir: tmpDir });
     expect(result.skipped).toBe(true);
@@ -291,7 +342,9 @@ describe('sweepMemoryGc — throttle: at most once per interval', () => {
   });
 
   it('runs when force=true even with a fresh stamp', async () => {
-    writeFileSync(join(tmpDir, '.last-gc-sweep'), new Date().toISOString());
+    const stampPath = join(tmpDir, '.last-gc-sweep');
+    writeFileSync(stampPath, new Date().toISOString());
+    utimesSync(stampPath, new Date(), new Date());
 
     const result = await sweepMemoryGc({ memoryDir: tmpDir, force: true });
     expect(result.skipped).toBe(false);
