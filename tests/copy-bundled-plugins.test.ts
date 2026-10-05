@@ -1,7 +1,5 @@
-// Windows: .mjs dynamic import of scripts/lib/copy-bundled-plugins.mjs fails on Windows (#703)
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 
-const isWin32 = process.platform === 'win32';
 import {
   mkdtempSync,
   mkdirSync,
@@ -10,9 +8,9 @@ import {
   existsSync,
   readFileSync,
 } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const scriptsDir = join(testDir, '..', 'scripts');
@@ -20,14 +18,17 @@ const scriptsDir = join(testDir, '..', 'scripts');
 // Dynamic import of the build-script helper — mirrors tests/postinstall.test.ts,
 // which does `await import('../scripts/postinstall.mjs')`. scripts/ is outside
 // tsconfig's `include`, so this stays untyped-JS interop, which is fine here.
+// pathToFileURL converts the absolute path to a file:// URL so Windows ESM
+// loaders accept it (bare absolute paths like C:\... are rejected by the loader).
 type CopyResult = { copied: boolean; fileCount: number; src: string; dest: string };
 let copyBundledPlugins: (srcRoot: string, distRoot: string) => CopyResult;
 
 beforeAll(async () => {
-  ({ copyBundledPlugins } = await import('../scripts/lib/copy-bundled-plugins.mjs'));
+  const url = pathToFileURL(resolve(testDir, '..', 'scripts', 'lib', 'copy-bundled-plugins.mjs')).href;
+  ({ copyBundledPlugins } = await import(url));
 });
 
-describe.skipIf(isWin32)('copyBundledPlugins', () => {
+describe('copyBundledPlugins', () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -77,7 +78,7 @@ describe.skipIf(isWin32)('copyBundledPlugins', () => {
   });
 });
 
-describe.skipIf(isWin32)('both build scripts route bundled-plugins through the shared helper', () => {
+describe('both build scripts route bundled-plugins through the shared helper', () => {
   // Wiring guard: the regression we are fixing was a SECOND, divergent copy
   // implementation. If a future edit re-introduces an inline copy (or drops the
   // helper call) in either build path, this fails — keeping the two paths unified.

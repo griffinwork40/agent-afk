@@ -52,6 +52,13 @@ export interface ToolEvent {
   result?: string;
   isError?: boolean;
   /**
+   * `true` when the tool result is a subagent's partial answer (e.g. a
+   * soft-deadline wind-down or tool-use cap on a compose node). Plumbed from
+   * `ToolResultChunk.incomplete`. Absent for clean completions. Written since
+   * #2970; older session files that lack this field are read as `undefined`.
+   */
+  incomplete?: boolean;
+  /**
    * Last ~240 characters of the tool's raw output, after secret redaction.
    * Present only on verification-like commands (test/lint/build) where the
    * result summary is commonly at the tail. Optional — absent on older records

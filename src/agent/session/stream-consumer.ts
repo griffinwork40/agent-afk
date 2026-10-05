@@ -167,6 +167,20 @@ function buildToolOutputEvent(
     ? { failureClass: event.failureClass }
     : {};
 
+  // Plumb compose soft-deadline partial flag through to both return branches.
+  // A persisted-output compose result can still carry incomplete: true when one
+  // or more of its nodes hit the soft deadline; omitting it from the persisted
+  // branch would silently drop the partial signal and leave compose_partial_nodes
+  // un-counted in the facet for any compose whose output was large enough to
+  // spill to disk.
+  const incompletePassthrough =
+    event.incomplete === true
+      ? {
+          incomplete: true as const,
+          ...(event.incompleteReason !== undefined && { incompleteReason: event.incompleteReason }),
+        }
+      : {};
+
   const parsed = parsePersistedOutput(event.content);
   if (parsed) {
     return {
@@ -182,6 +196,7 @@ function buildToolOutputEvent(
         ...displayPassthrough,
         ...batchPassthrough,
         ...failureClassPassthrough,
+        ...incompletePassthrough,
       },
     };
   }
@@ -214,6 +229,7 @@ function buildToolOutputEvent(
       ...(hiddenLineCount !== undefined && { hiddenLineCount }),
       ...(event.exitCode !== undefined && { exitCode: event.exitCode }),
       ...(event.durationMs !== undefined && { durationMs: event.durationMs }),
+      ...incompletePassthrough,
       ...displayPassthrough,
       ...batchPassthrough,
       ...failureClassPassthrough,

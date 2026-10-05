@@ -308,6 +308,20 @@ describe('runWhatif — predict-only path', () => {
     expect(stages).toContain('predict');
   });
 
+  it('emits [redundancy] Jaccard onProgress message on every run', async () => {
+    const deps = makeDeps();
+    const options = makeOptions({ verify: false });
+
+    await runWhatif(options, deps);
+
+    const messages = (deps.onProgress as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c: Array<{ message?: string }>) => c[0]?.message ?? '',
+    );
+    // The Jaccard pass must always emit an onProgress message — even for sub-ms
+    // passes — so operators can confirm the redundancy check ran.
+    expect(messages.some((m) => m.startsWith('[redundancy] Jaccard pass complete'))).toBe(true);
+  });
+
   it('includes headline', async () => {
     const deps = makeDeps();
     const report = await runWhatif(makeOptions({ verify: false }), deps);

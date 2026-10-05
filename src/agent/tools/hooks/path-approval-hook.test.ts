@@ -206,10 +206,11 @@ describe('createPathApprovalHook — session-scoped grants via context.grantMana
     expect(decision.reason).toContain('Sub-agent path access denied');
   });
 
-  it('context.grantManager takes precedence over opts.getGrantManager (the ref)', async () => {
-    // Ref grants the sibling; the injected (child) manager does NOT. If the
-    // injected manager wins, the fork write is restricted → auto-deny.
-    const refMgr = makeMockGrantManager({ writeRoots: [BASE, SIBLING] });
+  it('injected context.grantManager confines forked-child writes (restrictive injected manager denies out-of-root path)', async () => {
+    // The injected (child) manager grants only BASE. A write to the sibling
+    // path is outside those grants → restricted → auto-deny, regardless of
+    // what any parent-level ref might permit. (No stale opts.getGrantManager
+    // fallback exists; the hook reads context.grantManager directly.)
     const injectedMgr = makeMockGrantManager({ writeRoots: [BASE] });
     const { preToolUse } = createPathApprovalHook({
       getCwd: () => BASE,
@@ -359,16 +360,13 @@ describe('createPathApprovalHook — outcome mapping', () => {
     expect(mgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
   });
 
-  it('once: revoke targets the injected context.grantManager, not the ref (#514)', async () => {
+  it('once: revoke targets the injected context.grantManager (#514)', async () => {
     // #514 PostToolUse mirror: the dispatcher injects the executing session's
     // provider as context.grantManager on BOTH Pre and Post. The "Once"-grant
-    // must be added to — and revoked from — that SAME injected manager, never
-    // the process-global ref (opts.getGrantManager). Here the ref and the
-    // injected manager are DISTINCT instances: if the Post revoke hit the ref
-    // instead of the injected manager, the once-grant would leak on the
-    // injected manager (its writeRoots/readRoots would keep the granted path).
+    // must be added to — and revoked from — that SAME injected manager.
+    // There is no process-global ref fallback (#2748 removed opts.getGrantManager);
+    // the hook reads context.grantManager directly.
     elicitationRouter.install(async () => ({ action: 'accept', content: { choice: 'once' } }));
-    const refMgr = makeMockGrantManager();
     const injectedMgr = makeMockGrantManager();
     const { preToolUse, postToolUse } = createPathApprovalHook({
       getCwd: () => BASE,
@@ -376,25 +374,14 @@ describe('createPathApprovalHook — outcome mapping', () => {
     });
 
     // Pre: approve "once" against the INJECTED manager (context.grantManager).
-    const decision = await preToolUse({
-      ...preCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr),
-      grantManager: injectedMgr,
-    });
+    const decision = await preToolUse(preCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr));
     expect(decision).toEqual({});
     expect(injectedMgr._readRoots).toContain('/etc/hosts');
-    // The ref was never consulted or mutated for the add.
-    expect(refMgr._events).toHaveLength(0);
 
     // Post: revoke must land on the SAME injected manager the Pre check mutated.
-    postToolUse({
-      ...postCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr),
-      grantManager: injectedMgr,
-    });
+    postToolUse(postCtx('read_file', { file_path: '/etc/hosts' }, injectedMgr));
     expect(injectedMgr._readRoots).not.toContain('/etc/hosts');
     expect(injectedMgr._events.map((e) => e.op)).toEqual(['addRead', 'revoke']);
-    // The ref remained untouched throughout — proving the injected manager
-    // (not opts.getGrantManager) drove BOTH the add and the revoke.
-    expect(refMgr._events).toHaveLength(0);
   });
 
   it('session: adds to readRoots and caches; second call does not re-prompt', async () => {
