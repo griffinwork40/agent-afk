@@ -61,7 +61,7 @@ every field in that object, which events carry which fields, and the contract fo
 
 | Field | Type | Description |
 |---|---|---|
-| `stopHookActive` | `true \| undefined` | Present and `true` when a previous Stop hook in this turn already triggered a same-turn continuation (i.e. `continuation > 0`). Absent on the first Stop dispatch of a turn. Use this to distinguish a re-entry Stop from the original one. |
+| `stop_hook_active` | `true \| false` | `true` when a previous Stop hook in this turn already triggered a same-turn continuation (i.e. `continuation > 0`); `false` on the first Stop dispatch of a turn. Use this to distinguish a re-entry Stop from the original one. |
 | `continuation` | `number` | 0-based index of this Stop dispatch within the current turn. `0` on the first dispatch, `1` on the first continuation, etc. Always present. |
 
 #### Blocking Stop hooks and same-turn continuation (issue #2714)
