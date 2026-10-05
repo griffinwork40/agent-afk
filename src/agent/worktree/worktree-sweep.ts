@@ -39,6 +39,7 @@ import {
   classifyCandidate,
 } from './worktree-sweep.classify.js';
 export { MIN_EMPTY_AGE_MS } from './worktree-sweep.classify.js';
+import { resolveSchedulePins } from './worktree-sweep.schedule-pins.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,6 +105,12 @@ export interface SweepOptions {
    * worktree) is never reaped — even if the creator pid in meta is dead.
    */
   readPresence?: () => Promise<PresenceRecord[]>;
+  /**
+   * Override the schedules file path used by the schedule-pins guard.
+   * Defaults to the process-global schedules store (~/.afk/config/schedules.json).
+   * Injected by tests for hermeticity.
+   */
+  schedulesPath?: string;
 }
 
 interface SweepCandidateSummary {
@@ -292,6 +299,21 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
       // the meta.pid liveness check alone (prior behavior).
     }
 
+    // Schedule-pins guard: any worktree that is the cwd (or an ancestor of the
+    // cwd) of any scheduled task — enabled OR disabled — must never be reaped.
+    // A disabled schedule may be re-enabled at any time; reaping its target
+    // worktree would cause the next run to fail silently.
+    // Contract: resolveSchedulePins never throws; on error it returns an empty
+    // pin set and a diagnostic note appended below.
+    const registeredWorktreePaths = parsed
+      .filter((e) => !e.isBare && e.path !== parsed[0]?.path)
+      .map((e) => e.path);
+    const schedulePins = await resolveSchedulePins(
+      registeredWorktreePaths,
+      options.schedulesPath,
+    );
+    for (const note of schedulePins.notes) result.warnings.push(note);
+
     // Process registered worktrees (skip main/bare)
     let hasOrphanedRegistrations = false;
     const mainPath = parsed[0]?.path;
@@ -479,7 +501,14 @@ export async function runSweep(options: SweepOptions): Promise<SweepResult> {
         ownerLiveness,
       };
 
-      const verdict = classifyCandidate(candidate, maxAgeDaysClean, maxAgeDaysDirty);
+      let verdict = classifyCandidate(candidate, maxAgeDaysClean, maxAgeDaysDirty);
+      const pinnedByTaskId = schedulePins.pinnedByTask.get(entry.path);
+      if (pinnedByTaskId !== undefined && verdict !== 'active' && verdict !== 'locked') {
+        result.warnings.push(
+          `[INFO] worktree schedule-pinned by task '${pinnedByTaskId}' (will not be reaped): ${entry.path}`,
+        );
+        verdict = 'active';
+      }
       result.candidates.push({ path: entry.path, verdict, owner: resolvedOwner, ageMs });
 
       if (effectiveDryRun) continue;
