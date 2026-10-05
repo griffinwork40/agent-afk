@@ -19,6 +19,7 @@ import {
   readdirSync,
   rmSync,
 } from 'node:fs';
+import { rmSyncRetry } from '../__test-utils__/rm-sync-retry.js';
 import { join, resolve, tmpdir } from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
@@ -43,7 +44,10 @@ function tmpDir(): string {
 
 /**
  * Build a fake AFK_HOME tree with:
- *   - config/afk.env  (has ANTHROPIC_API_KEY + AFK_MODEL)
+ *   - config/afk.env  (has ANTHROPIC_API_KEY + AFK_MODEL + sandbox-owned keys
+ *                       AFK_HOME/AFK_STATE_DIR/AFK_FRAMEWORK_DIR to simulate
+ *                       the issue-2428 scenario where the operator's afk.env
+ *                       sets these to real paths)
  *   - AFK.md
  *   - skills/a, skills/b  (directories, simulating skill entries)
  *   - plugins/p1  (directory)
@@ -60,6 +64,10 @@ function buildFakeHome(dir: string): string {
       'ANTHROPIC_API_KEY=sk-ant-secret123',
       'AFK_MODEL=claude-sonnet-4-5',
       'AFK_EFFORT=high',
+      // Issue #2428: operator afk.env may set these to real paths
+      'AFK_HOME=/real/afk/home',
+      'AFK_STATE_DIR=/real/afk/state',
+      'AFK_FRAMEWORK_DIR=/real/afk/framework',
     ].join('\n'),
     'utf8',
   );
@@ -98,6 +106,26 @@ describe('materializeSandboxes: home layout', () => {
 
   afterEach(async () => {
     rmSync(root, { recursive: true, force: true });
+  });
+
+  // Issue #2425: sandbox paths must not reveal arm names ('baseline'/'candidate').
+  it('sandbox home paths do not contain the strings "baseline" or "candidate"', async () => {
+    const spec: ChangeSpec = { title: 'noop', changes: [] };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      expect(baseline.home).not.toMatch(/baseline/i);
+      expect(baseline.home).not.toMatch(/candidate/i);
+      expect(candidate.home).not.toMatch(/baseline/i);
+      expect(candidate.home).not.toMatch(/candidate/i);
+    } finally {
+      await cleanup();
+    }
   });
 
   it('creates baseline and candidate home directories', async () => {
@@ -143,6 +171,53 @@ describe('materializeSandboxes: home layout', () => {
     expect(baseline.launch.unset).toContain('AFK_MODEL');
     expect(candidate.launch.unset).toContain('AFK_MODEL');
     expect(candidate.launch.unset).not.toContain('ANTHROPIC_API_KEY');
+    await cleanup();
+  });
+
+  // Issue #2428: sandbox-owned keys must NOT appear in launch.unset and must
+  // be stripped from the sandbox afk.env copy (so dotenv can't fill them back).
+  it('does not include AFK_FRAMEWORK_DIR in launch.unset (issue #2428)', async () => {
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    expect(baseline.launch.unset ?? []).not.toContain('AFK_FRAMEWORK_DIR');
+    expect(candidate.launch.unset ?? []).not.toContain('AFK_FRAMEWORK_DIR');
+    await cleanup();
+  });
+
+  it('does not include AFK_HOME or AFK_STATE_DIR in launch.unset (issue #2428)', async () => {
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    for (const env of [baseline, candidate]) {
+      expect(env.launch.unset ?? []).not.toContain('AFK_HOME');
+      expect(env.launch.unset ?? []).not.toContain('AFK_STATE_DIR');
+    }
+    await cleanup();
+  });
+
+  it('strips AFK_HOME/AFK_STATE_DIR/AFK_FRAMEWORK_DIR from the sandbox afk.env copy (issue #2428)', async () => {
+    const { candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec: { title: 'noop', changes: [] },
+      baseLaunch: BASE_LAUNCH,
+    });
+    const envContent = readFileSync(join(candidate.home, 'config', 'afk.env'), 'utf8');
+    expect(envContent).not.toContain('AFK_HOME');
+    expect(envContent).not.toContain('AFK_STATE_DIR');
+    expect(envContent).not.toContain('AFK_FRAMEWORK_DIR');
+    // Ordinary non-credential keys are still present
+    expect(envContent).toContain('AFK_MODEL');
     await cleanup();
   });
 
@@ -231,17 +306,80 @@ describe('materializeSandboxes: home layout', () => {
     await cleanup();
   });
 
-  it('cleanup removes sandboxes directory', async () => {
+  // Issue #2466: each arm now gets its own root under os.tmpdir(), so there
+  // is no shared sandboxes/ dir under runDir. The arm roots are cleaned up
+  // independently; we verify the homes are gone after cleanup.
+  it('cleanup removes both arm home directories', async () => {
     const spec: ChangeSpec = { title: 'noop', changes: [] };
-    const { cleanup } = await materializeSandboxes({
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
       realHome,
       realCwd: root,
       runDir,
       spec,
       baseLaunch: BASE_LAUNCH,
     });
+    // Record arm roots (parent of home)
+    const baselineRoot = resolve(join(baseline.home, '..'));
+    const candidateRoot = resolve(join(candidate.home, '..'));
     await cleanup();
-    expect(existsSync(join(runDir, 'sandboxes'))).toBe(false);
+    expect(existsSync(baselineRoot)).toBe(false);
+    expect(existsSync(candidateRoot)).toBe(false);
+  });
+
+  // Issue #2466: arm sandboxes must be isolated — neither arm's home nor
+  // project should be reachable by walking up from the other arm's paths
+  // within 4 levels (excluding os.tmpdir() itself and filesystem root).
+  it('arm sandbox roots share no whatif-owned ancestor within 4 levels', async () => {
+    const spec: ChangeSpec = { title: 'noop', changes: [] };
+    const { baseline, candidate, cleanup } = await materializeSandboxes({
+      realHome,
+      realCwd: root,
+      runDir,
+      spec,
+      baseLaunch: BASE_LAUNCH,
+    });
+    try {
+      const sysTmpdir = resolve(os.tmpdir());
+
+      function ancestorsWithin(p: string, levels: number): string[] {
+        const acc: string[] = [];
+        let cur = resolve(p);
+        for (let i = 0; i < levels; i++) {
+          const parent = resolve(join(cur, '..'));
+          if (parent === cur) break; // filesystem root
+          if (resolve(parent) === sysTmpdir) break; // stop at os.tmpdir()
+          acc.push(parent);
+          cur = parent;
+        }
+        return acc;
+      }
+
+      const baselineHome = resolve(baseline.home);
+      const candidateHome = resolve(candidate.home);
+      const baselineRoot = resolve(join(baselineHome, '..'));
+      const candidateRoot = resolve(join(candidateHome, '..'));
+
+      // Ancestors of baseline's home (up to 4 levels, stopping at tmpdir)
+      const baselineAncestors = ancestorsWithin(baselineHome, 4);
+      // Ancestors of candidate's home (up to 4 levels, stopping at tmpdir)
+      const candidateAncestors = ancestorsWithin(candidateHome, 4);
+
+      // candidate root must NOT appear among baseline's ancestors
+      for (const anc of baselineAncestors) {
+        expect(resolve(anc)).not.toBe(candidateRoot);
+      }
+      // baseline root must NOT appear among candidate's ancestors
+      for (const anc of candidateAncestors) {
+        expect(resolve(anc)).not.toBe(baselineRoot);
+      }
+
+      // Also assert: baseline home is not a descendant of candidate root
+      expect(baselineHome.startsWith(candidateRoot + '/')).toBe(false);
+      // And candidate home is not a descendant of baseline root
+      expect(candidateHome.startsWith(baselineRoot + '/')).toBe(false);
+    } finally {
+      await cleanup();
+    }
   });
 });
 
@@ -465,6 +603,21 @@ describe('env operator', () => {
     ).rejects.toThrow();
   });
 
+  // Issue #2428: AFK_FRAMEWORK_DIR must be reserved alongside AFK_HOME/AFK_STATE_DIR
+  it('rejects AFK_FRAMEWORK_DIR (issue #2428)', async () => {
+    const op = getOperator('env');
+    await expect(
+      op.apply({ kind: 'env', key: 'AFK_FRAMEWORK_DIR', value: '/evil' }, makeCandidateEnv(), ctx),
+    ).rejects.toThrow();
+  });
+
+  it('rejects AFK_STATE_DIR', async () => {
+    const op = getOperator('env');
+    await expect(
+      op.apply({ kind: 'env', key: 'AFK_STATE_DIR', value: '/evil' }, makeCandidateEnv(), ctx),
+    ).rejects.toThrow();
+  });
+
   it('accepts non-secret env vars', async () => {
     const op = getOperator('env');
     const env = makeCandidateEnv();
@@ -579,7 +732,7 @@ describe('materializeSandboxes: git worktrees', () => {
   });
 
   afterEach(async () => {
-    rmSync(root, { recursive: true, force: true });
+    rmSyncRetry(root);
   });
 
   it('creates project worktrees for both envs; cleanup removes sandboxes', async () => {
@@ -607,8 +760,13 @@ describe('materializeSandboxes: git worktrees', () => {
     // Real repo untouched
     expect(existsSync(join(gitRepo, 'NEW.md'))).toBe(false);
 
+    // Record arm roots (parent of home) before cleanup
+    const baselineRoot = resolve(join(baseline.home, '..'));
+    const candidateRoot = resolve(join(candidate.home, '..'));
     await cleanup();
-    expect(existsSync(join(runDir, 'sandboxes'))).toBe(false);
+    // Both per-arm roots should be removed (issue #2466: no shared sandboxes/ dir)
+    expect(existsSync(baselineRoot)).toBe(false);
+    expect(existsSync(candidateRoot)).toBe(false);
   });
 
   it('throws when specTouchesProject but cwd is not a git repo', async () => {

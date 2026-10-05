@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { rmSyncRetry } from '../../../__test-utils__/rm-sync-retry.js';
 import { stripEscapeSequences } from '../../../utils/terminal-sanitize.js';
 import type { SessionStats, SlashContext } from '../types.js';
 import { diffCmd } from './diff.js';
@@ -11,7 +12,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   delete process.env['AFK_DIFF_LINES'];
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSyncRetry(dir);
 });
 
 function repo(): string {
@@ -42,6 +43,7 @@ function context(cwd: string): { ctx: SlashContext; output: string[] } {
 }
 
 describe('/diff', () => {
+  // Skipped on Windows: tests use POSIX 'test -e'/'touch' and chmod — genuinely POSIX-only.
   it.skipIf(process.platform === 'win32')('passes a pathspec as data instead of shell syntax', async () => {
     // Uses POSIX `test -e` and `touch` commands — POSIX-only.
     const cwd = repo();
@@ -54,6 +56,7 @@ describe('/diff', () => {
     expect(() => execFileSync('test', ['-e', marker])).toThrow();
   });
 
+  // Skipped on Windows: chmod not available — genuinely POSIX-only.
   it.skipIf(process.platform === 'win32')('renders mode-only changes that have no text patch headers', async () => {
     // chmod is a POSIX-only operation — Windows does not track executable bits.
     const cwd = repo();

@@ -229,6 +229,16 @@ describe('routes.schedules', () => {
       expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
     });
 
+    it('create: cwd: null is treated as absent (returns 201, no cwd passed to addSchedule)', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: null });
+      expect(json().status).toBe(201);
+      // addSchedule must have been called without a cwd field
+      expect(vi.mocked(addSchedule)).toHaveBeenCalledWith(
+        expect.not.objectContaining({ cwd: expect.anything() }),
+      );
+    });
+
     it('update: accepts a valid cwd', async () => {
       const { res, json } = makeRes();
       await handleUpdateSchedule(res, 'nightly-forge', { cwd: dir });
@@ -246,9 +256,36 @@ describe('routes.schedules', () => {
       expect(vi.mocked(updateSchedule)).not.toHaveBeenCalled();
     });
 
-    it('update: rejects an empty cwd with 400', async () => {
+    it('update: cwd: "" clears a previously-pinned cwd (null semantics)', async () => {
       const { res, json } = makeRes();
       await handleUpdateSchedule(res, 'nightly-forge', { cwd: '' });
+      expect(json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith(
+        'nightly-forge',
+        expect.objectContaining({ cwd: null }),
+      );
+    });
+
+    it('update: cwd: null clears a previously-pinned cwd', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: null });
+      expect(json().status).toBe(200);
+      expect(vi.mocked(updateSchedule)).toHaveBeenCalledWith(
+        'nightly-forge',
+        expect.objectContaining({ cwd: null }),
+      );
+    });
+
+    it('create: rejects a numeric cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleCreateSchedule(res, { ...base, cwd: 123 });
+      expect(json().status).toBe(400);
+      expect(vi.mocked(addSchedule)).not.toHaveBeenCalled();
+    });
+
+    it('update: rejects a numeric cwd with 400', async () => {
+      const { res, json } = makeRes();
+      await handleUpdateSchedule(res, 'nightly-forge', { cwd: 123 });
       expect(json().status).toBe(400);
       expect(vi.mocked(updateSchedule)).not.toHaveBeenCalled();
     });

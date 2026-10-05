@@ -62,6 +62,10 @@ export async function* runToolRound(
   // terminating in an unmatched `tool_use` — every subsequent API call 400s.
   const messagesRollbackIdx = input.messages.length;
   input.messages.push({ role: 'assistant', content: turnResult.assistantBlocks });
+  // Journal commit point: durably record the tool_use round BEFORE tools run,
+  // so a crash mid-dispatch still leaves the model's request on disk. A
+  // rollback splice below is reconciled (truncate) by the next sync.
+  input.journalSync?.sync(input.messages);
 
   try {
     // Accumulate the cumulative tool-call tally BEFORE dispatch so the progress

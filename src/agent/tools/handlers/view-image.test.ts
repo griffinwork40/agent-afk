@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { createViewImageHandler } from './view-image.js';
 import { readImageDimensions } from './_image-dimensions.js';
@@ -157,14 +158,16 @@ const signal = new AbortController().signal;
 // Setup / teardown
 // ---------------------------------------------------------------------------
 
-let tmpDir: string;
+let tmpDir: string | undefined;
 
 beforeEach(async () => {
-  tmpDir = await fs.mkdtemp('/tmp/afk-view-image-test-');
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-view-image-test-'));
 });
 
 afterEach(async () => {
-  await fs.rm(tmpDir, { recursive: true, force: true });
+  if (tmpDir !== undefined) {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -576,8 +579,9 @@ describe('view_image handler — error paths', () => {
 
   it('returns isError when file is outside the allowed read root', async () => {
     // Create a file outside the cwd that the handler is confined to
-    const outsideDir = await fs.mkdtemp('/tmp/afk-view-image-outside-');
+    let outsideDir: string | undefined;
     try {
+      outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'afk-view-image-outside-'));
       const outsideFile = path.join(outsideDir, 'secret.png');
       await fs.writeFile(outsideFile, makePngBuffer(10, 10));
 
@@ -588,7 +592,9 @@ describe('view_image handler — error paths', () => {
       expect(result.isError).toBe(true);
       expect(result.content).toContain('outside the allowed');
     } finally {
-      await fs.rm(outsideDir, { recursive: true, force: true });
+      if (outsideDir !== undefined) {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
     }
   });
 });

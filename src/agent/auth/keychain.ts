@@ -19,30 +19,64 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 // fast-fail (`undefined`) path instead of blocking startup.
 const OAUTH_REFRESH_TIMEOUT_MS = 10_000;
 
+// Short-lived read cache for `loadClaudeCodeOauthToken`. The keychain now
+// outranks the boot-time cache in credential-resolver, so every Anthropic
+// credential read (including from forked subagents) calls `execFileSync
+// security` on macOS. A 5-second window amortises that cost across the
+// hot re-resolve path (tool calls within one session) while staying well
+// inside any real-world token-rotation window (tokens expire in hours, not
+// seconds). The cache is intentionally per-process: subagents are separate
+// processes and must read the live store directly.
+const READ_CACHE_TTL_MS = 5_000;
+let _readCacheValue: string | undefined;
+let _readCacheExpiresAt = 0;
+
+/** @internal Exposed for tests that need hermetic control over the cache. */
+export function _resetKeychainReadCache(): void {
+  _readCacheValue = undefined;
+  _readCacheExpiresAt = 0;
+}
+
 /**
  * Read the Claude Code OAuth access token from its native credential store.
  *
  * Sources, by platform:
  *   - macOS  → macOS Keychain entry `Claude Code-credentials`
- *   - linux  → `~/.claude/.credentials.json`
- *   - win32  → not supported; returns `undefined`
+ *   - linux / win32 / other → `~/.claude/.credentials.json`
+ *     (Claude Code stores credentials in this plaintext file on every
+ *     platform except macOS; on Windows `homedir()` is `%USERPROFILE%`)
  *
  * Returns `undefined` when the entry is missing, malformed, or the access
  * token is past its `expiresAt`. This sync variant does not attempt a refresh;
  * use {@link refreshClaudeCodeOauthToken} for async refresh on 401.
  */
 export function loadClaudeCodeOauthToken(): string | undefined {
+  const now = Date.now();
+  if (now < _readCacheExpiresAt) return _readCacheValue;
+
+  // Reset cache before each live read so that failures never populate it.
+  // Only a successful token read sets _readCacheExpiresAt; failure paths
+  // leave it at 0 so the next call always re-reads the store (preventing
+  // the stale "no credential" window that occurred when `claude login` ran
+  // while a bot or daemon process was live).
+  _readCacheValue = undefined;
+  _readCacheExpiresAt = 0;
+
   const blob = readCredentialsBlob();
   if (blob === undefined) return undefined;
+
   const parsed = parseCredentials(blob);
   if (parsed === undefined) return undefined;
-  if (parsed.expiresAt !== undefined && parsed.expiresAt <= Date.now()) {
+
+  if (parsed.expiresAt !== undefined && parsed.expiresAt <= now) {
     process.stderr.write(
       'agent-afk: Claude Code OAuth token in keychain is expired. Run `claude login` to refresh.\n',
     );
     return undefined;
   }
-  return parsed.accessToken;
+  _readCacheValue = parsed.accessToken;
+  _readCacheExpiresAt = now + READ_CACHE_TTL_MS;
+  return _readCacheValue;
 }
 
 /**
@@ -52,7 +86,7 @@ export function loadClaudeCodeOauthToken(): string | undefined {
  * if expired or near-expiry, uses the stored `refreshToken` to obtain a
  * new access token from `platform.claude.com`. On success, writes the
  * updated credentials back to the same store Claude Code uses (keychain on
- * macOS, credentials file on Linux) — preserving all non-OAuth fields
+ * macOS, credentials file everywhere else) — preserving all non-OAuth fields
  * (e.g. `mcpOAuth`).
  *
  * Returns `undefined` when refresh is impossible or fails, and never throws
@@ -140,16 +174,27 @@ function readCredentialsBlob(): string | undefined {
       return undefined;
     }
   }
-  if (process.platform === 'linux') {
-    const path = join(homedir(), '.claude', '.credentials.json');
-    if (!existsSync(path)) return undefined;
-    try {
-      return readFileSync(path, 'utf-8');
-    } catch {
-      return undefined;
-    }
+  // Every non-macOS platform (linux, win32, ...) uses the plaintext file.
+  // History: this branch was linux-only, so win32 silently returned
+  // `undefined` and `afk login` asked Windows users for an API key even
+  // after a successful `claude login`.
+  const path = claudeCodeCredentialsPath();
+  if (!existsSync(path)) return undefined;
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return undefined;
   }
-  return undefined;
+}
+
+/**
+ * Path of Claude Code's plaintext credential file, used on every platform
+ * except macOS (which uses the Keychain).
+ *
+ * @internal Exported for tests.
+ */
+export function claudeCodeCredentialsPath(): string {
+  return join(homedir(), '.claude', '.credentials.json');
 }
 
 function parseCredentials(blob: string): ParsedCredentials | undefined {
@@ -242,6 +287,11 @@ export function parseAccountIdentifier(token: string): string {
 }
 
 function writeCredentialsBlob(blob: string): void {
+  // Invalidate the read cache so that the very next loadClaudeCodeOauthToken
+  // call reads the freshly-written store rather than returning a stale value
+  // (guards the `claude login` race where writes occurred while a bot or
+  // daemon process was live inside the 5-second cache window).
+  _resetKeychainReadCache();
   if (process.platform === 'darwin') {
     execFileSync(
       'security',
@@ -254,8 +304,8 @@ function writeCredentialsBlob(blob: string): void {
       ],
       { stdio: ['ignore', 'ignore', 'ignore'] },
     );
-  } else if (process.platform === 'linux') {
-    const path = join(homedir(), '.claude', '.credentials.json');
+  } else {
+    const path = claudeCodeCredentialsPath();
     // S3 fix: write with mode 0o600 so only the owner can read credentials.
     // Constraint: POSIX file-mode semantics — mode must be set at creation time
     // because a subsequent chmod would TOCTOU-race. Pass mode in the options

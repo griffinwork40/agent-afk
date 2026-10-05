@@ -22,6 +22,7 @@ import type { HookDecision, HookHandler } from '../hooks.js';
 import { MemoryStore } from './memory-store.js';
 import { deriveActor } from '../session/session-identity.js';
 import { isSubagentContext } from '../hooks/hook-utils.js';
+import type { ForkSignals } from './memory-hot-guard.js';
 
 /**
  * Build a PreToolUse hook that blocks `memory_update` with `target: "hot"` in
@@ -44,13 +45,20 @@ import { isSubagentContext } from '../hooks/hook-utils.js';
  *   dispatcher throws HookBlockedError and returns `is_error: true` with an
  *   explanation that directs the model to use target:"fact" instead.
  * - `{}` for anything else (non-subagent, non-memory_update, target:"fact").
+ *
+ * @param forkSignals Optional fork signals captured at registration time.
+ *   Pass `{ subagentToolOutputCapBytes }` (from the agent config) to cover
+ *   skill forks that run under a stub parent: those sessions have no
+ *   `parentSessionId` in `PreToolUseContext` but are still forked children.
+ *   The predicate is "parentSessionId in context OR any fork signal set" —
+ *   the same semantics as `isForkedChildSession`.
  */
-export function createChildMemoryHotBlockHook(): HookHandler {
+export function createChildMemoryHotBlockHook(forkSignals?: ForkSignals): HookHandler {
   return (context): HookDecision => {
     if (context.event !== 'PreToolUse') return {};
     if (context.toolName !== 'memory_update') return {};
     // Only apply to forked sub-agent sessions.
-    if (!isSubagentContext(context)) return {};
+    if (!isSubagentContext(context, forkSignals)) return {};
 
     // Inspect the `target` field from the tool input.
     const input = context.input as { target?: string } | undefined;

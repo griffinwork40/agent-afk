@@ -359,8 +359,8 @@ describe('readFileHandler cwd containment', () => {
     }
   });
 
-  it('rejects absolute path outside context.cwd', async () => {
-    const context: ToolHandlerContext = { cwd: tempDir };
+  it('rejects absolute path outside context.resolveBase', async () => {
+    const context: ToolHandlerContext = { resolveBase: tempDir };
     const result = await readFileHandler(
       { file_path: '/etc/passwd' },
       new AbortController().signal,
@@ -370,10 +370,10 @@ describe('readFileHandler cwd containment', () => {
     expect(result.content).toMatch(/outside the allowed/);
   });
 
-  it('resolves relative path against context.cwd', async () => {
+  it('resolves relative path against context.resolveBase', async () => {
     const filePath = join(tempDir, 'relative.txt');
     await fs.writeFile(filePath, 'hello\nworld\n');
-    const context: ToolHandlerContext = { cwd: tempDir };
+    const context: ToolHandlerContext = { resolveBase: tempDir };
 
     const result = await readFileHandler(
       { file_path: 'relative.txt' },
@@ -384,10 +384,10 @@ describe('readFileHandler cwd containment', () => {
     expect(result.content).toContain('hello');
   });
 
-  it('allows absolute path within context.cwd', async () => {
+  it('allows absolute path within context.resolveBase', async () => {
     const filePath = join(tempDir, 'inside.txt');
     await fs.writeFile(filePath, 'inside content\n');
-    const context: ToolHandlerContext = { cwd: tempDir };
+    const context: ToolHandlerContext = { resolveBase: tempDir };
 
     const result = await readFileHandler(
       { file_path: filePath },

@@ -38,9 +38,10 @@ export function expandCwd(rawCwd: string): string {
  * Returns `{ ok: true; resolved: string }` on success or
  * `{ ok: false; error: string }` on failure — never throws.
  *
- * The resolved (absolute) path is what gets persisted to schedules.json,
- * so tilde entries stored in an older file are transparently normalised
- * when any surface touches them.
+ * The resolved (absolute) path is what gets persisted to schedules.json.
+ * Any hand-edited tilde entries that bypass this validator are expanded at
+ * runtime by `toScheduledTask` (via `expandCwd`) before the daemon checks them,
+ * so legacy `~/repo` entries do not cause spurious runtime errors.
  */
 export function validateScheduleCwd(
   rawCwd: string,
@@ -101,4 +102,15 @@ export function checkTaskCwdAtRuntime(cwd: string): string | undefined {
   } catch {
     return `per-task cwd does not exist: ${cwd}`;
   }
+}
+
+/**
+ * Builtin tasks ignore `cwd` entirely, so a `cwd` on one is a misconfiguration.
+ * Surface it as a warning rather than failing the run, since the task can still
+ * execute correctly. Kept here (not inline in scheduler.ts) to keep all
+ * per-task cwd policy in one module.
+ */
+export function warnIfBuiltinHasCwd(task: { taskId: string; cwd?: string | undefined }): void {
+  if (task.cwd === undefined) return;
+  console.error(`[daemon] task "${task.taskId}": cwd is ignored by builtin tasks`);
 }

@@ -22,7 +22,7 @@ import { promises as fs } from 'node:fs';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import type { ExecFileFn } from '../../worktree/worktree-sweep.js';
 import { registerWorktreeRoot } from '../../worktree/worktree-root-registry.js';
-import { hasNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
+import { probeNonRebuildableIgnoredFiles } from '../../worktree/worktree-ignored-probe.js';
 import { env } from '../../../config/env.js';
 import { errorMessage } from '../../../utils/errors.js';
 
@@ -63,6 +63,42 @@ export function sanitizeSlug(name: string): string {
 }
 
 /**
+ * Probe for the remote's default branch ref (e.g. `origin/main`) at `repoRoot`
+ * without hitting the network. Tries `refs/remotes/origin/HEAD` first (set by
+ * `git clone`), then the conventional `origin/main` / `origin/master` tracking
+ * refs. Returns `undefined` when no remote default is discoverable (local-only
+ * repo, or no `origin` remote configured).
+ *
+ * All calls are local ref reads — no fetch. The returned value is a short
+ * tracking-ref name (e.g. `"origin/main"`), not a SHA — callers resolve it.
+ *
+ * Exported only for testing.
+ * @internal
+ */
+export async function detectRemoteDefaultRef(
+  execFile: ExecFileFn,
+  repoRoot: string,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFile('git', [
+      '-C', repoRoot, 'symbolic-ref', '--short', '--quiet', 'refs/remotes/origin/HEAD',
+    ]);
+    const ref = stdout.trim();
+    if (ref.length > 0) return ref; // e.g. "origin/main"
+  } catch { /* origin/HEAD not set — try conventional names */ }
+
+  for (const candidate of ['origin/main', 'origin/master']) {
+    try {
+      const { stdout } = await execFile('git', [
+        '-C', repoRoot, 'rev-parse', '--verify', '--quiet', `${candidate}^{commit}`,
+      ]);
+      if (stdout.trim().length > 0) return candidate;
+    } catch { /* tracking ref not present locally */ }
+  }
+  return undefined;
+}
+
+/**
  * Contract: resolve the DEFAULT base ref at `anchor` — the calling session's own
  * checkout — returning a concrete SHA.
  *
@@ -79,11 +115,31 @@ export function sanitizeSlug(name: string): string {
  * Documented fallback: when the anchor has no resolvable HEAD (not a git repo, or
  * an unborn branch) this returns the literal `'HEAD'` — the pre-#760 behaviour —
  * so the change can never turn a previously working create into a failure.
+ *
+ * #2749: prefer the remote's default branch over the mutable local `HEAD`. When
+ * multiple concurrent sessions share the same main checkout, `HEAD` is a live
+ * pointer that changes under each git checkout/merge/rebase, causing different
+ * sessions to silently receive different bases. `origin/HEAD` (or the conventional
+ * `origin/main` / `origin/master` fallback) is only updated by `git fetch`, which
+ * is far less frequent and never triggered by local workspace operations — making
+ * it a stable, session-safe default. The fallback to local `HEAD` is preserved so
+ * local-only repos (no remote) continue to work unchanged.
  */
 export async function resolveAnchorBaseRef(
   execFile: ExecFileFn,
   anchor: string,
 ): Promise<string> {
+  // #2749: try the remote default branch first (stable across concurrent sessions).
+  try {
+    const remoteRef = await detectRemoteDefaultRef(execFile, anchor);
+    if (remoteRef !== undefined) {
+      const out = await execFile('git', ['-C', anchor, 'rev-parse', remoteRef]);
+      const sha = out.stdout.trim();
+      if (sha) return sha;
+    }
+  } catch { /* fall through to local HEAD */ }
+
+  // Fall back to the local HEAD (backward-compat for repos with no remote).
   try {
     const out = await execFile('git', ['-C', anchor, 'rev-parse', 'HEAD']);
     const sha = out.stdout.trim();
@@ -205,7 +261,12 @@ export type GuardedRemoveOutcome =
   | { removed: true; branchPreserved: string | null }
   | { removed: false; reason: 'dirty' }
   | { removed: false; reason: 'commits-ahead'; commitsAhead: number }
-  | { removed: false; reason: 'ignored-local-state' };
+  /**
+   * `detail` is the repo-relative path of the non-rebuildable ignored entry
+   * that triggered the refusal (e.g. `app/.env`, `myapp/.build/Secrets.json`),
+   * or the git-error string when `because === 'git-failed'`.
+   */
+  | { removed: false; reason: 'ignored-local-state'; detail: string; because: 'non-rebuildable-entry' | 'git-failed' };
 
 export interface RemoveManagedWorktreeArgs {
   execFile: ExecFileFn;
@@ -243,8 +304,9 @@ export async function removeManagedWorktreeGuarded(
     if (await isManagedWorktreeDirty(execFile, worktreePath)) {
       return { removed: false, reason: 'dirty' };
     }
-    if (await hasNonRebuildableIgnoredFiles(execFile, worktreePath)) {
-      return { removed: false, reason: 'ignored-local-state' };
+    const ignoredProbe = await probeNonRebuildableIgnoredFiles(execFile, worktreePath);
+    if (ignoredProbe.protect) {
+      return { removed: false, reason: 'ignored-local-state', detail: ignoredProbe.detail, because: ignoredProbe.because };
     }
     const ahead = await managedWorktreeCommitsAhead(execFile, repoRoot, worktreePath);
     if (ahead > 0) {
@@ -319,6 +381,14 @@ export interface IsolatedTeardownResult {
   /** True when the tree was kept (dirty/ahead/ignored) and locked against the sweep. */
   preserved: boolean;
   reason?: 'dirty' | 'commits-ahead' | 'ignored-local-state';
+  /**
+   * For `ignored-local-state`: the repo-relative path that triggered the
+   * refusal, or the git-error string when `because === 'git-failed'`.
+   * Undefined for other reasons.
+   */
+  ignoredDetail?: string;
+  /** Distinguishes a real find from a probe failure for `ignored-local-state`. */
+  ignoredBecause?: 'non-rebuildable-entry' | 'git-failed';
 }
 
 /**
@@ -326,10 +396,25 @@ export interface IsolatedTeardownResult {
  * `commits-ahead` are self-explanatory; `ignored-local-state` is not — the
  * tree LOOKS clean to `git status`, so the lock reason is the only place the
  * operator can learn why it was kept anyway.
+ *
+ * When `detail` is provided, it is the repo-relative path that triggered the
+ * refusal (e.g. `app/.build/Debug/secret.key`). When `because` is
+ * `'git-failed'`, `detail` is a git error string and the message says so
+ * explicitly rather than implying a real find.
  */
-export function describePreserveReason(reason: NonNullable<IsolatedTeardownResult['reason']>): string {
+export function describePreserveReason(
+  reason: NonNullable<IsolatedTeardownResult['reason']>,
+  detail?: string,
+  because?: 'non-rebuildable-entry' | 'git-failed',
+): string {
   if (reason === 'ignored-local-state') {
-    return 'ignored-local-state: non-rebuildable ignored files present (e.g. .env) — git status looked clean';
+    if (because === 'git-failed') {
+      return `ignored-local-state: ignored-file probe failed (${detail ?? 'unknown error'}) — git status looked clean`;
+    }
+    if (detail !== undefined) {
+      return `ignored-local-state: ${detail} — git status looked clean`;
+    }
+    return 'ignored-local-state: non-rebuildable ignored files present — git status looked clean';
   }
   return reason;
 }
@@ -388,10 +473,12 @@ export async function teardownIsolatedWorktree(args: {
     }
     // Dirty, commits-ahead, or ignored-local-state → preserve WIP/local state;
     // lock so the sweep never reaps it.
+    const ignoredDetail = outcome.reason === 'ignored-local-state' ? outcome.detail : undefined;
+    const ignoredBecause = outcome.reason === 'ignored-local-state' ? outcome.because : undefined;
     try {
       await execFile('git', [
         '-C', args.repoRoot, 'worktree', 'lock',
-        '--reason', `afk: isolated-worktree preserved (${describePreserveReason(outcome.reason)})`,
+        '--reason', `afk: isolated-worktree preserved (${describePreserveReason(outcome.reason, ignoredDetail, ignoredBecause)})`,
         args.worktreePath,
       ]);
     } catch { /* best-effort */ }
@@ -405,9 +492,13 @@ export async function teardownIsolatedWorktree(args: {
         preservedAt: new Date().toISOString(),
       };
       if (outcome.reason === 'commits-ahead') patch['commitsAheadAtPreserve'] = outcome.commitsAhead;
+      if (outcome.reason === 'ignored-local-state') {
+        patch['ignoredDetailAtPreserve'] = outcome.detail;
+        patch['ignoredBecauseAtPreserve'] = outcome.because;
+      }
       await fs.writeFile(metaPath, JSON.stringify({ ...existing, ...patch }, null, 2), 'utf-8');
     } catch { /* best-effort — never fail teardown over a meta write */ }
-    return { removed: false, preserved: true, reason: outcome.reason };
+    return { removed: false, preserved: true, reason: outcome.reason, ignoredDetail, ignoredBecause };
   } catch {
     return { removed: false, preserved: false };
   }

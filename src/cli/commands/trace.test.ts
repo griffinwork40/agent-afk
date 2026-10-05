@@ -683,3 +683,39 @@ describe('formatTrace — fmtErrorHead sanitizes escape sequences', () => {
     expect(output).toContain('text');
   });
 });
+
+describe('formatTrace — fmtErrorHead truncates without splitting emoji', () => {
+  it('does not split an emoji at the 120-code-point display cut', () => {
+    // Construct an errorHead that is exactly 119 ASCII chars + an emoji.
+    // The emoji (😀, U+1F600) occupies 2 UTF-16 units. A UTF-16 `.slice(0, 119)`
+    // would cut mid-emoji and leave a lone surrogate; code-point-aware truncate
+    // must yield the emoji intact OR omit it (never split it).
+    const ascii119 = 'x'.repeat(119);
+    const headWith120thEmoji = ascii119 + '😀trailing';
+    const sessionId = 'emoji-trunc-test';
+    const tracePath = '/fake/trace.jsonl';
+    const event = {
+      kind: 'tool_call' as const,
+      seq: 1,
+      ts: '2024-01-01T00:00:00.000Z',
+      payload: {
+        phase: 'completed' as const,
+        toolUseId: 'tu_emoji_trunc',
+        name: 'bash',
+        resultBytes: 10,
+        isError: true,
+        truncated: false,
+        durationMs: 5,
+        errorHead: headWith120thEmoji,
+      },
+    };
+    const parsed = { events: [event], malformed: 0 };
+    const output = formatTrace(sessionId, tracePath, parsed, { showAll: true });
+    // Verify the rendered output does not contain a lone high surrogate
+    // (JSON.stringify would throw if it did on Node 20+).
+    expect(() => JSON.stringify(output)).not.toThrow();
+    // The emoji must appear whole or not at all — never as \uD83D alone.
+    const hasLoneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(output);
+    expect(hasLoneSurrogate).toBe(false);
+  });
+});

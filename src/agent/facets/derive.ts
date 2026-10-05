@@ -18,13 +18,17 @@ import {
   FACET_VERSION,
   SessionFacetSchema,
   type FacetOutcome,
-  type ParallelDispatchStats,
+  type FacetOutcomeSource,
   type SessionFacet,
   type StoredSessionInput,
   type SubagentInvocation,
+  type SubagentToolSummary,
   type ToolEventInput,
   type YieldTracking,
 } from './schema.js';
+import { computeParallelDispatch } from './parallel-dispatch.js';
+import { parseTerminalState } from '../outcomes/terminal-state.js';
+import { detectPrUrlFromEvents } from './derive.pr-detect.js';
 
 export interface DeriveOptions {
   /** Absolute path of the source session sidecar (recorded for provenance). */
@@ -33,6 +37,19 @@ export interface DeriveOptions {
   sourceSessionMtimeMs?: number;
   /** Injectable clock for deterministic tests. Defaults to `new Date()`. */
   derivedAt?: Date;
+  /**
+   * Journal-derived tool events for the PARENT session only (subagent tool
+   * calls excluded). When provided, these replace the sidecar `turns[].toolEvents`
+   * for tool aggregation so compacted-away calls still count.
+   * Populated by `store.ts` when a journal is available. (#2461)
+   */
+  journalEvents?: ToolEventInput[];
+  /**
+   * Per-subagent breakdown from the journal's subagent files. Stored as an
+   * optional field in the facet; subagent tool calls are NOT added to the
+   * parent's `tool_counts`. (#2461)
+   */
+  subagentBreakdown?: SubagentToolSummary[];
 }
 
 const SUBAGENT_TOOLS = new Set(['agent', 'compose', 'skill']);
@@ -44,6 +61,84 @@ const EVIDENCE_CAP = 50;
 // hyphen) while still matching `git commit`, `git commit -m …`, `git commit;`.
 const COMMIT_RE = /\bgit\s+commit(?![\w-])/;
 const SLASH_CMD_RE = /^\s*\/([a-zA-Z][\w-]*)/;
+
+/**
+ * Map a parsed TerminalKind to a FacetOutcome.
+ * Mapping: done -> fully_achieved; asking -> partially_achieved;
+ *          blocked -> not_achieved; interrupted -> aborted.
+ */
+function terminalKindToOutcome(kind: string): FacetOutcome {
+  if (kind === 'done') return 'fully_achieved';
+  if (kind === 'asking') return 'partially_achieved';
+  if (kind === 'blocked') return 'not_achieved';
+  if (kind === 'interrupted') return 'aborted';
+  return 'unknown';
+}
+
+interface OutcomeResult {
+  outcome: FacetOutcome;
+  outcomeSource: FacetOutcomeSource;
+  primarySuccess: string;
+}
+
+/**
+ * Derive outcome, outcome_source, and primary_success from the turns array.
+ * Extracted to keep deriveSessionFacet under the 200-line function ceiling.
+ */
+function deriveOutcome(
+  turns: StoredSessionInput['turns'],
+  sessionType: string,
+): OutcomeResult {
+  const lastAssistant =
+    [...(turns ?? [])].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
+  // Determine outcome and outcome_source (#2777):
+  //   - zero turns → 'aborted' (structural)
+  //   - empty last assistant → 'partially_achieved' (structural)
+  //   - terminal-state heading found → mapped kind (terminal_state)
+  //   - non-empty assistant, no heading → 'unknown' (none)
+  let outcome: FacetOutcome;
+  let outcomeSource: FacetOutcomeSource;
+  let whatWasDone: string | undefined;
+
+  const tArr = turns ?? [];
+  if (tArr.length === 0) {
+    outcome = 'aborted';
+    outcomeSource = 'structural';
+  } else if (lastAssistant.trim().length === 0) {
+    outcome = 'partially_achieved';
+    outcomeSource = 'structural';
+  } else {
+    const parsed = parseTerminalState(lastAssistant);
+    if (parsed !== null) {
+      outcome = terminalKindToOutcome(parsed.kind);
+      outcomeSource = 'terminal_state';
+      whatWasDone = parsed.whatWasDone;
+    } else {
+      outcome = 'unknown';
+      outcomeSource = 'none';
+    }
+  }
+
+  // primary_success (#2777):
+  //   - Done + whatWasDone parsed → oneLine(whatWasDone, 160)
+  //   - Done, no whatWasDone → existing behavior (lastAssistant fallback)
+  //   - partially_achieved (empty/structural) → firstPrompt or sessionType
+  //   - not_achieved / aborted → 'none'
+  //   - unknown → existing last-assistant fallback (not 'none')
+  const firstPrompt = tArr[0]?.user ?? '';
+  let primarySuccess: string;
+  if (outcome === 'not_achieved' || outcome === 'aborted') {
+    primarySuccess = 'none';
+  } else if (outcome === 'fully_achieved') {
+    primarySuccess = whatWasDone
+      ? oneLine(whatWasDone, 160) || sessionType
+      : oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  } else {
+    primarySuccess = oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType;
+  }
+
+  return { outcome, outcomeSource, primarySuccess };
+}
 
 /** Parse a stringified tool input to an object, swallowing malformed JSON. */
 function parseInput(input: string | undefined): Record<string, unknown> | undefined {
@@ -87,7 +182,7 @@ function classifySessionType(firstPrompt: string, source: string): string {
  * preserves each id's first-seen position (call order). Events without a
  * toolUseId cannot be paired and are kept individually.
  */
-function dedupeToolEvents(events: ToolEventInput[]): ToolEventInput[] {
+export function dedupeToolEvents(events: ToolEventInput[]): ToolEventInput[] {
   const byId = new Map<string, ToolEventInput>();
   const noId: ToolEventInput[] = [];
   for (const ev of events) {
@@ -97,63 +192,22 @@ function dedupeToolEvents(events: ToolEventInput[]): ToolEventInput[] {
   return [...byId.values(), ...noId];
 }
 
-/**
- * Compute the parallel dispatch ratio for a session.
- *
- * A "parallel turn" is any assistant turn that emitted more than one
- * deduplicated tool call (i.e. the model returned multiple tool_use blocks
- * in one response). The `dedupeToolEvents` pass must have already run on
- * each turn's events before calling this function.
- *
- * Design note: we count tool calls AT THE TURN LEVEL (using `turns` directly)
- * rather than re-grouping the flattened `allEvents` list. This preserves the
- * natural grouping the sidecar writer already recorded — each `TurnRecord`
- * corresponds to exactly one assistant response, so multiple toolEvents entries
- * in one turn = the model issued multiple tool_use blocks simultaneously.
- *
- * `ratio` is null when there are no tool calls to measure (avoids 0/0).
- */
-function computeParallelDispatch(
-  turns: Array<{ toolEvents?: ToolEventInput[] }>,
-): ParallelDispatchStats {
-  let totalToolCalls = 0;
-  let parallelToolCalls = 0;
-  let parallelTurns = 0;
-  let toolTurns = 0;
-
-  for (const turn of turns) {
-    const deduped = dedupeToolEvents(turn.toolEvents ?? []);
-    const count = deduped.length;
-    if (count === 0) continue;
-
-    toolTurns += 1;
-    totalToolCalls += count;
-
-    if (count > 1) {
-      parallelTurns += 1;
-      parallelToolCalls += count;
-    }
-  }
-
-  const ratio = totalToolCalls > 0 ? parallelToolCalls / totalToolCalls : null;
-
-  return {
-    total_tool_calls: totalToolCalls,
-    parallel_tool_calls: parallelToolCalls,
-    parallel_turns: parallelTurns,
-    tool_turns: toolTurns,
-    ratio,
-  };
+interface AggregateToolEventsResult {
+  toolCounts: Record<string, number>;
+  toolErrorCategories: Record<string, number>;
+  subagents: SubagentInvocation[];
+  skills: string[];
+  evidencePaths: string[];
+  toolErrors: number;
+  filesWritten: number;
+  filesEdited: number;
+  bashCommands: number;
+  commits: number;
+  /** GitHub PR URL from a gh pr create result, if found. */
+  detectedPrUrl: string | null;
 }
 
-export function deriveSessionFacet(
-  session: StoredSessionInput,
-  options: DeriveOptions = {},
-): SessionFacet {
-  const turns = session.turns ?? [];
-  const allEvents: ToolEventInput[] = dedupeToolEvents(turns.flatMap((t) => t.toolEvents ?? []));
-
-  // --- mechanical: tool + error aggregation ---
+function aggregateToolEvents(allEvents: ToolEventInput[]): AggregateToolEventsResult {
   const toolCounts: Record<string, number> = {};
   const toolErrorCategories: Record<string, number> = {};
   const subagents: SubagentInvocation[] = [];
@@ -164,7 +218,6 @@ export function deriveSessionFacet(
   let filesEdited = 0;
   let bashCommands = 0;
   let commits = 0;
-
   for (const ev of allEvents) {
     const name = ev.toolName;
     toolCounts[name] = (toolCounts[name] ?? 0) + 1;
@@ -194,6 +247,7 @@ export function deriveSessionFacet(
       // raw-input.ts.
       const cmd = asString(parsed?.['command']) ?? ev.input;
       if (cmd && COMMIT_RE.test(cmd)) commits += 1;
+
     }
 
     if (FILE_TOOLS.has(name)) {
@@ -217,6 +271,43 @@ export function deriveSessionFacet(
     }
   }
 
+  // PR detection (#2777, #2795): delegate to the shared helper so subagent
+  // journals can reuse identical logic via journal-adapter.ts.
+  const detectedPrUrl = detectPrUrlFromEvents(allEvents);
+
+  return { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl };
+}
+
+export function deriveSessionFacet(
+  session: StoredSessionInput,
+  options: DeriveOptions = {},
+): SessionFacet {
+  const turns = session.turns ?? [];
+  // When journal events are supplied (post-#2461), they replace the sidecar
+  // toolEvents for aggregation — they are already deduped by the adapter.
+  // The sidecar path is kept as the fallback for older sessions or when the
+  // journal is unavailable / disabled.
+  const allEvents: ToolEventInput[] = options.journalEvents !== undefined
+    ? options.journalEvents
+    : dedupeToolEvents(turns.flatMap((t) => t.toolEvents ?? []));
+
+  // --- mechanical: tool + error aggregation ---
+  const { toolCounts, toolErrorCategories, subagents, skills, evidencePaths, toolErrors, filesWritten, filesEdited, bashCommands, commits, detectedPrUrl } = aggregateToolEvents(allEvents);
+
+  // tool_errors_total = parent tool_errors + sum of per-subagent tool_errors (#2777)
+  const subagentToolErrorsTotal = (options.subagentBreakdown ?? [])
+    .reduce((acc, s) => acc + s.tool_errors, 0);
+  const toolErrorsTotal = toolErrors + subagentToolErrorsTotal;
+
+  // Subagent PR detection (#2795 gap 6): if a subagent opened a PR that the
+  // parent did not detect, promote the subagent URL. Last non-null wins —
+  // same policy as the parent path. Parent URL takes precedence (already set).
+  const effectivePrUrl: string | null = detectedPrUrl ??
+    (options.subagentBreakdown ?? []).reduce<string | null>(
+      (acc, s) => s.detected_pr_url ?? acc,
+      null,
+    );
+
   // --- semantic (heuristic) ---
   const firstPrompt = turns[0]?.user ?? '';
   const source = session.source ?? 'cli';
@@ -231,20 +322,9 @@ export function deriveSessionFacet(
 
   const userMessageCount = turns.filter((t) => (t.user ?? '').trim().length > 0).length;
   const assistantMessageCount = turns.filter((t) => (t.assistant ?? '').trim().length > 0).length;
-
   const lastAssistant = [...turns].reverse().find((t) => (t.assistant ?? '').trim().length > 0)?.assistant ?? '';
 
-  let outcome: FacetOutcome;
-  if (turns.length === 0) outcome = 'aborted';
-  else if (lastAssistant.trim().length === 0) outcome = 'partially_achieved';
-  else outcome = 'fully_achieved';
-
-  // Skip-gate semantics (consumers compare primary_success === 'none' and read
-  // friction_detail non-emptiness): 'none' for non-completing sessions.
-  const succeeded = outcome === 'fully_achieved' || outcome === 'partially_achieved';
-  const primarySuccess = succeeded
-    ? oneLine(lastAssistant || firstPrompt || sessionType, 160) || sessionType
-    : 'none';
+  const { outcome, outcomeSource, primarySuccess } = deriveOutcome(turns, sessionType);
 
   const frictionDetail =
     toolErrors > 0
@@ -273,10 +353,15 @@ export function deriveSessionFacet(
   // Yield tracking: is_scheduled_session is mechanical (from source); produced_pr
   // and pr_merged require async git/gh probes run by the session-end hook after
   // teardown, so they start as null here and are written back by that hook.
+  // Exception: when derive detects a `gh pr create` URL in bash output (#2777,
+  // #2795), set produced_pr=true and record the URL immediately. effectivePrUrl
+  // covers both the parent session and any subagent-opened PR (#2795 gap 6).
+  // Never set false here.
   const yieldTracking: YieldTracking = {
     is_scheduled_session: source === 'daemon',
-    produced_pr: null,
+    produced_pr: effectivePrUrl !== null ? true : null,
     pr_merged: null,
+    ...(effectivePrUrl !== null ? { pr_url: effectivePrUrl } : { pr_url: null }),
   };
 
   const facet: SessionFacet = {
@@ -309,11 +394,13 @@ export function deriveSessionFacet(
     subagents,
 
     tool_errors: toolErrors,
+    tool_errors_total: toolErrorsTotal,
     tool_error_categories: toolErrorCategories,
     friction_counts: { ...toolErrorCategories },
     friction_detail: frictionDetail,
 
     outcome,
+    outcome_source: outcomeSource,
     primary_success: primarySuccess,
     world_changes: {
       files_written: filesWritten,
@@ -330,6 +417,12 @@ export function deriveSessionFacet(
 
     decisions: [],
     evidence_pointers: evidencePointers,
+
+    // Subagent breakdown: populated from journal subagent files when available.
+    // Absent when journal is disabled or no subagent journals exist. (#2461)
+    ...(options.subagentBreakdown !== undefined && options.subagentBreakdown.length > 0
+      ? { subagent_breakdown: options.subagentBreakdown }
+      : {}),
   };
 
   // Populate token_breakdown when cost data is available.

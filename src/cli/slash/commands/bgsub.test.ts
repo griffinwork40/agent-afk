@@ -494,5 +494,131 @@ describe('/bgsub slash commands', () => {
       expect(flat).not.toContain('PARTIAL RESULT');
       expect(flat).toContain('legacy output text');
     });
+
+    // -----------------------------------------------------------------------
+    // B1: result.json fast path — non-empty outputText renders without event-
+    // log replay; the correct content appears and no duplicate banner is emitted
+    // for incomplete jobs.
+    // -----------------------------------------------------------------------
+    it('result.json fast path: renders persisted outputText directly (non-empty)', async () => {
+      const { BgJobLogWriter } = await import('../../../agent/bg-job-log.js');
+      const jobId = `result-json-${Date.now()}`;
+      const w = new BgJobLogWriter(jobId);
+      await w.writeMeta({
+        jobId,
+        subagentId: 'sub-result-json',
+        label: 'result-json test job',
+        model: 'sonnet',
+        startedAt: Date.now() - 5000,
+        status: 'completed',
+        endedAt: Date.now() - 1000,
+        stopReason: 'end_turn',
+        schemaVersion: 1,
+      });
+      // Persist a result.json directly — simulates what markTerminal() writes.
+      await w.writeResult({
+        jobId,
+        status: 'completed',
+        outputText: 'persisted result body line one\npersisted result body line two',
+        schemaVersion: 1,
+      });
+      await w.close();
+
+      const registry = new BackgroundAgentRegistry({});
+      setBgsubRegistry(registry);
+      expect(registry.get(jobId)).toBeUndefined();
+
+      const { ctx, lines } = makeCtx();
+      const res = await bgsubJoinCmd.handler(ctx, jobId);
+      expect(res).toBe('continue');
+
+      const flat = lines.join('\n');
+      expect(flat).toContain('persisted result body line one');
+      expect(flat).toContain('persisted result body line two');
+      // Fast path must not fall back to event-log noise.
+      expect(flat).not.toContain('no events recorded');
+    });
+
+    // B2: empty outputText — valid result.json with outputText === '' renders
+    // "(no output)" instead of falling through to event-log replay.
+    it('result.json fast path: renders "(no output)" for empty outputText', async () => {
+      const { BgJobLogWriter } = await import('../../../agent/bg-job-log.js');
+      const jobId = `result-json-empty-${Date.now()}`;
+      const w = new BgJobLogWriter(jobId);
+      await w.writeMeta({
+        jobId,
+        subagentId: 'sub-result-json-empty',
+        label: 'result-json empty job',
+        model: 'sonnet',
+        startedAt: Date.now() - 5000,
+        status: 'completed',
+        endedAt: Date.now() - 1000,
+        stopReason: 'end_turn',
+        schemaVersion: 1,
+      });
+      await w.writeResult({
+        jobId,
+        status: 'completed',
+        outputText: '',
+        schemaVersion: 1,
+      });
+      await w.close();
+
+      const registry = new BackgroundAgentRegistry({});
+      setBgsubRegistry(registry);
+
+      const { ctx, lines } = makeCtx();
+      const res = await bgsubJoinCmd.handler(ctx, jobId);
+      expect(res).toBe('continue');
+
+      const flat = lines.join('\n');
+      expect(flat).toContain('(no output)');
+      // Must not fall through to event-log replay.
+      expect(flat).not.toContain('no events recorded');
+    });
+
+    // B3: single banner — an incomplete job whose result.json outputText already
+    // contains the [⚠ PARTIAL RESULT] banner (written by extractOutputText)
+    // must not emit a second banner from diskMeta.stopReason.
+    it('result.json fast path: exactly one PARTIAL RESULT banner for incomplete jobs', async () => {
+      const { BgJobLogWriter } = await import('../../../agent/bg-job-log.js');
+      const jobId = `result-json-partial-${Date.now()}`;
+      const w = new BgJobLogWriter(jobId);
+      await w.writeMeta({
+        jobId,
+        subagentId: 'sub-result-json-partial',
+        label: 'result-json partial job',
+        model: 'sonnet',
+        startedAt: Date.now() - 5000,
+        status: 'completed',
+        endedAt: Date.now() - 1000,
+        stopReason: 'tool_use_loop_capped',
+        schemaVersion: 1,
+      });
+      // Simulate the banner already embedded by extractOutputText.
+      const preAnnotated =
+        '[⚠ PARTIAL RESULT — the subagent hit its tool-use iteration cap before finishing.' +
+        ' The text below is an incomplete intermediate finding, NOT a final answer; treat it as such.]\n\nsome output';
+      await w.writeResult({
+        jobId,
+        status: 'completed',
+        outputText: preAnnotated,
+        schemaVersion: 1,
+      });
+      await w.close();
+
+      const registry = new BackgroundAgentRegistry({});
+      setBgsubRegistry(registry);
+
+      const { ctx, lines } = makeCtx();
+      const res = await bgsubJoinCmd.handler(ctx, jobId);
+      expect(res).toBe('continue');
+
+      const flat = lines.join('\n');
+      // Banner must appear exactly once.
+      const bannerCount = (flat.match(/PARTIAL RESULT/g) ?? []).length;
+      expect(bannerCount).toBe(1);
+      expect(flat).toContain('some output');
+    });
   });
 });

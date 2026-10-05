@@ -244,7 +244,7 @@ products. Two defenses:
    contains raw `process.env` or `chalk.<style>` (exact-string allowlists).
 8. Verify test reach before splitting; do not add, rename, or modify any test file
    — zero test churn is the parity proof both precedent commits cite.
-9. Run `pnpm lint`, then `pnpm test <file>` (**no `--`**: pnpm 10 drops args after
+9. Run `pnpm lint`, then `pnpm test <file>` (**no `--`**: pnpm 10+ drops args after
    `--` and runs the entire suite).
 10. Return `UNSPLITTABLE` + reason rather than shave. A parked file is a valid
     outcome; a shaved file is not.

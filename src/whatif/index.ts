@@ -36,6 +36,7 @@ export type {
   PredictionDirection,
   Confidence,
   Prediction,
+  PredictionObservable,
   Episode,
   ToolRequest,
   EpisodeTrace,
@@ -49,6 +50,7 @@ export type {
   RateComparison,
   Verdict,
   VerifiedPrediction,
+  PredictionScope,
   DiscoveredDifference,
   FeatureDelta,
   VerifyResult,
@@ -97,3 +99,10 @@ export { compileChangeSpec } from './compile.js';
 // ---------------------------------------------------------------------------
 
 export { describeChange } from './operators/index.js';
+
+// ---------------------------------------------------------------------------
+// Question-fit classifier
+// ---------------------------------------------------------------------------
+
+export { classifyQuestionFit } from './question-fit.js';
+export type { QuestionFitLevel, QuestionFitResult } from './question-fit.js';

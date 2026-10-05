@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { executeCommand } from './command-executor.js';
 import type { HookContext } from '../hooks.js';
 
-// Hooks execute user-authored #!/bin/sh scripts — POSIX-only (#703)
+// Windows: genuinely POSIX-only — hooks execute user-authored #!/bin/sh scripts; no Windows shell equivalent (#703)
 describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', () => {
   let tmp: string;
 
@@ -93,6 +93,56 @@ describe.skipIf(process.platform === 'win32')('command-executor (POSIX shell)', 
         ),
       );
       expect(result.decision.injectContext).toBe('injected context');
+    });
+
+    // -------------------------------------------------------------------------
+    // updatedInput (#2371)
+    // -------------------------------------------------------------------------
+
+    it('hookSpecificOutput.updatedInput plain object → updatedInput on decision', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":{"model":"claude-haiku-4-5","prompt":"rewritten"}}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toEqual({ model: 'claude-haiku-4-5', prompt: 'rewritten' });
+    });
+
+    it('hookSpecificOutput.updatedInput array → ignored (updatedInput absent)', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":["not","an","object"]}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toBeUndefined();
+    });
+
+    it('hookSpecificOutput.updatedInput primitive string → ignored', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":"nope"}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toBeUndefined();
+    });
+
+    it('hookSpecificOutput.updatedInput null → ignored', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"updatedInput":null}}\'',
+        ),
+      );
+      expect(result.decision.updatedInput).toBeUndefined();
+    });
+
+    it('hookSpecificOutput.additionalContext and updatedInput can coexist', async () => {
+      const result = await executeCommand(
+        makeOpts(
+          'echo \'{"hookSpecificOutput":{"additionalContext":"ctx","updatedInput":{"k":"v"}}}\'',
+        ),
+      );
+      expect(result.decision.injectContext).toBe('ctx');
+      expect(result.decision.updatedInput).toEqual({ k: 'v' });
     });
 
     it('decision: "approve" is parsed correctly', async () => {
@@ -281,6 +331,255 @@ exit 0
       const result = await executeCommand(makeOpts(scriptPath, preToolContext));
       expect(result.decision.decision).toBe('block');
       expect(result.decision.reason).toContain('bash tool detected');
+    });
+
+    it('PostToolUse context includes tool_input in stdin payload (issue #2376)', async () => {
+      const scriptPath = join(tmp, 'check-post-input.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"tool_input"'*) echo '{"decision":"approve"}' ;;
+  *) echo "tool_input missing in PostToolUse payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'PostToolUse',
+        toolName: 'edit_file',
+        input: { file_path: '/tmp/x.ts', old_string: 'a', new_string: 'b' },
+        output: 'Edited /tmp/x.ts',
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('PostToolUseFailure context includes tool_input in stdin payload (issue #2376)', async () => {
+      const scriptPath = join(tmp, 'check-failure-input.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"tool_input"'*) echo '{"decision":"approve"}' ;;
+  *) echo "tool_input missing in PostToolUseFailure payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'PostToolUseFailure',
+        toolName: 'bash',
+        input: { command: 'rm -rf /' },
+        error: 'permission denied',
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    // -----------------------------------------------------------------------
+    // transcript_path in stdin payload (issue #2372)
+    // -----------------------------------------------------------------------
+
+    it('transcript_path is a real path when opts.transcriptPath is set and the file exists', async () => {
+      const { writeFileSync: wfs } = await import('node:fs');
+      const transcriptFile = join(tmp, 'session.md');
+      wfs(transcriptFile, '# Session\n\n## User\n\nhello\n\n');
+
+      const scriptPath = join(tmp, 'check-transcript.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"transcript_path":"${transcriptFile}"'*) echo '{"decision":"approve"}' ;;
+  *) echo "wrong or missing transcript_path in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        ...makeOpts(scriptPath),
+        transcriptPath: transcriptFile,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('transcript_path is null in payload when opts.transcriptPath is not provided', async () => {
+      const scriptPath = join(tmp, 'check-transcript-null.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"transcript_path":null'*) echo '{"decision":"approve"}' ;;
+  *) echo "expected transcript_path:null in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand(makeOpts(scriptPath));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('transcript_path is null in payload when opts.transcriptPath is explicitly null', async () => {
+      const scriptPath = join(tmp, 'check-transcript-explicit-null.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"transcript_path":null'*) echo '{"decision":"approve"}' ;;
+  *) echo "expected transcript_path:null in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        ...makeOpts(scriptPath),
+        transcriptPath: null,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+  });
+
+    it('Stop context includes stop_hook_active and continuation in stdin payload', async () => {
+      const scriptPath = join(tmp, 'check-stop-fields.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"stop_hook_active":true'*) ;;
+  *) echo "missing or wrong stop_hook_active in: $payload" >&2; exit 2 ;;
+esac
+case "$payload" in
+  *'"continuation":2'*) echo '{"decision":"approve"}' ;;
+  *) echo "missing or wrong continuation in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'Stop',
+        sessionId: 'test-session',
+        stopHookActive: true,
+        continuation: 2,
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('Stop context on first dispatch has stop_hook_active:false and continuation:0', async () => {
+      const scriptPath = join(tmp, 'check-stop-first.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"stop_hook_active":false'*) ;;
+  *) echo "missing or wrong stop_hook_active in: $payload" >&2; exit 2 ;;
+esac
+case "$payload" in
+  *'"continuation":0'*) echo '{"decision":"approve"}' ;;
+  *) echo "missing or wrong continuation in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+
+      const ctx: HookContext = {
+        event: 'Stop',
+        sessionId: 'test-session',
+      };
+      const result = await executeCommand(makeOpts(scriptPath, ctx));
+      expect(result.decision.decision).toBe('approve');
+    });
+
+  // ---------------------------------------------------------------------------
+  // session_id in stdin payload — opts.sessionId is the source of truth
+  // ---------------------------------------------------------------------------
+
+  describe('session_id in stdin payload', () => {
+    it('opts.sessionId is written to stdin session_id field', async () => {
+      const scriptPath = join(tmp, 'check-sid.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *'"session_id":"explicit-sid"'*) echo '{"decision":"approve"}' ;;
+  *) echo "wrong session_id in: $payload" >&2; exit 2 ;;
+esac
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        command: scriptPath,
+        context: { event: 'PreToolUse', toolName: 'bash', sessionId: 'explicit-sid' },
+        agentCwd: tmp,
+        sessionId: 'explicit-sid',
+        timeoutMs: 5000,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('AFK_SESSION_ID env var matches opts.sessionId', async () => {
+      const scriptPath = join(tmp, 'check-env-sid.sh');
+      writeFileSync(
+        scriptPath,
+        `#!/bin/sh
+if [ "$AFK_SESSION_ID" = "env-test-sid" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "wrong AFK_SESSION_ID: $AFK_SESSION_ID" >&2
+  exit 2
+fi
+`,
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        command: scriptPath,
+        context: { event: 'PostToolUse', toolName: 'write_file', sessionId: 'env-test-sid' },
+        agentCwd: tmp,
+        sessionId: 'env-test-sid',
+        timeoutMs: 5000,
+      });
+      expect(result.decision.decision).toBe('approve');
+    });
+
+    it('undefined opts.sessionId → session_id absent from stdin, AFK_SESSION_ID empty', async () => {
+      // JSON.stringify drops undefined values, so session_id is absent (not null)
+      // when sessionId is undefined. AFK_SESSION_ID is set to '' via ?? ''.
+      const scriptPath = join(tmp, 'check-null-sid.sh');
+      writeFileSync(
+        scriptPath,
+        '#!/bin/sh\npayload=$(cat)\ncase "$payload" in\n  *\'"session_id"\'*) echo "session_id key unexpectedly present: $payload" >&2; exit 2 ;;\nesac\nif [ -n "$AFK_SESSION_ID" ]; then\n  echo "expected empty AFK_SESSION_ID, got: $AFK_SESSION_ID" >&2; exit 2\nfi\necho \'{"decision":"approve"}\'\n',
+        'utf-8',
+      );
+      chmodSync(scriptPath, 0o755);
+      const result = await executeCommand({
+        command: scriptPath,
+        context: { event: 'SessionStart' },
+        agentCwd: tmp,
+        sessionId: undefined,
+        timeoutMs: 5000,
+      });
+      expect(result.decision.decision).toBe('approve');
     });
   });
 
@@ -558,6 +857,169 @@ echo '{"decision":"approve"}'
       } finally {
         if (original === undefined) delete process.env[name];
         else process.env[name] = original;
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Per-plugin env allowlist (issue #2459)
+  // ---------------------------------------------------------------------------
+
+  describe('per-plugin env allowlist (pluginHookEnv)', () => {
+    it('allowed var from process.env is forwarded to matching plugin hook', async () => {
+      const originalVal = process.env['TYPESAFE_API_KEY'];
+      process.env['TYPESAFE_API_KEY'] = 'test-typesafe-secret';
+      try {
+        const scriptPath = join(tmp, 'check-plugin-env.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+if [ "$TYPESAFE_API_KEY" = "test-typesafe-secret" ]; then
+  echo '{"decision":"approve"}'
+else
+  echo "expected TYPESAFE_API_KEY to be forwarded, got: $TYPESAFE_API_KEY" >&2
+  exit 2
+fi
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'claude-jev-afk',
+          pluginHookEnv: { 'claude-jev-afk': ['TYPESAFE_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+      } finally {
+        if (originalVal === undefined) delete process.env['TYPESAFE_API_KEY'];
+        else process.env['TYPESAFE_API_KEY'] = originalVal;
+      }
+    });
+
+    it('allowed var is NOT forwarded to a different plugin', async () => {
+      const originalVal = process.env['TYPESAFE_API_KEY'];
+      process.env['TYPESAFE_API_KEY'] = 'test-typesafe-secret';
+      try {
+        const scriptPath = join(tmp, 'check-no-cross-plugin.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+# hook from a DIFFERENT plugin — must NOT see claude-jev-afk's allowlisted vars
+if [ -n "$TYPESAFE_API_KEY" ]; then
+  echo "CROSS-PLUGIN LEAK: $TYPESAFE_API_KEY" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'other-plugin',
+          pluginHookEnv: { 'claude-jev-afk': ['TYPESAFE_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+      } finally {
+        if (originalVal === undefined) delete process.env['TYPESAFE_API_KEY'];
+        else process.env['TYPESAFE_API_KEY'] = originalVal;
+      }
+    });
+
+    it('listing ANTHROPIC_API_KEY forwards nothing and logs a warning', async () => {
+      const originalKey = process.env['ANTHROPIC_API_KEY'];
+      process.env['ANTHROPIC_API_KEY'] = 'sk-ant-danger';
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const scriptPath = join(tmp, 'check-denied-cred.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+if [ -n "$ANTHROPIC_API_KEY" ]; then
+  echo "ANTHROPIC KEY LEAKED" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'my-plugin',
+          pluginHookEnv: { 'my-plugin': ['ANTHROPIC_API_KEY'] },
+        });
+        // The var was denied → hook sees no ANTHROPIC_API_KEY → approve
+        expect(result.decision.decision).toBe('approve');
+        // A warning must have been emitted about the refused credential
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ANTHROPIC_API_KEY'));
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('my-plugin'));
+      } finally {
+        if (originalKey === undefined) delete process.env['ANTHROPIC_API_KEY'];
+        else process.env['ANTHROPIC_API_KEY'] = originalKey;
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('AFK_-prefixed credential listed in pluginHookEnv is refused with a warning', async () => {
+      const originalVal = process.env['AFK_LOCAL_API_KEY'];
+      process.env['AFK_LOCAL_API_KEY'] = 'afk-secret-val';
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const scriptPath = join(tmp, 'check-denied-afk.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+if [ -n "$AFK_LOCAL_API_KEY" ]; then
+  echo "AFK CRED LEAKED" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginName: 'my-plugin',
+          pluginHookEnv: { 'my-plugin': ['AFK_LOCAL_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('AFK_LOCAL_API_KEY'));
+      } finally {
+        if (originalVal === undefined) delete process.env['AFK_LOCAL_API_KEY'];
+        else process.env['AFK_LOCAL_API_KEY'] = originalVal;
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('non-plugin hook (no pluginName) does not receive plugin-allowlisted vars', async () => {
+      const originalVal = process.env['TYPESAFE_API_KEY'];
+      process.env['TYPESAFE_API_KEY'] = 'test-val';
+      try {
+        const scriptPath = join(tmp, 'check-no-plugin-no-var.sh');
+        writeFileSync(
+          scriptPath,
+          `#!/bin/sh
+# No pluginName set → pluginHookEnv is ignored → var not forwarded
+if [ -n "$TYPESAFE_API_KEY" ]; then
+  echo "VAR LEAKED TO NON-PLUGIN HOOK" >&2
+  exit 2
+fi
+echo '{"decision":"approve"}'
+`,
+          'utf-8',
+        );
+        chmodSync(scriptPath, 0o755);
+        // Note: no pluginName in opts — pluginHookEnv is ignored
+        const result = await executeCommand({
+          ...makeOpts(scriptPath),
+          pluginHookEnv: { 'some-plugin': ['TYPESAFE_API_KEY'] },
+        });
+        expect(result.decision.decision).toBe('approve');
+      } finally {
+        if (originalVal === undefined) delete process.env['TYPESAFE_API_KEY'];
+        else process.env['TYPESAFE_API_KEY'] = originalVal;
       }
     });
   });

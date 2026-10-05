@@ -30,7 +30,6 @@ export function buildSuggestConfig(opts: {
   engine: SuggestEngine;
   surface: InputSurface;
   stats: SuggestCtxStats;
-  apiKey: string | undefined;
   baseUrl: string | undefined;
   historyTracker: HistorySubmissionTracker;
 }): { suggest: { engine: SuggestEngine; getContext: () => SuggestContext } } | Record<string, never> {
@@ -43,7 +42,6 @@ export function buildSuggestConfig(opts: {
       engine,
       getContext: () => ({
         model: stats.model as string,
-        apiKey: opts.apiKey,
         baseUrl: opts.baseUrl,
         cwd: stats.cwd ?? process.cwd(),
         getHistory: () => {

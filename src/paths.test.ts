@@ -38,6 +38,7 @@ import {
   getBrowserStorageStatePath,
   getTraceDir,
   sessionLabelFromTracePath,
+  getWhatifDir,
 } from './paths.js';
 import { useUnsetAfkHome } from './__test-utils__/unset-afk-home.js';
 
@@ -400,8 +401,6 @@ describe('sessionLabelFromTracePath — inverse of getTraceDir', () => {
 // ---------------------------------------------------------------------------
 // getWhatifDir
 // ---------------------------------------------------------------------------
-
-import { getWhatifDir } from './paths.js';
 
 describe('getWhatifDir', () => {
   afterEach(() => {

@@ -121,3 +121,27 @@ describe('createChildSkillExecutorFactory — defaultSubagentModel threading', (
     expect(constructed[0]!['defaultSubagentModel']).toBe('sonnet');
   });
 });
+
+describe('createChildSkillExecutorFactory — journal view (nested skill forks)', () => {
+  beforeEach(() => {
+    constructed.length = 0;
+  });
+
+  it('exposes the forking child journal lazily (backfilled after fork), never a fixed snapshot', () => {
+    const factory = createChildSkillExecutorFactory('sonnet', undefined, stubProviderFactory);
+    const view: { messageJournal?: unknown } = {};
+    factory(1, 3, new AbortController().signal, undefined, undefined, undefined, view as never);
+    const parent = constructed[0]!['parentSession'] as { messageJournal?: unknown; sessionId?: string };
+    expect(parent.messageJournal).toBeUndefined();
+    const childJournal = { forSubagent: vi.fn() };
+    view.messageJournal = childJournal; // backfill after the child's fork returns
+    expect(parent.messageJournal).toBe(childJournal);
+    expect(parent.sessionId).toBeUndefined();
+  });
+
+  it('leaves the nested SkillExecutor unjournaled with no journal view', () => {
+    const factory = createChildSkillExecutorFactory('sonnet', undefined, stubProviderFactory);
+    factory(1, 3, new AbortController().signal);
+    expect(constructed[0]!['parentSession']).not.toHaveProperty('messageJournal');
+  });
+});

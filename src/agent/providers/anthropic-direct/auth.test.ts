@@ -18,6 +18,7 @@ import {
   EFFORT_BETA_HEADER,
   CLI_USER_AGENT,
   BILLING_HEADER_TEXT,
+  THINKING_BINDING_CONTROLS_BETA_HEADER,
 } from './auth.js';
 
 describe('anthropic-direct auth', () => {
@@ -35,30 +36,44 @@ describe('anthropic-direct auth', () => {
 
   it('buildClientOptions(token, "oauth") yields { authToken } and no apiKey', () => {
     const opts = buildClientOptions('tok', 'oauth');
-    expect(opts).toEqual({ authToken: 'tok' });
+    expect(opts).toEqual({ authToken: 'tok', maxRetries: 0 });
     expect((opts as Record<string, unknown>)['apiKey']).toBeUndefined();
   });
 
   it('buildClientOptions(token, "api-key") yields { apiKey } and no authToken', () => {
     const opts = buildClientOptions('tok', 'api-key');
-    expect(opts).toEqual({ apiKey: 'tok' });
+    expect(opts).toEqual({ apiKey: 'tok', maxRetries: 0 });
     expect((opts as Record<string, unknown>)['authToken']).toBeUndefined();
+  });
+
+  it('buildClientOptions always sets maxRetries: 0 so AFK retry layers own retries (#2422)', () => {
+    // The SDK defaults to maxRetries=2; without this override the SDK retries
+    // silently stack under AFK's own loop (round-retry.ts, retry-layer.ts),
+    // turning each failing call into up to 3× the attempts AFK believes it is
+    // making — and those SDK-level retries are invisible in the witness trace.
+    expect(buildClientOptions('tok', 'api-key').maxRetries).toBe(0);
+    expect(buildClientOptions('tok', 'oauth').maxRetries).toBe(0);
+    expect(buildClientOptions('tok', 'api-key', 'http://127.0.0.1:8080').maxRetries).toBe(0);
+    const fakeFetch = () => Promise.resolve(new Response());
+    expect(buildClientOptions('tok', 'api-key', undefined, fakeFetch).maxRetries).toBe(0);
   });
 
   it('buildClientOptions forwards a non-empty baseUrl as the SDK-camelCase baseURL', () => {
     expect(buildClientOptions('tok', 'api-key', 'http://127.0.0.1:8080')).toEqual({
       apiKey: 'tok',
       baseURL: 'http://127.0.0.1:8080',
+      maxRetries: 0,
     });
     expect(buildClientOptions('oauth-tok', 'oauth', 'http://127.0.0.1:9000')).toEqual({
       authToken: 'oauth-tok',
       baseURL: 'http://127.0.0.1:9000',
+      maxRetries: 0,
     });
   });
 
   it('buildClientOptions omits baseURL when baseUrl is undefined or empty', () => {
-    expect(buildClientOptions('tok', 'api-key')).toEqual({ apiKey: 'tok' });
-    expect(buildClientOptions('tok', 'api-key', '')).toEqual({ apiKey: 'tok' });
+    expect(buildClientOptions('tok', 'api-key')).toEqual({ apiKey: 'tok', maxRetries: 0 });
+    expect(buildClientOptions('tok', 'api-key', '')).toEqual({ apiKey: 'tok', maxRetries: 0 });
   });
 
   it('OAUTH_BETA_HEADER includes the interleaved-thinking beta', () => {
@@ -115,5 +130,43 @@ describe('anthropic-direct auth', () => {
 
   it('buildSystemPrefix("api-key") returns null', () => {
     expect(buildSystemPrefix('api-key')).toBeNull();
+  });
+});
+
+// ── thinking-binding-controls beta (drop_block policy, Fable 5.1) ─────────
+
+describe('buildRequestHeaders: thinkingBindingControls (drop_block, Fable 5.1)', () => {
+  it('oauth + withThinkingBindingControls=true appends THINKING_BINDING_CONTROLS_BETA_HEADER', () => {
+    const h = buildRequestHeaders('oauth', 'sid', 'rid', false, false, false, true);
+    expect(h['anthropic-beta']).toContain(THINKING_BINDING_CONTROLS_BETA_HEADER);
+    // Must keep all pre-existing oauth betas (regression guard)
+    expect(h['anthropic-beta']).toContain(OAUTH_BETA_HEADER.split(',')[0]);
+  });
+
+  it('api-key + withThinkingBindingControls=true appends THINKING_BINDING_CONTROLS_BETA_HEADER', () => {
+    // api-key mode normally returns an empty object; when drop_block is
+    // requested the beta must be forwarded so the server surfaces
+    // input_transformations instead of returning HTTP 400.
+    const h = buildRequestHeaders('api-key', 'sid', 'rid', false, false, false, true);
+    expect(h['anthropic-beta']).toBe(THINKING_BINDING_CONTROLS_BETA_HEADER);
+  });
+
+  it('oauth + withThinkingBindingControls=false omits THINKING_BINDING_CONTROLS_BETA_HEADER', () => {
+    const h = buildRequestHeaders('oauth', 'sid', 'rid', false, false, false, false);
+    expect(h['anthropic-beta']).not.toContain(THINKING_BINDING_CONTROLS_BETA_HEADER);
+  });
+
+  it('api-key + withThinkingBindingControls=false omits the beta (empty object for non-Fable)', () => {
+    // Non-Fable api-key requests never send thinkingBindingControls; result
+    // must be an empty object so no stray beta header corrupts unrelated calls.
+    const h = buildRequestHeaders('api-key', 'sid', 'rid', false, false, false, false);
+    expect(h['anthropic-beta']).toBeUndefined();
+    expect(Object.keys(h)).toHaveLength(0);
+  });
+
+  it('oauth + withThinkingBindingControls=true + withEffort=true includes both betas', () => {
+    const h = buildRequestHeaders('oauth', 'sid', 'rid', true, false, false, true);
+    expect(h['anthropic-beta']).toContain(EFFORT_BETA_HEADER);
+    expect(h['anthropic-beta']).toContain(THINKING_BINDING_CONTROLS_BETA_HEADER);
   });
 });

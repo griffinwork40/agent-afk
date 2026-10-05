@@ -17,15 +17,7 @@ import type { ChalkInstance } from 'chalk';
 import { displayWidth, stripAnsi } from '../../display.js';
 import { palette } from '../../palette.js';
 import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-
-function makeResult(content: string, isError = false): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-  };
-}
+import { makeResult } from './__fixtures__/tool-lane-render.fixtures.js';
 
 // ─── Spine renderer scenarios (commit-2 build plan §C) ────────────────────────
 //

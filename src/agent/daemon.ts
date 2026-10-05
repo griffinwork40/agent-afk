@@ -351,7 +351,7 @@ async function handleRequestAsync(
       const cwdResult =
         typeof cwdRaw === 'string' && cwdRaw
           ? validateScheduleCwd(cwdRaw)
-          : { ok: false as const, error: 'cwd must be a non-empty string' };
+          : { ok: false as const, error: 'cwd must be a non-empty string when provided' };
       if (!cwdResult.ok) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: cwdResult.error }));

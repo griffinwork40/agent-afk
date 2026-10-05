@@ -17,38 +17,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { stripAnsi } from '../../display.js';
-import { freshToolEntry } from './tool-lane-render.js';
 import type { Entry, ToolEntry } from './tool-lane-render.js';
-import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { ToolLane } from './tool-lane.js';
-
-// ── Fixture helpers ────────────────────────────────────────────────────────────
-
-function makeResult(content: string, isError = false, failureClass?: ToolFailureClass): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-    ...(failureClass ? { failureClass } : {}),
-  };
-}
-
-/**
- * Build a minimal ToolEntry suitable for passing to renderCompactFlushChildren
- * as a child.  `result` is set when provided so the entry is "completed".
- */
-function makeTool(
-  toolUseId: string,
-  toolName: string,
-  toolInput: string,
-  result?: ToolResultChunk,
-): ToolEntry {
-  const entry = freshToolEntry(toolUseId, toolName, toolInput, toolName + toolInput);
-  if (result) entry.result = result;
-  return entry;
-}
+import { makeResult, makeTool } from './__fixtures__/tool-lane-render.fixtures.js';
 
 // ── 1. renderCompactFlushChildren ─────────────────────────────────────────────
 

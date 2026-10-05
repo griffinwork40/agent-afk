@@ -7,37 +7,13 @@
  *   7a. ancestorIsLast indentation: [false] → spine '│' present; [true] → absent.
  *   7b. Benign-error doneGlyph: ⊘ present and ✗ absent for permission-denied.
  *   7c. Narrow-cols clamping: every emitted line fits within cols.
- *   7d. Multi-line outcome continuation: two pushOutcomeLines rows emitted.
+ *   7d. Multi-line outcome continuation: two pushOutcomeRows rows emitted.
  */
 
 import { describe, it, expect } from 'vitest';
 import { stripAnsi } from '../../display.js';
-import { freshToolEntry } from './tool-lane-render.js';
-import type { ToolResultChunk } from '../../../agent/types/message-types.js';
-import type { ToolFailureClass } from '../../../agent/trace/types.js';
 import { ToolLane } from './tool-lane.js';
-
-// ── Shared fixture helpers ─────────────────────────────────────────────────────
-
-function makeResult(
-  content: string,
-  isError = false,
-  failureClass?: ToolFailureClass,
-): ToolResultChunk {
-  return {
-    type: 'tool_result',
-    toolUseId: 'unused',
-    content,
-    isError,
-    ...(failureClass ? { failureClass } : {}),
-  };
-}
-
-function makeTool(toolUseId: string, toolName: string, toolInput: string, result?: ToolResultChunk) {
-  const entry = freshToolEntry(toolUseId, toolName, toolInput, toolName + toolInput);
-  if (result) entry.result = result;
-  return entry;
-}
+import { makeResult, makeTool } from './__fixtures__/tool-lane-render.fixtures.js';
 
 // ── 4. formatAgentChildren compact-path discrimination ─────────────────────────
 
@@ -218,11 +194,11 @@ describe('narrow-cols clamping (item 7c)', () => {
 // ── 7d. Multi-line outcome continuation ───────────────────────────────────────
 
 describe('multi-line outcome continuation (item 7d)', () => {
-  it('multi-line output (lineCount + tailPreview) → continuation rows emitted by pushOutcomeLines', async () => {
+  it('multi-line output (lineCount + tailPreview) → continuation rows emitted by pushOutcomeRows', async () => {
     const { renderCompactFlushChildren } = await import('./tool-lane-render-compact.js');
 
     // formatOutcome enters the multi-line branch when lineCount > 1.
-    // It appends tailPreview lines joined by '\n', which pushOutcomeLines
+    // It appends tailPreview lines joined by '\n', which pushOutcomeRows
     // then splits so each tail line becomes a separate emitted row with
     // the continuationIndent (spine-only prefix, no connector).
     const multiLineResult: ToolResultChunk = {

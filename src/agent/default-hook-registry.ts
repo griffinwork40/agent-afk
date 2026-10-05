@@ -17,9 +17,11 @@ import { createReleaseBoundaryDetect } from './release-boundary-detect.js';
 import { MemoryStore, createMemorySessionEndHook, createChildMemoryHotBlockHook } from './memory/index.js';
 import { createPlanModeGate } from './plan-mode-gate.js';
 import { createAfkModeGate } from './afk-mode-gate.js';
-import { cleanupComposeSpills } from './tools/compose-executor.js';
+import { cleanupComposeSpills } from './tools/compose-executor.format.js';
 import { runReceiptSessionEndHook } from './trace/receipt.js';
 import { createFacetSessionEndHook } from './facets/session-end-hook.js';
+import { createPreexistingLedgerHook } from './preexisting-ledger/session-end-hook.js';
+import { createOutcomeSessionEndHook, createChildAttributionHook } from './outcomes/index.js';
 import { createSpineSessionEndHook } from './spine/index.js';
 import { inboundAttachmentRegistry } from './content/attachment-registry.js';
 import { env } from '../config/env.js';
@@ -101,6 +103,23 @@ function registerChildMemoryGuard(registry: HookRegistry): void {
 }
 
 /**
+ * Register facet derivation and outcome-labeling hooks: the facet session-end
+ * hook, the outcome immediate-pass labeler, and the child artifact attribution
+ * listener. Extracted to keep {@link createDefaultHookRegistry} within its
+ * baselined line-count ceiling.
+ */
+function registerFacetAndOutcomeHooks(
+  registry: HookRegistry,
+  spineRepoRoot?: string,
+): void {
+  registry.register('SessionEnd', createFacetSessionEndHook());
+  registry.register('SessionEnd', createOutcomeSessionEndHook());
+  registry.register('PostToolUse', createChildAttributionHook());
+  registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: spineRepoRoot }));
+  registerPreexistingLedgerHook(registry);
+}
+
+/**
  * Register the SessionEnd hooks that clean up per-session transient state:
  * compose-truncation spill files and inbound attachment records. Both are
  * best-effort no-ops when `sessionId` is absent (top-level teardown without
@@ -146,13 +165,23 @@ function registerWhatifEpisodeGate(registry: HookRegistry): void {
   registry.register('PreToolUse', createWhatifEpisodeGate());
 }
 
+/**
+ * Register the pre-existing-defect ledger SessionEnd hook. Scans assistant
+ * turns for pre-existing-defect flags and appends JSONL entries to
+ * ~/.afk/agent-framework/preexisting-ledger.jsonl. Best-effort; never throws;
+ * opt-out via AFK_PREEXISTING_LEDGER_DISABLE=1.
+ */
+function registerPreexistingLedgerHook(registry: HookRegistry): void {
+  registry.register('SessionEnd', createPreexistingLedgerHook());
+}
+
 export function createDefaultHookRegistry(
   onSubagentComplete?: (info: SubagentCompleteInfo) => void,
   surface?: string,
   memoryStore?: MemoryStore,
   getPermissionMode?: () => PermissionMode,
   hookConfig?: LoadedHooksConfig,
-  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean },
+  agentOptions?: { cwd?: string; sessionId?: string; traceWriter?: TraceSink; afkPromptForApproval?: boolean; getTranscriptPath?: () => string | null },
   getCwd?: () => string | undefined,
 ): DefaultHookRegistryResult {
   const registry = createHookRegistry();
@@ -340,13 +369,7 @@ export function createDefaultHookRegistry(
   // JSON+Markdown summary of the run under ~/.afk/state/receipts/. Best-effort
   // and never injects/blocks; skips subagents and honors AFK_RUN_RECEIPT_DISABLED.
   registry.register('SessionEnd', runReceiptSessionEndHook);
-  // Derive and cache a session facet at teardown so every top-level session
-  // is visible to harvest --rank and other facet consumers. Best-effort;
-  // skips subagents; never blocks teardown.
-  registry.register('SessionEnd', createFacetSessionEndHook());
-  // SPINE.md: classify git diff against the architecture spine at session end.
-  // Best-effort; skips subagents; honors AFK_DISABLE_SPINE_UPDATE=1.
-  registry.register('SessionEnd', createSpineSessionEndHook({ repoRoot: agentOptions?.cwd }));
+  registerFacetAndOutcomeHooks(registry, agentOptions?.cwd);
   registerSubagentCompleteHook(registry, onSubagentComplete);
 
   // External-effect ledger: record outbound side effects (Telegram sends,
@@ -377,8 +400,7 @@ export function createDefaultHookRegistry(
       console.warn(`[hooks] ${warning}`);
     }
     loadAndRegisterConfigHooks(registry, hookConfig, {
-      cwd: agentOptions?.cwd,
-      sessionId: agentOptions?.sessionId,
+      cwd: agentOptions?.cwd, sessionId: agentOptions?.sessionId, getTranscriptPath: agentOptions?.getTranscriptPath,
     });
   }
 

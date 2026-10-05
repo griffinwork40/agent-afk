@@ -343,13 +343,32 @@ describe('renderInputLine — centered input clipping (AFK_CENTER_CONTENT, issue
   });
 
   it('returns an unclipped line when centering is disabled (no AFK_CENTER_CONTENT)', () => {
-    // Without centering the margin is '', so the existing ghost-only budget
-    // governs. A moderately long buffer should not be clipped by the new code.
-    const buffer = 'q'.repeat(60); // fits comfortably on 80-col default
+    // Without centering the margin is '', so the clip budget is cols - promptWidth.
+    // A moderately long buffer that fits should not be clipped.
+    const buffer = 'q'.repeat(60); // fits comfortably on 80-col default (prompt 2 + 60 + caret 1 = 63 ≤ 78)
     const host = makeCenteredHost({ cols: 80, buffer, cursor: buffer.length });
     // No withCenterContent — AFK_CENTER_CONTENT is unset.
     const line = renderInputLine(host);
     // The full buffer is present (no '…' from scroll clipping).
     expect(stripAnsi(line)).toContain(buffer);
+  });
+
+  it('clips a very long buffer even without centering (non-centered overflow, issue #2277)', () => {
+    // clipInputViewport is now called unconditionally. A buffer so long it
+    // exceeds cols - promptWidth on a narrow terminal MUST be clipped so
+    // CupFrameRenderer never hard-wraps the input line (the same guarantee
+    // that was already provided for centered mode in issue #2167).
+    //
+    // Narrow terminal: 40 cols. Prompt '> ' = 2 cols. availableWidth = 38.
+    // Buffer of 60 chars would overflow 38 cols without clipping.
+    const COLS = 40;
+    const buffer = 'r'.repeat(60); // clearly overflows 40 - 2 = 38 available cols
+    const host = makeCenteredHost({ cols: COLS, buffer, cursor: buffer.length });
+    // No withCenterContent — AFK_CENTER_CONTENT is unset (non-centered).
+    const line = renderInputLine(host);
+    // The rendered line must not exceed the terminal width.
+    expect(displayWidth(stripAnsi(line))).toBeLessThanOrEqual(COLS);
+    // The caret (▏ thin bar) must remain visible after clipping.
+    expect(line).toContain(THIN_BAR);
   });
 });

@@ -29,6 +29,7 @@
  */
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'node:crypto';
+import { isFable51, resolveThinkingParam, resolveEffort } from './resolve-params.js';
 import type {
   ProviderAccountInfo,
   ProviderAgentInfo,
@@ -67,6 +68,7 @@ import {
   setLiveSystemPrompt,
 } from './query-live-updates.js';
 import { interruptedTurnCompletedEvent } from './query-events.js';
+import type { JournalMessage } from '../../journal/index.js';
 import {
   compactQueryHistory,
   queryRewindTargets,
@@ -98,8 +100,18 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly maxTokens: number;
   private readonly tools: AnthropicToolDef[] | null;
   private readonly systemPrefix: ContentBlockParam[] | null;
+  /** Resolved thinking config for the LAUNCH model. Used as the per-turn value
+   * when no rawThinkingConfig is available (external/legacy callers). */
   private readonly thinking?: import('@anthropic-ai/sdk/resources').ThinkingConfigParam;
+  /** Original unresolved ThinkingConfig from AgentConfig — used to re-resolve
+   * per-turn when the current model changes mid-session. */
+  private readonly rawThinkingConfig?: import('../../types/sdk-types.js').ThinkingConfig;
+  /** Resolved effort for the LAUNCH model. */
   private readonly effort?: import('../../types/sdk-types.js').EffortLevel;
+  /** Original unresolved caller effort — used to re-resolve per-turn on model switch. */
+  private readonly rawEffort?: import('../../types/sdk-types.js').EffortLevel;
+  /** The wire model id that was active when thinking/effort were first resolved. */
+  private readonly launchModel: string;
   private readonly temperature?: number;
   private readonly baseUrl?: string;
   private readonly maxToolUseIterations?: number;
@@ -107,6 +119,13 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly traceWriter?: import('../../trace/index.js').TraceSink;
   /** Owning subagent id (fork only); stamped onto tool_call trace events. */
   private readonly subagentId?: string;
+  /**
+   * The session's configured working directory — `opts.cwd ?? process.cwd()`.
+   * Surfaced via `TurnDriverContext.cwd` so `session.init` reports the
+   * session's own directory rather than the host process's cwd — they differ
+   * for daemon tasks whose per-task `cwd` or `AFK_DAEMON_CWD` is set.
+   */
+  private readonly _cwd: string;
 
   /**
    * Per-session mutable state — see {@link SessionState}. Held as a
@@ -147,6 +166,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
   private readonly fastModeController?: import('../../fast-mode.js').FastModeController;
   /** Inter-round steering callback; set via setBeforeNextRound() from the subagent layer. */
   private beforeNextRound?: () => string | undefined;
+  /** Provider-side stop-hook seam; set via setBeforeTurnEnd() from AgentSession. */
+  private beforeTurnEnd?: (continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>;
 
   constructor(opts: AnthropicDirectQueryOptions) {
     this.initSessionId = opts.sessionId ?? randomUUID();
@@ -155,7 +176,10 @@ export class AnthropicDirectQuery implements ProviderQuery {
     this.tools = opts.tools;
     this.systemPrefix = opts.systemPrefix;
     this.thinking = opts.thinking;
+    if (opts.rawThinkingConfig !== undefined) this.rawThinkingConfig = opts.rawThinkingConfig;
     if (opts.effort !== undefined) this.effort = opts.effort;
+    if (opts.rawEffort !== undefined) this.rawEffort = opts.rawEffort;
+    this.launchModel = opts.model;
     if (opts.temperature !== undefined) this.temperature = opts.temperature;
     if (opts.baseUrl !== undefined) this.baseUrl = opts.baseUrl;
     if (opts.maxToolUseIterations !== undefined)
@@ -163,6 +187,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
     if (opts.softDeadlineMs !== undefined) this.softDeadlineMs = opts.softDeadlineMs;
     this.traceWriter = opts.traceWriter;
     if (opts.subagentId !== undefined) this.subagentId = opts.subagentId;
+    this._cwd = opts.cwd ?? process.cwd();
     this.cwdDependentsFactory = opts.cwdDependentsFactory;
     this.systemPromptRebuildFactory = opts.systemPromptRebuildFactory;
     this.onPermissionMode = opts.onPermissionMode;
@@ -187,6 +212,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
       userSystem: opts.userSystem,
       toolDispatcher: opts.toolDispatcher,
       ...(opts.initialMessages ? { initialMessages: opts.initialMessages } : {}),
+      ...(opts.messageJournal ? { messageJournal: opts.messageJournal } : {}),
       ...(opts.autoCompactThreshold !== undefined ? { autoCompactThreshold: opts.autoCompactThreshold } : {}),
       ...(opts.initialUsageInputTokens !== undefined ? { initialUsageInputTokens: opts.initialUsageInputTokens } : {}),
     });
@@ -211,9 +237,45 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get retry() { return query.retry; },
       get maxTokens() { return query.maxTokens; },
       get tools() { return query.tools; },
-      get thinking() { return query.thinking; },
-      get effort() { return query.effort; },
+      get thinking() {
+        // Re-resolve per-turn when we have the original config AND the current
+        // model has changed from the launch model — prevents a Sonnet-resolved
+        // `{type:'enabled', budget_tokens}` from being replayed on Fable 5.1
+        // (which only accepts adaptive thinking) after a mid-session /model switch.
+        if (
+          query.rawThinkingConfig !== undefined &&
+          query.state.currentModel !== query.launchModel
+        ) {
+          const currentEffort = resolveEffort(query.rawEffort, query.state.currentModel);
+          try {
+            return resolveThinkingParam(
+              query.rawThinkingConfig,
+              query.maxTokens,
+              query.state.currentModel,
+              currentEffort,
+            );
+          } catch {
+            // Resolution can throw for unsatisfiable configs; fall through to
+            // the launch-time value so the session degrades rather than errors.
+            return query.thinking;
+          }
+        }
+        return query.thinking;
+      },
+      get effort() {
+        // Re-resolve per-turn when the current model has changed from the launch
+        // model — Fable 5.1 defaults to 'high', not Sonnet's 'max'.
+        if (query.state.currentModel !== query.launchModel) {
+          return resolveEffort(query.rawEffort, query.state.currentModel);
+        }
+        return query.effort;
+      },
       get temperature() { return query.temperature; },
+      get thinkingBlockBinding() {
+        return isFable51(query.state.currentModel.toLowerCase()) && query.baseUrl === undefined
+          ? ({ prefix_mismatch_behavior: 'drop_block' as const })
+          : undefined;
+      },
       get baseUrl() { return query.baseUrl; },
       get maxToolUseIterations() { return query.maxToolUseIterations; },
       get softDeadlineMs() { return query.softDeadlineMs; },
@@ -224,6 +286,8 @@ export class AnthropicDirectQuery implements ProviderQuery {
       get throttleQueue() { return query.throttleQueue; },
       get fastModeController() { return query.fastModeController; },
       get beforeNextRound() { return query.beforeNextRound; },
+      get beforeTurnEnd() { return query.beforeTurnEnd; },
+      get cwd() { return query._cwd; },
       composeSystem: () => query.composeSystem(),
       makeInterruptedTurnEvent: () => query.makeInterruptedTurnEvent(),
       compact: () => query.compact(),
@@ -233,6 +297,11 @@ export class AnthropicDirectQuery implements ProviderQuery {
   /** Wire a steering callback for inter-round message injection. Called from the subagent layer. */
   setBeforeNextRound(cb: (() => string | undefined) | undefined): void {
     this.beforeNextRound = cb;
+  }
+
+  /** Wire the provider-side stop-hook seam (issue #2714). Called from AgentSession.wireStopHook(). */
+  setBeforeTurnEnd(cb: ((continuation: number, assistantText?: string) => Promise<{ continueWith?: string } | undefined>) | undefined): void {
+    this.beforeTurnEnd = cb;
   }
 
   async *[Symbol.asyncIterator](): AsyncIterator<ProviderEvent> {
@@ -323,7 +392,7 @@ export class AnthropicDirectQuery implements ProviderQuery {
    * fresh `this.retry.client` read at the start of every new turn. The next
    * user message therefore sees the swapped client automatically.
    */
-  async reauth(): Promise<{ accountId: string; swapped: boolean } | null> {
+  async reauth(): Promise<{ accountId: string; oldAccountId: string; swapped: boolean } | null> {
     return this.retry.forceClientRefresh();
   }
 
@@ -350,6 +419,14 @@ export class AnthropicDirectQuery implements ProviderQuery {
 
   listRewindTargets(): RewindTarget[] {
     return queryRewindTargets(this.state);
+  }
+
+  /** Live conversation in journal form (router `/model` swap carry); undefined without a journal. */
+  journalSnapshot(): JournalMessage[] | undefined {
+    const sync = this.state.journalSync;
+    if (!sync.enabled) return undefined;
+    sync.sync(this.state.messages);
+    return sync.snapshot();
   }
 
   async rewindConversation(

@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getSchedulesPath } from '../../paths.js';
 import type { ScheduledTask, TaskExecutor } from './triggers.js';
+import { expandCwd } from './cwd-validator.js';
 import { errorMessage } from '../../utils/errors.js';
 
 export interface ScheduledTaskConfig {
@@ -38,7 +39,7 @@ export interface ScheduledTaskConfig {
   /**
    * Per-task working directory (absolute path). When set, the spawned session's
    * cwd is pinned to this directory instead of the daemon-wide `AFK_DAEMON_CWD`.
-   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? process.cwd().
+   * Precedence: task.cwd ?? AFK_DAEMON_CWD ?? daemonDefaultCwd().
    * Must be an existing directory; tilde (~) is expanded at save time.
    */
   cwd?: string;
@@ -168,8 +169,17 @@ export function getSchedule(id: string, path?: string): ScheduledTaskConfig | un
   return loadSchedules(path).find((s) => s.id === id);
 }
 
-/** Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`. */
-export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt'>>;
+/**
+ * Patchable fields for `updateSchedule`. Excludes `id` and `createdAt`.
+ *
+ * `cwd` may be set to `null` to unset a previously-pinned per-task working
+ * directory and fall back to the daemon default. Passing `cwd: null` removes
+ * the field from the persisted config entirely.
+ */
+export type SchedulePatch = Partial<Omit<ScheduledTaskConfig, 'id' | 'createdAt' | 'updatedAt' | 'cwd'>> & {
+  /** Set a new directory path, or pass `null`/`""` to clear the existing one. */
+  cwd?: string | null;
+};
 
 /**
  * Patch one or more fields on an existing schedule. Atomically loads,
@@ -200,9 +210,12 @@ export function updateSchedule(
     ...(patch.notifyOn !== undefined ? { notifyOn: patch.notifyOn } : {}),
     ...(patch.notifyChat !== undefined ? { notifyChat: patch.notifyChat } : {}),
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-    ...(patch.cwd !== undefined ? { cwd: patch.cwd } : {}),
+    ...(patch.cwd !== undefined && patch.cwd !== null ? { cwd: patch.cwd } : {}),
     updatedAt: new Date().toISOString(),
   };
+  // cwd: null means "clear" — remove the per-task pinning entirely so the task
+  // falls back to the daemon-wide AFK_DAEMON_CWD default.
+  if (patch.cwd === null) delete updated.cwd;
   schedules[idx] = updated;
   saveSchedules(schedules, path);
   return updated;
@@ -253,6 +266,12 @@ export function resolveSlugCollision(base: string, existing: string[]): string {
 
 /**
  * Map a `ScheduledTaskConfig` to a `ScheduledTask` (daemon trigger shape).
+ *
+ * Tilde expansion: any stored `cwd` that still starts with `~` (e.g. from a
+ * hand-edited schedules.json) is expanded here via `expandCwd` so the
+ * runtime check in `checkTaskCwdAtRuntime` never sees an unexpanded tilde
+ * path. Validated paths (written by the CLI / tool handlers) are already
+ * absolute, so `expandCwd` is a no-op for them.
  */
 export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
   return {
@@ -263,6 +282,6 @@ export function toScheduledTask(config: ScheduledTaskConfig): ScheduledTask {
     ...(config.cron !== undefined ? { cronExpression: config.cron } : {}),
     ...(config.notifyOn !== undefined ? { notifyOn: config.notifyOn } : {}),
     ...(config.notifyChat !== undefined ? { notifyChat: config.notifyChat } : {}),
-    ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
+    ...(config.cwd !== undefined ? { cwd: expandCwd(config.cwd) } : {}),
   };
 }

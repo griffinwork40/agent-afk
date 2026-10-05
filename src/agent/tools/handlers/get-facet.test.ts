@@ -10,6 +10,8 @@ import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getFacetHandler } from './get-facet.js';
+import { writeRecord } from '../../outcomes/store.js';
+import type { VerifiedOutcome } from '../../outcomes/schema.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -26,6 +28,7 @@ beforeEach(() => {
   );
   mkdirSync(join(tmpRoot, 'state', 'sessions'), { recursive: true });
   mkdirSync(join(tmpRoot, 'agent-framework', 'facets'), { recursive: true });
+  mkdirSync(join(tmpRoot, 'agent-framework', 'outcomes'), { recursive: true });
 
   origStateDir = process.env['AFK_STATE_DIR'];
   origHome = process.env['AFK_HOME'];
@@ -152,5 +155,81 @@ describe('getFacetHandler', () => {
     const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
     // sess-newer has the higher mtime → must win, despite lower savedAt
     expect(parsed['session_id']).toBe('sess-newer');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verified_outcome join
+// ---------------------------------------------------------------------------
+
+describe('getFacetHandler – verified_outcome join', () => {
+  it('omits verified_outcome key when no outcome record exists', async () => {
+    writeSession('sess-no-outcome');
+    const result = await getFacetHandler({ session: 'sess-no-outcome' }, ABORT);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    expect('verified_outcome' in parsed).toBe(false);
+  });
+
+  it('includes verified_outcome when a record exists', async () => {
+    writeSession('sess-with-outcome');
+    const outcome: VerifiedOutcome = {
+      schema_version: 1,
+      session_id: 'sess-with-outcome',
+      label: 'succeeded',
+      confidence: 1.0,
+      state: 'settled',
+      settles_after: null,
+      session_kind: 'text',
+      self_report: 'done',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [{ lf: 'explicit_feedback', vote: 1, strength: 'strong', evidence: 'operator', observed_at: new Date().toISOString() }],
+      history: [],
+    };
+    const outcomesDir = join(tmpRoot, 'agent-framework', 'outcomes');
+    writeRecord(outcome, outcomesDir);
+
+    const result = await getFacetHandler({ session: 'sess-with-outcome' }, ABORT);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    expect(parsed['verified_outcome']).toBeDefined();
+    const vo = parsed['verified_outcome'] as VerifiedOutcome;
+    expect(vo.label).toBe('succeeded');
+    expect(vo.confidence).toBe(1.0);
+    expect(vo.state).toBe('settled');
+  });
+
+  it('returns verified_outcome when explicitly requested via fields', async () => {
+    writeSession('sess-field-vo');
+    const outcome: VerifiedOutcome = {
+      schema_version: 1,
+      session_id: 'sess-field-vo',
+      label: 'failed',
+      confidence: 1.0,
+      state: 'settled',
+      settles_after: null,
+      session_kind: 'text',
+      self_report: 'none',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+    };
+    const outcomesDir = join(tmpRoot, 'agent-framework', 'outcomes');
+    writeRecord(outcome, outcomesDir);
+
+    const result = await getFacetHandler({ session: 'sess-field-vo', fields: ['verified_outcome'] }, ABORT);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    expect(Object.keys(parsed)).toHaveLength(1);
+    const vo = parsed['verified_outcome'] as VerifiedOutcome;
+    expect(vo.label).toBe('failed');
+  });
+
+  it('returns null for verified_outcome when field explicitly requested but no record', async () => {
+    writeSession('sess-null-vo');
+    const result = await getFacetHandler({ session: 'sess-null-vo', fields: ['verified_outcome'] }, ABORT);
+    expect(result.isError).toBeFalsy();
+    const parsed = JSON.parse(result.content as string) as Record<string, unknown>;
+    expect(parsed['verified_outcome']).toBeNull();
   });
 });

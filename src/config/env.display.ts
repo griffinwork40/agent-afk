@@ -68,7 +68,7 @@ export const DISPLAY_ENV_REGISTRY = [
       'When set to "1" (or true/yes/on), streamed assistant prose in the interactive REPL condenses out of ' +
       'faint smoke (speck, then haze, then a dim letter, then the real letter) instead of popping in. ' +
       'Needs a 256-color or truecolor terminal. It stays off for NO_COLOR, non-TTY output, AFK_PLAIN_OUTPUT, ' +
-      'Telegram, and the daemon, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable.',
+      'Telegram, the daemon, and AFK_REDUCED_MOTION=1, and it skips code fences and tables. Default off. Set AFK_SMOKE_TEXT=0 or unset it to disable.',
     type: 'boolean',
     required: false,
     default: '',

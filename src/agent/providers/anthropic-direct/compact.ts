@@ -196,7 +196,7 @@ export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
     }
 
     const refs: ToolResultRef[] = [];
-    for (const msg of messages) {
+    for (const [messageIndex, msg] of messages.entries()) {
       if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
       const content = msg.content as ContentBlockParam[];
       for (const block of content) {
@@ -207,6 +207,7 @@ export const anthropicMicrocompactOps: MicrocompactOps<MessageParam> = {
           byteLength: toolResultContentBytes(resultBlock.content),
           isPlaceholder: isToolResultPlaceholder(resultBlock.content),
           toolName: toolUseId !== undefined ? toolNameById.get(toolUseId) : undefined,
+          messageIndex,
           clear(placeholder: string): void {
             // Replace content in place with a single text-string payload. Keeps
             // the tool_result block (and its tool_use_id) exactly where it was.

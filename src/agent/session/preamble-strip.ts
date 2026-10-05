@@ -45,7 +45,7 @@ export function isPreamble(text: string): boolean {
  * instruction, the ledger record contains `<command-name>` and
  * `<command-args>` tags from the breadcrumb formatter.
  */
-export function extractSkillTitle(text: string): string | undefined {
+function extractSkillTitle(text: string): string | undefined {
   const skillMatch = text.match(/<command-name>\/?([^<]+)<\/command-name>/);
   if (!skillMatch) return undefined;
   const skillName = skillMatch[1]!.replace(/^\//, '').trim();

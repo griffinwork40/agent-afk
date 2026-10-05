@@ -117,7 +117,7 @@ Markers never leak back into stored history — `cache-policy.ts` clones-and-sta
 - **Cost guardrails** — `--max-budget-usd <n>` / `AFK_MAX_BUDGET_USD` aborts on cost breach. `--task-budget <tokens>` / `AFK_TASK_BUDGET` is an advisory per-task hint surfaced to the model.
 - **MCP elicitations** — when an MCP server requests OAuth consent (e.g. Supabase re-auth), the REPL prints the server name, message, and URL, then asks `Continue? [y/N]`. Empty cancels; `n` declines; `y` accepts. Form-mode elicitations are auto-declined in v1. Handler: `src/agent/elicitation-router.ts`.
 - **Clipboard image paste** — paste images directly into the REPL (macOS pasteboard; bracketed-paste-aware). See `src/cli/input/clipboard-image.ts`.
-- **Auto-update check** — startup checks for a newer published version and prints a notice. Suppress with `afk --no-update-check`. Policy field `updatePolicy` (`notify`|`auto`|`off`) lives in `afk.config.json`. Implementation: `src/cli/update-checker.ts`.
+- **Auto-update check** — startup checks for a newer published version and prints a notice. Suppress with `afk --no-update-check`. Policy field `updatePolicy` (`notify`|`auto`|`off`) lives in `afk.config.json`. `auto` never installs across a major version (breaking changes ship there); the notice tells the user to upgrade by hand. Implementation: `src/cli/update-checker.ts`.
 
 ## Bypass permissions
 

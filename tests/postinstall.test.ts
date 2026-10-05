@@ -381,8 +381,9 @@ describe.skipIf(isWin32)('isGlobalInstall', () => {
 // restarts. These tests exercise the extracted maybeRestartServices() helper
 // directly — without running the isMain block — so the guard is reachable
 // from a unit test. Removing the isGlobalInstall guard inside
-// maybeRestartServices makes two of these tests fail: the
-// "npm_config_global is absent" case and the ".git marker is present" case.
+// maybeRestartServices makes three of these tests fail: the
+// "npm_config_global is absent" case, the ".git marker is present" case,
+// and the "uses the default pkgRoot" case.
 //
 // All tests inject platform, env, pkgRoot, existsFn, and restartFn so no real
 // filesystem or npm lifecycle environment leaks into the assertions.
@@ -460,6 +461,11 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
   it('uses the default pkgRoot (package root via fileURLToPath) when pkgRoot is omitted', () => {
     // Exercises the default-argument path: pkgRoot falls back to
     // fileURLToPath(new URL('..', import.meta.url)) rather than .pathname.
+    // Note: the checkout path has no percent-encoded characters, so this test
+    // cannot directly catch a fileURLToPath-vs-.pathname regression. What it
+    // does confirm is that the default is derived at all (the probed path
+    // contains the expected .git suffix) and that omitting pkgRoot does not
+    // suppress the restart when all other guards pass.
     // platform MUST be 'darwin' and npm_config_global 'true' — otherwise the
     // platform/env guards return before the default pkgRoot is ever read.
     // scripts/postinstall.mjs and this file are both one level below the
@@ -470,7 +476,11 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
       probed.push(p);
       return false; // no .git → treated as a global install
     };
-    const restartFn = vi.fn(() => ['com.afk.daemon']);
+    const receivedOpts: Array<{ labels?: string[] }> = [];
+    const restartFn = vi.fn((opts?: { labels?: string[] }) => {
+      receivedOpts.push(opts ?? {});
+      return ['com.afk.daemon'];
+    });
     const result = maybeRestartServices({
       platform: 'darwin',
       env: { npm_config_global: 'true' },
@@ -480,6 +490,7 @@ describe.skipIf(isWin32)('maybeRestartServices', () => {
     expect(probed).toEqual([expectedGitMarker]);
     expect(result).toEqual(['com.afk.daemon']);
     expect(restartFn).toHaveBeenCalledOnce();
+    expect(receivedOpts[0]?.labels).toEqual(['com.afk.daemon']);
   });
 });
 // ─── isMainModule ─────────────────────────────────────────────────────────────

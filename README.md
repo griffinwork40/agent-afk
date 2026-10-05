@@ -22,7 +22,7 @@ Open source. Runs locally. Works with any model provider, including local models
 ## Quick Start
 
 ```bash
-npm install -g agent-afk    # Node ≥ 22 required
+npm install -g agent-afk    # Node ≥ 22.13 required
 afk login                   # authenticate (auto-detects Claude Code / Codex creds)
 afk doctor                  # verify everything works
 afk chat "hello"             # first real conversation
@@ -30,11 +30,13 @@ afk chat "hello"             # first real conversation
 
 That's it. You're in.
 
-**Using pnpm?** `pnpm add -g agent-afk` works, but pnpm 10 blocks build scripts by default and silently skips `postinstall` (see [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)). Run `pnpm approve-builds -g` after install to approve the hook, or use `npm install -g agent-afk` instead. If a launchd/systemd-supervised `afk daemon` is already running and pnpm skipped the hook, restart it manually with `afk service restart daemon`.
+**Using pnpm?** `pnpm add -g agent-afk` works, but pnpm 10 and later block build scripts by default and skips `postinstall` (with an easy-to-miss warning — see [#2199](https://github.com/griffinwork40/agent-afk/issues/2199)). Run `pnpm approve-builds -g` after install to approve the hook, or use `npm install -g agent-afk` instead. If an `afk daemon` is already running and pnpm skipped the hook, restart it manually with `afk service restart daemon` — on macOS the hook restarts the daemon automatically when it runs, but on Linux you must always run this command after an upgrade even when the hook ran. If you have a manually-started Telegram bot, also run `afk telegram restart`.
 
 **Try without installing:** `npx agent-afk chat "hello"` runs a one-shot turn with zero global install.
 
 **Already using Claude Code or Codex?** `afk login` will detect your existing credentials automatically. Run `afk migrate` to import your plugins, skills, and MCP servers too -- it live-reads the source tool's dirs, so anything you install there keeps showing up in AFK with no re-run.
+
+Codex imports use `CODEX_HOME` when set (otherwise `~/.codex`) and also discover shared skills in `~/.agents/skills`. Native `.codex-plugin/plugin.json` manifests are recognized alongside Claude-format manifests; explicit `[plugins."name@marketplace"]` enable/disable settings apply at runtime. Without an installed-plugin registry, discovery selects one cached directory per marketplace/plugin using descending numeric-aware directory order. This is a filesystem fallback, not a guarantee of the version selected by Codex. Codex-hosted app connectors and TOML MCP server loading are not imported.
 
 > 📖 **Full documentation at [docs.agentafk.com](https://docs.agentafk.com)** -- quickstart, configuration, model setup, surfaces, skills, and SDK reference.
 
@@ -83,8 +85,8 @@ AFK_MODEL=sonnet
 TELEGRAM_BOT_TOKEN=1234567890:ABC...
 AFK_TELEGRAM_ALLOWED_CHAT_IDS=12345678
 
-# Per-task safety rails
-AFK_MAX_BUDGET_USD=5.00
+# Optional per-session cost cap (unset = no limit)
+# AFK_MAX_BUDGET_USD=5.00
 ```
 
 **Project-scoped system prompt.** Drop an `AFK.md` at your project root and `afk` appends it to its built-in framework prompt whenever you run from that directory — your instructions layer on top of the base, they don't replace it. No frontmatter needed.

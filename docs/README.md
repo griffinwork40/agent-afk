@@ -16,6 +16,12 @@ One line per document, grouped by concern.
 
 ---
 
+## Hooks
+
+- [hook-payload.md](hook-payload.md) — Shell hook stdin payload reference: every field, event-specific fields, `transcript_path` contract, and stdout response schema.
+
+---
+
 ## Agent & Subagent Runtime
 
 - [subagent-steering.md](subagent-steering.md) — Mid-run steering: how an external actor redirects a running subagent between tool-call boundaries.
