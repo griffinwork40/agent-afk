@@ -136,6 +136,7 @@ export async function processStreamEvent(
     if (pending) {
       pending.result = c.content;
       pending.isError = c.isError;
+      if (c.incomplete === true) pending.incomplete = true;
       // Capture resultTail for verification commands so lfVerification can
       // parse pass/fail even when the command was piped and isError reflects
       // only the pipe's last stage. Use tailPreview (last N non-empty lines

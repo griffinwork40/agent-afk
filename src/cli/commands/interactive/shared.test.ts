@@ -51,48 +51,48 @@ function stripAnsi(s: string): string {
 }
 
 describe('printResumeBanner', () => {
-  it('is a silent no-op when turns is empty', () => {
+  it('is a silent no-op when turns is empty', async () => {
     const { writer, lines } = makeWriter();
-    printResumeBanner(makeStats([]), writer);
+    await printResumeBanner(makeStats([]), writer);
     expect(lines).toEqual([]);
   });
 
-  it('emits a header and footer framing the replay', () => {
+  it('emits a header and footer framing the replay', async () => {
     const { writer, lines } = makeWriter();
     const turn: TurnRecord = {
       user: 'fix the auth bug',
       assistant: 'I patched the token check.',
       timestamp: 0,
     };
-    printResumeBanner(makeStats([turn]), writer);
+    await printResumeBanner(makeStats([turn]), writer);
 
     const text = lines.map((l) => stripAnsi(l)).join('\n');
     expect(text).toContain('Resuming session');
     expect(text).toContain('End of history');
   });
 
-  it('emits user and assistant content inside the replay', () => {
+  it('emits user and assistant content inside the replay', async () => {
     const { writer, lines } = makeWriter();
     const turn: TurnRecord = {
       user: 'fix the auth bug',
       assistant: 'I patched the token check.',
       timestamp: 0,
     };
-    printResumeBanner(makeStats([turn]), writer);
+    await printResumeBanner(makeStats([turn]), writer);
 
     const text = lines.map((l) => stripAnsi(l)).join('\n');
     expect(text).toContain('fix the auth bug');
     expect(text).toContain('I patched the token check.');
   });
 
-  it('includes all turns when multiple are present', () => {
+  it('includes all turns when multiple are present', async () => {
     const { writer, lines } = makeWriter();
     const turns: TurnRecord[] = [
       { user: 'first ask', assistant: 'first reply', timestamp: 0 },
       { user: 'second ask', assistant: 'second reply', timestamp: 1 },
       { user: 'third ask', assistant: 'third reply', timestamp: 2 },
     ];
-    printResumeBanner(makeStats(turns), writer);
+    await printResumeBanner(makeStats(turns), writer);
 
     const text = lines.map((l) => stripAnsi(l)).join('\n');
     expect(text).toContain('first ask');
@@ -100,23 +100,23 @@ describe('printResumeBanner', () => {
     expect(text).toContain('third ask');
   });
 
-  it('includes the turn count in the header', () => {
+  it('includes the turn count in the header', async () => {
     const { writer, lines } = makeWriter();
     const turns: TurnRecord[] = [
       { user: 'a', assistant: 'b', timestamp: 0 },
       { user: 'c', assistant: 'd', timestamp: 1 },
     ];
-    printResumeBanner(makeStats(turns), writer);
+    await printResumeBanner(makeStats(turns), writer);
 
     const text = lines.map((l) => stripAnsi(l)).join('\n');
     expect(text).toContain('2 turns');
   });
 
-  it('routes all output through writer.fn, not console.log', () => {
+  it('routes all output through writer.fn, not console.log', async () => {
     // All lines must arrive through the mock writer — if any go to console,
     // lines would be empty while output was printed elsewhere.
     const { writer, lines } = makeWriter();
-    printResumeBanner(makeStats([{ user: 'x', assistant: 'y', timestamp: 0 }]), writer);
+    await printResumeBanner(makeStats([{ user: 'x', assistant: 'y', timestamp: 0 }]), writer);
     expect(lines.length).toBeGreaterThan(0);
   });
 });

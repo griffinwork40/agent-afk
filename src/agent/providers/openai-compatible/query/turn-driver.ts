@@ -260,6 +260,13 @@ export async function* runTurnInner(
     let windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null = null;
     let round = 0;
     let toolCallCount = 0;
+    // Invariant: tool calls that were being streamed when the output cap cut the
+    // round off. `isToolCallStop` returns false for any truncation finish reason,
+    // so a call truncated mid-arguments sets needsToolDispatch=false and is
+    // discarded in-memory — it never reaches `dispatchAndAppend`, which is the
+    // ONLY site that builds an assistant `tool_calls` message. That silent drop
+    // is correct (a half-built call would poison history with an incomplete id).
+    // The names are captured here for `emitTurnTerminal`'s truncation notice.
     let droppedToolNames: string[] = [];
 
     // Inner tool-use loop: keep driving the model as long as it emits tool calls.
@@ -401,6 +408,17 @@ async function* emitTurnTerminal(
   windDownReason: typeof TOOL_USE_LOOP_CAPPED | typeof SOFT_DEADLINE_WIND_DOWN | null,
   turnStartTime: number,
 ): AsyncGenerator<ProviderEvent> {
+  // Invariant: the truncation notice is APPENDED to the single terminal
+  // assistant.message, never yielded as a second one — last-wins consumers
+  // (the non-streaming sendMessage() path, a subagent's final-message
+  // capture) keep only the LAST assistant message of a turn, so a second
+  // event would discard the model's real partial answer and surface only the
+  // warning. Same rule as the anthropic-direct terminal path. Deliberately
+  // applied AFTER the priorTurns push: the notice is operator-facing and
+  // must not enter conversation history.
+  //
+  // Issue #970: textless truncations use the `notice` channel instead of
+  // silently dropping. See the analogous logic in the anthropic-direct loop.
   const truncationText = isTruncationStopReason(accumulatedUsage.stopReason)
     ? truncationNotice(droppedToolNames, accumulatedUsage.stopReason, {
         canIncreaseOutputLimit: !(
