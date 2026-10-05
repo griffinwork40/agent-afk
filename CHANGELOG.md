@@ -11,6 +11,24 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.295.2] - 2026-10-05
+
+### Fixed
+- anchor breaking-change footer grep to line start (#2918) (598406db)
+- unref poller and exit on stdin close in test-server-dynamic fixture (#2917) (68e536a7)
+- pick most-representative verb for mixed parallel tool waves (#2920) (2a87e812)
+
+## [5.295.1] - 2026-10-04
+
+### Fixed
+- root session dirs at /tmp on darwin to fix sun_path EINVAL (#2942) (aa759578)
+- patch prod-path SSRF advisories (fast-uri, MCP SDK stack) (#2943) (92e65c4c)
+
+## [5.295.0] - 2026-10-04
+
+### Added
+- fire Stop on every top-level surface from the session layer (#2713) (ab6a3bc7)
+
 ## [5.294.0] - 2026-10-04
 
 ### Added
