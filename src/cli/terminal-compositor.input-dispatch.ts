@@ -33,6 +33,7 @@ import {
   handleBackspace,
 } from './terminal-compositor.input-dispatch.enter.js';
 import { handleCursorAndEdit } from './terminal-compositor.input-dispatch.cursor.js';
+import { clearModeNoticeOnKey } from './terminal-compositor.mode-notice.js';
 
 /**
  * Max gap (ms) between the two Escapes of a double-Esc rewind trigger at an
@@ -113,6 +114,8 @@ export interface KeyDispatchHost {
   clipboardInFlight: boolean;
   /** Paint-clear notice surfaced when a clipboard probe found no image. */
   clipboardFailureMsg: string | null;
+  /** Transient Shift+Tab mode notice; cleared by the next other keystroke. */
+  modeNotice: string | null;
   /** Image attachments accumulated this compose window (reassigned on submit). */
   attachments: ImageAttachment[];
 
@@ -199,6 +202,9 @@ export function applyEdit(self: KeyDispatchHost, next: InputCoreState): boolean 
 
 export function dispatchKey(self: KeyDispatchHost, char: string | undefined, key: KeyInfo): void {
   if (!self.armed) return;
+  // Any keystroke but Shift+Tab dismisses the mode notice (Shift+Tab replaces
+  // it). Runs first so every handler below repaints without it.
+  clearModeNoticeOnKey(self, key);
 
   // Invariant: key handling is a strictly ordered chain of guard
   // clauses. Each handler returns `true` the moment it consumes the

@@ -82,6 +82,8 @@ export interface FrameHost {
   readonly spinnerController: SpinnerController;
   attachments: ImageAttachment[];
   clipboardFailureMsg: string | null;
+  /** Transient Shift+Tab mode notice (terminal-compositor.mode-notice.ts). */
+  modeNotice: string | null;
   // ── committed-band tracking (mutated by preserveRowsBeforeFrameRender) ──
   committedBand: string[];
   /** #540: per-physical-row logical provenance, index-aligned 1:1 with committedBand. */
@@ -160,6 +162,7 @@ export function repaint(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const dropdownRows = self.renderDropdownRows();
@@ -257,6 +260,7 @@ function repaintPickerFrame(self: FrameHost): void {
     self.attachments,
     clipboardRef,
     self.stdout.columns ?? 80,
+    self.modeNotice,
   );
   self.clipboardFailureMsg = clipboardRef.value;
   const layout = computePickerViewportLayout(

@@ -50,6 +50,7 @@ import * as Lifecycle from './terminal-compositor.lifecycle.js';
 import * as Reset from './terminal-compositor.reset.js';
 import * as QueuedAccess from './terminal-compositor.queued-access.js';
 import * as Api from './terminal-compositor.api.js';
+import * as ModeNotice from './terminal-compositor.mode-notice.js';
 import type { BandReflowCache } from './terminal-compositor.band-reflow.js';
 
 // Re-export public types so existing importers of './terminal-compositor.js'
@@ -269,6 +270,12 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the input-dispatch module (KeyDispatchHost).
    */
   clipboardFailureMsg: string | null = null;
+  /**
+   * Transient Shift+Tab permission-mode notice, rendered in the live frame
+   * instead of scrollback; see terminal-compositor.mode-notice.ts.
+   * @internal Relaxed from `private` for the frame/input-dispatch/reset modules.
+   */
+  modeNotice: string | null = null;
   /**
    * Input mode — see {@link CompositorInputMode}. Default `'streaming'`
    * matches the historical single-mode behavior all existing callers
@@ -1144,6 +1151,12 @@ export class TerminalCompositor {
    * @internal Relaxed from `private` for the frame module (FrameHost).
    */
   renderHintRow(): string | null { return Api.renderHintRow(this); }
+
+  /**
+   * Show/replace (or clear, with `null`) the transient mode notice row.
+   * Returns false when disarmed so the caller can fall back to scrollback.
+   */
+  setModeNotice(text: string | null): boolean { return ModeNotice.setModeNotice(this, text); }
 
   /** @internal Public for sibling free-function modules (via Host interfaces) and test casts. */
   repaint(): void {
