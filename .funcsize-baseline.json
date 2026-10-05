@@ -12,7 +12,7 @@
     "src/agent/subagent.ts::SubagentManager.forkSubagent": { "loc": 310, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/handle.streaming.ts::streamToFinalMessage": { "loc": 242, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/subagent/handle.ts::SubagentHandleImpl.run": { "loc": 221, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/agent/tools/compose-executor.ts::ComposeExecutor.execute": { "loc": 474, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/agent/tools/compose-executor.ts::ComposeExecutor.execute": { "loc": 473, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/compose-input-parse.ts::parseComposeInput": { "loc": 236, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/bash.ts::createBashHandler": { "loc": 440, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/agent/tools/handlers/image-generate.ts::createImageGenerateHandler": { "loc": 213, "reason": "legacy: predates the function-size gate; pending helper extraction" },
@@ -41,14 +41,12 @@
     "src/cli/commands/interactive/worktree.ts::createWorktreeAt": { "loc": 271, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/commands/marketplace.ts::registerMarketplaceCommand": { "loc": 220, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/config/json-tier-parse.ts::parseJsonConfigFile": { "loc": 226, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/elicitation/agent-question.ts::renderAgentQuestion": { "loc": 400, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/input/reader.keypress.nav.ts::handleNavKey": { "loc": 208, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/input/reader.ts::readWithAutocompleteTty": { "loc": 230, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/render/picker.ts::runPicker": { "loc": 262, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/cli/terminal-compositor.input-dispatch.ts::handleEnter": { "loc": 259, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/skills/audit-fit/index.ts::handler": { "loc": 292, "reason": "legacy: predates the function-size gate; pending helper extraction" },
+    "src/skills/audit-fit/index.ts::handler": { "loc": 290, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/telegram/elicitation-handler.ts::makeTelegramElicitationHandler": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/telegram/handlers/message.ts::MessageHandler.handlePhoto": { "loc": 230, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/telegram/streaming.ts::streamResponse": { "loc": 286, "reason": "legacy: predates the function-size gate; pending helper extraction" }
+    "src/telegram/streaming.ts::streamResponse": { "loc": 274, "reason": "legacy: predates the function-size gate; pending helper extraction" }
   }
 }
