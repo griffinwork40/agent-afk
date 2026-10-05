@@ -21,11 +21,6 @@ import { isProcessAlive } from './worktree-sweep.classify.js';
  * Return the cwds of all live top-level sessions. Presence is advisory and
  * best-effort: on any read failure this returns an empty list, so the sweep
  * falls back to the meta.pid liveness check alone (prior behavior).
- */
-/**
- * Return the cwds of all live top-level sessions. Presence is advisory and
- * best-effort: on any read failure this returns an empty list, so the sweep
- * falls back to the meta.pid liveness check alone (prior behavior).
  *
  * Only sessions whose pid is currently alive are included; a stale presence
  * record left by a crashed session does not protect a worktree indefinitely.
