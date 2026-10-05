@@ -365,3 +365,190 @@ describe('legacy first_prompt field is stripped on read-modify-write', () => {
     expect(rec?.first_cwd).toBe('/project'); // first_cwd is kept
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding #1: normalClosure from closure_reason (iteration_cap should NOT
+// trigger good-by-default rule 6/7)
+// ---------------------------------------------------------------------------
+
+describe('upsertVotes – normalClosure derived from closure_reason (finding #1)', () => {
+  it('iteration_cap session with one minor vote past window stays unknown (not succeeded 0.3)', () => {
+    // An iteration_cap session: closure_reason='iteration_cap' → normalClosure=false
+    // Rule 7 (one minor negative past window → succeeded 0.3) only applies
+    // when normalClosure is true, so this session must stay unknown.
+    const pastWindow = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    const base = {
+      schema_version: 1 as const,
+      session_id: 'sess-iter-cap',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'provisional' as const,
+      settles_after: pastWindow,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      closure_reason: 'iteration_cap' as const,
+    };
+
+    upsertVotes(
+      'sess-iter-cap',
+      [makeVote({ lf: 'budget_cap', vote: -1, strength: 'weak', severity: 'minor', evidence: 'trace' })],
+      base,
+      { outcomesDir: tmpDir },
+    );
+
+    const rec = readRecord('sess-iter-cap', tmpDir);
+    // Must stay unknown — normalClosure=false prevents rule 7 from firing
+    expect(rec?.label).toBe('unknown');
+    expect(rec?.confidence).toBe(0);
+  });
+
+  it('normal-closure session with one minor vote past window → succeeded 0.3 (rule 7)', () => {
+    const pastWindow = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    const base = {
+      schema_version: 1 as const,
+      session_id: 'sess-normal-cl',
+      label: 'unknown' as const,
+      confidence: 0,
+      state: 'provisional' as const,
+      settles_after: pastWindow,
+      session_kind: 'text' as const,
+      self_report: 'none' as const,
+      artifacts: { commits: [], prs: [], repo: null },
+      closure_reason: 'normal' as const,
+    };
+
+    upsertVotes(
+      'sess-normal-cl',
+      [makeVote({ lf: 'cross_session_reask', vote: -1, strength: 'weak', severity: 'minor', evidence: 'minor' })],
+      base,
+      { outcomesDir: tmpDir },
+    );
+
+    const rec = readRecord('sess-normal-cl', tmpDir);
+    // normalClosure=true → rule 7 fires → succeeded 0.3
+    expect(rec?.label).toBe('succeeded');
+    expect(rec?.confidence).toBe(0.3);
+    expect(rec?.basis).toBe('no_bad_signals');
+  });
+
+  it('record missing closure_reason (old record) is treated as normal closure', () => {
+    // Old records without closure_reason → treated as normal (conservative default)
+    const pastWindow = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
+    // Write a raw record without closure_reason (simulating pre-fix record)
+    const legacyRec: VerifiedOutcome = {
+      schema_version: 1,
+      session_id: 'sess-no-closure',
+      label: 'unknown',
+      confidence: 0,
+      state: 'provisional',
+      settles_after: pastWindow,
+      session_kind: 'text',
+      self_report: 'none',
+      artifacts: { commits: [], prs: [], repo: null },
+      votes: [],
+      history: [],
+    };
+    writeRecord(legacyRec, tmpDir);
+
+    // Add one minor negative — with old record (no closure_reason → normal → rule 7)
+    upsertVotes(
+      'sess-no-closure',
+      [makeVote({ lf: 'cross_session_reask', vote: -1, strength: 'weak', severity: 'minor', evidence: 'minor' })],
+      undefined,
+      { outcomesDir: tmpDir },
+    );
+
+    const rec = readRecord('sess-no-closure', tmpDir);
+    // absence treated as normal → rule 7 fires → succeeded 0.3
+    expect(rec?.label).toBe('succeeded');
+  });
+
+  it('closureReason option sets closure_reason on new records', () => {
+    upsertVotes(
+      'sess-set-reason',
+      [],
+      {
+        schema_version: 1,
+        session_id: 'sess-set-reason',
+        label: 'unknown',
+        confidence: 0,
+        state: 'provisional',
+        settles_after: null,
+        session_kind: 'text',
+        self_report: 'none',
+        artifacts: { commits: [], prs: [], repo: null },
+      },
+      { outcomesDir: tmpDir, closureReason: 'iteration_cap' },
+    );
+    const rec = readRecord('sess-set-reason', tmpDir);
+    expect(rec?.closure_reason).toBe('iteration_cap');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding #3: session_ended_at is written once and preserved across upserts
+// ---------------------------------------------------------------------------
+
+describe('upsertVotes – session_ended_at immutability (finding #3)', () => {
+  it('session_ended_at is written on first upsert and not overwritten by later upserts', () => {
+    const endedAt = '2025-01-01T12:00:00.000Z';
+
+    // First upsert: supplies session_ended_at via base
+    upsertVotes(
+      'sess-ended-at',
+      [],
+      {
+        schema_version: 1,
+        session_id: 'sess-ended-at',
+        label: 'unknown',
+        confidence: 0,
+        state: 'provisional',
+        settles_after: null,
+        session_kind: 'text',
+        self_report: 'none',
+        artifacts: { commits: [], prs: [], repo: null },
+        session_ended_at: endedAt,
+      },
+      { outcomesDir: tmpDir },
+    );
+
+    // Second upsert: relabel-job style — no session_ended_at in base
+    upsertVotes(
+      'sess-ended-at',
+      [makeVote({ lf: 'ci', vote: 1, strength: 'weak', evidence: 'ci:ok' })],
+      undefined,
+      { outcomesDir: tmpDir },
+    );
+
+    const rec = readRecord('sess-ended-at', tmpDir);
+    // session_ended_at must still be the original value, not overwritten
+    expect(rec?.session_ended_at).toBe(endedAt);
+  });
+
+  it('session_ended_at is present on a freshly created record', () => {
+    const endedAt = '2025-06-01T09:00:00.000Z';
+    upsertVotes(
+      'sess-new-ended',
+      [],
+      {
+        schema_version: 1,
+        session_id: 'sess-new-ended',
+        label: 'unknown',
+        confidence: 0,
+        state: 'provisional',
+        settles_after: null,
+        session_kind: 'text',
+        self_report: 'none',
+        artifacts: { commits: [], prs: [], repo: null },
+        session_ended_at: endedAt,
+      },
+      { outcomesDir: tmpDir },
+    );
+    const rec = readRecord('sess-new-ended', tmpDir);
+    expect(rec?.session_ended_at).toBe(endedAt);
+  });
+});

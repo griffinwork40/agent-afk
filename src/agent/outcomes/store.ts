@@ -94,6 +94,13 @@ export function listRecords(
 export interface UpsertVotesOptions {
   /** Override the outcomes directory (default: getOutcomesDir()). */
   outcomesDir?: string;
+  /**
+   * Closure reason to store in the record (supplied at immediate-LF time via
+   * the witness trace). When omitted the existing record value is preserved.
+   * Callers that don't know the closure reason (e.g. relabel-job) should omit
+   * this — the value written at session-end time is authoritative.
+   */
+  closureReason?: VerifiedOutcome['closure_reason'];
 }
 
 /**
@@ -128,6 +135,22 @@ export function upsertVotes(
   // Build the record to mutate
   const record: VerifiedOutcome = existing ?? _skeleton(sessionId, base);
 
+  // Persist closure reason when supplied (only at immediate-LF time).
+  // Preserve the existing value when the caller does not know it (relabel-job etc.)
+  if (opts.closureReason !== undefined) {
+    record.closure_reason = opts.closureReason;
+  }
+
+  // session_ended_at is immutable after first write — preserve the existing
+  // value across all subsequent upsertVotes calls (relabel-job, reask, etc.).
+  // The base record from the session-end hook supplies the initial value.
+  // When the record already has session_ended_at (from the skeleton or an
+  // earlier upsert), do not overwrite it. This is enforced by the _skeleton
+  // helper which copies it from base; subsequent upserts read an existing
+  // record that already carries the field.
+  // No explicit action needed here — the existing record value is preserved
+  // when we pass `record` (which already has the field) to writeRecord.
+
   // Merge votes: dedupe by lf+evidence (incoming wins on collision)
   const merged = _mergeVotes(record.votes, newVotes);
   record.votes = merged;
@@ -150,6 +173,14 @@ export function upsertVotes(
     record.settles_after !== null &&
     nowMs > new Date(record.settles_after).getTime();
 
+  // Derive normalClosure from stored closure_reason.
+  // Records without closure_reason (written before this field was added) are
+  // treated as normal closure (conservative: we don't know it was abnormal).
+  // Only 'abort' and 'iteration_cap' are considered non-normal.
+  const normalClosure =
+    record.closure_reason === undefined ||
+    record.closure_reason === 'normal';
+
   // Re-combine
   const { label, confidence, basis } = combine({
     votes: merged,
@@ -157,6 +188,7 @@ export function upsertVotes(
     artifacts: record.artifacts,
     explicit_feedback: explicitFeedback,
     settleWindowPassed,
+    normalClosure,
   });
 
   // Settle immediately when explicit_feedback overrides

@@ -27,11 +27,13 @@ export {
   parsePrUrl,
   lfPrFate,
   lfCommitSurvival,
-  lfFixOfFix,
   realFetchPrState,
   realCheckAncestor,
   realCheckRevert,
 } from './lf-delayed.js';
+// Note: the M0 stub `lfFixOfFix` from lf-delayed.ts is intentionally NOT
+// re-exported — it returned [] unconditionally and is superseded by the real
+// implementation in lf-fof.ts (exported below as lfFixOfFixDelayed).
 
 export type { CombinerInput, CombinerResult } from './combine.js';
 export { combine, computeConfidence } from './combine.js';

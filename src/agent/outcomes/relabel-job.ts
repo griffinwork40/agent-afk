@@ -474,12 +474,20 @@ export async function rescoreSettledUnknown(
         continue;
       }
 
-      // Re-apply combiner v2 with settleWindowPassed=true (these are settled records)
+      // Re-apply combiner v2 with settleWindowPassed=true (these are settled records).
+      // Derive normalClosure from stored closure_reason: treat missing as normal
+      // (old records without the field; conservative — we don't know it was abnormal).
+      // Only 'abort' and 'iteration_cap' are non-normal.
+      const normalClosure =
+        rec.closure_reason === undefined ||
+        rec.closure_reason === 'normal';
+
       const { label, confidence, basis } = combine({
         votes: rec.votes,
         selfReport: rec.self_report,
         artifacts: rec.artifacts,
         settleWindowPassed: true,
+        normalClosure,
       });
 
       if (label === rec.label) {

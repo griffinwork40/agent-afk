@@ -170,3 +170,96 @@ describe('lfInSessionCorrection with machine-injected content', () => {
     expect(vote?.severity).toBe('minor');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding #5: MACHINE_BLOCK_PATTERNS must not strip human text like [please fix]
+// ---------------------------------------------------------------------------
+
+describe('stripMachineContent – bracket pattern does not strip human text (finding #5)', () => {
+  it('does NOT strip [please fix] — plain human correction text', () => {
+    const text = '[please fix] the auth module\nThis is broken.';
+    const result = stripMachineContent(text);
+    expect(result).toContain('[please fix]');
+    expect(result).toContain('This is broken.');
+  });
+
+  it('does NOT strip [note] — common human bracket usage', () => {
+    const text = '[note] please review this section carefully';
+    const result = stripMachineContent(text);
+    expect(result).toContain('[note]');
+  });
+
+  it('does NOT strip [TODO] style human markers (uppercase — pattern is case-sensitive start)', () => {
+    // The pattern starts with [a-z] — uppercase brackets are not stripped regardless
+    const text = '[TODO] implement the missing handler';
+    const result = stripMachineContent(text);
+    expect(result).toContain('[TODO]');
+  });
+
+  it('DOES strip [memory: ...] lines (internal colon)', () => {
+    const text = '[memory: user prefers verbose output]\nThen do this.';
+    const result = stripMachineContent(text);
+    expect(result).not.toContain('[memory:');
+    expect(result).toContain('Then do this.');
+  });
+
+  it('DOES strip [jev rules]: lines (external colon)', () => {
+    const text = '[jev rules]: always return calibrated probabilities\nPlease proceed.';
+    const result = stripMachineContent(text);
+    expect(result).not.toContain('[jev rules]');
+    expect(result).toContain('Please proceed.');
+  });
+
+  it('DOES strip [placeholder-prevent] (hyphenated label)', () => {
+    const text = '[placeholder-prevent]\nContinue.';
+    const result = stripMachineContent(text);
+    expect(result).not.toContain('[placeholder-prevent]');
+    expect(result).toContain('Continue.');
+  });
+
+  it('does NOT strip two-word human phrases with no colon or hyphen: [my note]', () => {
+    const text = '[my note] this was tricky to debug';
+    const result = stripMachineContent(text);
+    // [my note] has no colon and no hyphen → should NOT be stripped
+    expect(result).toContain('[my note]');
+  });
+
+  it('does NOT vote on correction when human text [please fix] is NOT stripped and has no correction keywords', () => {
+    // Confirm that [please fix] is preserved AND that lfInSessionCorrection does NOT
+    // falsely fire solely because of the bracket content (no correction keywords present).
+    const now = '2024-01-01T00:00:00.000Z';
+    function makeTurns(userTexts: string[]): Array<{ user: string }> {
+      return userTexts.map((user) => ({ user }));
+    }
+
+    // [please fix] the output — no correction keywords present, so no vote
+    const turns = makeTurns([
+      'Do the task.',
+      '[please fix] the output',
+    ]);
+    const vote = lfInSessionCorrection(turns, now);
+    // Before fix: [please fix] would have been stripped → empty turn → skipped → no vote.
+    // After fix: [please fix] is preserved; since the remaining text has no correction
+    // keywords, lfInSessionCorrection still returns null (correct).
+    expect(vote).toBeNull();
+  });
+
+  it('detects correction keywords in human text that was NOT stripped', () => {
+    // With the fix, [please fix] is no longer stripped. If the human turn ALSO
+    // contains correction language, lfInSessionCorrection should detect it.
+    const now = '2024-01-01T00:00:00.000Z';
+    function makeTurns(userTexts: string[]): Array<{ user: string }> {
+      return userTexts.map((user) => ({ user }));
+    }
+
+    // "No, [please fix]..." starts with "No," which matches the correction pattern
+    const turns = makeTurns([
+      'Do the task.',
+      'No, [please fix] this — it is wrong.',
+    ]);
+    const vote = lfInSessionCorrection(turns, now);
+    // "No," at the start of the message matches CORRECTION_PATTERNS[0]
+    expect(vote).not.toBeNull();
+    expect(vote?.lf).toBe('in_session_correction');
+  });
+});
