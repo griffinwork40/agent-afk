@@ -12,7 +12,7 @@
  * @module cli/input/work-derived-verb
  */
 
-import { humanVerbForTool } from '../tool-category.js';
+import { categorizeTool, CATEGORY_HUMAN_VERB, humanVerbForTool } from '../tool-category.js';
 
 /**
  * The verb for a tool name, or `undefined` when there is no tool to describe.
@@ -66,6 +66,59 @@ export class InFlightToolTracker {
     let last: string | undefined;
     for (const name of this.inFlight.values()) last = name;
     return last;
+  }
+
+  /**
+   * The most representative in-progress verb for the current wave, or
+   * `undefined` when idle.
+   *
+   * Selection rules (applied in priority order):
+   * 1. **Idle** — no tools in flight → `undefined` (spinner falls back to its
+   *    flavour pool).
+   * 2. **Unanimous verb** — every in-flight tool resolves to the same verb
+   *    (e.g. three `read_file` calls all say "Reading") → show that verb.
+   * 3. **Unanimous category** — verbs differ but all tools share the same
+   *    category (e.g. `bash` and `test_run` both in `shell`) → show the
+   *    category's human label (e.g. "Running").
+   * 4. **Mixed categories** — tools span different categories (e.g. `agent`
+   *    and `wait_for`) → show "Working" so the spinner is honest without
+   *    privileging whichever tool started last.
+   *
+   * The trailing `…` from `CATEGORY_HUMAN_VERB` is stripped here (not in
+   * `verbForToolName`) so the spinner's own punctuation appends cleanly.
+   */
+  currentVerb(): string | undefined {
+    if (this.inFlight.size === 0) return undefined;
+
+    // Collect unique verbs and categories across all in-flight tools.
+    let firstVerb: string | undefined;
+    let firstCategory: string | undefined;
+    let unanimousVerb = true;
+    let unanimousCategory = true;
+
+    for (const toolName of this.inFlight.values()) {
+      const verb = humanVerbForTool(toolName).replace(/…$/, '');
+      const cat = categorizeTool(toolName);
+
+      if (firstVerb === undefined) {
+        firstVerb = verb;
+        firstCategory = cat;
+      } else {
+        if (verb !== firstVerb) unanimousVerb = false;
+        if (cat !== firstCategory) unanimousCategory = false;
+      }
+    }
+
+    // Rule 2: all tools agree on the same verb.
+    if (unanimousVerb) return firstVerb;
+
+    // Rule 3: verbs differ but all tools share the same category.
+    if (unanimousCategory && firstCategory !== undefined) {
+      return CATEGORY_HUMAN_VERB[firstCategory as keyof typeof CATEGORY_HUMAN_VERB].replace(/…$/, '');
+    }
+
+    // Rule 4: mixed categories — use a neutral fallback.
+    return 'Working';
   }
 
   /** Drop all tracking — call between turns so state never leaks. */
@@ -139,7 +192,7 @@ export function noteToolEvent(
   } else {
     return false;
   }
-  sink?.setActiveToolName?.(tracker.current());
+  sink?.setActiveToolName?.(tracker.currentVerb());
   return true;
 }
 
