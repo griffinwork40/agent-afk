@@ -15,7 +15,7 @@
  * unknown-cast — the same pattern used in `parse-provider-agent-tool.test.ts`.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -400,6 +400,45 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     } finally {
       if (original !== undefined) process.env[key] = original;
       void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined when AFK_MAX_BUDGET_USD is empty string (not a $0 hard-stop)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    try {
+      process.env[key] = '';
+      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = factory(makeConfig());
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+    }
+  });
+
+  it('leaves maxBudgetUsd undefined and warns when AFK_MAX_BUDGET_USD is malformed (does not throw)', () => {
+    const key = 'AFK_MAX_BUDGET_USD';
+    const original = process.env[key];
+    let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env[key] = 'unlimited';
+      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      // Must not throw even with a malformed env value
+      session = factory(makeConfig());
+      const internals = session as unknown as { config?: AgentConfig };
+      expect(internals.config?.maxBudgetUsd).toBeUndefined();
+      // A warning must have been emitted
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+      void session?.close().catch(() => undefined);
+      vi.restoreAllMocks();
     }
   });
 });

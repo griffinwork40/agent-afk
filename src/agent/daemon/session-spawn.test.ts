@@ -46,8 +46,92 @@ vi.mock('node:fs', async (importOriginal) => {
 
 // Import after mock is registered.
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
-import { daemonDefaultCwd, _resetDaemonDefaultCwdCache } from './session-spawn.js';
+import { daemonDefaultCwd, _resetDaemonDefaultCwdCache, parseDaemonEnvLimits } from './session-spawn.js';
 import { getDaemonStateDir } from '../../paths.js';
+
+// ── parseDaemonEnvLimits tests ────────────────────────────────────────────────
+
+describe('parseDaemonEnvLimits', () => {
+  // ── AFK_MAX_TOOL_USE_ITERATIONS ───────────────────────────────────────────
+  it('returns undefined parsedMaxToolIters when raw is undefined', () => {
+    const { parsedMaxToolIters } = parseDaemonEnvLimits(undefined, undefined);
+    expect(parsedMaxToolIters).toBeUndefined();
+  });
+
+  it('returns floored positive integer for valid parsedMaxToolIters', () => {
+    const { parsedMaxToolIters } = parseDaemonEnvLimits('3.7', undefined);
+    expect(parsedMaxToolIters).toBe(3);
+  });
+
+  it('returns undefined parsedMaxToolIters for zero (not a valid ceiling)', () => {
+    const { parsedMaxToolIters } = parseDaemonEnvLimits('0', undefined);
+    expect(parsedMaxToolIters).toBeUndefined();
+  });
+
+  it('returns undefined parsedMaxToolIters for non-numeric string', () => {
+    const { parsedMaxToolIters } = parseDaemonEnvLimits('lots', undefined);
+    expect(parsedMaxToolIters).toBeUndefined();
+  });
+
+  it('returns undefined parsedMaxToolIters for negative value', () => {
+    const { parsedMaxToolIters } = parseDaemonEnvLimits('-1', undefined);
+    expect(parsedMaxToolIters).toBeUndefined();
+  });
+
+  // ── AFK_MAX_BUDGET_USD ────────────────────────────────────────────────────
+  it('returns undefined parsedMaxBudget when raw is undefined', () => {
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, undefined);
+    expect(parsedMaxBudget).toBeUndefined();
+  });
+
+  it('returns valid number for a well-formed budget', () => {
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '5.00');
+    expect(parsedMaxBudget).toBe(5);
+  });
+
+  it('accepts zero as a valid budget (hard-stop sentinel)', () => {
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '0');
+    expect(parsedMaxBudget).toBe(0);
+  });
+
+  it('returns undefined for empty string (not a $0 hard-stop)', () => {
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '');
+    expect(parsedMaxBudget).toBeUndefined();
+  });
+
+  it('returns undefined for whitespace-only string (treated as unset)', () => {
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '   ');
+    expect(parsedMaxBudget).toBeUndefined();
+  });
+
+  it('returns undefined and warns for malformed budget (does not throw)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'unlimited');
+    expect(parsedMaxBudget).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/AFK_MAX_BUDGET_USD/);
+  });
+
+  it('returns undefined and warns for NaN budget string (does not throw)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, 'NaN');
+    expect(parsedMaxBudget).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns undefined and warns for negative budget (does not throw)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { parsedMaxBudget } = parseDaemonEnvLimits(undefined, '-1');
+    expect(parsedMaxBudget).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('both limits resolved in one call', () => {
+    const { parsedMaxToolIters, parsedMaxBudget } = parseDaemonEnvLimits('10', '2.50');
+    expect(parsedMaxToolIters).toBe(10);
+    expect(parsedMaxBudget).toBe(2.5);
+  });
+});
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function makeTmpDir(): string {
