@@ -35,6 +35,22 @@ export type { ToolResultLookup } from './types.js';
 type ToolResultBlock = Extract<JournalBlock, { type: 'tool_result' }>;
 
 /**
+ * Shared return-type alias for both the sync (`findToolResult` in reader.ts)
+ * and async (`findToolResultAsync`) tool-result lookup paths. Consumers that
+ * import from the journal index via `findToolResultAsync` should import this
+ * type rather than spelling the inline shape to keep both sides in sync.
+ *
+ * @see findToolResult
+ * @see findToolResultAsync
+ */
+export interface ToolResultLookup {
+  /** Hydrated tool_result block. */
+  block: ToolResultBlock;
+  /** Subagent id, when the result lives in a subagent journal. */
+  subagentId?: string;
+}
+
+/**
  * Scan one journal file for the newest record whose tool_result.toolUseId
  * matches `toolUseId`. Returns { block, ts } on a hit, or null.
  *
