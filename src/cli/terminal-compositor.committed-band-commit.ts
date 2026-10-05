@@ -51,6 +51,8 @@ export interface CommittedBandHost {
   lastMeasuredFrameTop: number;
   /** How many of committedBand's rows (its bottom suffix) are painted on screen. */
   committedBandPaintedRows: number;
+  /** Leading band rows already in scrollback (terminal-compositor.band-archived-prefix.ts). */
+  committedBandArchivedPrefix: number;
   /** Memoization for reflowCommittedBandToWidth — see the field doc on the class. */
   bandReflowCache: BandReflowCache | null;
   /** Re-entrancy guard: suppresses a repaint during the clear→write window. */
@@ -363,6 +365,7 @@ export function clearCommittedBand(self: CommittedBandHost): void {
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
   self.committedBandPaintedRows = 0;
+  self.committedBandArchivedPrefix = 0;
   // Explicit reset (also self-invalidates via reflowCommittedBandToWidth's
   // reference check once committedBand is reassigned above, but an empty band
   // never needs a cache entry either way).
@@ -393,6 +396,7 @@ export function forgetCommittedBand(self: CommittedBandHost): void {
   self.committedBandTopRow = 0;
   self.committedBandBottomRow = 0;
   self.committedBandPaintedRows = 0;
+  self.committedBandArchivedPrefix = 0;
   self.bandReflowCache = null;
   // Keep lifecycleStateDirty unchanged: it tracks whether a commit has landed
   // since the last flush. Forgetting the model does not reset that semantic.

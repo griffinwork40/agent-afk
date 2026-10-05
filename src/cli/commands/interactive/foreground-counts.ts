@@ -64,8 +64,10 @@ export function makeForegroundCountsGetter(
 
   return (): { active: number; total: number } => {
     const bgJobs = registry?.list() ?? [];
-    bgSeenMax = Math.max(bgSeenMax, bgJobs.length);
+    // Use Set size so duplicate registry entries (same subagentId) do not
+    // permanently deflate the foreground total by ratcheting a count > unique bg dispatches.
     const bgSubagentIds = new Set(bgJobs.map((j) => j.subagentId));
+    bgSeenMax = Math.max(bgSeenMax, bgSubagentIds.size);
 
     const handles = manager.list();
     const active = handles.filter(

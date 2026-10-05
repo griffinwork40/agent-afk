@@ -133,6 +133,7 @@ describe('tool.overflow_kill telemetry — bash', () => {
     appendRoutingDecision.mockClear();
   });
 
+  // Windows: genuinely POSIX-only — uses `head -c` and `/dev/zero` (#703)
   it.skipIf(process.platform === 'win32')('emits tool.overflow_kill with operational fields when bash crosses the hard cap', async () => {
     // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
     // Fast generator: head -c 9000000 from /dev/zero crosses the 8MB hard
@@ -154,6 +155,7 @@ describe('tool.overflow_kill telemetry — bash', () => {
     expect(evt!['total_bytes'] as number).toBeGreaterThanOrEqual(100_000);
   }, 30_000);
 
+  // Windows: genuinely POSIX-only — uses `head -c` and `/dev/zero` (#703)
   it.skipIf(process.platform === 'win32')('does NOT include the bash command string in the telemetry payload', async () => {
     // `head -c` and `/dev/zero` are POSIX-only — POSIX-only (#703)
     // Distinctive marker we can scan for in the serialized mock calls.

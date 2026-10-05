@@ -29,8 +29,10 @@ import { join, basename, resolve, relative, isAbsolute } from 'path';
 import { getMemoryDir } from '../../paths.js';
 import { debugLog } from '../../utils/debug.js';
 import { factsToResults, sanitizeFtsQuery } from './memory-store.fts.js';
+import { queryUnaccessed, queryAccessStats } from './memory-store.access.js';
 import { parseJsonlLines } from '../../utils/jsonl.js';
 import type {
+  AccessStats,
   Fact,
   NewFact,
   SearchOpts,
@@ -548,6 +550,20 @@ export class MemoryStore {
     return (row as Fact) ?? null;
   }
 
+  /**
+   * Returns non-superseded facts with `access_count = 0` that are older than
+   * `minAgeDays` days (default 30). Read-only — no facts are modified or
+   * deleted. Use as a dry-run signal for a future GC sweep.
+   */
+  getUnaccessed(minAgeDays?: number): Fact[] {
+    return queryUnaccessed(this.db, minAgeDays);
+  }
+
+  /** Returns aggregate access-count statistics for the fact archive. */
+  getAccessStats(): AccessStats {
+    return queryAccessStats(this.db);
+  }
+
   searchFacts(query: string, opts?: SearchOpts): Fact[] {
     const limit = opts?.limit ?? 10;
     const conditions: string[] = ['facts_fts MATCH ?'];
@@ -722,7 +738,10 @@ export class MemoryStore {
         throw err; // No sanitization possible; surface the error to the handler.
       }
     }
-    const results: MemorySearchResult[] = [...factResults];
+    // Invariant: `results` aliases `factResults` (no defensive copy).
+    // The array is consumed exactly once (push + slice below) and never read
+    // from again. Add a spread copy here if a second reader ever appears.
+    const results: MemorySearchResult[] = factResults;
 
     if (!opts?.category) {
       const procs = this.searchProcedures(query);

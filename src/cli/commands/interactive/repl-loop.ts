@@ -7,6 +7,7 @@ import { setupSurface } from './surface-setup.js';
 import { setupFooterSubsystems, type FooterSubsystems } from './footer-subsystems.js';
 import { runInputLoop } from './loop-iteration.js';
 import { installConsoleBridge } from './console-bridge.js';
+import { schedulePeerInboxSweep } from './peer-inbox-startup-sweep.js';
 import type { TurnState } from './repl-loop-shared.js';
 
 // Re-export so existing importers keep their `import { ..., type TurnState }
@@ -119,6 +120,12 @@ export async function runReplLoop(
     if (compositor) restoreConsole = installConsoleBridge(compositor);
 
     footer = setupFooterSubsystems(ctx, turnState);
+    // Start the peer inbox notifier (fs.watch + poll). Best-effort: start()
+    // never throws. Disposed in the finally alongside bgResultNotifier.
+    footer.peerNotifier.start();
+    // Schedule a deferred sweep of dead sessions' peer inbox directories.
+    // Mirrors the witness sweep: fire-and-forget, unref'd, never blocks startup.
+    schedulePeerInboxSweep();
 
     // Invariant: periodic terminal writers (health rail 1s tick, bg-bar spinner,
     // mascot animation) continue writing ANSI cursor escapes while a pager/editor
@@ -159,6 +166,9 @@ export async function runReplLoop(
     // fires (interactive.ts teardown) so cascade-cancelled jobs don't queue
     // notices into a buffer that will never drain.
     footer?.bgResultNotifier.dispose();
+    // Stop the peer inbox notifier (watcher + poll). Must run before the
+    // process exits so no orphaned interval keeps it alive.
+    footer?.peerNotifier.dispose();
     // Stop the footer painters top → bottom so each clears the exact row it
     // painted before the counts below it change. HealthRail is the topmost
     // reserved row, so it must clear first (its stop fires onRowCountChange(0)

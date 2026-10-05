@@ -23,30 +23,16 @@ const FTS5_OPERATORS = new Set(['AND', 'OR', 'NOT']);
  * Characters that FTS5 treats as query-syntax tokens when they appear unquoted
  * in a bare word. A token containing any of these causes FTS5 to try to
  * interpret it as a column filter or arithmetic expression, producing errors
- * like "no such column: afk" for the query `agent-afk`.
+ * like "no such column: afk" for the query `agent-afk`. Includes `+`, `^`
+ * so that queries like `C++` are also quoted safely.
+ *
+ * Parentheses are NOT listed here: boundary parens (leading `(` / trailing
+ * `)`) are FTS5 group delimiters and must be preserved. Only parens embedded
+ * mid-word (like `foo(bar)`) need quoting; that case is detected inside
+ * {@link sanitizeFtsQuery} after stripping boundary parens from a token.
  */
-const FTS5_BAREWORD_SPECIAL = /[-:/.,]/;
+const FTS5_BAREWORD_SPECIAL = /[-:/.,+^]/;
 
-/**
- * Sanitize a raw FTS5 query so it survives the MATCH call without a syntax
- * error, while preserving intentional FTS5 syntax:
- *
- * - Explicit boolean operators (AND, OR, NOT) are kept as-is.
- * - Already-quoted phrases ("foo bar") are kept as-is.
- * - Prefix wildcards (term*) are kept as-is (valid FTS5 syntax).
- * - Bare tokens that contain FTS5 special characters (`-`, `:`, `/`, `.`, `,`)
- *   are wrapped in double-quotes so FTS5 treats them as literal phrases.
- *
- * The return value equals the input when no substitution was needed, which lets
- * callers skip the retry when sanitization is a no-op.
- *
- * Examples:
- *   "agent-afk"          → '"agent-afk"'
- *   "foo AND bar*"       → "foo AND bar*"   (unchanged)
- *   "ground-state"       → '"ground-state"'
- *   '"exact phrase"'     → '"exact phrase"' (unchanged)
- *   "foo:bar"            → '"foo:bar"'
- */
 /**
  * Map a Fact[] returned by searchFacts into MemorySearchResult entries.
  * Extracted here so the mapping logic is shared between the primary and
@@ -68,6 +54,33 @@ export function factsToResults(facts: Fact[]): MemorySearchResult[] {
   }));
 }
 
+/**
+ * Sanitize a raw FTS5 query so it survives the MATCH call without a syntax
+ * error, while preserving intentional FTS5 syntax:
+ *
+ * - Explicit boolean operators (AND, OR, NOT) are kept as-is.
+ * - Already-quoted phrases ("foo bar") are kept as-is.
+ * - Prefix wildcards (term*) are kept as-is (valid FTS5 syntax).
+ * - Bare tokens that contain FTS5 special characters (`-`, `:`, `/`, `.`, `,`,
+ *   `+`, `^`) or embedded parens are wrapped in double-quotes so FTS5 treats
+ *   them as literal phrases. Boundary parens (leading `(` / trailing `)`)
+ *   are group delimiters and are NOT quoted.
+ *
+ * The return value equals the input when no substitution was needed, which lets
+ * callers skip the retry when sanitization is a no-op.
+ *
+ * Examples:
+ *   "agent-afk"              → '"agent-afk"'
+ *   "foo AND bar*"           → "foo AND bar*"         (unchanged)
+ *   "ground-state"           → '"ground-state"'
+ *   '"exact phrase"'         → '"exact phrase"'       (unchanged)
+ *   "foo:bar"                → '"foo:bar"'
+ *   "C++"                    → '"C++"'
+ *   "foo(bar)"               → '"foo(bar)"'           (embedded paren → quoted)
+ *   "(foo OR bar) AND C++"   → '(foo OR bar) AND "C++"' (boundary parens preserved)
+ *
+ * @internal Exported only for MemoryStore and its unit tests.
+ */
 export function sanitizeFtsQuery(query: string): string {
   const tokens: string[] = [];
   // Walk the query character by character, emitting tokens split on whitespace
@@ -100,20 +113,56 @@ export function sanitizeFtsQuery(query: string): string {
     if (FTS5_OPERATORS.has(token)) {
       // Boolean operator — preserve as-is.
       tokens.push(token);
-    } else if (FTS5_BAREWORD_SPECIAL.test(token)) {
-      // Token contains FTS5-special characters. Strip any trailing * (prefix
-      // wildcard) before quoting, then re-append it outside the quotes so the
-      // wildcard still works: FTS5 supports "term"* but requires the * to be
-      // outside the quoted string.
-      if (token.endsWith('*')) {
-        tokens.push(`"${token.slice(0, -1)}"*`);
-      } else {
-        tokens.push(`"${token}"`);
-      }
-    } else {
-      // Plain token — keep as-is (includes prefix wildcards like `term*`).
-      tokens.push(token);
+      continue;
     }
+
+    // Classify whether the token has boundary parens (FTS5 group delimiters)
+    // or embedded parens (mid-word, like `foo(bar)`).
+    //
+    // Strategy: peel ALL leading `(`s and ALL trailing `)`s off the token.
+    // If the remaining `inner` has no parens, the parens were boundary-only
+    // and must stay un-quoted as group delimiters. If `inner` still contains
+    // a paren, the parens are embedded mid-word → quote the whole token.
+    //
+    // Examples:
+    //   `(foo`     → prefix `(`, inner `foo`, no embedded → `(foo`
+    //   `bar)`     → suffix `)`, inner `bar`, no embedded → `bar)`
+    //   `foo(bar)` → no leading `(`, but after stripping trailing `)`, inner
+    //                is `foo(bar` which still has `(` → embedded → `"foo(bar)"`
+    let prefixParens = '';
+    let suffixParens = '';
+    let inner = token;
+    while (inner.startsWith('(')) { prefixParens += '('; inner = inner.slice(1); }
+    while (inner.endsWith(')')) { suffixParens = ')' + suffixParens; inner = inner.slice(0, -1); }
+
+    if (inner === '') {
+      // Token was only parens (e.g. a lone `(` or `)`). Keep verbatim.
+      tokens.push(token);
+      continue;
+    }
+
+    if (/[()]/.test(inner)) {
+      // Embedded parens found in `inner` — the whole token has mixed boundary
+      // + embedded parens. Quote the ENTIRE original token (not the stripped
+      // form) so FTS5 treats it as a literal. E.g. `foo(bar)` → `"foo(bar)"`.
+      const raw = token.endsWith('*') ? token.slice(0, -1) : token;
+      const wc = token.endsWith('*') ? '*' : '';
+      tokens.push(`"${raw}"${wc}`);
+      continue;
+    }
+
+    // No embedded parens. Process `inner` for other FTS5 specials and
+    // re-attach the boundary parens around the (possibly quoted) inner part.
+    //
+    // Strip any trailing * (prefix wildcard) before quoting, then re-append
+    // it outside the quotes so the wildcard still works: FTS5 supports
+    // "term"* but requires the * to be outside the quoted string.
+    let wildcard = '';
+    if (inner.endsWith('*')) { wildcard = '*'; inner = inner.slice(0, -1); }
+
+    const needsQuoting = FTS5_BAREWORD_SPECIAL.test(inner);
+    const processed = needsQuoting ? `"${inner}"` : inner;
+    tokens.push(prefixParens + processed + wildcard + suffixParens);
   }
   return tokens.join(' ');
 }

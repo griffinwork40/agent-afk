@@ -2,8 +2,8 @@
  * Regression: a child aborted mid-run leaves a journal record per completed
  * tool call after `journal.flush()`.
  *
- * This is the killed-child proof for issue #2460: the retire of
- * `AFK_CAPTURE_SUBAGENT_OUTPUT` required verifying that the journal covers
+ * This is the killed-child proof for issue #2460: retiring the old opt-in
+ * subagent output-capture flag required verifying that the journal covers
  * the same failure case that flag was designed for — a child that runs to its
  * timeout and produces no final output. The capture flag flushed per tool call;
  * the journal `flush()` drains the SerialQueue and achieves the same guarantee
@@ -26,8 +26,8 @@ useTmpAfkHome();
 describe('journal flush on abort', () => {
   it('records appended before flush() are durable after flush resolves', async () => {
     // Simulate a child that writes journal records for two tool calls but is
-    // aborted before sending a final message. This is the scenario AFK_CAPTURE_SUBAGENT_OUTPUT
-    // existed to debug: a child that hits its timeout with no final output.
+    // aborted before sending a final message. This is the scenario the retired
+    // output-capture flag existed to debug: a child that hits its timeout with no final output.
     const journal = createMessageJournal({
       getSessionId: () => 'abort-flush-session',
     });

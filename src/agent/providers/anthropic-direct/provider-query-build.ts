@@ -108,7 +108,7 @@ export function buildProviderQuery(
 
   const resolvedEffort = resolveEffort(config.effort, model);
   const resolvedTemperature = config.temperature !== undefined
-    ? resolveAnthropicTemperature(config.temperature)
+    ? resolveAnthropicTemperature(config.temperature, model)
     : undefined;
   // Use requestedModel (the alias, e.g. sonnet_1m) rather than the resolved
   // wire id so safeAutoCompactThresholdFor sees the full 1M window when
@@ -148,9 +148,17 @@ export function buildProviderQuery(
     systemPrefix,
     tokenRefresher,
     ...(config.thinking !== undefined
-      ? { thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort) }
+      ? {
+          thinking: resolveThinkingParam(config.thinking, maxTokens, model, resolvedEffort),
+          // Pass the original unresolved config so the query can re-resolve
+          // per-turn when a mid-session /model switch changes the current model.
+          rawThinkingConfig: config.thinking,
+        }
       : {}),
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+    // Pass the original caller effort (may be undefined = "use model default")
+    // so the per-turn getter can re-resolve after a /model switch.
+    ...(config.effort !== undefined ? { rawEffort: config.effort } : {}),
     ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
     ...(localMode ? { baseUrl: config.baseUrl } : {}),
     ...(config.traceWriter ? { traceWriter: config.traceWriter } : {}),

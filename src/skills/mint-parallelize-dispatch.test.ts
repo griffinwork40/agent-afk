@@ -49,7 +49,7 @@ let forkShouldThrow = false;
 let lastForkSubagentArg: Record<string, unknown> | undefined;
 
 vi.mock('../agent/subagent.js', () => ({
-  SubagentManager: vi.fn(() => ({
+  SubagentManager: vi.fn(function () { return {
     forkSubagent: vi.fn(async (arg: Record<string, unknown>) => {
       lastForkSubagentArg = arg;
       if (forkShouldThrow) throw new Error('synthetic fork failure');
@@ -59,7 +59,7 @@ vi.mock('../agent/subagent.js', () => ({
       };
     }),
     teardownAll: vi.fn(async () => undefined),
-  })),
+  }; }),
 }));
 
 // Mutable plugin-body discovery, swapped per test.

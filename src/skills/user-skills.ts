@@ -63,6 +63,11 @@ interface ParsedSkillMd {
   context?: 'inline' | 'fork' | 'load';
   /** Job-to-be-done category authored in frontmatter. Passed through verbatim. */
   category?: string;
+  /**
+   * When `true`, exclude from the model-facing manifest (Claude Code parity).
+   * Parsed from `disable-model-invocation: true` in SKILL.md frontmatter.
+   */
+  disableModelInvocation?: boolean;
 }
 
 /**
@@ -147,6 +152,10 @@ function parseUserSkillMd(content: string, dirname: string): ParsedSkillMd | nul
   // category is passed through verbatim — no validation, no inference.
   const rawCategory = parsed.frontmatter['category'];
   if (rawCategory && rawCategory.length > 0) out.category = rawCategory;
+  // Claude Code parity: `disable-model-invocation: true` hides this skill from
+  // the model-facing manifest while keeping it slash-invocable.
+  const rawDMI = parsed.frontmatter['disable-model-invocation'];
+  if (rawDMI === 'true') out.disableModelInvocation = true;
   return out;
 }
 
@@ -345,6 +354,7 @@ export function scanSkillsFromDir(
     if (parsed.argumentHint) meta.argumentHint = parsed.argumentHint;
     if (parsed.whenToUse) meta.whenToUse = parsed.whenToUse;
     if (parsed.flags && parsed.flags.length > 0) meta.flags = parsed.flags;
+    if (parsed.disableModelInvocation) meta.disableModelInvocation = true;
     // Narrow the raw frontmatter string to the SkillCategory union. OOV values
     // are dropped (undefined) — the listing's F1 clamping only helps at render
     // time; rejecting here keeps the registry clean.

@@ -8,7 +8,7 @@
  * @module agent/providers/openai-compatible/base-schemas.test
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { selectBaseSchemas } from './base-schemas.js';
 import type { AnthropicToolDef } from '../anthropic-direct/types.js';
 
@@ -32,47 +32,25 @@ function names(tools: AnthropicToolDef[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Test lifecycle
-// ---------------------------------------------------------------------------
-
-beforeEach(() => {
-  vi.unstubAllEnvs();
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
-// ---------------------------------------------------------------------------
 // isSkillDispatch branch
 // ---------------------------------------------------------------------------
 
 describe('selectBaseSchemas — isSkillDispatch', () => {
-  it('strips ask_question', () => {
+  it('excludes the interactive-only tool set and retains everything else', () => {
     const result = selectBaseSchemas(ALL_TOOLS, { isSkillDispatch: true });
-    expect(names(result)).not.toContain('ask_question');
-  });
+    const resultNames = new Set(names(result));
 
-  it('strips terminal_font_size', () => {
-    const result = selectBaseSchemas(ALL_TOOLS, { isSkillDispatch: true });
-    expect(names(result)).not.toContain('terminal_font_size');
-  });
+    // These tools are stripped for skill dispatches:
+    const excluded = new Set(['ask_question', 'terminal_font_size', 'clipboard_write', 'clipboard_read']);
+    for (const name of excluded) {
+      expect(resultNames, `expected ${name} to be stripped`).not.toContain(name);
+    }
 
-  it('strips clipboard_write', () => {
-    const result = selectBaseSchemas(ALL_TOOLS, { isSkillDispatch: true });
-    expect(names(result)).not.toContain('clipboard_write');
-  });
-
-  it('strips clipboard_read', () => {
-    const result = selectBaseSchemas(ALL_TOOLS, { isSkillDispatch: true });
-    expect(names(result)).not.toContain('clipboard_read');
-  });
-
-  it('retains all other tools (read_file, write_file, bash)', () => {
-    const result = selectBaseSchemas(ALL_TOOLS, { isSkillDispatch: true });
-    expect(names(result)).toContain('read_file');
-    expect(names(result)).toContain('write_file');
-    expect(names(result)).toContain('bash');
+    // Everything else is retained:
+    const retained = new Set(['read_file', 'write_file', 'bash']);
+    for (const name of retained) {
+      expect(resultNames, `expected ${name} to be retained`).toContain(name);
+    }
   });
 
   it('isNonInteractive is ignored when isSkillDispatch is true', () => {

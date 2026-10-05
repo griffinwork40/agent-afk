@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { getTranscriptsDir } from '../src/paths.js';
 import { detectInText } from '../src/agent/preexisting-ledger/detector.js';
-import { clusterHits, type ClusterHit as TranscriptHit, type Cluster } from '../src/agent/preexisting-ledger/cluster.js';
+import { clusterHits, type ClusterHit, type Cluster } from '../src/agent/preexisting-ledger/cluster.js';
 import { getPreexistingBackfillPath } from '../src/agent/preexisting-ledger/paths.js';
 import { findLocusMatches, resolveLocusPath } from '../src/agent/preexisting-ledger/resolve.js';
 
@@ -49,7 +49,7 @@ function extractAssistantBlocks(markdown: string): string[] {
   return blocks;
 }
 
-function scanTranscript(filePath: string, fileName: string): TranscriptHit[] {
+function scanTranscript(filePath: string, fileName: string): ClusterHit[] {
   let content: string;
   try {
     content = readFileSync(filePath, 'utf8');
@@ -57,7 +57,7 @@ function scanTranscript(filePath: string, fileName: string): TranscriptHit[] {
     return [];
   }
   const blocks = extractAssistantBlocks(content);
-  const hits: TranscriptHit[] = [];
+  const hits: ClusterHit[] = [];
   // Derive a session date from the filename (ISO-ish prefix).
   const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(fileName);
   const sessionDate = dateMatch ? dateMatch[1]! : '';
@@ -246,7 +246,7 @@ async function main(): Promise<void> {
 
   console.log(`Scanning ${transcriptFiles.length} transcripts in ${transcriptsDir} ...`);
 
-  const allHits: TranscriptHit[] = [];
+  const allHits: ClusterHit[] = [];
   for (const f of transcriptFiles) {
     const hits = scanTranscript(join(transcriptsDir, f), f);
     allHits.push(...hits);

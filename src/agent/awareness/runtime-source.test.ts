@@ -9,6 +9,12 @@ import { buildRuntimeStateSource } from './runtime-source.js';
 import { gatherWorkspace } from './workspace-source.js';
 import type { AnthropicToolDef } from '../tools/types.js';
 import type { RuntimeSubagents, RuntimeWorkspace } from './types.js';
+import {
+  getQuotaSnapshot,
+  recordQuotaSnapshot,
+  resetQuotaCacheForTests,
+} from '../quota-cache.js';
+import { STALE_AFTER_MS } from '../../cli/quota-indicator.js';
 
 // `getWorkspace()` delegates to the real `gatherWorkspace`, which spawns git
 // subprocesses against the test's cwd — nondeterministic and slow. Mock it so
@@ -351,5 +357,55 @@ describe('buildRuntimeStateSource.getWorkspace', () => {
     expect(src.getSelf().cwd).toBe('/launch/checkout');
     cwd = '/repo/.afk-worktrees/feature';
     expect(src.getSelf().cwd).toBe('/repo/.afk-worktrees/feature');
+  });
+});
+
+// ─── getUsage ────────────────────────────────────────────────────────────────
+
+describe('buildRuntimeStateSource.getUsage', () => {
+  beforeEach(() => {
+    resetQuotaCacheForTests();
+  });
+
+  it('returns an empty array when no quota snapshot has been recorded', () => {
+    const src = buildRuntimeStateSource(defaultDeps());
+    expect(src.getUsage()).toEqual([]);
+  });
+
+  it('returns a compact entry for the anthropic oauth path when snapshot is fresh', () => {
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.74,
+      sevenDayUtilization: 0.12,
+      observedAt: new Date(),
+    });
+    const src = buildRuntimeStateSource(defaultDeps());
+    const usage = src.getUsage();
+    expect(usage).toHaveLength(1);
+    expect(usage[0].provider).toBe('anthropic');
+    expect(usage[0].account).toBe('oauth');
+    expect(usage[0].status).toBe('ok');
+    expect(usage[0].fiveHourPct).toBe(74);
+    expect(usage[0].sevenDayPct).toBe(12);
+  });
+
+  it('reports status=stale when the snapshot is older than STALE_AFTER_MS', () => {
+    recordQuotaSnapshot({
+      fiveHourUtilization: 0.5,
+      observedAt: new Date(Date.now() - STALE_AFTER_MS - 5000),
+    });
+    const src = buildRuntimeStateSource(defaultDeps());
+    const usage = src.getUsage();
+    expect(usage[0].status).toBe('stale');
+  });
+
+  it('does not include fiveHourPct when fiveHourUtilization is absent', () => {
+    recordQuotaSnapshot({
+      sevenDayUtilization: 0.3,
+      observedAt: new Date(),
+    });
+    const src = buildRuntimeStateSource(defaultDeps());
+    const usage = src.getUsage();
+    expect(usage[0].fiveHourPct).toBeUndefined();
+    expect(usage[0].sevenDayPct).toBe(30);
   });
 });
