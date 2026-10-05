@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
+import { rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildDaemonSessionFactory, type BuildDaemonSessionFactoryOpts, type DaemonSessionFactory } from './daemon-session-factory.js';
@@ -357,14 +358,19 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     process.env['AFK_HOME'] = tmpAfkHome;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Close all SQLite handles (kv.db, memory.db) opened by factory.dispose()
+    // and closeStore() BEFORE removing the temp dir. On Windows an open handle
+    // causes rmSync / fs.rm to fail with EBUSY.
+    await releaseOwnedHandles();
     delete process.env['AFK_HOME'];
-    rmSync(tmpAfkHome, { recursive: true, force: true });
+    // Belt-and-braces: retries cover any residual async flush on Windows.
+    await rm(tmpAfkHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it('forwards config.maxBudgetUsd when already set (e.g. by session-spawn.ts)', () => {
-    const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-    const session = factory(makeConfig({ maxBudgetUsd: 7.5 }));
+    const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+    const session = trackSession(factory(makeConfig({ maxBudgetUsd: 7.5 })));
     const internals = session as unknown as { config?: AgentConfig };
     expect(internals.config?.maxBudgetUsd).toBe(7.5);
     void session.close().catch(() => undefined);
@@ -376,8 +382,8 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
     try {
       process.env[key] = '3.00';
-      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-      session = factory(makeConfig());
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
       expect(internals.config?.maxBudgetUsd).toBe(3);
     } finally {
@@ -393,8 +399,8 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
     try {
       delete process.env[key];
-      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-      session = factory(makeConfig());
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
       expect(internals.config?.maxBudgetUsd).toBeUndefined();
     } finally {
@@ -409,8 +415,8 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     let session: ReturnType<ReturnType<typeof buildDaemonSessionFactory>> | undefined;
     try {
       process.env[key] = '';
-      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
-      session = factory(makeConfig());
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
       expect(internals.config?.maxBudgetUsd).toBeUndefined();
     } finally {
@@ -427,9 +433,9 @@ describe('buildDaemonSessionFactory — maxBudgetUsd wiring (#2297)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       process.env[key] = 'unlimited';
-      const factory = buildDaemonSessionFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
+      const factory = buildFactory({ model: 'sonnet', apiKey: TEST_API_KEY });
       // Must not throw even with a malformed env value
-      session = factory(makeConfig());
+      session = trackSession(factory(makeConfig()));
       const internals = session as unknown as { config?: AgentConfig };
       expect(internals.config?.maxBudgetUsd).toBeUndefined();
       // A warning must have been emitted
