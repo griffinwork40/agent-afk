@@ -11,6 +11,12 @@ auto-release workflow to deduplicate commits across successive runs.
 
 ## [Unreleased]
 
+## [5.296.2] - 2026-10-05
+
+### Changed
+- split audit-sdk-dependency and audit-fit under the 350-line ceiling (#832) (#2960) (babec7ad)
+- regenerate env-registry var count after concurrent merges (#2969) (d2c7b1b7)
+
 ## [5.296.1] - 2026-10-05
 
 ### Changed

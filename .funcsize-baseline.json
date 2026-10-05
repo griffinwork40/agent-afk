@@ -45,9 +45,7 @@
     "src/cli/input/reader.ts::readWithAutocompleteTty": { "loc": 230, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/render/picker.ts::runPicker": { "loc": 262, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/cli/terminal-compositor.input-dispatch.ts::handleEnter": { "loc": 259, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/skills/audit-fit/index.ts::handler": { "loc": 290, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/telegram/elicitation-handler.ts::makeTelegramElicitationHandler": { "loc": 406, "reason": "legacy: predates the function-size gate; pending helper extraction" },
-    "src/telegram/handlers/message.ts::MessageHandler.handlePhoto": { "loc": 230, "reason": "legacy: predates the function-size gate; pending helper extraction" },
     "src/telegram/streaming.ts::streamResponse": { "loc": 274, "reason": "legacy: predates the function-size gate; pending helper extraction" }
   }
 }
