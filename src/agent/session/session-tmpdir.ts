@@ -7,8 +7,25 @@
  * gets its own directory, injected as `TMPDIR`/`TMP`/`TEMP` into the env the
  * bash and test_run handlers hand to their child processes:
  *
- *   top-level  `<os.tmpdir()>/afk-<uid>/<pid>-<rand>/`
- *   fork       `<dispatching session's dir>/<subagentId>-<rand>/`
+ *   top-level  `<shortBase>/afk-<uid>/<rand8>/`
+ *   fork       `<dispatching session's dir>/<rand8>/`
+ *
+ * Invariant (sun_path budget): POSIX `struct sockaddr_un.sun_path` is 104
+ * bytes on macOS and 108 bytes on Linux (both NUL-terminated, so effective
+ * limits are 103 / 107). Tools that create IPC sockets under TMPDIR (tsx,
+ * ssh ControlPath, gpg-agent, tmux) will fail with EINVAL if the session dir
+ * path is too long. We keep the per-session leaf to 8 random hex characters
+ * so the full session dir fits in {@link UNIX_SOCKET_PATH_MAX} bytes minus the
+ * longest socket suffix any such tool appends (~40 chars), giving a
+ * comfortable budget. See SOCKET_LENGTH_BUDGET_CHECK comment below for the
+ * explicit arithmetic.
+ *
+ * Invariant (short base): on darwin `os.tmpdir()` resolves through the
+ * per-user var-folders path (~60 chars), blowing the sun_path budget before
+ * a single level of nesting. We root the session dirs at `/tmp/afk-<uid>`
+ * on darwin instead; /tmp is a symlink to /private/tmp and the kernel resolves
+ * it, but the string we put in TMPDIR is only 4 chars, not 40+. On other
+ * platforms `os.tmpdir()` is short enough that we use it unchanged.
  *
  * Invariant (ownership): a directory is deleted at close ONLY if this process
  * created it (`owned`), only after `realpath` proves it sits strictly inside
@@ -44,6 +61,33 @@ type Env = Record<string, string>;
 /** The env keys a session temp dir is injected under (POSIX + Windows). */
 export const TMP_ENV_KEYS = ['TMPDIR', 'TMP', 'TEMP'] as const;
 
+// Invariant (sun_path budget): POSIX sun_path is 104 bytes on macOS (including
+// NUL terminator), 108 bytes on Linux. IPC tools (tsx, ssh ControlPath, tmux,
+// gpg-agent) create unix sockets under TMPDIR; typical worst-case suffix is
+// "/tsx-<uid5>/<pid7>.pipe" = 23 chars. We target a session-dir length of at
+// most UNIX_SOCKET_PATH_MAX - 40 to give a 17-char margin for tool variation.
+//
+// SOCKET_LENGTH_BUDGET_CHECK (macOS, uid=501, pid=1234567):
+//   base  "/tmp/afk-501"        = 12 chars
+//   leaf  "/<8hex>"             =  9 chars  (1 sep + 8 hex)
+//   dir   total                 = 21 chars  ✓ well under 104-40=64
+//
+// SOCKET_LENGTH_BUDGET_CHECK (Linux, same inputs):
+//   dir length 21 ≤ 108-40=68  ✓
+//
+// The leaf is 8 random hex chars (4 bytes = 2^32 values), sufficient to avoid
+// collisions in any realistic parallel-session scenario.
+
+/** Minimum of macOS and Linux sun_path limits (bytes, NUL-terminated). */
+export const UNIX_SOCKET_PATH_MAX = 104;
+/**
+ * Characters we reserve for the tool-appended socket suffix:
+ * "/tsx-<uid5>/<pid7>.pipe" = 23 chars, rounded up with margin.
+ */
+export const SOCKET_SUFFIX_BUDGET = 40;
+/** Maximum session-dir length that keeps any socket path under sun_path. */
+export const SESSION_DIR_MAX = UNIX_SOCKET_PATH_MAX - SOCKET_SUFFIX_BUDGET; // 64
+
 let rootOverride: string | undefined;
 /** Allocated session dirs keyed by absolute path. */
 const registry = new Map<string, SessionTmpdir>();
@@ -64,7 +108,15 @@ function safeSegment(raw: string): string {
   return cleaned.length > 0 ? cleaned : 'session';
 }
 
-/** `<os.tmpdir()>/afk-<uid>` (username on platforms without uids). */
+/**
+ * Short-base temp root: `/tmp/afk-<uid>` on darwin, `<os.tmpdir()>/afk-<uid>`
+ * elsewhere.
+ *
+ * Contract: on darwin `os.tmpdir()` expands to a ~60-char var-folders path,
+ * which blows the 104-byte sun_path limit before any nesting. `/tmp` is 4
+ * chars and the kernel resolves the symlink to `/private/tmp` transparently,
+ * so unix sockets created under `/tmp/afk-<uid>/<leaf>` use a short string.
+ */
 export function sessionTmpdirRoot(): string {
   if (rootOverride !== undefined) return rootOverride;
   let who = String(currentUid() ?? '');
@@ -75,7 +127,8 @@ export function sessionTmpdirRoot(): string {
       who = 'user';
     }
   }
-  return path.join(os.tmpdir(), `afk-${who}`);
+  const base = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
+  return path.join(base, `afk-${who}`);
 }
 
 /** A real directory (not a symlink) owned by this uid. */
@@ -151,8 +204,13 @@ function register(dir: string, parent: SessionTmpdir | undefined): SessionTmpdir
   return tmp;
 }
 
-function uniqueName(base: string): string {
-  return `${safeSegment(base)}-${randomBytes(4).toString('hex')}`;
+/**
+ * 8 random hex chars (4 bytes = ~4 billion values): short, unguessable, no PID
+ * prefix. The `base` argument is intentionally ignored — keeping the leaf to
+ * exactly 8 chars is what keeps session-dir lengths under SESSION_DIR_MAX.
+ */
+function uniqueName(_base: string): string {
+  return randomBytes(4).toString('hex');
 }
 
 export function isSessionTmpdirDisabled(): boolean {

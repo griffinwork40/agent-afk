@@ -514,8 +514,8 @@ describe('runReplLoop -- peer session messages', () => {
     expect(text).toContain('line one\nline two');
     expect(text.match(/<peer-session-message /g)).toHaveLength(1);
     expect(text.trimEnd().endsWith('first turn')).toBe(true);
-    // Claimed exactly once: the envelope now lives in delivered/.
-    expect(existsSync(deliveredDir) && readdirSync(deliveredDir)).toHaveLength(1);
+    // Claimed exactly once: the envelope now lives in delivered/ (filter out acked/ subdir).
+    expect(existsSync(deliveredDir) && readdirSync(deliveredDir).filter(f => f !== 'acked')).toHaveLength(1);
     const lines = vi.mocked(ctx.replRenderer.writeLine).mock.calls.map((c) => String(c[0]));
     expect(lines.some((l) => l.includes('peer message from research:0'))).toBe(true);
   });

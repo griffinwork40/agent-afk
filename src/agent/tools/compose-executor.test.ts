@@ -20,6 +20,7 @@ interface CapturedManagerOpts {
   parentAbortSignal?: AbortSignal;
   cwd?: string;
   parentModel?: unknown;
+  parentCredential?: { key: unknown; sourceModel: unknown };
 }
 let lastManagerOpts: CapturedManagerOpts | undefined;
 
@@ -2235,7 +2236,7 @@ describe('ComposeExecutor', () => {
 // SubagentManager used to receive parentModel=gpt-6.1-sol (the routing model),
 // causing applyManagerApiKeyFallback to derive parentProvider='openai-compatible'
 // and forward the sk-ant-… token to OpenAI nodes (401). The fix: pass
-// credentialModel (the model the apiKey was resolved FROM) as parentModel.
+// credentialModel (the model the apiKey was resolved FROM) via parentCredential.sourceModel.
 describe('ComposeExecutor — credentialModel threading', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2248,7 +2249,7 @@ describe('ComposeExecutor — credentialModel threading', () => {
     });
   });
 
-  it('uses credentialModel as the SubagentManager parentModel when set', async () => {
+  it('uses credentialModel as the SubagentManager parentCredential.sourceModel when set', async () => {
     const executor = new ComposeExecutor(
       makeContext({
         defaultModel: 'gpt-6.1-sol',
@@ -2258,10 +2259,10 @@ describe('ComposeExecutor — credentialModel threading', () => {
     );
     await executor.execute(makeCall({ nodes: [{ id: 'n1', prompt: 'task' }] }));
     // The manager must receive the credential source model, not the routing model.
-    expect(lastManagerOpts?.parentModel).toBe('claude-opus-5-5');
+    expect(lastManagerOpts?.parentCredential?.sourceModel).toBe('claude-opus-5-5');
   });
 
-  it('falls back to defaultModel as parentModel when credentialModel is absent', async () => {
+  it('falls back to defaultModel as parentCredential.sourceModel when credentialModel is absent', async () => {
     const executor = new ComposeExecutor(
       makeContext({
         defaultModel: 'gpt-6.1-sol',
@@ -2270,6 +2271,6 @@ describe('ComposeExecutor — credentialModel threading', () => {
       }),
     );
     await executor.execute(makeCall({ nodes: [{ id: 'n1', prompt: 'task' }] }));
-    expect(lastManagerOpts?.parentModel).toBe('gpt-6.1-sol');
+    expect(lastManagerOpts?.parentCredential?.sourceModel).toBe('gpt-6.1-sol');
   });
 });

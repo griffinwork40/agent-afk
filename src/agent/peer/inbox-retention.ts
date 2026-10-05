@@ -43,6 +43,16 @@ import { PEER_WAKE_BUDGET_WINDOW_MS } from './guards.js';
 export const DELIVERED_RETENTION_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
 /**
+ * Maximum age of an unacked delivered receipt before it is treated as a
+ * leaked orphan and pruned anyway. A receipt without an ack marker is normally
+ * crash residue that `recoverUnackedDelivered` reclaims on restart. If the
+ * receipt was somehow never recovered after 24 hours it is almost certainly
+ * abandoned (session never restarted or the ack was silently lost after a
+ * full restart cycle). 24 h >> the restart window for any realistic session.
+ */
+export const UNACKED_RETENTION_MAX_AGE_MS = 24 * 60 * 60_000; // 24 hours
+
+/**
  * Age threshold after which a delivered receipt may be pruned.
  *
  * = wake-budget window (longest window any reader needs) + dedup window (60 s
@@ -91,15 +101,25 @@ export interface PruneResult {
   skippedHasPending: number;
   /** Number of files skipped because they were too fresh to prune. */
   skippedFresh: number;
+  /**
+   * Number of files skipped because they have no ack marker yet (crash
+   * residue awaiting `recoverUnackedDelivered`) and are younger than
+   * `UNACKED_RETENTION_MAX_AGE_MS`.
+   */
+  skippedUnacked: number;
 }
 
 /**
  * Prune stale delivered receipts for a single session.
  *
- * - Reads `delivered/` and `pending/` for the session.
+ * - Reads `delivered/`, `delivered/acked/`, and `pending/` for the session.
  * - Removes receipt files older than `DELIVERED_RECEIPT_MAX_AGE_MS`.
  * - Skips any receipt whose corresponding pending source still exists
  *   (receipt-as-claim-authority invariant).
+ * - Skips any receipt that has no ack marker in `delivered/acked/` and is
+ *   younger than `UNACKED_RETENTION_MAX_AGE_MS` — these are crash residue
+ *   that `recoverUnackedDelivered` reclaims on restart. After 24 h they are
+ *   treated as leaked orphans and pruned to prevent unbounded growth.
  * - Is a no-op when the throttle interval has not elapsed.
  * - Never throws — all errors are caught so the caller (notifier tick) is
  *   never interrupted.
@@ -118,14 +138,15 @@ export async function pruneDeliveredReceipts(
 
   // Throttle: skip when the interval has not elapsed.
   if (nowMs - lastRanMs < minIntervalMs) {
-    return { ran: false, nowMs: lastRanMs, pruned: 0, skippedHasPending: 0, skippedFresh: 0 };
+    return { ran: false, nowMs: lastRanMs, pruned: 0, skippedHasPending: 0, skippedFresh: 0, skippedUnacked: 0 };
   }
 
-  const result: PruneResult = { ran: true, nowMs, pruned: 0, skippedHasPending: 0, skippedFresh: 0 };
+  const result: PruneResult = { ran: true, nowMs, pruned: 0, skippedHasPending: 0, skippedFresh: 0, skippedUnacked: 0 };
 
   try {
     const base = getPeerInboxDir(sessionId);
     const deliveredDir = join(base, 'delivered');
+    const ackedDir = join(deliveredDir, 'acked');
     const pendingDir = join(base, 'pending');
 
     // Read pending filenames once — used to guard the claim-authority invariant.
@@ -136,6 +157,15 @@ export async function pruneDeliveredReceipts(
       pendingFiles = new Set();
     }
 
+    // Read acked filenames once — unacked receipts may be crash residue awaiting
+    // recoverUnackedDelivered on the next restart; protect them from early pruning.
+    let ackedFiles: Set<string>;
+    try {
+      ackedFiles = new Set(await readdir(ackedDir));
+    } catch {
+      ackedFiles = new Set();
+    }
+
     let deliveredFiles: string[];
     try {
       deliveredFiles = await readdir(deliveredDir);
@@ -144,9 +174,10 @@ export async function pruneDeliveredReceipts(
     }
 
     const cutoff = nowMs - DELIVERED_RECEIPT_MAX_AGE_MS;
+    const unackedCutoff = nowMs - UNACKED_RETENTION_MAX_AGE_MS;
 
     for (const file of deliveredFiles) {
-      if (file.startsWith('.tmp-')) continue;
+      if (file.startsWith('.tmp-') || file === 'acked') continue;
 
       // Safety invariant: never prune a receipt while its pending source exists.
       if (pendingFiles.has(file)) {
@@ -165,6 +196,14 @@ export async function pruneDeliveredReceipts(
 
       if (mtime >= cutoff) {
         result.skippedFresh++;
+        continue;
+      }
+
+      // Crash-recovery guard: if there is no ack marker and the file is younger
+      // than UNACKED_RETENTION_MAX_AGE_MS, retain it so recoverUnackedDelivered
+      // can reclaim it on the next restart. After 24 h assume it's an orphan.
+      if (!ackedFiles.has(file) && mtime >= unackedCutoff) {
+        result.skippedUnacked++;
         continue;
       }
 

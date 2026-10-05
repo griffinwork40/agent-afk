@@ -212,9 +212,24 @@ Peer messages carry **no user authority**. The model system prompt (`system-prom
 
 ---
 
-## Crash window
+## Crash recovery (injection-ack protocol)
 
-An envelope claimed by an exclusive hard-link receipt in `delivered/` but not yet drained into a turn is lost if the process dies. The receipt stays in `delivered/` for forensics; it is never retried, even if a crash leaves its source in `pending/` or `held/`. Rate history counts these copies once by message identity. This window is intentionally small (the claim and turn-start are close in wall time) and is documented as a known limitation.
+Envelopes are recovered after a process crash that occurs between claim and injection.
+
+**Lifecycle states** (distinct; recovery must not conflate them):
+- `claimed` — exclusive receipt written to `delivered/<file>`; pending source removed.
+- `injected` — ack marker written to `delivered/acked/<file>` after turn injection.
+- `processed` — model has replied to the injected message (not tracked at the mailbox layer).
+
+**Ack marker**: after an envelope is successfully injected into a model turn, the receiver calls `writeInjectionAck(sessionId, file)` which atomically writes `delivered/acked/<file>` containing the owning sessionId. This is a best-effort write; a failure leaves no ack, which causes the envelope to be recovered on next restart (at-least-once). Call site: `PeerInboxNotifier.consumeEnvelopes()` in `src/cli/commands/interactive/peer-inbox-notifier.ts` — one ack per consumed envelope, fire-and-forget.
+
+**Recovery on restart**: `recoverUnackedDelivered(sessionId)` is called at receiver startup. It scans `delivered/` for receipts with no ack marker and moves them back to `pending/` so they are re-delivered on the next poll. Call site: `PeerInboxNotifier.startWatching()` in `src/cli/commands/interactive/peer-inbox-notifier.ts` — called once when the sessionId first becomes known (first tick that sees a non-undefined sessionId).
+
+**Cross-session safety**: recovery only reclaims envelopes whose `to` field matches the calling sessionId. Envelopes belonging to another session are never reclaimed into an unrelated conversation.
+
+**Delivery contract**: **at-least-once**. A crash between ack-write and turn-injection (ack exists, but model turn was never issued) will NOT recover the envelope — callers should deduplicate by `messageId` when this matters. A crash between claim and ack-write (no ack) WILL recover the envelope and re-deliver it. Rate-history and dedup guards count these copies once by message identity.
+
+**Retention**: delivered receipts in `delivered/` are pruned by `pruneDeliveredReceipts` once they are older than `DELIVERED_RECEIPT_MAX_AGE_MS` and either acknowledged or older than `UNACKED_RETENTION_MAX_AGE_MS`. Ack markers in `delivered/acked/` are not individually pruned; they are removed together with the whole session inbox directory by `sweepPeerInboxes` after 7 days of inactivity for dead sessions.
 
 ---
 
@@ -253,6 +268,7 @@ Individual files in `delivered/` are pruned by a throttled sweep that runs from 
 | Retention threshold | wake-budget window (1 h) + dedup window (60 s) + 60 s safety margin ≈ **62 minutes** |
 | Throttle | at most once per **5 minutes** per receiver session |
 | Invariant | a receipt is **never removed** while its `pending/` source still exists (receipt-as-claim-authority) |
+| `acked/` subdir | injection-ack markers live at `delivered/acked/<file>`; reaped with the whole session directory by `sweepPeerInboxes` after 7 days |
 
 The threshold is derived from `PEER_WAKE_BUDGET_WINDOW_MS` (`src/agent/peer/guards.ts`) rather than hardcoded separately. `checkSendGuards` reads only files within the 60 s rate/dedup window, so receipts outside that window are not needed by the guard path; `findDeliveredEnvelope` (reply-hop lookup) needs receipts within roughly the wake-budget window; the extra margin covers edge cases where a reply arrives shortly after the wake budget resets.
 
@@ -303,7 +319,7 @@ Payloads with attachments in the compositor queue are not peeked by `peekQueuedT
 
 ### Deferred
 
-- `/resume` rekey: uninjected peer envelopes already renamed into `delivered/` stay there for forensics; they are not requeueued back to `pending/`. This is a known limitation of the crash window.
 - Telegram/daemon receivers: deferred.
 - Shared task board: deferred.
 - `afk send` shell subcommand: deferred.
+- `/resume` rekey: envelopes claimed before a `/resume` and not yet acked will be recovered on the resumed session's next startup if the owning sessionId matches — this is handled by `recoverUnackedDelivered`. Envelopes whose sessionId does not match the resumed session remain in `delivered/` for forensics.
