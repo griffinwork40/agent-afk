@@ -150,6 +150,23 @@ describe('recheckLandedUrl', () => {
     });
   });
 
+
+
+  it('does not treat browser error pages as egress policy blocks', async () => {
+    const page = makePage('chrome-error://chromewebdata/');
+    const config = makeConfig({ allowedDomains: ['example.com'] });
+
+    const result = await recheckLandedUrl(
+      page,
+      config,
+      'https://example.com/start',
+      vi.fn().mockResolvedValue(undefined),
+    );
+
+    expect(result).toBeNull();
+    expect(page.goBack).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // SSRF guard on landed URL (#2301)
   //

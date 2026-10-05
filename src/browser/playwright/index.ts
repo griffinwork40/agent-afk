@@ -32,7 +32,7 @@ import { resolveTarget } from './resolve-target.js';
 import { enforceDomainPolicy } from '../config.js';
 import { recheckLandedUrl } from './domain-recheck.js';
 import { writeScreenshotSidecar } from '../witness.js';
-import { checkEgressTarget } from '../../http-client/egress-guard.js';
+import { checkEgressTarget, EgressBlockedError } from '../../http-client/egress-guard.js';
 
 // ---------------------------------------------------------------------------
 // Per-session state
@@ -164,7 +164,15 @@ export class PlaywrightProvider implements BrowserProvider {
         waitUntil: input.waitFor ?? 'load',
       });
     } catch (err) {
-      navError = err;
+      navError = this.launcher.consumeRequestGuardError(sessionId) ?? err;
+    }
+
+    if (navError instanceof EgressBlockedError) {
+      return {
+        outcome: 'blocked_by_policy',
+        url: input.url,
+        reason: navError.message,
+      };
     }
 
     // Re-check the LANDED url: goto() follows 30x redirects, so an allowed URL
@@ -351,11 +359,19 @@ export class PlaywrightProvider implements BrowserProvider {
         try {
           await executeAction();
         } catch (retryErr) {
-          actionError = retryErr;
+          actionError = this.launcher.consumeRequestGuardError(sessionId) ?? retryErr;
         }
       } else {
-        actionError = err;
+        actionError = this.launcher.consumeRequestGuardError(sessionId) ?? err;
       }
+    }
+
+    if (actionError instanceof EgressBlockedError) {
+      return {
+        outcome: 'blocked_by_policy',
+        url: page.url(),
+        reason: actionError.message,
+      };
     }
 
     // Check post-action URL for policy violations. Shared with open() so the

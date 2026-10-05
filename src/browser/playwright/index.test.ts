@@ -50,6 +50,7 @@ vi.mock('./launcher.js', () => {
         (ctx.getLastHttpStatusFn as (...a: unknown[]) => unknown)(...args),
       hasOpenDialog: (...args: unknown[]) =>
         (ctx.hasOpenDialogFn as (...a: unknown[]) => unknown)(...args),
+      consumeRequestGuardError: vi.fn().mockReturnValue(undefined),
     };
   }
   return { BrowserLauncher: MockBrowserLauncher };
@@ -83,6 +84,7 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../../http-client/egress-guard.js', () => ({
   checkEgressTarget: vi.fn(),
+  EgressBlockedError: class EgressBlockedError extends Error {},
 }));
 
 // ---------------------------------------------------------------------------

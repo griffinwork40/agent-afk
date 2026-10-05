@@ -12,6 +12,14 @@ import type { BlockedByPolicy, BrowserConfig } from '../types.js';
 import { enforceDomainPolicy } from '../config.js';
 import { checkEgressTarget } from '../../http-client/egress-guard.js';
 
+function urlProtocol(rawUrl: string): string | null {
+  try {
+    return new URL(rawUrl).protocol;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Minimal page surface
 // ---------------------------------------------------------------------------
@@ -99,26 +107,36 @@ export async function recheckLandedUrl(
     return null;
   }
 
-  // SSRF guard on the landed URL. A redirect from a public host to a private
-  // IP bypasses the pre-navigation check in open(); this closes the gap.
-  const egressVerdict = await checkEgressTarget(landedUrl, {
-    ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
-    ...(opts.allowPrivateHosts !== undefined
-      ? { allowPrivateHosts: opts.allowPrivateHosts }
-      : {}),
-  });
-  if (!egressVerdict.allowed) {
-    // Best-effort rollback before returning the refusal.
-    try {
-      await page.goBack();
-    } catch {
-      await invalidateSession();
+  const protocol = urlProtocol(landedUrl);
+  // Browser-internal error pages such as chrome-error://chromewebdata/ are
+  // not network egress targets. Let the caller surface the real navigation
+  // error instead of relabeling it as an SSRF policy refusal.
+  if (protocol === 'chrome-error:') {
+    return null;
+  }
+
+  if (protocol === 'http:' || protocol === 'https:') {
+    // SSRF guard on the landed URL. A redirect from a public host to a private
+    // IP bypasses the pre-navigation check in open(); this closes the gap.
+    const egressVerdict = await checkEgressTarget(landedUrl, {
+      ...(opts.lookupFn !== undefined ? { lookupFn: opts.lookupFn } : {}),
+      ...(opts.allowPrivateHosts !== undefined
+        ? { allowPrivateHosts: opts.allowPrivateHosts }
+        : {}),
+    });
+    if (!egressVerdict.allowed) {
+      // Best-effort rollback before returning the refusal.
+      try {
+        await page.goBack();
+      } catch {
+        await invalidateSession();
+      }
+      return {
+        outcome: 'blocked_by_policy',
+        url: landedUrl,
+        reason: egressVerdict.reason,
+      };
     }
-    return {
-      outcome: 'blocked_by_policy',
-      url: landedUrl,
-      reason: egressVerdict.reason,
-    };
   }
 
   const policy = enforceDomainPolicy(landedUrl, config);

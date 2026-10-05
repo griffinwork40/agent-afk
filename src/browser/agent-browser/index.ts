@@ -37,6 +37,7 @@ import type {
   ScreenshotResult,
 } from '../types.js';
 import { enforceDomainPolicy } from '../config.js';
+import { checkEgressTarget } from '../../http-client/egress-guard.js';
 import { writeScreenshotSidecar } from '../witness.js';
 import { AgentBrowserClient } from './client.js';
 import type { AgentBrowserConnection } from './connection.js';
@@ -82,6 +83,15 @@ export class AgentBrowserProvider implements BrowserProvider {
   // -------------------------------------------------------------------------
 
   async open(input: OpenInput): Promise<OpenOutcome> {
+    const egressVerdict = await checkEgressTarget(input.url);
+    if (!egressVerdict.allowed) {
+      return {
+        outcome: 'blocked_by_policy',
+        url: input.url,
+        reason: egressVerdict.reason,
+      };
+    }
+
     const policyResult = enforceDomainPolicy(input.url, this.config);
     if (!policyResult.allowed) {
       return {
@@ -119,6 +129,16 @@ export class AgentBrowserProvider implements BrowserProvider {
     }
 
     const readResult = await this.client.read(state.tabId, { mode: 'main' });
+    const landedEgressVerdict = await checkEgressTarget(readResult.url);
+    if (!landedEgressVerdict.allowed) {
+      await this.client.evalScript(state.tabId, `window.location.href = 'about:blank'`).catch(() => {});
+      return {
+        outcome: 'blocked_by_policy',
+        url: readResult.url,
+        reason: `redirected to blocked egress target: ${landedEgressVerdict.reason}`,
+      };
+    }
+
     const landedPolicy = enforceDomainPolicy(readResult.url, this.config);
     if (!landedPolicy.allowed) {
       await this.client.evalScript(state.tabId, `window.location.href = 'about:blank'`).catch(() => {});
@@ -183,6 +203,16 @@ export class AgentBrowserProvider implements BrowserProvider {
     state.lastActionAt = new Date().toISOString();
 
     const readResult = await this.client.read(state.tabId, { mode: 'main' });
+    const egressVerdict = await checkEgressTarget(readResult.url);
+    if (!egressVerdict.allowed) {
+      await this.client.evalScript(state.tabId, `window.location.href = 'about:blank'`).catch(() => {});
+      return {
+        outcome: 'blocked_by_policy',
+        url: readResult.url,
+        reason: `action navigated to blocked egress target: ${egressVerdict.reason}`,
+      };
+    }
+
     const policy = enforceDomainPolicy(readResult.url, this.config);
     if (!policy.allowed) {
       await this.client.evalScript(state.tabId, `window.location.href = 'about:blank'`).catch(() => {});
