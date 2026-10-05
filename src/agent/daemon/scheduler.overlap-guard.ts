@@ -84,7 +84,7 @@ export function makeTelemetryUnwritableSkipRecord(
     durationMs: 0,
     status: 'skipped',
     skipReason: 'telemetry-unwritable',
-    errorMessage: `Telemetry file not writable: ${errorDescription}`,
+    errorMessage: `Telemetry file not writable: ${redactInlineSecrets(errorDescription)}`,
   };
 }
 

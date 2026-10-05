@@ -287,14 +287,16 @@ export class CronScheduler {
       // record the reason. Shell and builtin tasks are exempt — they don't
       // consume model quota and don't rely on the cooldown gate.
       const isAgentTask = (task.executor ?? 'agent') === 'agent';
-      if (writeError !== null && isAgentTask) {
+      const cooldownMs = task.debounceMs ?? this.defaultCooldownMs;
+      if (writeError !== null && isAgentTask && cooldownMs > 0) {
         const skipRecord = makeTelemetryUnwritableSkipRecord(task, this.now(), writeError);
-        this.writeTelemetry(skipRecord, task);
+        // Do NOT call writeTelemetry here — it calls appendFileSync to the same
+        // unwritable path, which would silently fail. Keep only the in-memory
+        // record and fire the completion callback directly for notifications.
         records.push(skipRecord);
+        fireOnTaskComplete(skipRecord, { onTaskComplete: this.options.onTaskComplete }, task);
         continue;
       }
-
-      const cooldownMs = task.debounceMs ?? this.defaultCooldownMs;
       const decision = evaluateSessionStartGates({
         taskId: task.taskId,
         cooldownMs,

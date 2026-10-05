@@ -11,9 +11,10 @@
  * dispatched:
  *
  * 1. `probeTelemetryWritable` — synchronous `accessSync(W_OK)` probe. Returns
- *    `null` when the file is writable (or does not exist yet — a fresh install
- *    where the file will be created on the first write). Returns an error
- *    string when the file exists AND is not writable.
+ *    `null` when the file is writable, or absent AND the parent directory is
+ *    writable (a fresh install where the file will be created on first write).
+ *    Returns an error string when the file is not writable OR when the file is
+ *    absent but the parent directory is also not writable.
  *
  * 2. `TelemetryAlertLatch` — a per-daemon-process latch, analogous to
  *    `BudgetAlertLatch`, that fires at most ONE Telegram alert per process
@@ -33,6 +34,7 @@
  */
 
 import { existsSync, accessSync, constants } from 'node:fs';
+import { dirname } from 'node:path';
 import { pushIfConfigured } from '../../telegram/push.js';
 
 // ─── Writability probe ────────────────────────────────────────────────────────
@@ -43,14 +45,25 @@ import { pushIfConfigured } from '../../telegram/push.js';
  * - Returns `null`  → safe to proceed (file absent or writable).
  * - Returns a string → the errno / message explaining why it is not writable.
  *
- * We only gate when the file already exists AND is not writable, because:
- *   a) A missing file will be created on first write (not a concern).
- *   b) A read-only file that already holds prior records is exactly the
- *      failure case: the gate read will return a stale last-fired time,
- *      making the cooldown check unreliable if/when the disk recovers.
+ * We gate when:
+ *   a) The file exists AND is not writable (stale last-fired time → cooldown
+ *      check unreliable if/when the disk recovers).
+ *   b) The file is absent AND the parent directory is not writable
+ *      (`appendFileSync` will fail on the first write attempt).
  */
 export function probeTelemetryWritable(telemetryPath: string): string | null {
-  if (!existsSync(telemetryPath)) return null;
+  if (!existsSync(telemetryPath)) {
+    // File absent — check that the parent directory is writable so the first
+    // write (which creates the file) will succeed.
+    try {
+      accessSync(dirname(telemetryPath), constants.W_OK);
+      return null; // parent writable — fresh install, safe to proceed
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const message = (err as NodeJS.ErrnoException).message ?? String(err);
+      return code != null ? `${code}: ${message}` : message;
+    }
+  }
   try {
     accessSync(telemetryPath, constants.W_OK);
     return null; // writable
@@ -98,6 +111,8 @@ export class TelemetryAlertLatch {
       `Fix the file permissions or disk issue and restart the daemon. ` +
       `Cooldown records cannot be saved while the file is unwritable, so tasks ` +
       `would re-fire on every restart if allowed to run.`;
+    // eslint-disable-next-line no-console
+    console.warn(text);
     await pushIfConfigured(text).catch(() => undefined);
   }
 

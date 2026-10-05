@@ -56,8 +56,23 @@ describe('probeTelemetryWritable', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns null when the file does not exist', () => {
+  it('returns null when the file does not exist and the parent directory is writable', () => {
+    // dir is freshly created and writable; filePath does not exist yet.
     expect(probeTelemetryWritable(filePath)).toBeNull();
+  });
+
+  it.skipIf(!PERMS_ENFORCED)('returns an error string when the file is absent but the parent dir is read-only', () => {
+    // Make the parent dir read-only so appendFileSync would fail on first write.
+    chmodSync(dir, 0o555);
+    try {
+      const result = probeTelemetryWritable(filePath);
+      expect(result).not.toBeNull();
+      expect(typeof result).toBe('string');
+      expect((result as string).length).toBeGreaterThan(0);
+    } finally {
+      // Restore so afterEach rmSync can clean up.
+      try { chmodSync(dir, 0o755); } catch { /* ignore */ }
+    }
   });
 
   it('returns null when the file exists and is writable', () => {
