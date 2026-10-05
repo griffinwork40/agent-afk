@@ -37,11 +37,11 @@ export const sendToSessionTool: AnthropicToolDef = {
   concurrencySafe: false,
   description:
     'Send a message to another live afk session on this machine. ' +
-    'Delivery: idle receiver wakes immediately (new turn); busy receiver gets it injected between tool rounds, inside its current task. ' +
+    'Delivery: idle receiver wakes immediately (new turn); busy receiver gets it MID-TURN between tool rounds (next turn if no tool round remains). ' +
     'User input always goes ahead of peer messages. ' +
-    'Before sending: call list_sessions and read the target\'s turnState, activity.promptHead, cwd, branch, and pendingMessages. ' +
+    'Before sending: call list_sessions and read the target\'s turnState, activity.promptHead, cwd, branch, and pendingMessages (read_witness with its sessionId gives more detail). ' +
     'Busy session — send only if the message bears on its current task or is urgent. ' +
-    'Blocked session (waiting on a human) — do not send; tell the user instead. ' +
+    'Blocked session (turnState === "blocked" or blocked === true) — do not send; tell the user instead. ' +
     'pendingMessages > 0 — consolidate rather than add another. ' +
     'Shared repo/branch — name the files or branch at risk of collision. ' +
     'Message body: self-contained (paths, branch, commit SHA, exact ask); receiver has none of your context. ' +
@@ -53,7 +53,7 @@ export const sendToSessionTool: AnthropicToolDef = {
     'The to field accepts a full sessionId, a unique prefix (≥6 chars), or the session name; ' +
     'prefer sessionId (names can be reused) and check resolvedTo in the result. ' +
     'Returns { status: "queued"|"refused", messageId?, reason?, detail?, resolvedTo?, targetState? }. ' +
-    'refused is NOT fatal — inspect reason ' +
+    'refused is NOT fatal — inspect reason and detail to understand why ' +
     '(e.g. "unknown-target", "ambiguous-target", "rate-limited", "hop-limit", "too-large", "duplicate", "inbound-off").',
   input_schema: {
     type: 'object',
