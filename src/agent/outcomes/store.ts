@@ -11,16 +11,13 @@
 
 import {
   existsSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
 import { getOutcomesDir, getOutcomeRecordPath, validateSessionId } from '../../paths.js';
 import { VerifiedOutcomeSchema, type VerifiedOutcome, type Vote } from './schema.js';
 import { combine } from './combine.js';
+import { atomicWriteFile } from '../../utils/atomic-write.js';
 
 // ---------------------------------------------------------------------------
 // Read
@@ -60,7 +57,7 @@ export function writeRecord(
 ): void {
   VerifiedOutcomeSchema.parse(outcome); // throws on invalid
   const path = _recordPath(outcome.session_id, outcomesDir);
-  _atomicWrite(path, outcome);
+  atomicWriteFile(path, `${JSON.stringify(outcome, null, 2)}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,12 +144,19 @@ export function upsertVotes(
       : ('bad' as const)
     : undefined;
 
+  // Determine whether the settle window has passed (for good-by-default rule)
+  const nowMs = Date.now();
+  const settleWindowPassed =
+    record.settles_after !== null &&
+    nowMs > new Date(record.settles_after).getTime();
+
   // Re-combine
-  const { label, confidence } = combine({
+  const { label, confidence, basis } = combine({
     votes: merged,
     selfReport: record.self_report,
     artifacts: record.artifacts,
     explicit_feedback: explicitFeedback,
+    settleWindowPassed,
   });
 
   // Settle immediately when explicit_feedback overrides
@@ -175,6 +179,12 @@ export function upsertVotes(
   record.confidence = confidence;
   record.state = state;
   record.settles_after = settlesAfter;
+  if (basis !== undefined) {
+    record.basis = basis;
+  } else {
+    // Clear stale basis when combiner returns unknown/blocked
+    delete record.basis;
+  }
 
   writeRecord(record, outcomesDir);
   return record;
@@ -238,13 +248,6 @@ function _recordPath(sessionId: string, outcomesDir: string): string {
     return getOutcomeRecordPath(sessionId);
   }
   return `${outcomesDir}/${sessionId}.json`;
-}
-
-function _atomicWrite(path: string, data: VerifiedOutcome): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  renameSync(tmp, path);
 }
 
 /**
